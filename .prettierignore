@@ -2,3 +2,6 @@ dist/
 coverage/
 node_modules/
 package-lock.json
+.github/ISSUE_TEMPLATE/
+.github/workflows/
+docs/adr/

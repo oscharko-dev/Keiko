@@ -4,11 +4,24 @@
   "description": "Enterprise model-agnostic developer-assist coding agent for regulated engineering workflows.",
   "type": "module",
   "license": "Apache-2.0",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "packageManager": "npm@10.9.8",
-  "bin": { "keiko": "dist/cli/index.js" },
-  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
-  "files": ["dist", "README.md", "LICENSE"],
+  "bin": {
+    "keiko": "dist/cli/index.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "sideEffects": false,
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
