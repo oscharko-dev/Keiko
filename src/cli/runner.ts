@@ -1,3 +1,5 @@
+import { runModelsCli } from "./models.js";
+import type { EnvSource } from "../gateway/config.js";
 import { SDK_VERSION } from "../sdk/index.js";
 
 // Pure CLI core: returns an exit code and writes through the injected IO so it is
@@ -13,6 +15,8 @@ Enterprise model-agnostic developer-assist coding agent.
 Usage:
   keiko [--help | -h]      Print this help and exit.
   keiko [--version | -v]   Print the version and exit.
+  keiko models list        List registered model capabilities.
+  keiko models validate    Validate gateway configuration.
 
 Exit codes:
   0  Success
@@ -20,7 +24,7 @@ Exit codes:
   2  Usage error
 `;
 
-export function runCli(args: readonly string[], io: CliIo): number {
+export function runCli(args: readonly string[], io: CliIo, env: EnvSource = {}): number {
   const first = args[0];
   if (first === undefined || first === "--help" || first === "-h") {
     io.out(HELP_TEXT);
@@ -29,6 +33,9 @@ export function runCli(args: readonly string[], io: CliIo): number {
   if (first === "--version" || first === "-v") {
     io.out(`keiko ${SDK_VERSION}\n`);
     return 0;
+  }
+  if (first === "models") {
+    return runModelsCli(args.slice(1), io, env);
   }
   io.err(`keiko: unknown ${first.startsWith("-") ? "option" : "command"}: ${first}\n`);
   io.err("Run `keiko --help` for usage.\n");

@@ -35,6 +35,37 @@ keiko --version   # print the version and exit
 | 1    | Runtime error |
 | 2    | Usage error   |
 
+## Model gateway
+
+The model gateway routes requests through a capability registry instead of hard-coded model
+names, and applies per-call timeout, bounded retry, and circuit-breaker controls. Every response
+carries typed usage metadata (request id, prompt and completion tokens, latency, cost class).
+
+```bash
+keiko models list                      # print the capability registry (no credentials)
+keiko models validate --config PATH    # validate a gateway config file
+keiko models validate                  # validate config from KEIKO_CONFIG_FILE
+```
+
+`models list` prints registered model capabilities to stdout and never emits credentials.
+`models validate` reports structural configuration errors to stderr without printing any
+configured value; it exits `0` when the config is valid, `1` when it is invalid, and `2` on a
+usage error (such as `--config` without a path).
+
+### Configuration and secrets
+
+Credentials are read only from environment variables or a JSON config file — never from CLI
+flags. Precedence is, highest first:
+
+1. Config file — path from `--config <path>` or the `KEIKO_CONFIG_FILE` environment variable.
+2. Per-model environment variables — `KEIKO_MODEL_<UPPER_MODEL_ID>_API_KEY` and
+   `KEIKO_MODEL_<UPPER_MODEL_ID>_BASE_URL`, where `<UPPER_MODEL_ID>` is the model id with every
+   non-alphanumeric character replaced by `_` and uppercased.
+3. Global fallback — `KEIKO_DEFAULT_API_KEY` and `KEIKO_DEFAULT_BASE_URL`.
+
+See [.env.example](.env.example) for the full list of variable names. API keys are never logged,
+serialised, or included in error messages.
+
 ## SDK usage
 
 ```ts
