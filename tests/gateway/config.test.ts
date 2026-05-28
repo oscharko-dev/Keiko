@@ -79,7 +79,7 @@ describe("parseGatewayConfig", () => {
     );
   });
 
-  it("applies KEIKO_DEFAULT_API_KEY when a provider omits apiKey via env source", () => {
+  it("file apiKey takes precedence over KEIKO_DEFAULT_API_KEY", () => {
     const config = parseGatewayConfig(validRaw(), {
       KEIKO_DEFAULT_API_KEY: "sk-env-default-1234567890abcd",
     });
