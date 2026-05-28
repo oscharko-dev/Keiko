@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
+import type { NormalizedResponse } from "../../src/gateway/types.js";
 import { runLoop } from "../../src/harness/loop.js";
+import type { ModelPort } from "../../src/harness/ports.js";
 import type { HarnessEvent, TaskInput } from "../../src/harness/types.js";
-import { buildContext, response, scriptedModel, stubClock, toolCall } from "./_support.js";
+import {
+  buildContext,
+  recordingTool,
+  response,
+  scriptedModel,
+  stubClock,
+  toolCall,
+} from "./_support.js";
 
 const EXPLAIN: TaskInput = { taskType: "explain-plan", input: { filePath: "src/foo.ts" } };
 const GENERATE: TaskInput = {
@@ -43,6 +52,91 @@ describe("runLoop — normal flow", () => {
     expect(states(sink.events())).toContain("patch-proposal");
     expect(states(sink.events())).toContain("verification");
     expect(ctx.patchDiff).toContain("+test");
+  });
+});
+
+describe("runLoop — task-type routing", () => {
+  it("explain-plan never enters tool-call, patch-proposal, or verification", async () => {
+    const { port } = scriptedModel([response({ content: "explanation" })]);
+    const { ctx, sink } = buildContext({ task: EXPLAIN, model: port });
+    await runLoop(ctx);
+    const visited = states(sink.events());
+    expect(visited).not.toContain("tool-call");
+    expect(visited).not.toContain("patch-proposal");
+    expect(visited).not.toContain("verification");
+    expect(ctx.patchDiff).toBeUndefined();
+  });
+
+  it("explain-plan returning tool_calls is a HARNESS_INTERNAL failure", async () => {
+    const { port } = scriptedModel([
+      response({ finishReason: "tool_calls", toolCalls: [toolCall("t1")] }),
+    ]);
+    const tool = recordingTool();
+    const { ctx, sink } = buildContext({ task: EXPLAIN, model: port, tools: tool.port });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("failed");
+    expect(failureCategory(sink.events())).toBe("HARNESS_INTERNAL");
+    expect(tool.calls()).toHaveLength(0);
+  });
+
+  it("investigate-bug runs the tool loop then proposes a patch", async () => {
+    const { port } = scriptedModel([
+      response({ finishReason: "tool_calls", toolCalls: [toolCall("t1")] }),
+      response({ content: "--- a/x\n+++ b/x\n+fix" }),
+    ]);
+    const tool = recordingTool([{ name: "read_file", description: "read", parameters: {} }]);
+    const { ctx, sink } = buildContext({ task: INVESTIGATE, model: port, tools: tool.port });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    expect(tool.calls()).toHaveLength(1);
+    const types = sink.events().map((e) => e.type);
+    expect(types).toContain("tool:call:started");
+    expect(types).toContain("tool:call:completed");
+    expect(ctx.patchDiff).toContain("+fix");
+  });
+});
+
+describe("runLoop — cancellation", () => {
+  it("aborts before tool-call: transitions to cancelled with no tool execution or patch", async () => {
+    const controller = new AbortController();
+    // First call requests a tool; the abort fires before the loop re-enters tool-call.
+    const port: ModelPort = {
+      call: (): Promise<NormalizedResponse> => {
+        controller.abort("cancel before tools");
+        return Promise.resolve(
+          response({ finishReason: "tool_calls", toolCalls: [toolCall("t1")] }),
+        );
+      },
+    };
+    const tool = recordingTool([{ name: "read_file", description: "r", parameters: {} }]);
+    const { ctx, sink } = buildContext({
+      task: INVESTIGATE,
+      model: port,
+      tools: tool.port,
+      signal: controller.signal,
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("cancelled");
+    expect(tool.calls()).toHaveLength(0);
+    expect(ctx.patchDiff).toBeUndefined();
+    expect(sink.events().at(-1)?.type).toBe("run:cancelled");
+  });
+
+  it("propagates the run signal to the ToolPort on execution", async () => {
+    const { port } = scriptedModel([
+      response({ finishReason: "tool_calls", toolCalls: [toolCall("t1")] }),
+      response({ content: "--- a/x\n+++ b/x\n+fix" }),
+    ]);
+    const tool = recordingTool([{ name: "read_file", description: "r", parameters: {} }]);
+    const controller = new AbortController();
+    const { ctx } = buildContext({
+      task: INVESTIGATE,
+      model: port,
+      tools: tool.port,
+      signal: controller.signal,
+    });
+    await runLoop(ctx);
+    expect(tool.calls()[0]?.signal).toBe(controller.signal);
   });
 });
 

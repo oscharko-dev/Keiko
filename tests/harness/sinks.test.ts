@@ -74,7 +74,12 @@ describe("MemoryEventSink", () => {
 describe("CliEventSink", () => {
   it("writes a non-empty line to out() for each event", () => {
     const lines: string[] = [];
-    const sink = new CliEventSink({ out: (t): void => { lines.push(t); }, err: (): void => undefined });
+    const sink = new CliEventSink({
+      out: (t): void => {
+        lines.push(t);
+      },
+      err: (): void => undefined,
+    });
     sink.emit(startedEvent(1));
     expect(lines).toHaveLength(1);
     expect(lines[0]?.trim().length).toBeGreaterThan(0);
@@ -82,7 +87,12 @@ describe("CliEventSink", () => {
 
   it("does not print reasoning rationale or modelResponse verbatim", () => {
     const lines: string[] = [];
-    const sink = new CliEventSink({ out: (t): void => { lines.push(t); }, err: (): void => undefined });
+    const sink = new CliEventSink({
+      out: (t): void => {
+        lines.push(t);
+      },
+      err: (): void => undefined,
+    });
     sink.emit(reasoningEvent());
     const joined = lines.join("");
     expect(joined).not.toContain("SECRET-RATIONALE-VERBATIM");
@@ -92,7 +102,12 @@ describe("CliEventSink", () => {
 
   it("does not print patch diff content verbatim", () => {
     const lines: string[] = [];
-    const sink = new CliEventSink({ out: (t): void => { lines.push(t); }, err: (): void => undefined });
+    const sink = new CliEventSink({
+      out: (t): void => {
+        lines.push(t);
+      },
+      err: (): void => undefined,
+    });
     sink.emit(patchEvent());
     expect(lines.join("")).not.toContain("SECRET-DIFF-CONTENT");
   });
@@ -100,7 +115,14 @@ describe("CliEventSink", () => {
   it("routes failure events to err()", () => {
     const out: string[] = [];
     const err: string[] = [];
-    const sink = new CliEventSink({ out: (t): void => { out.push(t); }, err: (t): void => { err.push(t); } });
+    const sink = new CliEventSink({
+      out: (t): void => {
+        out.push(t);
+      },
+      err: (t): void => {
+        err.push(t);
+      },
+    });
     sink.emit({
       schemaVersion: "1",
       runId: "run-1",

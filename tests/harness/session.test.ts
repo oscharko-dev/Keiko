@@ -31,6 +31,35 @@ describe("createSession", () => {
     expect(session.fingerprint).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  it("produces a reproducible runId and fingerprint across two runs with identical inputs", () => {
+    const a = createSession(
+      EXPLAIN,
+      CONFIG,
+      deps(scriptedModel([response()]).port, new MemoryEventSink()),
+    );
+    const b = createSession(
+      EXPLAIN,
+      CONFIG,
+      deps(scriptedModel([response()]).port, new MemoryEventSink()),
+    );
+    expect(a.runId).toBe(b.runId); // counter IdSource: both start at run-1, proving determinism
+    expect(a.fingerprint).toBe(b.fingerprint);
+  });
+
+  it("changes the fingerprint when a limit changes", () => {
+    const base = createSession(
+      EXPLAIN,
+      CONFIG,
+      deps(scriptedModel([response()]).port, new MemoryEventSink()),
+    );
+    const tweaked = createSession(
+      EXPLAIN,
+      { ...CONFIG, limits: { maxIterations: 99 } },
+      deps(scriptedModel([response()]).port, new MemoryEventSink()),
+    );
+    expect(tweaked.fingerprint).not.toBe(base.fingerprint);
+  });
+
   it("resolves result to a completed RunResult on the happy path", async () => {
     const sink = new MemoryEventSink();
     const session = createSession(
