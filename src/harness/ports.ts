@@ -30,6 +30,10 @@ export interface ToolPort {
 
 export interface EventSink {
   readonly emit: (event: HarnessEvent) => void;
+  // When true, the harness emits SENSITIVE fields (rationale, modelResponse, diff) verbatim
+  // because this sink retains them for replay (the in-memory test/manifest collector). For
+  // any other sink the harness redacts SENSITIVE fields before emitting (ADR-0004 D6).
+  readonly retainsRawContent?: boolean | undefined;
 }
 
 export interface IdSource {

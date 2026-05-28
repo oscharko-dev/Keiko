@@ -25,6 +25,9 @@ export interface ManifestSeed {
 }
 
 export class MemoryEventSink implements EventSink {
+  // The in-memory collector retains SENSITIVE fields verbatim so the manifest is a faithful
+  // replay record. The audit ledger (issue #10) applies its own redaction before persistence.
+  readonly retainsRawContent = true;
   private readonly collected: HarnessEvent[] = [];
 
   emit(event: HarnessEvent): void {
