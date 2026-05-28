@@ -1,7 +1,8 @@
 # Contributing to Keiko
 
-The delivery standard, agent routing, and GitHub-artifact rules live in [AGENTS.md](AGENTS.md). Read it before
-opening a pull request.
+Keiko is built to a production-ready, enterprise quality bar: strict TypeScript (no `any`), tested behavior,
+minimal runtime dependencies, and reviewable, evidence-backed changes. The toolchain and CI/supply-chain
+rationale are recorded in the [Architecture Decision Records](docs/adr/); read them before opening a pull request.
 
 ## Local development
 
