@@ -64,6 +64,27 @@ function resolveSecret(modelId: string, fileValue: string, env: EnvSource, suffi
   return fallback ?? "";
 }
 
+// Validates a resolved baseUrl for scheme and credential hygiene. Host/IP is
+// intentionally NOT restricted: Keiko addresses customer-internally-hosted endpoints
+// (private IPs are a valid, first-class target); this guard is scheme/credential
+// hygiene + defence-in-depth, not host filtering.
+function validateBaseUrl(baseUrl: string, path: string): void {
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw new ConfigInvalidError(`${path}.baseUrl must be a valid absolute URL`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new ConfigInvalidError(`${path}.baseUrl must use the http or https scheme`);
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new ConfigInvalidError(
+      `${path}.baseUrl must not embed credentials in the URL; provide the key via apiKey`,
+    );
+  }
+}
+
 function parseProvider(raw: unknown, index: number, env: EnvSource): ModelProviderConfig {
   const path = `providers[${String(index)}]`;
   if (!isRecord(raw)) {
@@ -80,6 +101,7 @@ function parseProvider(raw: unknown, index: number, env: EnvSource): ModelProvid
   if (apiKey.length === 0) {
     throw new ConfigInvalidError(`${path}.apiKey must be set via config or environment`);
   }
+  validateBaseUrl(baseUrl, path);
   return {
     modelId,
     baseUrl,

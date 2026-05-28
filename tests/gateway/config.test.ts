@@ -108,6 +108,42 @@ describe("parseGatewayConfig", () => {
     });
     expect(config.providers[0]?.apiKey).toBe("sk-env-default-1234567890abcd");
   });
+
+  describe("baseUrl validation", () => {
+    it("rejects a file: scheme baseUrl", () => {
+      const raw = rawWithProvider((p) => ({ ...p, baseUrl: "file:///etc/passwd" }));
+      expect(() => parseGatewayConfig(raw)).toThrow(ConfigInvalidError);
+    });
+
+    it("rejects a non-URL string as baseUrl", () => {
+      const raw = rawWithProvider((p) => ({ ...p, baseUrl: "not a url" }));
+      expect(() => parseGatewayConfig(raw)).toThrow(ConfigInvalidError);
+    });
+
+    it("rejects a baseUrl with embedded credentials and does not echo the password", () => {
+      const raw = rawWithProvider((p) => ({
+        ...p,
+        baseUrl: "https://user:pass@host.example/v1",
+      }));
+      try {
+        parseGatewayConfig(raw);
+        expect.unreachable("should have thrown");
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConfigInvalidError);
+        expect((error as Error).message).not.toContain("pass");
+      }
+    });
+
+    it("accepts a private/internal IP baseUrl (customer-internal endpoint use case)", () => {
+      const raw = rawWithProvider((p) => ({ ...p, baseUrl: "http://10.0.0.5:8000/v1" }));
+      expect(() => parseGatewayConfig(raw)).not.toThrow();
+    });
+
+    it("accepts a standard https baseUrl", () => {
+      const raw = rawWithProvider((p) => ({ ...p, baseUrl: "https://api.example.com/v1" }));
+      expect(() => parseGatewayConfig(raw)).not.toThrow();
+    });
+  });
 });
 
 describe("toSafeObject", () => {

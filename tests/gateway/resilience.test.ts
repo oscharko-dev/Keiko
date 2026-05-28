@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { AuthenticationError, CircuitOpenError, TransportError } from "../../src/gateway/errors.js";
+import {
+  AuthenticationError,
+  CircuitOpenError,
+  RateLimitError,
+  TransportError,
+} from "../../src/gateway/errors.js";
 import { CircuitBreaker, executeWithRetry } from "../../src/gateway/resilience.js";
 import type { Clock } from "../../src/gateway/types.js";
 
@@ -104,6 +109,27 @@ describe("executeWithRetry", () => {
     ).rejects.toBeInstanceOf(TransportError);
     expect(Math.max(...sleeps)).toBe(30_000);
   });
+
+  it("honours RateLimitError.retryAfterMs instead of exponential backoff when set", async () => {
+    const { clock, sleeps } = stubClock();
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          // First call throws RateLimitError with retryAfterMs; second succeeds.
+          if (calls === 1) {
+            return Promise.reject(new RateLimitError("rate limited", 2000));
+          }
+          return Promise.resolve("ok");
+        },
+        { maxRetries: 1, retryBaseDelayMs: 500 },
+        clock,
+      ),
+    ).resolves.toBe("ok");
+    // The retry delay must be 2000 (retryAfterMs), not 500 (exponential-backoff base).
+    expect(sleeps).toEqual([2000]);
+  });
 });
 
 describe("CircuitBreaker", () => {
@@ -124,6 +150,16 @@ describe("CircuitBreaker", () => {
     }
     expect(cb.status("m").state).toBe("open");
     expect(cb.status("m").openedAt).toBe(0);
+  });
+
+  it("stays closed after failureThreshold - 1 consecutive failures (off-by-one guard)", () => {
+    const { clock } = stubClock();
+    const cb = new CircuitBreaker("m", cbConfig, clock);
+    for (let i = 0; i < cbConfig.failureThreshold - 1; i += 1) {
+      cb.recordFailure();
+    }
+    expect(cb.status("m").state).toBe("closed");
+    expect(cb.status("m").consecutiveFailures).toBe(cbConfig.failureThreshold - 1);
   });
 
   it("blocks calls while open by signalling not-allowed", () => {

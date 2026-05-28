@@ -60,14 +60,21 @@ const REQUEST: GatewayRequest = {
 };
 
 describe("Gateway.chat", () => {
-  it("returns a response with a UUID v4 request id and positive latency", async () => {
+  it("returns a response with a UUID v4 request id and exact deterministic latency", async () => {
+    // now() sequence: 1000 (start), 1042 (end). Math.max(1, 1042-1000) = 42.
+    const sequence = [1000, 1042];
+    let callIndex = 0;
+    const deterministicClock: Clock = {
+      now: (): number => sequence[callIndex++] ?? 1042,
+      sleep: (): Promise<void> => Promise.resolve(),
+    };
     const gateway = new Gateway(config([provider()]), {
       adapter: fakeAdapter(() => Promise.resolve(okResponse("gpt-oss-120b"))),
-      clock: stubClock(),
+      clock: deterministicClock,
     });
     const result = await gateway.chat(REQUEST);
     expect(result.usage.requestId).toMatch(UUID_V4);
-    expect(result.usage.latencyMs).toBeGreaterThan(0);
+    expect(result.usage.latencyMs).toBe(42);
   });
 
   it("stamps usage.costClass from the registry entry for the model", async () => {

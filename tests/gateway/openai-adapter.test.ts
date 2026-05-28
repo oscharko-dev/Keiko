@@ -74,6 +74,13 @@ describe("OpenAiAdapter.call", () => {
     await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(AuthenticationError);
   });
 
+  it("throws AuthenticationError on HTTP 403", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(jsonResponse({ error: "forbidden" }, { status: 403 })),
+    );
+    await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(AuthenticationError);
+  });
+
   it("throws RateLimitError with retryAfterMs from the Retry-After header", async () => {
     const adapter = adapterWith(() =>
       Promise.resolve(jsonResponse({}, { status: 429, headers: { "retry-after": "5" } })),
