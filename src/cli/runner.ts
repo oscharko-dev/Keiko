@@ -1,4 +1,5 @@
 import { runModelsCli } from "./models.js";
+import { runAgentCli } from "./run.js";
 import type { EnvSource } from "../gateway/config.js";
 import { SDK_VERSION } from "../sdk/index.js";
 
@@ -17,6 +18,7 @@ Usage:
   keiko [--version | -v]   Print the version and exit.
   keiko models list        List registered model capabilities.
   keiko models validate    Validate gateway configuration.
+  keiko run <task>         Run a bounded dry-run task through the agent harness.
 
 Exit codes:
   0  Success
@@ -24,7 +26,13 @@ Exit codes:
   2  Usage error
 `;
 
-export function runCli(args: readonly string[], io: CliIo, env: EnvSource = {}): number {
+// Returns a number for synchronous commands; the async `run` command returns a Promise.
+// The process shim in index.ts awaits the union before calling process.exit.
+export function runCli(
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource = {},
+): number | Promise<number> {
   const first = args[0];
   if (first === undefined || first === "--help" || first === "-h") {
     io.out(HELP_TEXT);
@@ -36,6 +44,9 @@ export function runCli(args: readonly string[], io: CliIo, env: EnvSource = {}):
   }
   if (first === "models") {
     return runModelsCli(args.slice(1), io, env);
+  }
+  if (first === "run") {
+    return runAgentCli(args.slice(1), io);
   }
   io.err(`keiko: unknown ${first.startsWith("-") ? "option" : "command"}: ${first}\n`);
   io.err("Run `keiko --help` for usage.\n");
