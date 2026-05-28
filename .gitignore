@@ -110,3 +110,12 @@ Temporary Items
 /.idea/
 /AGENTS.md
 /CLAUDE.md
+
+# Node
+node_modules/
+dist/
+coverage/
+*.log
+.env
+.env.*
+!.env.example

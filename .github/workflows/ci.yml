@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+
+permissions: {}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.x"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Download and verify actionlint
+        run: |
+          curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" -o actionlint.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum --check
+          tar -xzf actionlint.tar.gz actionlint
+          chmod +x actionlint
+      - name: Run actionlint
+        run: ./actionlint -color .github/workflows/*.yml
+
+  verify-pinned-shas:
+    name: Verify pinned action SHAs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - name: Assert all action references are pinned to 40-hex SHAs
+        run: |
+          set -euo pipefail
+          violations=$(grep -rnE '^\s*-?\s*uses:' .github/workflows/ \
+            | grep -vE 'uses:\s*\./' \
+            | grep -vE 'uses:\s*docker://' \
+            | grep -vE 'uses:\s*[A-Za-z0-9._/-]+@[0-9a-f]{40}([[:space:]]|$|#)' || true)
+          if [ -n "$violations" ]; then
+            echo "Unpinned action references (must pin to a full 40-hex commit SHA):"
+            echo "$violations"
+            exit 1
+          fi
+          echo "All action references are pinned to full commit SHAs."
+
+  build-scan-sbom-smoke:
+    name: Build, scan, SBOM, smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.x"
+          cache: "npm"
+      - run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Security audit (high and above)
+        run: npm audit --audit-level=high
+      - name: Generate CycloneDX SBOM
+        run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
+      - name: Smoke - help exits 0
+        run: node dist/cli/index.js --help
+      - name: Smoke - version exits 0
+        run: node dist/cli/index.js --version
+      - name: Smoke - unknown command exits 2
+        run: |
+          set +e
+          node dist/cli/index.js definitely-not-a-command
+          code=$?
+          if [ "$code" -ne 2 ]; then echo "expected exit 2, got $code"; exit 1; fi
+          echo "unknown-command exit code correct: $code"
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          retention-days: 90
