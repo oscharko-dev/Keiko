@@ -12,6 +12,7 @@ supersedes the old one — the old one is not deleted.
 |--------|-------|--------|------|
 | [ADR-0001](ADR-0001-project-foundation-and-toolchain.md) | Project Foundation and Toolchain | Accepted | 2026-05-28 |
 | [ADR-0002](ADR-0002-ci-and-supply-chain-security-baseline.md) | CI and Supply-Chain Security Baseline | Accepted | 2026-05-28 |
+| [ADR-0003](ADR-0003-model-gateway-boundary.md) | Model Gateway Boundary, Capability Registry, and Cost/Timeout Controls | Accepted | 2026-05-28 |
 
 ## Adding a new ADR
 
