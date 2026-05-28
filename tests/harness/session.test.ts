@@ -101,6 +101,20 @@ describe("createSession", () => {
     }
   });
 
+  it("every event in a completed run has schemaVersion '1'", async () => {
+    const sink = new MemoryEventSink();
+    const session = createSession(
+      EXPLAIN,
+      CONFIG,
+      deps(scriptedModel([response({ content: "ok" })]).port, sink),
+    );
+    const result = await session.result;
+    expect(result.outcome).toBe("completed");
+    for (const event of result.events) {
+      expect(event.schemaVersion).toBe("1");
+    }
+  });
+
   it("does not call the model again after cancel during an in-flight model call", async () => {
     let resolveCall: ((value: NormalizedResponse) => void) | undefined;
     let calls = 0;

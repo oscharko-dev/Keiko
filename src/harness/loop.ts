@@ -3,7 +3,7 @@
 // its handler, and emits a state:transition before every change (ADR-0004 D1, D3, D4).
 
 import { HARNESS_CODES, toFailure } from "./errors.js";
-import type { RunContext, StateStep } from "./context.js";
+import { contextBytes, type RunContext, type StateStep } from "./context.js";
 import { handleModelCall, handleToolCall } from "./executor.js";
 import { handlePatchProposal, handleReporting, handleVerification } from "./patcher.js";
 import { handleContextSelection, handlePlanning } from "./planner.js";
@@ -29,15 +29,32 @@ function checkLoopLimits(ctx: RunContext): StateStep | null {
   return null;
 }
 
+// Context-size and model-call-count checks, evaluated at every model-call entry so the
+// limit bounds calls that follow tool-call (not only the initial context-selection path).
+function checkModelCallLimits(ctx: RunContext): StateStep | null {
+  if (ctx.counters.modelCalls >= ctx.limits.maxModelCalls) {
+    ctx.failure = toFailure(HARNESS_CODES.LIMIT_MODEL_CALLS, "model-call budget exhausted");
+    return { to: "limit-exceeded", reason: "maxModelCalls exceeded" };
+  }
+  const bytes = contextBytes(ctx.messages);
+  if (bytes > ctx.limits.maxContextBytes) {
+    ctx.failure = toFailure(
+      HARNESS_CODES.LIMIT_CONTEXT_SIZE,
+      `context ${String(bytes)} bytes exceeds limit ${String(ctx.limits.maxContextBytes)}`,
+    );
+    return { to: "limit-exceeded", reason: "maxContextBytes exceeded" };
+  }
+  return null;
+}
+
 // Per-state-entry guards: abort is honoured before any state; call-count limits are
 // enforced immediately before the state that consumes the bounded resource.
 function checkEntryGuards(ctx: RunContext, state: HarnessStateName): StateStep | null {
   if (ctx.signal.aborted) {
     return abortStep("abort detected before state entry");
   }
-  if (state === "model-call" && ctx.counters.modelCalls >= ctx.limits.maxModelCalls) {
-    ctx.failure = toFailure(HARNESS_CODES.LIMIT_MODEL_CALLS, "model-call budget exhausted");
-    return { to: "limit-exceeded", reason: "maxModelCalls exceeded" };
+  if (state === "model-call") {
+    return checkModelCallLimits(ctx);
   }
   if (state === "tool-call") {
     return checkToolLimits(ctx);

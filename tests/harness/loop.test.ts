@@ -240,4 +240,61 @@ describe("runLoop — limit breaches each map to their category", () => {
     expect(outcome).toBe("failed");
     expect(failureCategory(sink.events())).toBe("HARNESS_MODEL_ERROR");
   });
+
+  it("context limit after tool-call -> HARNESS_LIMIT_CONTEXT_SIZE on second model-call entry", async () => {
+    // The first model call returns tool_calls; the tool returns a large output that pushes
+    // ctx.messages past maxContextBytes before the second model-call entry guard fires.
+    const largeOutput = "x".repeat(500);
+    const { port, calls } = scriptedModel([
+      response({ finishReason: "tool_calls", toolCalls: [toolCall("t1")] }),
+      response({ content: "should not reach here" }),
+    ]);
+    const largeTool: import("../../src/harness/ports.js").ToolPort = {
+      execute: (req) =>
+        Promise.resolve({ toolCallId: req.toolCallId, output: largeOutput, durationMs: 0 }),
+      listTools: () => [{ name: "read_file", description: "read", parameters: {} }],
+    };
+    // maxContextBytes must be large enough to pass the initial context-selection check
+    // but small enough to fail after the tool output is appended to ctx.messages.
+    const { ctx, sink } = buildContext({
+      task: INVESTIGATE,
+      model: port,
+      tools: largeTool,
+      limits: { maxContextBytes: 400 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_CONTEXT_SIZE");
+    // The entry guard fires BEFORE the second model call is dispatched; only one call was made.
+    expect(calls()).toBe(1);
+  });
+
+  it("wall-time exact boundary: elapsed === maxWallTimeMs does not exceed; elapsed > maxWallTimeMs does", async () => {
+    // elapsed === limit → run proceeds (> is the operator, not >=)
+    const { clock: clockA, set: setA } = stubClock(0);
+    const { port: portA } = scriptedModel([response()]);
+    const { ctx: ctxA } = buildContext({
+      task: EXPLAIN,
+      model: portA,
+      clock: clockA,
+      limits: { maxWallTimeMs: 100 },
+    });
+    setA(100); // elapsed === 100, limit === 100 → NOT exceeded
+    const outcomeA = await runLoop(ctxA);
+    expect(outcomeA).toBe("completed");
+
+    // elapsed > limit → limit-exceeded
+    const { clock: clockB, set: setB } = stubClock(0);
+    const { port: portB } = scriptedModel([response()]);
+    const { ctx: ctxB, sink: sinkB } = buildContext({
+      task: EXPLAIN,
+      model: portB,
+      clock: clockB,
+      limits: { maxWallTimeMs: 100 },
+    });
+    setB(101); // elapsed === 101 > 100 → exceeded
+    const outcomeB = await runLoop(ctxB);
+    expect(outcomeB).toBe("limit-exceeded");
+    expect(failureCategory(sinkB.events())).toBe("HARNESS_LIMIT_WALL_TIME");
+  });
 });

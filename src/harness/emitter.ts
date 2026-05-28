@@ -29,6 +29,14 @@ function redactSensitive(event: HarnessEvent): HarnessEvent {
       };
     case "patch:proposed":
       return { ...event, diff: redact(event.diff) };
+    case "run:completed":
+      // WHY: report and patchDiff carry full model output — non-provider-config secret patterns
+      // (issue #6) are out of Wave-1 scope; we redact the known shapes here.
+      return {
+        ...event,
+        report: redact(event.report),
+        ...(event.patchDiff === undefined ? {} : { patchDiff: redact(event.patchDiff) }),
+      };
     case "run:failed":
       return event.failure.detail === undefined
         ? event

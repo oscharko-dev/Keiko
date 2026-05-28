@@ -84,4 +84,57 @@ describe("redaction at non-memory sinks (ADR-0004 D6)", () => {
       expect(redacted.diff).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
     }
   });
+
+  it("redacts a secret in run:completed report before emitting to a non-retaining sink", () => {
+    const received: HarnessEvent[] = [];
+    const nonMemorySink: EventSink = { emit: (e) => received.push(e) };
+    const memory = new MemoryEventSink();
+    const emitter = new Emitter([memory, nonMemorySink], stubClock().clock, "run-1", "fp");
+    emitter.emit({
+      type: "run:completed",
+      report: "found Bearer sk-abcdefghijklmnopqrstuvwxyz in output",
+    });
+    const raw = memory.events()[0];
+    const redacted = received[0];
+    expect(raw?.type).toBe("run:completed");
+    expect(redacted?.type).toBe("run:completed");
+    if (raw?.type === "run:completed") {
+      expect(raw.report).toContain("sk-abcdefghijklmnopqrstuvwxyz");
+    }
+    if (redacted?.type === "run:completed") {
+      expect(redacted.report).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+      expect(redacted.report).toContain("[REDACTED]");
+    }
+  });
+
+  it("redacts a secret in run:completed patchDiff before emitting to a non-retaining sink", () => {
+    const received: HarnessEvent[] = [];
+    const nonMemorySink: EventSink = { emit: (e) => received.push(e) };
+    const memory = new MemoryEventSink();
+    const emitter = new Emitter([memory, nonMemorySink], stubClock().clock, "run-1", "fp");
+    emitter.emit({
+      type: "run:completed",
+      report: "clean",
+      patchDiff: "diff with Bearer sk-abcdefghijklmnopqrstuvwxyz inside",
+    });
+    const raw = memory.events()[0];
+    const redacted = received[0];
+    if (raw?.type === "run:completed" && redacted?.type === "run:completed") {
+      expect(raw.patchDiff).toContain("sk-abcdefghijklmnopqrstuvwxyz");
+      expect(redacted.patchDiff).not.toContain("sk-abcdefghijklmnopqrstuvwxyz");
+      expect(redacted.patchDiff).toContain("[REDACTED]");
+    }
+  });
+
+  it("does not spread patchDiff on run:completed when it is absent", () => {
+    const received: HarnessEvent[] = [];
+    const nonMemorySink: EventSink = { emit: (e) => received.push(e) };
+    const emitter = new Emitter([nonMemorySink], stubClock().clock, "run-1", "fp");
+    emitter.emit({ type: "run:completed", report: "ok" });
+    const event = received[0];
+    expect(event?.type).toBe("run:completed");
+    if (event?.type === "run:completed") {
+      expect("patchDiff" in event).toBe(false);
+    }
+  });
 });
