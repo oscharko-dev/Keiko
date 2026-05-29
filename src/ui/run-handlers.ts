@@ -18,22 +18,42 @@ import type { UiHandlerDeps } from "./deps.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 
+// Sentinel thrown (and caught in handleCreateRun) when the body exceeds MAX_BODY_BYTES. Using a
+// typed class avoids fragile string matching and clearly separates this case from I/O errors.
+class BodyTooLargeError extends Error {
+  constructor() {
+    super("request body too large");
+    this.name = "BodyTooLargeError";
+  }
+}
+
 // Reads the request body up to a byte cap (a bounded read protects the loopback BFF from an
-// oversized body). Resolves the decoded UTF-8 text, or rejects past the cap.
+// oversized body). Resolves the decoded UTF-8 text, or rejects with BodyTooLargeError past the cap.
+// When the cap is exceeded the stream is switched to flowing/drain mode (req.resume) so Node.js
+// continues consuming the socket data and the HTTP server can still write the 413 response over
+// the same connection (FIX H). The chunks array is cleared at that point to free accumulated memory.
 function readBody(req: IncomingMessage): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const chunks: Buffer[] = [];
     let total = 0;
+    let capped = false;
     req.on("data", (chunk: Buffer) => {
       total += chunk.length;
       if (total > MAX_BODY_BYTES) {
-        reject(new Error("request body too large"));
+        if (!capped) {
+          capped = true;
+          chunks.length = 0; // release accumulated buffers before draining
+          reject(new BodyTooLargeError());
+          req.resume(); // drain without buffering; lets the server write the 413 response
+        }
         return;
       }
       chunks.push(chunk);
     });
     req.on("end", () => {
-      resolve(Buffer.concat(chunks).toString("utf8"));
+      if (!capped) {
+        resolve(Buffer.concat(chunks).toString("utf8"));
+      }
     });
     req.on("error", reject);
   });
@@ -44,7 +64,18 @@ export async function handleCreateRun(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  const raw = await readBody(ctx.req);
+  let raw: string;
+  try {
+    raw = await readBody(ctx.req);
+  } catch (error) {
+    if (error instanceof BodyTooLargeError) {
+      return {
+        status: 413,
+        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
+      };
+    }
+    throw error;
+  }
   const parsed = parseRunRequest(raw);
   if ("code" in parsed) {
     return { status: 400, body: errorBody(parsed.code, parsed.message) };

@@ -91,7 +91,7 @@ function unitTestAppliable(
   report: UnitTestWorkflowReport,
 ): AppliableSnapshot | undefined {
   return report.status === "dry-run" && report.proposedDiff !== undefined
-    ? { kind: "unit-tests", payload: request.input }
+    ? { kind: "unit-tests", payload: request.input, limits: request.limits }
     : undefined;
 }
 
@@ -100,7 +100,7 @@ function bugAppliable(
   report: BugInvestigationReport,
 ): AppliableSnapshot | undefined {
   return report.status === "fix-proposed" && report.proposedDiff !== undefined
-    ? { kind: "bug-investigation", payload: request.input }
+    ? { kind: "bug-investigation", payload: request.input, limits: request.limits }
     : undefined;
 }
 
@@ -282,16 +282,17 @@ export async function applyRun(
   redactReport: (value: unknown) => unknown,
 ): Promise<unknown> {
   const input = isRecord(snapshot.payload) ? snapshot.payload : {};
+  const limitsOverride = snapshot.limits !== undefined ? { limits: snapshot.limits } : {};
   const deps = { model };
   if (snapshot.kind === "unit-tests") {
     const report = await generateUnitTests(
-      { ...input, modelId, apply: true } as unknown as UnitTestWorkflowInput,
+      { ...input, modelId, apply: true, ...limitsOverride } as unknown as UnitTestWorkflowInput,
       deps,
     );
     return redactReport(report);
   }
   const report = await investigateBug(
-    { ...input, modelId, apply: true } as unknown as BugInvestigationInput,
+    { ...input, modelId, apply: true, ...limitsOverride } as unknown as BugInvestigationInput,
     deps,
   );
   return redactReport(report);

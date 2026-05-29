@@ -11,11 +11,13 @@ import type { QueueEventSink } from "./sink.js";
 export type RunStatus = "running" | "completed" | "cancelled" | "failed";
 
 // The appliable snapshot the gated apply path (route 9) re-invokes with `apply: true`. `kind`
-// selects the workflow; `payload` is the original validated run input minus the apply flag. Stored
-// opaquely (the run engine owns its shape) so the registry stays free of workflow types.
+// selects the workflow; `payload` is the original validated run input minus the apply flag; `limits`
+// carries the per-run limits so the apply re-invocation matches the reviewed dry-run exactly.
+// Stored opaquely (the run engine owns its shape) so the registry stays free of workflow types.
 export interface AppliableSnapshot {
   readonly kind: "unit-tests" | "bug-investigation";
   readonly payload: unknown;
+  readonly limits: Record<string, unknown> | undefined;
 }
 
 export interface RunRecord {

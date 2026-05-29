@@ -72,6 +72,7 @@ describe("run registry completion capture", () => {
     registry.complete("a", "completed", { status: "dry-run" }, {
       kind: "unit-tests",
       payload: { workspaceRoot: "." },
+      limits: undefined,
     });
     const record = registry.get("a");
     expect(record?.status).toBe("completed");

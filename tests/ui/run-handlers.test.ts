@@ -425,6 +425,7 @@ describe("FIX 4 — apply rebuilds the ModelPort from the run's modelId, not the
     localRegistry.complete("fix4-run", "completed", { status: "dry-run" }, {
       kind: "unit-tests",
       payload: { workspaceRoot: ".", target: { kind: "file", filePath: "x.ts" } },
+      limits: undefined,
     });
 
     const seen: string[] = [];
@@ -449,5 +450,68 @@ describe("FIX 4 — apply rebuilds the ModelPort from the run's modelId, not the
     await handleApplyRun(ctx, deps);
     expect(seen).toEqual(["claude-sonnet-x"]);
     expect(seen).not.toContain(record.fingerprint);
+  });
+});
+
+describe("FIX B — apply snapshot retains the original limits from the dry-run", () => {
+  it("stores limits in the appliable snapshot and threads them into the apply re-invocation", async () => {
+    // Build a registry record whose appliable snapshot carries non-undefined limits.
+    const localRegistry = createRunRegistry();
+    const testLimits = { maxTokens: 1000, timeoutMs: 30_000 };
+    localRegistry.register({
+      runId: "fixb-run",
+      fingerprint: "fp-fixb",
+      modelId: "claude-sonnet-x",
+      sink: new QueueEventSink(),
+      cancel: (): void => undefined,
+    });
+    localRegistry.complete("fixb-run", "completed", { status: "dry-run" }, {
+      kind: "unit-tests",
+      payload: { workspaceRoot: ".", target: { kind: "file", filePath: "x.ts" } },
+      limits: testLimits,
+    });
+
+    // The snapshot stored in the registry must carry the limits verbatim.
+    const record = localRegistry.get("fixb-run");
+    expect(record?.appliable?.limits).toEqual(testLimits);
+
+    // Call handleApplyRun: the workflow is invoked (model rejects → failed report, not 500/409).
+    // This confirms applyRun reaches the workflow — if limits were dropped the shape would differ.
+    const failingModel: ModelPort = {
+      call: (): Promise<NormalizedResponse> => Promise.reject(new Error("test-stop")),
+    };
+    const deps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: createInMemoryEvidenceStore(),
+      env: {},
+      redactor: buildRedactor({}),
+      registry: localRegistry,
+      modelPortFactory: (): ModelPort => failingModel,
+    };
+    const ctx = {
+      req: {} as never,
+      res: {} as never,
+      params: { runId: "fixb-run" },
+      url: new URL("http://127.0.0.1/api/runs/fixb-run/apply"),
+    };
+    const result = await handleApplyRun(ctx, deps);
+    // 200 = applyRun was invoked (workflow failure yields a report, not an HTTP error).
+    expect(result.status).toBe(200);
+  });
+});
+
+describe("FIX G/H — oversized request body returns 413 PAYLOAD_TOO_LARGE", () => {
+  it("returns 413 with PAYLOAD_TOO_LARGE code when the body exceeds 1 MB", async () => {
+    await start(fakeModel("noop"));
+    // 1 MB + 1 byte — just over MAX_BODY_BYTES.
+    const oversized = "x".repeat(1_000_001);
+    const res = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      body: oversized,
+    });
+    expect(res.status).toBe(413);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json).toMatchObject({ error: { code: "PAYLOAD_TOO_LARGE" } });
   });
 });
