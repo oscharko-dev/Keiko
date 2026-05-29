@@ -88,6 +88,27 @@ async function listen(server: Server, port: number): Promise<void> {
   });
 }
 
+// Keeps the real-CLI process alive until a shutdown signal or server close. Resolves cleanly so
+// the caller can return 0. Registered listeners are removed on resolve to prevent leaks.
+export function waitForShutdown(server: Server): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const onClose = (): void => {
+      process.removeListener("SIGINT", onSignal);
+      process.removeListener("SIGTERM", onSignal);
+      resolve();
+    };
+    const onSignal = (): void => {
+      server.removeListener("close", onClose);
+      server.close(() => {
+        resolve();
+      });
+    };
+    server.once("close", onClose);
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
+  });
+}
+
 export async function runUiCli(
   args: readonly string[],
   io: CliIo,
@@ -109,5 +130,10 @@ export async function runUiCli(
   const server = await factory({ staticRoot, csp, port: parsed.port });
   await listen(server, parsed.port);
   io.out(`Keiko UI listening on http://${UI_HOST}:${String(parsed.port)}\n`);
+  // Block only in the real CLI path (no injected factory). Injected-server tests skip blocking so
+  // they don't hang; the real process must stay alive until signalled.
+  if (deps.createServer === undefined) {
+    await waitForShutdown(server);
+  }
   return 0;
 }

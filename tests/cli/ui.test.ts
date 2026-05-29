@@ -1,9 +1,10 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EventEmitter } from "node:events";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseUiArgs, runUiCli, type UiCliDeps } from "../../src/cli/ui.js";
+import { parseUiArgs, runUiCli, waitForShutdown, type UiCliDeps } from "../../src/cli/ui.js";
 import { DEFAULT_UI_PORT } from "../../src/ui/index.js";
 import type { CliIo } from "../../src/cli/runner.js";
 
@@ -112,5 +113,20 @@ describe("runUiCli", () => {
     expect(code).toBe(0);
     expect(record.port).toBe(4399);
     expect(out.join("")).toContain("http://127.0.0.1:4399");
+  });
+});
+
+describe("waitForShutdown", () => {
+  it("resolves when the server emits close", async () => {
+    const emitter = new EventEmitter();
+    const server = emitter as unknown as Server;
+    const sigintBefore = process.listenerCount("SIGINT");
+    const sigtermBefore = process.listenerCount("SIGTERM");
+    const promise = waitForShutdown(server);
+    emitter.emit("close");
+    await expect(promise).resolves.toBeUndefined();
+    // Listeners added by waitForShutdown must be cleaned up after the close event.
+    expect(process.listenerCount("SIGINT")).toBe(sigintBefore);
+    expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore);
   });
 });
