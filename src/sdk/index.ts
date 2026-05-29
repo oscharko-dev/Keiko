@@ -109,3 +109,42 @@ export {
   type Hypothesis,
   type VerifiedFindings,
 } from "../workflows/index.js";
+
+// Audit ledger / evidence manifests (ADR-0010). The first persistent-artifact surface: persistEvidence
+// builds → redacts-by-construction → writes a redacted, versioned EvidenceManifest, and listEvidence /
+// loadEvidence are the #13 UI seam. Exported via an explicit named block (not `export *`) to keep the
+// surface auditable; none of these names collides with an existing layer export (the layer does NOT
+// export a bare `summarizeForAudit` or `redact` — it composes them internally).
+export {
+  buildEvidenceManifest,
+  persistEvidence,
+  createAuditRedactor,
+  createNodeEvidenceStore,
+  createInMemoryEvidenceStore,
+  aggregateUsage,
+  resolveCostClass,
+  listEvidence,
+  loadEvidence,
+  applyRetention,
+  buildEvidenceReport,
+  renderEvidenceReport,
+  assertValidRunId,
+  EVIDENCE_SCHEMA_VERSION,
+  DEFAULT_RETENTION,
+  type AuditRedactionConfig,
+  type EvidenceBuildInput,
+  type EvidenceCommandExecution,
+  type EvidenceDeps,
+  type EvidenceListEntry,
+  type EvidenceManifest,
+  type EvidenceModel,
+  type EvidencePatch,
+  type EvidenceReasoningEntry,
+  type EvidenceReport,
+  type EvidenceRunIdentity,
+  type EvidenceStateTransition,
+  type EvidenceStore,
+  type EvidenceToolCall,
+  type EvidenceUsageTotals,
+  type RetentionPolicy,
+} from "../audit/index.js";

@@ -123,3 +123,7 @@ coverage/
 # Per-run tmp copy of the unit-test-generation integration fixture (ADR-0008 D11). Created under
 # the repo root so `npx vitest` resolves vitest from the repo's node_modules; cleaned up per test.
 .keiko-itest-*/
+
+# Audit evidence manifests (ADR-0010 D4). `keiko run` writes redacted evidence to the
+# workspace-relative default base dir by default; never commit it.
+.keiko/

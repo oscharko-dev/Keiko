@@ -68,3 +68,41 @@ export {
   type Hypothesis,
   type VerifiedFindings,
 } from "./workflows/index.js";
+
+// Audit ledger / evidence manifests (ADR-0010). Exported explicitly (not via `export *`) to keep the
+// public surface auditable, matching the workflow precedent above. None of these names collides with
+// an existing root export; in particular the layer does NOT export a bare `summarizeForAudit` or
+// `redact` (it composes them internally), so the canonical root `summarizeForAudit` is unaffected.
+export {
+  buildEvidenceManifest,
+  persistEvidence,
+  createAuditRedactor,
+  createNodeEvidenceStore,
+  createInMemoryEvidenceStore,
+  aggregateUsage,
+  resolveCostClass,
+  listEvidence,
+  loadEvidence,
+  applyRetention,
+  buildEvidenceReport,
+  renderEvidenceReport,
+  assertValidRunId,
+  EVIDENCE_SCHEMA_VERSION,
+  DEFAULT_RETENTION,
+  type AuditRedactionConfig,
+  type EvidenceBuildInput,
+  type EvidenceCommandExecution,
+  type EvidenceDeps,
+  type EvidenceListEntry,
+  type EvidenceManifest,
+  type EvidenceModel,
+  type EvidencePatch,
+  type EvidenceReasoningEntry,
+  type EvidenceReport,
+  type EvidenceRunIdentity,
+  type EvidenceStateTransition,
+  type EvidenceStore,
+  type EvidenceToolCall,
+  type EvidenceUsageTotals,
+  type RetentionPolicy,
+} from "./audit/index.js";
