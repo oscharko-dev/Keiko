@@ -39,3 +39,12 @@ export {
   type AppliableSnapshot,
 } from "./runs.js";
 export { QueueEventSink, type StreamEvent, type SseWriter } from "./sink.js";
+export { parseRunRequest, type RunRequest, type RunKind } from "./run-request.js";
+export { startRun, applyRun, type StartRunResult } from "./run-engine.js";
+export {
+  handleCreateRun,
+  handleRunEvents,
+  handleCancelRun,
+  handleGetRun,
+  handleApplyRun,
+} from "./run-handlers.js";

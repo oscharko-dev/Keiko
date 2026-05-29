@@ -83,16 +83,16 @@ describe("health handler", () => {
   });
 });
 
-describe("not-implemented placeholders (run routes, until Task B)", () => {
-  it("returns a 501 NOT_IMPLEMENTED envelope for a deferred run route", async () => {
+describe("run routes are wired (Task B)", () => {
+  it("returns 404 for an unknown run on the events route", async () => {
     const route = API_ROUTES.find((r) => r.pattern === "/api/runs/:runId/events");
-    const result = await route?.handler(emptyCtx, stubDeps);
-    expect(result).not.toBe(STREAMING);
+    const ctxWithRun: RouteContext = { ...emptyCtx, params: { runId: "unknown-run" } };
+    const result = await route?.handler(ctxWithRun, stubDeps);
     if (result === undefined || result === STREAMING) {
       throw new Error("expected a RouteResult");
     }
-    expect(result.status).toBe(501);
-    expect(result.body).toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
+    expect(result.status).toBe(404);
+    expect(result.body).toMatchObject({ error: { code: "NOT_FOUND" } });
   });
 });
 

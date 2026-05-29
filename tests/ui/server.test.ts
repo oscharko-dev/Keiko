@@ -159,10 +159,10 @@ describe("unknown API routes", () => {
     expect(await response.json()).toMatchObject({ error: { code: "METHOD_NOT_ALLOWED" } });
   });
 
-  it("returns 501 for a run route not yet wired (until Task B)", async () => {
+  it("returns 404 for an unknown run on the events route", async () => {
     const res = await fetchRaw("/api/runs/run-1/events");
-    expect(res.status).toBe(501);
-    expect(JSON.parse(res.text)).toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
+    expect(res.status).toBe(404);
+    expect(JSON.parse(res.text)).toMatchObject({ error: { code: "NOT_FOUND" } });
   });
 
   it("serves the read endpoints from the default 3-arg server (no handler deps)", async () => {

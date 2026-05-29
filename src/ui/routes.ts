@@ -15,6 +15,13 @@ import {
   handleEvidenceList,
   handleEvidenceDetail,
 } from "./read-handlers.js";
+import {
+  handleCreateRun,
+  handleRunEvents,
+  handleCancelRun,
+  handleGetRun,
+  handleApplyRun,
+} from "./run-handlers.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -54,26 +61,17 @@ function health(): RouteResult {
   return { status: 200, body: { status: "ok", version: SDK_VERSION } };
 }
 
-// The run-engine routes (5–9) are implemented in Task B (run-handlers.ts) and wired into the table
-// then. Until that wiring lands they return a 501 placeholder so the contract surface stays explicit.
-function notImplemented(): RouteResult {
-  return {
-    status: 501,
-    body: errorBody("NOT_IMPLEMENTED", "This route is implemented in a later wave."),
-  };
-}
-
 // The full eleven-route contract (D5), in contract order.
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
   { method: "GET", pattern: "/api/config", handler: handleConfig },
   { method: "GET", pattern: "/api/models", handler: handleModels },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
-  { method: "POST", pattern: "/api/runs", handler: notImplemented },
-  { method: "GET", pattern: "/api/runs/:runId/events", handler: notImplemented },
-  { method: "POST", pattern: "/api/runs/:runId/cancel", handler: notImplemented },
-  { method: "GET", pattern: "/api/runs/:runId", handler: notImplemented },
-  { method: "POST", pattern: "/api/runs/:runId/apply", handler: notImplemented },
+  { method: "POST", pattern: "/api/runs", handler: handleCreateRun },
+  { method: "GET", pattern: "/api/runs/:runId/events", handler: handleRunEvents },
+  { method: "POST", pattern: "/api/runs/:runId/cancel", handler: handleCancelRun },
+  { method: "GET", pattern: "/api/runs/:runId", handler: handleGetRun },
+  { method: "POST", pattern: "/api/runs/:runId/apply", handler: handleApplyRun },
   { method: "GET", pattern: "/api/evidence", handler: handleEvidenceList },
   { method: "GET", pattern: "/api/evidence/:runId", handler: handleEvidenceDetail },
 ];
