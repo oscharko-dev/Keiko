@@ -31,6 +31,10 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "build:ui": "node scripts/build-ui.mjs",
+    "check:package-surface": "node scripts/check-package-surface.mjs",
+    "prepack": "npm run build && npm run build:ui && npm run check:package-surface",
+    "prepublishOnly": "npm run build && npm run build:ui && npm run check:package-surface",
     "clean": "rm -rf dist coverage"
   },
   "devDependencies": {

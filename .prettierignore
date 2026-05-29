@@ -5,3 +5,4 @@ package-lock.json
 .github/ISSUE_TEMPLATE/
 .github/workflows/
 docs/adr/
+ui/
