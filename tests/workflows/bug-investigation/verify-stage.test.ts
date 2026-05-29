@@ -14,21 +14,35 @@ import {
   type WorkspaceFs,
   type WorkspaceInfo,
 } from "../../../src/workspace/index.js";
-import type { PatchFileChange } from "../../../src/tools/index.js";
+import type { PatchFileChange, SpawnFn } from "../../../src/tools/index.js";
 import type { BugInvestigationInput } from "../../../src/workflows/bug-investigation/types.js";
+import { recordingSpawn, scriptChildClose } from "../../verification/_support.js";
 
 const ROOT = "/repo";
 
-function runState(framework: "vitest" | "unknown"): {
+interface StateOpts {
+  readonly withTestScript?: boolean;
+  readonly files?: Record<string, string>;
+  readonly spawn?: SpawnFn;
+}
+
+function runState(
+  framework: "vitest" | "unknown",
+  opts: StateOpts = {},
+): {
   state: BugRunState;
   workspace: WorkspaceInfo;
   fs: WorkspaceFs;
 } {
-  const files: Record<string, string> =
+  const pkg =
     framework === "vitest"
-      ? { "package.json": JSON.stringify({ name: "d", devDependencies: { vitest: "^4" } }) }
-      : { "package.json": JSON.stringify({ name: "d" }) };
-  const fs = memFs(ROOT, files);
+      ? JSON.stringify({
+          name: "d",
+          ...(opts.withTestScript === true ? { scripts: { test: "vitest run" } } : {}),
+          devDependencies: { vitest: "^4" },
+        })
+      : JSON.stringify({ name: "d" });
+  const fs = memFs(ROOT, { "package.json": pkg, ...(opts.files ?? {}) });
   const workspace = detectWorkspace(ROOT, fs);
   const input: BugInvestigationInput = {
     workspaceRoot: ROOT,
@@ -37,7 +51,11 @@ function runState(framework: "vitest" | "unknown"): {
   };
   const state = buildBugRunState(
     input,
-    { model: { call: () => Promise.reject(new Error("unused")) }, fs },
+    {
+      model: { call: () => Promise.reject(new Error("unused")) },
+      fs,
+      ...(opts.spawn === undefined ? {} : { spawn: opts.spawn }),
+    },
     computeBugFingerprint(input.report, "m"),
   );
   return { state, workspace, fs };
@@ -61,5 +79,22 @@ describe("runBugVerification (D11)", () => {
     const out = await runBugVerification(state, workspace, [changed("src/orphan.ts")], fs);
     expect(out.summary).toBeUndefined();
     expect(out.skipReason).toBe(SKIP_UNRESOLVED);
+  });
+
+  it("runs the resolved targeted test and reports passed (mock spawn, no real process)", async () => {
+    // A mirrored test exists for the changed source, so resolveTargetedTests yields a step; the fake
+    // spawn exits 0 so the audit summary's overallStatus is `passed` — mutation-robust evidence
+    // independent of the on-disk integration test.
+    const spawn = recordingSpawn();
+    const { state, workspace, fs } = runState("vitest", {
+      withTestScript: true,
+      files: { "tests/buggy.test.ts": "import { test } from 'vitest';\ntest('x', () => {});\n" },
+      spawn: spawn.fn,
+    });
+    scriptChildClose(spawn.child, { stdout: "1 passed", exitCode: 0 });
+    const out = await runBugVerification(state, workspace, [changed("src/buggy.ts")], fs);
+    expect(out.skipReason).toBeUndefined();
+    expect(out.summary?.overallStatus).toBe("passed");
+    expect(spawn.calls().length).toBe(1);
   });
 });
