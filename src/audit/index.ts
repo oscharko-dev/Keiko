@@ -13,6 +13,16 @@ export { applyRetention } from "./retention.js";
 export { buildEvidenceReport, renderEvidenceReport, type EvidenceReport } from "./report.js";
 export { assertValidRunId } from "./runid.js";
 export {
+  buildWorkflowManifest,
+  foldWorkflowUsage,
+  persistWorkflowEvidence,
+  type EvidencePersistContext,
+  type WorkflowEventLike,
+  type WorkflowRunIdentity,
+  type WorkflowRunKind,
+  type WorkflowTerminalStatus,
+} from "./workflow-evidence.js";
+export {
   createInMemoryEvidenceStore,
   createNodeEvidenceStore,
   type EvidenceStore,
