@@ -1,0 +1,12 @@
+{
+  "name": "keiko-gen-tests-fixture",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.7"
+  }
+}

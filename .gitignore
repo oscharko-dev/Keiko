@@ -119,3 +119,7 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# Per-run tmp copy of the unit-test-generation integration fixture (ADR-0008 D11). Created under
+# the repo root so `npx vitest` resolves vitest from the repo's node_modules; cleaned up per test.
+.keiko-itest-*/
