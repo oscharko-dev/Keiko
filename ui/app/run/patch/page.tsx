@@ -156,12 +156,21 @@ function ApplyConfirm({ onConfirm, onCancel, applying }: ApplyConfirmProps): Rea
   const confirmRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => { confirmRef.current?.focus(); }, []);
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>): void {
-    if (e.key === "Escape" && !applying) {
-      e.preventDefault();
-      onCancel();
+  // Escape dismisses the dialog. A document-level listener (rather than a handler on the
+  // non-interactive alertdialog container) keeps Escape working whichever control inside the dialog
+  // holds focus, and avoids assigning an interaction to a non-interactive element.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent): void {
+      if (e.key === "Escape" && !applying) {
+        e.preventDefault();
+        onCancel();
+      }
     }
-  }
+    document.addEventListener("keydown", onKey);
+    return (): void => {
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [applying, onCancel]);
 
   return (
     <div
@@ -169,7 +178,6 @@ function ApplyConfirm({ onConfirm, onCancel, applying }: ApplyConfirmProps): Rea
       aria-modal="true"
       aria-labelledby="apply-confirm-heading"
       aria-describedby="apply-confirm-desc"
-      onKeyDown={handleKeyDown}
       className="rounded-lg border border-orange-300 bg-orange-50 p-4"
     >
       <h3 id="apply-confirm-heading" className="font-semibold text-orange-900">Apply patch to workspace?</h3>
