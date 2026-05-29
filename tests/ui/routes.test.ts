@@ -1,10 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { API_ROUTES, isApiPath, matchRoute, type RouteContext } from "../../src/ui/routes.js";
+import {
+  API_ROUTES,
+  isApiPath,
+  matchRoute,
+  STREAMING,
+  type RouteContext,
+} from "../../src/ui/routes.js";
+import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../src/ui/index.js";
 import { SDK_VERSION } from "../../src/sdk/index.js";
 
 const emptyCtx: RouteContext = {
   req: {} as RouteContext["req"],
+  res: {} as RouteContext["res"],
   params: {},
+  url: new URL("http://127.0.0.1/api/health"),
+};
+
+const stubDeps: UiHandlerDeps = {
+  config: undefined,
+  configPresent: false,
+  evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+  env: {},
+  redactor: buildRedactor({}),
+  registry: createRunRegistry(),
+  modelPortFactory: () => undefined,
 };
 
 describe("API route contract", () => {
@@ -59,17 +78,21 @@ describe("health handler", () => {
   it("returns ok with the SDK version", async () => {
     const route = API_ROUTES.find((r) => r.pattern === "/api/health");
     expect(route).toBeDefined();
-    const result = await route?.handler(emptyCtx);
+    const result = await route?.handler(emptyCtx, stubDeps);
     expect(result).toEqual({ status: 200, body: { status: "ok", version: SDK_VERSION } });
   });
 });
 
-describe("not-implemented placeholders", () => {
-  it("returns a 501 NOT_IMPLEMENTED envelope for a deferred route", async () => {
-    const route = API_ROUTES.find((r) => r.pattern === "/api/config");
-    const result = await route?.handler(emptyCtx);
-    expect(result?.status).toBe(501);
-    expect(result?.body).toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
+describe("not-implemented placeholders (run routes, until Task B)", () => {
+  it("returns a 501 NOT_IMPLEMENTED envelope for a deferred run route", async () => {
+    const route = API_ROUTES.find((r) => r.pattern === "/api/runs/:runId/events");
+    const result = await route?.handler(emptyCtx, stubDeps);
+    expect(result).not.toBe(STREAMING);
+    if (result === undefined || result === STREAMING) {
+      throw new Error("expected a RouteResult");
+    }
+    expect(result.status).toBe(501);
+    expect(result.body).toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
   });
 });
 

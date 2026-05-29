@@ -159,9 +159,17 @@ describe("unknown API routes", () => {
     expect(await response.json()).toMatchObject({ error: { code: "METHOD_NOT_ALLOWED" } });
   });
 
-  it("returns 501 for a deferred route", async () => {
-    const res = await fetchRaw("/api/models");
+  it("returns 501 for a run route not yet wired (until Task B)", async () => {
+    const res = await fetchRaw("/api/runs/run-1/events");
     expect(res.status).toBe(501);
     expect(JSON.parse(res.text)).toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
+  });
+
+  it("serves the read endpoints from the default 3-arg server (no handler deps)", async () => {
+    const res = await fetchRaw("/api/models");
+    expect(res.status).toBe(200);
+    const body = JSON.parse(res.text) as { models: unknown[] };
+    expect(Array.isArray(body.models)).toBe(true);
+    expect(body.models.length).toBeGreaterThan(0);
   });
 });

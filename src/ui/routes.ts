@@ -1,28 +1,47 @@
-// BFF route dispatch skeleton (ADR-0011 D5). The eleven-route contract is wired here; Wave 1
-// implements only `GET /api/health`. Every other route is registered and returns a 501
-// NOT_IMPLEMENTED placeholder so the contract surface is explicit and Wave 2 fills the handlers.
-// Responses are the redacted error envelope `{ error: { code, message } }` for non-2xx.
+// BFF route dispatch (ADR-0011 D5). The eleven-route contract is wired here. The route TABLE
+// (method + pattern) is static and dependency-free; each entry names a handler that receives the
+// request context AND the per-server handler dependencies (resolved config, evidence store, run
+// registry, redactor — see deps.ts). A handler returns a RouteResult (status + JSON body, which the
+// server serializes) OR the STREAMING sentinel, meaning it has taken over the raw ServerResponse
+// (the SSE events route). Non-2xx bodies use the redacted error envelope `{ error: { code, message } }`.
 
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { SDK_VERSION } from "../sdk/index.js";
+import type { UiHandlerDeps } from "./deps.js";
+import {
+  handleConfig,
+  handleModels,
+  handleWorkflows,
+  handleEvidenceList,
+  handleEvidenceDetail,
+} from "./read-handlers.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
 }
 
-// A route handler returns the HTTP status and the JSON body to serialize. Handlers are pure with
-// respect to the response object: the server writes status, headers, and body.
+// A route handler returns the HTTP status and the JSON body to serialize, or STREAMING when it has
+// written directly to the ServerResponse (SSE) and the server must not write a JSON body.
 export interface RouteResult {
   readonly status: number;
   readonly body: unknown;
 }
 
+export const STREAMING = Symbol("streaming");
+export type HandlerOutcome = RouteResult | typeof STREAMING;
+
 export interface RouteContext {
   readonly req: IncomingMessage;
+  readonly res: ServerResponse;
   readonly params: Readonly<Record<string, string>>;
+  // Parsed request URL (loopback-authority base); handlers read the query without re-parsing.
+  readonly url: URL;
 }
 
-export type RouteHandler = (ctx: RouteContext) => RouteResult | Promise<RouteResult>;
+export type RouteHandler = (
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+) => HandlerOutcome | Promise<HandlerOutcome>;
 
 export interface RouteDefinition {
   readonly method: string;
@@ -31,33 +50,32 @@ export interface RouteDefinition {
   readonly handler: RouteHandler;
 }
 
-function notImplemented(): RouteResult {
-  return {
-    status: 501,
-    body: {
-      error: { code: "NOT_IMPLEMENTED", message: "This route is implemented in a later wave." },
-    } satisfies ApiError,
-  };
-}
-
 function health(): RouteResult {
   return { status: 200, body: { status: "ok", version: SDK_VERSION } };
 }
 
-// The full eleven-route contract (D5). Order is the contract order; `/api/health` is the only live
-// handler in Wave 1.
+// The run-engine routes (5–9) are implemented in Task B (run-handlers.ts) and wired into the table
+// then. Until that wiring lands they return a 501 placeholder so the contract surface stays explicit.
+function notImplemented(): RouteResult {
+  return {
+    status: 501,
+    body: errorBody("NOT_IMPLEMENTED", "This route is implemented in a later wave."),
+  };
+}
+
+// The full eleven-route contract (D5), in contract order.
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
-  { method: "GET", pattern: "/api/config", handler: notImplemented },
-  { method: "GET", pattern: "/api/models", handler: notImplemented },
-  { method: "GET", pattern: "/api/workflows", handler: notImplemented },
+  { method: "GET", pattern: "/api/config", handler: handleConfig },
+  { method: "GET", pattern: "/api/models", handler: handleModels },
+  { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
   { method: "POST", pattern: "/api/runs", handler: notImplemented },
   { method: "GET", pattern: "/api/runs/:runId/events", handler: notImplemented },
   { method: "POST", pattern: "/api/runs/:runId/cancel", handler: notImplemented },
   { method: "GET", pattern: "/api/runs/:runId", handler: notImplemented },
   { method: "POST", pattern: "/api/runs/:runId/apply", handler: notImplemented },
-  { method: "GET", pattern: "/api/evidence", handler: notImplemented },
-  { method: "GET", pattern: "/api/evidence/:runId", handler: notImplemented },
+  { method: "GET", pattern: "/api/evidence", handler: handleEvidenceList },
+  { method: "GET", pattern: "/api/evidence/:runId", handler: handleEvidenceDetail },
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured
@@ -121,7 +139,6 @@ export function errorBody(code: string, message: string): ApiError {
   return { error: { code, message } };
 }
 
-// Re-exported for callers that build responses (the server writes these to the API response).
 export function notFoundBody(): ApiError {
   return errorBody("NOT_FOUND", "The requested resource was not found.");
 }

@@ -9,7 +9,14 @@ import type { Server } from "node:http";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createUiServer, loadCspHeader, DEFAULT_UI_PORT, UI_HOST } from "../ui/index.js";
+import {
+  createUiServer,
+  loadCspHeader,
+  buildUiHandlerDeps,
+  DEFAULT_UI_PORT,
+  UI_HOST,
+  type UiHandlerDeps,
+} from "../ui/index.js";
 import type { EnvSource } from "../gateway/config.js";
 import type { CliIo } from "./runner.js";
 
@@ -35,6 +42,7 @@ export interface UiCliDeps {
     staticRoot: string;
     csp: string;
     port: number;
+    handlerDeps: UiHandlerDeps;
   }) => Server | Promise<Server>;
   readonly staticRoot?: string;
   readonly hashesFile?: string;
@@ -112,7 +120,7 @@ export function waitForShutdown(server: Server): Promise<void> {
 export async function runUiCli(
   args: readonly string[],
   io: CliIo,
-  _env: EnvSource,
+  env: EnvSource,
   deps: UiCliDeps = {},
 ): Promise<number> {
   const parsed = parseUiArgs(args);
@@ -126,8 +134,13 @@ export async function runUiCli(
     return 1;
   }
   const csp = await loadCspHeader(deps.hashesFile ?? join(staticRoot, "..", "csp-hashes.json"));
+  const handlerDeps = buildUiHandlerDeps({
+    configPath: parsed.config,
+    evidenceDir: parsed.evidenceDir,
+    env,
+  });
   const factory = deps.createServer ?? createUiServer;
-  const server = await factory({ staticRoot, csp, port: parsed.port });
+  const server = await factory({ staticRoot, csp, port: parsed.port, handlerDeps });
   await listen(server, parsed.port);
   io.out(`Keiko UI listening on http://${UI_HOST}:${String(parsed.port)}\n`);
   // Block only in the real CLI path (no injected factory). Injected-server tests skip blocking so
