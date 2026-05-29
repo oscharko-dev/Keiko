@@ -40,6 +40,18 @@ function underSensitiveDir(lower: string): boolean {
   return SENSITIVE_DIRS.some((dir) => lower === dir || lower.startsWith(`${dir}/`));
 }
 
+// Drops `.` and empty ("//") segments so the guard sees the SAME form #6 resolveWithinWorkspace
+// collapses to. Without this, `./.husky/pre-commit` and `.//.github/x` slip past the dir/basename
+// checks (they don't literally start with `.github/`/`.husky/`) yet #6 writes the real protected
+// file (security fix C1). Run only AFTER isTraversal has fail-closed `..`/leading-`/` on the raw
+// path. Pure string ops — no regex.
+function normalizePosix(posixPath: string): string {
+  return posixPath
+    .split("/")
+    .filter((segment) => segment !== "" && segment !== ".")
+    .join("/");
+}
+
 // The sensitive-path guard (D6 bound 2). Returns true when the path must be rejected as
 // out-of-scope. Manifest/config edits are NOT sensitive (see isElevatedReviewPath).
 export function isSensitivePath(relPath: string): boolean {
@@ -47,7 +59,7 @@ export function isSensitivePath(relPath: string): boolean {
   if (isTraversal(posixPath)) {
     return true;
   }
-  const lower = posixPath.toLowerCase();
+  const lower = normalizePosix(posixPath).toLowerCase();
   if (underSensitiveDir(lower)) {
     return true;
   }
@@ -55,9 +67,10 @@ export function isSensitivePath(relPath: string): boolean {
 }
 
 // Manifest/config edits a fix may legitimately need. ALLOWED, but flagged so the report surfaces
-// them as an elevated-review item. A pure basename predicate (case-insensitive).
+// them as an elevated-review item. A pure basename predicate (case-insensitive). Normalizes `./`
+// and `//` segments first so a `./package.json` form is flagged identically to `package.json`.
 export function isElevatedReviewPath(relPath: string): boolean {
-  const base = basename(toPosix(relPath).toLowerCase());
+  const base = basename(normalizePosix(toPosix(relPath)).toLowerCase());
   if (base === "package.json") {
     return true;
   }

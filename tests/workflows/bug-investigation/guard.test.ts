@@ -51,9 +51,30 @@ describe("isSensitivePath (AC #9 patch handling / D6 scope guard)", () => {
   it("handles backslash path separators", () => {
     expect(isSensitivePath(".github\\workflows\\ci.yml")).toBe(true);
   });
+
+  it("rejects sensitive paths hidden behind ./ and // prefixes (C1 bypass)", () => {
+    // #6 resolveWithinWorkspace collapses ./ and // and would write the REAL protected file, so the
+    // guard must normalize before the dir/basename checks.
+    expect(isSensitivePath("./.husky/pre-commit")).toBe(true);
+    expect(isSensitivePath(".//.github/workflows/ci.yml")).toBe(true);
+    expect(isSensitivePath("./.GITHUB/x")).toBe(true);
+    expect(isSensitivePath(".//package-lock.json")).toBe(true);
+    expect(isSensitivePath("./.github")).toBe(true);
+    expect(isSensitivePath("./src/../.husky/pre-commit")).toBe(true); // .. still fail-closes
+  });
+
+  it("still allows legitimate paths with a ./ prefix (no false positive)", () => {
+    expect(isSensitivePath("./src/foo.ts")).toBe(false);
+    expect(isSensitivePath(".//src/foo.ts")).toBe(false);
+  });
 });
 
 describe("isElevatedReviewPath (D6 manifest/config surfacing)", () => {
+  it("flags a ./-prefixed manifest identically to the bare form (C1 normalization)", () => {
+    expect(isElevatedReviewPath("./package.json")).toBe(true);
+    expect(isElevatedReviewPath(".//tsconfig.json")).toBe(true);
+  });
+
   it("flags manifest and tsconfig edits", () => {
     expect(isElevatedReviewPath("package.json")).toBe(true);
     expect(isElevatedReviewPath("tsconfig.json")).toBe(true);
