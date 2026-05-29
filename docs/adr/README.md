@@ -21,6 +21,7 @@ supersedes the old one — the old one is not deleted.
 | [ADR-0009](ADR-0009-bug-investigation-and-regression-test-workflow.md) | Bug Investigation and Regression-Test Workflow | Accepted | 2026-05-29 |
 | [ADR-0010](ADR-0010-audit-ledger-and-evidence-manifests.md) | Audit Ledger and Evidence Manifests | Accepted | 2026-05-29 |
 | [ADR-0011](ADR-0011-wave-1-user-interface-and-packaging.md) | Wave-1 User Interface and Packaging | Accepted | 2026-05-29 |
+| [ADR-0012](ADR-0012-wave-1-evaluation-harness-and-model-benchmarks.md) | Wave 1 Evaluation Harness and Model Benchmarks | Accepted | 2026-05-29 |
 
 ## Adding a new ADR
 
