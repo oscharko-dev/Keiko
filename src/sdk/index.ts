@@ -81,3 +81,31 @@ export {
   type WorkflowLimits,
   type WorkflowStatus,
 } from "../workflows/index.js";
+
+// Bug-investigation workflow (ADR-0009). The second programmatic workflow surface: investigateBug
+// is the single entry, BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR lets a UI (#13) render it without the
+// implementation, and the BugInvestigationReport (with its structural verified/hypothesis split)
+// plus the BugInvestigationEvent union are the stable contract the #10 audit ledger persists. The
+// Markdown renderer is aliased to avoid colliding with the unit-test workflow's renderMarkdownReport.
+export {
+  investigateBug,
+  renderBugMarkdownReport as renderBugInvestigationReport,
+  BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
+  DEFAULT_BUG_WORKFLOW_LIMITS,
+  isSensitivePath,
+  isElevatedReviewPath,
+  parseFailureEvidence,
+  type BugInvestigationDeps,
+  type BugInvestigationEvent,
+  type BugInvestigationInput,
+  type BugInvestigationReport,
+  type BugReportInput,
+  type BugWorkflowEventSink,
+  type BugWorkflowLimits,
+  type BugWorkflowStatus,
+  type ChangedFile,
+  type FailureEvidence,
+  type FailureFrame,
+  type Hypothesis,
+  type VerifiedFindings,
+} from "../workflows/index.js";

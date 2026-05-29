@@ -40,3 +40,31 @@ export {
   type WorkflowLimits,
   type WorkflowStatus,
 } from "./workflows/index.js";
+
+// Bug-investigation workflow (ADR-0009). Exported explicitly (not via `export *`) for the same
+// reason as the unit-test workflow: the event family reuses harness event-type NAMES by structural
+// convention, so a star re-export would collide with the harness ones surfaced above. The Markdown
+// renderer is aliased to renderBugInvestigationReport (mirroring renderUnitTestReport) so the two
+// workflow renderers do not collide at the package root.
+export {
+  investigateBug,
+  renderBugMarkdownReport as renderBugInvestigationReport,
+  BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
+  DEFAULT_BUG_WORKFLOW_LIMITS,
+  isSensitivePath,
+  isElevatedReviewPath,
+  parseFailureEvidence,
+  type BugInvestigationDeps,
+  type BugInvestigationEvent,
+  type BugInvestigationInput,
+  type BugInvestigationReport,
+  type BugReportInput,
+  type BugWorkflowEventSink,
+  type BugWorkflowLimits,
+  type BugWorkflowStatus,
+  type ChangedFile,
+  type FailureEvidence,
+  type FailureFrame,
+  type Hypothesis,
+  type VerifiedFindings,
+} from "./workflows/index.js";
