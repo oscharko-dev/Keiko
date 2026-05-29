@@ -156,14 +156,23 @@ function verificationLines(report: BugInvestigationReport): readonly string[] {
 }
 
 function hypothesisLines(report: BugInvestigationReport): readonly string[] {
+  const h = report.hypothesis;
+  // Suppress the section entirely when the model produced no hypothesis (rejected/failed paths), so
+  // the rendered report does not show a bare "UNVERIFIED" header with no content.
+  const hasContent =
+    h.rootCause !== undefined ||
+    h.regressionTestStrategy !== undefined ||
+    h.uncertainty !== undefined ||
+    h.confidence !== undefined;
+  if (!hasContent) {
+    return [];
+  }
   return [
     "## Hypothesis (UNVERIFIED — model output)",
-    ...sectionIf("Root cause", report.hypothesis.rootCause),
-    ...sectionIf("Regression test", report.hypothesis.regressionTestStrategy),
-    ...sectionIf("Uncertainty", report.hypothesis.uncertainty),
-    ...(report.hypothesis.confidence === undefined
-      ? []
-      : [`Confidence: ${report.hypothesis.confidence}`, ""]),
+    ...sectionIf("Root cause", h.rootCause),
+    ...sectionIf("Regression test", h.regressionTestStrategy),
+    ...sectionIf("Uncertainty", h.uncertainty),
+    ...(h.confidence === undefined ? [] : [`Confidence: ${h.confidence}`, ""]),
   ];
 }
 

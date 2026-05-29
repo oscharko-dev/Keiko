@@ -146,4 +146,27 @@ describe("renderBugMarkdownReport", () => {
     expect(md).toContain("investigation-only");
     expect(md).not.toContain("Changed files (verified)");
   });
+
+  it("suppresses the hypothesis section when the model produced no hypothesis (rejected)", () => {
+    const md = renderBugMarkdownReport(
+      assembleBugReport(
+        parts({
+          status: "rejected",
+          patchFiles: [],
+          patchValidates: false,
+          patchApplied: false,
+          verification: undefined,
+          proposedDiff: undefined,
+          dryRunPreview: undefined,
+          hypothesis: {
+            rootCause: undefined,
+            regressionTestStrategy: undefined,
+            uncertainty: undefined,
+            confidence: undefined,
+          },
+        }),
+      ),
+    );
+    expect(md).not.toContain("UNVERIFIED — model output");
+  });
 });
