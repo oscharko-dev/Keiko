@@ -1,0 +1,131 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
+import PatchPage from "./page";
+import * as api from "@/lib/api";
+
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
+
+vi.mock("next/navigation", () => ({
+  useParams: () => ({ runId: "run-patch-456" }),
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
+vi.mock("@/lib/api", () => ({
+  fetchRunReport: vi.fn(),
+  applyRun: vi.fn(),
+  ApiError: class ApiError extends Error {
+    code: string;
+    status: number;
+    constructor(code: string, msg: string, status: number) {
+      super(msg);
+      this.code = code;
+      this.status = status;
+    }
+  },
+}));
+
+const dryRunReport = {
+  report: {
+    status: "dry-run" as const,
+    proposedDiff:
+      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,2 +1,3 @@\n const x = 1;\n+const y = 2;\n",
+    changedFiles: [
+      {
+        path: "src/foo.ts",
+        kind: "modified",
+        addedLines: 1,
+        removedLines: 0,
+        elevatedReview: false,
+      },
+    ],
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe("PatchPage", () => {
+  beforeEach(() => {
+    vi.mocked(api.fetchRunReport).mockResolvedValue(dryRunReport);
+    vi.mocked(api.applyRun).mockResolvedValue({
+      report: { status: "completed" },
+    });
+  });
+
+  it("renders the patch review heading after loading", async () => {
+    render(<PatchPage />);
+    await waitFor(() => {
+      expect(
+        screen.getByRole("heading", { level: 1, name: /patch review/i }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("renders the diff viewer", async () => {
+    render(<PatchPage />);
+    await waitFor(() => {
+      // The diff region should be present
+      expect(screen.getByRole("heading", { name: /proposed diff/i })).toBeInTheDocument();
+    });
+  });
+
+  it("Apply patch button is reachable by keyboard", async () => {
+    render(<PatchPage />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /apply patch/i })).toBeInTheDocument();
+    });
+    const applyBtn = screen.getByRole("button", { name: /apply patch/i });
+    applyBtn.focus();
+    expect(document.activeElement).toBe(applyBtn);
+  });
+
+  it("shows confirmation before applying", async () => {
+    const user = userEvent.setup();
+    render(<PatchPage />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /apply patch/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /apply patch/i }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /confirm apply/i })).toBeInTheDocument();
+  });
+
+  it("calls applyRun after confirmation", async () => {
+    const user = userEvent.setup();
+    render(<PatchPage />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /apply patch/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /apply patch/i }));
+    await user.click(screen.getByRole("button", { name: /confirm apply/i }));
+    await waitFor(() => {
+      expect(api.applyRun).toHaveBeenCalledWith("run-patch-456");
+    });
+  });
+
+  it("Apply button disabled when run is not appliable", async () => {
+    vi.mocked(api.fetchRunReport).mockResolvedValue({
+      report: { status: "completed" },
+    });
+    render(<PatchPage />);
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
+    });
+    // No "Apply patch" button when not appliable
+    expect(screen.queryByRole("button", { name: /apply patch/i })).not.toBeInTheDocument();
+  });
+
+  it("has no axe-detectable accessibility violations after load", async () => {
+    const { container } = render(<PatchPage />);
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
+    });
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
+});
