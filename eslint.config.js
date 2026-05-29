@@ -4,7 +4,7 @@ import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "coverage/**", "node_modules/**", "ui/**", "scripts/**"] },
+  { ignores: ["dist/**", "coverage/**", "node_modules/**", "ui/**"] },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   ...tseslint.configs.stylisticTypeChecked,
@@ -23,5 +23,16 @@ export default tseslint.config(
   },
   { files: ["**/*.test.ts"], rules: { "max-lines-per-function": "off" } },
   { files: ["**/*.js"], ...tseslint.configs.disableTypeChecked },
+  // Build tooling under scripts/ is Node ESM outside the TypeScript program: disable type-aware
+  // rules and permit console output (these scripts report build progress on stdout).
+  { files: ["scripts/**/*.mjs"], ...tseslint.configs.disableTypeChecked },
+  {
+    files: ["scripts/**/*.mjs"],
+    languageOptions: { globals: { console: "readonly", process: "readonly" } },
+    rules: {
+      "no-console": "off",
+      "@typescript-eslint/explicit-function-return-type": "off",
+    },
+  },
   prettier,
 );
