@@ -35,7 +35,7 @@ describe("nodeResourceMonitor — documented no-op paths", () => {
   });
 });
 
-const linuxProc = process.platform === "linux" && existsSync("/proc/self/statm");
+const linuxProc = process.platform === "linux" && existsSync("/proc/self/status");
 
 describe.skipIf(!linuxProc)("nodeResourceMonitor — Linux /proc sampler", () => {
   it("fires onBreach when RSS exceeds a tiny ceiling, then unwatch clears the interval", async () => {

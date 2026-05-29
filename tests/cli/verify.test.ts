@@ -120,9 +120,7 @@ describe("runVerifyCli", () => {
   it("returns 1 and writes to err on a WorkspaceError (non-existent --dir)", async () => {
     // Exercises the WorkspaceError catch branch in runVerifyCli.
     // A directory with no package.json and no .git ancestor triggers WorkspaceNotFoundError.
-    const { mkdtempSync: mktemp, rmSync: rm } = await import("node:fs");
-    const { tmpdir: osTmpdir } = await import("node:os");
-    const orphan = mktemp(join(osTmpdir(), "keiko-verify-noroot-"));
+    const orphan = mkdtempSync(join(tmpdir(), "keiko-verify-noroot-"));
     try {
       const c = makeIo();
       const code = await runVerifyCli(["--dir", orphan], c.io);
@@ -134,7 +132,7 @@ describe("runVerifyCli", () => {
         expect(code).toBe(0);
       }
     } finally {
-      rm(orphan, { recursive: true, force: true });
+      rmSync(orphan, { recursive: true, force: true });
     }
   });
 });

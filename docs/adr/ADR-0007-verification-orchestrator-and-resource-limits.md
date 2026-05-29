@@ -113,9 +113,9 @@ classify. There is no path on which the interval leaks.
 
 `ResourceMonitor` is a seam: `interface ResourceMonitor { watch(pid: number | undefined, maxBytes:
 number | undefined, onBreach: () => void): () => void }`. `nodeResourceMonitor` polls
-`/proc/<pid>/statm` (RSS pages × page size) on Linux at a 250 ms `unref`'d interval and calls
-`onBreach` once when RSS exceeds `maxBytes`. `/proc/<pid>/statm` is a system path — NOT workspace
-content — so it is read with raw `node:fs` (read-only, bounded, no secrets), not through
+`/proc/<pid>/status` (`VmRSS` kB, page-size-independent) on Linux at a 250 ms `unref`'d interval
+and calls `onBreach` once when RSS exceeds `maxBytes`. `/proc/<pid>/status` is a system path — NOT
+workspace content — so it is read with raw `node:fs` (read-only, bounded, no secrets), not through
 `WorkspaceFs`. On non-Linux, or when `maxBytes` is undefined, `watch` returns a documented no-op
 unwatch and the dimension is recorded `enforced:false`. Tests inject a fake monitor that fires
 `onBreach` deterministically; the real `/proc` sampler has a focused unit test that is skipped when
