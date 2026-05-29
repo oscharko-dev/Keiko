@@ -289,7 +289,7 @@ keiko investigate --output-file ./fail.txt --file src/auth.ts --apply
 
 ### `keiko evidence`
 
-Inspect redacted evidence manifests written by `keiko run` and the workflows. Reads only the evidence base directory. Exit `0` on success, `1` on a missing run id or read error, `2` on a usage error.
+Inspect redacted evidence manifests written by `keiko run` and the workflows. Reads only the evidence base directory. Exit `0` on success, `1` on a run id not found in the store or a read error, `2` on a usage error (including `show` with no run id).
 
 ```bash
 keiko evidence list

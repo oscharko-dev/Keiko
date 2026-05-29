@@ -27,7 +27,14 @@ The single hard invariant across every surface: **no change reaches a branch wit
 
 Keiko reads files only inside the detected workspace, and only through a boundary-checked path.
 
-- **Always-on deny patterns.** Files such as `.env`, `*.pem`, `*.key`, private keys, and `.git/` are never read, regardless of `.gitignore`. The deny list is unconditional.
+- **Always-on deny patterns.** Secret-shaped and noise files are never read, regardless of `.gitignore`. The deny list is unconditional. The frozen `DEFAULT_DENY_PATTERNS` are, in full:
+  - secrets: `.env`, `.env.*` (except `.env.example`), `*.pem`, `*.key`, `id_rsa`, `id_ed25519`, `id_ecdsa`, `id_dsa`, `*.p12`, `*.pfx`, `.npmrc`
+  - deps: `node_modules`
+  - build: `dist`, `build`, `out`, `coverage`
+  - caches: `.cache`, `.next`, `.turbo`
+  - vcs: `.git`
+  - logs: `*.log`
+  - os: `.DS_Store`
 - **Two-tier path safety.** Lexical containment runs first (`resolveWithinWorkspace`), then realpath/symlink enforcement at the IO edge. A path that escapes the root — through `..`, an absolute reference outside the root, or a symlink whose real path leaves the workspace — throws `PathEscapeError` before any read.
 
 The context surface (`keiko context`) is dry-run by construction: it calls no model and creates no agent session.
@@ -41,7 +48,8 @@ See [ADR-0005](adr/ADR-0005-repository-context-and-workspace-access.md).
 The tool layer exposes two capabilities: a command runner and a patch applier. The command runner is bounded on several axes.
 
 - **Deny-by-default executable rules.** Only four executables can run, and the executable name is matched by `basename` so a path cannot disguise it. The frozen `DEFAULT_COMMAND_RULES` are:
-  - `node` and `npx` — **unrestricted** (see the honest limits below).
+  - `node` — **unrestricted** (see the honest limits below).
+  - `npx` — unrestricted except `-c`/`--call` (which run their argument in a shell) are denied.
   - `npm` — a denylist that rejects account-, registry-, and shell-escaping subcommands (`publish`, `unpublish`, `login`, `logout`, `adduser`, `token`, `version`, `deprecate`, `owner`, `access`, `star`, `profile`, `exec`, `x`); other subcommands (such as `run`, `test`, `ci`, `install`) are allowed.
   - `git` — a read-only allowlist (`status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`, `describe`, `blame`, `cat-file`); mutating subcommands such as `push`, `reset`, `checkout`, `commit`, and `merge` are denied.
   - Any other executable is rejected before it is spawned. Operators can narrow the rules further via configuration. The project's own gates (lint, typecheck, test, build) run _through_ `npm run`, so they need no separate rule.
@@ -111,6 +119,7 @@ Every model- or workspace-touching run produces an evidence manifest for audit.
 - **Atomic, contained writes.** Each manifest is written with an exclusive-create (`O_EXCL`) open into a directory whose real path is verified to be inside the evidence root.
 - **Retention.** The newest runs are kept up to a maximum; older runs are rotated out. Rotation deletes only ledger-created manifest files inside the contained directory, ordered by the manifest's recorded finish time, never by filesystem mtime.
 - **Schema versioning.** Every manifest carries a stable schema version; readers reject an unknown version rather than guessing at the shape.
+- **Not tamper-evident, not encrypted at rest.** Manifests are ordinary developer-writable JSON files; a local actor with filesystem access can edit or delete them. Wave 1 provides confinement, redaction, and `.gitignore` exclusion — not cryptographic integrity or encryption at rest. Immutable-ledger infrastructure is out of scope (see [ADR-0010](adr/ADR-0010-audit-ledger-and-evidence-manifests.md)).
 
 Inspect manifests with `keiko evidence list` and `keiko evidence show <runId>`. The default location is `$KEIKO_EVIDENCE_DIR` or `.keiko/evidence` under the workspace.
 
