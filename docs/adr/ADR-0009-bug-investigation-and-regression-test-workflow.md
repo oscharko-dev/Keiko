@@ -282,14 +282,24 @@ zero/bounded regex — plain string ops only) rejects any changed path that is:
    `posixPath.startsWith("/") || posixPath.split("/").includes("..")`. Rationale identical to
    ADR-0008's traversal fix: a `tests/../.github/workflows/ci.yml` path lexically looks benign
    but #6 `resolveWithinWorkspace` collapses it; we reject the as-parsed path before #6 sees it.
-2. **Under `.github/`** — CI/CD supply-chain. `posixPath === ".github" || posixPath.startsWith(".github/")`.
-3. **A lockfile** — `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`
-   (matched on the POSIX basename).
+   The traversal check runs on the raw posix path (before lower-casing) because `..` and `/` are
+   case-invariant.
+2. **Under `.github/`** — CI/CD supply-chain. `lower === ".github" || lower.startsWith(".github/")`.
+3. **Under `.husky/`** — git-hook directory. `lower === ".husky" || lower.startsWith(".husky/")`.
+   A prompt-injected `.husky/pre-commit` is an RCE-on-next-commit vector that #6's `.git` deny
+   does NOT cover (`.husky` lives outside `.git`).
+4. **A lockfile** — `package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`
+   (matched on the lower-cased POSIX basename).
 
-Rationale: #6's deny-list already blocks `.git`/secrets/deps/build, but NOT `.github/` or
-lockfiles. A prompt-injected "fix" must never silently alter CI workflows or pin/unpin
-dependencies. This is the prompt-injection blast-radius bound — the analog of #8's production
-guard, the second barrier independent of `applyEnabled`.
+**Case-insensitivity.** Checks 2–4 operate on the LOWER-CASED posix path / basename, matching
+#6 `isDenied`'s case-insensitivity. Without this, `.GitHub/workflows/ci.yml` or
+`Package-Lock.json` would bypass the guard on case-insensitive filesystems (macOS/Windows) yet
+resolve to the protected file. The traversal check (1) needs no lower-casing.
+
+Rationale: #6's deny-list already blocks `.git`/secrets/deps/build, but NOT `.github/`,
+`.husky/`, or lockfiles. A prompt-injected "fix" must never silently alter CI workflows, install
+a git hook, or pin/unpin dependencies. This is the prompt-injection blast-radius bound — the
+analog of #8's production guard, the second barrier independent of `applyEnabled`.
 
 **Manifest/config edits are ALLOWED but flagged.** `package.json`, `tsconfig*.json` (and other
 non-sensitive config) may be legitimately needed by a fix. They are NOT rejected, but each is
