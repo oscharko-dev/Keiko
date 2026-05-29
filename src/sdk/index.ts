@@ -55,3 +55,29 @@ export {
   type VerificationStep,
   type VerificationSummary,
 } from "../verification/index.js";
+
+// Reviewable developer-assist workflows (ADR-0008). The unit-test generation workflow is the first
+// programmatic workflow surface: generateUnitTests is the single entry, the descriptor lets a UI
+// (#13) render the workflow without the implementation, and the WorkflowEvent union plus report
+// types are the stable contract the #10 audit ledger persists.
+export {
+  generateUnitTests,
+  renderMarkdownReport,
+  UNIT_TEST_WORKFLOW_DESCRIPTOR,
+  DEFAULT_WORKFLOW_LIMITS,
+  detectConventions,
+  isTestPath,
+  type AddedTestFile,
+  type FileNamingStyle,
+  type TestConventions,
+  type UnitTestTarget,
+  type UnitTestWorkflowDeps,
+  type UnitTestWorkflowInput,
+  type UnitTestWorkflowReport,
+  type WorkflowDescriptor,
+  type WorkflowEvent,
+  type WorkflowEventSink,
+  type WorkflowInputSpec,
+  type WorkflowLimits,
+  type WorkflowStatus,
+} from "../workflows/index.js";

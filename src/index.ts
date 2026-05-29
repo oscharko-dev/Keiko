@@ -13,3 +13,30 @@ export * from "./verification/index.js";
 // ./verification/index.js the function keeps its layer-local name `summarizeForAudit` (ADR-0007).
 export { summarizeForAudit } from "./workspace/index.js";
 export { summarizeForAudit as summarizeVerificationForAudit } from "./verification/index.js";
+
+// Reviewable developer-assist workflows (ADR-0008). Exported explicitly rather than via `export *`
+// because the workflow event family reuses the harness event-type NAMES (ModelCallStartedEvent,
+// ModelCallCompletedEvent) by structural convention — a star re-export would collide with the
+// harness ones already surfaced above. The WorkflowEvent union is surfaced; the two name-colliding
+// member interfaces are reachable via that union.
+export {
+  generateUnitTests,
+  renderMarkdownReport as renderUnitTestReport,
+  UNIT_TEST_WORKFLOW_DESCRIPTOR,
+  DEFAULT_WORKFLOW_LIMITS,
+  detectConventions,
+  isTestPath,
+  type AddedTestFile,
+  type FileNamingStyle,
+  type TestConventions,
+  type UnitTestTarget,
+  type UnitTestWorkflowDeps,
+  type UnitTestWorkflowInput,
+  type UnitTestWorkflowReport,
+  type WorkflowDescriptor,
+  type WorkflowEvent,
+  type WorkflowEventSink,
+  type WorkflowInputSpec,
+  type WorkflowLimits,
+  type WorkflowStatus,
+} from "./workflows/index.js";

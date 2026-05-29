@@ -2,6 +2,7 @@ import { runModelsCli } from "./models.js";
 import { runAgentCli } from "./run.js";
 import { runContextCli } from "./context.js";
 import { runVerifyCli } from "./verify.js";
+import { runGenTestsCli } from "./gen-tests.js";
 import type { EnvSource } from "../gateway/config.js";
 import { SDK_VERSION } from "../sdk/index.js";
 
@@ -23,6 +24,7 @@ Usage:
   keiko run <task>         Run a bounded dry-run task through the agent harness.
   keiko context [OPTIONS]  Print a redacted workspace context summary (dry-run).
   keiko verify [OPTIONS]   Run the project's gates and print a redacted evidence summary.
+  keiko gen-tests [OPTIONS] Generate a reviewable unit-test patch (dry-run by default).
 
 Exit codes:
   0  Success
@@ -48,6 +50,9 @@ function dispatchCommand(
   }
   if (name === "verify") {
     return runVerifyCli(rest, io);
+  }
+  if (name === "gen-tests") {
+    return runGenTestsCli(rest, io, env);
   }
   return undefined;
 }
