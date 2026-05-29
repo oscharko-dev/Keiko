@@ -14,3 +14,17 @@ export {
   type TaskInput,
   type TaskType,
 } from "../harness/index.js";
+
+// Safe workspace context surface (ADR-0005). The only file-read path is the
+// boundary-checked one; no export returns raw arbitrary file content.
+export {
+  buildWorkspaceSummary,
+  detectWorkspace,
+  summarizeForAudit,
+  type AuditEntry,
+  type AuditSummary,
+  type ContextEntrySummary,
+  type ContextPackSummary,
+  type WorkspaceInfo,
+  type WorkspaceSummary,
+} from "../workspace/index.js";

@@ -79,6 +79,43 @@ const config: AgentConfig = {
 };
 ```
 
+## Repository context and workspace access
+
+Keiko can detect your workspace, discover files through a strict boundary, and build a
+redacted structured summary suitable for developer-assist context — all without sending
+anything to a model.
+
+**Always-on deny patterns** (never read, regardless of .gitignore):
+`.env`, `.env.*` (except `.env.example`), `*.pem`, `*.key`, `id_rsa`, `*.p12`, `*.pfx`,
+`.npmrc`, `node_modules/`, `dist/`, `build/`, `out/`, `coverage/`, `.cache/`, `.next/`,
+`.turbo/`, `.git/`, `*.log`, `.DS_Store`.
+
+**Workspace boundary guarantee:** every file path is resolved via `resolveWithinWorkspace`
+before any read. Paths that escape the root via `..`, absolute references outside the root,
+or NUL bytes throw `PathEscapeError`; symlinks whose `realpath` escapes the root are
+skipped. Lexical containment is checked in `src/workspace/paths.ts`; symlink/realpath
+enforcement lives at the IO edge in `src/workspace/discovery.ts` (see ADR-0005).
+
+**`keiko context` (dry-run):** prints a human-readable or JSON redacted summary of the
+workspace. No model is called; no agent session is created.
+
+```bash
+keiko context                         # detect workspace at cwd, print summary
+keiko context --dir ./my-project      # specify workspace root
+keiko context --task "add tests" --budget 65536  # include a context pack
+keiko context --json                  # machine-readable output
+```
+
+SDK usage:
+
+```ts
+import { detectWorkspace, buildWorkspaceSummary } from "keiko";
+
+const workspace = detectWorkspace(".");
+const summary = buildWorkspaceSummary(workspace);
+console.log(summary.name, summary.counts);
+```
+
 ## Development
 
 ```bash

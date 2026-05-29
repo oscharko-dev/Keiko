@@ -4,3 +4,4 @@
 export { SDK_VERSION } from "./sdk/index.js";
 export * from "./harness/index.js";
 export * from "./gateway/index.js";
+export * from "./workspace/index.js";
