@@ -75,6 +75,8 @@ jobs:
       - run: npm ci
       - name: Build
         run: npm run build
+      - name: Smoke - offline evaluate exits 0
+        run: KEIKO_EVIDENCE_DIR="$(mktemp -d)" node dist/cli/index.js evaluate --suite all
       - name: Security audit (high and above)
         run: npm audit --audit-level=high
       - name: Generate CycloneDX SBOM
