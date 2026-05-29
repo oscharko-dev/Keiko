@@ -34,11 +34,24 @@ function underTestDir(testDirs: readonly string[], posixPath: string): boolean {
   });
 }
 
+// A path containing a `..` segment or an absolute leading slash is traversal: it can resolve to a
+// production file OUTSIDE the apparent test directory. `tests/../src/auth.ts` lexically starts with
+// `tests/`, but #6 resolveWithinWorkspace collapses it to the in-workspace `src/auth.ts` and writes
+// THAT. A legitimately generated test path is always a clean workspace-relative path, so we reject
+// traversal fail-closed before any test/testDir check (security fix: D6 bypass via path traversal).
+function isTraversal(posixPath: string): boolean {
+  return posixPath.startsWith("/") || posixPath.split("/").includes("..");
+}
+
 // The production-code guard predicate (D6): a path passes if its basename marks it a test file OR
 // it lies under a detected testDir. Used to reject any patch that touches a non-test path before
-// renderDryRun/applyPatch — the second barrier against prompt-injected source modification.
+// renderDryRun/applyPatch — the second barrier against prompt-injected source modification. Any
+// traversal/absolute path is rejected outright so the guarded path matches the path #6 would write.
 export function isTestPath(workspace: WorkspaceInfo, relPath: string): boolean {
   const posixPath = toPosix(relPath);
+  if (isTraversal(posixPath)) {
+    return false;
+  }
   return basenameMarksTest(posixPath) || underTestDir(workspace.testDirs, posixPath);
 }
 

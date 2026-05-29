@@ -38,6 +38,26 @@ describe("isTestPath (AC #9 production-code guard, D6)", () => {
     expect(isTestPath(ws, "tests\\add.ts")).toBe(true);
     expect(isTestPath(ws, "src\\add.test.ts")).toBe(true);
   });
+
+  // Security regression: a `..` segment makes a path that lexically starts with `tests/` resolve
+  // (via #6 resolveWithinWorkspace) to a production file. Reject traversal fail-closed (D6 bypass).
+  it("FAILS a traversal path that escapes the testDir back into src", () => {
+    expect(isTestPath(ws, "tests/../src/auth.ts")).toBe(false);
+  });
+
+  it("FAILS a traversal path that escapes the workspace entirely", () => {
+    expect(isTestPath(ws, "tests/../../etc/passwd")).toBe(false);
+  });
+
+  it("FAILS an absolute path even with a .test segment", () => {
+    expect(isTestPath(ws, "/abs/tests/x.test.ts")).toBe(false);
+  });
+
+  it("FAILS a diff-prefix-style traversal (b/tests/../src/auth.ts)", () => {
+    // The b/ prefix is stripped by the #6 parser; the guard still sees the traversal in the rest.
+    expect(isTestPath(ws, "tests/../src/auth.ts")).toBe(false);
+    expect(isTestPath(ws, "../src/auth.ts")).toBe(false);
+  });
 });
 
 describe("detectConventions (AC #5, D7)", () => {
