@@ -17,6 +17,24 @@ export interface ToolCallRequest {
   readonly signal: AbortSignal;
 }
 
+// S-M1: a small, REDACTED audit struct a command/patch tool fills so the executor can emit a
+// command:executed / patch:applied event for the issue #10 ledger. Counts/flags ONLY — never
+// stdout, argument values, or file paths/contents.
+export type ToolCallMetadata =
+  | {
+      readonly kind: "command";
+      readonly executable: string;
+      readonly argCount: number;
+      readonly exitCode: number | null;
+      readonly timedOut: boolean;
+    }
+  | {
+      readonly kind: "patch-apply";
+      readonly changedFiles: number;
+      readonly created: number;
+      readonly deleted: number;
+    };
+
 export interface ToolCallResult {
   readonly toolCallId: string;
   readonly output: string;
@@ -24,6 +42,9 @@ export interface ToolCallResult {
   // True only for tools that spawn a subprocess (run_command). The executor counts these
   // against maxCommandExecutions; absence/false leaves the command budget untouched (issue #6).
   readonly commandExecuted?: boolean | undefined;
+  // S-M1: when present, the executor emits the matching redacted audit event in addition to
+  // tool:call:completed. Absent for read-only tools.
+  readonly metadata?: ToolCallMetadata | undefined;
 }
 
 export interface ToolPort {

@@ -1,6 +1,13 @@
-import { rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { nodeSpawnFn, runCommand, type RunCommandDeps } from "../../src/tools/exec.js";
+import {
+  nodeSpawnFn,
+  runCommand,
+  type HomeProvider,
+  type RunCommandDeps,
+} from "../../src/tools/exec.js";
 import {
   CommandCancelledError,
   CommandDeniedError,
@@ -49,6 +56,35 @@ function realDeps(processEnv: NodeJS.ProcessEnv): RunCommandDeps {
 
 function controller(): AbortController {
   return new AbortController();
+}
+
+interface HomeRecorder {
+  readonly provider: HomeProvider;
+  readonly made: () => readonly string[];
+  readonly cleaned: () => readonly string[];
+}
+
+// A HomeProvider that creates REAL empty temp dirs (so the env.HOME assertions check a real,
+// existing, empty directory) and records every make()/cleanup(dir) so a test can assert the
+// ephemeral home was created exactly once and removed on every settle path.
+function recordingHome(): HomeRecorder {
+  const made: string[] = [];
+  const cleaned: string[] = [];
+  return {
+    made: () => made,
+    cleaned: () => cleaned,
+    provider: {
+      make: (): string => {
+        const dir = mkdtempSync(join(tmpdir(), "keiko-home-test-"));
+        made.push(dir);
+        return dir;
+      },
+      cleanup: (dir): void => {
+        cleaned.push(dir);
+        rmSync(dir, { recursive: true, force: true });
+      },
+    },
+  };
 }
 
 interface KillRecorder {
@@ -134,8 +170,9 @@ describe("runCommand — allowlist guard (before spawn)", () => {
 });
 
 describe("runCommand — spawn options (no shell, clean env, detached)", () => {
-  it("always spawns with shell:false and a name-allowlisted env", async () => {
+  it("always spawns with shell:false and a name-allowlisted env (+ ephemeral HOME)", async () => {
     const spawn = recordingSpawn();
+    const home = recordingHome();
     const promise = runCommand(
       {
         command: "node",
@@ -144,13 +181,19 @@ describe("runCommand — spawn options (no shell, clean env, detached)", () => {
         timeoutMs: undefined,
         signal: controller().signal,
       },
-      fakeDeps(spawn.fn, { PATH: "/bin", SECRET_TOKEN: "leak-me-please" }),
+      {
+        ...fakeDeps(spawn.fn, { PATH: "/bin", SECRET_TOKEN: "leak-me-please" }),
+        home: home.provider,
+      },
     );
     spawn.child.emit("close", 0, null);
     await promise;
     const call = spawn.calls()[0];
+    const made = home.made()[0] ?? "";
     expect(call?.options.shell).toBe(false);
-    expect(call?.options.env).toEqual({ PATH: "/bin" });
+    // PATH is name-copied; the planted secret never reaches the child; HOME/USERPROFILE are the
+    // ephemeral dir (C5), so the env is exactly {PATH, HOME, USERPROFILE} — no parent spread.
+    expect(call?.options.env).toEqual({ PATH: "/bin", HOME: made, USERPROFILE: made });
     expect("SECRET_TOKEN" in (call?.options.env ?? {})).toBe(false);
   });
 
@@ -298,29 +341,163 @@ describe("runCommand — real node integration", () => {
     expect(childEnv.PATH).toBeDefined();
   });
 
-  it("C5: the child HOME is an ephemeral empty dir, NOT the parent's real home", async () => {
-    const parentHome = "/Users/realuser-should-not-leak";
-    const result = await runCommand(
+  it("C5: the child HOME is a real, existing, EMPTY dir that is NOT the parent's real home", async () => {
+    // A real on-disk parent home with a planted credential file, to prove the child does NOT
+    // see it. The child reports its own HOME plus whether that dir exists, how many entries it
+    // has, and whether the parent's planted ~/.npmrc is reachable from the child HOME.
+    const parentHome = mkdtempSync(join(tmpdir(), "keiko-parent-home-"));
+    writeFileSync(join(parentHome, ".npmrc"), "//registry/:_authToken=plantedtoken");
+    const home = recordingHome();
+    try {
+      const result = await runCommand(
+        {
+          command: "node",
+          args: [
+            "-e",
+            "const fs=require('node:fs');const h=process.env.HOME;process.stdout.write(JSON.stringify({h,u:process.env.USERPROFILE,exists:fs.existsSync(h),entries:fs.readdirSync(h).length,npmrc:fs.existsSync(require('node:path').join(h,'.npmrc'))}))",
+          ],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        { ...realDeps({ PATH: process.env.PATH ?? "", HOME: parentHome }), home: home.provider },
+      );
+      const env = JSON.parse(result.stdout) as {
+        h: string;
+        u?: string;
+        exists: boolean;
+        entries: number;
+        npmrc: boolean;
+      };
+      // HOME is set (so node/npm work), exists, is empty, and is NOT the parent's real home.
+      expect(env.h).not.toBe(parentHome);
+      expect(env.h).toBe(home.made()[0]);
+      expect(env.exists).toBe(true);
+      expect(env.entries).toBe(0);
+      // The parent's planted ~/.npmrc credential is NOT reachable from the child HOME.
+      expect(env.npmrc).toBe(false);
+      // USERPROFILE is redirected to the same ephemeral dir (Windows home lookups also miss).
+      expect(env.u).toBe(env.h);
+      // The ephemeral home was created exactly once and cleaned up after the command settled.
+      expect(home.made()).toHaveLength(1);
+      expect(home.cleaned()).toEqual(home.made());
+      expect(existsSync(home.made()[0] ?? "")).toBe(false);
+    } finally {
+      rmSync(parentHome, { recursive: true, force: true });
+    }
+  });
+
+  it("C5 (unit): the built spawn env.HOME/USERPROFILE point at a real empty dir, never the parent", async () => {
+    const home = recordingHome();
+    const spawn = recordingSpawn();
+    const promise = runCommand(
       {
         command: "node",
-        args: [
-          "-e",
-          "process.stdout.write(JSON.stringify({h:process.env.HOME, u:process.env.USERPROFILE}))",
-        ],
+        args: ["-e", "1"],
         cwd: undefined,
         timeoutMs: undefined,
         signal: controller().signal,
       },
-      realDeps({ PATH: process.env.PATH ?? "", HOME: parentHome, USERPROFILE: parentHome }),
+      {
+        ...fakeDeps(spawn.fn, {
+          PATH: "/bin",
+          HOME: "/Users/parent",
+          USERPROFILE: "/Users/parent",
+        }),
+        home: home.provider,
+      },
     );
-    const env = JSON.parse(result.stdout) as { h?: string; u?: string };
-    // HOME must be set (so node/npm work) but must NOT be the parent's real home.
-    expect(env.h).toBeDefined();
-    expect(env.h).not.toBe(parentHome);
-    // The ephemeral home must not contain credential files: reading ~/.npmrc finds nothing.
-    if (process.platform === "win32") {
-      expect(env.u).not.toBe(parentHome);
-    }
+    spawn.child.emit("close", 0, null);
+    await promise;
+    const env = spawn.calls()[0]?.options.env ?? {};
+    const made = home.made()[0] ?? "";
+    expect(env.HOME).toBe(made);
+    expect(env.USERPROFILE).toBe(made);
+    expect(env.HOME).not.toBe("/Users/parent");
+    // The dir was a real empty dir while the command ran, then removed.
+    expect(home.cleaned()).toEqual([made]);
+    expect(existsSync(made)).toBe(false);
+  });
+
+  it("C5: the ephemeral home is cleaned up on the timeout path", async () => {
+    const kills = captureKills();
+    const home = recordingHome();
+    const spawn = recordingSpawn();
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "wait"],
+        cwd: undefined,
+        timeoutMs: 5,
+        signal: controller().signal,
+      },
+      { ...fakeDeps(spawn.fn), home: home.provider },
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    spawn.child.emit("close", null, "SIGTERM");
+    await expect(promise).rejects.toBeInstanceOf(CommandTimeoutError);
+    expect(home.cleaned()).toEqual(home.made());
+    expect(home.made()).toHaveLength(1);
+    kills.restore();
+  });
+
+  it("C5: the ephemeral home is cleaned up on the cancellation path", async () => {
+    const kills = captureKills();
+    const ctrl = controller();
+    const home = recordingHome();
+    const spawn = recordingSpawn();
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "wait"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: ctrl.signal,
+      },
+      { ...fakeDeps(spawn.fn), home: home.provider },
+    );
+    ctrl.abort();
+    spawn.child.emit("close", null, "SIGTERM");
+    await expect(promise).rejects.toBeInstanceOf(CommandCancelledError);
+    expect(home.cleaned()).toEqual(home.made());
+    kills.restore();
+  });
+
+  it("C5: the ephemeral home is cleaned up on the spawn-error path", async () => {
+    const home = recordingHome();
+    const spawn = recordingSpawn();
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "1"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      { ...fakeDeps(spawn.fn), home: home.provider },
+    );
+    spawn.child.emit("error", new Error("spawn ENOENT"));
+    await expect(promise).rejects.toThrow();
+    expect(home.cleaned()).toEqual(home.made());
+  });
+
+  it("C5: a denied command creates NO ephemeral home (nothing to clean)", async () => {
+    const home = recordingHome();
+    const spawn = recordingSpawn();
+    await expect(
+      runCommand(
+        {
+          command: "rm",
+          args: ["-rf", "/"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        { ...fakeDeps(spawn.fn), home: home.provider },
+      ),
+    ).rejects.toBeInstanceOf(CommandDeniedError);
+    expect(home.made()).toHaveLength(0);
+    expect(home.cleaned()).toHaveLength(0);
   });
 
   it("no-shell: a shell metachar arg is passed literally, not expanded", async () => {

@@ -226,6 +226,27 @@ export interface ToolCallFailedEvent extends BaseEvent {
   readonly message: string;
 }
 
+// S-M1: redacted audit record that a subprocess RAN (issue #10 ledger). Counts/flags ONLY — never
+// argument values, never stdout/stderr. `executable` is the bare command name (e.g. "node"), which
+// the deny-by-default allowlist already constrains to a small, non-sensitive set.
+export interface CommandExecutedEvent extends BaseEvent {
+  readonly type: "command:executed";
+  readonly executable: string;
+  readonly argCount: number;
+  readonly exitCode: number | null;
+  readonly timedOut: boolean;
+  readonly durationMs: number;
+}
+
+// S-M1: redacted audit record that a patch was APPLIED (issue #10 ledger). File COUNTS only —
+// never file paths, never file contents.
+export interface PatchAppliedEvent extends BaseEvent {
+  readonly type: "patch:applied";
+  readonly changedFiles: number;
+  readonly created: number;
+  readonly deleted: number;
+}
+
 export interface ReasoningTraceEvent extends BaseEvent {
   readonly type: "reasoning:trace";
   readonly phase: HarnessStateName;
@@ -275,6 +296,8 @@ export type HarnessEvent =
   | ToolCallStartedEvent
   | ToolCallCompletedEvent
   | ToolCallFailedEvent
+  | CommandExecutedEvent
+  | PatchAppliedEvent
   | ReasoningTraceEvent
   | PatchProposedEvent
   | VerificationResultEvent

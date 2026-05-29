@@ -11,6 +11,7 @@ import type {
 } from "../gateway/types.js";
 import { contextBytes, type RunContext, type StateStep } from "./context.js";
 import { HARNESS_CODES, toFailure } from "./errors.js";
+import type { ToolCallMetadata } from "./ports.js";
 
 function buildRequest(ctx: RunContext): GatewayRequest {
   const tools = ctx.plan.allowsTools ? ctx.tools.listTools() : undefined;
@@ -94,6 +95,36 @@ function assistantMessage(response: NormalizedResponse): ChatMessage {
   return { role: "assistant", content: response.content };
 }
 
+// S-M1: emits the redacted audit event matching a tool's metadata, in addition to
+// tool:call:completed, so the issue #10 ledger sees THAT a command ran / a patch applied — never
+// the args, stdout, or file paths. No-op when the tool returned no metadata (read-only tools).
+function emitToolMetadata(
+  ctx: RunContext,
+  metadata: ToolCallMetadata | undefined,
+  durationMs: number,
+): void {
+  if (metadata === undefined) {
+    return;
+  }
+  if (metadata.kind === "command") {
+    ctx.emitter.emit({
+      type: "command:executed",
+      executable: metadata.executable,
+      argCount: metadata.argCount,
+      exitCode: metadata.exitCode,
+      timedOut: metadata.timedOut,
+      durationMs,
+    });
+    return;
+  }
+  ctx.emitter.emit({
+    type: "patch:applied",
+    changedFiles: metadata.changedFiles,
+    created: metadata.created,
+    deleted: metadata.deleted,
+  });
+}
+
 async function runOneTool(ctx: RunContext, call: NormalizedToolCall): Promise<ChatMessage> {
   ctx.counters.toolCalls += 1;
   ctx.emitter.emit({ type: "tool:call:started", toolName: call.name, toolCallId: call.id });
@@ -113,6 +144,7 @@ async function runOneTool(ctx: RunContext, call: NormalizedToolCall): Promise<Ch
       toolCallId: call.id,
       durationMs: result.durationMs,
     });
+    emitToolMetadata(ctx, result.metadata, result.durationMs);
     return { role: "tool", content: result.output, toolCallId: call.id };
   } catch (error) {
     const message = error instanceof Error ? error.message : "tool execution failed";

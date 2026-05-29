@@ -27,9 +27,13 @@ export interface SandboxPolicy {
 
 // Cross-platform name allowlist. Only names that are PRESENT in the parent are copied, so an
 // absent Windows var on POSIX (or vice versa) is simply skipped.
+//
+// HOME and USERPROFILE are deliberately ABSENT (C5). Forwarding the developer's real home would let
+// a subprocess read ~/.npmrc (npm tokens), ~/.git-credentials, and ~/.aws/… by standard home-dir
+// lookup. runCommand instead injects an ephemeral, EMPTY per-run dir as HOME/USERPROFILE so those
+// lookups resolve to nothing (ADR-0006 D2 Dimension 1).
 export const DEFAULT_ENV_ALLOWLIST: readonly string[] = Object.freeze([
   "PATH",
-  "HOME",
   "LANG",
   "LC_ALL",
   "LC_CTYPE",

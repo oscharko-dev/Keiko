@@ -181,6 +181,22 @@ describe("WorkspaceToolHost — run_command", () => {
     expect(result.output).not.toContain(awsKey);
     expect(result.output).toContain("[REDACTED]");
   });
+
+  it("S-M1: run_command attaches redacted command metadata (no stdout/arg values)", async () => {
+    const result = await host({ spawn: nodeSpawnFn }).execute(
+      request("run_command", { command: "node", args: ["-e", "process.stdout.write('ok')"] }),
+    );
+    expect(result.metadata).toEqual({
+      kind: "command",
+      executable: "node",
+      argCount: 2,
+      exitCode: 0,
+      timedOut: false,
+    });
+    // The metadata must not carry the argument VALUES or any captured stdout.
+    expect(JSON.stringify(result.metadata)).not.toContain("process.stdout");
+    expect(JSON.stringify(result.metadata)).not.toContain("ok");
+  });
 });
 
 describe("WorkspaceToolHost — S-M2 config deep-merge + envAllowlist validation", () => {
@@ -240,6 +256,21 @@ describe("WorkspaceToolHost — patch tools", () => {
     );
     expect(parse(result.output).changedFiles).toEqual(["src/x.txt"]);
     expect(read("src/x.txt")).toBe("one\nTWO\n");
+  });
+
+  it("S-M1: apply_patch attaches patch-apply metadata with counts only (no paths)", async () => {
+    write("src/x.txt", "one\ntwo\n");
+    const result = await host({ config: { applyEnabled: true } }).execute(
+      request("apply_patch", { diff: MODIFY }),
+    );
+    expect(result.metadata).toEqual({
+      kind: "patch-apply",
+      changedFiles: 1,
+      created: 0,
+      deleted: 0,
+    });
+    // Counts only — no file path leaks into the audit metadata.
+    expect(JSON.stringify(result.metadata)).not.toContain("src/x.txt");
   });
 });
 

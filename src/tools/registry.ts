@@ -6,7 +6,12 @@
 // the injected SpawnFn — so a unit test needs no real secrets and no real processes.
 
 import type { ToolDefinition } from "../gateway/types.js";
-import type { ToolCallRequest, ToolCallResult, ToolPort } from "../harness/ports.js";
+import type {
+  ToolCallMetadata,
+  ToolCallRequest,
+  ToolCallResult,
+  ToolPort,
+} from "../harness/ports.js";
 import { discoverWithStats, readWorkspaceFile } from "../workspace/discovery.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
 import type { WorkspaceInfo } from "../workspace/types.js";
@@ -27,6 +32,8 @@ type Args = Record<string, unknown>;
 interface Handled {
   readonly output: string;
   readonly commandExecuted: boolean;
+  // S-M1: redacted audit metadata for command/patch tools; absent for read-only tools.
+  readonly metadata?: ToolCallMetadata | undefined;
 }
 
 function requireString(args: Args, key: string, tool: string): string {
@@ -134,6 +141,7 @@ export class WorkspaceToolHost implements ToolPort {
       output: handled.output,
       durationMs: this.now() - startedAt,
       commandExecuted: handled.commandExecuted,
+      ...(handled.metadata === undefined ? {} : { metadata: handled.metadata }),
     };
   }
 
@@ -208,7 +216,17 @@ export class WorkspaceToolHost implements ToolPort {
         now: this.now,
       },
     );
-    return { output: summarizeCommand(result), commandExecuted: true };
+    return {
+      output: summarizeCommand(result),
+      commandExecuted: true,
+      metadata: {
+        kind: "command",
+        executable: command,
+        argCount: cmdArgs.length,
+        exitCode: result.exitCode,
+        timedOut: result.timedOut,
+      },
+    };
   }
 
   private proposePatch(args: Args): Handled {
@@ -232,7 +250,16 @@ export class WorkspaceToolHost implements ToolPort {
       writer: this.writer,
       limits: this.config.patchLimits,
     });
-    return { output: JSON.stringify(result), commandExecuted: false };
+    return {
+      output: JSON.stringify(result),
+      commandExecuted: false,
+      metadata: {
+        kind: "patch-apply",
+        changedFiles: result.changedFiles.length,
+        created: result.created.length,
+        deleted: result.deleted.length,
+      },
+    };
   }
 }
 

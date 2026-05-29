@@ -59,6 +59,10 @@ const SUMMARISERS: {
   "tool:call:started": (e) => `tool=${e.toolName} id=${e.toolCallId}`,
   "tool:call:completed": (e) => `tool=${e.toolName} id=${e.toolCallId}`,
   "tool:call:failed": (e) => `tool=${e.toolName} code=${e.errorCode}`,
+  "command:executed": (e) =>
+    `exec=${e.executable} args=${String(e.argCount)} exit=${String(e.exitCode)} timedOut=${String(e.timedOut)}`,
+  "patch:applied": (e) =>
+    `changed=${String(e.changedFiles)} created=${String(e.created)} deleted=${String(e.deleted)}`,
   "reasoning:trace": (e) => `phase=${e.phase} (rationale redacted)`,
   "patch:proposed": (e) => `file=${e.targetFile} bytes=${String(e.patchBytes)} (diff redacted)`,
   "verification:result": (e) => `passed=${String(e.passed)}`,

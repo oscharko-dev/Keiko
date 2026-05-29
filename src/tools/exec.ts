@@ -9,6 +9,9 @@
 
 import { spawn as nodeSpawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { redact } from "../gateway/redaction.js";
 import { resolveWithinWorkspace } from "../workspace/paths.js";
 import { assertContainedRealPath } from "../workspace/realpath.js";
@@ -34,6 +37,22 @@ export type SpawnFn = (
 export const nodeSpawnFn: SpawnFn = (command, args, options) =>
   nodeSpawn(command, [...args], options);
 
+// Supplies the child's HOME/USERPROFILE as an EPHEMERAL, EMPTY per-run directory instead of the
+// developer's real home (C5). `make` returns a fresh empty dir; `cleanup` removes it after the
+// command settles (best-effort). Injectable so tests can use a recording/fake provider.
+export interface HomeProvider {
+  readonly make: () => string;
+  readonly cleanup: (dir: string) => void;
+}
+
+export const nodeHomeProvider: HomeProvider = {
+  make: (): string => mkdtempSync(join(tmpdir(), "keiko-home-")),
+  cleanup: (dir): void => {
+    // Best-effort: a leftover temp dir is not worth failing or rejecting the command over.
+    rmSync(dir, { recursive: true, force: true });
+  },
+};
+
 export interface RunCommandDeps {
   readonly workspace: WorkspaceInfo;
   readonly policy: SandboxPolicy;
@@ -43,6 +62,8 @@ export interface RunCommandDeps {
   readonly now: () => number;
   // Read-only port used solely for the cwd symlink-containment check. Defaults to nodeWorkspaceFs.
   readonly fs?: WorkspaceFs | undefined;
+  // Supplies the ephemeral empty HOME/USERPROFILE for the child (C5). Defaults to nodeHomeProvider.
+  readonly home?: HomeProvider | undefined;
 }
 
 export interface RunCommandInput {
@@ -104,6 +125,11 @@ interface RunState {
   timer: NodeJS.Timeout | undefined;
   graceTimer: NodeJS.Timeout | undefined;
   onAbort: (() => void) | undefined;
+  // The ephemeral HOME dir to remove once after the command settles, and the provider that owns
+  // its removal. `homeCleaned` makes the cleanup idempotent (close AND error both call cleanup()).
+  home: HomeProvider | undefined;
+  homeDir: string | undefined;
+  homeCleaned: boolean;
 }
 
 // Resolves the validated cwd. Lexical containment first, then symlink containment via realpath
@@ -147,6 +173,11 @@ function cleanup(state: RunState, signal: AbortSignal): void {
   }
   if (state.onAbort !== undefined) {
     signal.removeEventListener("abort", state.onAbort);
+  }
+  // Remove the ephemeral HOME exactly once, on whichever settle path fires first (C5).
+  if (!state.homeCleaned && state.home !== undefined && state.homeDir !== undefined) {
+    state.homeCleaned = true;
+    state.home.cleanup(state.homeDir);
   }
 }
 
@@ -268,15 +299,33 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
     return Promise.reject(error instanceof Error ? error : new Error("cwd resolution failed"));
   }
   const env = buildSandboxEnv(deps.processEnv, deps.policy.envAllowlist);
-  const child = deps.spawn(input.command, input.args, { cwd, env, shell: false, detached: POSIX });
-  const buffers: Buffers = { out: [], err: [], total: 0, truncated: false };
+  // C5: the child gets an ephemeral, EMPTY HOME/USERPROFILE — never the developer's real home — so
+  // ~/.npmrc, ~/.git-credentials, ~/.aws/… are out of reach. Created only after the deny/cwd gates
+  // pass (a denied command allocates nothing); removed once after settle via cleanup().
+  const home = deps.home ?? nodeHomeProvider;
+  const homeDir = home.make();
+  env.HOME = homeDir;
+  env.USERPROFILE = homeDir;
   const state: RunState = {
     settled: false,
     timedOut: false,
     timer: undefined,
     graceTimer: undefined,
     onAbort: undefined,
+    home,
+    homeDir,
+    homeCleaned: false,
   };
+  let child: ChildProcess;
+  try {
+    child = deps.spawn(input.command, input.args, { cwd, env, shell: false, detached: POSIX });
+  } catch (error) {
+    // A synchronous spawn failure must still clean the ephemeral home and reject (never throw):
+    // the "never throws synchronously" contract holds and no temp dir leaks.
+    cleanup(state, input.signal);
+    return Promise.reject(error instanceof Error ? error : new Error("spawn failed"));
+  }
+  const buffers: Buffers = { out: [], err: [], total: 0, truncated: false };
   const ctx: ExecContext = { child, input, deps, buffers, state, startedAt: deps.now() };
   return new Promise<CommandResult>((resolve, reject) => {
     wireStreams(child, buffers, deps.policy, state);

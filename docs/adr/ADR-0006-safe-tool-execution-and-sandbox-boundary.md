@@ -96,13 +96,27 @@ without code changes. The defaults are the most permissive safe baseline.
 The sandbox boundary is expressed as a frozen, inspectable `DEFAULT_SANDBOX_POLICY` object
 (`src/tools/types.ts:48–54`). Five dimensions are documented, implemented, and tested:
 
-**Dimension 1 — Environment allowlist (name-copy isolation).** `buildSandboxEnv(processEnv,
-allowlist)` builds the child environment by iterating a frozen name allowlist and copying only names
-that are present in the parent (`src/tools/sandbox.ts:11–23`). It never spreads `...process.env`.
-`DEFAULT_ENV_ALLOWLIST` contains `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TZ`, `TERM`,
-`TMPDIR`, and Windows essentials (`SystemRoot`, `SystemDrive`, `PATHEXT`, `COMSPEC`,
-`NUMBER_OF_PROCESSORS`, `WINDIR`). No credential-bearing variable — `AWS_SECRET_ACCESS_KEY`,
-`GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `DATABASE_URL`, etc. — is ever forwarded to a child process.
+**Dimension 1 — Environment allowlist (name-copy isolation) + ephemeral HOME (C5).**
+`buildSandboxEnv(processEnv, allowlist)` builds the child environment by iterating a frozen name
+allowlist and copying only names that are present in the parent (`src/tools/sandbox.ts:11–23`). It
+never spreads `...process.env`. `DEFAULT_ENV_ALLOWLIST` contains `PATH`, `LANG`, `LC_ALL`,
+`LC_CTYPE`, `TZ`, `TERM`, `TMPDIR`, and Windows essentials (`SystemRoot`, `SystemDrive`, `PATHEXT`,
+`COMSPEC`, `NUMBER_OF_PROCESSORS`, `WINDIR`). No credential-bearing variable —
+`AWS_SECRET_ACCESS_KEY`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `DATABASE_URL`, etc. — is ever
+forwarded to a child process.
+
+`HOME` and `USERPROFILE` are deliberately NOT in the allowlist (C5). Forwarding the developer's real
+home would let an allowed subprocess (`npm`/`git`/`node`) read `~/.npmrc` (npm tokens),
+`~/.git-credentials`, and `~/.aws/…` via standard home-directory lookup — bypassing the env
+allowlist entirely, because the credential is read off disk, not off the environment. Instead,
+`runCommand` redirects `HOME` and `USERPROFILE` to a per-run **ephemeral, empty directory** created
+under the OS temp dir (`mkdtempSync(join(tmpdir(), "keiko-home-"))`) and removed after the command
+in every settle path — success, denial-before-spawn (no dir is created), timeout, cancellation, and
+spawn error (`src/tools/exec.ts`, `HomeProvider`/`nodeHomeProvider`). The child still receives a
+valid, writable `HOME` (so `node`/`npm` work), but it is empty: a home-directory credential lookup
+resolves to nothing. The provider is injected as a `RunCommandDeps.home` dependency with a Node
+default, so tests use a recording/fake provider and assert the child `HOME` is a real, existing,
+empty dir that is never the parent's real home, and that the dir is cleaned up.
 
 `collectSensitiveEnvValues(processEnv, allowlist)` collects all non-allowlisted parent env values
 ≥ 6 characters (`src/tools/sandbox.ts:29–44`) so that `runCommand` can pass them as

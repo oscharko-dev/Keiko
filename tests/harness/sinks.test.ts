@@ -45,6 +45,36 @@ function patchEvent(): HarnessEvent {
   };
 }
 
+function commandExecutedEvent(): HarnessEvent {
+  return {
+    schemaVersion: "1",
+    runId: "run-1",
+    fingerprint: "fp",
+    seq: 4,
+    ts: 4,
+    type: "command:executed",
+    executable: "node",
+    argCount: 2,
+    exitCode: 0,
+    timedOut: false,
+    durationMs: 12,
+  };
+}
+
+function patchAppliedEvent(): HarnessEvent {
+  return {
+    schemaVersion: "1",
+    runId: "run-1",
+    fingerprint: "fp",
+    seq: 5,
+    ts: 5,
+    type: "patch:applied",
+    changedFiles: 3,
+    created: 1,
+    deleted: 2,
+  };
+}
+
 describe("MemoryEventSink", () => {
   it("appends emitted events and returns them in emission order", () => {
     const sink = new MemoryEventSink();
@@ -110,6 +140,38 @@ describe("CliEventSink", () => {
     });
     sink.emit(patchEvent());
     expect(lines.join("")).not.toContain("SECRET-DIFF-CONTENT");
+  });
+
+  it("summarises command:executed with counts/flags only (no args or stdout)", () => {
+    const lines: string[] = [];
+    const sink = new CliEventSink({
+      out: (t): void => {
+        lines.push(t);
+      },
+      err: (): void => undefined,
+    });
+    sink.emit(commandExecutedEvent());
+    const joined = lines.join("");
+    expect(joined.trim().length).toBeGreaterThan(0);
+    expect(joined).toContain("command:executed");
+    expect(joined).toContain("node");
+    expect(joined).toContain("exit=0");
+  });
+
+  it("summarises patch:applied with file counts only (no paths or contents)", () => {
+    const lines: string[] = [];
+    const sink = new CliEventSink({
+      out: (t): void => {
+        lines.push(t);
+      },
+      err: (): void => undefined,
+    });
+    sink.emit(patchAppliedEvent());
+    const joined = lines.join("");
+    expect(joined).toContain("patch:applied");
+    expect(joined).toContain("changed=3");
+    expect(joined).toContain("created=1");
+    expect(joined).toContain("deleted=2");
   });
 
   it("routes failure events to err()", () => {
