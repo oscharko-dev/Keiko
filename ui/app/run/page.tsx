@@ -24,6 +24,7 @@ import {
   verificationStatusClasses,
   verificationStatusLabel,
 } from "@/lib/format";
+import { ResourceLimitDecisionsTable } from "@/lib/ResourceLimitDecisionsTable";
 
 // ---------------------------------------------------------------------------
 // Event timeline item
@@ -369,6 +370,9 @@ function RunViewInner(): ReactNode {
                     </dd>
                   </div>
                 )}
+              {report.verificationSummary !== undefined && report.verificationSummary.results.length > 0 && (
+                <ResourceLimitDecisionsTable results={report.verificationSummary.results} />
+              )}
               </dl>
               {report.proposedDiff !== undefined && (
                 <div className="mt-6 rounded border border-accent/30 bg-blue-50 p-4">

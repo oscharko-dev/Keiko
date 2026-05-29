@@ -85,6 +85,57 @@ describe("RunPage (/run?id=)", () => {
     expect(screen.getByRole("heading", { name: /event timeline/i })).toBeInTheDocument();
   });
 
+  it("shows resource-limit decisions table in terminal report", async () => {
+    vi.mocked(useSSE).mockReturnValue({ events: [], status: "terminal", error: null });
+    vi.mocked(api.fetchRunReport).mockResolvedValue({
+      report: {
+        status: "dry-run" as const,
+        verificationSummary: {
+          workspaceRoot: "/tmp/proj",
+          overallStatus: "passed" as const,
+          durationMs: 1200,
+          counts: { passed: 1 },
+          results: [
+            {
+              kind: "build" as const,
+              command: "npm run build",
+              status: "passed" as const,
+              exitCode: 0,
+              durationMs: 800,
+              truncated: false,
+              appliedLimits: [
+                {
+                  dimension: "wall-time" as const,
+                  limit: 60000,
+                  enforced: true,
+                  breached: false,
+                },
+                {
+                  dimension: "memory" as const,
+                  limit: 512,
+                  enforced: false,
+                  breached: false,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    render(<RunPage />);
+    await waitFor(() => {
+      // The resource-limit table caption is rendered
+      expect(screen.getByText(/resource-limit decisions/i)).toBeInTheDocument();
+    });
+    // Dimension column values
+    expect(screen.getByText("wall-time")).toBeInTheDocument();
+    expect(screen.getByText("memory")).toBeInTheDocument();
+    // Enforced column
+    expect(screen.getAllByText("Yes").length).toBeGreaterThanOrEqual(1);
+    // Breached column — none breached so shows "No"
+    expect(screen.getAllByText("No").length).toBeGreaterThanOrEqual(1);
+  });
+
   it("has no axe-detectable accessibility violations", async () => {
     const { container } = render(<RunPage />);
     const results = await axe(container);
