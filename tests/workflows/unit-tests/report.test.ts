@@ -99,6 +99,12 @@ describe("assembleReport (AC #9)", () => {
     expect(report.nextActions[0]).not.toContain(secret);
   });
 
+  it("redacts a secret-shaped token in verificationSkipReason", () => {
+    const token = "ghp_" + "0123456789abcdefghijABCDEFGHIJ0123456789";
+    const report = assembleReport(parts({ verificationSkipReason: `skipped: ${token}` }));
+    expect(report.verificationSkipReason).not.toContain(token);
+  });
+
   it("carries the verification summary when present", () => {
     const report = assembleReport(
       parts({ status: "completed", verificationSummary: auditSummary }),

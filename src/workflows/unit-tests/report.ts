@@ -32,7 +32,7 @@ function estimateTestCount(file: PatchFileChange): number {
 
 function toAddedTestFiles(files: readonly PatchFileChange[]): readonly AddedTestFile[] {
   return files.map((file) => ({
-    path: file.path,
+    path: redact(file.path),
     estimatedTestCount: estimateTestCount(file),
   }));
 }
@@ -70,7 +70,7 @@ export function assembleReport(parts: ReportParts): UnitTestWorkflowReport {
     knownGaps: redactOptional(parts.knownGaps),
     nextActions: parts.nextActions.map((action) => redact(action)),
     verificationSummary: parts.verificationSummary,
-    verificationSkipReason: parts.verificationSkipReason,
+    verificationSkipReason: redactOptional(parts.verificationSkipReason),
     modelCallCount: parts.modelCallCount,
     patchRetryCount: parts.patchRetryCount,
   };
