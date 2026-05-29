@@ -2,7 +2,7 @@
 
 **Audience:** Development teams and pilot customers running Keiko's locally hosted UI.
 
-**Status:** Wave 1 foundation. The UI is a first-class surface alongside the CLI and SDK. This runbook covers launch, runtime requirements, local-only security posture, and accessibility baseline. The full pilot operations runbook (issue #12) is not yet shipped; when it lands, this content will be cross-referenced.
+**Status:** Wave 1 foundation. The UI is a first-class surface alongside the CLI and SDK. This runbook covers launch, runtime requirements, local-only security posture, and accessibility baseline. The end-to-end pilot operations runbook is the [customer pilot runbook](./pilot/runbook.md); it cross-references this document for UI operation.
 
 ## Overview
 
@@ -264,16 +264,16 @@ The server has conservative timeouts (30 seconds for a full request, 10 seconds 
 
 If a run times out, cancel it and try again. Evidence is persisted even on timeout, so you can inspect partial results in the evidence browser.
 
-## Relationship to issue #12
+## Relationship to the pilot runbook
 
-Issue #12 is the **dedicated pilot customer runbook**, which will provide end-to-end guidance for running Wave 1 workflows in a pilot environment, including:
+The [customer pilot runbook](./pilot/runbook.md) is the end-to-end guide for running Wave 1 workflows in a pilot environment, covering:
 
 - Multi-day pilot setup and team coordination
-- Incident response and escalation
+- Feedback collection and escalation
 - Evidence retention and audit controls
-- Feedback collection and iteration
+- Evaluation and the Go/No-Go decision
 
-This document (**#13 runbook**) provides the **UI operations content** and should be folded into or cross-referenced by the #12 runbook when it ships. For now, use this guide to launch and operate the UI, and refer to the [main README](../README.md) for CLI/SDK usage and configuration.
+This document provides the **UI operations content** the pilot runbook references. Use this guide to launch and operate the UI; use the pilot runbook for pilot-wide process, and the [main README](../README.md) for CLI/SDK usage and configuration.
 
 ## Further reading
 
