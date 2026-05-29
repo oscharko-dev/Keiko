@@ -592,7 +592,7 @@ npm run typecheck
 npm run format
 ```
 
-Contributions follow the delivery standard in [`AGENTS.md`](AGENTS.md): spec-first, test-driven, conventional commits with an issue number, evidence for every claim.
+Contributions follow the delivery standard in [`CONTRIBUTING.md`](CONTRIBUTING.md): strict TypeScript, tested behavior, conventional commits with an issue number, and reviewable, evidence-backed changes.
 
 ---
 
