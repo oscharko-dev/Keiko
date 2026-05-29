@@ -112,7 +112,10 @@ function listManifestRunIds(realBase: string): readonly string[] {
 function atomicWrite(target: string, json: string, randomSuffix: () => string): void {
   const temp = `${target}.${randomSuffix()}.tmp`;
   try {
-    writeFileSync(temp, json, "utf8");
+    // O_EXCL ("wx"): refuse to open through a pre-planted symlink at the temp path, closing the
+    // temp-vs-final containment asymmetry (the final target is realpath-contained, the temp was
+    // not). A randomUUID suffix never collides, so "wx" never spuriously fails.
+    writeFileSync(temp, json, { encoding: "utf8", flag: "wx" });
     renameSync(temp, target);
   } catch (error) {
     rmSync(temp, { force: true });

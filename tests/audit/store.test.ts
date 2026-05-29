@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInMemoryEvidenceStore, createNodeEvidenceStore } from "../../src/audit/store.js";
+import { nodeWorkspaceFs } from "../../src/workspace/fs.js";
 import { EvidenceWriteError } from "../../src/audit/errors.js";
 import { InvalidRunIdError } from "../../src/audit/errors.js";
 
@@ -87,5 +88,18 @@ describe("createNodeEvidenceStore", () => {
     const filePath = join(parent, "afile");
     writeFileSync(filePath, "x");
     expect(() => createNodeEvidenceStore(join(filePath, "evidence"))).toThrow(EvidenceWriteError);
+  });
+
+  it("refuses to write through a pre-planted symlink at the temp path (O_EXCL, L1)", () => {
+    const base = freshDir();
+    const outside = freshDir();
+    const victim = join(outside, "victim.json");
+    writeFileSync(victim, "ORIGINAL");
+    // A deterministic suffix makes the temp path predictable so an attacker could pre-plant it.
+    const store = createNodeEvidenceStore(base, nodeWorkspaceFs, () => "fixed");
+    symlinkSync(victim, join(base, "run-1.json.fixed.tmp"));
+    // O_EXCL ("wx") refuses to open through the existing symlink → the put fails, never writing out.
+    expect(() => store.put("run-1", '{"evil":true}')).toThrow(EvidenceWriteError);
+    expect(readFileSync(victim, "utf8")).toBe("ORIGINAL");
   });
 });
