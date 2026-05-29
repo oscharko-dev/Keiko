@@ -1,0 +1,233 @@
+// EvalRunner (ADR-0012 D5/D6/D9/C5): runs the deterministic offline (or opt-in live) evaluation
+// suite. For each fixture it materializes the workspace to a temp dir, builds a typed workflow input,
+// injects a ScriptedModelPort (or live GatewayModelPort), a recording WorkspaceWriter, a deterministic
+// fake SpawnFn (apply fixtures only), and a fixed clock/idSource so durations and run-ids are stable.
+// It runs generateUnitTests / investigateBug UNCHANGED, persists a redacted EvidenceManifest through
+// the #10 store, scores every dimension, aggregates the suite, and cleans up the temp dir. No
+// network or live-model call is made in offline mode; no Date.now / Math.random touches a scored path.
+
+import { generateUnitTests } from "../workflows/unit-tests/workflow.js";
+import { investigateBug } from "../workflows/bug-investigation/workflow.js";
+import {
+  createNodeEvidenceStore,
+  persistWorkflowEvidence,
+  resolveEvidenceDir,
+  type EvidenceStore,
+} from "../audit/index.js";
+import { nodeWorkspaceFs } from "../workspace/index.js";
+import type { ModelPort } from "../harness/ports.js";
+import type { EnvSource } from "../gateway/config.js";
+import type { SpawnFn } from "../tools/index.js";
+import { createEvaluationModelProvider } from "./model-provider.js";
+import { aggregateScorecard, scoreFixture, summarizeScorecard } from "./scorer.js";
+import { checkSurfaceParity } from "./surface-parity.js";
+import {
+  buildBugInput,
+  buildUnitTestInput,
+  fakeSpawn,
+  materializeFixture,
+  recordingSink,
+  recordingWriter,
+  toScoringInput,
+  type RecordingSink,
+  type RecordingWriter,
+} from "./runner-support.js";
+import { isManifestValid } from "./manifest-check.js";
+import { ALL_FIXTURES } from "./fixtures/index.js";
+import {
+  EVAL_SCORECARD_SCHEMA_VERSION,
+  type EvalScorecard,
+  type EvaluationFixture,
+  type EvaluationMode,
+  type FixtureRunResult,
+  type LiveRunContext,
+} from "./types.js";
+
+// Factory + store seams so the CLI tests can drive fail-closed live config and capture evidence
+// writes without real config or disk. Defaults compose the real audit store + gateway provider.
+export interface EvalRunnerDeps {
+  readonly modelProviderFactory?:
+    | ((fixture: EvaluationFixture, mode: EvaluationMode, modelId: string) => ModelPort)
+    | undefined;
+  readonly store?: EvidenceStore | undefined;
+  readonly env?: EnvSource | undefined;
+  // Fixed wall-clock used for evaluatedAt and as the workflow `now` source (deterministic durations).
+  readonly now?: (() => number) | undefined;
+  // Fixed run-id source so persisted evidence filenames are stable across runs.
+  readonly idSource?: (() => string) | undefined;
+}
+
+export interface EvalRunOptions {
+  readonly mode: EvaluationMode;
+  readonly fixtures: readonly EvaluationFixture[];
+  // Overrides the model ID for all fixtures (live mode only); falls back to the fixture's modelId.
+  readonly modelIdOverride?: string | undefined;
+}
+
+const FIXED_EVAL_EPOCH_MS = 1_700_000_000_000;
+
+function fixtureModelId(fixture: EvaluationFixture, override: string | undefined): string {
+  if (override !== undefined) {
+    return override;
+  }
+  const fromInput = fixture.workflowInput.modelId;
+  return typeof fromInput === "string" ? fromInput : "eval-model";
+}
+
+function resolveModelPort(
+  fixture: EvaluationFixture,
+  options: EvalRunOptions,
+  deps: EvalRunnerDeps,
+  modelId: string,
+): ModelPort {
+  if (deps.modelProviderFactory !== undefined) {
+    return deps.modelProviderFactory(fixture, options.mode, modelId);
+  }
+  return createEvaluationModelProvider({
+    mode: options.mode,
+    transcript: fixture.mockTranscript,
+    modelId,
+    ...(deps.env === undefined ? {} : { env: deps.env }),
+  });
+}
+
+interface RunDeps {
+  readonly model: ModelPort;
+  readonly writer: RecordingWriter;
+  readonly sink: RecordingSink;
+  readonly spawn: SpawnFn | undefined;
+  readonly now: () => number;
+  readonly idSource: () => string;
+}
+
+async function runWorkflow(
+  fixture: EvaluationFixture,
+  workspaceRoot: string,
+  modelId: string,
+  deps: RunDeps,
+): Promise<Record<string, unknown>> {
+  const common = {
+    model: deps.model,
+    writer: deps.writer,
+    sink: deps.sink,
+    now: deps.now,
+    idSource: deps.idSource,
+    ...(deps.spawn === undefined ? {} : { spawn: deps.spawn }),
+  };
+  if (fixture.workflowKind === "unit-tests") {
+    const report = await generateUnitTests(
+      buildUnitTestInput(fixture, workspaceRoot, modelId),
+      common,
+    );
+    return report as unknown as Record<string, unknown>;
+  }
+  const report = await investigateBug(buildBugInput(fixture, workspaceRoot, modelId), common);
+  return report as unknown as Record<string, unknown>;
+}
+
+function persistAndCheck(
+  fixture: EvaluationFixture,
+  report: Record<string, unknown>,
+  store: EvidenceStore,
+  env: EnvSource,
+  runId: string,
+): boolean {
+  const status = typeof report.status === "string" ? report.status : "failed";
+  persistWorkflowEvidence(
+    {
+      runId,
+      fingerprint: fixture.name.slice(0, 16),
+      modelId: typeof report.modelId === "string" ? report.modelId : "eval-model",
+      kind: fixture.workflowKind,
+      status: status === "rejected" || status === "failed" ? "failed" : "completed",
+      startedAt: FIXED_EVAL_EPOCH_MS,
+      finishedAt: FIXED_EVAL_EPOCH_MS,
+    },
+    report,
+    [],
+    { store, env },
+  );
+  const raw = store.get(runId);
+  return raw !== undefined && isManifestValid(raw);
+}
+
+async function runFixture(
+  fixture: EvaluationFixture,
+  options: EvalRunOptions,
+  deps: EvalRunnerDeps,
+  store: EvidenceStore,
+): Promise<FixtureRunResult> {
+  const modelId = fixtureModelId(fixture, options.modelIdOverride);
+  const workspace = materializeFixture(fixture);
+  const writer = recordingWriter();
+  const now = deps.now ?? ((): number => FIXED_EVAL_EPOCH_MS);
+  const runId = `eval-${fixture.workflowKind}-${fixture.name}`;
+  try {
+    const report = await runWorkflow(fixture, workspace.root, modelId, {
+      model: resolveModelPort(fixture, options, deps, modelId),
+      writer,
+      sink: recordingSink(),
+      spawn: fixture.apply === true ? fakeSpawn(0, "ok") : undefined,
+      now,
+      idSource: (): string => runId,
+    });
+    const manifestValid = persistAndCheck(fixture, report, store, deps.env ?? {}, runId);
+    const scoring = toScoringInput(report, writer.writeCount(), manifestValid);
+    return {
+      fixtureName: fixture.name,
+      workflowKind: fixture.workflowKind,
+      durationMs: typeof report.durationMs === "number" ? report.durationMs : 0,
+      dimensionResults: scoreFixture(fixture, scoring),
+      report,
+    };
+  } finally {
+    workspace.cleanup();
+  }
+}
+
+function emptyEvidenceStore(deps: EvalRunnerDeps): EvidenceStore {
+  return deps.store ?? createNodeEvidenceStore(resolveEvidenceDir(undefined, deps.env));
+}
+
+function liveContext(
+  options: EvalRunOptions,
+  evidenceRefs: readonly string[],
+): LiveRunContext | undefined {
+  if (options.mode !== "live") {
+    return undefined;
+  }
+  const modelId = options.modelIdOverride ?? options.fixtures[0]?.workflowInput.modelId;
+  return {
+    modelId: typeof modelId === "string" ? modelId : "live-model",
+    // No secrets: identifies the run by model only; apiKey/baseUrl are NEVER serialized here.
+    configDescriptor: `live evaluation (${String(options.fixtures.length)} fixtures)`,
+    evidenceRefs,
+  };
+}
+
+export async function runEvaluationSuite(
+  options: EvalRunOptions,
+  deps: EvalRunnerDeps = {},
+): Promise<EvalScorecard> {
+  const store = emptyEvidenceStore(deps);
+  const evaluatedAt = new Date(deps.now?.() ?? FIXED_EVAL_EPOCH_MS).toISOString();
+  const fixtureResults: FixtureRunResult[] = [];
+  for (const fixture of options.fixtures) {
+    fixtureResults.push(await runFixture(fixture, options, deps, store));
+  }
+  const dimensions = aggregateScorecard(fixtureResults);
+  const surfaceParity = await checkSurfaceParity();
+  const live = liveContext(options, store.list());
+  return {
+    schemaVersion: EVAL_SCORECARD_SCHEMA_VERSION,
+    evaluatedAt,
+    mode: options.mode,
+    ...(live === undefined ? {} : { liveRunContext: live }),
+    dimensions,
+    surfaceParity,
+    fixtureResults,
+    summary: summarizeScorecard(fixtureResults, dimensions, surfaceParity),
+  };
+}
+
+export { ALL_FIXTURES };
