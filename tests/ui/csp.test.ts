@@ -13,6 +13,12 @@ describe("extractInlineScriptHashes", () => {
     expect(extractInlineScriptHashes([html])).toEqual([sha256Token(body)]);
   });
 
+  it("hashes uppercase <SCRIPT>...</SCRIPT> blocks (case-insensitive matching)", () => {
+    const body = "self.__next_f.push([1])";
+    const html = `<html><body><SCRIPT>${body}</SCRIPT></body></html>`;
+    expect(extractInlineScriptHashes([html])).toEqual([sha256Token(body)]);
+  });
+
   it("ignores external scripts that carry a src attribute", () => {
     const html = `<script src="/_next/static/chunk.js"></script>`;
     expect(extractInlineScriptHashes([html])).toEqual([]);

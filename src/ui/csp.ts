@@ -6,8 +6,11 @@
 
 import { createHash } from "node:crypto";
 
-const INLINE_SCRIPT_PATTERN = /<script\b([^>]*)>([\s\S]*?)<\/script>/g;
-const SRC_ATTRIBUTE_PATTERN = /\bsrc\s*=/;
+// Case-insensitive so no executable inline script is missed — an unmatched script would be
+// CSP-blocked at runtime. The `i` flag covers `<SCRIPT>` and mixed-case variants. `\s*` before
+// the closing `>` tolerates optional whitespace in `</script >` forms.
+const INLINE_SCRIPT_PATTERN = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
+const SRC_ATTRIBUTE_PATTERN = /\bsrc\s*=/i;
 
 // An inline script is a `<script>` element with a non-empty body and no `src` attribute.
 function isInlineScript(attributes: string, body: string): boolean {
