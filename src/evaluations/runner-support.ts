@@ -8,7 +8,7 @@
 import { EventEmitter } from "node:events";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import type { SpawnFn, WorkspaceWriter } from "../tools/index.js";
 import type { UnitTestTarget, UnitTestWorkflowInput } from "../workflows/unit-tests/types.js";
@@ -26,10 +26,17 @@ export interface MaterializedWorkspace {
 
 // Writes every workspaceFile to a fresh mkdtemp dir and returns the absolute root + a cleanup that
 // removes the whole tree. POSIX-relative keys are joined onto the root; parent dirs are created.
+// Containment guard: a key like `../../etc/x` would resolve outside the temp root — reject it
+// loudly rather than letting a malformed fixture escape the sandbox (mirrors #5/#6 realpath ethos).
 export function materializeFixture(fixture: EvaluationFixture): MaterializedWorkspace {
   const root = mkdtempSync(join(tmpdir(), "keiko-eval-"));
   for (const [relPath, content] of Object.entries(fixture.workspaceFiles)) {
     const abs = join(root, relPath);
+    if (abs !== root && !abs.startsWith(root + sep)) {
+      throw new Error(
+        `fixture workspaceFiles key "${relPath}" resolves outside the temp root: ${abs}`,
+      );
+    }
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, content, "utf8");
   }

@@ -299,4 +299,23 @@ describe("materializeFixture", () => {
       cleanup();
     }
   });
+
+  it("throws when a workspaceFiles key contains path traversal (../)", () => {
+    const malicious: EvaluationFixture = {
+      name: "traversal-fixture",
+      workflowKind: "unit-tests",
+      workspaceFiles: { "../../etc/passwd": "root:x:0:0" },
+      workflowInput: { target: { kind: "file", filePath: "src/x.ts" } },
+      mockTranscript: [],
+      dimensions: new Set(["task-completion" as const]),
+      oracle: {
+        expectedStatuses: ["completed"],
+        expectPatch: false,
+        expectVerificationSkip: true,
+        maxExpectedChangedFiles: 0,
+        maxExpectedPatchBytes: 0,
+      },
+    };
+    expect(() => materializeFixture(malicious)).toThrow(/resolves outside the temp root/);
+  });
 });
