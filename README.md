@@ -123,9 +123,11 @@ Keiko reads model credentials from **environment variables** or a **JSON config 
 
 The first match wins:
 
-1. Config file from `--config` or `KEIKO_CONFIG_FILE`
-2. Per-model environment variables
-3. Global environment variables
+1. Per-model environment variables: `KEIKO_MODEL_<UPPER_MODEL_ID>_API_KEY` / `_BASE_URL`
+2. Config-file value for that model's `apiKey` / `baseUrl`
+3. Global environment variables: `KEIKO_DEFAULT_API_KEY` / `_BASE_URL`
+
+Config-file selection is surface-specific: `keiko models validate` and `keiko ui` accept `--config` or `KEIKO_CONFIG_FILE`; `keiko gen-tests` and `keiko investigate` read `./keiko.config.json` from the working directory.
 
 ### Per-model variables
 
@@ -138,7 +140,7 @@ gpt-oss-120b  →  KEIKO_MODEL_GPT_OSS_120B_API_KEY
 
 ### Global fallback
 
-Used when no per-model variable is set:
+Used when neither a per-model environment variable nor a config-file value supplies the secret:
 
 ```
 KEIKO_DEFAULT_API_KEY
@@ -151,7 +153,7 @@ Credentials are held in memory for the duration of a call and are never logged o
 
 ## CLI usage
 
-The CLI exposes eleven commands. Every command supports `--help`. Global options:
+The CLI provides nine subcommands (`models`, `run`, `context`, `verify`, `gen-tests`, `investigate`, `evidence`, `evaluate`, `ui`); `models` and `evidence` each take a sub-action. Top-level `keiko --help` and `keiko --version` print usage; `keiko evaluate --help` prints its own usage. Global options:
 
 | Option            | Effect               |
 | ----------------- | -------------------- |
@@ -289,7 +291,7 @@ keiko investigate --output-file ./fail.txt --file src/auth.ts --apply
 
 ### `keiko evidence`
 
-Inspect redacted evidence manifests written by `keiko run` and the workflows. Reads only the evidence base directory. Exit `0` on success, `1` on a run id not found in the store or a read error, `2` on a usage error (including `show` with no run id).
+Inspect redacted evidence manifests written by `keiko run`, the local UI, and `keiko evaluate`. Reads only the evidence base directory. Exit `0` on success, `1` on a run id not found in the store or a read error, `2` on a usage error (including `show` with no run id).
 
 ```bash
 keiko evidence list
@@ -497,7 +499,7 @@ For the full offline scorecard, run `keiko evaluate` (see [Evaluation and Go/No-
 
 ## Evidence output
 
-Each run that touches the model or the workspace builds an `EvidenceManifest`. Manifests are **redacted at construction** — secret-shaped strings, environment values, and known literal credentials are removed before anything is written. There is no code path that writes an unredacted manifest.
+`keiko run`, workflow runs launched from the local UI, and `keiko evaluate` (offline and live) persist an `EvidenceManifest`. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest; `keiko verify` and `keiko context` are read-only summaries that persist nothing. Manifests are **redacted at construction** — secret-shaped strings, environment values, and known literal credentials are removed before anything is written. There is no code path that writes an unredacted manifest.
 
 Manifests are written with an exclusive-create (`O_EXCL`) open into a directory whose real path is verified to be inside the evidence root. The default location is `$KEIKO_EVIDENCE_DIR` or `.keiko/evidence` under the workspace.
 

@@ -71,9 +71,11 @@ Only after these pass should you run a model-backed workflow.
 
 Keiko reads credentials from environment variables or a JSON config file, never from CLI flags. Precedence, first match wins:
 
-1. Config file from `--config` or `KEIKO_CONFIG_FILE`.
-2. Per-model environment variables: `KEIKO_MODEL_<UPPER_MODEL_ID>_API_KEY` / `_BASE_URL`, where `<UPPER_MODEL_ID>` is the model id with every non-alphanumeric character replaced by `_` and uppercased (for example `gpt-oss-120b` → `KEIKO_MODEL_GPT_OSS_120B_API_KEY`).
+1. Per-model environment variables: `KEIKO_MODEL_<UPPER_MODEL_ID>_API_KEY` / `_BASE_URL`, where `<UPPER_MODEL_ID>` is the model id with every non-alphanumeric character replaced by `_` and uppercased (for example `gpt-oss-120b` → `KEIKO_MODEL_GPT_OSS_120B_API_KEY`).
+2. Config-file value for that model's `apiKey` / `baseUrl`.
 3. Global fallback: `KEIKO_DEFAULT_API_KEY` / `KEIKO_DEFAULT_BASE_URL`.
+
+Config-file selection is surface-specific: `keiko models validate` and `keiko ui` accept `--config` or `KEIKO_CONFIG_FILE`; `keiko gen-tests` and `keiko investigate` read `./keiko.config.json` from the working directory.
 
 See the README's [Configuration and secrets](../../README.md#configuration-and-secrets) section and `.env.example` for the full set of variable names.
 
@@ -135,7 +137,7 @@ Expected output: an overall status line and a per-gate table (kind, status, exit
 
 ### Inspect evidence
 
-Every model-backed run writes a redacted evidence manifest. List and read them:
+`keiko gen-tests` and `keiko investigate` print a reviewable report to stdout and do not persist a manifest. Persisted evidence comes from `keiko run`, workflow runs launched from the local UI, and `keiko evaluate` (offline and live). Inspect persisted manifests with:
 
 ```bash
 keiko evidence list
@@ -238,7 +240,7 @@ The final Go/No-Go is human-reviewed. See [Go/No-Go criteria](./go-no-go.md) for
 
 ## Evidence artifacts and retention
 
-- **What is written.** Each model- or workspace-touching run produces an `EvidenceManifest`, redacted at construction. There is no code path that writes an unredacted manifest.
+- **What is written.** `keiko run`, UI workflow runs, and `keiko evaluate` (offline and live) persist an `EvidenceManifest`, redacted at construction. The standalone workflow CLIs (`keiko gen-tests`, `keiko investigate`) do not persist manifests. There is no code path that writes an unredacted manifest.
 - **Where.** `$KEIKO_EVIDENCE_DIR` if set, otherwise `.keiko/evidence` under the workspace. Override per command with `--evidence-dir`.
 - **How it is written.** Atomically (exclusive-create) into a directory whose real path is verified to be inside the evidence root.
 - **Retention.** The newest runs are kept up to a maximum (50 by default); older runs are rotated out by recorded finish time. For a multi-day pilot that needs a longer record, copy manifests to your own retained store, or point `--evidence-dir` at a location your retention policy covers.

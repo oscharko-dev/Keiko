@@ -113,7 +113,7 @@ See [ADR-0003](adr/ADR-0003-model-gateway-boundary.md) and [ADR-0010](adr/ADR-00
 
 ## Evidence storage
 
-Every model- or workspace-touching run produces an evidence manifest for audit.
+`keiko run`, workflow runs launched from the local UI, and `keiko evaluate` (offline and live) persist an evidence manifest for audit. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist a manifest; `keiko verify` and `keiko context` are read-only summaries that persist nothing.
 
 - **Redaction before persist** (above): no unredacted manifest is ever written.
 - **Atomic, contained writes.** Each manifest is written with an exclusive-create (`O_EXCL`) open into a directory whose real path is verified to be inside the evidence root.

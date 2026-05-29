@@ -10,9 +10,9 @@ This guide maps the customer's nine-model pilot portfolio to recommended Wave 1 
 
 The qualitative and numeric figures below — cost class, latency class, and context window — are **documented assumptions** sourced from public model cards as of 2026-05-28. They live in the capability registry as starting defaults, and several carry an explicit `[assumption]` marker in the source.
 
-Override them per deployment through gateway configuration with the authoritative numbers for your own hosted endpoints. Treat the registry values as a sensible default to validate, not as a measured guarantee for your infrastructure.
+These figures are documented assumptions baked into the static capability registry (`src/gateway/capabilities.data.ts`); Wave 1 does not expose capability-metadata overrides in the gateway config (which configures providers, credentials, timeouts, and circuit-breaker only). Treat the registry values as a sensible default to validate against your own hosted endpoints, not a measured guarantee — and update the registry in the codebase if your authoritative numbers differ.
 
-For how configuration overrides the registry and how credentials resolve, see [Configuration and secrets](../../README.md#configuration-and-secrets).
+For how credentials resolve and how the gateway config is structured, see [Configuration and secrets](../../README.md#configuration-and-secrets). That configuration covers providers, credentials, timeouts, and circuit-breaker settings — not capability-metadata overrides.
 
 ---
 
@@ -73,7 +73,7 @@ Medium cost, standard latency. Suited to documentation summarisation, code expla
 
 ## Per-model notes
 
-Each note records the model's intended use and its known limitation, as declared in the capability registry. All numeric figures are documented assumptions the customer overrides via config.
+Each note records the model's intended use and its known limitation, as declared in the capability registry. All numeric figures are documented assumptions from the static capability registry; validate them against your endpoints. Wave 1 has no gateway-config field to override them.
 
 Note: `multilingual-e5-large Embedding` is the exact identifier in the capability registry, including the trailing word and the space. As a Wave 2 embedding model it is not referenced by Wave 1 chat workflows or their gateway configuration.
 
