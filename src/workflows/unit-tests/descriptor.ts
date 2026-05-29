@@ -1,34 +1,14 @@
 // The static UI workflow descriptor (ADR-0008 D10). Issue #13 reads this to render the workflow
-// UI without knowing the implementation. Pure value, no imports beyond ./types.js. Frozen and
-// JSON-serializable.
+// UI without knowing the implementation. Frozen and JSON-serializable. The descriptor interfaces
+// are the shared base (ADR-0009 D12) — re-exported here so #8's existing import surface (the
+// unit-tests barrel) is unchanged; both workflows depend on the base and neither on the other.
 
 import { DEFAULT_WORKFLOW_LIMITS, type WorkflowLimits } from "./types.js";
+import type { WorkflowDescriptor } from "../descriptor.js";
 
-export interface WorkflowInputSpec {
-  readonly name: string;
-  readonly type: "string" | "boolean" | "string[]" | "object";
-  readonly required: boolean;
-  readonly description: string;
-  readonly defaultValue?: unknown;
-}
+export type { WorkflowDescriptor, WorkflowInputSpec } from "../descriptor.js";
 
-export interface WorkflowDescriptor {
-  readonly workflowId: string;
-  readonly name: string;
-  readonly description: string;
-  readonly inputs: readonly WorkflowInputSpec[];
-  readonly defaultLimits: WorkflowLimits;
-  readonly modelSelectionOptions: {
-    // Whether the caller can specify an arbitrary modelId. Always true for this workflow.
-    readonly arbitrary: boolean;
-    // Hint to the UI: prefer fast/cheap models for test generation.
-    readonly preferredCostClass: "low" | "medium" | "high";
-  };
-  readonly supportsDryRun: boolean;
-  readonly supportsApply: boolean;
-}
-
-export const UNIT_TEST_WORKFLOW_DESCRIPTOR: WorkflowDescriptor = {
+export const UNIT_TEST_WORKFLOW_DESCRIPTOR: WorkflowDescriptor<WorkflowLimits> = {
   workflowId: "unit-test-generation",
   name: "Unit Test Generation",
   description:
