@@ -4,6 +4,7 @@ import { runContextCli } from "./context.js";
 import { runVerifyCli } from "./verify.js";
 import { runGenTestsCli } from "./gen-tests.js";
 import { runInvestigateCli } from "./investigate.js";
+import { runEvidenceCli } from "./evidence.js";
 import type { EnvSource } from "../gateway/config.js";
 import { SDK_VERSION } from "../sdk/index.js";
 
@@ -27,6 +28,7 @@ Usage:
   keiko verify [OPTIONS]   Run the project's gates and print a redacted evidence summary.
   keiko gen-tests [OPTIONS] Generate a reviewable unit-test patch (dry-run by default).
   keiko investigate [OPTIONS] Investigate a bug and propose a fix + regression test (dry-run by default).
+  keiko evidence <list|show> Inspect redacted evidence manifests written by \`keiko run\`.
 
 Exit codes:
   0  Success
@@ -58,6 +60,9 @@ function dispatchCommand(
   }
   if (name === "investigate") {
     return runInvestigateCli(rest, io, env);
+  }
+  if (name === "evidence") {
+    return runEvidenceCli(rest, io);
   }
   return undefined;
 }
