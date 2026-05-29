@@ -6,6 +6,7 @@
 // the #10 store, scores every dimension, aggregates the suite, and cleans up the temp dir. No
 // network or live-model call is made in offline mode; no Date.now / Math.random touches a scored path.
 
+import { randomUUID } from "node:crypto";
 import { generateUnitTests } from "../workflows/unit-tests/workflow.js";
 import { investigateBug } from "../workflows/bug-investigation/workflow.js";
 import {
@@ -160,7 +161,11 @@ async function runFixture(
   const workspace = materializeFixture(fixture);
   const writer = recordingWriter();
   const now = deps.now ?? ((): number => FIXED_EVAL_EPOCH_MS);
-  const runId = `eval-${fixture.workflowKind}-${fixture.name}`;
+  // Use the injectable idSource to generate the evidence runId. When no idSource is injected (real
+  // CLI), randomUUID makes each run unique so repeat runs don't collide in the #10 O_EXCL store.
+  // Tests inject a fixed idSource for deterministic evidence filenames.
+  const idSource = deps.idSource ?? randomUUID;
+  const runId = idSource();
   try {
     const report = await runWorkflow(fixture, workspace.root, modelId, {
       model: resolveModelPort(fixture, options, deps, modelId),
@@ -168,7 +173,7 @@ async function runFixture(
       sink: recordingSink(),
       spawn: fixture.apply === true ? fakeSpawn(0, "ok") : undefined,
       now,
-      idSource: (): string => runId,
+      idSource,
     });
     const manifestValid = persistAndCheck(fixture, report, store, deps.env ?? {}, runId);
     const scoring = toScoringInput(report, writer.writeCount(), manifestValid);
