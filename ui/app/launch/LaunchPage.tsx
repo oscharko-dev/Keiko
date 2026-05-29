@@ -122,9 +122,11 @@ type LimitsRecord = Record<string, number | undefined>;
 interface LimitsEditorProps {
   limits: LimitsRecord;
   onChange: (limits: LimitsRecord) => void;
+  /** Unique id for the controlled content element (aria-controls target). */
+  contentId: string;
 }
 
-function LimitsEditor({ limits, onChange }: LimitsEditorProps): ReactNode {
+function LimitsEditor({ limits, onChange, contentId }: LimitsEditorProps): ReactNode {
   const [open, setOpen] = useState(false);
 
   return (
@@ -133,13 +135,13 @@ function LimitsEditor({ limits, onChange }: LimitsEditorProps): ReactNode {
         type="button"
         onClick={() => { setOpen((o) => !o); }}
         aria-expanded={open}
+        aria-controls={contentId}
         className="flex w-full items-center justify-between px-4 py-2 text-left text-sm font-medium text-ink-muted hover:text-ink"
       >
         Advanced harness limits
         <span aria-hidden="true">{open ? "▲" : "▼"}</span>
       </button>
-      {open && (
-        <div className="grid gap-3 border-t border-ink/10 p-4 sm:grid-cols-2">
+      <div id={contentId} hidden={!open} className="grid gap-3 border-t border-ink/10 p-4 sm:grid-cols-2">
           {Object.entries(limits).map(([key, val]) => (
             <div key={key}>
               <label htmlFor={`limit-${key}`} className="block text-xs text-ink-muted">
@@ -161,7 +163,6 @@ function LimitsEditor({ limits, onChange }: LimitsEditorProps): ReactNode {
             </div>
           ))}
         </div>
-      )}
     </div>
   );
 }
@@ -382,7 +383,7 @@ function WorkflowSection({
           )}
 
           {/* Limits editor */}
-          <LimitsEditor limits={limits} onChange={setLimits} />
+          <LimitsEditor limits={limits} onChange={setLimits} contentId={`${sectionId}-limits-content`} />
 
           {/* Error */}
           {formError !== null && (
