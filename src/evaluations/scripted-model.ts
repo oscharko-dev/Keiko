@@ -24,16 +24,16 @@ export function createScriptedModelPort(
     call: (): Promise<NormalizedResponse> => {
       const index = Math.min(calls, script.length - 1);
       calls += 1;
-      if (script.length === 0) {
+      const entry = script[index];
+      if (entry === undefined) {
         return Promise.reject(
           new Error("ScriptedModelPort: empty script — no scripted response to return"),
         );
       }
-      const entry = script[index];
       if (entry instanceof Error) {
         return Promise.reject(entry);
       }
-      return Promise.resolve(entry as NormalizedResponse);
+      return Promise.resolve(entry);
     },
   };
 }

@@ -25,6 +25,7 @@ export {
 export {
   createInMemoryEvidenceStore,
   createNodeEvidenceStore,
+  resolveEvidenceDir,
   type EvidenceStore,
 } from "./store.js";
 export {

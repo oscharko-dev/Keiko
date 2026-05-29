@@ -72,7 +72,7 @@ export function recordingSink(): RecordingSink {
   return {
     events: () => events,
     emit: (event): void => {
-      events.push(event as { type: string });
+      events.push(event);
     },
   };
 }
@@ -175,9 +175,7 @@ export function toScoringInput(
   manifestValid: boolean,
 ): ScoringInput {
   const proposedDiff = typeof report.proposedDiff === "string" ? report.proposedDiff : undefined;
-  const verification = isRecord(report.verificationSummary)
-    ? report.verificationSummary
-    : undefined;
+  const verification = resolveVerification(report);
   const verificationStatus =
     verification !== undefined && typeof verification.overallStatus === "string"
       ? verification.overallStatus
@@ -199,4 +197,17 @@ function changedFileCount(report: Record<string, unknown>): number {
     return report.addedTestFiles.length;
   }
   return Array.isArray(report.changedFiles) ? report.changedFiles.length : 0;
+}
+
+// The verification summary lives at `verificationSummary` on a unit-test report and at
+// `verified.verification` on a bug-investigation report; this resolves whichever shape is present.
+function resolveVerification(report: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (isRecord(report.verificationSummary)) {
+    return report.verificationSummary;
+  }
+  const verified = report.verified;
+  if (isRecord(verified) && isRecord(verified.verification)) {
+    return verified.verification;
+  }
+  return undefined;
 }

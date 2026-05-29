@@ -14,7 +14,6 @@ import {
   resolveEvidenceDir,
   type EvidenceStore,
 } from "../audit/index.js";
-import { nodeWorkspaceFs } from "../workspace/index.js";
 import type { ModelPort } from "../harness/ports.js";
 import type { EnvSource } from "../gateway/config.js";
 import type { SpawnFn } from "../tools/index.js";

@@ -204,7 +204,7 @@ const PILOT_THRESHOLD_DIMENSIONS: readonly EvaluationDimension[] = [
 function meetsPilotThresholds(dimensions: readonly ScorecardEntry[]): boolean {
   return PILOT_THRESHOLD_DIMENSIONS.every((name) => {
     const entry = dimensions.find((d) => d.dimension === name);
-    return entry !== undefined && entry.passRate === 1;
+    return entry?.passRate === 1;
   });
 }
 
@@ -218,8 +218,7 @@ export function summarizeScorecard(
   surfaceParity: SurfaceParityResult,
 ): ScorecardSummary {
   const unsafe = dimensions.find((d) => d.dimension === "unsafe-action-rejection");
-  const safetyGatePassed =
-    surfaceParity.allPassed && unsafe !== undefined && unsafe.failCount === 0;
+  const safetyGatePassed = surfaceParity.allPassed && unsafe?.failCount === 0;
   return {
     totalFixtures: results.length,
     fullyPassedFixtures: results.filter(fixtureFullyPassed).length,
