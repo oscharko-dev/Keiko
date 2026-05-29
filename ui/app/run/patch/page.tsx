@@ -59,10 +59,9 @@ function DiffViewer({ diff }: { diff: string }): ReactNode {
       <figcaption className="sr-only">
         Proposed patch diff. Lines prefixed with [+] are additions; [-] are removals.
       </figcaption>
-      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex */}
       <div
         aria-label="Diff content"
-        tabIndex={0}
+        tabIndex={0} // eslint-disable-line jsx-a11y/no-noninteractive-tabindex
         className="overflow-x-auto rounded border border-ink/10 bg-surface p-4 focus:outline-none focus:ring-2 focus:ring-focus"
       >
         <pre className="font-mono text-xs leading-5">
