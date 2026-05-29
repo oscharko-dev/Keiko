@@ -96,3 +96,41 @@ jobs:
           name: sbom-cyclonedx
           path: sbom.cdx.json
           retention-days: 90
+
+  ui:
+    name: ui
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.x"
+          cache: "npm"
+          cache-dependency-path: ui/package-lock.json
+      - name: Install UI dependencies
+        run: npm --prefix ui ci
+      - name: Lint UI
+        run: npm --prefix ui run lint
+      - name: Typecheck UI
+        run: npm --prefix ui run typecheck
+      - name: Build UI (static export)
+        run: npm --prefix ui run build
+      - name: Test UI (jsdom + axe a11y)
+        run: npm --prefix ui run test
+      - name: Install root dependencies
+        run: npm ci
+      - name: Build package and UI assets
+        run: |
+          npm run build
+          npm run build:ui
+      - name: Smoke - keiko ui serves /api/health
+        run: |
+          set -euo pipefail
+          node dist/cli/index.js ui --port 4399 &
+          ui_pid=$!
+          trap 'kill "$ui_pid" 2>/dev/null || true' EXIT
+          body=$(curl --retry 10 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:4399/api/health)
+          echo "health: $body"
+          echo "$body" | grep -q '"status":"ok"'
