@@ -46,6 +46,13 @@ describe("extractInlineScriptHashes", () => {
   it("returns no hashes for an empty document set", () => {
     expect(extractInlineScriptHashes([])).toEqual([]);
   });
+
+  it("handles a whitespace/malformed closing tag (</script\\n bar>) via indexOf scan", () => {
+    const body = "boot()";
+    // indexOf finds `</script` regardless of what follows before the `>`
+    const html = `<script>${body}</script\n bar>`;
+    expect(extractInlineScriptHashes([html])).toEqual([sha256Token(body)]);
+  });
 });
 
 describe("buildCspHeader", () => {
