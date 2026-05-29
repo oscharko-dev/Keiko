@@ -6,7 +6,7 @@
 
 export { buildEvidenceManifest } from "./build.js";
 export { persistEvidence, type PersistResult } from "./persist.js";
-export { createAuditRedactor } from "./redaction.js";
+export { createAuditRedactor, deepRedactStrings } from "./redaction.js";
 export { aggregateUsage, resolveCostClass } from "./aggregate.js";
 export { listEvidence, loadEvidence, type EvidenceListEntry } from "./index-api.js";
 export { applyRetention } from "./retention.js";

@@ -10,6 +10,7 @@ import { writeFileSync } from "node:fs";
 import { GatewayError } from "../gateway/errors.js";
 import { redact } from "../gateway/redaction.js";
 import type { EnvSource } from "../gateway/config.js";
+import { createAuditRedactor, deepRedactStrings } from "../audit/index.js";
 import {
   fixtureByName,
   fixturesForSuite,
@@ -105,12 +106,24 @@ function selectFixtures(parsed: EvaluateArgs): Selection {
   return { fixtures: fixturesForSuite(suite) };
 }
 
-function emit(scorecard: EvalScorecard, parsed: EvaluateArgs, io: CliIo): void {
+// In live mode, deep-redact the scorecard before serialization so that any model content that
+// leaked into workflow report fields (e.g. fixture reasons) is scrubbed by the same audit
+// redactor applied at evidence-persist time. Offline scorecard is static harness text — safe as-is.
+function redactedScorecard(scorecard: EvalScorecard, live: boolean, env: EnvSource): unknown {
+  if (!live) {
+    return scorecard;
+  }
+  const redactFn = createAuditRedactor({ additionalSecrets: [] }, env);
+  return deepRedactStrings(scorecard, redactFn);
+}
+
+function emit(scorecard: EvalScorecard, parsed: EvaluateArgs, io: CliIo, env: EnvSource): void {
+  const output = redactedScorecard(scorecard, parsed.live, env);
   if (parsed.output !== undefined) {
-    writeFileSync(parsed.output, `${JSON.stringify(scorecard, null, 2)}\n`, "utf8");
+    writeFileSync(parsed.output, `${JSON.stringify(output, null, 2)}\n`, "utf8");
   }
   if (parsed.json) {
-    io.out(`${JSON.stringify(scorecard, null, 2)}\n`);
+    io.out(`${JSON.stringify(output, null, 2)}\n`);
     return;
   }
   io.out(`${renderEvalSummary(scorecard)}\n`);
@@ -163,7 +176,7 @@ async function runSuite(
       },
       { env, ...deps.runner },
     );
-    emit(scorecard, parsed, io);
+    emit(scorecard, parsed, io, env);
     return exitCodeFor(scorecard);
   } catch (error) {
     return handleRunError(error, parsed, io);
