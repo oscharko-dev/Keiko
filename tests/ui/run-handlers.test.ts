@@ -15,7 +15,13 @@ import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createUiServer, UI_HOST } from "../../src/ui/server.js";
 import { buildCspHeader } from "../../src/ui/csp.js";
-import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../src/ui/index.js";
+import {
+  buildRedactor,
+  createRunRegistry,
+  handleApplyRun,
+  QueueEventSink,
+  type UiHandlerDeps,
+} from "../../src/ui/index.js";
 import {
   createInMemoryEvidenceStore,
   listEvidence,
@@ -307,12 +313,14 @@ function abortableModel(): ModelPort {
   return {
     call: (_req, signal): Promise<NormalizedResponse> =>
       new Promise<NormalizedResponse>((_res, reject) => {
-        const fail = (): void => reject(new CancelledError("aborted in test"));
-        if (signal?.aborted === true) {
+        const fail = (): void => {
+          reject(new CancelledError("aborted in test"));
+        };
+        if (signal.aborted) {
           fail();
           return;
         }
-        signal?.addEventListener("abort", fail, { once: true });
+        signal.addEventListener("abort", fail, { once: true });
       }),
   };
 }
@@ -401,5 +409,45 @@ describe("FIX 3 — a failed UI run's report is redacted (security L1)", () => {
     await awaitTerminal(body.runId);
     const report = await (await fetch(`${base()}/api/runs/${body.runId}`)).text();
     expect(report).not.toContain(SECRET);
+  });
+});
+
+describe("FIX 4 — apply rebuilds the ModelPort from the run's modelId, not the fingerprint", () => {
+  it("passes record.modelId (never the fingerprint) to the model-port factory", async () => {
+    const localRegistry = createRunRegistry();
+    const record = localRegistry.register({
+      runId: "fix4-run",
+      fingerprint: "deadbeefcafef00d",
+      modelId: "claude-sonnet-x",
+      sink: new QueueEventSink(),
+      cancel: (): void => undefined,
+    });
+    localRegistry.complete("fix4-run", "completed", { status: "dry-run" }, {
+      kind: "unit-tests",
+      payload: { workspaceRoot: ".", target: { kind: "file", filePath: "x.ts" } },
+    });
+
+    const seen: string[] = [];
+    const deps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: createInMemoryEvidenceStore(),
+      env: {},
+      redactor: buildRedactor({}),
+      registry: localRegistry,
+      modelPortFactory: (modelId): undefined => {
+        seen.push(modelId);
+        return undefined;
+      },
+    };
+    const ctx = {
+      req: {} as never,
+      res: {} as never,
+      params: { runId: "fix4-run" },
+      url: new URL("http://127.0.0.1/api/runs/fix4-run/apply"),
+    };
+    await handleApplyRun(ctx, deps);
+    expect(seen).toEqual(["claude-sonnet-x"]);
+    expect(seen).not.toContain(record.fingerprint);
   });
 });

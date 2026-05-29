@@ -101,19 +101,21 @@ function buildManifest(
   };
 }
 
-// Writes a redacted manifest through the store. Returns silently on any failure (best-effort): the
-// store call is the system boundary, and a persist failure must not surface to the caller.
-function persistRedacted(
-  manifest: EvidenceManifest,
+// Builds, redacts, and writes a manifest through the store. The WHOLE operation (manifest assembly
+// included) is best-effort: a failure anywhere — a malformed report, a redactor error, an fs error —
+// is swallowed so the run outcome already recorded by the registry stands. Nothing is logged, so no
+// secret can leak through a log line.
+function persistBuilt(
+  build: () => EvidenceManifest,
   ctx: EvidencePersistContext,
 ): void {
   try {
+    const manifest = build();
     const redactor = createAuditRedactor({}, ctx.env);
     const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
     ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
   } catch {
-    // Best-effort: a persist failure (e.g. fs error) is swallowed so the run outcome stands. No
-    // secret is logged because nothing is logged.
+    // Best-effort: a persist failure must not surface to the caller (AC5 / coordinator guardrail).
   }
 }
 
@@ -126,29 +128,34 @@ export function persistWorkflowEvidence(
   events: readonly StreamEvent[],
   ctx: EvidencePersistContext,
 ): void {
-  const manifest = buildManifest(identity, foldWorkflowUsage(events), {
-    verification: verificationOf(report),
-    patch: patchOf(report),
-    failure: undefined,
-  });
-  persistRedacted(manifest, ctx);
+  persistBuilt(
+    () =>
+      buildManifest(identity, foldWorkflowUsage(events), {
+        verification: verificationOf(report),
+        patch: patchOf(report),
+        failure: undefined,
+      }),
+    ctx,
+  );
 }
 
 // Persists a terminated EXPLAIN-PLAN harness run. The RunResult carries the raw harness events whose
-// `usage` shape the audit fold understands, but to keep ONE manifest-build path the usage is folded
-// the same way from the buffered stream events (harness `model:call:completed` also carries top-level
-// token fields under `usage`, handled by the harness-shaped fold below).
+// `usage` shape the audit fold understands; the usage is folded the same way the workflow path folds
+// its own events so a single manifest-build path serves both.
 export function persistExplainEvidence(
   identity: RunIdentity,
   result: RunResult,
   ctx: EvidencePersistContext,
 ): void {
-  const manifest = buildManifest(identity, foldHarnessUsage(result.events), {
-    verification: undefined,
-    patch: undefined,
-    failure: undefined,
-  });
-  persistRedacted(manifest, ctx);
+  persistBuilt(
+    () =>
+      buildManifest(identity, foldHarnessUsage(result.events), {
+        verification: undefined,
+        patch: undefined,
+        failure: undefined,
+      }),
+    ctx,
+  );
 }
 
 function foldHarnessUsage(
