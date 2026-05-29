@@ -130,4 +130,38 @@ describe("runGenTestsCli (AC #1)", () => {
     const parsed = JSON.parse(c.out()) as { status: string };
     expect(parsed.status).toBe("rejected");
   });
+
+  it("drops empty entries from --changed (C2: trailing/consecutive commas)", async () => {
+    const c = makeIo();
+    const code = await runGenTestsCli(
+      ["--file", "src/add.ts", "--dir-root", dir, "--changed", "a.ts,,b.ts,"],
+      c.io,
+      {},
+      { model: modelReturning(FENCED) },
+    );
+    // Should succeed (treats --changed a.ts,b.ts as the target, not a usage error)
+    expect(code).toBe(0);
+  });
+
+  it("treats --changed with only commas as absent, falling back to --file target (C2)", async () => {
+    const c = makeIo();
+    const code = await runGenTestsCli(
+      ["--file", "src/add.ts", "--dir-root", dir, "--changed", ",,"],
+      c.io,
+      {},
+      { model: modelReturning(FENCED) },
+    );
+    // Falls back to --file target, no usage error
+    expect(code).toBe(0);
+    expect(c.err()).toBe("");
+  });
+
+  it("exits 1 with a specific error message when no gateway config is found (C3)", async () => {
+    const c = makeIo();
+    // No deps.model injected — buildModel runs and throws ConfigInvalidError (a GatewayError)
+    const code = await runGenTestsCli(["--file", "src/add.ts", "--dir-root", dir], c.io, {}, {});
+    expect(code).toBe(1);
+    expect(c.err()).toContain("model gateway configuration problem");
+    expect(c.err()).toContain("KEIKO_DEFAULT_API_KEY");
+  });
 });

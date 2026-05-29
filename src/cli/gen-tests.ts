@@ -9,6 +9,7 @@
 import { Gateway } from "../gateway/gateway.js";
 import { loadConfigFromFile, type EnvSource } from "../gateway/config.js";
 import { GatewayError } from "../gateway/errors.js";
+import { redact } from "../gateway/redaction.js";
 import { GatewayModelPort } from "../harness/adapters.js";
 import type { ModelPort } from "../harness/ports.js";
 import { WorkspaceError } from "../workspace/index.js";
@@ -90,11 +91,18 @@ function parseArgs(args: readonly string[]): GenTestsArgs | null {
     return null;
   }
   const changedRaw = values["--changed"];
+  const changedPaths =
+    changedRaw === undefined
+      ? undefined
+      : changedRaw
+          .split(",")
+          .map((p) => p.trim())
+          .filter((p) => p.length > 0);
   return {
     file,
     dir,
     fn: values["--function"],
-    changed: changedRaw === undefined ? undefined : changedRaw.split(",").map((p) => p.trim()),
+    changed: changedPaths === undefined || changedPaths.length === 0 ? undefined : changedPaths,
     apply: args.includes("--apply"),
     model: values["--model"],
     json: args.includes("--json"),
@@ -135,8 +143,8 @@ function buildModel(
   } catch (error) {
     if (error instanceof GatewayError) {
       io.err(
-        "Error: no model provider configured — set KEIKO_DEFAULT_API_KEY and " +
-          "KEIKO_DEFAULT_BASE_URL or create keiko.config.json\n",
+        `Error: model gateway configuration problem — ${redact(error.message)}\n` +
+          `Provide a model via keiko.config.json or KEIKO_DEFAULT_API_KEY / KEIKO_DEFAULT_BASE_URL.\n`,
       );
       return 1;
     }

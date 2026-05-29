@@ -17,7 +17,7 @@ supersedes the old one — the old one is not deleted.
 | [ADR-0005](ADR-0005-repository-context-and-workspace-access.md) | Repository Context and Workspace Access Layer | Accepted | 2026-05-29 |
 | [ADR-0006](ADR-0006-safe-tool-execution-and-sandbox-boundary.md) | Safe Tool Execution and Wave-1 Sandbox Boundary | Accepted | 2026-05-29 |
 | [ADR-0007](ADR-0007-verification-orchestrator-and-resource-limits.md) | Verification Orchestrator and Resource Limits | Accepted | 2026-05-29 |
-| [ADR-0008](ADR-0008-unit-test-generation-workflow.md) | Unit-Test Generation Workflow | Proposed | 2026-05-29 |
+| [ADR-0008](ADR-0008-unit-test-generation-workflow.md) | Unit-Test Generation Workflow | Accepted | 2026-05-29 |
 
 ## Adding a new ADR
 
