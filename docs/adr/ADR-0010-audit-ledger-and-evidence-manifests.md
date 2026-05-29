@@ -2,7 +2,25 @@
 
 ## Status
 
-Proposed
+Accepted
+
+Implemented in `src/audit/**` (issue #10). Three refinements landed during implementation and are
+reflected below: (1) **Defense-in-depth redaction is deep field-wise, not serialized-string.** The
+builder is redacted-by-construction (primary); the DiD pass in `persist.ts` re-applies the redactor
+to **every string leaf** of the assembled manifest object via a generic recursive walk **before**
+`JSON.stringify` (superseding D3's "re-runs the redactor over the serialized JSON string" wording).
+A serialized-string pass could miss JSON-escaped secrets and risk corrupting the document; the
+field-wise walk is idempotent and cannot break JSON structure. (2) **The harness is left
+unedited.** The reuse-unchanged rule is absolute (zero edits to
+`src/{gateway,harness,workspace,tools,verification,workflows}`), so `runAgent`/`createSession` are
+NOT modified (superseding any D9/D11 wording implying an edit to `runAgent`). The "SDK runs write
+evidence" requirement is satisfied at the CLI layer (`keiko run` writes by default via a tee
+EventSink + `MemoryEventSink.collectManifest`) and by the supported SDK persist entry
+`persistEvidence(input, deps)` exported from the audit layer. (3) **CLI tests never write into the
+repo tree.** `runAgentCli`/`runEvidenceCli` take a `deps` injection point (mirroring
+`runGenTestsCli`) so every test that exercises evidence writes to an injected in-memory
+`EvidenceStore` or an OS `mkdtemp` dir cleaned up in `afterEach`, or passes `--no-evidence`; `.keiko/`
+is added to `.gitignore` (D4).
 
 ## Context
 
@@ -261,10 +279,15 @@ emitter's sensitive-field map plus the env/config additions:
 | All `*.executable`, counts, exit codes, durations, token counts | Non-sensitive; passed through. |
 
 **Redacted by construction.** The builder applies the redactor at the moment it copies a value
-into the manifest. There is no intermediate "raw manifest" object. The writer (D4) re-runs the
-redactor over the serialized JSON string as a final defense-in-depth pass before the temp write,
-so a builder bug that missed a field cannot silently persist a secret. This double application is
-idempotent (`redact` over already-redacted text is a no-op on the redacted tokens).
+into the manifest. There is no intermediate "raw manifest" object. The persist orchestration (D11,
+`persist.ts`) then re-applies the redactor to **every string leaf** of the assembled manifest object
+— a generic recursive deep-redact walk — as a final defense-in-depth pass **before** `JSON.stringify`
+(see refinement (1) in Status; this supersedes the earlier "serialized JSON string" wording). Doing
+it field-wise rather than over the serialized string cannot miss a JSON-escaped secret and cannot
+corrupt the JSON structure, so a builder bug that missed a field — or a secret embedded in a verbatim
+`context`/`verification` summary the builder does not itself redact — cannot silently persist a
+secret. This double application is idempotent (`redact` over already-redacted text is a no-op on the
+redacted tokens).
 
 ### D4 — Filesystem write boundary (the new persistent artifact surface)
 
