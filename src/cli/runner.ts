@@ -47,7 +47,7 @@ function dispatchCommand(
     return runModelsCli(rest, io, env);
   }
   if (name === "run") {
-    return runAgentCli(rest, io);
+    return runAgentCli(rest, io, env);
   }
   if (name === "context") {
     return runContextCli(rest, io);

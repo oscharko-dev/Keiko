@@ -6,7 +6,7 @@
 // #13 UI seam.
 
 import type { RunOutcome, TaskType } from "../harness/types.js";
-import { EvidenceSchemaError } from "./errors.js";
+import { EvidenceReadError, EvidenceSchemaError } from "./errors.js";
 import type { EvidenceStore } from "./store.js";
 import type { EvidenceManifest } from "./types.js";
 import { EVIDENCE_SCHEMA_VERSION } from "./types.js";
@@ -21,8 +21,19 @@ export interface EvidenceListEntry {
 
 // Parses raw JSON and verifies the schema version before trusting the shape. We narrow on the
 // version discriminant exactly as harness consumers narrow on the event schemaVersion (D2).
+// JSON.parse can throw a raw SyntaxError on a truncated/hand-edited manifest; the parse is a system
+// boundary (reading developer-writable files), so catching it and re-throwing a typed AuditError is
+// correct — the CLI maps AuditError to an exit code instead of leaking an unhandled stack (C1).
+function parseJson(json: string, runId: string): unknown {
+  try {
+    return JSON.parse(json);
+  } catch {
+    throw new EvidenceReadError(`evidence manifest is not valid JSON: ${runId}`);
+  }
+}
+
 function parseManifest(json: string, runId: string): EvidenceManifest {
-  const parsed: unknown = JSON.parse(json);
+  const parsed: unknown = parseJson(json, runId);
   if (typeof parsed !== "object" || parsed === null) {
     throw new EvidenceSchemaError(`evidence manifest is not an object: ${runId}`, "none");
   }

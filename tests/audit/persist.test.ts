@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { persistEvidence } from "../../src/audit/persist.js";
 import { createInMemoryEvidenceStore } from "../../src/audit/store.js";
 import { loadEvidence } from "../../src/audit/index-api.js";
@@ -131,5 +134,29 @@ describe("persistEvidence", () => {
     const store = createInMemoryEvidenceStore();
     persistEvidence(withContext, { store });
     expect(store.get(RUN_ID)).not.toContain(GITHUB);
+  });
+});
+
+describe("persistEvidence — default store writes to a predictable local dir (C5)", () => {
+  const dirs: string[] = [];
+  function freshDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-persist-default-"));
+    dirs.push(dir);
+    return dir;
+  }
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists to a real node store at the resolved KEIKO_EVIDENCE_DIR when no store is injected", () => {
+    const dir = freshDir();
+    // No deps.store: persistEvidence must default to the node store at the resolved dir (NOT an
+    // in-memory store that would silently discard the evidence). KEIKO_EVIDENCE_DIR points at an
+    // os-tmpdir so nothing lands in the repo tree.
+    const out = persistEvidence(buildInput(), { env: { KEIKO_EVIDENCE_DIR: dir } });
+    expect(out.location.endsWith(`${RUN_ID}.json`)).toBe(true);
+    expect(readdirSync(dir)).toContain(`${RUN_ID}.json`);
   });
 });

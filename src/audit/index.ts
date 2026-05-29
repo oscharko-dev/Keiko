@@ -20,6 +20,7 @@ export {
 export {
   AUDIT_CODES,
   AuditError,
+  EvidenceReadError,
   EvidenceSchemaError,
   EvidenceWriteError,
   InvalidRunIdError,

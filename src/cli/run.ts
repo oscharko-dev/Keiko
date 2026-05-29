@@ -17,7 +17,10 @@ import type { HarnessEvent, RunResult, TaskInput, TaskType } from "../harness/ty
 import { DEFAULT_LIMITS } from "../harness/types.js";
 import { persistEvidence } from "../audit/persist.js";
 import { renderEvidenceReport } from "../audit/report.js";
-import { createNodeEvidenceStore, type EvidenceStore } from "../audit/store.js";
+import { createNodeEvidenceStore, resolveEvidenceDir, type EvidenceStore } from "../audit/store.js";
+import { AuditError } from "../audit/errors.js";
+import { redact } from "../gateway/redaction.js";
+import type { EnvSource } from "../gateway/config.js";
 import type { CliIo } from "./runner.js";
 
 const TASK_TYPES: ReadonlySet<string> = new Set<TaskType>([
@@ -26,8 +29,6 @@ const TASK_TYPES: ReadonlySet<string> = new Set<TaskType>([
   "explain-plan",
 ]);
 
-const DEFAULT_EVIDENCE_DIR = "./.keiko/evidence";
-
 const USAGE = `Usage:
   keiko run explain-plan --file PATH [--question TEXT]
   keiko run generate-unit-tests --file PATH [--function NAME]
@@ -35,22 +36,22 @@ const USAGE = `Usage:
 
   Evidence flags (a redacted manifest is written by default):
     --no-evidence            Do not write an evidence manifest.
-    --evidence-dir PATH      Write evidence under PATH (default ./.keiko/evidence).
+    --evidence-dir PATH      Write evidence under PATH (default $KEIKO_EVIDENCE_DIR or ./.keiko/evidence).
     --include-reasoning      Include redacted reasoning entries in the manifest.
     --include-diff           Include the redacted proposed diff in the manifest.
 
 All tasks run in dry-run mode: a patch is proposed as an event, never written to disk.
 `;
 
-// Test seam: inject an in-memory EvidenceStore and/or env so CLI tests never write to the repo tree.
+// Test seam: inject an in-memory EvidenceStore so CLI tests never write to the repo tree.
 export interface RunDeps {
   readonly store?: EvidenceStore | undefined;
-  readonly env?: Readonly<Record<string, string | undefined>> | undefined;
 }
 
 interface EvidenceFlags {
   readonly write: boolean;
-  readonly evidenceDir: string;
+  // The raw --evidence-dir value (undefined when absent); the env var / default is layered in later.
+  readonly evidenceDirFlag: string | undefined;
   readonly includeReasoning: boolean;
   readonly includeDiff: boolean;
 }
@@ -67,7 +68,7 @@ function flag(args: readonly string[], name: string): string | undefined {
 function parseEvidenceFlags(args: readonly string[]): EvidenceFlags {
   return {
     write: !args.includes("--no-evidence"),
-    evidenceDir: flag(args, "--evidence-dir") ?? DEFAULT_EVIDENCE_DIR,
+    evidenceDirFlag: flag(args, "--evidence-dir"),
     includeReasoning: args.includes("--include-reasoning"),
     includeDiff: args.includes("--include-diff"),
   };
@@ -140,25 +141,46 @@ function seedFor(task: TaskInput, result: RunResult): ManifestSeed {
   };
 }
 
+interface EvidenceContext {
+  readonly flags: EvidenceFlags;
+  readonly env: EnvSource;
+  readonly deps: RunDeps;
+}
+
+// Persists the evidence manifest. This is a system boundary (filesystem write), so try/catch is
+// correct here (CLAUDE.md): on any failure — typed AuditError or otherwise — print a REDACTED
+// message and return exit 1 rather than rejecting out of runAgentCli as an unhandled rejection (C3).
+// Returns undefined on success so the caller falls through to the run-outcome exit code.
 function writeEvidence(
   result: RunResult,
   memory: MemoryEventSink,
   task: TaskInput,
-  flags: EvidenceFlags,
-  deps: RunDeps,
+  ctx: EvidenceContext,
   io: CliIo,
-): void {
-  const manifest = memory.collectManifest(seedFor(task, result));
-  const store = deps.store ?? createNodeEvidenceStore(flags.evidenceDir);
-  const out = persistEvidence(
-    {
-      result,
-      manifest,
-      options: { includeReasoning: flags.includeReasoning, includeDiff: flags.includeDiff },
-    },
-    { store, ...(deps.env === undefined ? {} : { env: deps.env }) },
-  );
-  io.out(renderEvidenceReport(out.report));
+): number | undefined {
+  try {
+    const manifest = memory.collectManifest(seedFor(task, result));
+    const store =
+      ctx.deps.store ??
+      createNodeEvidenceStore(resolveEvidenceDir(ctx.flags.evidenceDirFlag, ctx.env));
+    const out = persistEvidence(
+      {
+        result,
+        manifest,
+        options: {
+          includeReasoning: ctx.flags.includeReasoning,
+          includeDiff: ctx.flags.includeDiff,
+        },
+      },
+      { store, env: ctx.env },
+    );
+    io.out(renderEvidenceReport(out.report));
+    return undefined;
+  } catch (error) {
+    const detail = error instanceof AuditError ? error.message : redact(String(error));
+    io.err(`keiko run: failed to write evidence: ${detail}\n`);
+    return 1;
+  }
 }
 
 function outcomeToExitCode(result: RunResult, io: CliIo): number {
@@ -178,6 +200,7 @@ function outcomeToExitCode(result: RunResult, io: CliIo): number {
 export async function runAgentCli(
   args: readonly string[],
   io: CliIo,
+  env: EnvSource = {},
   deps: RunDeps = {},
 ): Promise<number> {
   const taskType = args[0];
@@ -204,7 +227,10 @@ export async function runAgentCli(
   });
   const result = await session.result;
   if (flags.write) {
-    writeEvidence(result, memory, task, flags, deps, io);
+    const evidenceFailure = writeEvidence(result, memory, task, { flags, env, deps }, io);
+    if (evidenceFailure !== undefined) {
+      return evidenceFailure;
+    }
   }
   return outcomeToExitCode(result, io);
 }

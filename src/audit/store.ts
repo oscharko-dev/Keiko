@@ -28,6 +28,19 @@ import { assertValidRunId } from "./runid.js";
 
 const MANIFEST_SUFFIX = ".json";
 
+// The workspace-relative default evidence base dir (ADR-0010 D4): predictable, local, .gitignored.
+export const DEFAULT_EVIDENCE_DIR = "./.keiko/evidence";
+
+// Single source of the output-location precedence (ADR-0010 D4): an explicit value (CLI
+// --evidence-dir) wins over the KEIKO_EVIDENCE_DIR env var, which wins over the default. Shared by
+// the CLI run command and the SDK persistEvidence default so both resolve identically.
+export function resolveEvidenceDir(
+  explicit: string | undefined,
+  env: Readonly<Record<string, string | undefined>> | undefined,
+): string {
+  return explicit ?? env?.KEIKO_EVIDENCE_DIR ?? DEFAULT_EVIDENCE_DIR;
+}
+
 export interface EvidenceStore {
   // Persist one manifest atomically under the base dir, named <runId>.json. Returns the path.
   readonly put: (runId: string, json: string) => string;

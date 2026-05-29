@@ -114,6 +114,15 @@ describe("keiko evidence show", () => {
     const code = runEvidenceCli(["show", "../escape"], c.io, { store: seededStore(["run-a"]) });
     expect(code).toBe(2);
   });
+
+  it("exits 1 (no unhandled throw) on a corrupt/unparseable manifest (C1)", () => {
+    const c = capture();
+    const store = createInMemoryEvidenceStore();
+    store.put("run-corrupt", '{"evidenceSchemaVersion": "1", run');
+    const code = runEvidenceCli(["show", "run-corrupt"], c.io, { store });
+    expect(code).toBe(1);
+    expect(c.err().length).toBeGreaterThan(0);
+  });
 });
 
 describe("keiko evidence usage errors", () => {

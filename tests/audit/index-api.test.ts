@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { listEvidence, loadEvidence } from "../../src/audit/index-api.js";
 import { createInMemoryEvidenceStore } from "../../src/audit/store.js";
-import { EvidenceSchemaError } from "../../src/audit/errors.js";
+import { EvidenceReadError, EvidenceSchemaError } from "../../src/audit/errors.js";
 import type { EvidenceManifest } from "../../src/audit/types.js";
 
 function manifestFixture(runId: string, startedAt: number): EvidenceManifest {
@@ -70,5 +70,17 @@ describe("loadEvidence", () => {
     const store = createInMemoryEvidenceStore();
     store.put("run-x", JSON.stringify({ run: {} }));
     expect(() => loadEvidence(store, "run-x")).toThrow(EvidenceSchemaError);
+  });
+
+  it("raises a typed EvidenceReadError (not a raw SyntaxError) for malformed JSON (C1)", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("run-x", '{"evidenceSchemaVersion": "1", run');
+    expect(() => loadEvidence(store, "run-x")).toThrow(EvidenceReadError);
+  });
+
+  it("propagates the typed read error through listEvidence too", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("run-x", "not json at all");
+    expect(() => listEvidence(store)).toThrow(EvidenceReadError);
   });
 });

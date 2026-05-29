@@ -16,7 +16,7 @@ import type {
   ToolCallFailedEvent,
 } from "../harness/types.js";
 import { aggregateUsage, resolveCostClass } from "./aggregate.js";
-import { createAuditRedactor } from "./redaction.js";
+import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
 import type {
   EvidenceBuildInput,
   EvidenceCommandExecution,
@@ -238,7 +238,7 @@ export function buildEvidenceManifest(
   for (const event of input.result.events) {
     foldEvent(state, event, redact, { includeDiff, includeReasoning });
   }
-  return {
+  const manifest: EvidenceManifest = {
     evidenceSchemaVersion: EVIDENCE_SCHEMA_VERSION,
     run: buildIdentity(input),
     model: { modelId: input.manifest.modelId, costClass: resolveCostClass(input.manifest.modelId) },
@@ -248,4 +248,10 @@ export function buildEvidenceManifest(
     commandExecutions: state.commandExecutions,
     ...optionalSections(input, state, redact, includeReasoning),
   };
+  // C2: the #5 context and #7 verification summaries are embedded VERBATIM above, so per-field
+  // redaction during the fold does not reach them. Apply the audit redactor over every string leaf so
+  // a DIRECT builder caller (not only via persistEvidence) gets a truly redacted-by-construction
+  // manifest. Idempotent, so the fold's per-field redaction still stands and persist's DiD pass is a
+  // no-op on already-redacted tokens.
+  return deepRedactStrings(manifest, redact) as EvidenceManifest;
 }

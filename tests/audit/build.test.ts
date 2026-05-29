@@ -328,4 +328,54 @@ describe("buildEvidenceManifest — embedded summaries", () => {
     expect(m.context).toEqual(context);
     expect(m.verification).toEqual(verification);
   });
+
+  it("redacts a configured literal + env-value embedded in the summaries IN THE BUILDER (C2)", () => {
+    const LITERAL = "internal.corp.example";
+    const context: AuditSummary = {
+      workspaceRoot: `/repo on host ${LITERAL}`,
+      totalCandidates: 1,
+      usedBytes: 1,
+      budgetBytes: 1,
+      droppedForBudget: 0,
+      entries: [
+        {
+          path: `src/${LITERAL}.ts`,
+          sizeBytes: 1,
+          excerptBytes: 0,
+          selectionReason: "source",
+          truncated: false,
+        },
+      ],
+    };
+    const verification: VerificationAuditSummary = {
+      workspaceRoot: `/repo via ${ENV_SECRET}`,
+      overallStatus: "passed",
+      durationMs: 1,
+      counts: {
+        passed: 1,
+        failed: 0,
+        skipped: 0,
+        denied: 0,
+        "timed-out": 0,
+        cancelled: 0,
+        "resource-exceeded": 0,
+      },
+      results: [],
+    };
+    const m = buildEvidenceManifest(
+      inputFor(fullEventMix(), {
+        context,
+        verification,
+        redaction: { sensitiveLiterals: [LITERAL], redactEnvValues: ["LEAK"] },
+      }),
+      { env: { LEAK: ENV_SECRET } },
+    );
+    // A direct builder caller (not via persistEvidence) must already see a redacted manifest.
+    const json = JSON.stringify(m);
+    expect(json).not.toContain(LITERAL);
+    expect(json).not.toContain(ENV_SECRET);
+    expect(m.context?.workspaceRoot).toContain("[REDACTED]");
+    expect(m.context?.entries[0]?.path).toContain("[REDACTED]");
+    expect(m.verification?.workspaceRoot).toContain("[REDACTED]");
+  });
 });

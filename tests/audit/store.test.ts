@@ -2,10 +2,29 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createInMemoryEvidenceStore, createNodeEvidenceStore } from "../../src/audit/store.js";
+import {
+  createInMemoryEvidenceStore,
+  createNodeEvidenceStore,
+  resolveEvidenceDir,
+} from "../../src/audit/store.js";
 import { nodeWorkspaceFs } from "../../src/workspace/fs.js";
 import { EvidenceWriteError } from "../../src/audit/errors.js";
 import { InvalidRunIdError } from "../../src/audit/errors.js";
+
+describe("resolveEvidenceDir — precedence (C4)", () => {
+  it("prefers the explicit value over env and default", () => {
+    expect(resolveEvidenceDir("/explicit", { KEIKO_EVIDENCE_DIR: "/env" })).toBe("/explicit");
+  });
+
+  it("falls back to KEIKO_EVIDENCE_DIR when no explicit value", () => {
+    expect(resolveEvidenceDir(undefined, { KEIKO_EVIDENCE_DIR: "/env" })).toBe("/env");
+  });
+
+  it("falls back to the workspace-relative default when neither is set", () => {
+    expect(resolveEvidenceDir(undefined, {})).toBe("./.keiko/evidence");
+    expect(resolveEvidenceDir(undefined, undefined)).toBe("./.keiko/evidence");
+  });
+});
 
 describe("createInMemoryEvidenceStore", () => {
   it("round-trips put/get/list/delete deterministically", () => {

@@ -12,10 +12,10 @@
 // verbatim-embedded summary (context/verification) that the builder does not itself redact.
 
 import { buildEvidenceManifest } from "./build.js";
-import { createAuditRedactor } from "./redaction.js";
+import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
 import { buildEvidenceReport, type EvidenceReport } from "./report.js";
 import { applyRetention } from "./retention.js";
-import { createInMemoryEvidenceStore } from "./store.js";
+import { createNodeEvidenceStore, resolveEvidenceDir } from "./store.js";
 import type {
   EvidenceBuildInput,
   EvidenceDeps,
@@ -23,27 +23,6 @@ import type {
   RetentionPolicy,
 } from "./types.js";
 import { DEFAULT_RETENTION } from "./types.js";
-
-type Redactor = (input: string) => string;
-
-// Recursively re-redacts every string leaf, rebuilding arrays/objects so the input is never mutated
-// and the JSON structure is preserved exactly. Bounded by the manifest's (finite) nesting depth.
-function deepRedact(value: unknown, redact: Redactor): unknown {
-  if (typeof value === "string") {
-    return redact(value);
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => deepRedact(item, redact));
-  }
-  if (typeof value === "object" && value !== null) {
-    const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value)) {
-      out[key] = deepRedact(child, redact);
-    }
-    return out;
-  }
-  return value;
-}
 
 export interface PersistResult {
   readonly manifest: EvidenceManifest;
@@ -57,11 +36,17 @@ export function persistEvidence(
   retention: RetentionPolicy = DEFAULT_RETENTION,
 ): PersistResult {
   const env = deps.env ?? {};
+  // The builder is already redacted-by-construction (incl. the deep-redact of embedded summaries);
+  // re-apply the redactor over every string leaf here as IDEMPOTENT defense in depth, so a builder
+  // bug that missed a field still cannot persist a secret.
   const manifest = buildEvidenceManifest(input, deps);
   const redact = createAuditRedactor(input.redaction ?? {}, env);
-  const safeManifest = deepRedact(manifest, redact) as EvidenceManifest;
+  const safeManifest = deepRedactStrings(manifest, redact) as EvidenceManifest;
   const json = JSON.stringify(safeManifest, null, 2);
-  const store = deps.store ?? createInMemoryEvidenceStore();
+  // C5/AC#6: with no explicit store, persist to the predictable local node store (resolved dir incl.
+  // KEIKO_EVIDENCE_DIR), NOT an in-memory store that would silently discard the evidence. Tests
+  // inject createInMemoryEvidenceStore explicitly so they never write to the repository tree.
+  const store = deps.store ?? createNodeEvidenceStore(resolveEvidenceDir(undefined, deps.env));
   const location = store.put(safeManifest.run.runId, json);
   applyRetention(store, retention);
   return { manifest: safeManifest, location, report: buildEvidenceReport(safeManifest, location) };

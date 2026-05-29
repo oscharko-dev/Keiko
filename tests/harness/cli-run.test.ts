@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { runAgentCli } from "../../src/cli/run.js";
 import { runCli, type CliIo } from "../../src/cli/runner.js";
-import { createInMemoryEvidenceStore } from "../../src/audit/store.js";
+import { createInMemoryEvidenceStore, type EvidenceStore } from "../../src/audit/store.js";
+import { EvidenceWriteError } from "../../src/audit/errors.js";
 
 // Replace every filesystem write entry point with a throwing stub. With these mocked, any code path
 // that touched the disk would throw. The run command now writes evidence by DEFAULT, so the tests
@@ -55,9 +56,14 @@ function capture(): { io: CliIo; out: () => string; err: () => string } {
 describe("runAgentCli dry-run", () => {
   it("runs explain-plan to completion and exits 0", async () => {
     const c = capture();
-    const code = await runAgentCli(["explain-plan", "--file", "src/foo.ts"], c.io, {
-      store: createInMemoryEvidenceStore(),
-    });
+    const code = await runAgentCli(
+      ["explain-plan", "--file", "src/foo.ts"],
+      c.io,
+      {},
+      {
+        store: createInMemoryEvidenceStore(),
+      },
+    );
     expect(code).toBe(0);
     expect(c.out()).toContain("run:started");
     expect(c.out()).toContain("run:completed");
@@ -66,9 +72,14 @@ describe("runAgentCli dry-run", () => {
 
   it("runs generate-unit-tests and proposes a patch without applying it", async () => {
     const c = capture();
-    const code = await runAgentCli(["generate-unit-tests", "--file", "src/foo.ts"], c.io, {
-      store: createInMemoryEvidenceStore(),
-    });
+    const code = await runAgentCli(
+      ["generate-unit-tests", "--file", "src/foo.ts"],
+      c.io,
+      {},
+      {
+        store: createInMemoryEvidenceStore(),
+      },
+    );
     expect(code).toBe(0);
     expect(c.out()).toContain("patch:proposed");
     // The diff content is redacted at the CLI sink; only metadata is printed.
@@ -101,7 +112,7 @@ describe("runAgentCli evidence-by-default", () => {
   it("writes a redacted evidence manifest to the injected store and prints the report", async () => {
     const c = capture();
     const store = createInMemoryEvidenceStore();
-    const code = await runAgentCli(["explain-plan", "--file", "src/foo.ts"], c.io, { store });
+    const code = await runAgentCli(["explain-plan", "--file", "src/foo.ts"], c.io, {}, { store });
     expect(code).toBe(0);
     expect(store.list()).toHaveLength(1);
     const runId = store.list()[0];
@@ -128,10 +139,39 @@ describe("runAgentCli evidence-by-default", () => {
   it("never reaches a real fs write even on the default path (injected store intercepts)", async () => {
     const c = capture();
     const store = createInMemoryEvidenceStore();
-    const code = await runAgentCli(["generate-unit-tests", "--file", "src/foo.ts"], c.io, {
-      store,
-    });
+    const code = await runAgentCli(
+      ["generate-unit-tests", "--file", "src/foo.ts"],
+      c.io,
+      {},
+      {
+        store,
+      },
+    );
     expect(code).toBe(0);
     expect(store.list()).toHaveLength(1);
+  });
+});
+
+describe("runAgentCli evidence write failure (C3)", () => {
+  it("returns exit 1 and prints a redacted error when the store put throws (no rejection)", async () => {
+    const c = capture();
+    const failingStore: EvidenceStore = {
+      put: (): string => {
+        throw new EvidenceWriteError("disk is read-only");
+      },
+      list: () => [],
+      get: () => undefined,
+      delete: () => undefined,
+    };
+    const code = await runAgentCli(
+      ["explain-plan", "--file", "src/foo.ts"],
+      c.io,
+      {},
+      {
+        store: failingStore,
+      },
+    );
+    expect(code).toBe(1);
+    expect(c.err()).toContain("failed to write evidence");
   });
 });

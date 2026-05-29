@@ -49,3 +49,26 @@ export function createAuditRedactor(
   ];
   return (input: string): string => redact(input, literals);
 }
+
+// Recursively re-applies a redactor to EVERY STRING LEAF of a plain-JSON value, rebuilding
+// arrays/objects so the input is never mutated and the JSON structure is preserved exactly. Bounded
+// by the (finite) nesting depth of an EvidenceManifest. Idempotent (redact over already-redacted
+// text is a no-op), so it is safe to apply at build time AND again as defense in depth at persist
+// time. This is what makes the builder truly redacted-by-construction even for the #5/#7 summaries it
+// embeds verbatim and the audit redactor (env-values/configured literals) would otherwise miss.
+export function deepRedactStrings(value: unknown, redact: (input: string) => string): unknown {
+  if (typeof value === "string") {
+    return redact(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => deepRedactStrings(item, redact));
+  }
+  if (typeof value === "object" && value !== null) {
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value)) {
+      out[key] = deepRedactStrings(child, redact);
+    }
+    return out;
+  }
+  return value;
+}

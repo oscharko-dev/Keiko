@@ -9,6 +9,7 @@ export const AUDIT_CODES = {
   INVALID_RUN_ID: "AUDIT_INVALID_RUN_ID",
   WRITE: "AUDIT_WRITE",
   SCHEMA: "AUDIT_SCHEMA",
+  READ: "AUDIT_READ",
 } as const;
 
 export type AuditCode = (typeof AUDIT_CODES)[keyof typeof AUDIT_CODES];
@@ -30,6 +31,12 @@ export class InvalidRunIdError extends AuditError {
 // A write or delete at the filesystem boundary failed, or a path escaped the contained base dir.
 export class EvidenceWriteError extends AuditError {
   readonly code = AUDIT_CODES.WRITE;
+}
+
+// A persisted manifest could not be parsed as JSON (truncated, hand-edited, or corrupt). Surfaced as
+// a typed error so the CLI maps it to a clean exit code instead of leaking a raw SyntaxError (C1).
+export class EvidenceReadError extends AuditError {
+  readonly code = AUDIT_CODES.READ;
 }
 
 // A persisted manifest carried an unrecognised evidenceSchemaVersion (D5) — not silently coerced.
