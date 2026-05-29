@@ -326,7 +326,7 @@ The offline suite checks workflow plumbing deterministically. It does not measur
 
 ### `keiko ui`
 
-Launch the local UI. The server binds to `127.0.0.1` (loopback only), prints its URL, and runs until interrupted (Ctrl+C). It serves the packaged UI assets, which require `npm run build:ui` in a source checkout.
+Launch the local UI. The server binds to `127.0.0.1` (loopback only), prints its URL, and runs until interrupted (Ctrl+C). It serves prebuilt UI assets. The published npm package ships these assets, so `keiko ui` works immediately after install; from a source checkout, run `npm run build:ui` first.
 
 ```bash
 keiko ui

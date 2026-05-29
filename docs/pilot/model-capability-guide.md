@@ -75,6 +75,8 @@ Medium cost, standard latency. Suited to documentation summarisation, code expla
 
 Each note records the model's intended use and its known limitation, as declared in the capability registry. All numeric figures are documented assumptions the customer overrides via config.
 
+Note: `multilingual-e5-large Embedding` is the exact identifier in the capability registry, including the trailing word and the space. As a Wave 2 embedding model it is not referenced by Wave 1 chat workflows or their gateway configuration.
+
 ### `Qwen3-Coder-480B-A35B-Instruct-FP8`
 
 - Chat · cost high · latency slow · tool + structured.
