@@ -7,7 +7,12 @@
  */
 
 import { useEffect, useRef, useState } from "react";
-import { TERMINAL_EVENT_TYPES, type HarnessEvent, type SseStatus } from "./types";
+import {
+  ALL_SSE_EVENT_TYPES,
+  TERMINAL_EVENT_TYPES,
+  type HarnessEvent,
+  type SseStatus,
+} from "./types";
 
 export interface UseSSEResult {
   events: HarnessEvent[];
@@ -25,6 +30,14 @@ export function useSSE(runId: string | null): UseSSEResult {
 
   useEffect(() => {
     if (runId === null) return;
+
+    // FIX D: Reset all accumulated state when runId changes so a new run view
+    // does not inherit previous run's events or resume cursor. This runs
+    // synchronously before the EventSource opens, giving the UI a clean slate.
+    setEvents([]);
+    setStatus("connecting");
+    setError(null);
+    lastSeqRef.current = -1;
 
     let es: EventSource | null = null;
     let cancelled = false;
@@ -53,14 +66,13 @@ export function useSSE(runId: string | null): UseSSEResult {
         // closes permanently; the next open attempt will fail cleanly.
       };
 
-      // Listen for all event types by routing through the generic message handler.
-      // Per the SSE spec, named events require addEventListener; `onmessage` only fires
-      // on unnamed messages. We register a wildcard handler pattern by overriding onerror
-      // for now and using the built-in EventSource.
-      //
-      // Because SSE uses `event: <type>` framing, we must addEventListener per-type.
-      // For a stable implementation we add a generic listener that handles any event type
-      // the server sends by intercepting the raw MessageEvent.
+      // FIX C: Register a listener for every named SSE event type the BFF can emit.
+      // Per the SSE spec, `onmessage` only fires for unnamed events (no `event:` field).
+      // Named events require an explicit addEventListener call for each type name.
+      // ALL_SSE_EVENT_TYPES is the single source of truth for the full set — derived from
+      // src/harness/types.ts, src/workflows/unit-tests/events.ts, and
+      // src/workflows/bug-investigation/events.ts. Adding a new workflow event type to
+      // that array is the only change required to cover it here.
       const handleEvent = (ev: MessageEvent): void => {
         if (cancelled) return;
 
@@ -75,42 +87,15 @@ export function useSSE(runId: string | null): UseSSEResult {
         lastSeqRef.current = parsed.seq;
         setEvents((prev) => [...prev, parsed]);
 
+        // FIX E: TERMINAL_EVENT_TYPES now includes workflow:completed/failed and
+        // bug:completed/failed so workflow and bug runs reach terminal state properly.
         if (TERMINAL_EVENT_TYPES.has(parsed.type)) {
           setStatus("terminal");
           es?.close();
         }
       };
 
-      // The harness emits many event types. Rather than enumerate all of them here, we use a
-      // catch-all by listening for the MessageEvent on the source. Named events still bubble as
-      // MessageEvents on the source object. This is the standard EventSource pattern.
-      //
-      // NOTE: `addEventListener("message", ...)` catches UNNAMED events (no `event:` field).
-      //       Named events need explicit listeners. We register named event listeners for all
-      //       known HarnessEvent types.
-      const EVENT_TYPES = [
-        "run:started",
-        "state:transition",
-        "model:call:started",
-        "model:call:completed",
-        "model:call:failed",
-        "tool:call:started",
-        "tool:call:completed",
-        "tool:call:failed",
-        "reasoning:trace",
-        "patch:proposed",
-        "verification:result",
-        "run:completed",
-        "run:cancelled",
-        "run:failed",
-        "ready",
-        // workflow events
-        "started",
-        "completed",
-        "failed",
-      ] as const;
-
-      for (const evType of EVENT_TYPES) {
+      for (const evType of ALL_SSE_EVENT_TYPES) {
         es.addEventListener(evType, handleEvent as EventListenerOrEventListenerObject);
       }
     }

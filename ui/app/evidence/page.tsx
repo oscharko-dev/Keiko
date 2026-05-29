@@ -5,7 +5,7 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { fetchEvidenceList, ApiError } from "@/lib/api";
 import type { EvidenceListEntry } from "@/lib/types";
-import { formatDate, outcomeClasses, outcomeLabel } from "@/lib/format";
+import { formatDate, outcomeClasses, outcomeLabel, toDateString } from "@/lib/format";
 
 // ---------------------------------------------------------------------------
 // Filter bar
@@ -156,8 +156,9 @@ function clientFilter(entries: EvidenceListEntry[], filters: Filters): EvidenceL
     if (filters.workflow !== "" && e.taskType !== filters.workflow) return false;
     if (filters.outcome !== "" && e.outcome !== filters.outcome) return false;
     if (filters.date !== "") {
-      // Match entries whose startedAt begins with the date string
-      if (!e.startedAt.startsWith(filters.date)) return false;
+      // FIX F: startedAt is epoch-ms (number). Derive the YYYY-MM-DD date string
+      // from the epoch-ms value and compare — never call .startsWith on a number.
+      if (toDateString(e.startedAt) !== filters.date) return false;
     }
     return true;
   });
@@ -174,10 +175,8 @@ export default function EvidencePage(): ReactNode {
     fetchEvidenceList()
       .then(({ entries }) => {
         if (!active) return;
-        // Newest-first sort by finishedAt
-        const sorted = [...entries].sort(
-          (a, b) => new Date(b.finishedAt).getTime() - new Date(a.finishedAt).getTime(),
-        );
+        // Newest-first sort by finishedAt (epoch-ms numbers — direct subtraction is safe)
+        const sorted = [...entries].sort((a, b) => b.finishedAt - a.finishedAt);
         setAllEntries(sorted);
         setLoading(false);
       })

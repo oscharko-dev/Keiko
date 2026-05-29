@@ -182,15 +182,129 @@ export type HarnessEvent =
       type: "run:failed";
       failure: { category: string; message: string; detail?: string };
       atState: string;
-    });
+    })
+  // Harness tool-pipeline audit events (S-M1 — counts/flags only, no content)
+  | (BaseEvent & {
+      type: "command:executed";
+      executable: string;
+      argCount: number;
+      exitCode: number | null;
+      timedOut: boolean;
+      durationMs: number;
+    })
+  | (BaseEvent & {
+      type: "patch:applied";
+      changedFiles: number;
+      created: number;
+      deleted: number;
+    })
+  // Unit-test workflow events (src/workflows/unit-tests/events.ts)
+  | (BaseEvent & { type: "workflow:started"; workflowId: string; modelId: string; applyEnabled: boolean; limits: Record<string, unknown> })
+  | (BaseEvent & { type: "conventions:detected"; framework: string; testDirs: readonly string[]; fileNamingStyle: string })
+  | (BaseEvent & { type: "context:selected"; entryCount: number; usedBytes: number; budgetBytes: number; droppedForBudget: number })
+  | (BaseEvent & { type: "workflow:model:call:started"; attempt: number; contextBytes: number })
+  | (BaseEvent & { type: "workflow:model:call:completed"; attempt: number; finishReason: string; promptTokens: number; completionTokens: number; latencyMs: number })
+  | (BaseEvent & { type: "patch:validated"; ok: boolean; patchBytes: number; filesChanged: number; rejectionCode?: string })
+  | (BaseEvent & { type: "workflow:patch:applied"; changedFiles: number; created: number; deleted: number })
+  | (BaseEvent & { type: "workflow:verification:result"; overallStatus: string; stepCount: number; passedCount: number; durationMs: number })
+  | (BaseEvent & { type: "workflow:completed"; status: string; durationMs: number })
+  | (BaseEvent & { type: "workflow:failed"; errorCode: string; message: string })
+  // Bug-investigation workflow events (src/workflows/bug-investigation/events.ts)
+  | (BaseEvent & { type: "bug:started"; workflowId: string; modelId: string; applyEnabled: boolean; limits: Record<string, unknown> })
+  | (BaseEvent & { type: "bug:failure:parsed"; frameCount: number; messageCount: number })
+  | (BaseEvent & { type: "bug:context:selected"; entryCount: number; usedBytes: number; budgetBytes: number; droppedForBudget: number })
+  | (BaseEvent & { type: "bug:model:call:started"; attempt: number; contextBytes: number })
+  | (BaseEvent & { type: "bug:model:call:completed"; attempt: number; finishReason: string; promptTokens: number; completionTokens: number; latencyMs: number })
+  | (BaseEvent & { type: "bug:rootcause:proposed"; hasPatch: boolean; confidence?: "low" | "medium" | "high" })
+  | (BaseEvent & { type: "bug:patch:validated"; ok: boolean; patchBytes: number; filesChanged: number; rejectionCode?: string })
+  | (BaseEvent & { type: "bug:patch:applied"; changedFiles: number; created: number; deleted: number })
+  | (BaseEvent & { type: "bug:verification:result"; overallStatus: string; stepCount: number; passedCount: number; durationMs: number })
+  | (BaseEvent & { type: "bug:completed"; status: string; durationMs: number })
+  | (BaseEvent & { type: "bug:failed"; errorCode: string; message: string })
+  // Synthetic BFF sentinel emitted on stream open
+  | (BaseEvent & { type: "ready" });
 
 export type HarnessEventType = HarnessEvent["type"];
-export type TerminalEventType = "run:completed" | "run:cancelled" | "run:failed";
 
-export const TERMINAL_EVENT_TYPES = new Set<string>([
+/**
+ * All SSE event type strings the BFF can emit. Centralised here so useSSE and
+ * tests share one authoritative list — adding a new workflow event type here is
+ * the only change needed to cover it end-to-end.
+ *
+ * SSE `event:` framing means EventSource only delivers a named event to a
+ * listener registered for that exact name. Missing any type here silently drops
+ * those events. Derived from:
+ *   - src/harness/types.ts         (HarnessEvent union)
+ *   - src/workflows/unit-tests/events.ts  (WorkflowEvent union)
+ *   - src/workflows/bug-investigation/events.ts  (BugInvestigationEvent union)
+ *   - synthetic "ready" sentinel emitted by the BFF on stream open
+ */
+export const ALL_SSE_EVENT_TYPES: readonly HarnessEventType[] = [
+  // Harness core
+  "run:started",
+  "state:transition",
+  "model:call:started",
+  "model:call:completed",
+  "model:call:failed",
+  "tool:call:started",
+  "tool:call:completed",
+  "tool:call:failed",
+  "reasoning:trace",
+  "patch:proposed",
+  "verification:result",
   "run:completed",
   "run:cancelled",
   "run:failed",
+  // Harness tool-pipeline (S-M1)
+  "command:executed",
+  "patch:applied",
+  // Unit-test workflow
+  "workflow:started",
+  "conventions:detected",
+  "context:selected",
+  "workflow:model:call:started",
+  "workflow:model:call:completed",
+  "patch:validated",
+  "workflow:patch:applied",
+  "workflow:verification:result",
+  "workflow:completed",
+  "workflow:failed",
+  // Bug-investigation workflow
+  "bug:started",
+  "bug:failure:parsed",
+  "bug:context:selected",
+  "bug:model:call:started",
+  "bug:model:call:completed",
+  "bug:rootcause:proposed",
+  "bug:patch:validated",
+  "bug:patch:applied",
+  "bug:verification:result",
+  "bug:completed",
+  "bug:failed",
+  // Synthetic BFF sentinel
+  "ready",
+] as const;
+
+export type TerminalEventType =
+  | "run:completed"
+  | "run:cancelled"
+  | "run:failed"
+  | "workflow:completed"
+  | "workflow:failed"
+  | "bug:completed"
+  | "bug:failed";
+
+export const TERMINAL_EVENT_TYPES = new Set<string>([
+  // Harness terminals
+  "run:completed",
+  "run:cancelled",
+  "run:failed",
+  // Unit-test workflow terminals
+  "workflow:completed",
+  "workflow:failed",
+  // Bug-investigation workflow terminals
+  "bug:completed",
+  "bug:failed",
 ]);
 
 // ---------------------------------------------------------------------------
@@ -207,8 +321,10 @@ export interface EvidenceListEntry {
   runId: string;
   taskType: string;
   outcome: EvidenceOutcome;
-  startedAt: string;
-  finishedAt: string;
+  /** Epoch-ms timestamp from the audit layer (src/audit/index-api.ts startedAt: number). */
+  startedAt: number;
+  /** Epoch-ms timestamp from the audit layer (src/audit/index-api.ts finishedAt: number). */
+  finishedAt: number;
 }
 
 export interface EvidenceRunIdentity {
@@ -217,8 +333,10 @@ export interface EvidenceRunIdentity {
   harnessVersion: string;
   taskType: string;
   outcome: EvidenceOutcome;
-  startedAt: string;
-  finishedAt: string;
+  /** Epoch-ms timestamp (src/audit/types.ts startedAt: number). */
+  startedAt: number;
+  /** Epoch-ms timestamp (src/audit/types.ts finishedAt: number). */
+  finishedAt: number;
   durationMs: number;
 }
 

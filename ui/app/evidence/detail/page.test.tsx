@@ -35,8 +35,8 @@ const mockManifest = {
       harnessVersion: "1.0.0",
       taskType: "generate-unit-tests",
       outcome: "completed" as const,
-      startedAt: "2026-05-29T10:00:00Z",
-      finishedAt: "2026-05-29T10:02:00Z",
+      startedAt: 1780048800000, // 2026-05-29T10:00:00Z epoch-ms (FIX F)
+      finishedAt: 1780048920000, // 2026-05-29T10:02:00Z epoch-ms (FIX F)
       durationMs: 120000,
     },
     model: { modelId: "claude-3-5-sonnet", costClass: "medium" as const },

@@ -106,12 +106,13 @@ export function formatTokens(n: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// ISO date → local readable
+// Date → local readable
+// Accepts epoch-ms numbers (from the audit layer) or ISO strings.
 // ---------------------------------------------------------------------------
 
-export function formatDate(iso: string): string {
+export function formatDate(value: number | string): string {
   try {
-    return new Date(iso).toLocaleString(undefined, {
+    return new Date(value).toLocaleString(undefined, {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -119,7 +120,27 @@ export function formatDate(iso: string): string {
       minute: "2-digit",
     });
   } catch {
-    return iso;
+    return typeof value === "string" ? value : value.toString();
+  }
+}
+
+/**
+ * Derive the UTC YYYY-MM-DD string from an epoch-ms timestamp or ISO string.
+ * Used by the evidence date filter to compare against the date-input value.
+ * UTC is used because the audit layer stores epoch-ms without a timezone offset
+ * and the date-input value produced by the browser is always a plain date string
+ * in the user's local timezone — but the BFF timestamps are UTC-based epoch-ms.
+ * Using UTC methods keeps the comparison consistent regardless of runtime timezone.
+ */
+export function toDateString(value: number | string): string {
+  try {
+    const d = new Date(value);
+    const yyyy = d.getUTCFullYear().toString();
+    const mm = (d.getUTCMonth() + 1).toString().padStart(2, "0");
+    const dd = d.getUTCDate().toString().padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  } catch {
+    return "";
   }
 }
 
