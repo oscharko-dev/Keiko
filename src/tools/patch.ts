@@ -7,6 +7,7 @@
 
 import { isDenied } from "../workspace/ignore.js";
 import { resolveWithinWorkspace } from "../workspace/paths.js";
+import { assertContainedRealPath } from "../workspace/realpath.js";
 import { PathEscapeError } from "../workspace/errors.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
 import type { WorkspaceInfo } from "../workspace/types.js";
@@ -39,7 +40,11 @@ function isBinaryDiff(diff: string): boolean {
   );
 }
 
-function safePath(workspace: WorkspaceInfo, path: string): PatchRejection | undefined {
+function safePath(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  path: string,
+): PatchRejection | undefined {
   let resolved: string;
   try {
     resolved = resolveWithinWorkspace(workspace.root, path);
@@ -53,16 +58,28 @@ function safePath(workspace: WorkspaceInfo, path: string): PatchRejection | unde
   if (isDenied(rel === "" ? path : rel)) {
     return { code: "path-denied", message: "path matches an always-on deny pattern", path };
   }
+  // Symlink containment: a lexically-contained target whose real path (or, for a create target,
+  // whose nearest existing parent) escapes the root is rejected here — the same gate the read
+  // path applies. This blocks the symlink-write/.git-hooks escalation (ADR-0006 D2, S-H1).
+  try {
+    assertContainedRealPath(fs, workspace.root, resolved, rel === "" ? path : rel);
+  } catch (error) {
+    if (error instanceof PathEscapeError) {
+      return { code: "path-unsafe", message: "path escapes the workspace via symlink", path };
+    }
+    throw error;
+  }
   return undefined;
 }
 
 function collectPathReasons(
   workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
   files: readonly PatchFileChange[],
 ): PatchRejection[] {
   const reasons: PatchRejection[] = [];
   for (const file of files) {
-    const rejection = safePath(workspace, file.path);
+    const rejection = safePath(workspace, fs, file.path);
     if (rejection !== undefined) {
       reasons.push(rejection);
     }
@@ -156,7 +173,7 @@ export function validatePatch(
   const totalChangedLines = files.reduce((sum, f) => sum + f.addedLines + f.removedLines, 0);
   const reasons = [
     ...sizeAndCountReasons(diff, files, totalChangedLines, limits, totalBytes),
-    ...collectPathReasons(workspace, files),
+    ...collectPathReasons(workspace, fs, files),
   ];
   // Conflict detection touches the filesystem; only run it when the path checks passed, so a
   // denied/oversized patch never reads target files.
@@ -214,6 +231,10 @@ function planWrites(
 ): readonly PlannedWrite[] {
   return files.map((file) => {
     const absolute = resolveWithinWorkspace(workspace.root, file.path);
+    // Defense in depth: re-assert symlink containment at the write boundary so the validated
+    // absolute path handed to the WorkspaceWriter cannot escape via a symlink even if a caller
+    // reached applyPatch without validatePatch (S-H1). Throws PathEscapeError on escape.
+    assertContainedRealPath(fs, workspace.root, absolute, file.path);
     const original = readCurrent(workspace, fs, file.path);
     const outcome = computeFileContent(file, original);
     return { path: file.path, absolute, kind: file.kind, newContent: outcome.content, original };

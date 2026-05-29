@@ -234,6 +234,37 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
   });
 });
 
+describe("runCommand — output flood protection (F12)", () => {
+  it("kills the child and flags truncated:true when output exceeds maxOutputBytes", async () => {
+    const kills = captureKills();
+    const spawn = recordingSpawn();
+    // A 4-byte cap so a single chunk overflows it.
+    const deps: RunCommandDeps = {
+      ...fakeDeps(spawn.fn),
+      policy: { ...DEFAULT_SANDBOX_POLICY, maxOutputBytes: 4 },
+    };
+    const promise = runCommand(
+      {
+        command: "node",
+        args: ["-e", "flood"],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      deps,
+    );
+    // Emit more than the cap → appendCapped signals a flood → terminate() kills the group.
+    spawn.child.stdout.emit("data", Buffer.from("0123456789", "utf8"));
+    expectTerminated(kills, spawn.child);
+    // The child then dies; the result must carry truncated:true and a capped stdout.
+    spawn.child.emit("close", null, "SIGTERM");
+    const result = await promise;
+    expect(result.truncated).toBe(true);
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(4);
+    kills.restore();
+  });
+});
+
 describe("runCommand — real node integration", () => {
   it("runs an allowed command and captures stdout with exitCode 0", async () => {
     const result = await runCommand(
@@ -265,6 +296,31 @@ describe("runCommand — real node integration", () => {
     const childEnv = JSON.parse(result.stdout) as Record<string, string>;
     expect(childEnv.AWS_SECRET_ACCESS_KEY).toBeUndefined();
     expect(childEnv.PATH).toBeDefined();
+  });
+
+  it("C5: the child HOME is an ephemeral empty dir, NOT the parent's real home", async () => {
+    const parentHome = "/Users/realuser-should-not-leak";
+    const result = await runCommand(
+      {
+        command: "node",
+        args: [
+          "-e",
+          "process.stdout.write(JSON.stringify({h:process.env.HOME, u:process.env.USERPROFILE}))",
+        ],
+        cwd: undefined,
+        timeoutMs: undefined,
+        signal: controller().signal,
+      },
+      realDeps({ PATH: process.env.PATH ?? "", HOME: parentHome, USERPROFILE: parentHome }),
+    );
+    const env = JSON.parse(result.stdout) as { h?: string; u?: string };
+    // HOME must be set (so node/npm work) but must NOT be the parent's real home.
+    expect(env.h).toBeDefined();
+    expect(env.h).not.toBe(parentHome);
+    // The ephemeral home must not contain credential files: reading ~/.npmrc finds nothing.
+    if (process.platform === "win32") {
+      expect(env.u).not.toBe(parentHome);
+    }
   });
 
   it("no-shell: a shell metachar arg is passed literally, not expanded", async () => {
@@ -307,7 +363,10 @@ describe("runCommand — real node integration", () => {
     const result = await runCommand(
       {
         command: "node",
-        args: ["-e", `process.stdout.write(${JSON.stringify("tok=" + ("ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"))})`],
+        args: [
+          "-e",
+          `process.stdout.write(${JSON.stringify("tok=" + ("ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"))})`,
+        ],
         cwd: undefined,
         timeoutMs: undefined,
         signal: controller().signal,

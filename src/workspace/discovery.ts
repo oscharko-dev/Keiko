@@ -8,8 +8,9 @@
 import { relative } from "node:path";
 import { nodeWorkspaceFs, type WorkspaceDirEntry, type WorkspaceFs } from "./fs.js";
 import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
-import { isWithinWorkspace, resolveWithinWorkspace } from "./paths.js";
-import { FileTooLargeError, PathDeniedError, PathEscapeError, WorkspaceReadError } from "./errors.js";
+import { resolveWithinWorkspace } from "./paths.js";
+import { assertContainedRealPath } from "./realpath.js";
+import { FileTooLargeError, PathDeniedError, WorkspaceReadError } from "./errors.js";
 import { redact } from "../gateway/redaction.js";
 import {
   DEFAULT_READ_OPTIONS,
@@ -179,31 +180,16 @@ function readContent(
   }
   const rawBytes = Buffer.byteLength(raw, "utf8");
   const truncated = rawBytes > opts.maxBytes;
-  const text = truncated ? Buffer.from(raw, "utf8").subarray(0, opts.maxBytes).toString("utf8") : raw;
+  const text = truncated
+    ? Buffer.from(raw, "utf8").subarray(0, opts.maxBytes).toString("utf8")
+    : raw;
   return { relativePath: relPath, sizeBytes: rawBytes, text: redact(text), truncated };
 }
 
-// Resolves absolutePath to its real path and asserts it stays within root.
-// When the path does not yet exist, realPath throws — we return absolutePath unchanged and let
-// statBytes surface the missing-file error as a WorkspaceReadError (no false PathEscapeError).
-// We also resolve root to guard against platform symlinks (e.g. macOS /var -> /private/var).
-function resolveRealPath(
-  fs: WorkspaceFs,
-  root: string,
-  absolutePath: string,
-  relPath: string,
-): string {
-  let real: string;
-  try { real = fs.realPath(absolutePath); } catch { return absolutePath; }
-  let realRoot = root;
-  try { realRoot = fs.realPath(root); } catch { /* fall back to lexical root */ }
-  if (!isWithinWorkspace(realRoot, real)) {
-    throw new PathEscapeError(`path escapes the workspace boundary via symlink: ${relPath}`, relPath);
-  }
-  return real;
-}
-
 // The single read path. Order: boundary -> deny -> realpath containment -> size cap -> read -> redact.
+// Realpath containment is shared with the write/cwd paths via assertContainedRealPath: when the
+// path does not exist, it validates the nearest existing parent and returns absolutePath, so a
+// missing in-root file still surfaces as a WorkspaceReadError (not a false PathEscapeError).
 export function readWorkspaceFile(
   workspace: WorkspaceInfo,
   relPath: string,
@@ -215,7 +201,7 @@ export function readWorkspaceFile(
   if (isDenied(normalizedRel)) {
     throw new PathDeniedError(`refusing to read a denied path: ${normalizedRel}`, normalizedRel);
   }
-  const resolvedPath = resolveRealPath(fs, workspace.root, absolutePath, normalizedRel);
+  const resolvedPath = assertContainedRealPath(fs, workspace.root, absolutePath, normalizedRel);
   const size = statBytes(fs, resolvedPath, normalizedRel);
   if (size > opts.maxBytes) {
     throw new FileTooLargeError(

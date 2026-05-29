@@ -53,4 +53,42 @@ describe("parseUnifiedDiff", () => {
   it("throws PatchParseError on a malformed hunk header", () => {
     expect(() => parseUnifiedDiff("--- a/x\n+++ b/x\n@@ not a header @@\n+y\n")).toThrow();
   });
+
+  it("treats body lines beginning '-- '/'++ ' as hunk content, not a new file header (C6)", () => {
+    // The added line renders as `+-- dashes` and the removed as `--- text`/`+++ text`. With a
+    // hunk line-count budget, these stay BODY until the hunk is consumed.
+    const diff =
+      "--- a/doc.md\n" +
+      "+++ b/doc.md\n" +
+      "@@ -1,2 +1,2 @@\n" +
+      " context\n" +
+      "--- removed dashes\n" +
+      "+++ added dashes\n";
+    const { files } = parseUnifiedDiff(diff);
+    expect(files).toHaveLength(1);
+    expect(files[0]?.path).toBe("doc.md");
+    expect(files[0]?.kind).toBe("modify");
+    // Lines are stored verbatim WITH the leading marker; content here begins "-- "/"++ ".
+    const lines = files[0]?.hunks[0]?.lines ?? [];
+    expect(lines).toEqual([" context", "--- removed dashes", "+++ added dashes"]);
+    expect(files[0]?.addedLines).toBe(1);
+    expect(files[0]?.removedLines).toBe(1);
+  });
+
+  it("accepts a NEW file header only after the prior hunk's budget is consumed (C6)", () => {
+    const diff =
+      "--- a/one.md\n" +
+      "+++ b/one.md\n" +
+      "@@ -1,1 +1,1 @@\n" +
+      "-- old\n" +
+      "++ new\n" +
+      "--- a/two.md\n" +
+      "+++ b/two.md\n" +
+      "@@ -1,1 +1,1 @@\n" +
+      "-x\n" +
+      "+y\n";
+    const { files } = parseUnifiedDiff(diff);
+    expect(files.map((f) => f.path)).toEqual(["one.md", "two.md"]);
+    expect(files[0]?.hunks[0]?.lines).toEqual(["-- old", "++ new"]);
+  });
 });

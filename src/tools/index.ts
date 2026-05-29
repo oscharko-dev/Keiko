@@ -19,6 +19,7 @@ export type {
   PatchValidation,
   SandboxPolicy,
   ToolHostConfig,
+  ToolHostConfigInput,
 } from "./types.js";
 
 export {
@@ -27,6 +28,7 @@ export {
   DEFAULT_PATCH_LIMITS,
   DEFAULT_SANDBOX_POLICY,
   DEFAULT_TOOL_HOST_CONFIG,
+  resolveToolHostConfig,
 } from "./types.js";
 
 export {

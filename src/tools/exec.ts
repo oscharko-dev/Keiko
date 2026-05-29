@@ -11,6 +11,8 @@ import { spawn as nodeSpawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { redact } from "../gateway/redaction.js";
 import { resolveWithinWorkspace } from "../workspace/paths.js";
+import { assertContainedRealPath } from "../workspace/realpath.js";
+import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
 import type { WorkspaceInfo } from "../workspace/types.js";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { buildSandboxEnv, collectSensitiveEnvValues, isCommandAllowed } from "./sandbox.js";
@@ -39,6 +41,8 @@ export interface RunCommandDeps {
   readonly spawn: SpawnFn;
   readonly processEnv: NodeJS.ProcessEnv;
   readonly now: () => number;
+  // Read-only port used solely for the cwd symlink-containment check. Defaults to nodeWorkspaceFs.
+  readonly fs?: WorkspaceFs | undefined;
 }
 
 export interface RunCommandInput {
@@ -102,10 +106,13 @@ interface RunState {
   onAbort: (() => void) | undefined;
 }
 
-// Resolves the validated cwd. A cwd escaping the workspace surfaces as PathEscapeError, which
-// the host maps to a tool error — the command never spawns.
+// Resolves the validated cwd. Lexical containment first, then symlink containment via realpath
+// (S-H1): a cwd that is a symlink escaping the root must not become the spawn cwd. Both escapes
+// surface as PathEscapeError, which the host maps to a tool error — the command never spawns.
 function resolveCwd(deps: RunCommandDeps, cwd: string | undefined): string {
-  return resolveWithinWorkspace(deps.workspace.root, cwd ?? ".");
+  const lexical = resolveWithinWorkspace(deps.workspace.root, cwd ?? ".");
+  const fs = deps.fs ?? nodeWorkspaceFs;
+  return assertContainedRealPath(fs, deps.workspace.root, lexical, cwd ?? ".");
 }
 
 function buildResult(
@@ -239,6 +246,14 @@ function armTimersAndAbort(ctx: ExecContext): void {
 // CommandCancelledError on abort; otherwise resolves a redacted, byte-capped CommandResult. All
 // failure paths are Promise rejections — the function never throws synchronously.
 export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promise<CommandResult> {
+  // Defensive: an empty/non-array envAllowlist would make buildSandboxEnv produce an empty child
+  // env (no PATH → spawn ENOENT, or worse a misconfiguration). Reject cleanly so the "never throws
+  // synchronously" contract holds even under a malformed config (S-M2).
+  if (!Array.isArray(deps.policy.envAllowlist) || deps.policy.envAllowlist.length === 0) {
+    return Promise.reject(
+      new CommandDeniedError("sandbox envAllowlist must be a non-empty array", input.command),
+    );
+  }
   const decision = isCommandAllowed(deps.commandRules, input.command, input.args);
   if (!decision.allowed) {
     return Promise.reject(

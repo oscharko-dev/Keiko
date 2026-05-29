@@ -61,15 +61,31 @@ export interface CommandRule {
   readonly allowedSubcommands?: readonly string[] | undefined;
   // When set (and allowedSubcommands is not), these subcommands are denied (denylist mode).
   readonly deniedSubcommands?: readonly string[] | undefined;
+  // Leading flags that consume the NEXT token as their value (e.g. npm `--prefix DIR`, git `-C DIR`).
+  // The subcommand resolver skips both the flag and its value so a value cannot masquerade as the
+  // subcommand (S-H2): `npm --prefix /x publish` resolves to `publish`, not `/x`.
+  readonly valueFlags?: readonly string[] | undefined;
+  // Flags that are themselves denied because they execute a transitive shell or arbitrary command
+  // (e.g. npm/npx `-c`/`--call`). Presence of any of these anywhere in args denies the invocation.
+  readonly denyFlags?: readonly string[] | undefined;
+  // In denylist mode, the resolved first non-flag token MUST be one of these known subcommands;
+  // an unrecognized token (e.g. a stray path left by a value-flag bypass) is denied by default.
+  readonly knownSubcommands?: readonly string[] | undefined;
 }
 
 // Minimal, justified default rules. Everything not listed is denied (deny-by-default).
 export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   { executable: "node" },
-  { executable: "npx" },
+  {
+    executable: "npx",
+    // `-c`/`--call` runs its argument in a SHELL — our shell:false is irrelevant once npx spawns
+    // it (S-H2). Deny the flag outright.
+    denyFlags: Object.freeze(["-c", "--call"]),
+  },
   {
     executable: "npm",
-    // Deny account/registry-mutating subcommands; allow run/test/ci/ls/exec/install.
+    // Deny account/registry-mutating subcommands AND exec/x (which spawn an arbitrary binary or a
+    // transitive shell, bypassing the allowlist). Allow run/test/ci/ls/install.
     deniedSubcommands: Object.freeze([
       "publish",
       "unpublish",
@@ -83,6 +99,68 @@ export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
       "access",
       "star",
       "profile",
+      "exec",
+      "x",
+    ]),
+    // `-c`/`--call` execute a command string in a shell; deny outright (S-H2).
+    denyFlags: Object.freeze(["-c", "--call"]),
+    // Value-taking global flags. The resolver skips the flag AND its value so the value cannot be
+    // mistaken for the subcommand (`npm --prefix /x publish` → publish, denied).
+    valueFlags: Object.freeze([
+      "--prefix",
+      "--registry",
+      "--loglevel",
+      "--workspace",
+      "-w",
+      "--userconfig",
+      "--globalconfig",
+      "--cache",
+      "--tag",
+      "--otp",
+      "--node-options",
+    ]),
+    // Deny-by-default on the subcommand: the resolved first non-flag token must be a recognized
+    // npm subcommand. A stray path (left by an unhandled value flag) is not recognized → denied.
+    knownSubcommands: Object.freeze([
+      "run",
+      "run-script",
+      "test",
+      "t",
+      "tst",
+      "ci",
+      "install",
+      "i",
+      "install-ci-test",
+      "ls",
+      "list",
+      "ll",
+      "la",
+      "audit",
+      "outdated",
+      "view",
+      "info",
+      "ping",
+      "doctor",
+      "help",
+      "config",
+      "rebuild",
+      "dedupe",
+      "prune",
+      "pkg",
+      "publish",
+      "unpublish",
+      "login",
+      "logout",
+      "adduser",
+      "token",
+      "version",
+      "deprecate",
+      "owner",
+      "access",
+      "star",
+      "profile",
+      "exec",
+      "x",
     ]),
   },
   {
@@ -98,6 +176,16 @@ export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
       "describe",
       "blame",
       "cat-file",
+    ]),
+    // Global value flags that precede the subcommand (`git -C DIR <sub>`). Skipping them prevents
+    // the value (DIR) from being read as the subcommand (S-H2).
+    valueFlags: Object.freeze([
+      "-C",
+      "-c",
+      "--git-dir",
+      "--work-tree",
+      "--namespace",
+      "--exec-path",
     ]),
   },
 ]);
@@ -213,3 +301,29 @@ export const DEFAULT_TOOL_HOST_CONFIG: ToolHostConfig = {
   applyEnabled: false,
   maxReadBytes: 262_144,
 } as const;
+
+// Caller-facing override shape. The nested `sandbox` and `patchLimits` objects are accepted as
+// PARTIALS so an integrator can override one field (e.g. maxOutputBytes) without re-stating the
+// whole object — the host deep-merges them over DEFAULT_TOOL_HOST_CONFIG (S-M2). A plain
+// `Partial<ToolHostConfig>` would force a shallow spread that drops the unspecified sub-fields
+// (notably envAllowlist), so this distinct input type is the contract.
+export interface ToolHostConfigInput {
+  readonly sandbox?: Partial<SandboxPolicy> | undefined;
+  readonly commandRules?: readonly CommandRule[] | undefined;
+  readonly patchLimits?: Partial<PatchLimits> | undefined;
+  readonly applyEnabled?: boolean | undefined;
+  readonly maxReadBytes?: number | undefined;
+}
+
+// Deep-merges a caller override over the defaults: the nested sandbox/patchLimits objects merge
+// field-by-field so a partial override never drops an unspecified default (S-M2).
+export function resolveToolHostConfig(input: ToolHostConfigInput | undefined): ToolHostConfig {
+  const base = DEFAULT_TOOL_HOST_CONFIG;
+  return {
+    sandbox: { ...base.sandbox, ...input?.sandbox },
+    commandRules: input?.commandRules ?? base.commandRules,
+    patchLimits: { ...base.patchLimits, ...input?.patchLimits },
+    applyEnabled: input?.applyEnabled ?? base.applyEnabled,
+    maxReadBytes: input?.maxReadBytes ?? base.maxReadBytes,
+  };
+}

@@ -56,23 +56,61 @@ function hasNul(value: string): boolean {
   return value.includes("\u0000");
 }
 
-// The first non-flag token in args is the subcommand under inspection (e.g. `git diff`).
-function firstSubcommand(args: readonly string[]): string | undefined {
+// Resolves the subcommand: the first non-flag token, skipping leading flags AND the value of any
+// value-taking flag (`--prefix DIR`, `-C DIR`). This is the S-H2 fix — a value can no longer
+// masquerade as the subcommand. `--flag=value` carries its value inline, so only the flag token is
+// consumed. Returns undefined when no subcommand token is present.
+function resolveSubcommand(rule: CommandRule, args: readonly string[]): string | undefined {
+  const valueFlags = new Set(rule.valueFlags ?? []);
+  let skipNext = false;
   for (const arg of args) {
+    if (skipNext) {
+      skipNext = false; // this token is the value of the preceding value-flag; skip it
+      continue;
+    }
     if (!arg.startsWith("-")) {
       return arg;
+    }
+    // A `-f=value` / `--flag=value` token carries its own value; consume just this token.
+    if (!arg.includes("=") && valueFlags.has(arg)) {
+      skipNext = true; // the following token is this flag's value
     }
   }
   return undefined;
 }
 
-function checkSubcommand(rule: CommandRule, args: readonly string[]): CommandDecision {
-  const sub = firstSubcommand(args);
-  if (rule.allowedSubcommands !== undefined) {
-    if (sub === undefined || !rule.allowedSubcommands.includes(sub)) {
-      return { allowed: false, reason: `subcommand not allowed: ${rule.executable} ${sub ?? ""}` };
-    }
-    return { allowed: true };
+// Denies the whole invocation if any denied flag (e.g. npm/npx `-c`/`--call`) appears anywhere in
+// args, in either `--call x` or `--call=x` form. These execute a transitive shell (S-H2).
+function hasDeniedFlag(rule: CommandRule, args: readonly string[]): boolean {
+  const denied = rule.denyFlags;
+  if (denied === undefined) {
+    return false;
+  }
+  return args.some((arg) => {
+    const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    return denied.includes(flag);
+  });
+}
+
+function checkAllowlistMode(
+  rule: CommandRule,
+  allowed: readonly string[],
+  sub: string | undefined,
+): CommandDecision {
+  if (sub === undefined || !allowed.includes(sub)) {
+    return { allowed: false, reason: `subcommand not allowed: ${rule.executable} ${sub ?? ""}` };
+  }
+  return { allowed: true };
+}
+
+function checkDenylistMode(rule: CommandRule, sub: string | undefined): CommandDecision {
+  // Deny-by-default on the subcommand: when a known-subcommand set is declared, an unrecognized
+  // first non-flag token (e.g. a stray path from a value-flag bypass) is denied.
+  if (
+    rule.knownSubcommands !== undefined &&
+    (sub === undefined || !rule.knownSubcommands.includes(sub))
+  ) {
+    return { allowed: false, reason: `unrecognized subcommand: ${rule.executable} ${sub ?? ""}` };
   }
   if (
     rule.deniedSubcommands !== undefined &&
@@ -82,6 +120,17 @@ function checkSubcommand(rule: CommandRule, args: readonly string[]): CommandDec
     return { allowed: false, reason: `subcommand denied: ${rule.executable} ${sub}` };
   }
   return { allowed: true };
+}
+
+function checkSubcommand(rule: CommandRule, args: readonly string[]): CommandDecision {
+  if (hasDeniedFlag(rule, args)) {
+    return { allowed: false, reason: `denied flag for ${rule.executable}` };
+  }
+  const sub = resolveSubcommand(rule, args);
+  if (rule.allowedSubcommands !== undefined) {
+    return checkAllowlistMode(rule, rule.allowedSubcommands, sub);
+  }
+  return checkDenylistMode(rule, sub);
 }
 
 // PURE deny-by-default decision. The executable must be a BARE name (no path separators, no

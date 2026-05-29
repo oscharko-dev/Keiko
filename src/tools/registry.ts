@@ -15,7 +15,12 @@ import { CommandCancelledError, ToolArgumentError, UnknownToolError } from "./er
 import { applyPatch, renderDryRun, validatePatch } from "./patch.js";
 import { TOOL_DEFINITIONS } from "./schemas.js";
 import { nodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
-import { DEFAULT_TOOL_HOST_CONFIG, type CommandResult, type ToolHostConfig } from "./types.js";
+import {
+  resolveToolHostConfig,
+  type CommandResult,
+  type ToolHostConfig,
+  type ToolHostConfigInput,
+} from "./types.js";
 
 type Args = Record<string, unknown>;
 
@@ -101,7 +106,7 @@ export class WorkspaceToolHost implements ToolPort {
     readonly fs?: WorkspaceFs | undefined;
     readonly writer?: WorkspaceWriter | undefined;
     readonly spawn?: SpawnFn | undefined;
-    readonly config?: Partial<ToolHostConfig> | undefined;
+    readonly config?: ToolHostConfigInput | undefined;
     readonly processEnv?: NodeJS.ProcessEnv | undefined;
     readonly now?: (() => number) | undefined;
   }) {
@@ -109,7 +114,7 @@ export class WorkspaceToolHost implements ToolPort {
     this.fs = deps.fs ?? nodeWorkspaceFs;
     this.writer = deps.writer ?? nodeWorkspaceWriter;
     this.spawn = deps.spawn ?? nodeSpawnFn;
-    this.config = { ...DEFAULT_TOOL_HOST_CONFIG, ...deps.config };
+    this.config = resolveToolHostConfig(deps.config);
     this.processEnv = deps.processEnv ?? process.env;
     this.now = deps.now ?? Date.now;
   }

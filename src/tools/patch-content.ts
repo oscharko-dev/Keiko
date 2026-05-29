@@ -96,6 +96,32 @@ function applyModify(original: readonly string[], hunks: readonly PatchHunk[]): 
     : { content: joinLines(out), conflicts: [] };
 }
 
+// Verifies a delete's pre-image against the current content (C2). A delete hunk lists the lines to
+// remove (`-`) and surrounding context (` `); their concatenation must equal the current file, or
+// the diff is stale/fabricated and we MUST NOT delete a mismatched file. A hunk-free delete (no
+// pre-image to check) is accepted as-is. `+` lines are not expected in a delete and are ignored.
+function verifyDeletePreImage(change: PatchFileChange, current: string): ApplyOutcome {
+  const preImage: string[] = [];
+  for (const hunk of change.hunks) {
+    for (const raw of hunk.lines) {
+      const marker = raw.charAt(0);
+      if (marker === " " || marker === "-") {
+        preImage.push(raw.slice(1));
+      }
+    }
+  }
+  if (preImage.length === 0) {
+    return { content: null, conflicts: [] };
+  }
+  const matches = joinLines(preImage) === current || preImage.join("\n") === current;
+  return matches
+    ? { content: null, conflicts: [] }
+    : {
+        content: null,
+        conflicts: [{ hunkIndex: 0, reason: "delete pre-image does not match current content" }],
+      };
+}
+
 // Computes the post-image for one file change against its current content (undefined = absent).
 export function computeFileContent(
   change: PatchFileChange,
@@ -120,7 +146,7 @@ export function computeFileContent(
         conflicts: [{ hunkIndex: 0, reason: "delete target does not exist" }],
       };
     }
-    return { content: null, conflicts: [] };
+    return verifyDeletePreImage(change, current);
   }
   if (current === undefined) {
     return { content: null, conflicts: [{ hunkIndex: 0, reason: "modify target does not exist" }] };

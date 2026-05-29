@@ -68,6 +68,12 @@ describe("isCommandAllowed — deny-by-default", () => {
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "", []).allowed).toBe(false);
   });
 
+  it("rejects an executable containing a NUL byte (F11)", () => {
+    // "node\0evil" would basename-match "node" without the explicit hasNul guard; this pins it.
+    const withNul = "node" + String.fromCharCode(0) + "evil";
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, withNul, ["-e", "1"]).allowed).toBe(false);
+  });
+
   it("allows a git read-only subcommand and denies a mutating one", () => {
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["status"]).allowed).toBe(true);
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["diff"]).allowed).toBe(true);
@@ -99,5 +105,73 @@ describe("isCommandAllowed — deny-by-default", () => {
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["--no-pager", "status"]).allowed).toBe(
       true,
     );
+  });
+});
+
+describe("isCommandAllowed — S-H2 value-flag bypass + transitive shell", () => {
+  it("denies `npm --prefix /x publish` (value-flag bypass: /x is not the subcommand)", () => {
+    expect(
+      isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["--prefix", "/x", "publish"]).allowed,
+    ).toBe(false);
+  });
+
+  it("denies `npm --loglevel x publish` (value flag with a value)", () => {
+    expect(
+      isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["--loglevel", "x", "publish"]).allowed,
+    ).toBe(false);
+  });
+
+  it("denies `npm --registry https://evil publish`", () => {
+    expect(
+      isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["--registry", "https://evil", "publish"])
+        .allowed,
+    ).toBe(false);
+  });
+
+  it("denies `npm -w pkg publish` (short value flag)", () => {
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["-w", "pkg", "publish"]).allowed).toBe(
+      false,
+    );
+  });
+
+  it("denies `npm exec -- rm -rf /` (exec spawns a transitive shell)", () => {
+    expect(
+      isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["exec", "--", "rm", "-rf", "/"]).allowed,
+    ).toBe(false);
+  });
+
+  it("denies `npm x ...` (alias of exec)", () => {
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["x", "cowsay"]).allowed).toBe(false);
+  });
+
+  it("denies a stray first non-flag token that is not a known npm subcommand", () => {
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["/x"]).allowed).toBe(false);
+  });
+
+  it('denies `npx -c "echo x"` (transitive shell via --call)', () => {
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npx", ["-c", "echo x"]).allowed).toBe(false);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npx", ["--call", "echo x"]).allowed).toBe(
+      false,
+    );
+  });
+
+  it('denies `npm -c "echo x"` (transitive shell via --call on npm too)', () => {
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["-c", "echo x"]).allowed).toBe(false);
+  });
+
+  it("denies `git -C sub push` (value flag -C masks the subcommand)", () => {
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["-C", "sub", "push"]).allowed).toBe(
+      false,
+    );
+  });
+
+  it("positive controls still pass: npm test, npm run build, git status, npx eslint", () => {
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["test"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["run", "build"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["status"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["-C", "sub", "status"]).allowed).toBe(
+      true,
+    );
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npx", ["eslint", "."]).allowed).toBe(true);
   });
 });

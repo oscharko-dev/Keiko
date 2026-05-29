@@ -56,6 +56,11 @@ interface HunkAccumulator {
   newStart: number;
   newLines: number;
   lines: string[];
+  // Remaining old/new line budget from the `@@ -l,s +l,s @@` header. While either is > 0 the hunk
+  // is still consuming body lines, so a body line that renders as `--- `/`+++ ` is NOT a new file
+  // header (C6). A context line draws from both; `-` from old; `+` from new.
+  oldRemaining: number;
+  newRemaining: number;
 }
 
 function toHunk(acc: HunkAccumulator): PatchHunk {
@@ -73,12 +78,16 @@ function parseHunkHeader(line: string): HunkAccumulator {
   if (match === null) {
     throw new PatchParseError("malformed hunk header");
   }
+  const oldLines = match[2] === undefined ? 1 : Number(match[2]);
+  const newLines = match[4] === undefined ? 1 : Number(match[4]);
   return {
     oldStart: Number(match[1]),
-    oldLines: match[2] === undefined ? 1 : Number(match[2]),
+    oldLines,
     newStart: Number(match[3]),
-    newLines: match[4] === undefined ? 1 : Number(match[4]),
+    newLines,
     lines: [],
+    oldRemaining: oldLines,
+    newRemaining: newLines,
   };
 }
 
@@ -152,6 +161,25 @@ function isHunkBodyLine(line: string): boolean {
   return marker === " " || marker === "+" || marker === "-";
 }
 
+// A hunk is still consuming body lines while either the old or the new line budget is positive.
+function hunkActive(file: FileAccumulator): boolean {
+  const hunk = file.current;
+  return hunk !== undefined && (hunk.oldRemaining > 0 || hunk.newRemaining > 0);
+}
+
+// Draws down the hunk's old/new line budget for a body line (context draws both, `-` old, `+` new).
+function consumeBudget(hunk: HunkAccumulator, line: string): void {
+  const marker = line.charAt(0);
+  if (marker === " ") {
+    hunk.oldRemaining -= 1;
+    hunk.newRemaining -= 1;
+  } else if (marker === "-") {
+    hunk.oldRemaining -= 1;
+  } else if (marker === "+") {
+    hunk.newRemaining -= 1;
+  }
+}
+
 function handleBodyLine(file: FileAccumulator, line: string): void {
   if (file.current === undefined) {
     return; // lines outside a hunk (e.g. `diff --git`, `index …`) are ignored
@@ -168,9 +196,16 @@ function handleBodyLine(file: FileAccumulator, line: string): void {
   }
   file.current.lines.push(line);
   countBody(file, line);
+  consumeBudget(file.current, line);
 }
 
 function handleLine(state: ParseState, line: string): void {
+  // While a hunk still has budget, ` `/`+`/`-` lines are BODY even if they render as `--- `/`+++ `
+  // (C6). Only once the hunk is consumed (or absent) can a `--- ` line open a new file.
+  if (state.current !== undefined && hunkActive(state.current) && isHunkBodyLine(line)) {
+    handleBodyLine(state.current, line);
+    return;
+  }
   if (line.startsWith("--- ")) {
     startNewFile(state, headerPath(line, "--- "));
     return;

@@ -84,4 +84,32 @@ describe("computeFileContent — create / delete", () => {
     };
     expect(computeFileContent(change, undefined).conflicts).toHaveLength(1);
   });
+
+  it("deletes when the hunk pre-image matches the current content (C2)", () => {
+    const change: PatchFileChange = {
+      path: "d",
+      kind: "delete",
+      addedLines: 0,
+      removedLines: 2,
+      hunks: [{ oldStart: 1, oldLines: 2, newStart: 0, newLines: 0, lines: ["-one", "-two"] }],
+    };
+    const out = computeFileContent(change, "one\ntwo\n");
+    expect(out.content).toBeNull();
+    expect(out.conflicts).toHaveLength(0);
+  });
+
+  it("conflicts on a STALE delete whose pre-image does not match (C2): file NOT deleted", () => {
+    const change: PatchFileChange = {
+      path: "d",
+      kind: "delete",
+      addedLines: 0,
+      removedLines: 2,
+      hunks: [{ oldStart: 1, oldLines: 2, newStart: 0, newLines: 0, lines: ["-one", "-two"] }],
+    };
+    // Current content differs from the diff's pre-image — a fabricated/stale delete.
+    const out = computeFileContent(change, "ACTUAL\nCONTENT\n");
+    expect(out.content).toBeNull();
+    expect(out.conflicts).toHaveLength(1);
+    expect(out.conflicts[0]?.reason).toContain("pre-image");
+  });
 });

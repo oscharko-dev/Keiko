@@ -89,7 +89,10 @@ describe("WorkspaceToolHost — read-only tools (happy path)", () => {
   it("list_files returns relative paths and stats", async () => {
     write("src/a.txt", "x");
     const result = await host().execute(request("list_files", {}));
-    const parsed = parse(result.output) as { files: { relativePath: string }[]; stats: { discovered: number } };
+    const parsed = parse(result.output) as {
+      files: { relativePath: string }[];
+      stats: { discovered: number };
+    };
     expect(parsed.files.map((f: { relativePath: string }) => f.relativePath)).toContain(
       "src/a.txt",
     );
@@ -168,12 +171,45 @@ describe("WorkspaceToolHost — run_command", () => {
     const result = await host({ spawn: nodeSpawnFn }).execute(
       request("run_command", {
         command: "node",
-        args: ["-e", `process.stdout.write(${JSON.stringify("k=" + ("AKIA" + "IOSFODNN7EXAMPLE"))})`],
+        args: [
+          "-e",
+          `process.stdout.write(${JSON.stringify("k=" + ("AKIA" + "IOSFODNN7EXAMPLE"))})`,
+        ],
       }),
     );
     const awsKey = "AKIA" + "IOSFODNN7EXAMPLE"; // split so the literal is not contiguous
     expect(result.output).not.toContain(awsKey);
     expect(result.output).toContain("[REDACTED]");
+  });
+});
+
+describe("WorkspaceToolHost — S-M2 config deep-merge + envAllowlist validation", () => {
+  it("a partial sandbox override keeps the full default env allowlist (PATH reaches the child)", async () => {
+    // Overriding only maxOutputBytes must NOT drop envAllowlist (the shallow-spread bug).
+    const result = await host({
+      spawn: nodeSpawnFn,
+      config: { sandbox: { maxOutputBytes: 4_096 } },
+      processEnv: { PATH: process.env.PATH ?? "" },
+    }).execute(
+      request("run_command", {
+        command: "node",
+        args: ["-e", "process.stdout.write(JSON.stringify(Object.keys(process.env)))"],
+      }),
+    );
+    const summary = parse(result.output) as { exitCode: number; stdout: string };
+    expect(summary.exitCode).toBe(0);
+    expect(JSON.parse(summary.stdout) as string[]).toContain("PATH");
+  });
+
+  it("an explicitly-empty envAllowlist rejects cleanly (no synchronous throw)", async () => {
+    const spawn = recordingSpawn();
+    // The call must return a rejected promise, never throw synchronously, so awaiting it works.
+    const promise = host({
+      spawn: spawn.fn,
+      config: { sandbox: { envAllowlist: [] } },
+    }).execute(request("run_command", { command: "node", args: ["-e", "1"] }));
+    await expect(promise).rejects.toBeInstanceOf(CommandDeniedError);
+    expect(spawn.calls()).toHaveLength(0);
   });
 });
 
