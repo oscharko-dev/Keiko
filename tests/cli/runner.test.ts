@@ -55,6 +55,20 @@ describe("runCli", () => {
     expect(c.err()).toBe("");
   });
 
+  it("lists the evidence subcommand in help", () => {
+    const c = makeIo();
+    const code = runCli(["--help"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("keiko evidence");
+  });
+
+  it("dispatches the evidence subcommand (usage error 2 with no subcommand, no disk touched)", () => {
+    const c = makeIo();
+    const code = runCli(["evidence"], c.io);
+    expect(code).toBe(2);
+    expect(c.err().toLowerCase()).toContain("usage");
+  });
+
   it("returns 2 and reports the offending token for an unknown command", () => {
     const c = makeIo();
     const code = runCli(["frobnicate"], c.io);
