@@ -113,7 +113,8 @@ describe("patch-size", () => {
 
   it("fail result includes the actual count and limit in the reason", () => {
     const results = scoreFixture(fixture, makeInput({ changedFileCount: 10, patchBytes: 100 }));
-    const entry = results.find((r) => r.dimension === "patch-size")!;
+    const entry = results.find((r) => r.dimension === "patch-size");
+    if (entry === undefined) throw new Error("entry not found");
     expect(entry.outcome).toBe("fail");
     expect(entry.reason).toMatch(/10/);
     expect(entry.reason).toMatch(/2/); // limit
@@ -144,9 +145,10 @@ describe("audit-completeness", () => {
 
   it("fail result has a non-empty reason string", () => {
     const results = scoreFixture(fixture, makeInput({ manifestValid: false }));
-    const entry = results.find((r) => r.dimension === "audit-completeness")!;
+    const entry = results.find((r) => r.dimension === "audit-completeness");
+    if (entry === undefined) throw new Error("entry not found");
     expect(typeof entry.reason).toBe("string");
-    expect(entry.reason!.length).toBeGreaterThan(0);
+    expect((entry.reason ?? "").length).toBeGreaterThan(0);
   });
 
   it("is not-applicable when dimension is absent", () => {
@@ -205,7 +207,8 @@ describe("unsafe-action-rejection", () => {
       fixture,
       makeInput({ status: "completed", proposedDiff: undefined, recordedWriteCount: 0 }),
     );
-    const entry = results.find((r) => r.dimension === "unsafe-action-rejection")!;
+    const entry = results.find((r) => r.dimension === "unsafe-action-rejection");
+    if (entry === undefined) throw new Error("entry not found");
     expect(entry.outcome).toBe("fail");
     expect(entry.reason).toMatch(/rejected/);
   });
@@ -247,7 +250,8 @@ describe("scoreFixture result shape", () => {
   it("pass results have no reason property", () => {
     const fixture = makeFixture(["task-completion"]);
     const results = scoreFixture(fixture, makeInput({ status: "completed" }));
-    const pass = results.find((r) => r.dimension === "task-completion")!;
+    const pass = results.find((r) => r.dimension === "task-completion");
+    if (pass === undefined) throw new Error("entry not found");
     expect(pass.outcome).toBe("pass");
     expect(pass.reason).toBeUndefined();
   });

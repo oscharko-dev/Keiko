@@ -118,10 +118,11 @@ describe("task-completion", () => {
 
   it("fail result includes a reason string", () => {
     const results = scoreFixture(fixture, makeInput({ status: "failed" }));
-    const entry = results.find((r) => r.dimension === "task-completion")!;
+    const entry = results.find((r) => r.dimension === "task-completion");
+    if (entry === undefined) throw new Error("entry not found");
     expect(entry.outcome).toBe("fail");
     expect(typeof entry.reason).toBe("string");
-    expect(entry.reason!.length).toBeGreaterThan(0);
+    expect((entry.reason ?? "").length).toBeGreaterThan(0);
   });
 
   it("is not-applicable when dimension is absent from the fixture set", () => {
