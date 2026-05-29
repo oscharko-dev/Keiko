@@ -92,6 +92,35 @@ describe("PatchPage (/run/patch?id=)", () => {
     });
   });
 
+  it("Escape key on the apply confirm dismisses and returns focus to Apply button", async () => {
+    const user = userEvent.setup();
+    render(<PatchPage />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /apply patch/i })).toBeInTheDocument();
+    });
+    // Open the confirm dialog
+    await user.click(screen.getByRole("button", { name: /apply patch/i }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    // The confirm button should be focused
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /confirm apply/i }));
+    // Press Escape — dialog should close
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    // Focus should return to the Apply patch button
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /apply patch/i }));
+  });
+
+  it("alertdialog has aria-modal=true", async () => {
+    const user = userEvent.setup();
+    render(<PatchPage />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /apply patch/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /apply patch/i }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+  });
+
   it("has no axe-detectable accessibility violations", async () => {
     const { container } = render(<PatchPage />);
     await waitFor(() => {

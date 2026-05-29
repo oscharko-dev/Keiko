@@ -155,8 +155,23 @@ interface ApplyConfirmProps { onConfirm: () => void; onCancel: () => void; apply
 function ApplyConfirm({ onConfirm, onCancel, applying }: ApplyConfirmProps): ReactNode {
   const confirmRef = useRef<HTMLButtonElement | null>(null);
   useEffect(() => { confirmRef.current?.focus(); }, []);
+
+  function handleKeyDown(e: React.KeyboardEvent<HTMLDivElement>): void {
+    if (e.key === "Escape" && !applying) {
+      e.preventDefault();
+      onCancel();
+    }
+  }
+
   return (
-    <div role="alertdialog" aria-modal="false" aria-labelledby="apply-confirm-heading" aria-describedby="apply-confirm-desc" className="rounded-lg border border-orange-300 bg-orange-50 p-4">
+    <div
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="apply-confirm-heading"
+      aria-describedby="apply-confirm-desc"
+      onKeyDown={handleKeyDown}
+      className="rounded-lg border border-orange-300 bg-orange-50 p-4"
+    >
       <h3 id="apply-confirm-heading" className="font-semibold text-orange-900">Apply patch to workspace?</h3>
       <p id="apply-confirm-desc" className="mt-1 text-sm text-orange-800">This will write the proposed changes to your workspace. Use version control to revert if needed.</p>
       <div className="mt-4 flex gap-3">
@@ -224,8 +239,14 @@ function PatchViewInner(): ReactNode {
 
   function handleCancelConfirm(): void {
     setApplyState("idle");
-    applyBtnRef.current?.focus();
+    // Focus is restored via useEffect below, after the Apply button re-mounts.
   }
+
+  useEffect(() => {
+    if (applyState === "idle") {
+      applyBtnRef.current?.focus();
+    }
+  }, [applyState]);
 
   if (runId === "") {
     return (
