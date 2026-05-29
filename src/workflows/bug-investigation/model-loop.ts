@@ -150,6 +150,12 @@ async function attemptOnce(
   return result;
 }
 
+// True when the attempt produced a terminal outcome (accepted patch or investigation-only); a
+// retryable rejection is the only non-terminal case.
+function isTerminal(result: AttemptResult): boolean {
+  return result.accepted !== undefined || result.investigationOnly !== undefined;
+}
+
 export async function runBugModelLoop(
   state: BugRunState,
   workspace: WorkspaceInfo,
@@ -165,7 +171,7 @@ export async function runBugModelLoop(
     patchRetryCount <= state.limits.maxRetries
   ) {
     modelCallCount += 1;
-    const result = await attemptOnce(
+    const r = await attemptOnce(
       state,
       workspace,
       report,
@@ -174,26 +180,17 @@ export async function runBugModelLoop(
       modelCallCount,
       rejectionReason,
     );
-    if (result.accepted !== undefined) {
+    if (isTerminal(r)) {
       return {
-        accepted: result.accepted,
-        investigationOnly: undefined,
-        modelCallCount,
-        patchRetryCount,
-        lastRejectionCode: undefined,
-      };
-    }
-    if (result.investigationOnly !== undefined) {
-      return {
-        accepted: undefined,
-        investigationOnly: result.investigationOnly,
+        accepted: r.accepted,
+        investigationOnly: r.investigationOnly,
         modelCallCount,
         patchRetryCount,
         lastRejectionCode: undefined,
       };
     }
     patchRetryCount += 1;
-    rejectionReason = result.rejectionCode;
+    rejectionReason = r.rejectionCode;
   }
   return {
     accepted: undefined,

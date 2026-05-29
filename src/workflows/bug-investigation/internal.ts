@@ -10,7 +10,6 @@ import {
   type BugInvestigationDeps,
   type BugInvestigationInput,
   type BugWorkflowLimits,
-  type FailureEvidence,
   type Hypothesis,
 } from "./types.js";
 import type { BugWorkflowEventSink } from "./events.js";

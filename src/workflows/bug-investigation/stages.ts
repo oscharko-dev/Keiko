@@ -1,0 +1,261 @@
+// Terminal-report stages (ADR-0009 D3/D4/D11). Each function maps a pipeline outcome —
+// fix-proposed (dry-run), fix-applied, investigation-only, rejected, cancelled, or failed — to the
+// redacted BugInvestigationReport via assembleBugReport. applyPatch (apply mode) is the one IO
+// boundary here and is fail-closed in #6 (applyEnabled gates the write); it receives the SAME
+// tighter PatchLimits as validatePatch (D6 bound 1, defence-in-depth re-validation). finishPipeline
+// selects the branch; emitCompleted stamps the terminal event. All redaction is inside assembleBugReport.
+
+import { redact } from "../../gateway/redaction.js";
+import { applyPatch, renderDryRun, type PatchApplyResult } from "../../tools/index.js";
+import { nodeWorkspaceFs, type WorkspaceInfo } from "../../workspace/index.js";
+import { assembleBugReport } from "./report.js";
+import { runBugVerification } from "./verify-stage.js";
+import {
+  investigationNextActions,
+  nextActionsFor,
+  patchLimitsFrom,
+  type AcceptedBugPatch,
+  type BugModelLoopResult,
+  type BugRunState,
+} from "./internal.js";
+import { isElevatedReviewPath } from "./guard.js";
+import type { BugInvestigationReport, FailureEvidence, Hypothesis } from "./types.js";
+
+const EMPTY_HYPOTHESIS: Hypothesis = {
+  rootCause: undefined,
+  regressionTestStrategy: undefined,
+  uncertainty: undefined,
+  confidence: undefined,
+};
+
+function elevatedPaths(accepted: AcceptedBugPatch): readonly string[] {
+  return accepted.validation.files.map((f) => f.path).filter((p) => isElevatedReviewPath(p));
+}
+
+export function rejectedReport(
+  state: BugRunState,
+  loop: BugModelLoopResult,
+  evidence: FailureEvidence,
+): BugInvestigationReport {
+  return assembleBugReport({
+    status: "rejected",
+    modelId: state.input.modelId,
+    durationMs: state.now() - state.startedAt,
+    patchFiles: [],
+    patchValidates: false,
+    patchApplied: false,
+    verification: undefined,
+    failureFrames: evidence.frames,
+    hypothesis: EMPTY_HYPOTHESIS,
+    proposedDiff: undefined,
+    dryRunPreview: undefined,
+    verificationSkipReason: undefined,
+    nextActions: [
+      `The model did not produce an in-scope fix (${loop.lastRejectionCode ?? "insufficient evidence"})`,
+    ],
+    modelCallCount: loop.modelCallCount,
+    patchRetryCount: loop.patchRetryCount,
+  });
+}
+
+// Insufficient-input rejection: returned by the intake precondition before any model call.
+export function insufficientInputReport(state: BugRunState): BugInvestigationReport {
+  return assembleBugReport({
+    status: "rejected",
+    modelId: state.input.modelId,
+    durationMs: state.now() - state.startedAt,
+    patchFiles: [],
+    patchValidates: false,
+    patchApplied: false,
+    verification: undefined,
+    failureFrames: [],
+    hypothesis: EMPTY_HYPOTHESIS,
+    proposedDiff: undefined,
+    dryRunPreview: undefined,
+    verificationSkipReason: undefined,
+    nextActions: [
+      "Provide at least one of: a description, failing output, a stack trace, or suspected target files",
+    ],
+    modelCallCount: 0,
+    patchRetryCount: 0,
+  });
+}
+
+export function investigationOnlyReport(
+  state: BugRunState,
+  loop: BugModelLoopResult,
+  hypothesis: Hypothesis,
+  evidence: FailureEvidence,
+): BugInvestigationReport {
+  return assembleBugReport({
+    status: "investigation-only",
+    modelId: state.input.modelId,
+    durationMs: state.now() - state.startedAt,
+    patchFiles: [],
+    patchValidates: false,
+    patchApplied: false,
+    verification: undefined,
+    failureFrames: evidence.frames,
+    hypothesis,
+    proposedDiff: undefined,
+    dryRunPreview: undefined,
+    verificationSkipReason: "verification skipped: no patch produced (investigation-only)",
+    nextActions: investigationNextActions(),
+    modelCallCount: loop.modelCallCount,
+    patchRetryCount: loop.patchRetryCount,
+  });
+}
+
+export function dryRunReport(
+  state: BugRunState,
+  loop: BugModelLoopResult,
+  accepted: AcceptedBugPatch,
+  evidence: FailureEvidence,
+): BugInvestigationReport {
+  const files = accepted.validation.files.map((f) => f.path);
+  return assembleBugReport({
+    status: "fix-proposed",
+    modelId: state.input.modelId,
+    durationMs: state.now() - state.startedAt,
+    patchFiles: accepted.validation.files,
+    patchValidates: true,
+    patchApplied: false,
+    verification: undefined,
+    failureFrames: evidence.frames,
+    hypothesis: accepted.hypothesis,
+    proposedDiff: accepted.diff,
+    dryRunPreview: renderDryRun(accepted.validation),
+    verificationSkipReason: "verification skipped: dry-run, no files written",
+    nextActions: nextActionsFor(false, files, elevatedPaths(accepted)),
+    modelCallCount: loop.modelCallCount,
+    patchRetryCount: loop.patchRetryCount,
+  });
+}
+
+export function cancelledReport(
+  state: BugRunState,
+  loop: BugModelLoopResult,
+  accepted: AcceptedBugPatch | undefined,
+  evidence: FailureEvidence,
+): BugInvestigationReport {
+  return assembleBugReport({
+    status: "cancelled",
+    modelId: state.input.modelId,
+    durationMs: state.now() - state.startedAt,
+    patchFiles: accepted?.validation.files ?? [],
+    patchValidates: accepted !== undefined,
+    patchApplied: false,
+    verification: undefined,
+    failureFrames: evidence.frames,
+    hypothesis: accepted?.hypothesis ?? EMPTY_HYPOTHESIS,
+    proposedDiff: accepted?.diff,
+    dryRunPreview: accepted === undefined ? undefined : renderDryRun(accepted.validation),
+    verificationSkipReason: "verification skipped: cancelled",
+    nextActions: ["The workflow was cancelled before completion"],
+    modelCallCount: loop.modelCallCount,
+    patchRetryCount: loop.patchRetryCount,
+  });
+}
+
+export function failedReport(state: BugRunState, error: unknown): BugInvestigationReport {
+  const message = redact(error instanceof Error ? error.message : "unexpected workflow failure");
+  const errorCode = error instanceof Error ? error.name : "UNKNOWN";
+  state.emitter.emit({ type: "bug:failed", errorCode, message });
+  return assembleBugReport({
+    status: "failed",
+    modelId: state.input.modelId,
+    durationMs: state.now() - state.startedAt,
+    patchFiles: [],
+    patchValidates: false,
+    patchApplied: false,
+    verification: undefined,
+    failureFrames: [],
+    hypothesis: EMPTY_HYPOTHESIS,
+    proposedDiff: undefined,
+    dryRunPreview: undefined,
+    verificationSkipReason: undefined,
+    nextActions: ["Inspect the error and retry"],
+    modelCallCount: 0,
+    patchRetryCount: 0,
+  });
+}
+
+async function applyAndVerify(
+  state: BugRunState,
+  workspace: WorkspaceInfo,
+  loop: BugModelLoopResult,
+  accepted: AcceptedBugPatch,
+  evidence: FailureEvidence,
+): Promise<BugInvestigationReport> {
+  const fs = state.deps.fs ?? nodeWorkspaceFs;
+  const applyResult: PatchApplyResult = applyPatch(workspace, accepted.diff, {
+    applyEnabled: true,
+    signal: state.signal,
+    fs,
+    limits: patchLimitsFrom(state.limits),
+    ...(state.deps.writer === undefined ? {} : { writer: state.deps.writer }),
+  });
+  state.emitter.emit({
+    type: "bug:patch:applied",
+    changedFiles: applyResult.changedFiles.length,
+    created: applyResult.created.length,
+    deleted: applyResult.deleted.length,
+  });
+  if (state.signal.aborted) {
+    return cancelledReport(state, loop, accepted, evidence);
+  }
+  const verification = await runBugVerification(state, workspace, accepted.validation.files, fs);
+  return assembleBugReport({
+    status: "fix-applied",
+    modelId: state.input.modelId,
+    durationMs: state.now() - state.startedAt,
+    patchFiles: accepted.validation.files,
+    patchValidates: true,
+    patchApplied: true,
+    verification: verification.summary,
+    failureFrames: evidence.frames,
+    hypothesis: accepted.hypothesis,
+    proposedDiff: accepted.diff,
+    dryRunPreview: renderDryRun(accepted.validation),
+    verificationSkipReason: verification.skipReason,
+    nextActions: nextActionsFor(true, applyResult.changedFiles, elevatedPaths(accepted)),
+    modelCallCount: loop.modelCallCount,
+    patchRetryCount: loop.patchRetryCount,
+  });
+}
+
+export function emitCompleted(
+  state: BugRunState,
+  report: BugInvestigationReport,
+): BugInvestigationReport {
+  state.emitter.emit({
+    type: "bug:completed",
+    status: report.status,
+    durationMs: report.durationMs,
+  });
+  return report;
+}
+
+// Selects the terminal branch from the model-loop result: investigation-only (hypothesis, no
+// patch), rejected (nothing usable), cancelled (abort before apply), apply+verify (apply mode), or
+// dry-run (default).
+export async function finishPipeline(
+  state: BugRunState,
+  workspace: WorkspaceInfo,
+  loop: BugModelLoopResult,
+  evidence: FailureEvidence,
+): Promise<BugInvestigationReport> {
+  if (loop.accepted === undefined) {
+    if (loop.investigationOnly !== undefined) {
+      return investigationOnlyReport(state, loop, loop.investigationOnly, evidence);
+    }
+    return rejectedReport(state, loop, evidence);
+  }
+  if (state.signal.aborted) {
+    return cancelledReport(state, loop, loop.accepted, evidence);
+  }
+  if (state.input.apply === true) {
+    return applyAndVerify(state, workspace, loop, loop.accepted, evidence);
+  }
+  return dryRunReport(state, loop, loop.accepted, evidence);
+}
