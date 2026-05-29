@@ -2,7 +2,13 @@
 
 ## Status
 
-Proposed
+Accepted
+
+Implemented in `src/workflows/bug-investigation/**` (issue #9). Two refinements landed during
+implementation and are reflected in D6: (1) the sensitive-path checks (`.github/`, `.husky/`,
+lockfiles) match case-insensitively (matching #6 `isDenied`) so a case-only variant cannot bypass
+the guard on case-insensitive filesystems; and (2) `.husky/` is added to the directory deny because
+a prompt-injected git hook is an RCE-on-next-commit vector that #6's `.git` deny does not cover.
 
 ## Context
 
