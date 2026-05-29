@@ -114,24 +114,24 @@ describe("investigate CLI --help", () => {
 describe("SDK exports", () => {
   it("exports generateUnitTests as a function", async () => {
     const sdk = (await import("../../src/sdk/index.js")) as Record<string, unknown>;
-    expect(typeof sdk["generateUnitTests"]).toBe("function");
+    expect(typeof sdk.generateUnitTests).toBe("function");
   });
 
   it("exports investigateBug as a function", async () => {
     const sdk = (await import("../../src/sdk/index.js")) as Record<string, unknown>;
-    expect(typeof sdk["investigateBug"]).toBe("function");
+    expect(typeof sdk.investigateBug).toBe("function");
   });
 
   it("exports UNIT_TEST_WORKFLOW_DESCRIPTOR as an object", async () => {
     const sdk = (await import("../../src/sdk/index.js")) as Record<string, unknown>;
-    expect(typeof sdk["UNIT_TEST_WORKFLOW_DESCRIPTOR"]).toBe("object");
-    expect(sdk["UNIT_TEST_WORKFLOW_DESCRIPTOR"]).not.toBeNull();
+    expect(typeof sdk.UNIT_TEST_WORKFLOW_DESCRIPTOR).toBe("object");
+    expect(sdk.UNIT_TEST_WORKFLOW_DESCRIPTOR).not.toBeNull();
   });
 
   it("exports BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR as an object", async () => {
     const sdk = (await import("../../src/sdk/index.js")) as Record<string, unknown>;
-    expect(typeof sdk["BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR"]).toBe("object");
-    expect(sdk["BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR"]).not.toBeNull();
+    expect(typeof sdk.BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR).toBe("object");
+    expect(sdk.BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR).not.toBeNull();
   });
 });
 
