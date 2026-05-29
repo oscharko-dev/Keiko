@@ -21,6 +21,9 @@ export interface AppliableSnapshot {
 export interface RunRecord {
   readonly runId: string;
   readonly fingerprint: string;
+  // The run's resolved model id, used by the gated apply path to rebuild the ModelPort (the
+  // fingerprint is a config hash, NOT a model id — passing it to the factory was a defect).
+  readonly modelId: string;
   readonly sink: QueueEventSink;
   status: RunStatus;
   // The redacted final report projection, set once the run terminates.
@@ -36,6 +39,7 @@ export interface RunRecord {
 export interface RegisterRunInput {
   readonly runId: string;
   readonly fingerprint: string;
+  readonly modelId: string;
   readonly sink: QueueEventSink;
   readonly cancel: (reason?: string) => void;
 }
@@ -113,6 +117,7 @@ function registerRun(state: RegistryState, input: RegisterRunInput): RunRecord {
   const record: RunRecord = {
     runId: input.runId,
     fingerprint: input.fingerprint,
+    modelId: input.modelId,
     sink: input.sink,
     status: "running",
     report: undefined,

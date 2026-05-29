@@ -1,7 +1,8 @@
 // Parsing + validation of the `POST /api/runs` request body (ADR-0011 D5 route 5). The body arrives
 // as untyped JSON; this module narrows it (no `any`) into a typed `RunRequest` or a typed validation
 // error. It performs SHAPE validation only — exactly one of workflowId/taskType, a present input
-// object, a non-empty modelId, an `apply` flag that defaults false (D8). The deeper guards
+// object, a non-empty modelId. The create route is ALWAYS dry-run: `apply` is forced false here
+// regardless of the body, so applying is reachable only via the gated apply route (D8). The deeper guards
 // (`isSensitivePath`, patch limits, target validation) are enforced by the workflow/harness entry
 // points the engine calls; the BFF never reimplements them.
 
@@ -76,7 +77,11 @@ export function parseRunRequest(raw: string): RunRequest | RunRequestError {
   return {
     kind,
     modelId,
-    apply: parsed.apply === true,
+    // Dry-run-first (ADR-0011 D8 / security M1): the create route NEVER applies, even if the client
+    // body carries `apply:true`. Applying is the sole responsibility of POST /api/runs/:runId/apply
+    // (route 9), which re-invokes the workflow through the gated path. A one-shot create-with-apply
+    // would bypass the explicit review→apply step, so the body flag is deliberately ignored here.
+    apply: false,
     input,
     ...(isRecord(limits) ? { limits } : { limits: undefined }),
   };

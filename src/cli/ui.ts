@@ -89,6 +89,17 @@ function defaultStaticRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "..", "ui", "static");
 }
 
+// Conservative request/header timeouts on the loopback BFF (defense in depth, L2/L3): even on
+// 127.0.0.1 a slow or stuck client must not hold a connection indefinitely. headersTimeout must be
+// at or below requestTimeout so an incomplete request line/header set is cut first.
+const REQUEST_TIMEOUT_MS = 30_000;
+const HEADERS_TIMEOUT_MS = 10_000;
+
+export function applyServerTimeouts(server: Server): void {
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
+}
+
 async function listen(server: Server, port: number): Promise<void> {
   await new Promise<void>((res, rej) => {
     server.once("error", rej);
@@ -141,6 +152,7 @@ export async function runUiCli(
   });
   const factory = deps.createServer ?? createUiServer;
   const server = await factory({ staticRoot, csp, port: parsed.port, handlerDeps });
+  applyServerTimeouts(server);
   await listen(server, parsed.port);
   io.out(`Keiko UI listening on http://${UI_HOST}:${String(parsed.port)}\n`);
   // Block only in the real CLI path (no injected factory). Injected-server tests skip blocking so

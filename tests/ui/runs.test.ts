@@ -15,6 +15,7 @@ function registerInput(runId: string): RegisterRunInput {
   return {
     runId,
     fingerprint: "fp",
+    modelId: "test-model",
     sink: new QueueEventSink(),
     cancel: (): void => undefined,
   };

@@ -4,7 +4,7 @@
 // There is no shell and no user-controlled path beyond the contained root.
 
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { join, normalize, resolve, sep, extname } from "node:path";
 import type { ServerResponse } from "node:http";
 
@@ -54,15 +54,18 @@ export function resolveContainedPath(root: string, pathname: string): string | u
 }
 
 // Streams the file at `filePath` with the correct content type. Returns false when the path is not
-// a regular file (caller then falls back to the SPA index or a 404).
+// a regular file (caller then falls back to the SPA index or a 404). Uses `lstat` (not `stat`) so a
+// symlink planted in the static root is NOT followed: a regular file is served, a symlink is refused
+// even when it points back inside the root — matching the audit store's never-follow-a-symlink rule
+// (defense in depth; the export pipeline emits only regular files).
 export async function serveFile(res: ServerResponse, filePath: string): Promise<boolean> {
   let info;
   try {
-    info = await stat(filePath);
+    info = await lstat(filePath);
   } catch {
     return false;
   }
-  if (!info.isFile()) {
+  if (info.isSymbolicLink() || !info.isFile()) {
     return false;
   }
   res.statusCode = 200;

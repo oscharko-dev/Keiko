@@ -16,7 +16,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createUiServer, UI_HOST } from "../../src/ui/server.js";
 import { buildCspHeader } from "../../src/ui/csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../src/ui/index.js";
+import {
+  createInMemoryEvidenceStore,
+  listEvidence,
+  loadEvidence,
+  type EvidenceStore,
+} from "../../src/audit/index.js";
 import type { ModelPort } from "../../src/harness/index.js";
+import { CancelledError } from "../../src/gateway/errors.js";
 import type { NormalizedResponse } from "../../src/gateway/types.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -51,12 +58,13 @@ let port: number;
 let staticRoot: string;
 let workspace: string;
 let registry: ReturnType<typeof createRunRegistry>;
+let evidenceStore: EvidenceStore;
 
 function handlerDeps(model: ModelPort): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
-    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    evidenceStore,
     env: { KEY: SECRET },
     redactor: buildRedactor({ KEY: SECRET }),
     registry,
@@ -67,6 +75,7 @@ function handlerDeps(model: ModelPort): UiHandlerDeps {
 async function start(model: ModelPort): Promise<void> {
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-ui-runs-"));
   registry = createRunRegistry();
+  evidenceStore = createInMemoryEvidenceStore();
   server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0 });
   await new Promise<void>((res) => server.listen(0, UI_HOST, res));
   port = (server.address() as AddressInfo).port;
@@ -289,5 +298,108 @@ describe("no secret reaches any response body", () => {
     const events = await (await fetch(`${base()}/api/runs/${body.runId}/events`)).text();
     expect(report).not.toContain(SECRET);
     expect(events).not.toContain(SECRET);
+  });
+});
+
+// A model that never resolves until aborted, then rejects with the gateway CancelledError the
+// workflow maps to a "cancelled" report. Lets a test deterministically cancel an in-flight run.
+function abortableModel(): ModelPort {
+  return {
+    call: (_req, signal): Promise<NormalizedResponse> =>
+      new Promise<NormalizedResponse>((_res, reject) => {
+        const fail = (): void => reject(new CancelledError("aborted in test"));
+        if (signal?.aborted === true) {
+          fail();
+          return;
+        }
+        signal?.addEventListener("abort", fail, { once: true });
+      }),
+  };
+}
+
+describe("FIX 1 — UI runs persist a redacted evidence manifest (AC5)", () => {
+  it("persists a dry-run that listEvidence/loadEvidence return, with no secret", async () => {
+    await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
+    const { body } = await createRun();
+    await awaitTerminal(body.runId);
+    await awaitEvidence(body.runId);
+
+    const entries = listEvidence(evidenceStore);
+    expect(entries.map((e) => e.runId)).toContain(body.runId);
+    const entry = entries.find((e) => e.runId === body.runId);
+    expect(entry?.taskType).toBe("generate-unit-tests");
+    expect(entry?.outcome).toBe("completed");
+
+    const manifest = loadEvidence(evidenceStore, body.runId);
+    expect(manifest?.evidenceSchemaVersion).toBe("1");
+    expect(manifest?.run.runId).toBe(body.runId);
+    expect(JSON.stringify(manifest)).not.toContain(SECRET);
+  });
+
+  it("persists a cancelled run with a cancelled outcome (literal AC5)", async () => {
+    await start(abortableModel());
+    const { body } = await createRun();
+    await fetch(`${base()}/api/runs/${body.runId}/cancel`, { method: "POST" });
+    await awaitTerminal(body.runId);
+    await awaitEvidence(body.runId);
+
+    const entry = listEvidence(evidenceStore).find((e) => e.runId === body.runId);
+    expect(entry?.outcome).toBe("cancelled");
+    const manifest = loadEvidence(evidenceStore, body.runId);
+    expect(manifest?.run.outcome).toBe("cancelled");
+    expect(JSON.stringify(manifest)).not.toContain(SECRET);
+  });
+
+  it("surfaces the persisted run through the /api/evidence routes", async () => {
+    await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
+    const { body } = await createRun();
+    await awaitTerminal(body.runId);
+    await awaitEvidence(body.runId);
+
+    const list = (await (await fetch(`${base()}/api/evidence`)).json()) as {
+      entries: { runId: string }[];
+    };
+    expect(list.entries.map((e) => e.runId)).toContain(body.runId);
+    const detail = await fetch(`${base()}/api/evidence/${body.runId}`);
+    expect(detail.status).toBe(200);
+    const json = (await detail.json()) as { manifest: { run: { runId: string } } };
+    expect(json.manifest.run.runId).toBe(body.runId);
+  });
+});
+
+// Polls the evidence store until the (best-effort, post-terminal) persist has landed.
+async function awaitEvidence(runId: string): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (loadEvidence(evidenceStore, runId) !== undefined) {
+      return;
+    }
+    await new Promise((res) => setTimeout(res, 5));
+  }
+  throw new Error("evidence was not persisted");
+}
+
+describe("FIX 2 — POST /api/runs is always dry-run (security M1)", () => {
+  it("ignores apply:true in the body and still produces a dry-run (no write)", async () => {
+    await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
+    const created = await createRun(true);
+    expect(created.status).toBe(202);
+    await awaitTerminal(created.body.runId);
+    const res = await fetch(`${base()}/api/runs/${created.body.runId}`);
+    const json = (await res.json()) as { report: { status: string } };
+    expect(json.report.status).toBe("dry-run");
+  });
+});
+
+describe("FIX 3 — a failed UI run's report is redacted (security L1)", () => {
+  it("scrubs a secret carried in the failure error", async () => {
+    const failing: ModelPort = {
+      call: (): Promise<NormalizedResponse> =>
+        Promise.reject(new Error(`model exploded with token ${SECRET}`)),
+    };
+    await start(failing);
+    const { body } = await createRun();
+    await awaitTerminal(body.runId);
+    const report = await (await fetch(`${base()}/api/runs/${body.runId}`)).text();
+    expect(report).not.toContain(SECRET);
   });
 });

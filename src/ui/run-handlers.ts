@@ -53,7 +53,12 @@ export async function handleCreateRun(
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  const engineCtx: EngineContext = { request: parsed, model, registry: deps.registry };
+  const engineCtx: EngineContext = {
+    request: parsed,
+    model,
+    registry: deps.registry,
+    evidence: { store: deps.evidenceStore, env: deps.env },
+  };
   try {
     const started = startRun(engineCtx, deps.redactor);
     return { status: 202, body: { runId: started.runId, fingerprint: started.fingerprint } };
@@ -152,16 +157,10 @@ export async function handleApplyRun(
       body: errorBody("NOT_APPLIABLE", "The run is not in an appliable state."),
     };
   }
-  const model = deps.modelPortFactory(record.fingerprint);
+  const model = deps.modelPortFactory(record.modelId);
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  const report = await applyRun(record.appliable, model, modelIdFor(deps), deps.redactor);
+  const report = await applyRun(record.appliable, model, record.modelId, deps.redactor);
   return { status: 200, body: { report } };
-}
-
-// The modelId used for an apply re-invocation: the first configured provider, mirroring the CLI
-// default. Falls back to a placeholder when no config (the injected factory in tests ignores it).
-function modelIdFor(deps: UiHandlerDeps): string {
-  return deps.config?.providers[0]?.modelId ?? "default";
 }

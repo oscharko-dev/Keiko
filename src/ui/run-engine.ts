@@ -19,10 +19,16 @@ import type {
   BugInvestigationInput,
   BugInvestigationReport,
 } from "../workflows/bug-investigation/types.js";
-import type { TaskInput } from "../harness/index.js";
+import type { TaskInput, RunResult } from "../harness/index.js";
 import type { RunRequest } from "./run-request.js";
 import { QueueEventSink } from "./sink.js";
 import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";
+import {
+  persistWorkflowEvidence,
+  persistExplainEvidence,
+  type EvidencePersistContext,
+  type RunIdentity,
+} from "./evidence.js";
 
 export interface StartRunResult {
   readonly runId: string;
@@ -33,6 +39,9 @@ interface EngineContext {
   readonly request: RunRequest;
   readonly model: ModelPort;
   readonly registry: RunRegistry;
+  // Where terminated runs persist their redacted evidence manifest (AC5). Optional so the 3-arg
+  // engine-context form in older tests still compiles; persistence is simply skipped when absent.
+  readonly evidence?: EvidencePersistContext | undefined;
 }
 
 // Assembles the workflow/task input by overlaying the request-level fields onto the client `input`
@@ -101,6 +110,8 @@ interface DispatchOutcome {
   readonly status: TerminalStatus;
   readonly report: unknown;
   readonly appliable: AppliableSnapshot | undefined;
+  // Present only for an explain-plan run: the raw harness RunResult, used to fold usage for evidence.
+  readonly result?: RunResult | undefined;
 }
 
 interface Dispatched {
@@ -162,6 +173,7 @@ function dispatchExplain(
       status: runResult.outcome === "completed" ? "completed" : statusOrFailed(runResult.outcome),
       report: runResult.report ?? { status: runResult.outcome },
       appliable: undefined,
+      result: runResult,
     }),
   );
   return {
@@ -181,15 +193,16 @@ function dispatchExplain(
 // ActiveRunLimitError when the registry is at capacity (mapped to 429 upstream).
 export function startRun(ctx: EngineContext, redactReport: (value: unknown) => unknown): StartRunResult {
   const sink = new QueueEventSink();
+  const startedAt = Date.now();
   if (ctx.request.kind === "explain-plan") {
     const { dispatched, runId, fingerprint } = dispatchExplain(ctx, sink);
-    registerAndCapture(ctx.registry, { runId, fingerprint, sink }, dispatched, redactReport);
+    registerAndCapture(ctx, { runId, fingerprint, sink, startedAt }, dispatched, redactReport);
     return { runId, fingerprint };
   }
   const runId = randomUUID();
   const fingerprint = randomUUID().slice(0, 16);
   const dispatched = dispatchWorkflow(ctx, sink, runId);
-  registerAndCapture(ctx.registry, { runId, fingerprint, sink }, dispatched, redactReport);
+  registerAndCapture(ctx, { runId, fingerprint, sink, startedAt }, dispatched, redactReport);
   return { runId, fingerprint };
 }
 
@@ -197,35 +210,65 @@ interface RegisterIdentity {
   readonly runId: string;
   readonly fingerprint: string;
   readonly sink: QueueEventSink;
+  readonly startedAt: number;
 }
 
 function registerAndCapture(
-  registry: RunRegistry,
+  ctx: EngineContext,
   identity: RegisterIdentity,
   dispatched: Dispatched,
   redactReport: (value: unknown) => unknown,
 ): void {
-  registry.register({
+  ctx.registry.register({
     runId: identity.runId,
     fingerprint: identity.fingerprint,
+    modelId: ctx.request.modelId,
     sink: identity.sink,
     cancel: dispatched.cancel,
   });
   void dispatched.result
     .then((outcome) => {
-      registry.complete(
+      ctx.registry.complete(
         identity.runId,
         outcome.status,
         redactReport(outcome.report),
         outcome.appliable,
       );
+      persistOutcome(ctx, identity, outcome);
     })
     .catch((error: unknown) => {
-      registry.complete(identity.runId, "failed", { error: String(error) }, undefined);
+      ctx.registry.complete(identity.runId, "failed", redactReport({ error: String(error) }), undefined);
     })
     .finally(() => {
       identity.sink.closeAll();
     });
+}
+
+// Persists a terminated run's redacted evidence manifest (AC5). Best-effort and never throwing: the
+// evidence helpers swallow their own errors, and this is only invoked after the registry already
+// recorded the terminal outcome, so a missing evidence config simply skips persistence.
+function persistOutcome(
+  ctx: EngineContext,
+  identity: RegisterIdentity,
+  outcome: DispatchOutcome,
+): void {
+  if (ctx.evidence === undefined) {
+    return;
+  }
+  const runIdentity: RunIdentity = {
+    runId: identity.runId,
+    fingerprint: identity.fingerprint,
+    modelId: ctx.request.modelId,
+    kind: ctx.request.kind,
+    status: outcome.status,
+    startedAt: identity.startedAt,
+    finishedAt: Date.now(),
+  };
+  if (ctx.request.kind === "explain-plan" && outcome.result !== undefined) {
+    persistExplainEvidence(runIdentity, outcome.result, ctx.evidence);
+    return;
+  }
+  persistWorkflowEvidence(runIdentity, outcome.report, identity.sink.buffered(), ctx.evidence);
 }
 
 // Re-invokes a workflow with apply:true through the SAME gated entry point (D8). This is the only

@@ -48,3 +48,9 @@ export {
   handleGetRun,
   handleApplyRun,
 } from "./run-handlers.js";
+export {
+  persistWorkflowEvidence,
+  persistExplainEvidence,
+  type EvidencePersistContext,
+  type RunIdentity,
+} from "./evidence.js";
