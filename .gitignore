@@ -127,3 +127,11 @@ coverage/
 # Audit evidence manifests (ADR-0010 D4). `keiko run` writes redacted evidence to the
 # workspace-relative default base dir by default; never commit it.
 .keiko/
+
+# Wave 1 UI build artifacts (ADR-0011 D3). The nested `ui/` package builds a static export; only
+# its source + package.json + package-lock.json are committed. Build outputs, the Next typegen
+# file, and incremental tsbuildinfo are generated and must never be committed.
+ui/.next/
+ui/out/
+ui/next-env.d.ts
+ui/*.tsbuildinfo

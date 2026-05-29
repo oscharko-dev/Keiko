@@ -1,0 +1,5 @@
+{
+  "root": true,
+  "extends": ["next/core-web-vitals", "plugin:jsx-a11y/strict"],
+  "ignorePatterns": ["out/", ".next/", "node_modules/"]
+}
