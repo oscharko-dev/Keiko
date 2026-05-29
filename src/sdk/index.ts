@@ -28,3 +28,30 @@ export {
   type WorkspaceInfo,
   type WorkspaceSummary,
 } from "../workspace/index.js";
+
+// Verification orchestrator surface (ADR-0007). Verification reuses the #6 command boundary
+// unchanged; these are the plan/run/summary entry points and their JSON-serializable shapes
+// (the stable contract the #10 audit ledger persists). The audit projection is exposed under an
+// explicit alias because the workspace surface already owns `summarizeForAudit`.
+export {
+  buildVerificationPlan,
+  buildVerificationSummary,
+  classifyOutcome,
+  detectScripts,
+  renderMarkdownSummary,
+  resolveTargetedTests,
+  runVerification,
+  summarizeForAudit as summarizeVerificationForAudit,
+  DEFAULT_VERIFICATION_LIMITS,
+  type ResourceLimitDecision,
+  type VerificationAuditSummary,
+  type VerificationDeps,
+  type VerificationKind,
+  type VerificationPlan,
+  type VerificationReport,
+  type VerificationResourceLimits,
+  type VerificationResult,
+  type VerificationStatus,
+  type VerificationStep,
+  type VerificationSummary,
+} from "../verification/index.js";

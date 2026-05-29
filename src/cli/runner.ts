@@ -1,6 +1,7 @@
 import { runModelsCli } from "./models.js";
 import { runAgentCli } from "./run.js";
 import { runContextCli } from "./context.js";
+import { runVerifyCli } from "./verify.js";
 import type { EnvSource } from "../gateway/config.js";
 import { SDK_VERSION } from "../sdk/index.js";
 
@@ -21,6 +22,7 @@ Usage:
   keiko models validate    Validate gateway configuration.
   keiko run <task>         Run a bounded dry-run task through the agent harness.
   keiko context [OPTIONS]  Print a redacted workspace context summary (dry-run).
+  keiko verify [OPTIONS]   Run the project's gates and print a redacted evidence summary.
 
 Exit codes:
   0  Success
@@ -43,6 +45,9 @@ function dispatchCommand(
   }
   if (name === "context") {
     return runContextCli(rest, io);
+  }
+  if (name === "verify") {
+    return runVerifyCli(rest, io);
   }
   return undefined;
 }
