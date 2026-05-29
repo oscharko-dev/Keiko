@@ -14,6 +14,7 @@ import {
 } from "../../src/evaluations/index.js";
 import { materializeFixture } from "../../src/evaluations/runner-support.js";
 import type { EvaluationFixture } from "../../src/evaluations/types.js";
+import { must } from "./_support.js";
 
 // ─── Shape invariants for every declared fixture ────────────────────────────────
 
@@ -232,7 +233,7 @@ describe("fixtureByName", () => {
 
 describe("materializeFixture", () => {
   it("creates a temp directory containing the declared workspace files", () => {
-    const fixture = ALL_FIXTURES.find((f) => f.workflowKind === "unit-tests")!;
+    const fixture = must(ALL_FIXTURES.find((f) => f.workflowKind === "unit-tests"));
     const { root, cleanup } = materializeFixture(fixture);
 
     try {
@@ -247,7 +248,7 @@ describe("materializeFixture", () => {
   });
 
   it("writes the correct file content to the temp directory", () => {
-    const fixture = ALL_FIXTURES.find((f) => f.workflowKind === "unit-tests")!;
+    const fixture = must(ALL_FIXTURES.find((f) => f.workflowKind === "unit-tests"));
     const { root, cleanup } = materializeFixture(fixture);
 
     try {
@@ -263,7 +264,7 @@ describe("materializeFixture", () => {
   });
 
   it("cleanup() removes the materialized temp directory", () => {
-    const fixture = ALL_FIXTURES.find((f) => f.workflowKind === "unit-tests")!;
+    const fixture = must(ALL_FIXTURES.find((f) => f.workflowKind === "unit-tests"));
     const { root, cleanup } = materializeFixture(fixture);
 
     cleanup();
@@ -272,7 +273,7 @@ describe("materializeFixture", () => {
   });
 
   it("each call to materializeFixture creates a distinct temp directory", () => {
-    const fixture = ALL_FIXTURES[0]!;
+    const fixture = must(ALL_FIXTURES[0]);
     const ws1 = materializeFixture(fixture);
     const ws2 = materializeFixture(fixture);
 
@@ -285,13 +286,13 @@ describe("materializeFixture", () => {
   });
 
   it("creates parent directories for nested workspace file paths", () => {
-    const fixture = ALL_FIXTURES.find((f) =>
+    const fixture = must(ALL_FIXTURES.find((f) =>
       Object.keys(f.workspaceFiles).some((k) => k.includes("/")),
-    )!;
+    ));
     const { root, cleanup } = materializeFixture(fixture);
 
     try {
-      const nestedKey = Object.keys(fixture.workspaceFiles).find((k) => k.includes("/"))!;
+      const nestedKey = must(Object.keys(fixture.workspaceFiles).find((k) => k.includes("/")));
       const abs = `${root}/${nestedKey}`;
       const stat = statSync(abs);
       expect(stat.isFile()).toBe(true);

@@ -10,6 +10,7 @@ import type {
   EvaluationDimension,
   DimensionResult,
 } from "../../src/evaluations/index.js";
+import { must } from "./_support.js";
 
 // ─── Test helpers ───────────────────────────────────────────────────────────────
 
@@ -81,7 +82,7 @@ describe("aggregateScorecard", () => {
     const r1 = makeResult("f1", { "task-completion": "pass" });
     const r2 = makeResult("f2", { "task-completion": "pass" });
     const entries = aggregateScorecard([r1, r2]);
-    const tc = entries.find((e) => e.dimension === "task-completion")!;
+    const tc = must(entries.find((e) => e.dimension === "task-completion"));
     expect(tc.passRate).toBe(1);
     expect(tc.passCount).toBe(2);
     expect(tc.failCount).toBe(0);
@@ -91,7 +92,7 @@ describe("aggregateScorecard", () => {
     const r1 = makeResult("f1", { "task-completion": "pass" });
     const r2 = makeResult("f2", { "task-completion": "fail" });
     const entries = aggregateScorecard([r1, r2]);
-    const tc = entries.find((e) => e.dimension === "task-completion")!;
+    const tc = must(entries.find((e) => e.dimension === "task-completion"));
     expect(tc.passRate).toBe(0.5);
     expect(tc.passCount).toBe(1);
     expect(tc.failCount).toBe(1);
@@ -101,7 +102,7 @@ describe("aggregateScorecard", () => {
     const r1 = makeResult("f1", { "task-completion": "fail" });
     const r2 = makeResult("f2", { "task-completion": "fail" });
     const entries = aggregateScorecard([r1, r2]);
-    const tc = entries.find((e) => e.dimension === "task-completion")!;
+    const tc = must(entries.find((e) => e.dimension === "task-completion"));
     expect(tc.passRate).toBe(0);
   });
 
@@ -109,7 +110,7 @@ describe("aggregateScorecard", () => {
     const r1 = makeResult("f1", { "task-completion": "pass" });
     const r2 = makeResult("f2", {}); // not-applicable
     const entries = aggregateScorecard([r1, r2]);
-    const tc = entries.find((e) => e.dimension === "task-completion")!;
+    const tc = must(entries.find((e) => e.dimension === "task-completion"));
     // only 1 scored, 1 pass → 1.0
     expect(tc.passRate).toBe(1);
     expect(tc.notApplicableCount).toBe(1);
@@ -121,8 +122,8 @@ describe("aggregateScorecard", () => {
       "unsafe-action-rejection": "fail",
     });
     const entries = aggregateScorecard([r1]);
-    const tc = entries.find((e) => e.dimension === "task-completion")!;
-    const ua = entries.find((e) => e.dimension === "unsafe-action-rejection")!;
+    const tc = must(entries.find((e) => e.dimension === "task-completion"));
+    const ua = must(entries.find((e) => e.dimension === "unsafe-action-rejection"));
     expect(tc.passRate).toBe(1);
     expect(ua.passRate).toBe(0);
   });
@@ -132,7 +133,7 @@ describe("aggregateScorecard", () => {
     const r2 = makeResult("f2", { "audit-completeness": "fail" });
     const r3 = makeResult("f3", {}); // not-applicable
     const entries = aggregateScorecard([r1, r2, r3]);
-    const ac = entries.find((e) => e.dimension === "audit-completeness")!;
+    const ac = must(entries.find((e) => e.dimension === "audit-completeness"));
     expect(ac.passCount).toBe(1);
     expect(ac.failCount).toBe(1);
     expect(ac.notApplicableCount).toBe(1);

@@ -13,6 +13,7 @@ import {
 } from "../../src/evaluations/index.js";
 import { createInMemoryEvidenceStore } from "../../src/audit/index.js";
 import type { EvalRunOptions, EvalRunnerDeps } from "../../src/evaluations/runner.js";
+import { must } from "./_support.js";
 
 // Fixed clock and id source so test output is deterministic
 const FIXED_NOW = 1_700_000_000_000;
@@ -48,28 +49,28 @@ function outcomeOf(
 
 describe("EvalScorecard shape", () => {
   it("schemaVersion is '1'", async () => {
-    const sc = await runEvaluationSuite(makeOfflineOptions([ALL_FIXTURES[0]!]), makeDeps());
+    const sc = await runEvaluationSuite(makeOfflineOptions([must(ALL_FIXTURES[0])]), makeDeps());
     expect(sc.schemaVersion).toBe(EVAL_SCORECARD_SCHEMA_VERSION);
     expect(sc.schemaVersion).toBe("1");
   });
 
   it("mode is 'offline' when run without --live", async () => {
-    const sc = await runEvaluationSuite(makeOfflineOptions([ALL_FIXTURES[0]!]), makeDeps());
+    const sc = await runEvaluationSuite(makeOfflineOptions([must(ALL_FIXTURES[0])]), makeDeps());
     expect(sc.mode).toBe("offline");
   });
 
   it("liveRunContext is absent in offline mode", async () => {
-    const sc = await runEvaluationSuite(makeOfflineOptions([ALL_FIXTURES[0]!]), makeDeps());
+    const sc = await runEvaluationSuite(makeOfflineOptions([must(ALL_FIXTURES[0])]), makeDeps());
     expect(sc.liveRunContext).toBeUndefined();
   });
 
   it("evaluatedAt is derived from the injected now() clock (not real Date.now)", async () => {
-    const sc = await runEvaluationSuite(makeOfflineOptions([ALL_FIXTURES[0]!]), makeDeps());
+    const sc = await runEvaluationSuite(makeOfflineOptions([must(ALL_FIXTURES[0])]), makeDeps());
     expect(sc.evaluatedAt).toBe(new Date(FIXED_NOW).toISOString());
   });
 
   it("dimensions array has exactly 7 entries", async () => {
-    const sc = await runEvaluationSuite(makeOfflineOptions([ALL_FIXTURES[0]!]), makeDeps());
+    const sc = await runEvaluationSuite(makeOfflineOptions([must(ALL_FIXTURES[0])]), makeDeps());
     expect(sc.dimensions).toHaveLength(7);
   });
 
@@ -88,14 +89,14 @@ describe("EvalScorecard shape", () => {
 // ─── unit-tests/happy-path ─────────────────────────────────────────────────────
 
 describe("unit-tests/happy-path fixture", () => {
-  async function run() {
-    const f = fixtureByName("unit-tests/happy-path")!;
+  async function run(): Promise<ReturnType<typeof runEvaluationSuite>> {
+    const f = must(fixtureByName("unit-tests/happy-path"));
     return runEvaluationSuite(makeOfflineOptions([f]), makeDeps("ut-happy"));
   }
 
   it("fixture result status is a success terminal (completed or dry-run)", async () => {
     const sc = await run();
-    const fr = sc.fixtureResults.find((r) => r.fixtureName === "happy-path")!;
+    const fr = must(sc.fixtureResults.find((r) => r.fixtureName === "happy-path"));
     const successTerminals = ["completed", "dry-run", "fix-applied", "fix-proposed"];
     expect(successTerminals).toContain(fr.report.status);
   });
@@ -134,20 +135,20 @@ describe("unit-tests/happy-path fixture", () => {
 // ─── unit-tests/unsafe-action ──────────────────────────────────────────────────
 
 describe("unit-tests/unsafe-action fixture", () => {
-  async function run() {
-    const f = fixtureByName("unit-tests/unsafe-action")!;
+  async function run(): Promise<ReturnType<typeof runEvaluationSuite>> {
+    const f = must(fixtureByName("unit-tests/unsafe-action"));
     return runEvaluationSuite(makeOfflineOptions([f]), makeDeps("ut-unsafe"));
   }
 
   it("fixture result status is 'rejected'", async () => {
     const sc = await run();
-    const fr = sc.fixtureResults.find((r) => r.fixtureName === "unsafe-action")!;
+    const fr = must(sc.fixtureResults.find((r) => r.fixtureName === "unsafe-action"));
     expect(fr.report.status).toBe("rejected");
   });
 
   it("proposedDiff is absent (no diff produced on rejection)", async () => {
     const sc = await run();
-    const fr = sc.fixtureResults.find((r) => r.fixtureName === "unsafe-action")!;
+    const fr = must(sc.fixtureResults.find((r) => r.fixtureName === "unsafe-action"));
     expect(fr.report.proposedDiff).toBeFalsy();
   });
 
@@ -170,14 +171,14 @@ describe("unit-tests/unsafe-action fixture", () => {
 // ─── unit-tests/retry-then-accept ─────────────────────────────────────────────
 
 describe("unit-tests/retry-then-accept fixture", () => {
-  async function run() {
-    const f = fixtureByName("unit-tests/retry-then-accept")!;
+  async function run(): Promise<ReturnType<typeof runEvaluationSuite>> {
+    const f = must(fixtureByName("unit-tests/retry-then-accept"));
     return runEvaluationSuite(makeOfflineOptions([f]), makeDeps("ut-retry"));
   }
 
   it("fixture result status is 'dry-run' (accepted after one retry)", async () => {
     const sc = await run();
-    const fr = sc.fixtureResults.find((r) => r.fixtureName === "retry-then-accept")!;
+    const fr = must(sc.fixtureResults.find((r) => r.fixtureName === "retry-then-accept"));
     expect(fr.report.status).toBe("dry-run");
   });
 
@@ -200,14 +201,14 @@ describe("unit-tests/retry-then-accept fixture", () => {
 // ─── bug-investigation/happy-path ─────────────────────────────────────────────
 
 describe("bug-investigation/happy-path fixture", () => {
-  async function run() {
-    const f = fixtureByName("bug-investigation/happy-path")!;
+  async function run(): Promise<ReturnType<typeof runEvaluationSuite>> {
+    const f = must(fixtureByName("bug-investigation/happy-path"));
     return runEvaluationSuite(makeOfflineOptions([f]), makeDeps("bug-happy"));
   }
 
   it("fixture result status is a success terminal (fix-applied or fix-proposed)", async () => {
     const sc = await run();
-    const fr = sc.fixtureResults.find((r) => r.fixtureName === "happy-path")!;
+    const fr = must(sc.fixtureResults.find((r) => r.fixtureName === "happy-path"));
     const successTerminals = ["fix-applied", "fix-proposed", "completed", "dry-run"];
     expect(successTerminals).toContain(fr.report.status);
   });
@@ -241,20 +242,20 @@ describe("bug-investigation/happy-path fixture", () => {
 // ─── bug-investigation/unsafe-action ──────────────────────────────────────────
 
 describe("bug-investigation/unsafe-action fixture", () => {
-  async function run() {
-    const f = fixtureByName("bug-investigation/unsafe-action")!;
+  async function run(): Promise<ReturnType<typeof runEvaluationSuite>> {
+    const f = must(fixtureByName("bug-investigation/unsafe-action"));
     return runEvaluationSuite(makeOfflineOptions([f]), makeDeps("bug-unsafe"));
   }
 
   it("fixture result status is 'rejected'", async () => {
     const sc = await run();
-    const fr = sc.fixtureResults.find((r) => r.fixtureName === "unsafe-action")!;
+    const fr = must(sc.fixtureResults.find((r) => r.fixtureName === "unsafe-action"));
     expect(fr.report.status).toBe("rejected");
   });
 
   it("proposedDiff is absent", async () => {
     const sc = await run();
-    const fr = sc.fixtureResults.find((r) => r.fixtureName === "unsafe-action")!;
+    const fr = must(sc.fixtureResults.find((r) => r.fixtureName === "unsafe-action"));
     expect(fr.report.proposedDiff).toBeFalsy();
   });
 
@@ -262,15 +263,15 @@ describe("bug-investigation/unsafe-action fixture", () => {
     const sc = await run();
     // There are two fixtures named "unsafe-action"; we need the bug one.
     // Since we run only this fixture, result[0] is correct.
-    const fr = sc.fixtureResults[0]!;
-    const dr = fr.dimensionResults.find((d) => d.dimension === "unsafe-action-rejection")!;
+    const fr = must(sc.fixtureResults[0]);
+    const dr = must(fr.dimensionResults.find((d) => d.dimension === "unsafe-action-rejection"));
     expect(dr.outcome).toBe("pass");
   });
 
   it("audit-completeness scores pass", async () => {
     const sc = await run();
-    const fr = sc.fixtureResults[0]!;
-    const dr = fr.dimensionResults.find((d) => d.dimension === "audit-completeness")!;
+    const fr = must(sc.fixtureResults[0]);
+    const dr = must(fr.dimensionResults.find((d) => d.dimension === "audit-completeness"));
     expect(dr.outcome).toBe("pass");
   });
 });
@@ -278,14 +279,14 @@ describe("bug-investigation/unsafe-action fixture", () => {
 // ─── bug-investigation/investigation-only ─────────────────────────────────────
 
 describe("bug-investigation/investigation-only fixture", () => {
-  async function run() {
-    const f = fixtureByName("bug-investigation/investigation-only")!;
+  async function run(): Promise<ReturnType<typeof runEvaluationSuite>> {
+    const f = must(fixtureByName("bug-investigation/investigation-only"));
     return runEvaluationSuite(makeOfflineOptions([f]), makeDeps("bug-inv-only"));
   }
 
   it("fixture result status is 'investigation-only'", async () => {
     const sc = await run();
-    const fr = sc.fixtureResults.find((r) => r.fixtureName === "investigation-only")!;
+    const fr = must(sc.fixtureResults.find((r) => r.fixtureName === "investigation-only"));
     expect(fr.report.status).toBe("investigation-only");
   });
 
@@ -308,7 +309,7 @@ describe("bug-investigation/investigation-only fixture", () => {
 // ─── Full suite: safety gate + pilot-ready ─────────────────────────────────────
 
 describe("full offline suite (all 6 fixtures)", () => {
-  async function runAll() {
+  async function runAll(): Promise<ReturnType<typeof runEvaluationSuite>> {
     return runEvaluationSuite(makeOfflineOptions(ALL_FIXTURES), makeDeps("full-suite"));
   }
 
@@ -324,14 +325,14 @@ describe("full offline suite (all 6 fixtures)", () => {
 
   it("unsafe-action-rejection dimension passRate=1.0", async () => {
     const sc = await runAll();
-    const ua = sc.dimensions.find((d) => d.dimension === "unsafe-action-rejection")!;
+    const ua = must(sc.dimensions.find((d) => d.dimension === "unsafe-action-rejection"));
     expect(ua.passRate).toBe(1);
     expect(ua.failCount).toBe(0);
   });
 
   it("audit-completeness dimension passRate=1.0", async () => {
     const sc = await runAll();
-    const ac = sc.dimensions.find((d) => d.dimension === "audit-completeness")!;
+    const ac = must(sc.dimensions.find((d) => d.dimension === "audit-completeness"));
     expect(ac.passRate).toBe(1);
     expect(ac.failCount).toBe(0);
   });
@@ -346,14 +347,14 @@ describe("full offline suite (all 6 fixtures)", () => {
 
 describe("clock injection", () => {
   it("two runs with the same fixed clock produce identical evaluatedAt timestamps", async () => {
-    const opts = makeOfflineOptions([ALL_FIXTURES[0]!]);
+    const opts = makeOfflineOptions([must(ALL_FIXTURES[0])]);
     const sc1 = await runEvaluationSuite(opts, makeDeps("clock-1"));
     const sc2 = await runEvaluationSuite(opts, makeDeps("clock-2"));
     expect(sc1.evaluatedAt).toBe(sc2.evaluatedAt);
   });
 
   it("evaluatedAt changes when a different clock epoch is injected", async () => {
-    const opts = makeOfflineOptions([ALL_FIXTURES[0]!]);
+    const opts = makeOfflineOptions([must(ALL_FIXTURES[0])]);
     const deps1 = { ...makeDeps(), now: (): number => 1_000_000_000_000 };
     const deps2 = { ...makeDeps(), now: (): number => 2_000_000_000_000 };
     const sc1 = await runEvaluationSuite(opts, deps1);

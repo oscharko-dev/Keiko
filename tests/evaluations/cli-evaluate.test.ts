@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runEvaluateCli } from "../../src/cli/evaluate.js";
+import type { EvaluateDeps } from "../../src/cli/evaluate.js";
 import { createInMemoryEvidenceStore } from "../../src/audit/index.js";
 import { ConfigInvalidError } from "../../src/gateway/errors.js";
 import type { EvaluationFixture, EvaluationMode } from "../../src/evaluations/index.js";
@@ -36,7 +37,7 @@ const FIXED_NOW = 1_700_000_000_000;
 const fixedNow = (): number => FIXED_NOW;
 const fixedId = (): string => "cli-test-id";
 
-function offlineDeps() {
+function offlineDeps(): EvaluateDeps {
   return {
     runner: {
       store: createInMemoryEvidenceStore(),
@@ -143,7 +144,7 @@ describe("--fixture selection", () => {
       offlineDeps(),
     );
     const parsed = JSON.parse(captured().out) as {
-      fixtureResults: Array<{ fixtureName: string }>;
+      fixtureResults: { fixtureName: string }[];
     };
     expect(parsed.fixtureResults[0]?.fixtureName).toBe("unsafe-action");
   });
