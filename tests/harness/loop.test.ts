@@ -232,6 +232,60 @@ describe("runLoop — limit breaches each map to their category", () => {
     expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_FAILURE_ATTEMPTS");
   });
 
+  it("maxCommandExecutions -> HARNESS_LIMIT_COMMAND_EXECUTIONS when a tool reports commandExecuted", async () => {
+    // A model that ALWAYS asks for one tool call; the tool reports commandExecuted:true so the
+    // executor increments commandExecutions until the (previously dead) guard trips on re-entry.
+    const { port } = scriptedModel([
+      response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "run_command")] }),
+    ]);
+    const commandTool: import("../../src/harness/ports.js").ToolPort = {
+      execute: (req) =>
+        Promise.resolve({
+          toolCallId: req.toolCallId,
+          output: "ran",
+          durationMs: 0,
+          commandExecuted: true,
+        }),
+      listTools: () => [{ name: "run_command", description: "run", parameters: {} }],
+    };
+    const { ctx, sink } = buildContext({
+      task: INVESTIGATE,
+      model: port,
+      tools: commandTool,
+      limits: { maxCommandExecutions: 1 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("limit-exceeded");
+    expect(failureCategory(sink.events())).toBe("HARNESS_LIMIT_COMMAND_EXECUTIONS");
+  });
+
+  it("commandExecuted:false never trips maxCommandExecutions", async () => {
+    const { port } = scriptedModel([
+      response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "read_file")] }),
+      response({ content: "--- a/x\n+++ b/x\n+fix" }),
+    ]);
+    const readTool: import("../../src/harness/ports.js").ToolPort = {
+      execute: (req) =>
+        Promise.resolve({
+          toolCallId: req.toolCallId,
+          output: "content",
+          durationMs: 0,
+          commandExecuted: false,
+        }),
+      listTools: () => [{ name: "read_file", description: "read", parameters: {} }],
+    };
+    const { ctx, sink } = buildContext({
+      task: INVESTIGATE,
+      model: port,
+      tools: readTool,
+      limits: { maxCommandExecutions: 1 },
+    });
+    const outcome = await runLoop(ctx);
+    expect(outcome).toBe("completed");
+    expect(ctx.counters.commandExecutions).toBe(0);
+    void sink;
+  });
+
   it("non-retryable model error -> failed with HARNESS_MODEL_ERROR", async () => {
     const { AuthenticationError } = await import("../../src/gateway/errors.js");
     const { port } = scriptedModel([new AuthenticationError("nope")]);

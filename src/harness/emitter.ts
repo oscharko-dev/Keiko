@@ -30,8 +30,9 @@ function redactSensitive(event: HarnessEvent): HarnessEvent {
     case "patch:proposed":
       return { ...event, diff: redact(event.diff) };
     case "run:completed":
-      // WHY: report and patchDiff carry full model output — non-provider-config secret patterns
-      // (issue #6) are out of Wave-1 scope; we redact the known shapes here.
+      // WHY: report and patchDiff carry full model output — redact() now scrubs the common
+      // third-party credential shapes (GitHub/AWS/Slack/Google/PEM) added for issue #6 in
+      // addition to the OpenAI/Bearer shapes, so known secret formats never reach a sink.
       return {
         ...event,
         report: redact(event.report),

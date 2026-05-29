@@ -21,6 +21,9 @@ export interface ToolCallResult {
   readonly toolCallId: string;
   readonly output: string;
   readonly durationMs: number;
+  // True only for tools that spawn a subprocess (run_command). The executor counts these
+  // against maxCommandExecutions; absence/false leaves the command budget untouched (issue #6).
+  readonly commandExecuted?: boolean | undefined;
 }
 
 export interface ToolPort {

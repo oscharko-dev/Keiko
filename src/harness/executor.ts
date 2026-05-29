@@ -104,6 +104,9 @@ async function runOneTool(ctx: RunContext, call: NormalizedToolCall): Promise<Ch
       arguments: call.arguments,
       signal: ctx.signal,
     });
+    if (result.commandExecuted === true) {
+      ctx.counters.commandExecutions += 1;
+    }
     ctx.emitter.emit({
       type: "tool:call:completed",
       toolName: call.name,

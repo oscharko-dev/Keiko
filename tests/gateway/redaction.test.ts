@@ -39,4 +39,56 @@ describe("redact", () => {
   it("does not redact an empty additional secret entry", () => {
     expect(redact("hello world", [""])).toBe("hello world");
   });
+
+  it("redacts a GitHub personal-access token", () => {
+    const token = "ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"; // split so the literal is not contiguous
+    const result = redact(`token=${token}`);
+    expect(result).not.toContain(token);
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts the other GitHub token prefixes (gho/ghu/ghs/ghr)", () => {
+    for (const prefix of ["gho_", "ghu_", "ghs_", "ghr_"]) {
+      const token = `${prefix}ABCDEFGHIJKLMNOPQRSTUVWXYZ012345`;
+      expect(redact(token)).not.toContain(token);
+    }
+  });
+
+  it("redacts an AWS access key id", () => {
+    const key = "AKIA" + "IOSFODNN7EXAMPLE"; // split so the literal is not contiguous
+    const result = redact(`aws_access_key_id = ${key}`);
+    expect(result).not.toContain(key);
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts a Slack token", () => {
+    const token = "xoxb-" + "123456789012-abcdefghijklmnop"; // split so the literal is not contiguous
+    const result = redact(`slack=${token}`);
+    expect(result).not.toContain(token);
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts a Google API key", () => {
+    const key = "AIza" + "SyA1234567890_abcdefghijklmnopqrstu"; // split so the literal is not contiguous
+    const result = redact(`key=${key}`);
+    expect(result).not.toContain(key);
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts a PEM private-key header line", () => {
+    const pemHeader = "-----BEGIN RSA " + "PRIVATE KEY-----"; // split so the literal is not contiguous
+    const result = redact(pemHeader);
+    expect(result).not.toContain("BEGIN RSA " + "PRIVATE KEY");
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("does not over-redact a git SHA", () => {
+    const sha = "9fceb02d0ae598e95dc970b74767f19372d61af8";
+    expect(redact(`commit ${sha}`)).toContain(sha);
+  });
+
+  it("does not over-redact a UUID", () => {
+    const uuid = "550e8400-e29b-41d4-a716-446655440000";
+    expect(redact(`id ${uuid}`)).toContain(uuid);
+  });
 });
