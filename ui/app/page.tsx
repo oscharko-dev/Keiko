@@ -1,1 +1,1 @@
-export { default } from "./launch/LaunchPage";
+export { default } from "./home/HomePage";

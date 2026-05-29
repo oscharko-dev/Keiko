@@ -31,7 +31,7 @@ export default function RootLayout({ children }: { children: ReactNode }): React
               <ul className="flex gap-6 text-sm">
                 <li>
                   <Link
-                    href="/"
+                    href="/launch"
                     className="text-ink-muted hover:text-ink"
                   >
                     Launch

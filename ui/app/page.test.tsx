@@ -1,50 +1,51 @@
 /**
- * page.tsx re-exports LaunchPage — tests are co-located in LaunchPage.test.tsx.
- * This file retains the smoke-level export test so the original test file stays valid.
+ * page.tsx now exports the Home dashboard (HomePage).
+ * Tests cover: product heading, surface nav cards, quick-start section, axe.
  */
-import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
 import { axe } from "jest-axe";
 import HomePage from "./page";
 
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: vi.fn() }),
-}));
-
-vi.mock("@/lib/api", () => ({
-  fetchWorkflows: vi.fn().mockResolvedValue({
-    descriptors: [],
-    explainPlan: { inputs: [] },
-  }),
-  fetchModels: vi.fn().mockResolvedValue({ models: [] }),
-  startRun: vi.fn(),
-  ApiError: class ApiError extends Error {
-    code: string;
-    status: number;
-    constructor(code: string, msg: string, status: number) {
-      super(msg);
-      this.code = code;
-      this.status = status;
-    }
-  },
-}));
-
-describe("HomePage (LaunchPage re-export)", () => {
-  it("renders the launch workflow heading", async () => {
+describe("HomePage (home dashboard)", () => {
+  it("renders the Keiko product heading", () => {
     render(<HomePage />);
-    await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { level: 1, name: /launch workflow/i }),
-      ).toBeInTheDocument();
-    });
+    expect(
+      screen.getByRole("heading", { level: 1, name: /keiko developer-assist ui/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders surface navigation cards with links to all primary areas", () => {
+    render(<HomePage />);
+    expect(screen.getByRole("link", { name: /open the workflow launch surface/i })).toHaveAttribute(
+      "href",
+      "/launch",
+    );
+    expect(screen.getByRole("link", { name: /open the evidence browser/i })).toHaveAttribute(
+      "href",
+      "/evidence",
+    );
+    expect(
+      screen.getByRole("link", { name: /open the configuration and model inspector/i }),
+    ).toHaveAttribute("href", "/config");
+  });
+
+  it("surface nav landmark is present and keyboard-reachable", () => {
+    render(<HomePage />);
+    const nav = screen.getByRole("navigation", { name: /surface navigation/i });
+    expect(nav).toBeInTheDocument();
+    // Links inside the nav are the primary keyboard targets
+    const links = screen.getAllByRole("link");
+    expect(links.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("renders the quick-start section", () => {
+    render(<HomePage />);
+    expect(screen.getByRole("heading", { name: /quick start/i })).toBeInTheDocument();
   });
 
   it("has no axe-detectable accessibility violations", async () => {
     const { container } = render(<HomePage />);
-    await waitFor(() => {
-      // Wait for async loading state to settle
-      expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
-    });
     const results = await axe(container);
     expect(results).toHaveNoViolations();
   });
