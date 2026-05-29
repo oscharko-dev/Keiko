@@ -91,6 +91,16 @@ describe("applyRetention — maxTotalBytes", () => {
     applyRetention(store, { maxTotalBytes: oldBytes + 1 });
     expect(store.list()).toEqual(["run-new"]);
   });
+
+  it("always keeps the newest manifest even if it alone exceeds the byte cap", () => {
+    const store = storeWith([
+      ["run-old", 100],
+      ["run-new", 200],
+    ]);
+    // A cap of 1 byte is below even a single manifest; the newest must survive, the oldest is dropped.
+    applyRetention(store, { maxTotalBytes: 1 });
+    expect(store.list()).toEqual(["run-new"]);
+  });
 });
 
 describe("applyRetention — robustness", () => {

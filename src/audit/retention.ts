@@ -63,9 +63,16 @@ function overByteCap(sorted: readonly Candidate[], maxTotalBytes: number): reado
   const doomed: string[] = [];
   let running = 0;
   // Walk newest-first, keeping manifests until the cap is reached; the rest (oldest) are deleted.
-  for (const candidate of sorted) {
+  // The newest manifest (index 0) is ALWAYS kept even if it alone exceeds the cap — retention must
+  // never delete the just-written run, and "delete oldest until under the cap" cannot apply to a
+  // single most-recent file.
+  for (let i = 0; i < sorted.length; i += 1) {
+    const candidate = sorted[i];
+    if (candidate === undefined) {
+      continue;
+    }
     running += candidate.bytes;
-    if (running > maxTotalBytes) {
+    if (i > 0 && running > maxTotalBytes) {
       doomed.push(candidate.runId);
     }
   }
