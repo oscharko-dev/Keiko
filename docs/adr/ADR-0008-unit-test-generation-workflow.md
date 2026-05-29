@@ -2,7 +2,14 @@
 
 ## Status
 
-Proposed
+Accepted
+
+Implemented in `src/workflows/unit-tests/**` (issue #8). Two refinements landed during
+implementation and are reflected below: (1) D3 adds a `proposedDiff` field so the report carries
+the reviewable unified diff itself (not only the `renderDryRun` validation summary), redacted; and
+(2) the production-code guard (D6) rejects any path containing a `..` segment or a leading slash
+fail-closed, because such a path lexically appears under a `testDir` yet `resolveWithinWorkspace`
+collapses it to a production file outside that directory.
 
 ## Context
 
@@ -155,8 +162,9 @@ of truth for all defaults.
 ### D3 — Workflow report schema (`UnitTestWorkflowReport`)
 
 Plain JSON-serializable. All prose (coveredBehavior, knownGaps, nextActions) is redacted
-via `redact()` before assembly. The diff preview (`dryRunPreview`) is redacted before
-assembly. This is the stable contract consumed by issue #10 (audit ledger) and issue #13 (UI).
+via `redact()` before assembly. The diff preview (`dryRunPreview`) and the proposed diff
+(`proposedDiff`) are redacted before assembly. This is the stable contract consumed by issue #10
+(audit ledger) and issue #13 (UI).
 
 ```typescript
 // src/workflows/unit-tests/types.ts
@@ -183,6 +191,15 @@ export interface UnitTestWorkflowReport {
    * Absent when the model produced no valid patch after all retries.
    */
   readonly dryRunPreview?: string | undefined;
+
+  /**
+   * The model's proposed unified diff (redacted) — the reviewable test CODE itself. `dryRunPreview`
+   * from #6 `renderDryRun` is only a validation SUMMARY ("PATCH OK — 1 file, 20 changed lines"); for
+   * the tests to be reviewable (AC #4) and for dry-run to "produce a diff" (AC #6) the report must
+   * carry the diff. Present whenever a parseable, in-scope patch was produced; absent on rejection
+   * or cancellation. Redacted via `redact()` before assembly, like all other content fields.
+   */
+  readonly proposedDiff?: string | undefined;
 
   /** Patch files that were added or modified. Empty on rejection or dry-run with no valid patch. */
   readonly addedTestFiles: readonly AddedTestFile[];

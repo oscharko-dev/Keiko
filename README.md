@@ -116,6 +116,60 @@ const summary = buildWorkspaceSummary(workspace);
 console.log(summary.name, summary.counts);
 ```
 
+## Unit-test generation
+
+Keiko generates a reviewable unit-test patch for existing TypeScript code. It detects the
+project's test framework and naming conventions, builds a redacted context pack, calls the model
+once (with bounded retries on an invalid or out-of-scope diff), validates the diff through the safe
+patch boundary, and — by default — stops at a reviewable diff without touching any file. A
+production-code guard rejects any patch that would modify a non-test path, so a prompt-injected
+diff cannot reach your source files (see ADR-0008 D6).
+
+**`keiko gen-tests` (dry-run by default):**
+
+```bash
+keiko gen-tests --file src/add.ts                    # propose tests for a file (dry-run)
+keiko gen-tests --file src/add.ts --function add     # focus on one function
+keiko gen-tests --dir src/math                        # module-level generation
+keiko gen-tests --changed src/a.ts,src/b.ts           # a changed-file set
+keiko gen-tests --file src/add.ts --apply             # write the tests AND run verification
+keiko gen-tests --file src/add.ts --json              # emit the full report as JSON
+keiko gen-tests --file src/add.ts --model MODEL_ID    # pick a registered model
+keiko gen-tests --file src/add.ts --dir-root ./proj   # workspace root override (defaults to cwd)
+```
+
+Exactly one of `--file` or `--dir` is required; `--changed` composes with either. The text output
+prints the proposed unified diff and the patch validation summary so you can review the generated
+tests in the terminal; `--apply` writes them and runs targeted verification through the safe tool
+and verification layers. Exit `0` on a successful dry-run or apply, `1` on a rejected/cancelled/
+failed run or a workspace error, `2` on a usage error. The model provider is read from
+`keiko.config.json` or the gateway environment variables — never from CLI flags.
+
+SDK usage:
+
+```ts
+import { generateUnitTests, type UnitTestWorkflowReport } from "keiko";
+import { GatewayModelPort, Gateway, loadConfigFromFile } from "keiko";
+
+const config = loadConfigFromFile("./keiko.config.json", process.env);
+const model = new GatewayModelPort(new Gateway(config));
+
+const report: UnitTestWorkflowReport = await generateUnitTests(
+  {
+    workspaceRoot: ".",
+    target: { kind: "file", filePath: "src/add.ts" },
+    modelId: config.providers[0].modelId,
+  },
+  { model }, // apply defaults to false: a reviewable diff, no files written
+);
+console.log(report.status, report.proposedDiff);
+```
+
+The returned `UnitTestWorkflowReport` is plain JSON: it carries the proposed diff, the validation
+preview, estimated test counts, model-generated covered-behavior / known-gaps prose, next actions,
+and (in apply mode) a verification summary — all redacted. `UNIT_TEST_WORKFLOW_DESCRIPTOR` exposes
+the workflow's inputs and capabilities for a UI to render without knowing the implementation.
+
 ## Development
 
 ```bash
