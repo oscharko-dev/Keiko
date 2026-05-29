@@ -40,11 +40,16 @@ See [ADR-0005](adr/ADR-0005-repository-context-and-workspace-access.md).
 
 The tool layer exposes two capabilities: a command runner and a patch applier. The command runner is bounded on several axes.
 
-- **Allowlist, not denylist.** Only listed executables run; the first token of every command is checked before anything is spawned. The Wave 1 allowlist is `npm` (subcommands `test`, `run`, `ci`, `install`), `node`, `git` (subcommands `status`, `diff`, `rev-parse`, `ls-files`), `tsc`, `vitest`, `eslint`, and `prettier`. Anything else is rejected.
+- **Deny-by-default executable rules.** Only four executables can run, and the executable name is matched by `basename` so a path cannot disguise it. The frozen `DEFAULT_COMMAND_RULES` are:
+  - `node` and `npx` — **unrestricted** (see the honest limits below).
+  - `npm` — a denylist that rejects account-, registry-, and shell-escaping subcommands (`publish`, `unpublish`, `login`, `logout`, `adduser`, `token`, `version`, `deprecate`, `owner`, `access`, `star`, `profile`, `exec`, `x`); other subcommands (such as `run`, `test`, `ci`, `install`) are allowed.
+  - `git` — a read-only allowlist (`status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`, `describe`, `blame`, `cat-file`); mutating subcommands such as `push`, `reset`, `checkout`, `commit`, and `merge` are denied.
+  - Any other executable is rejected before it is spawned. Operators can narrow the rules further via configuration. The project's own gates (lint, typecheck, test, build) run _through_ `npm run`, so they need no separate rule.
 - **No shell.** Commands are spawned directly, with no shell interpretation, so quoting and metacharacters cannot inject a second command.
-- **Ephemeral HOME.** Each command runs with a temporary HOME, so user dotfiles and credentials are not visible to it.
-- **Resource bounds.** A wall-clock timeout, an output cap, and a per-run command-count ceiling.
-- **Path containment and symlink gate.** Every path argument is resolved and checked to remain within the workspace (the [ADR-0005](adr/ADR-0005-repository-context-and-workspace-access.md) boundary); a path whose real path escapes the workspace is rejected before the command runs.
+- **Ephemeral HOME.** Each command runs with `HOME` (and `USERPROFILE`) redirected to a per-run empty temporary directory, so a home-directory credential lookup (`~/.npmrc`, `~/.git-credentials`, `~/.aws/…`) resolves to nothing.
+- **Environment name allowlist.** The child receives only a frozen allowlist of environment variable names copied from the parent, never a spread of the full environment.
+- **Resource bounds.** A wall-clock timeout, an output cap, and a per-run command-execution ceiling.
+- **Workspace-rooted working directory.** Commands run with their working directory set to the workspace root. The realpath/symlink write gate is enforced by the patch applier (below) and by workspace discovery ([ADR-0005](adr/ADR-0005-repository-context-and-workspace-access.md)); the command runner itself does not constrain an unrestricted `node` process, which is why `node`/`npx` are called out as arbitrary code execution.
 
 See [ADR-0006](adr/ADR-0006-safe-tool-execution-and-sandbox-boundary.md).
 
