@@ -5,7 +5,7 @@
 // is on. Every report shape is plain JSON-serializable so the #10 audit ledger can persist it.
 
 import type { ModelPort } from "../../harness/ports.js";
-import type { SpawnFn } from "../../tools/index.js";
+import type { SpawnFn, WorkspaceWriter } from "../../tools/index.js";
 import type { TestFramework, WorkspaceFs } from "../../workspace/index.js";
 import type { VerificationAuditSummary } from "../../verification/index.js";
 import type { WorkflowEventSink } from "./events.js";
@@ -82,6 +82,9 @@ export interface UnitTestWorkflowDeps {
   readonly model: ModelPort;
   // Workspace filesystem. Defaults to nodeWorkspaceFs.
   readonly fs?: WorkspaceFs | undefined;
+  // Filesystem WRITE port used by applyPatch in apply mode. Defaults to nodeWorkspaceWriter.
+  // Injected as a recording writer in unit tests to assert write behaviour without touching disk.
+  readonly writer?: WorkspaceWriter | undefined;
   // Spawn function for runCommand / runVerification. Defaults to nodeSpawnFn.
   readonly spawn?: SpawnFn | undefined;
   // Monotonic clock. Defaults to Date.now.
