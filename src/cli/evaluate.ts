@@ -174,7 +174,9 @@ async function runSuite(
         fixtures,
         ...(parsed.model === undefined ? {} : { modelIdOverride: parsed.model }),
       },
-      { env, ...deps.runner },
+      // Provide Date.now as the default wall-clock so a real `keiko evaluate` prints the actual
+      // current time. Tests override this via deps.runner.now for deterministic evaluatedAt.
+      { env, now: Date.now, ...deps.runner },
     );
     emit(scorecard, parsed, io, env);
     return exitCodeFor(scorecard);
