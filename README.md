@@ -181,8 +181,8 @@ npm test           # run the unit test suite
 ```
 
 All seven required CI checks must pass before a change can merge into `dev`. See
-[CONTRIBUTING.md](CONTRIBUTING.md) and [docs/adr/](docs/adr/) for the delivery standard and architecture
-decisions.
+[CONTRIBUTING.md](CONTRIBUTING.md), [docs/adr/](docs/adr/) for the delivery standard and architecture
+decisions, and [docs/ui-runbook.md](docs/ui-runbook.md) for Wave 1 UI operations.
 
 ## License
 
