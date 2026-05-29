@@ -125,14 +125,24 @@ function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: strin
       report,
       appliable: unitTestAppliable(ctx.request, report),
     }));
-    return { result, cancel: (reason?: string): void => controller.abort(reason) };
+    return {
+    result,
+    cancel: (reason?: string): void => {
+      controller.abort(reason);
+    },
+  };
   }
   const result = investigateBug(bugInput(ctx.request), commonDeps).then((report) => ({
     status: bugStatusToRun(report.status),
     report,
     appliable: bugAppliable(ctx.request, report),
   }));
-  return { result, cancel: (reason?: string): void => controller.abort(reason) };
+  return {
+    result,
+    cancel: (reason?: string): void => {
+      controller.abort(reason);
+    },
+  };
 }
 
 // Starts an explain-plan harness run. createSession returns the runId/fingerprint synchronously and
@@ -155,7 +165,12 @@ function dispatchExplain(
     }),
   );
   return {
-    dispatched: { result, cancel: (reason?: string): void => session.cancel(reason) },
+    dispatched: {
+      result,
+      cancel: (reason?: string): void => {
+        session.cancel(reason);
+      },
+    },
     runId: session.runId,
     fingerprint: session.fingerprint,
   };
