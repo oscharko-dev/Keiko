@@ -132,26 +132,37 @@ export function dryRunReport(
   });
 }
 
+// `applied` is set ONLY on a post-apply abort: the patch is already on disk, so the report (and the
+// #10 ledger record) must reflect that (patchApplied: true) rather than hard-coding false. A
+// pre-apply abort passes applied === undefined and stays patchApplied: false.
 export function cancelledReport(
   state: BugRunState,
   loop: BugModelLoopResult,
   accepted: AcceptedBugPatch | undefined,
   evidence: FailureEvidence,
+  applied?: { readonly changedFiles: readonly string[] },
 ): BugInvestigationReport {
+  const nextActions =
+    applied === undefined
+      ? ["The workflow was cancelled before completion"]
+      : [
+          `The fix was applied to ${applied.changedFiles[0] ?? "disk"} but the workflow was cancelled before verification completed`,
+          "Run `keiko verify` to confirm the suite",
+        ];
   return assembleBugReport({
     status: "cancelled",
     modelId: state.input.modelId,
     durationMs: state.now() - state.startedAt,
     patchFiles: accepted?.validation.files ?? [],
     patchValidates: accepted !== undefined,
-    patchApplied: false,
+    patchApplied: applied !== undefined,
     verification: undefined,
     failureFrames: evidence.frames,
     hypothesis: accepted?.hypothesis ?? EMPTY_HYPOTHESIS,
     proposedDiff: accepted?.diff,
     dryRunPreview: accepted === undefined ? undefined : renderDryRun(accepted.validation),
     verificationSkipReason: "verification skipped: cancelled",
-    nextActions: ["The workflow was cancelled before completion"],
+    nextActions,
     modelCallCount: loop.modelCallCount,
     patchRetryCount: loop.patchRetryCount,
   });
@@ -202,7 +213,11 @@ async function applyAndVerify(
     deleted: applyResult.deleted.length,
   });
   if (state.signal.aborted) {
-    return cancelledReport(state, loop, accepted, evidence);
+    // Post-apply abort: the patch is already on disk, so the report must reflect patchApplied: true
+    // (M1) — the #10 ledger record must match the real filesystem state.
+    return cancelledReport(state, loop, accepted, evidence, {
+      changedFiles: applyResult.changedFiles,
+    });
   }
   const verification = await runBugVerification(state, workspace, accepted.validation.files, fs);
   return assembleBugReport({

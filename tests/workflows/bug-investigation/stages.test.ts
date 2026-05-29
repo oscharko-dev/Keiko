@@ -74,4 +74,27 @@ describe("terminal stages via investigateBug", () => {
     expect(writer.writes().length).toBeGreaterThan(0);
     expect(report.verificationSkipReason).toBeDefined();
   });
+
+  it("reports patchApplied: true when cancelled AFTER apply (M1 — ledger matches disk)", async () => {
+    // The signal is not aborted when finishPipeline checks it, so applyAndVerify runs; the writer
+    // aborts mid-apply so the post-apply `signal.aborted` check fires. The patch is on disk, so the
+    // cancelled report must reflect patchApplied: true (not the pre-apply hard-coded false).
+    const controller = new AbortController();
+    const base = recordingWriter();
+    const writer = {
+      ...base,
+      writeFileUtf8: (p: string, c: string): void => {
+        base.writeFileUtf8(p, c);
+        controller.abort();
+      },
+    };
+    const report = await investigateBug(
+      input({ apply: true }),
+      deps({ writer, signal: controller.signal }),
+    );
+    expect(report.status).toBe("cancelled");
+    expect(report.verified.patchApplied).toBe(true);
+    expect(base.writes().length).toBeGreaterThan(0);
+    expect(report.nextActions.some((a) => a.includes("applied"))).toBe(true);
+  });
 });
