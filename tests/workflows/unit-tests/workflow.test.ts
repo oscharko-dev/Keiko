@@ -4,6 +4,7 @@ import type {
   UnitTestWorkflowDeps,
   UnitTestWorkflowInput,
 } from "../../../src/workflows/unit-tests/types.js";
+import { SKIP_UNRESOLVED } from "../../../src/workflows/unit-tests/verify-stage.js";
 import { memFs } from "../../workspace/_memfs.js";
 import { recordingSink, recordingWriter, response, scriptedModel } from "./_support.js";
 
@@ -118,7 +119,11 @@ describe("generateUnitTests — production-code guard (AC #9, D6)", () => {
     ]);
     const report = await generateUnitTests(input(), deps(model.port));
     expect(report.status).toBe("rejected");
-    expect(report.patchRetryCount).toBeGreaterThan(0);
+    // T1: exact ceiling assertions (maxModelCalls=3, maxRetries=2, all-rejected).
+    // Loop exits when modelCallCount reaches 3 (ceiling) after 3 calls and 3 incremented retries.
+    // Mutating `<=` → `<` in model-loop.ts yields modelCallCount=2, so the ===3 assertion flips.
+    expect(report.modelCallCount).toBe(3);
+    expect(report.patchRetryCount).toBe(3);
     expect(report.addedTestFiles).toHaveLength(0);
     expect(report.proposedDiff).toBeUndefined();
   });
@@ -173,5 +178,27 @@ describe("generateUnitTests — limits & lifecycle", () => {
     const report = await generateUnitTests(input(), deps(model.port));
     expect(report.status).toBe("failed");
     expect(report.addedTestFiles).toHaveLength(0);
+  });
+});
+
+describe("generateUnitTests — apply mode verification skip (T2)", () => {
+  it("skips verification and records SKIP_UNRESOLVED when testFramework is unknown", async () => {
+    // Package.json with no vitest/jest/mocha → testFramework === "unknown"
+    const unknownFs = memFs(ROOT, {
+      "package.json": JSON.stringify({ name: "no-framework", scripts: { test: "echo ok" } }),
+      "src/add.ts": "export const add = (a: number, b: number): number => a + b;",
+    });
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const writer = recordingWriter();
+    const report = await generateUnitTests(input({ apply: true }), {
+      model: model.port,
+      fs: unknownFs,
+      writer,
+      now: () => 1000,
+      idSource: () => "run-1",
+    });
+    expect(report.status).toBe("completed");
+    expect(report.verificationSummary).toBeUndefined();
+    expect(report.verificationSkipReason).toBe(SKIP_UNRESOLVED);
   });
 });

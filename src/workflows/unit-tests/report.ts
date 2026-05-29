@@ -1,9 +1,9 @@
 // Report assembly and Markdown rendering (ADR-0008 D3, steering note A). assembleReport composes
 // the JSON-serializable UnitTestWorkflowReport from pipeline stage outputs; renderMarkdownReport
 // produces the CLI text path. ALL prose (coveredBehavior, knownGaps, nextActions), the dry-run
-// preview, and the proposed diff are redacted via redact() here so nothing the report carries can
-// leak a secret — defence in depth on top of the redaction already applied upstream. Pure: no IO,
-// no clock; the caller injects durationMs and counters.
+// preview, the proposed diff, verificationSkipReason, and addedTestFiles[].path are redacted via
+// redact() here so nothing the report carries can leak a secret — defence in depth on top of the
+// redaction already applied upstream. Pure: no IO, no clock; the caller injects durationMs and counters.
 
 import { redact } from "../../gateway/redaction.js";
 import type { PatchFileChange } from "../../tools/index.js";

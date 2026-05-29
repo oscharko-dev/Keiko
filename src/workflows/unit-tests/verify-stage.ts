@@ -19,7 +19,7 @@ import {
 import type { RunState } from "./internal.js";
 import type { UnitTestTarget } from "./types.js";
 
-const SKIP_UNRESOLVED = "verification skipped: framework unknown or no test files resolved";
+export const SKIP_UNRESOLVED = "verification skipped: framework unknown or no test files resolved";
 
 // The source files the target points at — passed to resolveTargetedTests so it can find the
 // just-created sibling/mirrored test (steering note C). Test files are NOT passed here.
