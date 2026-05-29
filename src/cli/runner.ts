@@ -5,6 +5,7 @@ import { runVerifyCli } from "./verify.js";
 import { runGenTestsCli } from "./gen-tests.js";
 import { runInvestigateCli } from "./investigate.js";
 import { runEvidenceCli } from "./evidence.js";
+import { runEvaluateCli } from "./evaluate.js";
 import { runUiCli } from "./ui.js";
 import type { EnvSource } from "../gateway/config.js";
 import { SDK_VERSION } from "../sdk/index.js";
@@ -30,6 +31,7 @@ Usage:
   keiko gen-tests [OPTIONS] Generate a reviewable unit-test patch (dry-run by default).
   keiko investigate [OPTIONS] Investigate a bug and propose a fix + regression test (dry-run by default).
   keiko evidence <list|show> Inspect redacted evidence manifests written by \`keiko run\`.
+  keiko evaluate [OPTIONS]     Run the evaluation harness (offline by default; --live for live model).
   keiko ui [OPTIONS]       Launch the local UI on 127.0.0.1 and print its URL.
 
 Exit codes:
@@ -65,6 +67,9 @@ function dispatchCommand(
   }
   if (name === "evidence") {
     return runEvidenceCli(rest, io);
+  }
+  if (name === "evaluate") {
+    return runEvaluateCli(rest, io, env, {});
   }
   if (name === "ui") {
     return runUiCli(rest, io, env);

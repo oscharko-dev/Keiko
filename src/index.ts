@@ -106,3 +106,25 @@ export {
   type EvidenceUsageTotals,
   type RetentionPolicy,
 } from "./audit/index.js";
+
+// Wave 1 evaluation harness (ADR-0012 D11). Exported explicitly (not via `export *`) to keep the
+// public surface auditable, matching the workflow/audit precedent above. None of these names
+// collides with an existing root export.
+export {
+  runEvaluationSuite,
+  createScriptedModelPort,
+  EVAL_SCORECARD_SCHEMA_VERSION,
+  type ScriptedModelPort,
+  type EvalScorecard,
+  type EvaluationFixture,
+  type EvaluationDimension,
+  type EvaluationMode,
+  type DimensionResult,
+  type DimensionOutcome,
+  type ScorecardEntry,
+  type ScorecardSummary,
+  type SurfaceParityResult,
+  type FixtureRunResult,
+  type FixtureOracle,
+  type WorkflowKind,
+} from "./evaluations/index.js";

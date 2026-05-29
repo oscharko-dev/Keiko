@@ -148,3 +148,26 @@ export {
   type EvidenceUsageTotals,
   type RetentionPolicy,
 } from "../audit/index.js";
+
+// Wave 1 evaluation harness (ADR-0012 D11). The deterministic offline runner, the product-code
+// scripted-model replay port, and the versioned scorecard schema, exported via an explicit named
+// block (no `export *`). ScriptedModelPort is surfaced so external callers can build replay tooling
+// without the full runner. No name collides with an existing SDK export.
+export {
+  runEvaluationSuite,
+  createScriptedModelPort,
+  EVAL_SCORECARD_SCHEMA_VERSION,
+  type ScriptedModelPort,
+  type EvalScorecard,
+  type EvaluationFixture,
+  type EvaluationDimension,
+  type EvaluationMode,
+  type DimensionResult,
+  type DimensionOutcome,
+  type ScorecardEntry,
+  type ScorecardSummary,
+  type SurfaceParityResult,
+  type FixtureRunResult,
+  type FixtureOracle,
+  type WorkflowKind,
+} from "../evaluations/index.js";
