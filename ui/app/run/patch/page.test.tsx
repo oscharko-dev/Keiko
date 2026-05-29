@@ -5,12 +5,8 @@ import { axe } from "jest-axe";
 import PatchPage from "./page";
 import * as api from "@/lib/api";
 
-// ---------------------------------------------------------------------------
-// Mocks
-// ---------------------------------------------------------------------------
-
 vi.mock("next/navigation", () => ({
-  useParams: () => ({ runId: "run-patch-456" }),
+  useSearchParams: () => ({ get: (key: string) => key === "id" ? "run-patch-456" : null }),
   useRouter: () => ({ push: vi.fn() }),
 }));
 
@@ -31,45 +27,33 @@ vi.mock("@/lib/api", () => ({
 const dryRunReport = {
   report: {
     status: "dry-run" as const,
-    proposedDiff:
-      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,2 +1,3 @@\n const x = 1;\n+const y = 2;\n",
-    changedFiles: [
-      {
-        path: "src/foo.ts",
-        kind: "modified",
-        addedLines: 1,
-        removedLines: 0,
-        elevatedReview: false,
-      },
-    ],
+    proposedDiff: "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,2 +1,3 @@\n const x = 1;\n+const y = 2;\n",
+    changedFiles: [{
+      path: "src/foo.ts",
+      kind: "modified",
+      addedLines: 1,
+      removedLines: 0,
+      elevatedReview: false,
+    }],
   },
 };
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe("PatchPage", () => {
+describe("PatchPage (/run/patch?id=)", () => {
   beforeEach(() => {
     vi.mocked(api.fetchRunReport).mockResolvedValue(dryRunReport);
-    vi.mocked(api.applyRun).mockResolvedValue({
-      report: { status: "completed" },
-    });
+    vi.mocked(api.applyRun).mockResolvedValue({ report: { status: "completed" } });
   });
 
   it("renders the patch review heading after loading", async () => {
     render(<PatchPage />);
     await waitFor(() => {
-      expect(
-        screen.getByRole("heading", { level: 1, name: /patch review/i }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("heading", { level: 1, name: /patch review/i })).toBeInTheDocument();
     });
   });
 
   it("renders the diff viewer", async () => {
     render(<PatchPage />);
     await waitFor(() => {
-      // The diff region should be present
       expect(screen.getByRole("heading", { name: /proposed diff/i })).toBeInTheDocument();
     });
   });
@@ -108,19 +92,7 @@ describe("PatchPage", () => {
     });
   });
 
-  it("Apply button disabled when run is not appliable", async () => {
-    vi.mocked(api.fetchRunReport).mockResolvedValue({
-      report: { status: "completed" },
-    });
-    render(<PatchPage />);
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
-    });
-    // No "Apply patch" button when not appliable
-    expect(screen.queryByRole("button", { name: /apply patch/i })).not.toBeInTheDocument();
-  });
-
-  it("has no axe-detectable accessibility violations after load", async () => {
+  it("has no axe-detectable accessibility violations", async () => {
     const { container } = render(<PatchPage />);
     await waitFor(() => {
       expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();

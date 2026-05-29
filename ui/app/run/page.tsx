@@ -1,14 +1,20 @@
 "use client";
 
+/**
+ * Live run view — static route /run?id=<runId>.
+ * Uses useSearchParams() to read the run ID at runtime without dynamic segments.
+ * This keeps the static export compatible (output: "export" in next.config.mjs).
+ */
+
 import { useEffect, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
+import { Suspense } from "react";
 import type { ReactNode } from "react";
 import { useSSE } from "@/lib/useSSE";
-import { cancelRun, fetchRunReport, ApiError } from "@/lib/api";
+import { cancelRun, fetchRunReport, fetchModels, ApiError } from "@/lib/api";
 import type { HarnessEvent, ModelCapability, RunReport, SseStatus } from "@/lib/types";
 import {
-  costClassClasses,
   costClassLabel,
   formatBytes,
   formatMs,
@@ -20,7 +26,7 @@ import {
 } from "@/lib/format";
 
 // ---------------------------------------------------------------------------
-// Event timeline item components
+// Event timeline item
 // ---------------------------------------------------------------------------
 
 function EventCard({
@@ -42,7 +48,6 @@ function EventCard({
         : variant === "muted"
           ? "border-l-gray-300"
           : "border-l-accent";
-
   return (
     <li className={`rounded-r border-l-4 ${border} bg-surface-subtle px-4 py-2`}>
       <p className="text-sm font-medium text-ink">{label}</p>
@@ -69,7 +74,6 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
             .join(" ")}`}
         />
       );
-
     case "state:transition":
       return (
         <EventCard
@@ -79,7 +83,6 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant="muted"
         />
       );
-
     case "model:call:started":
       return (
         <EventCard
@@ -88,7 +91,6 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           detail={`${ev.messageCount.toString()} messages · ${formatBytes(ev.contextBytes)} context`}
         />
       );
-
     case "model:call:completed": {
       const cap = models.find((m) => m.id === ev.modelId);
       const cc = cap?.costClass ?? "unknown";
@@ -102,7 +104,6 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
         />
       );
     }
-
     case "model:call:failed":
       return (
         <EventCard
@@ -112,7 +113,6 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant="error"
         />
       );
-
     case "tool:call:started":
       return (
         <EventCard
@@ -122,7 +122,6 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant="muted"
         />
       );
-
     case "tool:call:completed":
       return (
         <EventCard
@@ -132,7 +131,6 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant="success"
         />
       );
-
     case "tool:call:failed":
       return (
         <EventCard
@@ -142,7 +140,6 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant="error"
         />
       );
-
     case "reasoning:trace":
       return (
         <EventCard
@@ -152,7 +149,6 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant="muted"
         />
       );
-
     case "patch:proposed":
       return (
         <EventCard
@@ -162,7 +158,6 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant="success"
         />
       );
-
     case "verification:result":
       return (
         <EventCard
@@ -172,16 +167,8 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant={ev.passed ? "success" : "error"}
         />
       );
-
     case "run:completed":
-      return (
-        <EventCard
-          key={`${ev.seq}`}
-          label="Run completed"
-          variant="success"
-        />
-      );
-
+      return <EventCard key={`${ev.seq}`} label="Run completed" variant="success" />;
     case "run:cancelled":
       return (
         <EventCard
@@ -191,7 +178,6 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant="muted"
         />
       );
-
     case "run:failed":
       return (
         <EventCard
@@ -201,16 +187,10 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant="error"
         />
       );
-
     default:
-      // Exhaustive; unknown event types are silently skipped in the timeline
       return null;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Status badge
-// ---------------------------------------------------------------------------
 
 function StatusBadge({ status }: { status: SseStatus }): ReactNode {
   const classes =
@@ -237,32 +217,29 @@ function StatusBadge({ status }: { status: SseStatus }): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// Main page
+// Run view inner (needs useSearchParams)
 // ---------------------------------------------------------------------------
 
-export default function RunPage(): ReactNode {
-  const params = useParams<{ runId: string }>();
-  const runId = params.runId;
+function RunViewInner(): ReactNode {
+  const searchParams = useSearchParams();
+  const runId = searchParams.get("id") ?? "";
   const router = useRouter();
 
-  // Load models for costClass enrichment
   const [models, setModels] = useState<ModelCapability[]>([]);
   useEffect(() => {
-    import("@/lib/api")
-      .then(({ fetchModels }) => fetchModels())
+    fetchModels()
       .then(({ models: m }) => { setModels(m); })
       .catch(() => { /* non-fatal */ });
   }, []);
 
-  const { events, status, error } = useSSE(runId);
+  const { events, status, error } = useSSE(runId || null);
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [report, setReport] = useState<RunReport | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
   const liveRegionRef = useRef<HTMLDivElement | null>(null);
-
-  // Announce new events in the ARIA live region
   const lastSeqRef = useRef(-1);
+
   useEffect(() => {
     const latest = events[events.length - 1];
     if (latest !== undefined && latest.seq > lastSeqRef.current) {
@@ -273,14 +250,11 @@ export default function RunPage(): ReactNode {
     }
   }, [events]);
 
-  // On terminal event, fetch the final report
   useEffect(() => {
-    if (status !== "terminal") return;
+    if (status !== "terminal" || runId === "") return;
     let active = true;
     fetchRunReport(runId)
-      .then(({ report: r }) => {
-        if (active) setReport(r);
-      })
+      .then(({ report: r }) => { if (active) setReport(r); })
       .catch((err) => {
         if (!active) return;
         const msg = err instanceof ApiError ? err.message : "Failed to load run report";
@@ -290,6 +264,15 @@ export default function RunPage(): ReactNode {
   }, [status, runId]);
 
   const isTerminal = status === "terminal";
+
+  if (runId === "") {
+    return (
+      <section aria-labelledby="run-heading">
+        <h1 id="run-heading" className="text-heading text-ink">Run</h1>
+        <p className="mt-4 text-sm text-ink-muted">No run ID specified.</p>
+      </section>
+    );
+  }
 
   async function handleCancel(): Promise<void> {
     setCancelError(null);
@@ -306,20 +289,11 @@ export default function RunPage(): ReactNode {
 
   return (
     <section aria-labelledby="run-heading">
-      {/* ARIA live region for SSE progress */}
-      <div
-        ref={liveRegionRef}
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-        className="sr-only"
-      />
+      <div role="status" aria-live="polite" aria-atomic="true" ref={liveRegionRef} className="sr-only" />
 
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 id="run-heading" className="text-heading text-ink">
-            Run
-          </h1>
+          <h1 id="run-heading" className="text-heading text-ink">Run</h1>
           <p className="mt-1 font-mono text-xs text-ink-muted">{runId}</p>
         </div>
         <div className="flex items-center gap-3">
@@ -337,93 +311,70 @@ export default function RunPage(): ReactNode {
       </div>
 
       {error !== null && (
-        <p role="alert" className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-          {error}
-        </p>
+        <p role="alert" className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
       )}
       {cancelError !== null && (
-        <p role="alert" className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-          {cancelError}
-        </p>
+        <p role="alert" className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{cancelError}</p>
       )}
 
-      {/* Event timeline */}
       <section aria-labelledby="timeline-heading" className="mt-section">
-        <h2 id="timeline-heading" className="text-subheading text-ink">
-          Event timeline
-        </h2>
+        <h2 id="timeline-heading" className="text-subheading text-ink">Event timeline</h2>
         {events.length === 0 ? (
           <p className="mt-4 text-sm text-ink-muted" aria-busy={status === "connecting"}>
             {status === "connecting" ? "Connecting to event stream…" : "No events yet."}
           </p>
         ) : (
-          <ol
-            aria-label="Run events"
-            className="mt-4 grid gap-2"
-          >
+          <ol aria-label="Run events" className="mt-4 grid gap-2">
             {events.map((ev) => renderEvent(ev, models))}
           </ol>
         )}
       </section>
 
-      {/* Final report and patch-review entry */}
       {isTerminal && (
         <section aria-labelledby="report-heading" className="mt-section">
-          <h2 id="report-heading" className="text-subheading text-ink">
-            Run result
-          </h2>
+          <h2 id="report-heading" className="text-subheading text-ink">Run result</h2>
           {reportError !== null && (
-            <p role="alert" className="mt-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
-              {reportError}
-            </p>
+            <p role="alert" className="mt-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{reportError}</p>
           )}
           {report !== null && (
             <div className="mt-4 rounded-lg border border-ink/10 p-6">
               <dl className="grid gap-2 text-sm">
                 <div className="flex gap-2">
-                  <dt className="font-medium text-ink-muted w-28">Status</dt>
+                  <dt className="w-28 font-medium text-ink-muted">Status</dt>
                   <dd>
-                    <span
-                      className={`rounded px-2 py-0.5 text-xs font-medium ${outcomeClasses(report.status)}`}
-                    >
+                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${outcomeClasses(report.status)}`}>
                       {outcomeLabel(report.status)}
                     </span>
                   </dd>
                 </div>
                 {report.modelId !== undefined && (
                   <div className="flex gap-2">
-                    <dt className="font-medium text-ink-muted w-28">Model</dt>
+                    <dt className="w-28 font-medium text-ink-muted">Model</dt>
                     <dd>{report.modelId}</dd>
                   </div>
                 )}
                 {report.durationMs !== undefined && (
                   <div className="flex gap-2">
-                    <dt className="font-medium text-ink-muted w-28">Duration</dt>
+                    <dt className="w-28 font-medium text-ink-muted">Duration</dt>
                     <dd>{formatMs(report.durationMs)}</dd>
                   </div>
                 )}
                 {report.verificationSummary !== undefined && (
                   <div className="flex gap-2">
-                    <dt className="font-medium text-ink-muted w-28">Verification</dt>
+                    <dt className="w-28 font-medium text-ink-muted">Verification</dt>
                     <dd>
-                      <span
-                        className={`rounded px-2 py-0.5 text-xs font-medium ${verificationStatusClasses(report.verificationSummary.overallStatus)}`}
-                      >
+                      <span className={`rounded px-2 py-0.5 text-xs font-medium ${verificationStatusClasses(report.verificationSummary.overallStatus)}`}>
                         {verificationStatusLabel(report.verificationSummary.overallStatus)}
                       </span>
                     </dd>
                   </div>
                 )}
               </dl>
-
-              {/* Patch review entry point */}
               {report.proposedDiff !== undefined && (
                 <div className="mt-6 rounded border border-accent/30 bg-blue-50 p-4">
-                  <p className="text-sm font-medium text-ink">
-                    A patch has been proposed. Review and apply it below.
-                  </p>
+                  <p className="text-sm font-medium text-ink">A patch has been proposed. Review and apply it below.</p>
                   <Link
-                    href={`/runs/${encodeURIComponent(runId)}/patch`}
+                    href={`/run/patch?id=${encodeURIComponent(runId)}`}
                     className="mt-2 inline-block rounded bg-accent px-4 py-1.5 text-sm font-semibold text-ink-inverse hover:bg-accent-strong focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2"
                   >
                     Review patch
@@ -438,12 +389,29 @@ export default function RunPage(): ReactNode {
       <div className="mt-8">
         <button
           type="button"
-          onClick={() => { router.push("/"); }}
+          onClick={() => { router.push("/launch"); }}
           className="text-sm text-ink-muted underline hover:text-ink focus:outline-none focus:ring-2 focus:ring-focus"
         >
           ← Back to Launch
         </button>
       </div>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Page export (wraps in Suspense for useSearchParams)
+// ---------------------------------------------------------------------------
+
+export default function RunPage(): ReactNode {
+  return (
+    <Suspense fallback={
+      <section aria-labelledby="run-heading">
+        <h1 id="run-heading" className="text-heading text-ink">Run</h1>
+        <p className="mt-4 text-ink-muted" aria-busy="true">Loading…</p>
+      </section>
+    }>
+      <RunViewInner />
+    </Suspense>
   );
 }

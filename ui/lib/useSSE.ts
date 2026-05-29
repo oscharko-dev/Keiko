@@ -66,8 +66,7 @@ export function useSSE(runId: string | null): UseSSEResult {
 
         let parsed: HarnessEvent;
         try {
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-          parsed = JSON.parse(ev.data) as HarnessEvent;
+          parsed = JSON.parse(ev.data as string) as HarnessEvent;
         } catch {
           // malformed event — skip
           return;

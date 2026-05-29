@@ -57,7 +57,7 @@ describe("EvidencePage", () => {
     await waitFor(() => {
       expect(screen.getByRole("link", { name: "run-aaa" })).toHaveAttribute(
         "href",
-        "/evidence/run-aaa",
+        "/evidence/detail?id=run-aaa",
       );
     });
   });

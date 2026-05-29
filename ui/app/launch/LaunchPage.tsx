@@ -241,7 +241,7 @@ function WorkflowSection({
         apply: applyMode,
         limits,
       });
-      router.push(`/runs/${encodeURIComponent(runId)}`);
+      router.push(`/run?id=${encodeURIComponent(runId)}`);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "Failed to start run";
       setFormError(msg);
@@ -450,7 +450,7 @@ function ExplainPlanSection({ models, isSelected, onSelect }: ExplainPlanSection
         modelId: selectedModel,
         apply: false,
       });
-      router.push(`/runs/${encodeURIComponent(runId)}`);
+      router.push(`/run?id=${encodeURIComponent(runId)}`);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : "Failed to start run";
       setFormError(msg);

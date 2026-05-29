@@ -10,7 +10,7 @@ import * as api from "@/lib/api";
 // ---------------------------------------------------------------------------
 
 vi.mock("next/navigation", () => ({
-  useParams: () => ({ runId: "run-test-123" }),
+  useSearchParams: () => ({ get: (key: string) => key === "id" ? "run-test-123" : null }),
   useRouter: () => ({ push: vi.fn() }),
 }));
 
@@ -43,17 +43,11 @@ const { useSSE } = await import("@/lib/useSSE");
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("RunPage", () => {
+describe("RunPage (/run?id=)", () => {
   beforeEach(() => {
-    vi.mocked(useSSE).mockReturnValue({
-      events: [],
-      status: "connecting",
-      error: null,
-    });
+    vi.mocked(useSSE).mockReturnValue({ events: [], status: "connecting", error: null });
     vi.mocked(api.cancelRun).mockResolvedValue({ ok: true });
-    vi.mocked(api.fetchRunReport).mockResolvedValue({
-      report: { status: "dry-run" },
-    });
+    vi.mocked(api.fetchRunReport).mockResolvedValue({ report: { status: "dry-run" } });
   });
 
   it("renders the run heading with the runId", () => {
@@ -72,27 +66,21 @@ describe("RunPage", () => {
   });
 
   it("Cancel button is disabled when run is terminal", () => {
-    vi.mocked(useSSE).mockReturnValue({
-      events: [],
-      status: "terminal",
-      error: null,
-    });
+    vi.mocked(useSSE).mockReturnValue({ events: [], status: "terminal", error: null });
     render(<RunPage />);
-    const cancelBtn = screen.getByRole("button", { name: /cancel this run/i });
-    expect(cancelBtn).toBeDisabled();
+    expect(screen.getByRole("button", { name: /cancel this run/i })).toBeDisabled();
   });
 
   it("calls cancelRun API when Cancel is clicked", async () => {
     const user = userEvent.setup();
     render(<RunPage />);
-    const cancelBtn = screen.getByRole("button", { name: /cancel this run/i });
-    await user.click(cancelBtn);
+    await user.click(screen.getByRole("button", { name: /cancel this run/i }));
     await waitFor(() => {
       expect(api.cancelRun).toHaveBeenCalledWith("run-test-123");
     });
   });
 
-  it("shows events timeline with heading", () => {
+  it("shows event timeline heading", () => {
     render(<RunPage />);
     expect(screen.getByRole("heading", { name: /event timeline/i })).toBeInTheDocument();
   });

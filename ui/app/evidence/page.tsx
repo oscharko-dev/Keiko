@@ -123,7 +123,7 @@ function EvidenceList({ entries }: EvidenceListProps): ReactNode {
             >
               <td className="py-2 pr-4">
                 <Link
-                  href={`/evidence/${encodeURIComponent(entry.runId)}`}
+                  href={`/evidence/detail?id=${encodeURIComponent(entry.runId)}`}
                   className="font-mono text-xs text-accent hover:underline focus:outline-none focus:ring-1 focus:ring-focus"
                 >
                   {entry.runId}
