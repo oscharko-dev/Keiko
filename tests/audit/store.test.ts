@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  linkSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,8 +16,11 @@ import {
   resolveEvidenceDir,
 } from "../../src/audit/store.js";
 import { nodeWorkspaceFs } from "../../src/workspace/fs.js";
-import { EvidenceWriteError } from "../../src/audit/errors.js";
-import { InvalidRunIdError } from "../../src/audit/errors.js";
+import {
+  EvidenceReadError,
+  EvidenceWriteError,
+  InvalidRunIdError,
+} from "../../src/audit/errors.js";
 
 describe("resolveEvidenceDir — precedence (C4)", () => {
   it("prefers the explicit value over env and default", () => {
@@ -106,7 +117,42 @@ describe("createNodeEvidenceStore", () => {
     const parent = freshDir();
     const filePath = join(parent, "afile");
     writeFileSync(filePath, "x");
-    expect(() => createNodeEvidenceStore(join(filePath, "evidence"))).toThrow(EvidenceWriteError);
+    const store = createNodeEvidenceStore(join(filePath, "evidence"));
+    expect(() => store.put("run-1", "{}")).toThrow(EvidenceWriteError);
+  });
+
+  it("wraps read failures as EvidenceReadError instead of leaking raw filesystem errors", () => {
+    const parent = freshDir();
+    const filePath = join(parent, "afile");
+    writeFileSync(filePath, "x");
+    const store = createNodeEvidenceStore(filePath);
+    expect(() => store.list()).toThrow(EvidenceReadError);
+  });
+
+  it("does not create the evidence directory for read-only list/get operations", () => {
+    const parent = freshDir();
+    const missing = join(parent, "missing-evidence");
+    const store = createNodeEvidenceStore(missing);
+    expect(store.list()).toEqual([]);
+    expect(store.get("run-1")).toBeUndefined();
+    expect(existsSync(missing)).toBe(false);
+  });
+
+  it("ignores hardlinked manifest-looking files for list/get/delete", () => {
+    const base = freshDir();
+    const outside = freshDir();
+    const victim = join(outside, "victim.json");
+    const hardlink = join(base, "run-1.json");
+    writeFileSync(victim, '{"evidenceSchemaVersion":"1"}');
+    linkSync(victim, hardlink);
+    const store = createNodeEvidenceStore(base);
+    expect(store.list()).toEqual([]);
+    expect(store.get("run-1")).toBeUndefined();
+    expect(() => {
+      store.delete("run-1");
+    }).not.toThrow();
+    expect(readFileSync(victim, "utf8")).toBe('{"evidenceSchemaVersion":"1"}');
+    expect(existsSync(hardlink)).toBe(true);
   });
 
   it("refuses to write through a pre-planted symlink at the temp path (O_EXCL, L1)", () => {

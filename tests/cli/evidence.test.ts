@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runEvidenceCli } from "../../src/cli/evidence.js";
-import { createInMemoryEvidenceStore, type EvidenceStore } from "../../src/audit/store.js";
+import {
+  createInMemoryEvidenceStore,
+  createNodeEvidenceStore,
+  type EvidenceStore,
+} from "../../src/audit/store.js";
 import type { CliIo } from "../../src/cli/runner.js";
 import type { EvidenceManifest } from "../../src/audit/types.js";
 
@@ -50,6 +57,20 @@ function seededStore(runIds: readonly string[]): EvidenceStore {
   return store;
 }
 
+const dirs: string[] = [];
+
+function freshDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "keiko-cli-evidence-"));
+  dirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of dirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 describe("keiko evidence list", () => {
   it("prints sorted runIds in text and exits 0", () => {
     const c = capture();
@@ -73,6 +94,40 @@ describe("keiko evidence list", () => {
     expect(code).toBe(0);
     expect(c.out().toLowerCase()).toContain("no evidence");
   });
+
+  it("uses KEIKO_EVIDENCE_DIR for the default node store", () => {
+    const dir = freshDir();
+    const store = createNodeEvidenceStore(dir);
+    store.put("run-env", JSON.stringify(manifest("run-env")));
+    const c = capture();
+    const code = runEvidenceCli(["list"], c.io, { env: { KEIKO_EVIDENCE_DIR: dir } });
+    expect(code).toBe(0);
+    expect(c.out()).toContain("run-env");
+  });
+
+  it("prefers --evidence-dir over KEIKO_EVIDENCE_DIR", () => {
+    const envDir = freshDir();
+    const flagDir = freshDir();
+    createNodeEvidenceStore(envDir).put("run-env", JSON.stringify(manifest("run-env")));
+    createNodeEvidenceStore(flagDir).put("run-flag", JSON.stringify(manifest("run-flag")));
+    const c = capture();
+    const code = runEvidenceCli(["list", "--evidence-dir", flagDir], c.io, {
+      env: { KEIKO_EVIDENCE_DIR: envDir },
+    });
+    expect(code).toBe(0);
+    expect(c.out()).toContain("run-flag");
+    expect(c.out()).not.toContain("run-env");
+  });
+
+  it("does not create a missing evidence dir for read-only list", () => {
+    const parent = freshDir();
+    const missing = join(parent, "missing-evidence");
+    const c = capture();
+    const code = runEvidenceCli(["list", "--evidence-dir", missing], c.io);
+    expect(code).toBe(0);
+    expect(c.out().toLowerCase()).toContain("no evidence");
+    expect(existsSync(missing)).toBe(false);
+  });
 });
 
 describe("keiko evidence show", () => {
@@ -80,8 +135,19 @@ describe("keiko evidence show", () => {
     const c = capture();
     const code = runEvidenceCli(["show", "run-a"], c.io, { store: seededStore(["run-a"]) });
     expect(code).toBe(0);
+    expect(c.out()).toContain("Evidence: run-a.json");
     expect(c.out()).toContain("run-a");
     expect(c.out()).toContain("explain-plan");
+  });
+
+  it("prints the actual node-store manifest location in the text report", () => {
+    const dir = freshDir();
+    const store = createNodeEvidenceStore(dir);
+    const location = store.put("run-a", JSON.stringify(manifest("run-a")));
+    const c = capture();
+    const code = runEvidenceCli(["show", "run-a", "--evidence-dir", dir], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain(`Evidence: ${location}`);
   });
 
   it("emits the full manifest with --json", () => {

@@ -54,5 +54,6 @@ export {
   type EvidenceStateTransition,
   type EvidenceToolCall,
   type EvidenceUsageTotals,
+  type EvidenceVerificationResult,
   type RetentionPolicy,
 } from "./types.js";

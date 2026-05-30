@@ -303,12 +303,12 @@ keiko evidence list
 keiko evidence show <runId>
 ```
 
-| Option                | Description                                      |
-| --------------------- | ------------------------------------------------ |
-| `list`                | List stored manifests                            |
-| `show <runId>`        | Show one manifest by run id                      |
-| `--evidence-dir PATH` | Evidence directory (default `./.keiko/evidence`) |
-| `--json`              | Emit as JSON                                     |
+| Option                | Description                                                               |
+| --------------------- | ------------------------------------------------------------------------- |
+| `list`                | List stored manifests                                                     |
+| `show <runId>`        | Show one manifest by run id                                               |
+| `--evidence-dir PATH` | Evidence directory (or `KEIKO_EVIDENCE_DIR`; default `./.keiko/evidence`) |
+| `--json`              | Emit as JSON                                                              |
 
 ### `keiko evaluate`
 

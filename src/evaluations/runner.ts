@@ -6,7 +6,7 @@
 // the #10 store, scores every dimension, aggregates the suite, and cleans up the temp dir. No
 // network or live-model call is made in offline mode; no Date.now / Math.random touches a scored path.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { generateUnitTests } from "../workflows/unit-tests/workflow.js";
 import { investigateBug } from "../workflows/bug-investigation/workflow.js";
 import {
@@ -16,6 +16,7 @@ import {
   type EvidenceStore,
 } from "../audit/index.js";
 import type { ModelPort } from "../harness/ports.js";
+import { canonicalise, HARNESS_VERSION, type TaskType } from "../harness/index.js";
 import type { EnvSource } from "../gateway/config.js";
 import type { SpawnFn } from "../tools/index.js";
 import { createEvaluationModelProvider } from "./model-provider.js";
@@ -102,6 +103,11 @@ interface RunDeps {
   readonly idSource: () => string;
 }
 
+const WORKFLOW_TASK_TYPES: Readonly<Record<EvaluationFixture["workflowKind"], TaskType>> = {
+  "unit-tests": "generate-unit-tests",
+  "bug-investigation": "investigate-bug",
+};
+
 async function runWorkflow(
   fixture: EvaluationFixture,
   workspaceRoot: string,
@@ -133,12 +139,14 @@ function persistAndCheck(
   store: EvidenceStore,
   env: EnvSource,
   runId: string,
+  workspaceRoot: string,
+  modelId: string,
 ): boolean {
   const status = typeof report.status === "string" ? report.status : "failed";
   persistWorkflowEvidence(
     {
       runId,
-      fingerprint: fixture.name.slice(0, 16),
+      fingerprint: evalFingerprint(fixture, workspaceRoot, modelId),
       modelId: typeof report.modelId === "string" ? report.modelId : "eval-model",
       kind: fixture.workflowKind,
       status: status === "rejected" || status === "failed" ? "failed" : "completed",
@@ -151,6 +159,27 @@ function persistAndCheck(
   );
   const raw = store.get(runId);
   return raw !== undefined && isManifestValid(raw);
+}
+
+function evalFingerprint(
+  fixture: EvaluationFixture,
+  workspaceRoot: string,
+  modelId: string,
+): string {
+  const taskType = WORKFLOW_TASK_TYPES[fixture.workflowKind];
+  const input =
+    fixture.workflowKind === "unit-tests"
+      ? buildUnitTestInput(fixture, workspaceRoot, modelId)
+      : buildBugInput(fixture, workspaceRoot, modelId);
+  const canonical = canonicalise({
+    taskType,
+    taskInput: { taskType, input },
+    modelId,
+    workingDirectory: workspaceRoot,
+    dryRun: fixture.apply !== true,
+    harnessVersion: HARNESS_VERSION,
+  });
+  return createHash("sha256").update(canonical, "utf8").digest("hex");
 }
 
 async function runFixture(
@@ -177,7 +206,15 @@ async function runFixture(
       now,
       idSource,
     });
-    const manifestValid = persistAndCheck(fixture, report, store, deps.env ?? {}, runId);
+    const manifestValid = persistAndCheck(
+      fixture,
+      report,
+      store,
+      deps.env ?? {},
+      runId,
+      workspace.root,
+      modelId,
+    );
     const scoring = toScoringInput(report, writer.writeCount(), manifestValid);
     return {
       fixtureName: fixture.name,

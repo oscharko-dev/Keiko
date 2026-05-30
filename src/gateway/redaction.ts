@@ -5,6 +5,7 @@ const REDACTED = "[REDACTED]";
 
 // Bearer <token>: keep the scheme, drop the credential.
 const BEARER_PATTERN = /\bBearer\s+[\w.\-+/=]+/gi;
+const BASIC_AUTH_PATTERN = /\bBasic\s+[\w.\-+/=]+/gi;
 
 // OpenAI-style keys (sk-, sk-proj-, etc.): a prefix followed by >= 16 secret chars.
 const API_KEY_PATTERN = /\bsk-[A-Za-z0-9_-]{16,}/g;
@@ -19,6 +20,8 @@ const GOOGLE_API_KEY_PATTERN = /\bAIza[0-9A-Za-z_-]{20,}/g;
 const PEM_PRIVATE_KEY_BLOCK_PATTERN =
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
 const PEM_PRIVATE_KEY_HEADER_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/g;
+const GENERIC_API_KEY_HEADER_PATTERN = /\b(x-api-key\s*:\s*)[^\s"'`,;]+/gi;
+const GENERIC_API_KEY_ASSIGNMENT_PATTERN = /\b(api[_-]?key\s*[=:]\s*)[^\s"'`,;&]+/gi;
 
 const BUILTIN_PATTERNS: readonly RegExp[] = [
   GITHUB_TOKEN_PATTERN,
@@ -39,6 +42,9 @@ function escapeRegExp(value: string): string {
 export function redact(input: string, additionalSecrets: readonly string[] = []): string {
   let output = input
     .replace(BEARER_PATTERN, `Bearer ${REDACTED}`)
+    .replace(BASIC_AUTH_PATTERN, `Basic ${REDACTED}`)
+    .replace(GENERIC_API_KEY_HEADER_PATTERN, `$1${REDACTED}`)
+    .replace(GENERIC_API_KEY_ASSIGNMENT_PATTERN, `$1${REDACTED}`)
     .replace(API_KEY_PATTERN, REDACTED);
   for (const pattern of BUILTIN_PATTERNS) {
     output = output.replace(pattern, REDACTED);

@@ -10,7 +10,9 @@ const SLACK = "xoxb-" + "1".repeat(20);
 const GOOGLE = "AIza" + "C".repeat(30);
 const PEM = "-----BEGIN RSA PRIVATE KEY-----";
 const BEARER = "Bearer " + "z".repeat(32);
+const BASIC = "Basic " + Buffer.from("user:pass").toString("base64");
 const AUTH_HEADER = "authorization: Bearer " + "q".repeat(40);
+const API_KEY_VALUE = "generic-key-value-" + "k".repeat(16);
 
 describe("createAuditRedactor — builtin secret shapes", () => {
   const redactor = createAuditRedactor({}, {});
@@ -23,6 +25,7 @@ describe("createAuditRedactor — builtin secret shapes", () => {
     ["google api key", GOOGLE],
     ["pem header", PEM],
     ["bearer token", BEARER],
+    ["basic auth credential", BASIC],
   ])("scrubs a %s to [REDACTED]", (_label, secret) => {
     const out = redactor(`prefix ${secret} suffix`);
     expect(out).toContain("[REDACTED]");
@@ -33,6 +36,25 @@ describe("createAuditRedactor — builtin secret shapes", () => {
     const out = redactor(AUTH_HEADER);
     expect(out).toContain("Bearer [REDACTED]");
     expect(out).not.toContain("q".repeat(40));
+  });
+
+  it("keeps the Basic scheme but drops the credential in an auth header", () => {
+    const out = redactor(`Authorization: ${BASIC}`);
+    expect(out).toContain("Basic [REDACTED]");
+    expect(out).not.toContain(BASIC);
+  });
+
+  it("scrubs generic API key headers and assignments", () => {
+    const input = [
+      `X-API-Key: ${API_KEY_VALUE}`,
+      `api_key=${API_KEY_VALUE}`,
+      `api-key: ${API_KEY_VALUE}`,
+    ].join("\n");
+    const out = redactor(input);
+    expect(out).toContain("X-API-Key: [REDACTED]");
+    expect(out).toContain("api_key=[REDACTED]");
+    expect(out).toContain("api-key: [REDACTED]");
+    expect(out).not.toContain(API_KEY_VALUE);
   });
 });
 

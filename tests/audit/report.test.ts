@@ -74,6 +74,19 @@ describe("buildEvidenceReport", () => {
     expect(report.changedFiles).toBe(3);
     expect(report.verificationStatus).toBe("passed");
   });
+
+  it("derives verification status from harness verification events when no #7 summary exists", () => {
+    const report = buildEvidenceReport(
+      manifest({
+        verificationResults: [
+          { seq: 1, ts: 100, passed: true, detail: "ok" },
+          { seq: 2, ts: 110, passed: false, detail: "not ok" },
+        ],
+      }),
+      "/repo/.keiko/evidence/run-1.json",
+    );
+    expect(report.verificationStatus).toBe("failed");
+  });
 });
 
 describe("renderEvidenceReport", () => {

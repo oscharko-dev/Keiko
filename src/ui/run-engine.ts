@@ -6,9 +6,9 @@
 // is captured into the registry asynchronously. `apply` defaults false; the only place apply becomes
 // true is the gated apply path (run-handlers), which re-invokes this engine with apply:true.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { DryRunToolPort } from "../harness/index.js";
-import { createSession, type AgentConfig } from "../harness/index.js";
+import { canonicalise, createSession, HARNESS_VERSION, type AgentConfig } from "../harness/index.js";
 import type { ModelPort } from "../harness/index.js";
 import { generateUnitTests, investigateBug } from "../workflows/index.js";
 import type {
@@ -19,7 +19,8 @@ import type {
   BugInvestigationInput,
   BugInvestigationReport,
 } from "../workflows/bug-investigation/types.js";
-import type { TaskInput, RunResult } from "../harness/index.js";
+import type { TaskInput, RunResult, TaskType } from "../harness/index.js";
+import type { EvidenceReport } from "../audit/index.js";
 import type { RunRequest } from "./run-request.js";
 import { QueueEventSink } from "./sink.js";
 import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";
@@ -34,6 +35,12 @@ export interface StartRunResult {
   readonly runId: string;
   readonly fingerprint: string;
 }
+
+const KIND_TO_TASK_TYPE: Readonly<Record<RunRequest["kind"], TaskType>> = {
+  "unit-tests": "generate-unit-tests",
+  "bug-investigation": "investigate-bug",
+  "explain-plan": "explain-plan",
+};
 
 interface EngineContext {
   readonly request: RunRequest;
@@ -67,6 +74,25 @@ function bugInput(request: RunRequest): BugInvestigationInput {
 
 function explainTask(request: RunRequest): TaskInput {
   return { taskType: "explain-plan", input: request.input } as unknown as TaskInput;
+}
+
+function workspaceRoot(request: RunRequest): string {
+  const root = request.input.workspaceRoot;
+  return typeof root === "string" && root.length > 0 ? root : ".";
+}
+
+function workflowFingerprint(request: RunRequest): string {
+  const taskType = KIND_TO_TASK_TYPE[request.kind];
+  const canonical = canonicalise({
+    taskType,
+    taskInput: { taskType, input: request.input },
+    limits: request.limits ?? {},
+    modelId: request.modelId,
+    workingDirectory: workspaceRoot(request),
+    dryRun: true,
+    harnessVersion: HARNESS_VERSION,
+  });
+  return createHash("sha256").update(canonical, "utf8").digest("hex");
 }
 
 // dry-run-success (appliable) states per workflow. Only these produce an appliable snapshot for the
@@ -200,7 +226,7 @@ export function startRun(ctx: EngineContext, redactReport: (value: unknown) => u
     return { runId, fingerprint };
   }
   const runId = randomUUID();
-  const fingerprint = randomUUID().slice(0, 16);
+  const fingerprint = workflowFingerprint(ctx.request);
   const dispatched = dispatchWorkflow(ctx, sink, runId);
   registerAndCapture(ctx, { runId, fingerprint, sink, startedAt }, dispatched, redactReport);
   return { runId, fingerprint };
@@ -228,13 +254,13 @@ function registerAndCapture(
   });
   void dispatched.result
     .then((outcome) => {
+      const evidence = persistOutcome(ctx, identity, outcome);
       ctx.registry.complete(
         identity.runId,
         outcome.status,
-        redactReport(outcome.report),
+        redactReport(attachEvidenceReport(outcome.report, evidence)),
         outcome.appliable,
       );
-      persistOutcome(ctx, identity, outcome);
     })
     .catch((error: unknown) => {
       ctx.registry.complete(identity.runId, "failed", redactReport({ error: String(error) }), undefined);
@@ -251,9 +277,9 @@ function persistOutcome(
   ctx: EngineContext,
   identity: RegisterIdentity,
   outcome: DispatchOutcome,
-): void {
+): EvidenceReport | undefined {
   if (ctx.evidence === undefined) {
-    return;
+    return undefined;
   }
   const runIdentity: RunIdentity = {
     runId: identity.runId,
@@ -265,10 +291,19 @@ function persistOutcome(
     finishedAt: Date.now(),
   };
   if (ctx.request.kind === "explain-plan" && outcome.result !== undefined) {
-    persistExplainEvidence(runIdentity, outcome.result, ctx.evidence);
-    return;
+    return persistExplainEvidence(runIdentity, outcome.result, ctx.evidence);
   }
-  persistWorkflowEvidence(runIdentity, outcome.report, identity.sink.buffered(), ctx.evidence);
+  return persistWorkflowEvidence(runIdentity, outcome.report, identity.sink.buffered(), ctx.evidence);
+}
+
+function attachEvidenceReport(report: unknown, evidence: EvidenceReport | undefined): unknown {
+  if (evidence === undefined) {
+    return report;
+  }
+  if (isRecord(report)) {
+    return { ...report, evidence };
+  }
+  return { report, evidence };
 }
 
 // Re-invokes a workflow with apply:true through the SAME gated entry point (D8). This is the only

@@ -2,14 +2,18 @@ import { describe, expect, it } from "vitest";
 import {
   SDK_VERSION,
   buildWorkspaceSummary,
+  createInMemoryEvidenceStore,
   detectWorkspace,
   investigateBug,
+  loadEvidence,
+  runAgent,
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
   isSensitivePath,
   summarizeForAudit,
 } from "../../src/sdk/index.js";
 import * as root from "../../src/index.js";
 import { memFs } from "../workspace/_memfs.js";
+import { DryRunToolPort, MemoryEventSink } from "../../src/harness/index.js";
 import type { ModelPort } from "../../src/harness/ports.js";
 import type { NormalizedResponse } from "../../src/gateway/types.js";
 
@@ -20,6 +24,7 @@ describe("SDK surface", () => {
 
   it("re-exports the SDK from the package root", () => {
     expect(root.SDK_VERSION).toBe(SDK_VERSION);
+    expect(root.runAgent).toBe(runAgent);
   });
 
   it("exposes the safe workspace summary API through the SDK and root barrels", () => {
@@ -30,6 +35,60 @@ describe("SDK surface", () => {
     expect(root.buildWorkspaceSummary).toBe(buildWorkspaceSummary);
     expect(root.summarizeForAudit).toBe(summarizeForAudit);
     expect(root).not.toHaveProperty("nodeWorkspaceFs");
+  });
+});
+
+describe("SDK runAgent evidence persistence", () => {
+  function model(content = "done"): ModelPort {
+    const response: NormalizedResponse = {
+      modelId: "m",
+      content,
+      finishReason: "stop",
+      toolCalls: [],
+      structuredOutput: null,
+      usage: {
+        requestId: "sdk-run",
+        promptTokens: 1,
+        completionTokens: 2,
+        latencyMs: 3,
+        costClass: "low",
+      },
+    };
+    return { call: (): Promise<NormalizedResponse> => Promise.resolve(response) };
+  }
+
+  it("persists a redacted evidence manifest by default through the SDK runAgent", async () => {
+    const store = createInMemoryEvidenceStore();
+    const session = runAgent(
+      { taskType: "explain-plan", input: { filePath: "src/foo.ts" } },
+      {
+        model: "m",
+        workingDirectory: "/repo",
+        evidence: { store },
+      },
+      { model: model(), tools: new DryRunToolPort(), sink: new MemoryEventSink() },
+    );
+    const result = await session.result;
+    expect(store.list()).toEqual([result.runId]);
+    const loaded = loadEvidence(store, result.runId);
+    expect(loaded?.run.runId).toBe(result.runId);
+    expect(loaded?.run.fingerprint).toBe(session.fingerprint);
+    expect(loaded?.usageTotals.requestCount).toBe(1);
+  });
+
+  it("allows SDK callers to opt out of evidence writes explicitly", async () => {
+    const store = createInMemoryEvidenceStore();
+    const session = runAgent(
+      { taskType: "explain-plan", input: { filePath: "src/foo.ts" } },
+      {
+        model: "m",
+        workingDirectory: "/repo",
+        evidence: { store, write: false },
+      },
+      { model: model(), tools: new DryRunToolPort(), sink: new MemoryEventSink() },
+    );
+    await session.result;
+    expect(store.list()).toEqual([]);
   });
 });
 

@@ -66,7 +66,7 @@ function dispatchCommand(
     return runInvestigateCli(rest, io, env);
   }
   if (name === "evidence") {
-    return runEvidenceCli(rest, io);
+    return runEvidenceCli(rest, io, { env });
   }
   if (name === "evaluate") {
     return runEvaluateCli(rest, io, env, {});

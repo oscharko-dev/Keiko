@@ -32,19 +32,113 @@ function parseJson(json: string, runId: string): unknown {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function requireRecord(
+  parent: Record<string, unknown>,
+  key: string,
+  runId: string,
+): Record<string, unknown> {
+  const value = parent[key];
+  if (!isRecord(value)) {
+    throw new EvidenceSchemaError(
+      `evidence manifest is missing object field ${key}: ${runId}`,
+      "1",
+    );
+  }
+  return value;
+}
+
+function requireArray(parent: Record<string, unknown>, key: string, runId: string): void {
+  if (!Array.isArray(parent[key])) {
+    throw new EvidenceSchemaError(`evidence manifest is missing array field ${key}: ${runId}`, "1");
+  }
+}
+
+function requireString(parent: Record<string, unknown>, key: string, runId: string): void {
+  if (typeof parent[key] !== "string") {
+    throw new EvidenceSchemaError(
+      `evidence manifest is missing string field ${key}: ${runId}`,
+      "1",
+    );
+  }
+}
+
+function requireNumber(parent: Record<string, unknown>, key: string, runId: string): void {
+  if (typeof parent[key] !== "number" || !Number.isFinite(parent[key])) {
+    throw new EvidenceSchemaError(
+      `evidence manifest is missing numeric field ${key}: ${runId}`,
+      "1",
+    );
+  }
+}
+
+function requireOptionalRecord(parent: Record<string, unknown>, key: string, runId: string): void {
+  const value = parent[key];
+  if (value !== undefined && !isRecord(value)) {
+    throw new EvidenceSchemaError(
+      `evidence manifest has invalid object field ${key}: ${runId}`,
+      "1",
+    );
+  }
+}
+
+function requireOptionalArray(parent: Record<string, unknown>, key: string, runId: string): void {
+  const value = parent[key];
+  if (value !== undefined && !Array.isArray(value)) {
+    throw new EvidenceSchemaError(
+      `evidence manifest has invalid array field ${key}: ${runId}`,
+      "1",
+    );
+  }
+}
+
+function validateManifestShape(parsed: Record<string, unknown>, runId: string): void {
+  const run = requireRecord(parsed, "run", runId);
+  requireString(run, "runId", runId);
+  requireString(run, "fingerprint", runId);
+  requireString(run, "harnessVersion", runId);
+  requireString(run, "taskType", runId);
+  requireString(run, "outcome", runId);
+  requireNumber(run, "startedAt", runId);
+  requireNumber(run, "finishedAt", runId);
+  requireNumber(run, "durationMs", runId);
+  const model = requireRecord(parsed, "model", runId);
+  requireString(model, "modelId", runId);
+  requireString(model, "costClass", runId);
+  const usage = requireRecord(parsed, "usageTotals", runId);
+  requireNumber(usage, "promptTokens", runId);
+  requireNumber(usage, "completionTokens", runId);
+  requireNumber(usage, "requestCount", runId);
+  requireNumber(usage, "totalLatencyMs", runId);
+  requireArray(parsed, "stateTransitions", runId);
+  requireArray(parsed, "toolCalls", runId);
+  requireArray(parsed, "commandExecutions", runId);
+  requireOptionalArray(parsed, "sandboxConfigurations", runId);
+  requireOptionalArray(parsed, "verificationResults", runId);
+  requireOptionalArray(parsed, "reasoning", runId);
+  requireOptionalRecord(parsed, "context", runId);
+  requireOptionalRecord(parsed, "patch", runId);
+  requireOptionalRecord(parsed, "verification", runId);
+  requireOptionalRecord(parsed, "failure", runId);
+}
+
 function parseManifest(json: string, runId: string): EvidenceManifest {
   const parsed: unknown = parseJson(json, runId);
-  if (typeof parsed !== "object" || parsed === null) {
+  if (!isRecord(parsed)) {
     throw new EvidenceSchemaError(`evidence manifest is not an object: ${runId}`, "none");
   }
-  const version = (parsed as { readonly evidenceSchemaVersion?: unknown }).evidenceSchemaVersion;
+  const version = parsed.evidenceSchemaVersion;
   if (version !== EVIDENCE_SCHEMA_VERSION) {
     throw new EvidenceSchemaError(
       `unrecognised evidence schema version for ${runId}`,
       typeof version === "string" ? version : "none",
     );
   }
-  return parsed as EvidenceManifest;
+  validateManifestShape(parsed, runId);
+  return parsed as unknown as EvidenceManifest;
 }
 
 function toListEntry(manifest: EvidenceManifest): EvidenceListEntry {

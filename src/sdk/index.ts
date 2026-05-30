@@ -6,7 +6,6 @@ export const SDK_VERSION = "0.1.0";
 // callers import the agent API from one place.
 export {
   createSession,
-  runAgent,
   type AgentConfig,
   type AgentSession,
   type HarnessDeps,
@@ -14,6 +13,8 @@ export {
   type TaskInput,
   type TaskType,
 } from "../harness/index.js";
+
+export { runAgent, type SdkAgentConfig, type SdkEvidenceOptions } from "./run-agent.js";
 
 // Safe workspace context surface (ADR-0005). The only file-read path is the
 // boundary-checked one; no export returns raw arbitrary file content.
@@ -146,6 +147,7 @@ export {
   type EvidenceStore,
   type EvidenceToolCall,
   type EvidenceUsageTotals,
+  type EvidenceVerificationResult,
   type RetentionPolicy,
 } from "../audit/index.js";
 
