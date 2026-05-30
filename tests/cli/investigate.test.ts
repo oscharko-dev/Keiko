@@ -163,6 +163,56 @@ describe("runInvestigateCli (AC #1 CLI)", () => {
     expect(report.verified.failureFrames.length).toBeGreaterThan(0);
   });
 
+  it("reads failing output from an in-workspace --output-file through the workspace boundary", async () => {
+    mkdirSync(join(dir, "logs"), { recursive: true });
+    writeFileSync(join(dir, "logs", "failure.txt"), "AssertionError at src/buggy.ts:1:40", "utf8");
+    const cap = makeIo();
+    const code = await runInvestigateCli(
+      ["--output-file", "logs/failure.txt", "--dir-root", dir, "--json"],
+      cap.io,
+      {},
+      { model: modelReturning(FIX) },
+    );
+    expect(code).toBe(0);
+    const report = JSON.parse(cap.out()) as {
+      status: string;
+      verified: { failureFrames: unknown[] };
+    };
+    expect(report.status).toBe("fix-proposed");
+    expect(report.verified.failureFrames.length).toBeGreaterThan(0);
+  });
+
+  it("rejects an --output-file outside the workspace boundary before model use", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-investigate-outside-"));
+    try {
+      writeFileSync(
+        join(outside, "failure.txt"),
+        "AssertionError at src/buggy.ts:1:40 outside-payload-not-leaked",
+        "utf8",
+      );
+      let modelCalls = 0;
+      const model: ModelPort = {
+        call: (request, signal) => {
+          modelCalls += 1;
+          return modelReturning(FIX).call(request, signal);
+        },
+      };
+      const cap = makeIo();
+      const code = await runInvestigateCli(
+        ["--output-file", join(outside, "failure.txt"), "--dir-root", dir],
+        cap.io,
+        {},
+        { model },
+      );
+      expect(code).toBe(1);
+      expect(modelCalls).toBe(0);
+      expect(cap.err()).toContain("WORKSPACE_PATH_ESCAPE");
+      expect(cap.err()).not.toContain("outside-payload-not-leaked");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("exits 1 when an evidence file cannot be read", async () => {
     const cap = makeIo();
     const reader = (): string => {

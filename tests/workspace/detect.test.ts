@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -80,11 +80,61 @@ describe("detectWorkspace", () => {
     expect(detectWorkspace(dir).ignoreLines).toContain("dist/");
   });
 
+  it("treats symlinked package.json and .gitignore metadata escaping the workspace as absent", () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-detect-outside-"));
+    try {
+      writeFileSync(join(outside, "package.json"), JSON.stringify({ name: "outside" }), "utf8");
+      writeFileSync(join(outside, ".gitignore"), "dist/\n", "utf8");
+      symlinkSync(join(outside, "package.json"), join(dir, "package.json"));
+      symlinkSync(join(outside, ".gitignore"), join(dir, ".gitignore"));
+      const info = detectWorkspace(dir);
+      expect(info.root).toBe(dir);
+      expect(info.name).toBeUndefined();
+      expect(info.version).toBeUndefined();
+      expect(info.ignoreLines).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("treats metadata symlinks to denied in-workspace files as absent", () => {
+    writeFileSync(join(dir, ".env"), JSON.stringify({ name: "secret-name" }), "utf8");
+    mkdirSync(join(dir, ".git"), { recursive: true });
+    symlinkSync(join(dir, ".env"), join(dir, "package.json"));
+    const info = detectWorkspace(dir);
+    expect(info.root).toBe(dir);
+    expect(info.name).toBeUndefined();
+    expect(info.version).toBeUndefined();
+  });
+
   it("tolerates a malformed package.json without throwing", () => {
     writeFileSync(join(dir, "package.json"), "{ not valid json", "utf8");
     const info = detectWorkspace(dir);
     expect(info.root).toBe(dir);
     expect(info.name).toBeUndefined();
+  });
+
+  it("treats unreadable metadata files as absent", () => {
+    const root = "/ws";
+    const fs: WorkspaceFs = {
+      readFileUtf8: (): string => {
+        throw new Error("EACCES");
+      },
+      stat: (): never => {
+        throw new Error("not used");
+      },
+      readDir: (): readonly never[] => [],
+      realPath: (p: string): string => p,
+      exists: (absolutePath: string): boolean =>
+        absolutePath === root ||
+        absolutePath === join(root, "package.json") ||
+        absolutePath === join(root, ".gitignore"),
+    };
+    const info = detectWorkspace(root, fs);
+    expect(info.root).toBe(root);
+    expect(info.name).toBeUndefined();
+    expect(info.version).toBeUndefined();
+    expect(info.ignoreLines).toEqual([]);
   });
 
   it("throws WorkspaceNotFoundError when no marker exists above startDir", () => {

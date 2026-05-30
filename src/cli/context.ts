@@ -5,7 +5,7 @@
 
 import { detectWorkspace } from "../workspace/detect.js";
 import { discoverWithStats } from "../workspace/discovery.js";
-import { buildContextPack } from "../workspace/contextPack.js";
+import { buildContextPackFromFiles } from "../workspace/contextPack.js";
 import { buildWorkspaceSummary } from "../workspace/summary.js";
 import { WorkspaceError } from "../workspace/errors.js";
 import { DEFAULT_CONTEXT_REQUEST, type WorkspaceSummary } from "../workspace/types.js";
@@ -47,21 +47,28 @@ function parseArgs(args: readonly string[]): ContextArgs | null {
     return null;
   }
   const budget = budgetRaw === undefined ? undefined : Number.parseInt(budgetRaw, 10);
+  if (budget !== undefined && !Number.isSafeInteger(budget)) {
+    return null;
+  }
   return { dir: dirRaw ?? ".", task: taskRaw, budget, json: args.includes("--json") };
 }
 
 function buildSummary(parsed: ContextArgs): WorkspaceSummary {
   const workspace = detectWorkspace(parsed.dir);
-  const { stats } = discoverWithStats(workspace, DEFAULT_CONTEXT_REQUEST.discovery);
+  const { files, stats } = discoverWithStats(workspace, DEFAULT_CONTEXT_REQUEST.discovery);
   const wantsPack = parsed.task !== undefined || parsed.budget !== undefined;
   if (!wantsPack) {
     return buildWorkspaceSummary(workspace, undefined, stats);
   }
-  const pack = buildContextPack(workspace, {
-    ...DEFAULT_CONTEXT_REQUEST,
-    task: parsed.task,
-    budgetBytes: parsed.budget ?? DEFAULT_CONTEXT_REQUEST.budgetBytes,
-  });
+  const pack = buildContextPackFromFiles(
+    workspace,
+    {
+      ...DEFAULT_CONTEXT_REQUEST,
+      task: parsed.task,
+      budgetBytes: parsed.budget ?? DEFAULT_CONTEXT_REQUEST.budgetBytes,
+    },
+    files,
+  );
   return buildWorkspaceSummary(workspace, pack, stats);
 }
 

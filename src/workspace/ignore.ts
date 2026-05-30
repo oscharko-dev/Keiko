@@ -70,20 +70,13 @@ export function isDenied(relPath: string): boolean {
     if (lower === EXAMPLE_ENV) {
       continue;
     }
-    for (const pattern of DEFAULT_DENY_PATTERNS) {
-      if (denyMatch(pattern, lower)) {
+    for (const matcher of PRECOMPILED_DENY_MATCHERS) {
+      if (matcher.regex.test(lower)) {
         return true;
       }
     }
   }
   return false;
-}
-
-// A single basename glob supporting `*` (any run of non-separator chars). Linear. Both the
-// pattern and the name are lowercased so matching is case-insensitive (case-insensitive
-// filesystems must not let a case-only variant like `.ENV` bypass the deny list).
-function denyMatch(pattern: string, name: string): boolean {
-  return globToRegExp(pattern.toLowerCase(), false).test(name);
 }
 
 // ─── .gitignore subset ──────────────────────────────────────────────────────────
@@ -101,6 +94,10 @@ interface IgnoreRule {
 
 export interface IgnoreMatcher {
   readonly rules: readonly IgnoreRule[];
+}
+
+interface DenyMatcher {
+  readonly regex: RegExp;
 }
 
 function globBody(glob: string): string {
@@ -131,6 +128,10 @@ function globToRegExp(glob: string, anchored: boolean): RegExp {
   const prefix = anchored ? "^" : "^(?:.*/)?";
   return new RegExp(`${prefix}${globBody(glob)}(?:/.*)?$`);
 }
+
+const PRECOMPILED_DENY_MATCHERS: readonly DenyMatcher[] = DEFAULT_DENY_PATTERNS.map((pattern) => ({
+  regex: globToRegExp(pattern.toLowerCase(), false),
+}));
 
 // Matches the path that names the directory itself (no nested suffix), used so a `dir/` rule
 // can distinguish a real subdirectory from a same-named file at another depth.

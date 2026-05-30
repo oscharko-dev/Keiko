@@ -5,7 +5,8 @@
 // model call is the one IO boundary here; its failure propagates to the workflow catch boundary.
 
 import type { ChatMessage } from "../../gateway/types.js";
-import { nodeWorkspaceFs, type ContextPack, type WorkspaceInfo } from "../../workspace/index.js";
+import { nodeWorkspaceFs } from "../../workspace/fs.js";
+import type { ContextPack, WorkspaceInfo } from "../../workspace/index.js";
 import { validatePatch, type PatchValidation } from "../../tools/index.js";
 import { isTestPath } from "./conventions.js";
 import { parseModelOutput } from "./parse.js";

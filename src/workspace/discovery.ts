@@ -42,6 +42,14 @@ function toRelative(root: string, absolutePath: string): string {
   return relative(root, absolutePath).split("\\").join("/");
 }
 
+function toRealRelative(fs: WorkspaceFs, root: string, absolutePath: string): string {
+  try {
+    return toRelative(fs.realPath(root), absolutePath);
+  } catch {
+    return toRelative(root, absolutePath);
+  }
+}
+
 // Returns false when the entry must be skipped for any security or noise reason, recording
 // which tier rejected it for the discovery stats.
 function isAllowed(walk: Walk, relPath: string, isDir: boolean): boolean {
@@ -202,6 +210,10 @@ export function readWorkspaceFile(
     throw new PathDeniedError(`refusing to read a denied path: ${normalizedRel}`, normalizedRel);
   }
   const resolvedPath = assertContainedRealPath(fs, workspace.root, absolutePath, normalizedRel);
+  const resolvedRel = toRealRelative(fs, workspace.root, resolvedPath);
+  if (isDenied(resolvedRel)) {
+    throw new PathDeniedError(`refusing to read a denied path: ${normalizedRel}`, normalizedRel);
+  }
   const size = statBytes(fs, resolvedPath, normalizedRel);
   if (size > opts.maxBytes) {
     throw new FileTooLargeError(

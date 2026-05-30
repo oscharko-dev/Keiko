@@ -27,13 +27,17 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the eleven D5 routes", () => {
-    expect(API_ROUTES).toHaveLength(11);
+  it("declares the twelve D5 routes", () => {
+    expect(API_ROUTES).toHaveLength(12);
   });
 
   it("exposes every contract path exactly once per method", () => {
     const keys = API_ROUTES.map((r) => `${r.method} ${r.pattern}`);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it("includes the workspace summary route", () => {
+    expect(API_ROUTES.some((route) => route.pattern === "/api/workspace")).toBe(true);
   });
 });
 

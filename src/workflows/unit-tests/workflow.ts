@@ -7,7 +7,8 @@
 // redacted "failed" report (and a CancelledError to a "cancelled" report).
 
 import { CancelledError } from "../../gateway/errors.js";
-import { detectWorkspace, nodeWorkspaceFs } from "../../workspace/index.js";
+import { detectWorkspace } from "../../workspace/index.js";
+import { nodeWorkspaceFs } from "../../workspace/fs.js";
 import { buildTestGenContext } from "./context.js";
 import { detectConventions } from "./conventions.js";
 import { computeFingerprint } from "./emit.js";

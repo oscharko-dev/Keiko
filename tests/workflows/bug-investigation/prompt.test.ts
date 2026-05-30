@@ -46,6 +46,20 @@ describe("buildBugPrompt (AC #9 prompt construction)", () => {
     expect(user).toContain("src/buggy.ts:1");
   });
 
+  it("redacts secret-shaped failure evidence before model prompt construction", () => {
+    const secret = "Bearer tiny_token";
+    const report: BugReportInput = {
+      description: `do not leak ${secret}`,
+      failingOutput: `AssertionError token=${secret}`,
+      stackTrace: `at half (src/buggy.ts:1:40) Bearer ${secret}`,
+    };
+    const messages = buildBugPrompt(report, parseFailureEvidence(report), makePack([]), "vitest");
+    const user = messages.find((m) => m.role === "user")?.content ?? "";
+    expect(user).not.toContain(secret);
+    expect(user).toContain("[REDACTED]");
+    expect(user).toContain("Bearer [REDACTED]");
+  });
+
   it("embeds redacted context excerpts when the pack is non-empty", () => {
     const pack = makePack([makeEntry({ path: "src/buggy.ts", excerpt: "n / 3" })]);
     const messages = buildBugPrompt(REPORT, parseFailureEvidence(REPORT), pack, "vitest");

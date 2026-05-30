@@ -1,5 +1,5 @@
 // Wave 2 local UI BFF (ADR-0011). A hand-written node:http server with zero new runtime
-// dependencies that serves the static export and exposes the eleven-route JSON + SSE API contract;
+// dependencies that serves the static export and exposes the twelve-route JSON + SSE API contract;
 // the browser tier is presentation-only and holds no secret, harness handle, or filesystem authority.
 
 export { createUiServer, DEFAULT_UI_PORT, UI_HOST, type UiServerDeps } from "./server.js";

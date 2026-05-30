@@ -186,6 +186,12 @@ describe("readWorkspaceFile", () => {
     expect(() => readWorkspaceFile(detectWorkspace(dir), ".env")).toThrow(PathDeniedError);
   });
 
+  it("refuses to read a symlink alias whose real target is denied", () => {
+    file(".env", "SECRET=1");
+    symlinkSync(join(dir, ".env"), join(dir, "alias.env"));
+    expect(() => readWorkspaceFile(detectWorkspace(dir), "alias.env")).toThrow(PathDeniedError);
+  });
+
   it("denied-path error carries the WORKSPACE_PATH_DENIED code", () => {
     file(".env", "SECRET=1");
     let caught: unknown;

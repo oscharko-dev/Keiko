@@ -1,4 +1,4 @@
-// BFF route dispatch (ADR-0011 D5). The eleven-route contract is wired here. The route TABLE
+// BFF route dispatch (ADR-0011 D5). The twelve-route contract is wired here. The route TABLE
 // (method + pattern) is static and dependency-free; each entry names a handler that receives the
 // request context AND the per-server handler dependencies (resolved config, evidence store, run
 // registry, redactor — see deps.ts). A handler returns a RouteResult (status + JSON body, which the
@@ -12,6 +12,7 @@ import {
   handleConfig,
   handleModels,
   handleWorkflows,
+  handleWorkspace,
   handleEvidenceList,
   handleEvidenceDetail,
 } from "./read-handlers.js";
@@ -61,7 +62,7 @@ function health(): RouteResult {
   return { status: 200, body: { status: "ok", version: SDK_VERSION } };
 }
 
-// The full eleven-route contract (D5), in contract order.
+// The full twelve-route contract (D5), in contract order.
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
   { method: "GET", pattern: "/api/config", handler: handleConfig },
@@ -74,6 +75,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/runs/:runId/apply", handler: handleApplyRun },
   { method: "GET", pattern: "/api/evidence", handler: handleEvidenceList },
   { method: "GET", pattern: "/api/evidence/:runId", handler: handleEvidenceDetail },
+  { method: "GET", pattern: "/api/workspace", handler: handleWorkspace },
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured

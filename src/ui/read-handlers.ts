@@ -1,9 +1,10 @@
-// The five read-only BFF endpoints (ADR-0011 D5 routes 2,3,4,10,11). Each returns a redacted JSON
+// The six read-only BFF endpoints (ADR-0011 D5 routes 2,3,4,10,11,12). Each returns a redacted JSON
 // projection of already-safe data: config via `toSafeObject` (strips apiKey), the full capability
-// registry, the workflow launch-form descriptors, and evidence list/detail served straight from the
-// store (manifests are redacted-by-construction on disk, served as-is per D9). No secret reaches any
-// response; the config route never leaks the config path even on a load failure (handled upstream in
-// deps.ts, which yields `config: undefined` rather than throwing).
+// registry, the workflow launch-form descriptors, the workspace summary built from the workspace
+// layer, and evidence list/detail served straight from the store (manifests are redacted-by-
+// construction on disk, served as-is per D9). No secret reaches any response; the config route
+// never leaks the config path even on a load failure (handled upstream in deps.ts, which yields
+// `config: undefined` rather than throwing).
 
 import { toSafeObject, listCapabilities } from "../gateway/index.js";
 import {
@@ -18,6 +19,16 @@ import {
   EvidenceSchemaError,
   type EvidenceListEntry,
 } from "../audit/index.js";
+import {
+  buildContextPackFromFiles,
+  buildWorkspaceSummary,
+  DEFAULT_CONTEXT_REQUEST,
+  detectWorkspace,
+  discoverWithStats,
+  WORKSPACE_CODES,
+  WorkspaceError,
+  type WorkspaceSummary,
+} from "../workspace/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -58,6 +69,71 @@ export function handleWorkflows(): RouteResult {
       },
     },
   };
+}
+
+function parsePositiveBudget(value: string | null): number | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  if (!/^[1-9][0-9]*$/u.test(value)) {
+    throw new Error("invalid budget");
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error("invalid budget");
+  }
+  return parsed;
+}
+
+function workspaceErrorResult(error: WorkspaceError): RouteResult {
+  const status =
+    error.code === WORKSPACE_CODES.NOT_FOUND
+      ? 404
+      : error.code === WORKSPACE_CODES.FILE_TOO_LARGE || error.code === WORKSPACE_CODES.READ_FAILED
+        ? 422
+        : 400;
+  return { status, body: errorBody(error.code, error.message) };
+}
+
+// Route 12 — workspace summary and optional context pack, built by the safe workspace layer.
+export function handleWorkspace(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const q = ctx.url.searchParams;
+  let budget: number | undefined;
+  try {
+    budget = parsePositiveBudget(q.get("budget"));
+  } catch {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "The budget query parameter must be a positive integer."),
+    };
+  }
+  const dir = q.get("dir") ?? ".";
+  const task = q.get("task") ?? undefined;
+  try {
+    const workspace = detectWorkspace(dir);
+    const { files, stats } = discoverWithStats(workspace, DEFAULT_CONTEXT_REQUEST.discovery);
+    const wantsContext = task !== undefined || budget !== undefined;
+    const pack = wantsContext
+      ? buildContextPackFromFiles(
+          workspace,
+          {
+            ...DEFAULT_CONTEXT_REQUEST,
+            task,
+            budgetBytes: budget ?? DEFAULT_CONTEXT_REQUEST.budgetBytes,
+          },
+          files,
+        )
+      : undefined;
+    const summary = buildWorkspaceSummary(workspace, pack, stats);
+    const body = deps.redactor({ summary }) as { readonly summary: WorkspaceSummary };
+    return { status: 200, body };
+  } catch (error) {
+    if (error instanceof WorkspaceError) {
+      const result = workspaceErrorResult(error);
+      return { status: result.status, body: deps.redactor(result.body) };
+    }
+    throw error;
+  }
 }
 
 interface EvidenceFilters {

@@ -101,7 +101,7 @@ threefold and load-bearing:
    runtime is the Node `node:http` server in `src/ui/**` with **zero new runtime dependencies**, so
    the package's `dependencies` map stays empty and all seven checks stay lean and green.
 2. **Minimal, auditable trust boundary.** The server-side authority is a small, hand-written Node
-   BFF with an explicit, tiny route table (D5 lists eleven routes). That is far easier to
+   BFF with an explicit, tiny route table (D5 lists twelve routes). That is far easier to
    security-audit — and far smaller an attack surface — than the full Next server runtime, its
    middleware, its image optimizer, and its request handling.
 3. **Offline determinism.** A directory of static assets plus a local Node server is trivially
@@ -114,7 +114,7 @@ is the **sole** holder of harness/gateway/secret/filesystem authority. The `keik
 launches the BFF and prints the local URL.
 
 **Consequence.** The package gains zero runtime dependencies; the supply-chain gates stay lean; the
-audited trust boundary is an eleven-route Node server, not a framework runtime; CI is offline and
+audited trust boundary is a twelve-route Node server, not a framework runtime; CI is offline and
 deterministic. The cost: the UI cannot use Next server-side rendering, server actions, route
 handlers, or `next/image` optimization at runtime — every dynamic behaviour is a client fetch to the
 BFF (accepted; D4/D5 define that contract).
@@ -217,6 +217,7 @@ the existing public types from the seam map (ADR-0003/0004/0007/0008/0009/0010).
 | 9 | `POST /api/runs/:runId/apply` | — (optionally `{ "confirm": true }`) | `{ "report": <apply+verify result> }` | **The only write path.** Re-runs the workflow / applies the proposed patch through the existing gated path with `apply: true` (D8). Returns the apply+verify result. |
 | 10 | `GET /api/evidence` | query: `?workspace&date&workflow&model&outcome` (all optional filters) | `{ "entries": EvidenceListEntry[] }` | `listEvidence(store)` header projection; filters applied server-side. |
 | 11 | `GET /api/evidence/:runId` | — | `{ "manifest": EvidenceManifest }` | `loadEvidence(store, runId)`; served **as-is** (already redacted on disk, D9). `404` if absent; `422` on `EvidenceSchemaError` with the safe pre-redacted `.message`. |
+| 12 | `GET /api/workspace` | query: `?dir&task&budget` (`dir` defaults to `.`; optional `task`; optional positive integer `budget`) | `{ "summary": WorkspaceSummary }` | Workspace-layer summary endpoint. Builds the summary from the safe workspace primitives, and includes a context pack when `task` or `budget` is provided. Response bodies are redacted before serialization. |
 
 **SSE framing.** Each event is one SSE message: `event:` is the harness/workflow event `type`;
 `data:` is the redacted event JSON on a single line; messages are separated by a blank line. The
@@ -245,7 +246,7 @@ no detail). `code` is a stable machine string (e.g. `BAD_REQUEST`, `NOT_FOUND`,
   defense), and binds the listening socket to `127.0.0.1` only — never `0.0.0.0`.
 
 **Consequence.** The frontend and BFF teams build in parallel against a frozen contract; the
-contract is small (eleven routes) and auditable. The cost: any later capability requires a route
+contract is small (twelve routes) and auditable. The cost: any later capability requires a route
 addition, and the CSP forbids inline scripts, so the static export must not emit inline `<script>`
 blocks (Next static export with `script-src 'self'` is compatible; verified as an implementation
 acceptance check).
@@ -414,7 +415,7 @@ contract. The cost: six surfaces is a meaningful frontend build, parallelized in
 
 ### D13 — Scope fence
 
-**In scope.** The six surfaces; the eleven-route BFF; the `keiko ui` command; the `ui/` toolchain and
+**In scope.** The six surfaces; the twelve-route BFF; the `keiko ui` command; the `ui/` toolchain and
 its isolation; the packaging hooks; the `ui` CI job; the WCAG 2.2 AA baseline; and a pilot runbook
 doc (`docs/`) covering UI launch, local-only operation, supported runtime, and accessibility status
 (issue §8). The runbook is created by #13 and **notes the #12 linkage** (the pilot runbook from #12
@@ -435,7 +436,7 @@ any edit to the frozen core layers (D2).
   `npm sbom --omit dev`, `dependency-review`, and package-surface review stay lean and green by
   construction (D1/D3/D4).
 - **A small, auditable trust boundary.** One boundary (browser ↔ BFF), one inward import direction,
-  an eleven-route hand-written server — far smaller to audit than a framework server runtime (D2/D5).
+  a twelve-route hand-written server — far smaller to audit than a framework server runtime (D2/D5).
 - **The browser cannot leak a secret.** Config via `toSafeObject`, live payloads via
   `deepRedactStrings`, manifests already redacted on disk, live events redacted by the harness
   emitter (the sink omits `retainsRawContent`) — no secret reaches the DOM, network, or downloads,
