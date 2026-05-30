@@ -72,7 +72,7 @@ export function classifyScripts(scripts: Readonly<Record<string, string>>): Scri
 }
 
 export function detectScripts(workspace: WorkspaceInfo, fs?: WorkspaceFs): ScriptCatalog {
-  let scripts: Readonly<Record<string, string>> = {};
+  let scripts: Readonly<Record<string, string>>;
   try {
     const content = readWorkspaceFile(
       workspace,
