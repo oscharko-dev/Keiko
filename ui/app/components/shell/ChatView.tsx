@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { fetchChatMessages, ApiError } from "@/lib/api";
-import type { ChatMessage, ProjectWithAvailability } from "@/lib/types";
+import { ApiError, fetchChatMessages, fetchChats } from "@/lib/api";
+import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 import { ChatComposer } from "./ChatComposer";
 
 // ---------------------------------------------------------------------------
@@ -20,13 +20,23 @@ type MessagesState =
   | { kind: "error"; message: string }
   | { kind: "loaded"; messages: readonly ChatMessage[] };
 
+type ChatState =
+  | { kind: "loading" }
+  | { kind: "error"; message: string }
+  | { kind: "loaded"; chat: Chat }
+  | { kind: "notfound" };
+
 /**
  * Central chat view: project header + message list + composer.
  * Unavailable projects show a banner; composer is hidden.
  * This component only renders when both ?project= and ?chat= are present.
+ *
+ * Fetches the chat record (issue #65) so the composer can read `chat.selectedModel`
+ * and submit per-mode workflow runs against `project.path`.
  */
 export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
   const [state, setState] = useState<MessagesState>({ kind: "loading" });
+  const [chatState, setChatState] = useState<ChatState>({ kind: "loading" });
   const [refreshKey, setRefreshKey] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -52,16 +62,31 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
     return load();
   }, [load, refreshKey]);
 
-  // Scroll to bottom when messages load or new message arrives
+  useEffect(() => {
+    let active = true;
+    setChatState({ kind: "loading" });
+    void fetchChats(project.path)
+      .then(({ chats }) => {
+        if (!active) return;
+        const found = chats.find((c) => c.id === chatId);
+        setChatState(found === undefined ? { kind: "notfound" } : { kind: "loaded", chat: found });
+      })
+      .catch((err: unknown) => {
+        if (!active) return;
+        const message = err instanceof ApiError ? err.message : "Failed to load chat";
+        setChatState({ kind: "error", message });
+      });
+    return () => {
+      active = false;
+    };
+  }, [chatId, project.path]);
+
   useEffect(() => {
     if (state.kind === "loaded") {
       bottomRef.current?.scrollIntoView?.({ behavior: "smooth" });
     }
   }, [state]);
 
-  // Focus composer on mount (D8: New chat → focus composer).
-  // The ref is attached to ChatComposer's <textarea> via the textareaRef prop,
-  // so it is available synchronously after the first render.
   useEffect(() => {
     composerRef.current?.focus();
   }, [chatId]);
@@ -137,10 +162,12 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
         <div ref={bottomRef} aria-hidden="true" />
       </div>
 
-      {/* Composer — hidden for unavailable projects */}
-      {available && (
+      {/* Composer — hidden for unavailable projects or while the chat record is still loading. */}
+      {available && chatState.kind === "loaded" && (
         <ChatComposer
           chatId={chatId}
+          chat={chatState.chat}
+          project={project}
           onMessageSent={handleMessageSent}
           textareaRef={composerRef}
         />
