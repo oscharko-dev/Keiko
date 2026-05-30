@@ -3,7 +3,7 @@
 // 0o700/0o600 permission hardening (Unix), and reopen-safe migrations.
 
 import { DatabaseSync } from "node:sqlite";
-import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
@@ -115,6 +115,16 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
   };
 }
 
+function quarantineCorruptDb(target: string): void {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  renameSync(target, `${target}.corrupt.${ts}`);
+  for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
+    if (existsSync(sidecar)) {
+      renameSync(sidecar, `${sidecar}.corrupt.${ts}`);
+    }
+  }
+}
+
 function preparedDatabase(target: string): DatabaseSync {
   const db = new DatabaseSync(target);
   db.exec("PRAGMA foreign_keys = ON");
@@ -159,8 +169,16 @@ function chmodIfPresent(path: string, mode: number): void {
 
 export function createNodeUiStore(dbPath: string, opts?: UiStoreFactoryOptions): UiStore {
   ensureDirHardened(dirname(dbPath));
-  const db = preparedDatabase(dbPath);
-  db.exec("PRAGMA journal_mode = WAL");
+  let db = preparedDatabase(dbPath);
+  try {
+    db.exec("PRAGMA journal_mode = WAL");
+  } catch {
+    // Corrupt DB: quarantine (rename to .corrupt.<iso>) and open a fresh one.
+    db.close();
+    quarantineCorruptDb(dbPath);
+    db = preparedDatabase(dbPath);
+    db.exec("PRAGMA journal_mode = WAL");
+  }
   runMigrations(db);
   chmodIfPresent(dbPath, 0o600);
   chmodIfPresent(`${dbPath}-wal`, 0o600);

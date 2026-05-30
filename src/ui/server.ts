@@ -89,6 +89,25 @@ function fallbackDeps(): UiHandlerDeps {
   };
 }
 
+function isStateChangingMethod(method: string): boolean {
+  return (
+    method === "POST" || method === "PATCH" || method === "PUT" || method === "DELETE"
+  );
+}
+
+// Returns true when the request was rejected (caller should return immediately).
+function rejectIfInvalidStateChange(req: IncomingMessage, res: ServerResponse): boolean {
+  if (!isJsonRequest(req)) {
+    rejectUnsupportedMediaType(res);
+    return true;
+  }
+  if (!hasCsrfHeader(req)) {
+    rejectCsrf(res);
+    return true;
+  }
+  return false;
+}
+
 async function dispatchApi(
   deps: UiServerDeps,
   req: IncomingMessage,
@@ -105,15 +124,8 @@ async function dispatchApi(
     writeJson(res, 405, methodNotAllowedBody());
     return;
   }
-  if (method === "POST") {
-    if (!isJsonRequest(req)) {
-      rejectUnsupportedMediaType(res);
-      return;
-    }
-    if (!hasCsrfHeader(req)) {
-      rejectCsrf(res);
-      return;
-    }
+  if (isStateChangingMethod(method) && rejectIfInvalidStateChange(req, res)) {
+    return;
   }
   const ctx: RouteContext = { req, res, params: match.params, url };
   const handlerDeps = deps.handlerDeps ?? fallbackDeps();

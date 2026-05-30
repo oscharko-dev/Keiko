@@ -148,8 +148,13 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     resolveEvidenceDir(options.evidenceDir, options.env),
   );
   const secrets = redactionSecrets(options.env, config);
+  const redactString = createAuditRedactor(
+    { additionalSecrets: secrets },
+    options.env,
+  );
   const uiStore =
-    options.store ?? createNodeUiStore(resolveUiDbPath(options.uiDbPath, options.env));
+    options.store ??
+    createNodeUiStore(resolveUiDbPath(options.uiDbPath, options.env), { redactString });
   return {
     config,
     configPresent,

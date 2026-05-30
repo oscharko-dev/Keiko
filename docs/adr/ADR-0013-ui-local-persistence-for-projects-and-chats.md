@@ -489,6 +489,10 @@ migration (`user_version` 2) under a follow-up issue.
 - Cascade deletes (`ON DELETE CASCADE`) mean `deleteProject` removes all chats and messages for
   that project in one SQL operation without BFF-layer loop logic.
 
+### Known follow-ups
+
+- L1 hardening: chmod-follows-symlink path-pivot defense pending; tracked separately.
+
 ## Alternatives Considered
 
 ### Alternative 1: `better-sqlite3` (npm runtime dependency)

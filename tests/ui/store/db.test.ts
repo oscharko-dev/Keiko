@@ -2,7 +2,7 @@
 // Asserts perms 0o700/0o600 on the dir/file (Unix), and that the DB file is NOT inside process.cwd().
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, statSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, existsSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createInMemoryUiStore, createNodeUiStore } from "../../../src/ui/store/index.js";
@@ -80,5 +80,21 @@ describe("createNodeUiStore — on-disk file", () => {
     const store = createNodeUiStore(dbPath);
     expect(dbPath.startsWith(process.cwd())).toBe(false);
     store.close();
+  });
+
+  it("quarantines a corrupt DB file and opens a fresh store (M2)", () => {
+    const dbPath = join(tmpDir, "corrupt.db");
+    // Write non-SQLite garbage to the target path.
+    writeFileSync(dbPath, Buffer.from("not a sqlite db"));
+
+    // createNodeUiStore must survive the corrupt file and return a working store.
+    const store = createNodeUiStore(dbPath);
+    expect(store.listProjects()).toEqual([]);
+    store.close();
+
+    // A .corrupt.<timestamp> sibling file must exist.
+    const siblings = readdirSync(tmpDir);
+    const corruptFiles = siblings.filter((f) => f.startsWith("corrupt.db.corrupt."));
+    expect(corruptFiles).toHaveLength(1);
   });
 });

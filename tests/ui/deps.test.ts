@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildRedactor, buildUiHandlerDeps } from "../../src/ui/deps.js";
 import { createInMemoryUiStore } from "../../src/ui/store/index.js";
+import { DatabaseSync } from "node:sqlite";
 
 const tmpDirs: string[] = [];
 
@@ -66,5 +67,54 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(deps.store).toBeDefined();
     expect(deps.store.listProjects()).toEqual([]);
     deps.store.close();
+  });
+});
+
+describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () => {
+  it("redacts API-key-shaped env value from persisted shortResult (H1)", () => {
+    // Build deps with a real env containing a synthetic API-key-shaped secret.
+    // The secret MUST NOT appear verbatim in the on-disk DB after a message is persisted.
+    const SECRET = "sk-keiko-test-h1-NOT-A-REAL-SECRET";
+    const uiDir = tmp("h1-");
+    const evidenceDir = tmp("h1-ev-");
+    const dbPath = join(uiDir, "keiko-ui.db");
+
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { KEIKO_DEFAULT_API_KEY: SECRET },
+      uiDbPath: dbPath,
+    });
+
+    // Create the minimum store entities to reach createMessage.
+    const proj = deps.store.createProject(uiDir);
+    const chat = deps.store.createChat(proj.path, "t", "m");
+    deps.store.createMessage({
+      chatId: chat.id,
+      role: "user",
+      content: "content",
+      timestamp: Date.now(),
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: `leak ${SECRET} tail`,
+    });
+
+    // shortResult returned by listMessages must not contain the literal secret.
+    const messages = deps.store.listMessages(chat.id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.shortResult).not.toContain(SECRET);
+    expect(messages[0]?.shortResult).toContain("[REDACTED]");
+
+    deps.store.close();
+
+    // On-disk raw row must also not contain the literal secret.
+    const db = new DatabaseSync(dbPath);
+    const row = db.prepare("SELECT short_result FROM chat_messages LIMIT 1").get() as {
+      short_result: string | null;
+    };
+    db.close();
+    expect(row.short_result).not.toContain(SECRET);
+    expect(row.short_result).toContain("[REDACTED]");
   });
 });
