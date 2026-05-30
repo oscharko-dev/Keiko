@@ -94,6 +94,27 @@ describe("runLoop — task-type routing", () => {
     expect(types).toContain("tool:call:completed");
     expect(ctx.patchDiff).toContain("+fix");
   });
+
+  it("preserves assistant tool calls and tool_call_id for the follow-up model turn", async () => {
+    const firstToolCall = toolCall("t1");
+    const scripted = scriptedModel([
+      response({ finishReason: "tool_calls", toolCalls: [firstToolCall] }),
+      response({ content: "--- a/x\n+++ b/x\n+fix" }),
+    ]);
+    const tool = recordingTool([{ name: "read_file", description: "read", parameters: {} }]);
+    const { ctx } = buildContext({ task: INVESTIGATE, model: scripted.port, tools: tool.port });
+    await runLoop(ctx);
+    const secondRequest = scripted.requests()[1];
+    expect(secondRequest?.messages.at(-2)).toMatchObject({
+      role: "assistant",
+      toolCalls: [firstToolCall],
+    });
+    expect(secondRequest?.messages.at(-1)).toMatchObject({
+      role: "tool",
+      toolCallId: "t1",
+      content: "tool output",
+    });
+  });
 });
 
 describe("runLoop — cancellation", () => {

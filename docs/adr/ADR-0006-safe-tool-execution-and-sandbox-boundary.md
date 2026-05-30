@@ -231,15 +231,12 @@ tool output feeds the model but is not persisted in the audit ledger (issue #10)
 stream. The audit ledger receives `RunManifest.events`, which contains only the metadata events; it
 does not receive the message array unless explicitly included.
 
-**Broadened `redact()` patterns (additive).** Four common credential shapes and one PEM marker were
+**Broadened `redact()` patterns (additive).** Four common credential shapes and PEM markers were
 added to `src/gateway/redaction.ts` (lines 15–19): GitHub tokens (`gh[pousr]_[A-Za-z0-9]{20,}`),
 AWS access key IDs (`AKIA[0-9A-Z]{16}`), Slack tokens (`xox[baprs]-[A-Za-z0-9-]{10,}`), Google API
-keys (`AIza[0-9A-Za-z_-]{20,}`), and the PEM private key header line
-(`-----BEGIN [A-Z ]*PRIVATE KEY-----`). Each pattern uses a single linear character class with one
-bounded or open quantifier — no nested quantifiers — satisfying the CodeQL `js/polynomial-redos`
-rule. The PEM pattern redacts only the header line; the base64 body is not pattern-matched
-(documenting this as a limitation is the honest position: the body is opaque base64 and requires
-structural awareness to redact reliably).
+keys (`AIza[0-9A-Za-z_-]{20,}`), and PEM private key blocks
+(`-----BEGIN [A-Z ]*PRIVATE KEY-----` through the matching `END` marker). The PEM header-only
+fallback still covers truncated output.
 
 The stale comment in `src/harness/emitter.ts` that described broadened redaction as out of scope
 for Wave 1 has been updated to reflect that these patterns are now active (line 35).
@@ -310,11 +307,6 @@ Tool consumers (`WorkspaceToolHost` callers) depend only on the `ToolPort` inter
 - **Windows grandchild orphaning.** On Windows, `child.kill()` terminates the immediate child only.
   Grandchildren spawned by the child (e.g. a test runner that forks workers) may continue running.
   `tree-kill` would solve this but is a runtime npm dependency forbidden by ADR-0001.
-- **PEM body not redacted.** The `PEM_PRIVATE_KEY_PATTERN` matches the header line
-  (`-----BEGIN … PRIVATE KEY-----`) but not the base64 body following it. A full private key in
-  command output would have its header redacted but its body present. Operators should not pipe
-  key material through `run_command`; the env allowlist ensures no key path is forwarded, but a
-  script that reads and prints a key from a path the model constructs would bypass this.
 - **Bounded unified-diff subset only.** The parser handles the common cases (create, modify,
   delete, standard hunks) but not rename detection, extended git-diff headers, or fuzzy matching.
   A diff produced by a non-standard tool may fail to parse or produce conflicts where a full

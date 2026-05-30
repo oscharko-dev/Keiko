@@ -62,6 +62,7 @@ export interface EvalRunOptions {
   readonly fixtures: readonly EvaluationFixture[];
   // Overrides the model ID for all fixtures (live mode only); falls back to the fixture's modelId.
   readonly modelIdOverride?: string | undefined;
+  readonly configPath?: string | undefined;
 }
 
 const FIXED_EVAL_EPOCH_MS = 1_700_000_000_000;
@@ -87,6 +88,7 @@ function resolveModelPort(
     mode: options.mode,
     transcript: fixture.mockTranscript,
     modelId,
+    ...(options.configPath === undefined ? {} : { configPath: options.configPath }),
     ...(deps.env === undefined ? {} : { env: deps.env }),
   });
 }

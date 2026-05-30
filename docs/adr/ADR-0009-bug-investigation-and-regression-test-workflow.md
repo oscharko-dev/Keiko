@@ -510,7 +510,8 @@ structure.
 | `--stack TEXT` | string | Inline stack trace. |
 | `--file PATH[,PATH]` | string | Comma-list of suspected target files. |
 | `--apply` | flag | Enable apply mode; default is dry-run. |
-| `--model MODEL_ID` | string | Model ID; defaults to first configured provider. |
+| `--model MODEL_ID` | string | Model ID; defaults to the cheapest configured model that supports tools and structured output. |
+| `--config PATH` | string | Gateway config file; otherwise `KEIKO_CONFIG_FILE` is required. |
 | `--json` | flag | Emit `BugInvestigationReport` as JSON. |
 | `--dir-root PATH` | string | Workspace root override; defaults to cwd. |
 

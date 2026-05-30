@@ -73,6 +73,11 @@ describe("parseGatewayConfig", () => {
     expect(() => parseGatewayConfig(raw)).toThrow(/timeoutMs/);
   });
 
+  it("rejects a provider modelId that is not in the capability registry", () => {
+    const raw = rawWithProvider((p) => ({ ...p, modelId: "not-in-registry" }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/capability registry/);
+  });
+
   it("rejects an empty providers array", () => {
     expect(() => parseGatewayConfig({ providers: [], circuitBreaker: {} })).toThrow(
       ConfigInvalidError,
@@ -134,8 +139,18 @@ describe("parseGatewayConfig", () => {
       }
     });
 
-    it("accepts a private/internal IP baseUrl (customer-internal endpoint use case)", () => {
+    it("rejects a plaintext non-loopback baseUrl", () => {
       const raw = rawWithProvider((p) => ({ ...p, baseUrl: "http://10.0.0.5:8000/v1" }));
+      expect(() => parseGatewayConfig(raw)).toThrow(/https/);
+    });
+
+    it("accepts a plaintext loopback baseUrl for local development", () => {
+      const raw = rawWithProvider((p) => ({ ...p, baseUrl: "http://127.0.0.1:8000/v1" }));
+      expect(() => parseGatewayConfig(raw)).not.toThrow();
+    });
+
+    it("accepts a plaintext IPv6 loopback baseUrl for local development", () => {
+      const raw = rawWithProvider((p) => ({ ...p, baseUrl: "http://[::1]:8000/v1" }));
       expect(() => parseGatewayConfig(raw)).not.toThrow();
     });
 

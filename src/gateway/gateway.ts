@@ -51,9 +51,14 @@ export class Gateway {
     const start = this.clock.now();
     const adapter = this.adapterFor(requestId, route.capability);
     const result = await executeWithRetry(
-      () => this.invoke(breaker, adapter, request, route.provider),
+      (attemptTimeoutMs) =>
+        this.invoke(breaker, adapter, request, {
+          ...route.provider,
+          ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
+        }),
       route.provider,
       this.clock,
+      request.cancellationSignal,
     );
     return {
       ...result,

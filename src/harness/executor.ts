@@ -92,7 +92,9 @@ export async function handleModelCall(ctx: RunContext): Promise<StateStep> {
 }
 
 function assistantMessage(response: NormalizedResponse): ChatMessage {
-  return { role: "assistant", content: response.content };
+  return response.toolCalls.length === 0
+    ? { role: "assistant", content: response.content }
+    : { role: "assistant", content: response.content, toolCalls: response.toolCalls };
 }
 
 // S-M1: emits the redacted audit event matching a tool's metadata, in addition to

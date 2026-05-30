@@ -44,7 +44,7 @@ function validConfig(): string {
       {
         modelId: "gpt-oss-120b",
         baseUrl: "https://host.example/v1",
-        apiKey: "sk-secret-config-value-1234567890",
+        apiKey: "test-config-secret-value-1234567890",
         timeoutMs: 30000,
         maxRetries: 3,
         retryBaseDelayMs: 500,
@@ -107,6 +107,24 @@ describe("runModelsCli validate", () => {
     const code = runModelsCli(["validate", "--config", path], c.io, {});
     expect(code).toBe(1);
     expect(c.err()).toContain("GATEWAY_CONFIG_INVALID");
+  });
+
+  it("rejects a config whose modelId is absent from the capability registry", () => {
+    const path = join(dir, "unknown-model.json");
+    const parsed = JSON.parse(validConfig()) as {
+      providers: { modelId: string }[];
+    };
+    const provider = parsed.providers[0];
+    if (provider === undefined) {
+      throw new Error("test fixture must include one provider");
+    }
+    provider.modelId = "not-in-registry";
+    writeFileSync(path, JSON.stringify(parsed), "utf8");
+    const c = makeIo();
+    const code = runModelsCli(["validate", "--config", path], c.io, {});
+    expect(code).toBe(1);
+    expect(c.err()).toContain("GATEWAY_CONFIG_INVALID");
+    expect(c.err()).toContain("capability registry");
   });
 
   it("never prints a credential value when reporting a validation error", () => {

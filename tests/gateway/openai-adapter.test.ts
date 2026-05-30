@@ -3,6 +3,8 @@ import { OpenAiAdapter } from "../../src/gateway/openai-adapter.js";
 import {
   AuthenticationError,
   CancelledError,
+  ContextOverflowError,
+  ModelRefusalError,
   ProviderError,
   RateLimitError,
   TimeoutError,
@@ -118,6 +120,30 @@ describe("OpenAiAdapter.call", () => {
     }
   });
 
+  it("maps provider context-window errors to ContextOverflowError", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse(
+          { error: { code: "context_length_exceeded", message: "prompt too long" } },
+          { status: 400 },
+        ),
+      ),
+    );
+    await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(ContextOverflowError);
+  });
+
+  it("maps provider safety refusals to ModelRefusalError", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse(
+          { error: { code: "content_filter", message: "blocked by policy" } },
+          { status: 400 },
+        ),
+      ),
+    );
+    await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(ModelRefusalError);
+  });
+
   it("throws TransportError when fetch rejects with a network TypeError", async () => {
     const adapter = adapterWith(() => Promise.reject(new TypeError("network down")));
     await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(TransportError);
@@ -152,6 +178,61 @@ describe("OpenAiAdapter.call", () => {
     } catch (error) {
       expect((error as Error).message).not.toContain(CONFIG.apiKey);
     }
+  });
+
+  it("redacts file-configured provider secrets reflected in successful model content", async () => {
+    const customSecret = "opaque-config-token-value-987";
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: `token=${customSecret}`,
+                tool_calls: [
+                  {
+                    id: "call_1",
+                    function: {
+                      name: "search",
+                      arguments: JSON.stringify({ token: customSecret }),
+                    },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+        }),
+      ),
+    );
+    const result = await adapter.call(REQUEST, { ...CONFIG, apiKey: customSecret });
+    const serialized = JSON.stringify(result);
+    expect(serialized).not.toContain(customSecret);
+    expect(serialized).toContain("[REDACTED]");
+  });
+
+  it("redacts file-configured provider secrets reflected in structured output", async () => {
+    const customSecret = "opaque-structured-token-value-987";
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              message: { role: "assistant", content: JSON.stringify({ token: customSecret }) },
+              finish_reason: "stop",
+            },
+          ],
+        }),
+      ),
+    );
+    const result = await adapter.call(
+      { ...REQUEST, responseFormat: { type: "json_schema", schema: { type: "object" } } },
+      { ...CONFIG, apiKey: customSecret },
+    );
+    const serialized = JSON.stringify(result);
+    expect(result.structuredOutput).toEqual({ token: "[REDACTED]" });
+    expect(serialized).not.toContain(customSecret);
   });
 
   it("throws TimeoutError when fetch aborts with a TimeoutError DOMException", async () => {
@@ -191,5 +272,49 @@ describe("OpenAiAdapter.call", () => {
     };
     expect(body.tools[0]?.function.name).toBe("search");
     expect(body.response_format.type).toBe("json_schema");
+  });
+
+  it("serialises assistant tool_calls and tool response tool_call_id on continuation turns", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "done" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(
+      {
+        ...REQUEST,
+        messages: [
+          { role: "user", content: "search" },
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [{ id: "call_1", name: "search", arguments: { q: "hi" } }],
+          },
+          { role: "tool", content: "result", toolCallId: "call_1" },
+        ],
+      },
+      CONFIG,
+    );
+    const body = sentBody as {
+      messages: {
+        role: string;
+        content: string | null;
+        tool_call_id?: string;
+        tool_calls?: { id: string; function: { name: string; arguments: string } }[];
+      }[];
+    };
+    expect(body.messages[1]).toMatchObject({
+      role: "assistant",
+      content: null,
+      tool_calls: [{ id: "call_1", function: { name: "search", arguments: '{"q":"hi"}' } }],
+    });
+    expect(body.messages[2]).toMatchObject({
+      role: "tool",
+      content: "result",
+      tool_call_id: "call_1",
+    });
   });
 });

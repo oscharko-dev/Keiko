@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MalformedToolCallError } from "../../src/gateway/errors.js";
+import { MalformedToolCallError, ModelRefusalError } from "../../src/gateway/errors.js";
 import { normalizeChatResponse } from "../../src/gateway/normalize.js";
 
 const BASE_USAGE = { requestId: "req-1", latencyMs: 12, costClass: "medium" } as const;
@@ -132,6 +132,20 @@ describe("normalizeChatResponse", () => {
       choices: [{ message: { role: "assistant", content: "x" }, finish_reason: "length" }],
     });
     expect(normalizeChatResponse(payload, "m", BASE_USAGE).finishReason).toBe("length");
+  });
+
+  it("throws ModelRefusalError for a provider refusal field", () => {
+    const payload = chatPayload({
+      choices: [{ message: { role: "assistant", content: "", refusal: "I cannot comply" } }],
+    });
+    expect(() => normalizeChatResponse(payload, "m", BASE_USAGE)).toThrow(ModelRefusalError);
+  });
+
+  it("throws ModelRefusalError for content_filter finish_reason", () => {
+    const payload = chatPayload({
+      choices: [{ message: { role: "assistant", content: "" }, finish_reason: "content_filter" }],
+    });
+    expect(() => normalizeChatResponse(payload, "m", BASE_USAGE)).toThrow(ModelRefusalError);
   });
 
   it("returns empty content when the provider omits the choices array", () => {

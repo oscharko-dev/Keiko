@@ -52,12 +52,16 @@ export function toolCall(id: string, name = "read_file"): NormalizedToolCall {
 export function scriptedModel(script: readonly (NormalizedResponse | Error)[]): {
   port: ModelPort;
   calls: () => number;
+  requests: () => readonly Parameters<ModelPort["call"]>[0][];
 } {
   let i = 0;
+  const requests: Parameters<ModelPort["call"]>[0][] = [];
   return {
     calls: (): number => i,
+    requests: (): readonly Parameters<ModelPort["call"]>[0][] => requests,
     port: {
-      call: (): Promise<NormalizedResponse> => {
+      call: (request): Promise<NormalizedResponse> => {
+        requests.push(request);
         const item = script[Math.min(i, script.length - 1)];
         i += 1;
         if (item instanceof Error) {

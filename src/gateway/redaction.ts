@@ -16,14 +16,17 @@ const GITHUB_TOKEN_PATTERN = /\bgh[pousr]_[A-Za-z0-9]{20,}/g;
 const AWS_ACCESS_KEY_PATTERN = /\bAKIA[0-9A-Z]{16}\b/g;
 const SLACK_TOKEN_PATTERN = /\bxox[baprs]-[A-Za-z0-9-]{10,}/g;
 const GOOGLE_API_KEY_PATTERN = /\bAIza[0-9A-Za-z_-]{20,}/g;
-const PEM_PRIVATE_KEY_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/g;
+const PEM_PRIVATE_KEY_BLOCK_PATTERN =
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g;
+const PEM_PRIVATE_KEY_HEADER_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/g;
 
 const BUILTIN_PATTERNS: readonly RegExp[] = [
   GITHUB_TOKEN_PATTERN,
   AWS_ACCESS_KEY_PATTERN,
   SLACK_TOKEN_PATTERN,
   GOOGLE_API_KEY_PATTERN,
-  PEM_PRIVATE_KEY_PATTERN,
+  PEM_PRIVATE_KEY_BLOCK_PATTERN,
+  PEM_PRIVATE_KEY_HEADER_PATTERN,
 ];
 
 function escapeRegExp(value: string): string {

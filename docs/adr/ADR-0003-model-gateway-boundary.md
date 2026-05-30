@@ -469,11 +469,11 @@ Notes on registry design:
 
 Precedence order (highest wins):
 
-1. Explicit config file: path from `--config <path>` flag or `KEIKO_CONFIG_FILE` env var. JSON.
-   Schema validated before any field is read.
-2. Per-model env vars: `KEIKO_MODEL_<UPPER_MODEL_ID>_API_KEY` and
+1. Per-model env vars: `KEIKO_MODEL_<UPPER_MODEL_ID>_API_KEY` and
    `KEIKO_MODEL_<UPPER_MODEL_ID>_BASE_URL`. `UPPER_MODEL_ID` is the model ID with all
    non-alphanumeric characters replaced by `_` and uppercased.
+2. Explicit config file: path from `--config <path>` flag or `KEIKO_CONFIG_FILE` env var. JSON.
+   Schema validated before any field is read.
 3. Global fallback: `KEIKO_DEFAULT_API_KEY`, `KEIKO_DEFAULT_BASE_URL`.
 
 **Secret sourcing policy:**

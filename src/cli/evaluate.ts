@@ -25,7 +25,7 @@ import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:
   keiko evaluate [--suite <unit-tests|bug-investigation|all>] [--fixture <name>]
-                 [--live] [--model <id>] [--json] [--output <path>]
+                 [--live] [--model <id>] [--config PATH] [--json] [--output <path>]
 
 Runs the evaluation harness against the built-in fixtures. Offline by default
 (deterministic, no network); pass --live to evaluate against a configured model.
@@ -41,6 +41,7 @@ interface EvaluateArgs {
   readonly fixture: string | undefined;
   readonly live: boolean;
   readonly model: string | undefined;
+  readonly config: string | undefined;
   readonly json: boolean;
   readonly output: string | undefined;
 }
@@ -54,7 +55,7 @@ function flagValue(args: readonly string[], name: string): string | undefined | 
   return value === undefined || value.startsWith("--") ? null : value;
 }
 
-const VALUE_FLAGS = ["--suite", "--fixture", "--model", "--output"] as const;
+const VALUE_FLAGS = ["--suite", "--fixture", "--model", "--config", "--output"] as const;
 type ValueFlag = (typeof VALUE_FLAGS)[number];
 
 function readValueFlags(args: readonly string[]): Record<ValueFlag, string | undefined> | null {
@@ -79,6 +80,7 @@ function parseArgs(args: readonly string[]): EvaluateArgs | null {
     fixture: values["--fixture"],
     live: args.includes("--live"),
     model: values["--model"],
+    config: values["--config"],
     json: args.includes("--json"),
     output: values["--output"],
   };
@@ -173,6 +175,7 @@ async function runSuite(
         mode: parsed.live ? "live" : "offline",
         fixtures,
         ...(parsed.model === undefined ? {} : { modelIdOverride: parsed.model }),
+        ...(parsed.config === undefined ? {} : { configPath: parsed.config }),
       },
       // Provide Date.now as the default wall-clock so a real `keiko evaluate` prints the actual
       // current time. Tests override this via deps.runner.now for deterministic evaluatedAt.
@@ -192,8 +195,8 @@ function handleRunError(error: unknown, parsed: EvaluateArgs, io: CliIo): number
     io.err(
       `Error: model gateway configuration problem — ${redact(error.message)}\n` +
         (parsed.live
-          ? "Live evaluation requires a configured provider. Provide keiko.config.json or set " +
-            "KEIKO_DEFAULT_API_KEY and KEIKO_DEFAULT_BASE_URL.\n"
+          ? "Live evaluation requires a configured provider. Pass --config PATH or set " +
+            "KEIKO_CONFIG_FILE.\n"
           : ""),
     );
     return 1;

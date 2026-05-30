@@ -142,6 +142,32 @@ describe("Gateway.chat", () => {
     expect(calls).toBe(2);
   });
 
+  it("passes the remaining end-to-end timeout budget to retry attempts", async () => {
+    const seenTimeouts: number[] = [];
+    let current = 0;
+    const clock: Clock = {
+      now: (): number => current,
+      sleep: (ms): Promise<void> => {
+        current += ms;
+        return Promise.resolve();
+      },
+    };
+    let calls = 0;
+    const gateway = new Gateway(config([provider({ timeoutMs: 1000, retryBaseDelayMs: 100 })]), {
+      adapter: fakeAdapter((_request, cfg) => {
+        calls += 1;
+        seenTimeouts.push(cfg.timeoutMs);
+        current += calls === 1 ? 700 : 0;
+        return calls === 1
+          ? Promise.reject(new TransportError("transient"))
+          : Promise.resolve(okResponse("gpt-oss-120b"));
+      }),
+      clock,
+    });
+    await gateway.chat(REQUEST);
+    expect(seenTimeouts).toEqual([1000, 200]);
+  });
+
   it("opens the circuit after repeated failures and then blocks without calling the adapter", async () => {
     let calls = 0;
     const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {

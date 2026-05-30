@@ -75,7 +75,7 @@ Keiko reads credentials from environment variables or a JSON config file, never 
 2. Config-file value for that model's `apiKey` / `baseUrl`.
 3. Global fallback: `KEIKO_DEFAULT_API_KEY` / `KEIKO_DEFAULT_BASE_URL`.
 
-Config-file selection is surface-specific: `keiko models validate` and `keiko ui` accept `--config` or `KEIKO_CONFIG_FILE`; `keiko gen-tests` and `keiko investigate` read `./keiko.config.json` from the working directory.
+Live model surfaces (`keiko models validate`, `keiko gen-tests`, `keiko investigate`, `keiko evaluate --live`, and `keiko ui`) read a config only from `--config PATH` or `KEIKO_CONFIG_FILE`. Keiko does not implicitly trust `./keiko.config.json` from the target repository. Provider `baseUrl` values must use `https:` unless they target `localhost` or loopback for local development.
 
 See the README's [Configuration and secrets](../../README.md#configuration-and-secrets) section and `.env.example` for the full set of variable names.
 

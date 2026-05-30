@@ -4,6 +4,7 @@
 // and are excluded from every serialisation path.
 
 import { readFileSync } from "node:fs";
+import { findCapability } from "./capabilities.js";
 import { ConfigInvalidError } from "./errors.js";
 import type { CircuitBreakerConfig, GatewayConfig, ModelProviderConfig } from "./types.js";
 
@@ -68,6 +69,15 @@ function resolveSecret(modelId: string, fileValue: string, env: EnvSource, suffi
 // intentionally NOT restricted: Keiko addresses customer-internally-hosted endpoints
 // (private IPs are a valid, first-class target); this guard is scheme/credential
 // hygiene + defence-in-depth, not host filtering.
+function isLoopbackHost(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "::1" ||
+    hostname === "[::1]" ||
+    hostname.startsWith("127.")
+  );
+}
+
 function validateBaseUrl(baseUrl: string, path: string): void {
   let url: URL;
   try {
@@ -77,6 +87,11 @@ function validateBaseUrl(baseUrl: string, path: string): void {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new ConfigInvalidError(`${path}.baseUrl must use the http or https scheme`);
+  }
+  if (url.protocol === "http:" && !isLoopbackHost(url.hostname)) {
+    throw new ConfigInvalidError(
+      `${path}.baseUrl must use https unless it targets localhost or loopback`,
+    );
   }
   if (url.username !== "" || url.password !== "") {
     throw new ConfigInvalidError(
@@ -91,6 +106,9 @@ function parseProvider(raw: unknown, index: number, env: EnvSource): ModelProvid
     throw new ConfigInvalidError(`${path} must be an object`);
   }
   const modelId = requireNonEmptyString(raw.modelId, `${path}.modelId`);
+  if (findCapability(modelId) === undefined) {
+    throw new ConfigInvalidError(`${path}.modelId must be registered in the capability registry`);
+  }
   const fileBaseUrl = typeof raw.baseUrl === "string" ? raw.baseUrl : "";
   const fileApiKey = typeof raw.apiKey === "string" ? raw.apiKey : "";
   const baseUrl = resolveSecret(modelId, fileBaseUrl, env, "BASE_URL");

@@ -7,13 +7,12 @@
 
 import { Gateway } from "../gateway/gateway.js";
 import { loadConfigFromFile, type EnvSource } from "../gateway/config.js";
+import { ConfigInvalidError } from "../gateway/errors.js";
 import { GatewayModelPort } from "../harness/adapters.js";
 import type { ModelPort } from "../harness/ports.js";
 import type { NormalizedResponse } from "../gateway/types.js";
 import { createScriptedModelPort } from "./scripted-model.js";
 import type { EvaluationMode } from "./types.js";
-
-const DEFAULT_CONFIG_PATH = "./keiko.config.json";
 
 export interface EvaluationModelProviderDeps {
   readonly mode: EvaluationMode;
@@ -23,7 +22,7 @@ export interface EvaluationModelProviderDeps {
   readonly transcript: readonly (NormalizedResponse | Error)[];
   // The model ID the fixture targets.
   readonly modelId: string;
-  // Config file path for live mode. Defaults to ./keiko.config.json (matches the CLI commands).
+  // Config file path for live mode. If omitted, KEIKO_CONFIG_FILE must be set.
   readonly configPath?: string | undefined;
 }
 
@@ -34,6 +33,11 @@ export function createEvaluationModelProvider(deps: EvaluationModelProviderDeps)
   if (deps.mode === "offline") {
     return createScriptedModelPort(deps.transcript);
   }
-  const config = loadConfigFromFile(deps.configPath ?? DEFAULT_CONFIG_PATH, deps.env ?? {});
+  const env = deps.env ?? {};
+  const path = deps.configPath ?? env.KEIKO_CONFIG_FILE;
+  if (path === undefined) {
+    throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
+  }
+  const config = loadConfigFromFile(path, env);
   return new GatewayModelPort(new Gateway(config));
 }

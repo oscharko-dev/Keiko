@@ -82,6 +82,20 @@ describe("redact", () => {
     expect(result).toContain("[REDACTED]");
   });
 
+  it("redacts an entire multiline PEM private-key block", () => {
+    const pem = [
+      "-----BEGIN RSA " + "PRIVATE KEY-----",
+      "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC",
+      "sensitive-body-line",
+      "-----END RSA " + "PRIVATE KEY-----",
+    ].join("\n");
+    const result = redact(`key:\n${pem}\nend`);
+    expect(result).not.toContain("MIIEvQIBADAN");
+    expect(result).not.toContain("sensitive-body-line");
+    expect(result).not.toContain("END RSA " + "PRIVATE KEY");
+    expect(result).toContain("[REDACTED]");
+  });
+
   it("does not over-redact a git SHA", () => {
     const sha = "9fceb02d0ae598e95dc970b74767f19372d61af8";
     expect(redact(`commit ${sha}`)).toContain(sha);
