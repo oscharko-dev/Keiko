@@ -278,6 +278,29 @@ describe("AC5 — picking a different model PATCHes the chat before startRun", (
     await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
     expect(api.updateChat).not.toHaveBeenCalled();
   });
+
+  it("rolls back to a valid model when updateChat rejects and chat.selectedModel is stale", async () => {
+    // chat.selectedModel is a stale ID not in the registry — on mount pickDefaultModelId
+    // would have selected Mistral. After a failed updateChat the dropdown must land on
+    // a valid option (Mistral), NOT an empty/unavailable ID.
+    const user = userEvent.setup();
+    vi.mocked(api.updateChat).mockRejectedValueOnce(
+      new Error("network error"),
+    );
+    renderComposer(makeChat("stale-id-not-in-registry"));
+    await waitForReady();
+    const combo = screen.getByRole("combobox", { name: /model/i }) as HTMLSelectElement;
+    // On mount it should have fallen back to Mistral.
+    expect(combo.value).toBe("Mistral-Small-3.1-24B-Instruct-2503");
+    // Pick a different valid model so persistModelChange will call updateChat.
+    await user.selectOptions(combo, "Qwen2.5-Coder-7B-Instruct");
+    await selectMode("Verify");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+    // Wait for the error to be shown (updateChat failed).
+    await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
+    // The dropdown must show a valid option, not a blank/unavailable ID.
+    expect(combo.value).toBe("Mistral-Small-3.1-24B-Instruct-2503");
+  });
 });
 
 describe("AC6 + AC7 — per-mode startRun payload", () => {
@@ -431,11 +454,107 @@ describe("disabled state matrix", () => {
     expect(screen.getByRole("button", { name: /send message/i })).toBeDisabled();
   });
 
+  it("submit is disabled with Explain Plan + whitespace-only textarea", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    await selectMode("Explain Plan");
+    await user.type(screen.getByRole("textbox", { name: /message/i }), "   ");
+    expect(screen.getByRole("button", { name: /send message/i })).toBeDisabled();
+  });
+
+  it("submit is disabled with Explain Plan + only newlines in textarea", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    await selectMode("Explain Plan");
+    // Shift+Enter inserts a newline without submitting.
+    await user.click(screen.getByRole("textbox", { name: /message/i }));
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    expect(screen.getByRole("button", { name: /send message/i })).toBeDisabled();
+  });
+
+  it("submit is enabled with Explain Plan + non-empty first line", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    await selectMode("Explain Plan");
+    await user.type(screen.getByRole("textbox", { name: /message/i }), "path/to/file.ts");
+    expect(screen.getByRole("button", { name: /send message/i })).not.toBeDisabled();
+  });
+
+  it("submit is enabled with Explain Plan + leading newline then non-empty line", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    await selectMode("Explain Plan");
+    const textarea = screen.getByRole("textbox", { name: /message/i });
+    await user.click(textarea);
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    await user.type(textarea, "path/to/file.ts");
+    expect(screen.getByRole("button", { name: /send message/i })).not.toBeDisabled();
+  });
+
+  it("Explain Plan with leading newline uses the non-empty line as filePath", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    await selectMode("Explain Plan");
+    const textarea = screen.getByRole("textbox", { name: /message/i });
+    await user.click(textarea);
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    await user.type(textarea, "path/to/file.ts");
+    await user.keyboard("{Shift>}{Enter}{/Shift}");
+    await user.type(textarea, "Why?");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
+    const arg = vi.mocked(api.startRun).mock.calls[0]?.[0];
+    expect(arg).toMatchObject({
+      taskType: "explain-plan",
+      input: { filePath: "path/to/file.ts", question: "Why?", workspaceRoot: "/repo" },
+    });
+  });
+
   it("submit is enabled with Verify + empty textarea", async () => {
     renderComposer();
     await waitForReady();
     await selectMode("Verify");
     expect(screen.getByRole("button", { name: /send message/i })).not.toBeDisabled();
+  });
+});
+
+describe("placeholder text — Generate Tests and Verify clarify textarea is chat-note only", () => {
+  it("Generate Tests placeholder mentions 'not used by the workflow'", async () => {
+    renderComposer();
+    await waitForReady();
+    await selectMode("Generate Tests");
+    const textarea = screen.getByRole("textbox", { name: /message/i });
+    expect(textarea).toHaveAttribute("placeholder", expect.stringMatching(/not used by the workflow/i));
+  });
+
+  it("Verify placeholder mentions 'not used by the workflow'", async () => {
+    renderComposer();
+    await waitForReady();
+    await selectMode("Verify");
+    const textarea = screen.getByRole("textbox", { name: /message/i });
+    expect(textarea).toHaveAttribute("placeholder", expect.stringMatching(/not used by the workflow/i));
+  });
+
+  it("Investigate Bug placeholder does not say 'not used by the workflow'", async () => {
+    renderComposer();
+    await waitForReady();
+    await selectMode("Investigate Bug");
+    const textarea = screen.getByRole("textbox", { name: /message/i });
+    expect(textarea).not.toHaveAttribute("placeholder", expect.stringMatching(/not used by the workflow/i));
+  });
+
+  it("Explain Plan placeholder does not say 'not used by the workflow'", async () => {
+    renderComposer();
+    await waitForReady();
+    await selectMode("Explain Plan");
+    const textarea = screen.getByRole("textbox", { name: /message/i });
+    expect(textarea).not.toHaveAttribute("placeholder", expect.stringMatching(/not used by the workflow/i));
   });
 });
 

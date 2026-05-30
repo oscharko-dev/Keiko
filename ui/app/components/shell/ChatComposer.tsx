@@ -81,6 +81,17 @@ interface RunPayload {
   readonly input: Record<string, unknown>;
 }
 
+// Returns the first non-empty trimmed line from text, or null if none exists.
+// Used by both isSubmitReady and buildRunPayload for Explain Plan so that
+// whitespace-only input (e.g. "\n  \n") never passes validation silently.
+function extractExplainPlanFilePath(text: string): string | null {
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  return null;
+}
+
 function buildRunPayload(
   mode: ComposerMode,
   modelId: string,
@@ -105,12 +116,20 @@ function buildRunPayload(
     };
   }
   if (mode === "explain-plan") {
-    const lines = text.split("\n");
-    const filePath = (lines[0] ?? "").trim();
-    if (filePath.length === 0) {
+    const filePath = extractExplainPlanFilePath(text);
+    if (filePath === null) {
       return null;
     }
-    const rest = lines.slice(1).join("\n").trim();
+    const lines = text.split("\n");
+    // Skip leading blank lines, then skip the filePath line, collect the rest as question.
+    let filePathLineIndex = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if ((lines[i] ?? "").trim().length > 0) {
+        filePathLineIndex = i;
+        break;
+      }
+    }
+    const rest = lines.slice(filePathLineIndex + 1).join("\n").trim();
     const baseInput: Record<string, unknown> = { filePath, workspaceRoot };
     if (rest.length > 0) {
       baseInput.question = rest;
@@ -128,9 +147,11 @@ function isSubmitReady(
   if (mode === null || modelId.length === 0) {
     return false;
   }
-  const trimmed = text.trim();
-  if (mode === "explain-plan" || mode === "investigate-bug") {
-    return trimmed.length > 0;
+  if (mode === "explain-plan") {
+    return extractExplainPlanFilePath(text) !== null;
+  }
+  if (mode === "investigate-bug") {
+    return text.trim().length > 0;
   }
   return true;
 }
@@ -156,9 +177,9 @@ function modePlaceholder(mode: ComposerMode | null): string {
     return "Describe the bug. (Enter to send, Shift+Enter for new line)";
   }
   if (mode === "generate-tests") {
-    return "Optional context. The workflow targets the project root.";
+    return "Optional notes for the chat (not used by the workflow). Tests are generated for the entire project.";
   }
-  return "Optional notes. Verify runs against the project root.";
+  return "Optional notes for the chat (not used by the workflow). Verification runs against the entire project.";
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +248,9 @@ export function ChatComposer({
     } catch (err: unknown) {
       const msg = err instanceof ApiError ? err.message : "Failed to update chat model.";
       setSendState({ kind: "error", message: msg });
-      setSelectedModelId(chat.selectedModel);
+      // Re-run the same fallback logic used on mount so the dropdown never shows
+      // a value with no matching <option> when chat.selectedModel is stale.
+      setSelectedModelId(pickDefaultModelId(chatModels, chat.selectedModel));
       return false;
     }
   }
