@@ -1,5 +1,5 @@
 /**
- * Typed fetch wrapper for the 11 BFF routes (ADR-0011 D5).
+ * Typed fetch wrapper for the 12 BFF routes (ADR-0011 D5).
  * Same-origin relative paths (/api/...). Parses the {error:{code,message}} envelope.
  * Never logs response bodies.
  */
@@ -11,6 +11,7 @@ import type {
   ModelCapability,
   RunReport,
   SafeGatewayConfig,
+  WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
 
@@ -176,4 +177,29 @@ export async function fetchEvidenceManifest(
   runId: string,
 ): Promise<{ manifest: EvidenceManifest }> {
   return fetchJson(`/api/evidence/${encodeURIComponent(runId)}`);
+}
+
+// ---------------------------------------------------------------------------
+// Route 12 — workspace summary
+// ---------------------------------------------------------------------------
+
+export interface WorkspaceSummaryFilters {
+  dir?: string;
+  task?: string;
+  budget?: number;
+}
+
+export async function fetchWorkspaceSummary(
+  filters: WorkspaceSummaryFilters = {},
+): Promise<{ summary: WorkspaceSummary }> {
+  const params = new URLSearchParams();
+  params.set("dir", filters.dir ?? ".");
+  if (filters.task !== undefined) {
+    params.set("task", filters.task);
+  }
+  if (filters.budget !== undefined) {
+    params.set("budget", String(filters.budget));
+  }
+  const qs = params.toString();
+  return fetchJson(`/api/workspace${qs ? `?${qs}` : ""}`);
 }

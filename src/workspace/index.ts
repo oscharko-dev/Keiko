@@ -40,12 +40,7 @@ export {
   type WorkspaceCode,
 } from "./errors.js";
 
-export {
-  nodeWorkspaceFs,
-  type WorkspaceDirEntry,
-  type WorkspaceFs,
-  type WorkspaceStat,
-} from "./fs.js";
+export { type WorkspaceDirEntry, type WorkspaceFs, type WorkspaceStat } from "./fs.js";
 
 export { isWithinWorkspace, resolveWithinWorkspace } from "./paths.js";
 
@@ -68,6 +63,10 @@ export {
 
 export { lexicalRetrievalStrategy, type RankedFile, type RetrievalStrategy } from "./retrieval.js";
 
-export { buildContextPack, type ContextPackDeps } from "./contextPack.js";
+export {
+  buildContextPack,
+  buildContextPackFromFiles,
+  type ContextPackDeps,
+} from "./contextPack.js";
 
 export { buildWorkspaceSummary, summarizeForAudit } from "./summary.js";

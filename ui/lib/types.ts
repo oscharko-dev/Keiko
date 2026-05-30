@@ -83,6 +83,56 @@ export interface WorkflowsResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Workspace — redacted workspace summary
+// ---------------------------------------------------------------------------
+
+export type WorkspaceLanguage = "typescript" | "javascript";
+export type TestFramework = "vitest" | "jest" | "mocha" | "unknown";
+
+export interface DiscoveryStats {
+  discovered: number;
+  denied: number;
+  ignored: number;
+}
+
+export type SelectionReason =
+  | "entrypoint"
+  | "manifest"
+  | "documentation"
+  | "config"
+  | "source"
+  | "test";
+
+export interface ContextEntrySummary {
+  path: string;
+  sizeBytes: number;
+  excerptBytes: number;
+  selectionReason: SelectionReason;
+  truncated: boolean;
+  excerpt: string;
+}
+
+export interface ContextPackSummary {
+  totalCandidates: number;
+  usedBytes: number;
+  budgetBytes: number;
+  droppedForBudget: number;
+  entries: readonly ContextEntrySummary[];
+}
+
+export interface WorkspaceSummary {
+  root: string;
+  name: string | undefined;
+  version: string | undefined;
+  testFramework: TestFramework;
+  sourceDirs: readonly string[];
+  testDirs: readonly string[];
+  languages: readonly WorkspaceLanguage[];
+  counts: DiscoveryStats;
+  context: ContextPackSummary | undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Harness — HarnessEvent union
 // ---------------------------------------------------------------------------
 
@@ -458,6 +508,11 @@ export type BffErrorCode =
   | "NOT_FOUND"
   | "NOT_APPLIABLE"
   | "EVIDENCE_SCHEMA"
+  | "WORKSPACE_FILE_TOO_LARGE"
+  | "WORKSPACE_NOT_FOUND"
+  | "WORKSPACE_PATH_DENIED"
+  | "WORKSPACE_PATH_ESCAPE"
+  | "WORKSPACE_READ_FAILED"
   | "INTERNAL";
 
 export interface BffError {

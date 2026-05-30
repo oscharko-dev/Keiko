@@ -9,7 +9,8 @@
 // redacted "failed" report.
 
 import { CancelledError } from "../../gateway/errors.js";
-import { detectWorkspace, nodeWorkspaceFs } from "../../workspace/index.js";
+import { detectWorkspace } from "../../workspace/index.js";
+import { nodeWorkspaceFs } from "../../workspace/fs.js";
 import { buildBugContext } from "./context.js";
 import { computeBugFingerprint } from "./emit.js";
 import { parseFailureEvidence } from "./failure-parse.js";

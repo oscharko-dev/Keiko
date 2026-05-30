@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   handleConfig,
   handleModels,
   handleWorkflows,
+  handleWorkspace,
   handleEvidenceList,
   handleEvidenceDetail,
 } from "../../src/ui/read-handlers.js";
@@ -30,6 +34,41 @@ function asResult(outcome: RouteResult | typeof STREAMING): RouteResult {
 
 function emptyStore(): EvidenceStore {
   return { put: () => "", list: () => [], get: () => undefined, delete: () => undefined };
+}
+
+function redactTopSecret(value: unknown): unknown {
+  if (typeof value === "string") {
+    return value.replaceAll("topsecret", "[REDACTED]");
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactTopSecret(entry));
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    out[key] = redactTopSecret(entry);
+  }
+  return out;
+}
+
+function createWorkspaceFixture(): string {
+  const root = mkdtempSync(join(tmpdir(), "keiko-ui-workspace-"));
+  mkdirSync(join(root, "src"), { recursive: true });
+  mkdirSync(join(root, "tests"), { recursive: true });
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({
+      name: "topsecret",
+      version: "1.0.0",
+      devDependencies: { vitest: "^4.1.7" },
+    }),
+    "utf8",
+  );
+  writeFileSync(join(root, "src", "index.ts"), "export const x = 1;\n", "utf8");
+  writeFileSync(join(root, "tests", "index.test.ts"), "it('ok', () => {});\n", "utf8");
+  return root;
 }
 
 function depsWith(overrides: Partial<UiHandlerDeps>): UiHandlerDeps {
@@ -98,6 +137,84 @@ describe("GET /api/workflows", () => {
     ]);
     expect(body.explainPlan.inputs[0]).toMatchObject({ name: "filePath", required: true });
     expect(body.explainPlan.inputs[1]).toMatchObject({ name: "question", required: false });
+  });
+});
+
+describe("GET /api/workspace", () => {
+  it("returns a workspace summary and redacts the response body", () => {
+    const root = createWorkspaceFixture();
+    try {
+      const result = handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(root)}`),
+        depsWith({ redactor: redactTopSecret }),
+      );
+      expect(result.status).toBe(200);
+      const body = result.body as {
+        summary: {
+          root: string;
+          name: string;
+          context?: { entries: { path: string; excerpt: string }[] };
+        };
+      };
+      expect(body.summary.root).toBe(root);
+      expect(body.summary.name).toBe("[REDACTED]");
+      expect(body.summary.context).toBeUndefined();
+      expect(JSON.stringify(result.body)).not.toContain("topsecret");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes a context pack when task or budget is provided", () => {
+    const root = createWorkspaceFixture();
+    try {
+      const result = handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(root)}&task=src/index.ts&budget=128`),
+        depsWith({ redactor: redactTopSecret }),
+      );
+      expect(result.status).toBe(200);
+      const body = result.body as {
+        summary: {
+          context: {
+            budgetBytes: number;
+            entries: { path: string; selectionReason: string }[];
+            droppedForBudget: number;
+          };
+        };
+      };
+      expect(body.summary.context).toBeDefined();
+      expect(body.summary.context.entries.length).toBeGreaterThan(0);
+      expect(body.summary.context.budgetBytes).toBe(128);
+      expect(body.summary.context.entries[0]?.selectionReason).toBe("entrypoint");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an invalid budget with BAD_REQUEST", () => {
+    const result = handleWorkspace(ctx("/api/workspace?budget=0"), depsWith({}));
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+  });
+
+  it("rejects a non-JSON-safe budget with BAD_REQUEST", () => {
+    const result = handleWorkspace(ctx("/api/workspace?budget=9007199254740992"), depsWith({}));
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+  });
+
+  it("surfaces safe workspace errors for missing workspaces", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-ui-missing-"));
+    try {
+      const result = handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(join(root, "missing"))}`),
+        depsWith({}),
+      );
+      expect(result.status).toBe(404);
+      expect(result.body).toMatchObject({ error: { code: "WORKSPACE_NOT_FOUND" } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

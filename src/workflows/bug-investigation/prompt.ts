@@ -3,11 +3,16 @@
 // messages. The system message specifies the model-output contract (an OPTIONAL fenced ```diff
 // block plus labeled prose sections) that parse.ts consumes, and explicitly tells the model to OMIT
 // the diff when evidence is insufficient (the investigation-only outcome, D10). Context excerpts and
-// failure messages handed in are already redacted by #5 / the workflow; this module does no redaction.
+// failure messages handed in may originate from CLI/UI input, so every free-text report field is
+// redacted and byte-capped before it enters the model prompt.
 
+import { TextDecoder } from "node:util";
+import { redact } from "../../gateway/redaction.js";
 import type { ChatMessage } from "../../gateway/types.js";
 import type { ContextPack } from "../../workspace/index.js";
 import type { BugReportInput, FailureEvidence } from "./types.js";
+
+const MAX_PROMPT_TEXT_BYTES = 16_384;
 
 const OUTPUT_CONTRACT =
   "Respond with an OPTIONAL minimal fix as a unified diff inside a single fenced code block opened " +
@@ -32,18 +37,41 @@ function systemContent(framework: string): string {
 }
 
 function descriptionBlock(description: string | undefined): string {
-  return description !== undefined && description.trim().length > 0
-    ? `Bug description:\n${description.trim()}`
+  const safe = safePromptText(description);
+  return safe !== undefined
+    ? `Bug description:\n${safe}`
     : "No free-text description was provided.";
+}
+
+function clampToBytes(text: string, maxBytes: number): { text: string; truncated: boolean } {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
+    return { text, truncated: false };
+  }
+  const buffer = Buffer.from(text, "utf8").subarray(0, maxBytes);
+  const decoded = new TextDecoder("utf-8", { fatal: false }).decode(buffer).replace(/�+$/u, "");
+  return { text: `${decoded}\n[TRUNCATED]`, truncated: true };
+}
+
+function safePromptText(value: string | undefined): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return undefined;
+  }
+  return clampToBytes(redact(trimmed), MAX_PROMPT_TEXT_BYTES).text;
 }
 
 function evidenceBlock(report: BugReportInput, evidence: FailureEvidence): string {
   const parts: string[] = [];
-  if (report.failingOutput !== undefined && report.failingOutput.trim().length > 0) {
-    parts.push(`Failing output:\n${report.failingOutput.trim()}`);
+  const failingOutput = safePromptText(report.failingOutput);
+  if (failingOutput !== undefined) {
+    parts.push(`Failing output:\n${failingOutput}`);
   }
-  if (report.stackTrace !== undefined && report.stackTrace.trim().length > 0) {
-    parts.push(`Stack trace:\n${report.stackTrace.trim()}`);
+  const stackTrace = safePromptText(report.stackTrace);
+  if (stackTrace !== undefined) {
+    parts.push(`Stack trace:\n${stackTrace}`);
   }
   if (evidence.frames.length > 0) {
     const frames = evidence.frames
@@ -67,9 +95,10 @@ function contextBlock(pack: ContextPack): string {
 }
 
 function retryBlock(rejectionReason: string | undefined): string {
-  return rejectionReason === undefined
+  const safe = safePromptText(rejectionReason);
+  return safe === undefined
     ? ""
-    : `\n\nThe previous diff was rejected: ${rejectionReason}. Produce a corrected, in-scope ` +
+    : `\n\nThe previous diff was rejected: ${safe}. Produce a corrected, in-scope ` +
         "minimal diff, or omit the diff if no safe fix is possible.";
 }
 

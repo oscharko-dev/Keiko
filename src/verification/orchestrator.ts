@@ -15,7 +15,8 @@ import {
   type SandboxPolicy,
   type SpawnFn,
 } from "../tools/index.js";
-import { nodeWorkspaceFs, type WorkspaceFs, type WorkspaceInfo } from "../workspace/index.js";
+import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
+import type { WorkspaceInfo } from "../workspace/index.js";
 import { classifyOutcome, type AbortReason } from "./classify.js";
 import { buildAppliedLimits, type BreachedDimension } from "./limits.js";
 import { nodeResourceMonitor, type ResourceMonitor } from "./monitor.js";

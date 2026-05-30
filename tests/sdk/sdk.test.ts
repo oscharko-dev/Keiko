@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   SDK_VERSION,
+  buildWorkspaceSummary,
+  detectWorkspace,
   investigateBug,
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
   isSensitivePath,
+  summarizeForAudit,
 } from "../../src/sdk/index.js";
 import * as root from "../../src/index.js";
 import { memFs } from "../workspace/_memfs.js";
@@ -17,6 +20,16 @@ describe("SDK surface", () => {
 
   it("re-exports the SDK from the package root", () => {
     expect(root.SDK_VERSION).toBe(SDK_VERSION);
+  });
+
+  it("exposes the safe workspace summary API through the SDK and root barrels", () => {
+    expect(typeof detectWorkspace).toBe("function");
+    expect(typeof buildWorkspaceSummary).toBe("function");
+    expect(typeof summarizeForAudit).toBe("function");
+    expect(root.detectWorkspace).toBe(detectWorkspace);
+    expect(root.buildWorkspaceSummary).toBe(buildWorkspaceSummary);
+    expect(root.summarizeForAudit).toBe(summarizeForAudit);
+    expect(root).not.toHaveProperty("nodeWorkspaceFs");
   });
 });
 

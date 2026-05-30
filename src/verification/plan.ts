@@ -5,11 +5,11 @@
 
 import { basename, dirname, extname, join } from "node:path";
 import {
-  nodeWorkspaceFs,
   resolveWithinWorkspace,
   type WorkspaceFs,
   type WorkspaceInfo,
 } from "../workspace/index.js";
+import { nodeWorkspaceFs } from "../workspace/fs.js";
 import {
   DEFAULT_VERIFICATION_LIMITS,
   type ScriptCatalog,

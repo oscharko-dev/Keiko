@@ -2,9 +2,11 @@
 // `.git` entry or a `package.json`, then read safe metadata. The only JSON parse in the
 // module is wrapped in a single try/catch at this IO boundary (ADR-0005). No clock, no RNG.
 
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
 import { WorkspaceNotFoundError } from "./errors.js";
+import { isDenied } from "./ignore.js";
+import { assertContainedRealPath } from "./realpath.js";
 import type { TestFramework, WorkspaceInfo, WorkspaceLanguage } from "./types.js";
 
 const MARKERS = [".git", "package.json"] as const;
@@ -68,13 +70,41 @@ function detectFramework(record: Record<string, unknown>): TestFramework {
 
 const EMPTY_META: PackageMeta = { name: undefined, version: undefined, testFramework: "unknown" };
 
-function readPackageMeta(root: string, fs: WorkspaceFs): PackageMeta {
-  const path = join(root, "package.json");
+function toRelative(root: string, absolutePath: string): string {
+  return relative(root, absolutePath).split("\\").join("/");
+}
+
+function toRealRelative(root: string, fs: WorkspaceFs, absolutePath: string): string {
+  try {
+    return toRelative(fs.realPath(root), absolutePath);
+  } catch {
+    return toRelative(root, absolutePath);
+  }
+}
+
+function readContainedText(root: string, path: string, fs: WorkspaceFs): string | undefined {
   if (!fs.exists(path)) {
-    return EMPTY_META;
+    return undefined;
   }
   try {
-    const parsed: unknown = JSON.parse(fs.readFileUtf8(path));
+    const containedPath = assertContainedRealPath(fs, root, path, path);
+    if (isDenied(toRealRelative(root, fs, containedPath))) {
+      return undefined;
+    }
+    return fs.readFileUtf8(containedPath);
+  } catch {
+    return undefined;
+  }
+}
+
+function readPackageMeta(root: string, fs: WorkspaceFs): PackageMeta {
+  const path = join(root, "package.json");
+  try {
+    const raw = readContainedText(root, path, fs);
+    if (raw === undefined) {
+      return EMPTY_META;
+    }
+    const parsed: unknown = JSON.parse(raw);
     if (!isRecord(parsed)) {
       return EMPTY_META;
     }
@@ -90,14 +120,11 @@ function readPackageMeta(root: string, fs: WorkspaceFs): PackageMeta {
 
 function readIgnoreLines(root: string, fs: WorkspaceFs): readonly string[] {
   const path = join(root, ".gitignore");
-  if (!fs.exists(path)) {
+  const raw = readContainedText(root, path, fs);
+  if (raw === undefined) {
     return [];
   }
-  try {
-    return fs.readFileUtf8(path).split(/\r?\n/);
-  } catch {
-    return [];
-  }
+  return raw.split(/\r?\n/);
 }
 
 function isExistingDir(absolutePath: string, fs: WorkspaceFs): boolean {

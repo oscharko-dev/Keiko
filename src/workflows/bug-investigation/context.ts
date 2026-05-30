@@ -9,13 +9,12 @@ import {
   buildContextPack,
   DEFAULT_DISCOVERY_OPTIONS,
   lexicalRetrievalStrategy,
-  nodeWorkspaceFs,
   type ContextPack,
   type ContextPackDeps,
   type ContextRequest,
-  type WorkspaceFs,
   type WorkspaceInfo,
 } from "../../workspace/index.js";
+import { nodeWorkspaceFs, type WorkspaceFs } from "../../workspace/fs.js";
 import type { BugWorkflowLimits, FailureEvidence } from "./types.js";
 
 export interface BugContextDeps {

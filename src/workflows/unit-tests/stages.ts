@@ -6,7 +6,8 @@
 
 import { redact } from "../../gateway/redaction.js";
 import { applyPatch, renderDryRun, type PatchApplyResult } from "../../tools/index.js";
-import { nodeWorkspaceFs, type WorkspaceInfo } from "../../workspace/index.js";
+import { nodeWorkspaceFs } from "../../workspace/fs.js";
+import type { WorkspaceInfo } from "../../workspace/index.js";
 import { assembleReport } from "./report.js";
 import { runWorkflowVerification } from "./verify-stage.js";
 import {

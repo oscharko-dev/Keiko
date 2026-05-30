@@ -102,6 +102,12 @@ describe("runContextCli", () => {
     expect(c.err()).toContain("Usage");
   });
 
+  it("returns 2 when --budget exceeds the safe integer range", () => {
+    const c = makeIo();
+    expect(runContextCli(["--dir", dir, "--budget", "9007199254740992"], c.io)).toBe(2);
+    expect(c.err()).toContain("Usage");
+  });
+
   it("returns 2 when --dir is supplied without a value", () => {
     const c = makeIo();
     expect(runContextCli(["--dir"], c.io)).toBe(2);

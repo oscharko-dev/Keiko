@@ -13,6 +13,7 @@ import {
   type ContextEntry,
   type ContextPack,
   type ContextRequest,
+  type DiscoveredFile,
   type WorkspaceInfo,
 } from "./types.js";
 
@@ -123,6 +124,15 @@ export function buildContextPack(
   deps: ContextPackDeps = DEFAULT_DEPS,
 ): ContextPack {
   const candidates = discoverFiles(workspace, request.discovery, deps.fs);
+  return buildContextPackFromFiles(workspace, request, candidates, deps);
+}
+
+export function buildContextPackFromFiles(
+  workspace: WorkspaceInfo,
+  request: ContextRequest,
+  candidates: readonly DiscoveredFile[],
+  deps: ContextPackDeps = DEFAULT_DEPS,
+): ContextPack {
   const ranked = deps.strategy.rank(candidates, request.task);
   const state: BudgetState = { entries: [], usedBytes: 0, droppedForBudget: 0 };
   for (const item of ranked) {

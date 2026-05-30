@@ -1,7 +1,7 @@
 // The Wave 2 BFF (ADR-0011 D1/D2/D5/D7/D8/D9). A hand-written node:http server with zero new runtime
 // dependencies: it binds 127.0.0.1 only, sets the security headers + hash-based CSP on EVERY response
 // (including the SSE and error paths), rejects non-loopback Host/Origin (DNS-rebinding defense), and
-// dispatches the eleven-route API contract through deps-bound handlers. A handler returns a
+// dispatches the twelve-route API contract through deps-bound handlers. A handler returns a
 // RouteResult (status + JSON body the server serializes) or the STREAMING sentinel, meaning it has
 // taken over the raw ServerResponse (the SSE events route). Static export is served from a
 // path-traversal-safe contained root with an index fallback. The handler dependencies (resolved
@@ -48,7 +48,7 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 // A minimal default deps object so a 3-arg server can still serve the deps-bound read routes (e.g.
-// `/api/models`, which needs no config) without a config or evidence dir.
+// `/api/models` and `/api/workspace`, which need no config) without a config or evidence dir.
 function fallbackDeps(): UiHandlerDeps {
   return {
     config: undefined,

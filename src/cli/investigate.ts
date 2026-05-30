@@ -2,12 +2,12 @@
 // regression test (ADR-0009 D14). Dry-run by default; --apply writes the fix and runs verification.
 // The text path prints the proposed diff (when present) plus clearly-labelled verified facts and
 // the UNVERIFIED model hypothesis; --json emits the full BugInvestigationReport. Failing output and
-// stack traces may be read from files (--output-file / --stack-file) to avoid huge argv. The gateway
-// ModelPort is built from config (loadConfigFromFile); tests inject deps.model directly so no live
-// gateway is needed. Exit 0 on fix-applied/fix-proposed/investigation-only, 1 on
+// stack traces may be read from files (--output-file / --stack-file) to avoid huge argv. Evidence
+// files are read through the workspace boundary, never raw node:fs. The gateway ModelPort is built
+// from config (loadConfigFromFile); tests inject deps.model directly so no live gateway is needed.
+// Exit 0 on fix-applied/fix-proposed/investigation-only, 1 on
 // rejected/cancelled/failed/runtime, 2 on usage. Mirrors runGenTestsCli's structure.
 
-import { readFileSync } from "node:fs";
 import { Gateway } from "../gateway/gateway.js";
 import { loadConfigFromFile, type EnvSource } from "../gateway/config.js";
 import { ConfigInvalidError, GatewayError } from "../gateway/errors.js";
@@ -15,7 +15,12 @@ import { assertConfiguredModel, selectConfiguredModel } from "../gateway/model-s
 import { redact } from "../gateway/redaction.js";
 import { GatewayModelPort } from "../harness/adapters.js";
 import type { ModelPort } from "../harness/ports.js";
-import { WorkspaceError } from "../workspace/index.js";
+import {
+  detectWorkspace,
+  readWorkspaceFile,
+  WorkspaceError,
+  type WorkspaceInfo,
+} from "../workspace/index.js";
 import { investigateBug, renderBugMarkdownReport } from "../workflows/index.js";
 import type {
   BugInvestigationReport,
@@ -38,7 +43,7 @@ write the fix and run verification through the safe tool + verification layers.
 export interface InvestigateDeps {
   // Injected ModelPort for tests. When absent, a GatewayModelPort is built from config.
   readonly model?: ModelPort | undefined;
-  // Injected file reader for tests. Defaults to node:fs readFileSync (utf8).
+  // Injected file reader for tests. Production defaults to readWorkspaceFile.
   readonly readFile?: ((path: string) => string) | undefined;
 }
 
@@ -152,6 +157,10 @@ function resolveReport(
     ...(stackTrace === undefined ? {} : { stackTrace }),
     ...(parsed.files === undefined ? {} : { targetFiles: parsed.files }),
   };
+}
+
+function workspaceEvidenceReader(workspace: WorkspaceInfo): (path: string) => string {
+  return (path: string): string => readWorkspaceFile(workspace, path).text;
 }
 
 function buildModel(
@@ -287,11 +296,12 @@ export async function runInvestigateCli(
   if (typeof model === "number") {
     return model;
   }
-  const readFile = deps.readFile ?? ((path: string): string => readFileSync(path, "utf8"));
   try {
+    const workspace = detectWorkspace(parsed.dirRoot);
+    const readFile = deps.readFile ?? workspaceEvidenceReader(workspace);
     const report = await investigateBug(
       {
-        workspaceRoot: parsed.dirRoot,
+        workspaceRoot: workspace.root,
         report: resolveReport(parsed, readFile),
         apply: parsed.apply,
         modelId: model.modelId,
