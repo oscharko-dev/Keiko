@@ -11,7 +11,9 @@ import {
   buildVerificationPlan,
   buildVerificationSummary,
   detectScripts,
+  EmptyPlanError,
   runVerification,
+  VerificationError,
   type VerificationKind,
   type VerificationReport,
 } from "../verification/index.js";
@@ -81,16 +83,21 @@ async function runPlan(parsed: VerifyArgs): Promise<VerificationReport> {
     only: parsed.only,
     changedFiles: parsed.changed,
   });
+  if (plan.steps.length === 0) {
+    throw new EmptyPlanError("verification plan contains no runnable or skipped steps");
+  }
   return runVerification(plan, { workspace });
 }
 
 function renderText(report: VerificationReport, io: CliIo): void {
   const summary = buildVerificationSummary(report);
   io.out(`Verification: ${summary.overallStatus} (${String(summary.durationMs)}ms)\n`);
-  io.out("KIND\tSTATUS\tEXIT\tMS\tDETAIL\n");
+  io.out("KIND\tSTATUS\tEXIT\tMS\tCOMMAND\tDETAIL\n");
   for (const r of summary.results) {
     const exit = r.exitCode === null ? "-" : String(r.exitCode);
-    io.out(`${r.kind}\t${r.status}\t${exit}\t${String(r.durationMs)}\t${r.detail ?? ""}\n`);
+    io.out(
+      `${r.kind}\t${r.status}\t${exit}\t${String(r.durationMs)}\t${r.command}\t${r.detail ?? ""}\n`,
+    );
   }
 }
 
@@ -110,6 +117,10 @@ export async function runVerifyCli(args: readonly string[], io: CliIo): Promise<
     return report.overallStatus === "passed" ? 0 : 1;
   } catch (error) {
     if (error instanceof WorkspaceError) {
+      io.err(`Error [${error.code}]: ${error.message}\n`);
+      return 1;
+    }
+    if (error instanceof VerificationError) {
       io.err(`Error [${error.code}]: ${error.message}\n`);
       return 1;
     }

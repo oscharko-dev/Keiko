@@ -23,7 +23,7 @@ export abstract class VerificationError extends Error {
 }
 
 // Raised when a verification run is requested but the plan contains no steps (e.g. --only with an
-// empty selection). Surfaced as a usage error at the CLI boundary.
+// empty selection). Surfaced as a non-green verification error at the CLI boundary.
 export class EmptyPlanError extends VerificationError {
   readonly code = VERIFICATION_CODES.PLAN_EMPTY;
 }

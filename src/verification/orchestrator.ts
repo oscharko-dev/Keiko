@@ -19,6 +19,7 @@ import {
 import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
 import type { WorkspaceInfo } from "../workspace/index.js";
 import { classifyOutcome, type AbortReason } from "./classify.js";
+import { classifyScripts } from "./detect.js";
 import { buildAppliedLimits, type BreachedDimension } from "./limits.js";
 import { nodeResourceMonitor, type ResourceMonitor } from "./monitor.js";
 import type {
@@ -41,8 +42,6 @@ export interface VerificationDeps {
   readonly fs?: WorkspaceFs | undefined;
 }
 
-const OUTPUT_DIGEST_BYTES = 4_096;
-
 // Verification runs deterministic repository gates selected by Keiko, not arbitrary model-issued
 // run_command calls. Keep the model-facing defaults read-only while allowing the verification
 // orchestrator to invoke npm scripts and framework-targeted npx runs through the same #6 boundary.
@@ -54,6 +53,7 @@ export const VERIFICATION_COMMAND_RULES: readonly CommandRule[] = Object.freeze(
   },
   {
     executable: "npx",
+    allowedSubcommands: Object.freeze(["vitest", "jest"]),
     denyFlags: Object.freeze(["-c", "--call"]),
   },
   ...DEFAULT_COMMAND_RULES,
@@ -81,15 +81,21 @@ function policyForStep(limits: VerificationResourceLimits): SandboxPolicy {
   };
 }
 
-// A redacted, byte-capped digest of stdout+stderr. #6 already redacts and caps each stream; we
-// re-redact the COMPOSED string (defence in depth) and clamp to a small digest for the report.
+// Data-minimal output metadata. #6 already redacts/caps each stream, but regulated CLI/SDK
+// summaries should not echo arbitrary repository logs or customer data by default.
 function outputDigest(result: CommandResult | undefined): string {
   if (result === undefined) {
     return "";
   }
   const combined = `${result.stdout}${result.stderr}`;
-  const capped = Buffer.from(combined, "utf8").subarray(0, OUTPUT_DIGEST_BYTES).toString("utf8");
-  return redact(capped);
+  if (combined.length === 0) {
+    return "";
+  }
+  if (result.truncated) {
+    return "command output exceeded the configured output-size limit and was omitted";
+  }
+  const bytes = Buffer.byteLength(combined, "utf8");
+  return `command output captured (${String(bytes)} bytes) and omitted from summary`;
 }
 
 // Derives which single dimension tripped, so exactly one appliedLimits row is breached:true.
@@ -114,6 +120,117 @@ interface StepRun {
   readonly result: CommandResult | undefined;
   readonly error: unknown;
   readonly abortReason: AbortReason;
+  readonly durationMs: number;
+}
+
+function deniedResult(step: VerificationStep, reason: string): VerificationResult {
+  return {
+    kind: step.kind,
+    scriptName: step.scriptName,
+    command: step.command,
+    args: step.args,
+    status: "denied",
+    exitCode: null,
+    signal: null,
+    durationMs: 0,
+    truncated: false,
+    redacted: true,
+    outputSummary: "",
+    appliedLimits: buildAppliedLimits(step.limits, undefined),
+    detail: redact(reason),
+  };
+}
+
+function isGeneratedSkipShape(step: VerificationStep): boolean {
+  return (
+    step.kind !== "targeted-test" &&
+    step.skipReason !== undefined &&
+    step.scriptName === undefined &&
+    step.command === "npm" &&
+    step.args.length === 2 &&
+    step.args[0] === "run" &&
+    step.args[1] === step.kind
+  );
+}
+
+function hasWindowsDrivePrefix(value: string): boolean {
+  return value.length >= 2 && value[1] === ":";
+}
+
+function isGeneratedTargetPath(value: string): boolean {
+  if (
+    value.length === 0 ||
+    value.startsWith("-") ||
+    value.startsWith("/") ||
+    value.includes("\u0000") ||
+    hasWindowsDrivePrefix(value)
+  ) {
+    return false;
+  }
+  return value
+    .split("\\")
+    .join("/")
+    .split("/")
+    .every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
+}
+
+function scriptNameMatchesKind(step: VerificationStep): boolean {
+  if (step.kind === "targeted-test" || step.scriptName === undefined) {
+    return false;
+  }
+  return classifyScripts({ [step.scriptName]: "" })[step.kind] === step.scriptName;
+}
+
+function isValidTargetedStep(step: VerificationStep): boolean {
+  if (step.scriptName !== undefined || step.command !== "npx" || step.args.length < 2) {
+    return false;
+  }
+  if (step.args[0] === "vitest") {
+    return (
+      step.args[1] === "run" &&
+      step.args.length >= 3 &&
+      step.args.slice(2).every(isGeneratedTargetPath)
+    );
+  }
+  if (step.args[0] === "jest") {
+    return step.args.length >= 2 && step.args.slice(1).every(isGeneratedTargetPath);
+  }
+  return false;
+}
+
+function isValidTestStep(step: VerificationStep): boolean {
+  if (step.kind === "test") {
+    if (step.scriptName === "test") {
+      return step.args.length === 1 && step.args[0] === "test";
+    }
+    return (
+      scriptNameMatchesKind(step) &&
+      step.args.length === 2 &&
+      step.args[0] === "run" &&
+      step.args[1] === step.scriptName
+    );
+  }
+  return false;
+}
+
+function isValidScriptStep(step: VerificationStep): boolean {
+  if (step.command !== "npm") {
+    return false;
+  }
+  if (step.kind === "test") {
+    return isValidTestStep(step);
+  }
+  if (!scriptNameMatchesKind(step)) {
+    return false;
+  }
+  return step.args.length === 2 && step.args[0] === "run" && step.args[1] === step.scriptName;
+}
+
+function isValidVerificationStep(step: VerificationStep): boolean {
+  if (isGeneratedSkipShape(step)) {
+    return true;
+  }
+  return step.kind === "targeted-test" ? isValidTargetedStep(step) : isValidScriptStep(step);
 }
 
 // Runs one command step through #6, wrapping the base SpawnFn with the memory monitor and owning
@@ -126,6 +243,8 @@ async function runStep(
   baseSpawn: SpawnFn,
   monitor: ResourceMonitor,
 ): Promise<StepRun> {
+  const now = deps.now ?? Date.now;
+  const startedAt = now();
   let abortReason: AbortReason;
   const ac = new AbortController();
   const onHarnessAbort = (): void => {
@@ -153,9 +272,9 @@ async function runStep(
       },
       buildRunDeps(deps, step, spawn),
     );
-    return { result, error: undefined, abortReason };
+    return { result, error: undefined, abortReason, durationMs: result.durationMs };
   } catch (error) {
-    return { result: undefined, error, abortReason };
+    return { result: undefined, error, abortReason, durationMs: now() - startedAt };
   } finally {
     stop?.();
     deps.signal?.removeEventListener("abort", onHarnessAbort);
@@ -230,7 +349,7 @@ function toResult(step: VerificationStep, run: StepRun): VerificationResult {
     status,
     exitCode: run.result?.exitCode ?? null,
     signal: run.result?.signal ?? null,
-    durationMs: run.result?.durationMs ?? 0,
+    durationMs: run.result?.durationMs ?? run.durationMs,
     truncated: run.result?.truncated ?? false,
     redacted: true,
     outputSummary: outputDigest(run.result),
@@ -273,43 +392,95 @@ function countByStatus(results: readonly VerificationResult[]): Record<Verificat
   return counts;
 }
 
-export async function runVerification(
-  plan: VerificationPlan,
-  deps: VerificationDeps,
-): Promise<VerificationReport> {
-  const now = deps.now ?? Date.now;
-  const baseSpawn = deps.spawn ?? nodeSpawnFn;
-  const monitor = deps.monitor ?? nodeResourceMonitor;
-  const startedAtMs = now();
-  const results: VerificationResult[] = [];
-  let cancelled = false;
-  for (const step of plan.steps) {
-    if (cancelled) {
-      results.push(cancelledResult(step));
-      continue;
-    }
-    if (step.skipReason !== undefined) {
-      results.push(skippedResult(step));
-      continue;
-    }
-    if (deps.signal?.aborted === true) {
-      cancelled = true;
-      results.push(cancelledResult(step));
-      continue;
-    }
-    const run = await runStep(step, deps, baseSpawn, monitor);
-    const result = toResult(step, run);
-    results.push(result);
-    if (result.status === "cancelled") {
-      cancelled = true;
-    }
-  }
+function finishReport(
+  workspaceRoot: string,
+  results: readonly VerificationResult[],
+  cancelled: boolean,
+  startedAtMs: number,
+  now: () => number,
+): VerificationReport {
   return {
-    workspaceRoot: plan.workspaceRoot,
+    workspaceRoot,
     results,
     overallStatus: overallStatus(results, cancelled),
     startedAtMs,
     durationMs: now() - startedAtMs,
     counts: countByStatus(results),
   };
+}
+
+function rootMismatchReport(
+  plan: VerificationPlan,
+  workspaceRoot: string,
+  startedAtMs: number,
+  now: () => number,
+): VerificationReport {
+  const results = plan.steps.map((step) =>
+    deniedResult(step, "verification plan rejected: workspace root mismatch"),
+  );
+  return finishReport(workspaceRoot, results, false, startedAtMs, now);
+}
+
+function preExecutionResult(
+  step: VerificationStep,
+  cancelled: boolean,
+  signal: AbortSignal | undefined,
+): { readonly result: VerificationResult; readonly cancelled: boolean } | undefined {
+  if (!isValidVerificationStep(step)) {
+    return {
+      result: deniedResult(step, "verification plan rejected: unsupported step shape"),
+      cancelled,
+    };
+  }
+  if (cancelled) {
+    return { result: cancelledResult(step), cancelled };
+  }
+  if (step.skipReason !== undefined) {
+    return { result: skippedResult(step), cancelled };
+  }
+  if (signal?.aborted === true) {
+    return { result: cancelledResult(step), cancelled: true };
+  }
+  return undefined;
+}
+
+async function runPlanSteps(
+  plan: VerificationPlan,
+  deps: VerificationDeps,
+  baseSpawn: SpawnFn,
+  monitor: ResourceMonitor,
+): Promise<{ readonly results: readonly VerificationResult[]; readonly cancelled: boolean }> {
+  const results: VerificationResult[] = [];
+  let cancelled = false;
+  for (const step of plan.steps) {
+    const early = preExecutionResult(step, cancelled, deps.signal);
+    if (early !== undefined) {
+      results.push(early.result);
+      cancelled = early.cancelled;
+      continue;
+    }
+    const result = toResult(step, await runStep(step, deps, baseSpawn, monitor));
+    results.push(result);
+    cancelled ||= result.status === "cancelled";
+  }
+  return { results, cancelled };
+}
+
+export async function runVerification(
+  plan: VerificationPlan,
+  deps: VerificationDeps,
+): Promise<VerificationReport> {
+  const now = deps.now ?? Date.now;
+  const startedAtMs = now();
+  const workspaceRoot = deps.workspace.root;
+  if (plan.workspaceRoot !== workspaceRoot) {
+    return rootMismatchReport(plan, workspaceRoot, startedAtMs, now);
+  }
+  const { results, cancelled } = await runPlanSteps(
+    plan,
+    deps,
+    deps.spawn ?? nodeSpawnFn,
+    deps.monitor ?? nodeResourceMonitor,
+  );
+  return finishReport(workspaceRoot, results, cancelled, startedAtMs, now);
 }

@@ -15,9 +15,10 @@ Four interlocking requirements shape the design.
 
 **Verification reuses the #6 boundary; it does not weaken it.** Every command this layer runs goes
 through `runCommand` from `src/tools/exec.ts` unchanged. The verification layer adds NO new spawn
-path, NO new allowlist, and NO new write surface. It is a consumer of the trust boundary, not a
-second boundary. This is a hard constraint: any change to `src/tools/**`, `src/harness/**`,
-`src/workspace/**`, or `src/gateway/**` would mean verification had reached past its layer.
+path and NO new write surface. It supplies a narrower verification-only command-rule set to the
+same #6 boundary and validates public `VerificationPlan` step shapes before execution; it does not
+create a second spawn implementation. This is a hard constraint: changes to `src/tools/**`,
+`src/harness/**`, `src/workspace/**`, or `src/gateway/**` are not required for verification itself.
 
 **Resource limits must be honest.** Wall-time and output-size are genuinely enforced by #6
 (`SandboxPolicy.defaultTimeoutMs` and `maxOutputBytes`). Memory is best-effort and Linux-only.
@@ -134,8 +135,21 @@ The orchestrator runs steps sequentially. Before each step it checks the harness
 cancelled, the in-flight step classifies `cancelled` and every remaining step is reported
 `cancelled` (not `skipped`, because the work was abandoned, not absent). Cancellation is honored
 within the #6 termination bound: SIGTERM, then SIGKILL after `SandboxPolicy.terminationGraceMs`
-(default 2000 ms). The report's `overallStatus` is `passed` iff every result is in
-`{passed, skipped}`; `cancelled` if the run was harness-cancelled; otherwise `failed`.
+(default 2000 ms), and rejected timeout/cancellation paths still carry elapsed step duration so the
+report does not hide the blocking cost. The report's `overallStatus` is `passed` iff every result is
+in `{passed, skipped}`; `cancelled` if the run was harness-cancelled; otherwise `failed`.
+
+### D6 — Public plans fail closed to Keiko-generated verification shapes
+
+`VerificationPlan` is public because the #10 audit ledger persists it and SDK callers need to
+request verification, but the public type is not an arbitrary command API. `runVerification` rejects
+plans whose `workspaceRoot` does not match `deps.workspace.root` and marks unsupported step shapes
+`denied` before spawn. Script-backed steps must be canonical npm verification invocations
+(`npm test` for `test`, `npm run <scriptName>` where the script name classifies to the requested
+kind), generated skip steps must use the same no-script shape as `buildVerificationPlan`, and
+targeted-test steps are limited to generated file-only `npx vitest run <test-files...>` or
+`npx jest <test-files...>` invocations. That keeps the SDK surface auditable while preserving the
+verification layer's ability to run detected project gates.
 
 ## Seam table (what downstream issues depend on)
 
@@ -152,11 +166,12 @@ within the #6 termination bound: SIGTERM, then SIGKILL after `SandboxPolicy.term
 ### Positive
 
 - The agent's edits are checked by the project's own gates, and the result carries the exit code,
-  duration, a redacted output digest, and the exact resource limits applied — evidence a reviewer
-  or an auditor can act on.
-- Verification reuses the #6 boundary unchanged: the same deny-by-default allowlist, env isolation,
-  no-shell spawn, and output redaction protect verification commands. There is no second, weaker
-  execution path to audit.
+  duration, data-minimal output metadata, and the exact resource limits applied — evidence a
+  reviewer or an auditor can act on.
+- Verification reuses the #6 boundary unchanged: the same env isolation, no-shell spawn, executable
+  resolution, and output capping protect verification commands. There is no second, weaker execution
+  path to audit, and the verification-specific command rules are narrower than arbitrary
+  model-issued commands.
 - The four-dimension `appliedLimits` record is honest about what Wave 1 enforces. A reader can see
   at a glance that network is documented-not-enforced and memory is Linux-only best-effort.
 - The `ResourceMonitor` and `SpawnFn` seams let the container wave add real isolation without
@@ -178,6 +193,10 @@ within the #6 termination bound: SIGTERM, then SIGKILL after `SandboxPolicy.term
 - **Targeted-test resolution is best-effort.** It resolves sibling/mirrored `.test`/`.spec` files
   for vitest and jest; when the framework is `unknown` or no test file is resolvable, no targeted
   step is added rather than guessing an invocation that might run nothing or everything.
+- **Repository npm scripts can execute arbitrary script bodies.** This is inherent in running the
+  repository's own gates, which Issue #7 requires. Wave 1 constrains the launcher, environment,
+  output, cwd, timeout, and evidence; it does not provide container-level filesystem/network/process
+  isolation for script internals. That isolation belongs behind the container/resource-control seam.
 - **The Windows grandchild-orphaning limitation of ADR-0006 D2 Dimension 5 applies unchanged** to
   verification commands, since they spawn through the same #6 path.
 

@@ -6,7 +6,11 @@ import {
 } from "../../src/verification/summary.js";
 import { buildAppliedLimits } from "../../src/verification/limits.js";
 import { DEFAULT_VERIFICATION_LIMITS } from "../../src/verification/types.js";
-import type { VerificationReport, VerificationResult } from "../../src/verification/types.js";
+import type {
+  VerificationReport,
+  VerificationResult,
+  VerificationStatus,
+} from "../../src/verification/types.js";
 
 const SECRET = "ghp_" + "0123456789abcdefABCDEFghijklmnopqrst";
 
@@ -30,6 +34,8 @@ function result(overrides: Partial<VerificationResult> = {}): VerificationResult
 }
 
 function report(results: readonly VerificationResult[]): VerificationReport {
+  const count = (status: VerificationStatus): number =>
+    results.filter((r) => r.status === status).length;
   return {
     workspaceRoot: "/ws",
     results,
@@ -39,13 +45,13 @@ function report(results: readonly VerificationResult[]): VerificationReport {
     startedAtMs: 0,
     durationMs: 100,
     counts: {
-      passed: results.filter((r) => r.status === "passed").length,
-      failed: results.filter((r) => r.status === "failed").length,
-      skipped: 0,
-      denied: 0,
-      "timed-out": 0,
-      cancelled: 0,
-      "resource-exceeded": 0,
+      passed: count("passed"),
+      failed: count("failed"),
+      skipped: count("skipped"),
+      denied: count("denied"),
+      "timed-out": count("timed-out"),
+      cancelled: count("cancelled"),
+      "resource-exceeded": count("resource-exceeded"),
     },
   };
 }
@@ -56,6 +62,56 @@ describe("buildVerificationSummary", () => {
     expect(summary.overallStatus).toBe("passed");
     expect(summary.results[0]?.outputSummary).toBe("all good");
     expect(summary.results[0]?.command).toBe("npm test");
+  });
+
+  it("preserves the summary contract fields required by the verification evidence schema", () => {
+    const summary = buildVerificationSummary(
+      report([
+        result({
+          kind: "lint",
+          scriptName: "lint",
+          args: ["run", "lint"],
+          status: "failed",
+          exitCode: 1,
+          durationMs: 37,
+          truncated: true,
+          outputSummary: "lint failed",
+          detail: "eslint reported an error",
+        }),
+      ]),
+    );
+
+    expect(summary).toMatchObject({
+      workspaceRoot: "/ws",
+      overallStatus: "failed",
+      durationMs: 100,
+      counts: {
+        passed: 0,
+        failed: 1,
+        skipped: 0,
+        denied: 0,
+        "timed-out": 0,
+        cancelled: 0,
+        "resource-exceeded": 0,
+      },
+    });
+    expect(summary.results[0]).toMatchObject({
+      kind: "lint",
+      scriptName: "lint",
+      command: "npm run lint",
+      status: "failed",
+      exitCode: 1,
+      durationMs: 37,
+      truncated: true,
+      outputSummary: "lint failed",
+      detail: "eslint reported an error",
+    });
+    expect(summary.results[0]?.appliedLimits.map((row) => row.dimension)).toEqual([
+      "wall-time",
+      "output-size",
+      "memory",
+      "network",
+    ]);
   });
 
   it("re-redacts a secret that somehow reached outputSummary or detail", () => {
