@@ -104,6 +104,15 @@ describe("runVerifyCli", () => {
     expect(c.out()).toContain("Verification: failed");
   });
 
+  it("runs a non-literal test script selected by script detection", async () => {
+    writePackage({ "test:unit": 'node -e "process.exit(0)"' });
+    const c = makeIo();
+    const code = await runVerifyCli(["--dir", dir, "--only", "test"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("test\tpassed");
+    expect(c.out()).toContain("\tnpm run test:unit\t");
+  });
+
   it("emits a JSON summary with --json (exit 0 on pass)", async () => {
     writePackage({ test: 'node -e "process.exit(0)"' });
     const c = makeIo();

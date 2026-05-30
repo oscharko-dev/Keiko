@@ -198,12 +198,27 @@ function isValidTargetedStep(step: VerificationStep): boolean {
   return false;
 }
 
+function isValidTestStep(step: VerificationStep): boolean {
+  if (step.kind === "test") {
+    if (step.scriptName === "test") {
+      return step.args.length === 1 && step.args[0] === "test";
+    }
+    return (
+      scriptNameMatchesKind(step) &&
+      step.args.length === 2 &&
+      step.args[0] === "run" &&
+      step.args[1] === step.scriptName
+    );
+  }
+  return false;
+}
+
 function isValidScriptStep(step: VerificationStep): boolean {
   if (step.command !== "npm") {
     return false;
   }
   if (step.kind === "test") {
-    return step.scriptName === "test" && step.args.length === 1 && step.args[0] === "test";
+    return isValidTestStep(step);
   }
   if (!scriptNameMatchesKind(step)) {
     return false;
