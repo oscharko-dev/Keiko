@@ -3,21 +3,6 @@
 # keiko.sh — manage the local Keiko UI/BFF server (the only long-running local
 # Keiko process). It binds 127.0.0.1 only, serves the packaged UI assets, and is
 # the loopback control plane for the Wave 1 workflows and evidence browser.
-#
-# Usage:
-#   scripts/keiko.sh start      Start the UI and wait until it is healthy.
-#   scripts/keiko.sh stop       Gracefully stop the UI (SIGTERM, then SIGKILL).
-#   scripts/keiko.sh restart    Stop (if running) and start again.
-#   scripts/keiko.sh status     Report whether the UI is running.
-#   scripts/keiko.sh help       Show this help.
-#
-# Configuration (all optional, read from the environment):
-#   KEIKO_UI_PORT   Loopback port to bind          (default: 4319)
-#   KEIKO_UI_HOST   127.0.0.1 | localhost          (default: 127.0.0.1)
-#
-# Runtime state (pid + log) lives under the gitignored .keiko/ directory.
-#
-# Exit codes: 0 success, 1 runtime error (build/startup/stop failure), 2 usage error.
 
 set -euo pipefail
 
@@ -27,10 +12,32 @@ PORT="${KEIKO_UI_PORT:-4319}"
 HOST="${KEIKO_UI_HOST:-127.0.0.1}"
 ENTRY="$ROOT/dist/cli/index.js"
 STATIC_DIR="$ROOT/dist/ui/static"
-STATE_DIR="$ROOT/.keiko"
+# Runtime state (pid + log). Defaults to the gitignored .keiko/ under the repo;
+# overridable (mainly for tests) so a run never clobbers another instance's state.
+STATE_DIR="${KEIKO_STATE_DIR:-$ROOT/.keiko}"
 PID_FILE="$STATE_DIR/ui.pid"
 LOG_FILE="$STATE_DIR/ui.log"
 HEALTH_URL="http://${HOST}:${PORT}/api/health"
+
+usage() {
+  cat <<'EOF'
+keiko.sh — manage the local Keiko UI/BFF server (loopback only).
+
+Usage:
+  scripts/keiko.sh start      Start the UI and wait until it is healthy.
+  scripts/keiko.sh stop       Gracefully stop the UI (SIGTERM, then SIGKILL).
+  scripts/keiko.sh restart    Stop (if running) and start again.
+  scripts/keiko.sh status     Report whether the UI is running.
+  scripts/keiko.sh help       Show this help.
+
+Configuration (all optional, read from the environment):
+  KEIKO_UI_PORT    Loopback port to bind        (default: 4319)
+  KEIKO_UI_HOST    127.0.0.1 | localhost         (default: 127.0.0.1)
+  KEIKO_STATE_DIR  Runtime pid/log directory     (default: <repo>/.keiko)
+
+Exit codes: 0 success, 1 runtime error (build/startup/stop failure), 2 usage error.
+EOF
+}
 
 # True if PID is alive AND is actually a Keiko UI process. Guards against a stale
 # pid file whose number has been recycled by an unrelated process.
@@ -42,7 +49,7 @@ is_keiko_ui() {
 }
 
 # Echoes the live Keiko UI pid (and returns 0), or returns 1 if not running.
-# Clears a stale pid file as a side effect.
+# Clears a stale/invalid pid file as a side effect.
 running_pid() {
   [ -f "$PID_FILE" ] || return 1
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
@@ -52,10 +59,6 @@ running_pid() {
   fi
   rm -f "$PID_FILE"
   return 1
-}
-
-usage() {
-  sed -n '3,27p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 cmd_start() {
