@@ -75,11 +75,11 @@ Keiko reads credentials from environment variables or a JSON config file, never 
 2. Config-file value for that model's `apiKey` / `baseUrl`.
 3. Global fallback: `KEIKO_DEFAULT_API_KEY` / `KEIKO_DEFAULT_BASE_URL`.
 
-Live model surfaces (`keiko models validate`, `keiko gen-tests`, `keiko investigate`, `keiko evaluate --live`, and `keiko ui`) read a config only from `--config PATH` or `KEIKO_CONFIG_FILE`. Keiko does not implicitly trust `./keiko.config.json` from the target repository. Provider `baseUrl` values must use `https:` unless they target `localhost` or loopback for local development.
+Live model CLI surfaces (`keiko models validate`, `keiko gen-tests`, `keiko investigate`, and `keiko evaluate --live`) read a config only from `--config PATH` or `KEIKO_CONFIG_FILE`. `keiko ui` requires `--config PATH` for model-backed workflow runs. Keiko does not implicitly trust `./keiko.config.json` from the target repository. Provider `baseUrl` values must use `https:` unless they target `localhost` or loopback for local development.
 
 See the README's [Configuration and secrets](../../README.md#configuration-and-secrets) section and `.env.example` for the full set of variable names.
 
-Which model to use for which workflow is a deliberate choice. The two Wave 1 workflows produce structured diffs and need a model with both tool-calling and reliable structured output. The [model capability guide](./model-capability-guide.md) maps the pilot portfolio to roles and flags the models that are unfit (`Qwen2.5-Coder-7B-Instruct`, whose `structuredOutput` is false) or not callable in Wave 1 (the OCR and embedding models).
+Which model to use for which workflow is a deliberate choice. The two Wave 1 workflows produce structured diffs and should be routed to a model with both tool-calling and reliable structured output; this is operator routing guidance, not a runtime guard in the default selector. The [model capability guide](./model-capability-guide.md) maps the pilot portfolio to roles and flags the models that are unfit (`Qwen2.5-Coder-7B-Instruct`, whose `structuredOutput` is false) or not callable in Wave 1 (the OCR and embedding models).
 
 ---
 
@@ -210,7 +210,7 @@ These are non-negotiable for a regulated pilot.
 - **Dry-run first.** Always read the proposed diff before applying. The default output is a diff for exactly this reason.
 - **Human review of every diff.** A person reads and approves every change before it is applied and before it reaches a branch. For an investigation, separate the verified findings from the hypothesis and confirm the fix addresses a real cause.
 - **No unattended merge.** Keiko never commits, pushes, opens a pull request, or merges. Applying a patch writes to your working tree and runs verification; integrating it is a human action.
-- **Evidence for the record.** Keep the evidence manifest for every applied change. It is the redacted, durable record a reviewer or auditor reads later.
+- **Evidence for the record.** When audit evidence is required, use a manifest-producing surface (`keiko run`, a local UI workflow run, or `keiko evaluate`) and keep the resulting manifest. Standalone `keiko gen-tests` and `keiko investigate` runs produce reviewable reports and diffs, but they do not persist manifests.
 
 ---
 
@@ -256,7 +256,7 @@ A workable shape for a time-boxed pilot:
 
 1. **Setup day.** Complete [Safe setup](#safe-setup) and [Model configuration](#model-configuration) on each operator's machine. Run `keiko evaluate` (offline) and confirm it exits `0`. Decide which model serves which workflow using the [model capability guide](./model-capability-guide.md).
 2. **Baseline.** Run `keiko evaluate --live` against the candidate model(s) and review the scorecard and its linked evidence. Record the baseline.
-3. **Daily use.** Operators run `gen-tests` and `investigate` in dry-run, review diffs, and apply selectively. Retain evidence for every applied change.
+3. **Daily use.** Operators run `gen-tests` and `investigate` in dry-run, review diffs, and apply selectively. For retained audit evidence, route the change through `keiko run`, the local UI workflow path, or `keiko evaluate`.
 4. **Retention checkpoint.** Because default retention keeps only the newest 50 runs, copy or relocate evidence at least daily if the pilot generates more than that, so nothing is rotated out before review.
 5. **Review checkpoint.** At a set cadence (for example daily), a reviewer reads the day's applied diffs and their evidence, and logs feedback.
 6. **Decision.** At the end, run the [Go/No-Go](./go-no-go.md) assessment: confirm the offline thresholds and complete the human live-evaluation review.

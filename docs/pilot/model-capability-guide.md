@@ -16,14 +16,14 @@ For how credentials resolve and how the gateway config is structured, see [Confi
 
 ---
 
-## What the Wave 1 workflows need
+## What to route to Wave 1 workflows
 
-The two Wave 1 chat workflows — [unit-test generation](../adr/ADR-0008-unit-test-generation-workflow.md) and [bug investigation](../adr/ADR-0009-bug-investigation-and-regression-test-workflow.md) — produce structured diffs. They need two capabilities:
+The two Wave 1 chat workflows — [unit-test generation](../adr/ADR-0008-unit-test-generation-workflow.md) and [bug investigation](../adr/ADR-0009-bug-investigation-and-regression-test-workflow.md) — produce structured diffs. Route those workflows to models that declare:
 
 - `toolCalling` — the workflow drives the model through tool steps.
 - `structuredOutput` — the workflow expects a reliably structured patch.
 
-A model with `structuredOutput: false` can still serve inline completion or chat, but it is a poor fit for the structured-diff workflows. Two portfolio entries are not chat models at all: their methods are Wave 2 and they are not callable by Wave 1 workflows.
+This is operator routing guidance, not a runtime guard in the current CLI default selector. If a workflow command is run without `--model`, Keiko selects from configured chat providers by cost; operators should configure or pass a model with the capabilities above for structured-diff work. A model with `structuredOutput: false` can still serve inline completion or chat, but it is a poor fit for the structured-diff workflows. Two portfolio entries are not chat models at all: their methods are Wave 2 and they are not callable by Wave 1 workflows.
 
 ---
 
@@ -67,7 +67,7 @@ Medium cost, standard latency. Suited to documentation summarisation, code expla
 
 ### Not suited to the structured-diff workflows
 
-`Qwen2.5-Coder-7B-Instruct` declares `structuredOutput: false`. It is low cost and fast and works well for inline completion, snippets, and high-throughput batch use. It is **not** a reliable choice for unit-test generation or bug investigation, which depend on a structured patch. Route those workflows to a model with `structuredOutput: true`.
+`Qwen2.5-Coder-7B-Instruct` declares `structuredOutput: false`. It is low cost and fast and works well for inline completion, snippets, and high-throughput batch use. It is **not** a reliable choice for unit-test generation or bug investigation, which depend on a structured patch. Route those workflows explicitly to a model with `structuredOutput: true`; do not rely on the default cheapest-chat selection when this model is configured.
 
 ---
 

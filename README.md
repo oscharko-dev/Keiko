@@ -2,9 +2,9 @@
 
 Keiko is an enterprise, model-agnostic developer-assist coding agent for regulated engineering teams.
 
-It runs bounded, reviewable coding workflows against a configurable gateway of language models, across three surfaces: a command-line tool (`keiko`), a programmatic SDK, and a local web UI. Every change is dry-run by default and produces redacted evidence for audit. Keiko assists a developer; it does not merge code on its own.
+It runs bounded, reviewable coding workflows against a configurable gateway of language models, across three surfaces: a command-line tool (`keiko`), a programmatic SDK, and a local web UI. Dry-run workflows are the default, and the manifest-producing surfaces emit redacted evidence for audit. Keiko assists a developer; it does not merge code on its own.
 
-This README is the package's only shipped document. It is self-contained and links to the repository [`docs/`](docs/) for depth.
+This README is the package's only shipped document. It contains the package-facing essentials and links to the repository [`docs/`](https://github.com/oscharko-dev/Keiko/tree/dev/docs) for deeper operational guidance.
 
 ---
 
@@ -39,7 +39,7 @@ Three properties define it:
 
 - **Model-agnostic.** Route each task to a model that fits the work and the budget, from one config file. The gateway exposes each model's declared capabilities; the caller chooses.
 - **Bounded and reviewable.** Workflows run as deterministic pipelines, not open-ended autonomy. Changes are dry-run by default and returned as a diff for human review. No change reaches a branch without a person.
-- **Auditable.** Each run emits a structured, redacted evidence manifest. Credentials never enter logs, events, or evidence.
+- **Auditable.** Manifest-producing surfaces emit structured, redacted evidence. Credentials never enter logs, events, or evidence.
 
 Keiko provides bounded developer assistance with measurable output and regulated reviewability. It is not a replacement for engineering judgment, and it does not claim parity with general-purpose autonomous agents.
 
@@ -58,9 +58,9 @@ Wave 1 is feature-complete for its defined scope. The shipped capabilities are:
 - **Local UI** — a single-user, local-only web surface for the workflows and evidence.
 - **Evaluation harness** — an offline (default) or live scorecard for pilot decisions.
 
-These are reachable from all three surfaces: the CLI, the SDK, and the local UI.
+Surface coverage is intentionally not identical. The CLI exposes the full command set; the SDK exposes programmatic workflows, workspace, verification, gateway, evaluation, and evidence APIs; the local UI exposes workflow launch/review/apply, live run observation, evidence browsing, config/model inspection, and workspace summary.
 
-Two model kinds in the portfolio are registered but not yet callable: OCR-vision (`callOcr`) and embedding (`callEmbedding`) methods are Wave 2. See the [model capability guide](docs/pilot/model-capability-guide.md).
+Two model kinds in the portfolio are registered but not yet callable: OCR-vision (`callOcr`) and embedding (`callEmbedding`) methods are Wave 2. See the [model capability guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pilot/model-capability-guide.md).
 
 ---
 
@@ -128,7 +128,7 @@ The first match wins:
 2. Config-file value for that model's `apiKey` / `baseUrl`
 3. Global environment variables: `KEIKO_DEFAULT_API_KEY` / `_BASE_URL`
 
-Live model surfaces (`keiko models validate`, `keiko gen-tests`, `keiko investigate`, `keiko evaluate --live`, and `keiko ui`) read a config only from `--config PATH` or `KEIKO_CONFIG_FILE`. Keiko does not implicitly trust `./keiko.config.json` from the target repository.
+Live model CLI surfaces (`keiko models validate`, `keiko gen-tests`, `keiko investigate`, and `keiko evaluate --live`) read a config only from `--config PATH` or `KEIKO_CONFIG_FILE`. `keiko ui` requires `--config PATH` for model-backed runs. Keiko does not implicitly trust `./keiko.config.json` from the target repository.
 
 Provider `baseUrl` values must use `https:` unless they target `localhost` or loopback for local development.
 
@@ -150,7 +150,7 @@ KEIKO_DEFAULT_API_KEY
 KEIKO_DEFAULT_BASE_URL
 ```
 
-Credentials are held in memory for the duration of a call and are never logged or serialized. See [`.env.example`](.env.example) for a template and [ADR-0003](docs/adr/ADR-0003-model-gateway-boundary.md) for the rationale.
+Credentials are held in memory for the duration of a call and are never logged or serialized. See [`.env.example`](https://github.com/oscharko-dev/Keiko/blob/dev/.env.example) for a template and [ADR-0003](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0003-model-gateway-boundary.md) for the rationale.
 
 ---
 
@@ -334,21 +334,21 @@ The offline suite checks workflow plumbing deterministically. It does not measur
 
 ### `keiko ui`
 
-Launch the local UI. The server binds to `127.0.0.1` (loopback only), prints its URL, and runs until interrupted (Ctrl+C). It serves prebuilt UI assets. The published npm package ships these assets, so `keiko ui` works immediately after install; from a source checkout, run `npm run ui:ci && npm run build:ui` first.
+Launch the local UI. The server binds to `127.0.0.1` (loopback only), prints its URL, and runs until interrupted (Ctrl+C). It serves prebuilt UI assets. The published npm package ships these assets, so `keiko ui` works immediately after install; from a source checkout, run `npm run build && npm run ui:ci && npm run build:ui` first.
 
 ```bash
 keiko ui
 keiko ui --port 4319
 ```
 
-| Option                | Description                                       |
-| --------------------- | ------------------------------------------------- |
-| `--port PORT`         | Port to bind (default: 4319)                      |
-| `--host HOST`         | `127.0.0.1` or `localhost` (default: `127.0.0.1`) |
-| `--evidence-dir PATH` | Evidence directory for UI-run evidence            |
-| `--config PATH`       | Gateway config file (or `KEIKO_CONFIG_FILE`)      |
+| Option                | Description                                                         |
+| --------------------- | ------------------------------------------------------------------- |
+| `--port PORT`         | Port to bind (default: 4319)                                        |
+| `--host HOST`         | Validate a loopback host value; the server always binds `127.0.0.1` |
+| `--evidence-dir PATH` | Evidence directory for UI-run evidence                              |
+| `--config PATH`       | Gateway config file required for model-backed UI runs               |
 
-See [Local UI](#local-ui) and the [local UI runbook](docs/ui-runbook.md).
+See [Local UI](#local-ui) and the [local UI runbook](https://github.com/oscharko-dev/Keiko/blob/dev/docs/ui-runbook.md).
 
 ---
 
@@ -511,7 +511,7 @@ Manifests are written with an exclusive-create (`O_EXCL`) open into a directory 
 
 Retention keeps the newest runs up to a maximum (`DEFAULT_RETENTION`, 50 runs). Every manifest carries a stable `EVIDENCE_SCHEMA_VERSION`; readers reject unknown versions rather than guessing.
 
-Inspect manifests with `keiko evidence list` and `keiko evidence show <runId>`. See [ADR-0010](docs/adr/ADR-0010-audit-ledger-and-evidence-manifests.md).
+Inspect manifests with `keiko evidence list` and `keiko evidence show <runId>`. See [ADR-0010](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0010-audit-ledger-and-evidence-manifests.md).
 
 ---
 
@@ -519,7 +519,7 @@ Inspect manifests with `keiko evidence list` and `keiko evidence show <runId>`. 
 
 `keiko ui` serves a single-user web surface for the workflows and evidence. It binds to `127.0.0.1` by default, checks `Host` and `Origin` headers to block DNS-rebinding, serves a strict Content-Security-Policy, and renders only redacted views. The apply action uses the same gated, dry-run-default path as the CLI.
 
-The server runs until you interrupt it (Ctrl+C). For setup, surfaces, and troubleshooting, see the [local UI runbook](docs/ui-runbook.md).
+The server runs until you interrupt it (Ctrl+C). For setup, surfaces, and troubleshooting, see the [local UI runbook](https://github.com/oscharko-dev/Keiko/blob/dev/docs/ui-runbook.md).
 
 Multi-user access, authentication, and remote hosting are out of scope for Wave 1.
 
@@ -535,7 +535,7 @@ Keiko's boundaries are explicit, and so are their limits. In summary:
 - **The UI** is local-only with DNS-rebinding defense and a strict CSP.
 - **No unattended merge.** A human reviews every change. This is a hard invariant of the pilot.
 
-Wave 1 is **not** OS-level isolation. Allowlisted project scripts (for example `npm test`) can run repository-authored code; the boundary protects the host outside the workspace, not the workspace from itself. For the full picture and the explicit limitations, read [Security and audit boundaries](docs/security-and-audit-boundaries.md).
+Wave 1 is **not** OS-level isolation. Allowlisted project scripts (for example `npm test`) can run repository-authored code; the boundary protects the host outside the workspace, not the workspace from itself. For the full picture and the explicit limitations, read [Security and audit boundaries](https://github.com/oscharko-dev/Keiko/blob/dev/docs/security-and-audit-boundaries.md).
 
 ---
 
@@ -546,13 +546,13 @@ Wave 1 is **not** OS-level isolation. Allowlisted project scripts (for example `
 - Offline (`keiko evaluate`) checks workflow plumbing deterministically against scripted responses. It does not measure model quality.
 - Live (`keiko evaluate --live`) runs the same suite against a configured model endpoint.
 
-See [Go/No-Go criteria](docs/pilot/go-no-go.md) and the [model capability guide](docs/pilot/model-capability-guide.md).
+See [Go/No-Go criteria](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pilot/go-no-go.md) and the [model capability guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pilot/model-capability-guide.md).
 
 ---
 
 ## Packaging
 
-The published tarball ships only `dist/`, `README.md`, and `LICENSE` (the `files` allowlist). Repository docs stay in the repository. A surface check (`npm run check:package-surface`) runs in the `prepack` and `prepublishOnly` chains and asserts the built CLI, SDK, type declarations, and UI assets ship while source, source maps, `.env` files, and docs do not.
+The published tarball ships only `dist/`, `README.md`, and `LICENSE` (the `files` allowlist). Repository docs stay in the repository. A surface check (`npm run check:package-surface`) runs in the `prepack` and `prepublishOnly` chains, which execute `npm run clean && npm run build && npm run ui:ci && npm run build:ui && npm run check:package-surface`. Those checks assert the built CLI, SDK, type declarations, and UI assets ship while source, source maps, `.env` files, and docs do not.
 
 Keiko has zero runtime dependencies. Supply-chain review is covered by the CI dependency-review job, CodeQL, root/UI audit steps, and SBOM builds. Inspect the surface with:
 
@@ -560,7 +560,7 @@ Keiko has zero runtime dependencies. Supply-chain review is covered by the CI de
 npm pack --dry-run
 ```
 
-Publishing the package is out of scope for Wave 1. See [npm packaging](docs/npm-packaging.md).
+Publishing the package is out of scope for Wave 1. See [npm packaging](https://github.com/oscharko-dev/Keiko/blob/dev/docs/npm-packaging.md).
 
 ---
 
@@ -576,16 +576,16 @@ A later phase may add a cloud-native backend for teams that want shared evaluati
 
 Repository documentation (not shipped in the package):
 
-| Document                                                               | Audience                            |
-| ---------------------------------------------------------------------- | ----------------------------------- |
-| [Customer pilot runbook](docs/pilot/runbook.md)                        | Pilot teams, evaluators, reviewers  |
-| [Go/No-Go criteria](docs/pilot/go-no-go.md)                            | Pilot sponsors, leads, review board |
-| [Model capability guide](docs/pilot/model-capability-guide.md)         | Pilot evaluators, operators         |
-| [Security and audit boundaries](docs/security-and-audit-boundaries.md) | Security and regulated reviewers    |
-| [Local UI runbook](docs/ui-runbook.md)                                 | UI operators and reviewers          |
-| [npm packaging](docs/npm-packaging.md)                                 | Release engineers                   |
+| Document                                                                                                              | Audience                            |
+| --------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| [Customer pilot runbook](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pilot/runbook.md)                        | Pilot teams, evaluators, reviewers  |
+| [Go/No-Go criteria](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pilot/go-no-go.md)                            | Pilot sponsors, leads, review board |
+| [Model capability guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pilot/model-capability-guide.md)         | Pilot evaluators, operators         |
+| [Security and audit boundaries](https://github.com/oscharko-dev/Keiko/blob/dev/docs/security-and-audit-boundaries.md) | Security and regulated reviewers    |
+| [Local UI runbook](https://github.com/oscharko-dev/Keiko/blob/dev/docs/ui-runbook.md)                                 | UI operators and reviewers          |
+| [npm packaging](https://github.com/oscharko-dev/Keiko/blob/dev/docs/npm-packaging.md)                                 | Release engineers                   |
 
-Architecture Decision Records live in [`docs/adr/`](docs/adr/).
+Architecture Decision Records live in [`docs/adr/`](https://github.com/oscharko-dev/Keiko/tree/dev/docs/adr).
 
 ---
 

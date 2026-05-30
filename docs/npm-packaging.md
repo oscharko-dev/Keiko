@@ -18,7 +18,7 @@ So the published tarball contains only:
 - `README.md` — the package's single shipped document.
 - `LICENSE` — the Apache-2.0 license text.
 
-Repository documentation under `docs/` does **not** ship. This is why the README is self-contained and links to `docs/` for depth: a package consumer has the README, not the repository tree.
+Repository documentation under `docs/` does **not** ship. This is why the README carries the package-facing essentials and only links to `docs/` for repository users who need deeper operational guidance.
 
 ---
 
@@ -60,20 +60,20 @@ A missing UI build is the most common failure: the check tells you to run `npm r
 Both `prepack` and `prepublishOnly` run the same sequence:
 
 ```
+npm run clean
 npm run build          # tsc -> dist/
+npm run ui:ci          # install nested ui/ dependencies
 npm run build:ui       # build the UI export into dist/ui/
 npm run check:package-surface
 ```
 
 `prepack` runs on `npm pack` and on `npm publish`; `prepublishOnly` runs only on `npm publish`. The surface check is the last step, so the assets it asserts have already been built. The check itself runs `npm pack --dry-run` with `--ignore-scripts` to avoid re-triggering `prepack` recursively.
 
-The UI build step expects the nested UI dependencies to already be installed. Prepare them explicitly with `npm --prefix ui ci --ignore-scripts` in a release workspace; `prepack` does not perform a hidden nested install.
-
 To reproduce the full pre-publish state locally:
 
 ```bash
 npm --prefix ui ci --ignore-scripts
-npm run build && npm run build:ui && npm run check:package-surface
+npm run clean && npm run build && npm run build:ui && npm run check:package-surface
 ```
 
 ---
