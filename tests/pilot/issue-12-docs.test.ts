@@ -34,6 +34,7 @@ describe("Issue #12 docs drift", () => {
     );
     expect(readme).toContain(PACKAGE_SURFACE_CHAIN);
     expect(packaging).toContain("npm run ui:ci");
+    expect(packaging).toContain("npm run prepack");
     expect(packaging).not.toContain("prepack does not perform a hidden nested install");
   });
 

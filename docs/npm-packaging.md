@@ -72,8 +72,7 @@ npm run check:package-surface
 To reproduce the full pre-publish state locally:
 
 ```bash
-npm --prefix ui ci --ignore-scripts
-npm run clean && npm run build && npm run build:ui && npm run check:package-surface
+npm run prepack
 ```
 
 ---
