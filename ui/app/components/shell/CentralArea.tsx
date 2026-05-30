@@ -1,10 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
-import { fetchProjects, ApiError } from "@/lib/api";
 import type { ProjectWithAvailability } from "@/lib/types";
+import { useSelectedProject } from "./useSelectedProject";
 import { WorkspaceShellEntry } from "./WorkspaceShellEntry";
 import { ChatView } from "./ChatView";
 
@@ -55,12 +54,6 @@ function ProjectHeader({ project }: ProjectHeaderProps): ReactNode {
 // CentralArea — reads search params and dispatches to the right view
 // ---------------------------------------------------------------------------
 
-type ProjectLookupState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "found"; project: ProjectWithAvailability }
-  | { kind: "notfound" };
-
 /**
  * Central content area router. Reads ?project= and ?chat= from the URL and
  * dispatches to: Welcome | ProjectHeader | ChatView.
@@ -71,42 +64,7 @@ export function CentralArea(): ReactNode {
   const projectPath = searchParams.get("project");
   const chatId = searchParams.get("chat");
 
-  const [projectState, setProjectState] = useState<ProjectLookupState>({ kind: "idle" });
-
-  const lookupProject = useCallback((path: string) => {
-    setProjectState({ kind: "loading" });
-    let active = true;
-    void fetchProjects()
-      .then((r) => {
-        if (!active) return;
-        const found = r.projects.find((p) => p.path === path);
-        if (found) {
-          setProjectState({ kind: "found", project: found });
-        } else {
-          setProjectState({ kind: "notfound" });
-        }
-      })
-      .catch((err: unknown) => {
-        if (!active) return;
-        // Graceful fallback — just show welcome
-        if (err instanceof ApiError) {
-          setProjectState({ kind: "notfound" });
-        } else {
-          setProjectState({ kind: "notfound" });
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!projectPath) {
-      setProjectState({ kind: "idle" });
-      return;
-    }
-    return lookupProject(projectPath);
-  }, [projectPath, lookupProject]);
+  const projectState = useSelectedProject();
 
   // No project selected → welcome
   if (!projectPath) {
