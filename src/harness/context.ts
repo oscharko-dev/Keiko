@@ -38,6 +38,7 @@ export interface RunContext {
   report: string | undefined;
   failure: HarnessFailure | undefined;
   cancelReason: string | undefined;
+  cancelledAtState: HarnessStateName | undefined;
 }
 
 // The result of a single state handler: the next state and the human-readable reason

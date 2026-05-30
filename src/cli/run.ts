@@ -137,6 +137,8 @@ function seedFor(task: TaskInput, result: RunResult): ManifestSeed {
     taskInput: task,
     limits: DEFAULT_LIMITS,
     modelId: "mock-model",
+    workingDirectory: ".",
+    dryRun: true,
     startedAt: new Date(result.startedAt).toISOString(),
   };
 }

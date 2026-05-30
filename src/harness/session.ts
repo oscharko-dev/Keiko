@@ -6,6 +6,7 @@ import { systemClock } from "../gateway/resilience.js";
 import type { Clock } from "../gateway/types.js";
 import { newCounters, type RunContext } from "./context.js";
 import { Emitter } from "./emitter.js";
+import { HARNESS_CODES, toFailure } from "./errors.js";
 import { defaultFingerprinter, defaultIdSource } from "./fingerprint.js";
 import { runLoop } from "./loop.js";
 import type { EventSink, Fingerprinter, IdSource, ModelPort, ToolPort } from "./ports.js";
@@ -48,6 +49,10 @@ export interface AgentSession {
 
 function resolveLimits(config: AgentConfig): HarnessLimits {
   return { ...DEFAULT_LIMITS, ...config.limits };
+}
+
+function resolveDryRun(config: AgentConfig): boolean {
+  return config.dryRun ?? true;
 }
 
 interface ResultIdentity {
@@ -104,8 +109,33 @@ function buildContext(
     report: undefined,
     failure: undefined,
     cancelReason: undefined,
+    cancelledAtState: undefined,
   };
   return { ctx, memory };
+}
+
+function armWallTimeDeadline(
+  ctx: RunContext,
+  controller: AbortController,
+  clock: Clock,
+): () => void {
+  let cleared = false;
+  const deadlineController = new AbortController();
+  void clock
+    .sleep(ctx.limits.maxWallTimeMs, deadlineController.signal)
+    .then(() => {
+      if (cleared || controller.signal.aborted) {
+        return;
+      }
+      ctx.failure = toFailure(HARNESS_CODES.LIMIT_WALL_TIME, "wall-time budget exhausted");
+      ctx.cancelReason = "maxWallTimeMs exceeded";
+      controller.abort("maxWallTimeMs exceeded");
+    })
+    .catch(() => undefined);
+  return (): void => {
+    cleared = true;
+    deadlineController.abort("run finished");
+  };
 }
 
 export function createSession(
@@ -114,16 +144,20 @@ export function createSession(
   deps: HarnessDeps,
 ): AgentSession {
   const limits = resolveLimits(config);
+  const dryRun = resolveDryRun(config);
   const runId = (deps.idSource ?? defaultIdSource).newRunId();
   const fingerprint = (deps.fingerprinter ?? defaultFingerprinter).compute({
     taskType: task.taskType,
     taskInput: task,
     limits,
     modelId: config.model,
+    workingDirectory: config.workingDirectory,
+    dryRun,
     harnessVersion: HARNESS_VERSION,
   });
   const controller = new AbortController();
   const { ctx, memory } = buildContext(task, config, deps, controller.signal, runId, fingerprint);
+  const clearDeadline = armWallTimeDeadline(ctx, controller, ctx.clock);
   ctx.emitter.emit({
     type: "run:started",
     taskType: task.taskType,
@@ -134,6 +168,7 @@ export function createSession(
   // observed at the loop's first abort check, before any model or tool call is made.
   const result = Promise.resolve()
     .then(() => runLoop(ctx))
+    .finally(clearDeadline)
     .then((outcome) => buildResult(ctx, outcome, memory, { runId, fingerprint }));
   return {
     runId,

@@ -118,6 +118,8 @@ function makeManifest(events: readonly HarnessEvent[]): RunManifest {
     taskInput,
     limits,
     modelId: "m1",
+    workingDirectory: "/repo",
+    dryRun: true,
     startedAt: "2026-05-29T00:00:00.000Z",
     events,
   };

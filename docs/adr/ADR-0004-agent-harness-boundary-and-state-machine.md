@@ -166,7 +166,8 @@ that is not the in-memory test collector. The audit ledger (#10) may apply addit
 before persistence.
 
 Sensitive fields: `reasoning:trace.rationale`, `reasoning:trace.modelResponse`,
-`patch:proposed.diff`, `model:call:started.messages` (content only), `run:failed.detail`.
+`patch:proposed.diff`, `model:call:started.messages` (content only), failed call messages,
+`verification:result.detail`, `run:cancelled.reason`, and `run:failed.message` / `detail`.
 
 ### D7 — Deterministic run-ID scheme and canonical configuration fingerprint
 
@@ -176,15 +177,15 @@ test runs and reproducible for replay.
 
 **Configuration fingerprint**: SHA-256 (hex digest) over the UTF-8 encoding of a canonical,
 key-sorted JSON object containing: `taskType`, `taskInput` (sanitized — secrets excluded), `limits`
-(fully resolved including defaults), `modelId`, and `harnessVersion`. The fingerprint is computed at
-run start and attached to every `HarnessEvent`. Two runs with the same fingerprint used the same
-effective configuration.
+(fully resolved including defaults), `modelId`, `workingDirectory`, `dryRun`, and `harnessVersion`.
+The fingerprint is computed at run start and attached to every `HarnessEvent`. Two runs with the
+same fingerprint used the same effective configuration and developer-review mode.
 
 **Replay/evidence manifest** (the minimal record the audit ledger needs to re-run under the same
 model/config): `runId`, `fingerprint`, `harnessVersion`, `taskType`, `taskInput`, `limits`,
-`modelId`, `startedAt` (wall-clock ISO-8601), `events` (the full ordered event array). This is
-the `RunManifest` type. Issue #10 persists this; the harness produces it via `collectManifest()` on
-the in-memory sink.
+`modelId`, `workingDirectory`, `dryRun`, `startedAt` (wall-clock ISO-8601), `events` (the full
+ordered event array). This is the `RunManifest` type. Issue #10 persists this; the harness produces
+it via `collectManifest()` on the in-memory sink.
 
 ### D8 — Three bounded Wave-1 task types with explicit state paths
 
@@ -572,6 +573,8 @@ export interface RunManifest {
   readonly taskInput: TaskInput;
   readonly limits: HarnessLimits;
   readonly modelId: string;
+  readonly workingDirectory: string;
+  readonly dryRun: boolean;
   readonly startedAt: string;   // ISO-8601 wall-clock
   readonly events: readonly HarnessEvent[];
 }
@@ -780,6 +783,8 @@ export interface FingerprintInput {
   readonly taskInput: TaskInput;
   readonly limits: HarnessLimits;
   readonly modelId: string;
+  readonly workingDirectory: string;
+  readonly dryRun: boolean;
   readonly harnessVersion: string;
 }
 
