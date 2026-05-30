@@ -13,6 +13,10 @@ import type { ProjectWithAvailability } from "@/lib/types";
 vi.mock("@/lib/api", () => ({
   fetchChatMessages: vi.fn(),
   createChatMessage: vi.fn(),
+  fetchChats: vi.fn(),
+  fetchModels: vi.fn(),
+  updateChat: vi.fn(),
+  startRun: vi.fn(),
   ApiError: class ApiError extends Error {
     code: string;
     status: number;
@@ -43,6 +47,15 @@ const unavailableProject: ProjectWithAvailability = {
   available: false,
 };
 
+const baseChat = {
+  id: "c1",
+  projectPath: "/workspace/foo",
+  title: "t",
+  selectedModel: "Mistral-Small-3.1-24B-Instruct-2503",
+  createdAt: 0,
+  updatedAt: 0,
+} as const;
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -50,6 +63,12 @@ const unavailableProject: ProjectWithAvailability = {
 describe("ChatView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // ChatView now fetches the chat record so ChatComposer can read selectedModel (issue #65).
+    // The default keeps fetchChats pending forever so the composer stays in its loading state
+    // and individual existing tests stay focused on the message-list surface. Tests that need
+    // the composer rendered override `fetchChats` with `mockResolvedValueOnce`.
+    vi.mocked(api.fetchChats).mockReturnValue(new Promise(() => { /* never resolves */ }));
+    vi.mocked(api.fetchModels).mockResolvedValue({ models: [] });
   });
 
   it("renders loading state initially", () => {
@@ -111,6 +130,7 @@ describe("ChatView", () => {
 
   it("shows composer for available project", async () => {
     vi.mocked(api.fetchChatMessages).mockResolvedValueOnce({ messages: [] });
+    vi.mocked(api.fetchChats).mockResolvedValueOnce({ chats: [baseChat] });
     render(<ChatView chatId="c1" project={availableProject} />);
     await waitFor(() => {
       expect(screen.getByRole("textbox", { name: /message/i })).toBeInTheDocument();
@@ -137,7 +157,26 @@ describe("ChatView", () => {
   it("sending a message re-fetches messages", async () => {
     const user = userEvent.setup();
     vi.mocked(api.fetchChatMessages).mockResolvedValue({ messages: [] });
-    vi.mocked(api.createChatMessage).mockResolvedValueOnce({
+    vi.mocked(api.fetchChats).mockResolvedValueOnce({ chats: [baseChat] });
+    vi.mocked(api.fetchModels).mockResolvedValueOnce({
+      models: [
+        {
+          id: "Mistral-Small-3.1-24B-Instruct-2503",
+          kind: "chat",
+          contextWindow: 128_000,
+          maxOutputTokens: 8_000,
+          toolCalling: true,
+          structuredOutput: true,
+          streaming: true,
+          costClass: "medium",
+          latencyClass: "medium",
+          throughputHint: "ok",
+          preferredUseCases: [],
+          knownLimitations: [],
+        },
+      ],
+    });
+    vi.mocked(api.createChatMessage).mockResolvedValue({
       message: {
         id: "m1",
         chatId: "c1",
@@ -146,11 +185,14 @@ describe("ChatView", () => {
         timestamp: 1000,
       },
     });
+    vi.mocked(api.startRun).mockResolvedValueOnce({ runId: "r1", fingerprint: "f" });
     render(<ChatView chatId="c1" project={availableProject} />);
     await waitFor(() => {
-      expect(screen.getByRole("textbox")).toBeInTheDocument();
+      expect(screen.getByRole("combobox", { name: /model/i })).toBeInTheDocument();
     });
-    await user.type(screen.getByRole("textbox"), "Test");
+    // The composer now requires a workflow mode to be selected before submit is enabled.
+    // Pick Verify (no textarea content required) and submit.
+    await user.click(screen.getByRole("radio", { name: /verify/i }));
     await user.click(screen.getByRole("button", { name: /send message/i }));
     await waitFor(() => {
       // fetchChatMessages called at least twice: initial load + after send
@@ -160,9 +202,10 @@ describe("ChatView", () => {
 
   it("has no axe-detectable accessibility violations (available project)", async () => {
     vi.mocked(api.fetchChatMessages).mockResolvedValueOnce({ messages: [] });
+    vi.mocked(api.fetchChats).mockResolvedValueOnce({ chats: [baseChat] });
     const { container } = render(<ChatView chatId="c1" project={availableProject} />);
     await waitFor(() => {
-      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.queryByRole("status", { name: /loading messages/i })).toBeNull();
     });
     const results = await axe(container);
     expect(results).toHaveNoViolations();

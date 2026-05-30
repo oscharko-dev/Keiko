@@ -8,6 +8,7 @@ import type { TaskInput } from "../types.js";
 import { buildExplainPlan } from "./explain-plan.js";
 import { buildGenerateUnitTests } from "./generate-unit-tests.js";
 import { buildInvestigateBug } from "./investigate-bug.js";
+import { buildVerify } from "./verify.js";
 
 export interface TaskPlan {
   // The capabilities this task is permitted to use. The loop NEVER enters a disallowed
@@ -32,5 +33,7 @@ export function resolveTaskPlan(task: TaskInput): TaskPlan {
       return buildInvestigateBug(task.input);
     case "explain-plan":
       return buildExplainPlan(task.input);
+    case "verify":
+      return buildVerify(task.input);
   }
 }

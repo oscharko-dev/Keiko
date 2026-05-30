@@ -573,3 +573,64 @@ describe("FIX G/H — oversized request body returns 413 PAYLOAD_TOO_LARGE", () 
     expect(json).toMatchObject({ error: { code: "PAYLOAD_TOO_LARGE" } });
   });
 });
+
+describe("Security #1 — verify workspaceRoot project-allowlist check", () => {
+  it("returns 403 WORKSPACE_NOT_REGISTERED for verify with an unregistered workspaceRoot", async () => {
+    await start(fakeModel("noop"));
+    const res = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ taskType: "verify", input: { workspaceRoot: "/tmp/not-registered" }, modelId: "m" }),
+    });
+    expect(res.status).toBe(403);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json).toMatchObject({ error: { code: "WORKSPACE_NOT_REGISTERED" } });
+  });
+
+  it("returns 202 for verify with a registered workspaceRoot", async () => {
+    // Wire a store that has the workspace pre-registered so the allowlist check passes.
+    await start(fakeModel("noop"));
+    await new Promise<void>((res) => server.close(() => { res(); }));
+    const registeredStore = createInMemoryUiStore();
+    registeredStore.createProject(workspace);
+    server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      port,
+      handlerDeps: { ...handlerDeps(fakeModel("noop")), store: registeredStore },
+    });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+    const res = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ taskType: "verify", input: { workspaceRoot: workspace }, modelId: "m" }),
+    });
+    expect(res.status).toBe(202);
+  });
+
+  it("does not apply the allowlist to unit-test-generation (workflow) runs", async () => {
+    await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
+    // workspace is NOT registered in the store — workflow runs are unrestricted.
+    const res = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        workflowId: "unit-test-generation",
+        input: { workspaceRoot: workspace, target: { kind: "file", filePath: "src/add.ts" } },
+        modelId: "test-model",
+      }),
+    });
+    expect(res.status).toBe(202);
+  });
+
+  it("does not apply the allowlist to explain-plan runs", async () => {
+    await start(fakeModel("an explanation"));
+    // workspace is NOT registered in the store — explain-plan runs are unrestricted.
+    const res = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ taskType: "explain-plan", input: { filePath: "src/add.ts" }, modelId: "m" }),
+    });
+    expect(res.status).toBe(202);
+  });
+});

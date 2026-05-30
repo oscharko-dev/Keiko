@@ -45,8 +45,9 @@ export function handleModels(): RouteResult {
   return { status: 200, body: { models: listCapabilities() } };
 }
 
-// Route 4 — launch-form metadata: the workflow descriptors plus the synthesized explain-plan inputs
-// (explain-plan is a harness task with no workflow descriptor).
+// Route 4 — launch-form metadata: the workflow descriptors plus the synthesized explain-plan and
+// verify inputs (both are harness tasks with no workflow descriptor — verify is BFF-only and runs
+// the deterministic verification orchestrator).
 export function handleWorkflows(): RouteResult {
   return {
     status: 200,
@@ -65,6 +66,23 @@ export function handleWorkflows(): RouteResult {
             type: "string",
             required: false,
             description: "Optional focusing question for the explanation.",
+          },
+        ],
+        defaultLimits: DEFAULT_LIMITS,
+      },
+      verify: {
+        inputs: [
+          {
+            name: "workspaceRoot",
+            type: "string",
+            required: true,
+            description: "Project root to verify.",
+          },
+          {
+            name: "targetFiles",
+            type: "string[]",
+            required: false,
+            description: "Optional file subset to target tests for.",
           },
         ],
         defaultLimits: DEFAULT_LIMITS,

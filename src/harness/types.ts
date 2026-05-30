@@ -59,7 +59,7 @@ export const DEFAULT_LIMITS: HarnessLimits = {
 
 // ─── Task types ───────────────────────────────────────────────────────────────
 
-export type TaskType = "generate-unit-tests" | "investigate-bug" | "explain-plan";
+export type TaskType = "generate-unit-tests" | "investigate-bug" | "explain-plan" | "verify";
 
 export interface GenerateUnitTestsInput {
   readonly filePath: string;
@@ -78,10 +78,18 @@ export interface ExplainPlanInput {
   readonly question?: string | undefined;
 }
 
+// Verify task is deterministic: the run engine invokes the verification orchestrator directly
+// (no model loop), so this shape carries only the workspaceRoot and optional target file subset.
+export interface VerifyInput {
+  readonly workspaceRoot: string;
+  readonly targetFiles?: readonly string[] | undefined;
+}
+
 export type TaskInput =
   | { readonly taskType: "generate-unit-tests"; readonly input: GenerateUnitTestsInput }
   | { readonly taskType: "investigate-bug"; readonly input: InvestigateBugInput }
-  | { readonly taskType: "explain-plan"; readonly input: ExplainPlanInput };
+  | { readonly taskType: "explain-plan"; readonly input: ExplainPlanInput }
+  | { readonly taskType: "verify"; readonly input: VerifyInput };
 
 // ─── Runtime counters (harness-internal mutable state) ────────────────────────
 

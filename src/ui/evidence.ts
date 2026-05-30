@@ -48,7 +48,8 @@ export interface RunIdentity {
   readonly workspaceRoot?: string | undefined;
 }
 
-// explain-plan is the only RunKind that is NOT a workflow kind; the workflow caller never passes it.
+// Only the two model-driven workflow kinds map to the shared audit core; explain-plan and verify
+// follow their own manifest paths (different usage shape / no usage at all).
 function toWorkflowKind(kind: RunKind): WorkflowRunKind {
   return kind === "bug-investigation" ? "bug-investigation" : "unit-tests";
 }
@@ -100,7 +101,61 @@ const KIND_TO_TASK_TYPE: Readonly<Record<RunKind, TaskType>> = {
   "unit-tests": "generate-unit-tests",
   "bug-investigation": "investigate-bug",
   "explain-plan": "explain-plan",
+  verify: "verify",
 };
+
+// Persists a terminated VERIFY run. Verify never calls a model, so usageTotals are all zero and
+// stateTransitions/toolCalls/commandExecutions stay empty (the verification orchestrator's own
+// audit summarisation lives in `src/verification/summary.ts` and is out of scope for this leaf).
+export function persistVerifyEvidence(
+  identity: RunIdentity,
+  ctx: EvidencePersistContext,
+): EvidenceReport {
+  const manifest = buildVerifyManifest(identity);
+  const redactor = createAuditRedactor(
+    { additionalSecrets: ctx.additionalSecrets ?? [] },
+    ctx.env,
+  );
+  const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
+  const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
+  return buildEvidenceReport(redacted, location);
+}
+
+function buildVerifyManifest(identity: RunIdentity): EvidenceManifest {
+  const context =
+    identity.workspaceRoot === undefined
+      ? undefined
+      : {
+          workspaceRoot: identity.workspaceRoot,
+          totalCandidates: 0,
+          usedBytes: 0,
+          budgetBytes: 0,
+          droppedForBudget: 0,
+          entries: [],
+        };
+  return {
+    evidenceSchemaVersion: EVIDENCE_SCHEMA_VERSION,
+    run: {
+      runId: identity.runId,
+      fingerprint: identity.fingerprint,
+      harnessVersion: HARNESS_VERSION,
+      taskType: KIND_TO_TASK_TYPE[identity.kind],
+      outcome: identity.status,
+      startedAt: identity.startedAt,
+      finishedAt: identity.finishedAt,
+      durationMs: Math.max(0, identity.finishedAt - identity.startedAt),
+    },
+    model: { modelId: identity.modelId, costClass: resolveCostClass(identity.modelId) },
+    usageTotals: { promptTokens: 0, completionTokens: 0, requestCount: 0, totalLatencyMs: 0 },
+    ...(context === undefined ? {} : { context }),
+    stateTransitions: [],
+    toolCalls: [],
+    commandExecutions: [],
+    verification: undefined,
+    patch: undefined,
+    failure: undefined,
+  };
+}
 
 function buildExplainManifest(identity: RunIdentity, result: RunResult): EvidenceManifest {
   const context =
