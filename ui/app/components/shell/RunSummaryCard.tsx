@@ -56,7 +56,9 @@ function badgeFor(status: ChatWorkflowStatus | undefined): BadgeStyle {
     return { label: "Completed", icon: "✓", wrapperClass: "bg-accent text-ink-inverse", spinning: false };
   }
   if (status === "failed") {
-    return { label: "Failed", icon: "✕", wrapperClass: "bg-red-600 text-ink-inverse", spinning: false };
+    // bg-red-500 (#ef4444) on text-ink-inverse (#1a1e23) = 5.57:1, meets WCAG 1.4.3 AA 4.5:1.
+    // bg-red-600 (#dc2626) here fails at 3.47:1 (a11y audit, issue #66).
+    return { label: "Failed", icon: "✕", wrapperClass: "bg-red-500 text-ink-inverse", spinning: false };
   }
   if (status === "cancelled") {
     return { label: "Cancelled", icon: "⊘", wrapperClass: "bg-elevated text-ink", spinning: false };
@@ -92,16 +94,19 @@ export function RunSummaryCard({ message, onPatched }: RunSummaryCardProps): Rea
   const linkDisabledClass = "pointer-events-none cursor-not-allowed opacity-50";
 
   return (
+    // No explicit border: bg-panel + rounded corners + gap-3 list spacing match the user/assistant
+    // message bubbles in ChatView. An explicit border-border on bg-panel was only 1.22:1
+    // (WCAG 1.4.11 needs 3:1 — a11y audit, issue #66).
     <div
       role="status"
       aria-live="polite"
-      className="max-w-[80%] rounded-lg border border-border bg-panel px-3 py-2 text-sm text-ink"
+      className="max-w-[80%] rounded-lg bg-panel px-3 py-2 text-sm text-ink"
     >
       <div className="flex items-center gap-2">
         <span
           className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium ${badge.wrapperClass}`}
         >
-          <span aria-hidden="true" className={badge.spinning ? "inline-block animate-pulse" : undefined}>
+          <span aria-hidden="true" className={badge.spinning ? "inline-block motion-safe:animate-pulse" : undefined}>
             {badge.icon}
           </span>
           <span>{badge.label}</span>
