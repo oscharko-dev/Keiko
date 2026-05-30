@@ -1,0 +1,169 @@
+// ADR-0013 D3/D8/D9 — DB lifecycle, factories, and the public UiStore wiring. The synchronous
+// `node:sqlite` DatabaseSync drives both factories; the node adapter adds directory creation,
+// 0o700/0o600 permission hardening (Unix), and reopen-safe migrations.
+
+import { DatabaseSync } from "node:sqlite";
+import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
+import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
+import type {
+  Chat,
+  ChatMessage,
+  CreateChatOptions,
+  NewChatMessage,
+  Project,
+  UiStore,
+  UiStoreFactoryOptions,
+  UpdateChatPatch,
+  UpdateProjectPatch,
+} from "./types.js";
+import { runMigrations } from "./schema.js";
+import {
+  deleteProject as sqlDeleteProject,
+  listProjects as sqlListProjects,
+  updateProject as sqlUpdateProject,
+  upsertProject as sqlUpsertProject,
+} from "./projects.js";
+import {
+  deleteChat as sqlDeleteChat,
+  insertChat as sqlInsertChat,
+  listChats as sqlListChats,
+  updateChat as sqlUpdateChat,
+} from "./chats.js";
+import { insertMessage as sqlInsertMessage, listMessages as sqlListMessages } from "./messages.js";
+import { validateProjectPath } from "./validation.js";
+import { basename } from "node:path";
+import { invalidRequest } from "./errors.js";
+
+const DEFAULT_REDACT = (s: string): string => s;
+
+// Returns whether a project's directory currently exists and is a directory. Derived availability
+// (ADR-0013 D5): the store never deletes a row because the path went missing; the UI surfaces this.
+export function isProjectAvailable(project: { readonly path: string }): boolean {
+  try {
+    return statSync(project.path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+interface ResolvedFactoryOptions {
+  readonly now: () => number;
+  readonly newId: () => string;
+  readonly redactString: (s: string) => string;
+}
+
+function resolveOptions(opts: UiStoreFactoryOptions | undefined): ResolvedFactoryOptions {
+  return {
+    now: opts?.now ?? ((): number => Date.now()),
+    newId: opts?.newId ?? randomUUID,
+    redactString: opts?.redactString ?? DEFAULT_REDACT,
+  };
+}
+
+function deriveProjectName(explicit: string | undefined, path: string): string {
+  if (explicit === undefined) return basename(path);
+  if (explicit.length === 0) throw invalidRequest("Name must not be empty.");
+  return explicit;
+}
+
+function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
+  const create = (path: string, name?: string): Project => {
+    const normalized = validateProjectPath(path, { mustExist: true });
+    const resolvedName = deriveProjectName(name, normalized);
+    return sqlUpsertProject(db, normalized, resolvedName, options.now());
+  };
+  const update = (path: string, patch: UpdateProjectPatch): Project => {
+    const normalized = validateProjectPath(path, { mustExist: false });
+    return sqlUpdateProject(db, normalized, patch, options.now());
+  };
+  const remove = (path: string): void => {
+    const normalized = validateProjectPath(path, { mustExist: false });
+    sqlDeleteProject(db, normalized);
+  };
+  return {
+    listProjects: () => sqlListProjects(db),
+    createProject: create,
+    updateProject: update,
+    deleteProject: remove,
+    listChats: (projectPath: string) => sqlListChats(db, projectPath),
+    createChat: (
+      projectPath: string,
+      title: string,
+      selectedModel: string,
+      opts?: CreateChatOptions,
+    ): Chat =>
+      sqlInsertChat(db, {
+        id: options.newId(),
+        projectPath,
+        title,
+        selectedModel,
+        opts,
+        now: options.now(),
+      }),
+    updateChat: (id: string, patch: UpdateChatPatch): Chat =>
+      sqlUpdateChat(db, id, patch, options.now()),
+    deleteChat: (id: string): void => {
+      sqlDeleteChat(db, id);
+    },
+    listMessages: (chatId: string): readonly ChatMessage[] => sqlListMessages(db, chatId),
+    createMessage: (msg: NewChatMessage): ChatMessage =>
+      sqlInsertMessage(db, options.newId(), msg, options.redactString),
+    close: (): void => {
+      db.close();
+    },
+  };
+}
+
+function preparedDatabase(target: string): DatabaseSync {
+  const db = new DatabaseSync(target);
+  db.exec("PRAGMA foreign_keys = ON");
+  return db;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// In-memory factory (tests)
+// ────────────────────────────────────────────────────────────────────────────
+
+export function createInMemoryUiStore(opts?: UiStoreFactoryOptions): UiStore {
+  const db = preparedDatabase(":memory:");
+  runMigrations(db);
+  return buildStore(db, resolveOptions(opts));
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Node on-disk factory
+// ────────────────────────────────────────────────────────────────────────────
+
+function ensureDirHardened(dir: string): void {
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+  }
+  if (process.platform !== "win32") {
+    try {
+      chmodSync(dir, 0o700);
+    } catch {
+      // best-effort; leave existing perms if owner change is unavailable
+    }
+  }
+}
+
+function chmodIfPresent(path: string, mode: number): void {
+  if (process.platform === "win32") return;
+  try {
+    chmodSync(path, mode);
+  } catch {
+    // file may not exist yet (WAL/-shm sidecars); best-effort
+  }
+}
+
+export function createNodeUiStore(dbPath: string, opts?: UiStoreFactoryOptions): UiStore {
+  ensureDirHardened(dirname(dbPath));
+  const db = preparedDatabase(dbPath);
+  db.exec("PRAGMA journal_mode = WAL");
+  runMigrations(db);
+  chmodIfPresent(dbPath, 0o600);
+  chmodIfPresent(`${dbPath}-wal`, 0o600);
+  chmodIfPresent(`${dbPath}-shm`, 0o600);
+  return buildStore(db, resolveOptions(opts));
+}
