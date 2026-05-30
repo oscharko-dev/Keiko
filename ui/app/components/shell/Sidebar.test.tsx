@@ -134,7 +134,7 @@ describe("Sidebar", () => {
   it("clicking a project row writes ?project= to URL", async () => {
     const user = userEvent.setup();
     vi.mocked(api.fetchProjects).mockResolvedValueOnce({
-      projects: [mockProjects[0]],
+      projects: [mockProjects[0]!],
     });
     render(<Sidebar collapsed={false} />);
     await waitFor(() => {
@@ -143,7 +143,7 @@ describe("Sidebar", () => {
     // The main row button has the project name as text
     const projectBtns = screen.getAllByRole("button", { name: /foo project/i });
     // The first match is the row select button (title attribute = path)
-    await user.click(projectBtns[0]);
+    await user.click(projectBtns[0]!);
     expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining("project="));
   });
 
@@ -168,7 +168,7 @@ describe("Sidebar", () => {
   it("selected project row has aria-current=true", async () => {
     mockSearchParams.set("project", encodeURIComponent("/workspace/foo"));
     vi.mocked(api.fetchProjects).mockResolvedValueOnce({
-      projects: [mockProjects[0]],
+      projects: [mockProjects[0]!],
     });
     vi.mocked(api.fetchChats).mockResolvedValue({ chats: [] });
     render(<Sidebar collapsed={false} />);

@@ -36,8 +36,8 @@ describe("sortProjects", () => {
       makeProject({ path: "/b", favorite: true, lastOpenedAt: 1 }),
     ];
     const sorted = sortProjects(projects);
-    expect(sorted[0].path).toBe("/b");
-    expect(sorted[1].path).toBe("/a");
+    expect(sorted[0]?.path).toBe("/b");
+    expect(sorted[1]?.path).toBe("/a");
   });
 
   it("sorts non-favorites by lastOpenedAt descending", () => {
@@ -66,7 +66,7 @@ describe("sortProjects", () => {
       makeProject({ path: "/b", favorite: false, lastOpenedAt: 100 }),
     ];
     const sorted = sortProjects(projects);
-    expect(sorted[0].path).toBe("/b");
+    expect(sorted[0]?.path).toBe("/b");
   });
 
   it("does not mutate the original array", () => {
@@ -76,7 +76,7 @@ describe("sortProjects", () => {
     ];
     const original = [...projects];
     sortProjects(projects);
-    expect(projects[0].path).toBe(original[0].path);
+    expect(projects[0]?.path).toBe(original[0]?.path);
   });
 
   it("keeps favorite-to-favorite order by lastOpenedAt desc", () => {
@@ -85,7 +85,7 @@ describe("sortProjects", () => {
       makeProject({ path: "/b", favorite: true, lastOpenedAt: 200 }),
     ];
     const sorted = sortProjects(projects);
-    expect(sorted[0].path).toBe("/b");
+    expect(sorted[0]?.path).toBe("/b");
   });
 });
 
@@ -118,8 +118,8 @@ describe("sortChats", () => {
       makeChat({ id: "b", projectPath: "/p", updatedAt: 100 }),
       makeChat({ id: "a", projectPath: "/p", updatedAt: 200 }),
     ];
-    const firstId = chats[0].id;
+    const firstId = chats[0]?.id;
     sortChats(chats);
-    expect(chats[0].id).toBe(firstId);
+    expect(chats[0]?.id).toBe(firstId);
   });
 });
