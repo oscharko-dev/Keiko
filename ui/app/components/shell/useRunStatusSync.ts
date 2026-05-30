@@ -11,12 +11,14 @@
  * or the terminal report; polling is the smaller, lower-risk surface (D3).
  *
  * Cadence: 1500ms baseline, 6000ms after 60s of continuous running. Stops on terminal, unmount,
- * or unavailable. AbortController cancels in-flight requests on cleanup.
+ * or unavailable. A `cancelled` flag in the effect closure is the single source of truth for
+ * "should this loop keep running?" — it gates every state mutation after an await so a slow
+ * fetch cannot PATCH after the component unmounts.
  */
 import { useEffect, useRef, useState } from "react";
 import { ApiError, fetchEvidenceManifest, fetchRunReport, patchChatMessage } from "@/lib/api";
 import type { ChatMessage } from "@/lib/types";
-import { formatRunSummary, formatRunSummaryFromManifest } from "@/lib/run-summary";
+import { classifyRunReport, formatRunSummaryFromManifest } from "@/lib/run-summary";
 
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 const BASE_INTERVAL_MS = 1500;
@@ -30,13 +32,6 @@ export interface RunStatusSyncResult {
 interface FallbackKind {
   readonly workflowId?: string;
   readonly taskType?: string;
-}
-
-function buildFallbackKind(message: ChatMessage): FallbackKind {
-  return {
-    ...(message.workflowId !== undefined ? { workflowId: message.workflowId } : {}),
-    ...(message.taskType !== undefined ? { taskType: message.taskType } : {}),
-  };
 }
 
 function isTerminal(status: string | undefined): boolean {
@@ -66,8 +61,8 @@ export function useRunStatusSync(
   const runId = message.runId;
   const persistedStatus = message.workflowStatus;
   const messageId = message.id;
-  // FallbackKind is read by both the report and manifest branches; keep its serialized form
-  // stable across renders so the effect deps don't churn.
+  // FallbackKind is read by both the report and manifest branches; pulling primitives into the
+  // dep array keeps the effect stable across renders that change unrelated message fields.
   const workflowId = message.workflowId;
   const taskType = message.taskType;
 
@@ -79,8 +74,10 @@ export function useRunStatusSync(
     // Pin runId for the async closures so TS retains the narrowed `string` type after awaits.
     const activeRunId: string = runId;
 
+    // The cancelled flag is the single source of truth for loop termination. fetchJson does not
+    // expose an AbortSignal at this surface, so a fetch in flight at unmount-time still
+    // resolves; the flag gates every state mutation that follows.
     let cancelled = false;
-    const controller = new AbortController();
     const startedAt = Date.now();
     let intervalId: ReturnType<typeof setTimeout> | undefined;
     const fallbackKind: FallbackKind = {
@@ -97,7 +94,10 @@ export function useRunStatusSync(
       }, interval);
     }
 
-    async function applyTerminal(workflowStatus: "completed" | "failed" | "cancelled", shortResult: string): Promise<void> {
+    async function applyTerminal(
+      workflowStatus: "completed" | "failed" | "cancelled",
+      shortResult: string,
+    ): Promise<void> {
       try {
         const result = await patchChatMessage(messageId, { workflowStatus, shortResult });
         if (!cancelled) onPatchedRef.current(result.message);
@@ -111,7 +111,11 @@ export function useRunStatusSync(
         const { manifest } = await fetchEvidenceManifest(activeRunId);
         if (cancelled) return;
         const summary = formatRunSummaryFromManifest(manifest, fallbackKind);
-        if (summary.workflowStatus === "completed" || summary.workflowStatus === "failed" || summary.workflowStatus === "cancelled") {
+        if (
+          summary.workflowStatus === "completed" ||
+          summary.workflowStatus === "failed" ||
+          summary.workflowStatus === "cancelled"
+        ) {
           await applyTerminal(summary.workflowStatus, summary.shortResult);
         } else {
           // Manifest should always be terminal; defensive fall-through schedules another tick.
@@ -133,10 +137,13 @@ export function useRunStatusSync(
       try {
         const { report } = await fetchRunReport(activeRunId);
         if (cancelled) return;
-        const summary = formatRunSummary(report, fallbackKind);
-        if (summary.workflowStatus === "completed" || summary.workflowStatus === "failed" || summary.workflowStatus === "cancelled") {
-          await applyTerminal(summary.workflowStatus, summary.shortResult);
+        const outcome = classifyRunReport(report, fallbackKind);
+        if (outcome.kind === "terminal") {
+          await applyTerminal(outcome.summary.workflowStatus, outcome.summary.shortResult);
         } else {
+          // running OR unknown — keep polling. An unknown-shape response (no recognisable
+          // status field) MUST NOT be treated as a terminal completion: doing so would mark
+          // a still-running row as completed on a malformed BFF response (self-critique #3).
           scheduleNext();
         }
       } catch (error) {
@@ -154,7 +161,6 @@ export function useRunStatusSync(
 
     return (): void => {
       cancelled = true;
-      controller.abort();
       if (intervalId !== undefined) clearTimeout(intervalId);
     };
   }, [runId, persistedStatus, messageId, workflowId, taskType]);

@@ -191,6 +191,31 @@ describe("useRunStatusSync", () => {
     expect(vi.mocked(api.fetchRunReport).mock.calls.length).toBe(before);
   });
 
+  // Self-critique #3 — an unknown-shape report from the BFF MUST NOT force a terminal PATCH.
+  it("keeps polling on an unknown-shape report (no status field)", async () => {
+    vi.mocked(api.fetchRunReport)
+      .mockResolvedValueOnce({ report: {} as never })
+      .mockResolvedValueOnce({ report: { status: "completed" } as never });
+    vi.mocked(api.patchChatMessage).mockResolvedValue(
+      patchedReply({ workflowStatus: "completed" }),
+    );
+    const onPatched = vi.fn();
+    render(<Probe message={makeMessage()} onPatched={onPatched} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // After the first (unknown) response, no PATCH; the hook scheduled another tick.
+    expect(api.patchChatMessage).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(api.patchChatMessage).toHaveBeenCalledTimes(1);
+    expect(api.patchChatMessage).toHaveBeenCalledWith(
+      "msg-1",
+      expect.objectContaining({ workflowStatus: "completed" }),
+    );
+  });
+
   it("does not PATCH after unmount even if a fetch resolved late", async () => {
     let resolveReport: ((value: unknown) => void) | undefined;
     vi.mocked(api.fetchRunReport).mockImplementation(

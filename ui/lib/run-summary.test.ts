@@ -1,7 +1,11 @@
 // Issue #66 — formatRunSummary unit tests. 12 kind × status cases plus defensive shape cases.
 
 import { describe, expect, it } from "vitest";
-import { formatRunSummary, formatRunSummaryFromManifest } from "./run-summary";
+import {
+  classifyRunReport,
+  formatRunSummary,
+  formatRunSummaryFromManifest,
+} from "./run-summary";
 
 const UNIT_KIND = { workflowId: "unit-test-generation" } as const;
 const BUG_KIND = { workflowId: "bug-investigation" } as const;
@@ -126,10 +130,13 @@ describe("formatRunSummary — defensive shapes", () => {
     expect(r.workflowStatus).toBe("completed");
   });
 
-  it("missing status falls through to completed", () => {
+  it("missing status falls through to the conservative completed default", () => {
+    // After self-critique #3 the formatter no longer fabricates per-kind text for an
+    // unknown-shape payload — it returns the safe "Completed." default. The hook uses
+    // classifyRunReport to keep polling rather than calling formatRunSummary here.
     const r = formatRunSummary({}, VERIFY_KIND);
     expect(r.workflowStatus).toBe("completed");
-    expect(r.shortResult).toBe("Verification passed.");
+    expect(r.shortResult).toBe("Completed.");
   });
 
   it("truncates failure messages so shortResult stays ≤ 200 chars", () => {
@@ -141,6 +148,34 @@ describe("formatRunSummary — defensive shapes", () => {
   it("unknown workflow kind still produces non-throwing summary", () => {
     const r = formatRunSummary({ status: "completed" }, { workflowId: "unknown-workflow" });
     expect(r.shortResult).toBe("Completed.");
+  });
+});
+
+describe("classifyRunReport — keep-polling on unknown shapes (self-critique #3)", () => {
+  it("non-object report returns kind=unknown", () => {
+    expect(classifyRunReport(null, UNIT_KIND).kind).toBe("unknown");
+    expect(classifyRunReport("oops" as unknown, UNIT_KIND).kind).toBe("unknown");
+    expect(classifyRunReport(undefined, UNIT_KIND).kind).toBe("unknown");
+  });
+
+  it("report missing status returns kind=unknown", () => {
+    expect(classifyRunReport({}, UNIT_KIND).kind).toBe("unknown");
+  });
+
+  it("report with unrecognised status returns kind=unknown", () => {
+    expect(classifyRunReport({ status: "weird-state" }, UNIT_KIND).kind).toBe("unknown");
+  });
+
+  it("running status returns kind=running", () => {
+    expect(classifyRunReport({ status: "running" }, UNIT_KIND).kind).toBe("running");
+  });
+
+  it("terminal status returns kind=terminal with the summary", () => {
+    const outcome = classifyRunReport({ status: "completed" }, UNIT_KIND);
+    expect(outcome.kind).toBe("terminal");
+    if (outcome.kind === "terminal") {
+      expect(outcome.summary.workflowStatus).toBe("completed");
+    }
   });
 });
 

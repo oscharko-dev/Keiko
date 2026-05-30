@@ -24,6 +24,20 @@ export interface RunSummary {
   readonly shortResult: string;
 }
 
+// Issue #66 — discriminator returned by classifyRunReport so the caller can tell a real
+// terminal/running classification from an "unknown shape, keep polling" decision. PATCHing
+// callers MUST NOT write a terminal status on `kind: "unknown"`. The terminal-summary status
+// is narrowed to the three terminal values so callers don't have to re-narrow inline.
+export type TerminalWorkflowStatus = "completed" | "failed" | "cancelled";
+export interface TerminalRunSummary {
+  readonly workflowStatus: TerminalWorkflowStatus;
+  readonly shortResult: string;
+}
+export type RunSummaryOutcome =
+  | { readonly kind: "terminal"; readonly summary: TerminalRunSummary }
+  | { readonly kind: "running" }
+  | { readonly kind: "unknown" };
+
 const MAX_SHORT_RESULT = 200;
 
 // Subset of RunStatus we care about; any other status string is mapped to "running" or the
@@ -144,43 +158,57 @@ function formatFailed(report: Record<string, unknown>): string {
 }
 
 /**
- * Builds the chat run-summary from a terminal RunReport-like value.
- *
- * - Non-object `report` → falls back to {"completed":"Completed.","failed":"Run failed.",
- *   "cancelled":"Run cancelled."} based on the inferred status. The caller indicates intent
- *   through the `fallbackKind`; when the kind is "other" we still return a non-throwing summary.
- * - When `report.status` is "running" → returns {workflowStatus:"running", shortResult:""};
- *   the hook normally never calls this on a running report but the contract allows it.
+ * Classifies a RunReport-like value into terminal / running / unknown. The hook uses the
+ * "unknown" branch to keep polling rather than PATCHing the row to a synthetic terminal
+ * status — guards against a malformed BFF response forcing a still-running row to completed
+ * (self-critique #3).
+ */
+export function classifyRunReport(
+  report: unknown,
+  fallbackKind: RunSummaryFallbackKind,
+): RunSummaryOutcome {
+  const reportObj = asObject(report);
+  if (reportObj === undefined) return { kind: "unknown" };
+  const status = readStatus(reportObj);
+  const fkind = classifyKind(fallbackKind);
+
+  if (status === "running") return { kind: "running" };
+  if (status === "cancelled") {
+    return {
+      kind: "terminal",
+      summary: { workflowStatus: "cancelled", shortResult: "Run cancelled." },
+    };
+  }
+  if (status === "failed" || status === "rejected") {
+    return {
+      kind: "terminal",
+      summary: { workflowStatus: "failed", shortResult: truncate(formatFailed(reportObj)) },
+    };
+  }
+  if (status !== undefined && TERMINAL_COMPLETED.has(status)) {
+    return {
+      kind: "terminal",
+      summary: {
+        workflowStatus: "completed",
+        shortResult: truncate(formatCompleted(reportObj, fkind)),
+      },
+    };
+  }
+  return { kind: "unknown" };
+}
+
+/**
+ * Thin wrapper preserved for direct callers (tests, future surfaces) that want a "best-effort"
+ * summary regardless of shape. The polling hook uses classifyRunReport so the conservative
+ * "Completed." fallback below is never observed on the unknown-shape path.
  */
 export function formatRunSummary(
   report: unknown,
   fallbackKind: RunSummaryFallbackKind,
 ): RunSummary {
-  const reportObj = asObject(report);
-  const status = reportObj === undefined ? undefined : readStatus(reportObj);
-  const kind = classifyKind(fallbackKind);
-
-  if (status === "running") {
-    return { workflowStatus: "running", shortResult: "" };
-  }
-  if (status === "cancelled") {
-    return { workflowStatus: "cancelled", shortResult: "Run cancelled." };
-  }
-  if (status === "failed" || status === "rejected") {
-    return {
-      workflowStatus: "failed",
-      shortResult: truncate(reportObj === undefined ? "Run failed." : formatFailed(reportObj)),
-    };
-  }
-  if (status !== undefined && TERMINAL_COMPLETED.has(status) && reportObj !== undefined) {
-    return { workflowStatus: "completed", shortResult: truncate(formatCompleted(reportObj, kind)) };
-  }
-  // Unknown / missing status: surface a conservative "completed" with the kind-default text. The
-  // hook only calls formatRunSummary on a terminal HTTP-200 report or a manifest, so a
-  // missing-status response indicates a wider-than-expected shape rather than running state.
-  if (reportObj !== undefined) {
-    return { workflowStatus: "completed", shortResult: truncate(formatCompleted(reportObj, kind)) };
-  }
+  const outcome = classifyRunReport(report, fallbackKind);
+  if (outcome.kind === "terminal") return outcome.summary;
+  if (outcome.kind === "running") return { workflowStatus: "running", shortResult: "" };
   return { workflowStatus: "completed", shortResult: "Completed." };
 }
 

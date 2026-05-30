@@ -75,7 +75,11 @@ export function RunSummaryCard({ message, onPatched }: RunSummaryCardProps): Rea
   const badge = badgeFor(message.workflowStatus);
   const label = deriveLabel(message);
   const runId = message.runId ?? "";
+  const hasRunId = runId.length > 0;
   const shortId = runId.length > 8 ? runId.slice(0, 8) : runId;
+  // A link with no runId points at a dead URL; disable it the same way as the unavailable
+  // state so the user is not invited to navigate to a 404 (self-critique #12).
+  const linksDisabled = unavailable || !hasRunId;
 
   // Links target the canonical detail pages; encodeURIComponent in the raw `?id=` template
   // is the established repo pattern (updateChat) and avoids the double-encoding trap
@@ -124,18 +128,18 @@ export function RunSummaryCard({ message, onPatched }: RunSummaryCardProps): Rea
         <Link
           href={runHref}
           aria-label="View run details"
-          aria-disabled={unavailable ? "true" : undefined}
-          tabIndex={unavailable ? -1 : undefined}
-          className={`${linkBaseClass} ${unavailable ? linkDisabledClass : ""}`}
+          aria-disabled={linksDisabled ? "true" : undefined}
+          tabIndex={linksDisabled ? -1 : undefined}
+          className={`${linkBaseClass} ${linksDisabled ? linkDisabledClass : ""}`}
         >
           <span aria-hidden="true">▶</span>
         </Link>
         <Link
           href={evidenceHref}
           aria-label="View evidence manifest"
-          aria-disabled={unavailable ? "true" : undefined}
-          tabIndex={unavailable ? -1 : undefined}
-          className={`${linkBaseClass} ${unavailable ? linkDisabledClass : ""}`}
+          aria-disabled={linksDisabled ? "true" : undefined}
+          tabIndex={linksDisabled ? -1 : undefined}
+          className={`${linkBaseClass} ${linksDisabled ? linkDisabledClass : ""}`}
         >
           <span aria-hidden="true">≡</span>
         </Link>
