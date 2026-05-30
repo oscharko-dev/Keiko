@@ -60,6 +60,16 @@ describe("buildBugPrompt (AC #9 prompt construction)", () => {
     expect(user).toContain("Bearer [REDACTED]");
   });
 
+  it("redacts secret-shaped evidence before the final prompt clamp", () => {
+    const secret = `ghp_${"C".repeat(36)}`;
+    const report: BugReportInput = {
+      failingOutput: `${"a".repeat(16_380)}${secret}`,
+    };
+    const messages = buildBugPrompt(report, parseFailureEvidence(report), makePack([]), "vitest");
+    const user = messages.find((m) => m.role === "user")?.content ?? "";
+    expect(user).not.toContain(secret);
+  });
+
   it("embeds redacted context excerpts when the pack is non-empty", () => {
     const pack = makePack([makeEntry({ path: "src/buggy.ts", excerpt: "n / 3" })]);
     const messages = buildBugPrompt(REPORT, parseFailureEvidence(REPORT), pack, "vitest");

@@ -113,6 +113,20 @@ describe("assembleBugReport (AC #7 verified/hypothesis separation)", () => {
     expect(report.proposedDiff).not.toContain(secret);
   });
 
+  it("redacts secret-shaped tokens in path-bearing report fields", () => {
+    const secret = `ghp_${"B".repeat(36)}`;
+    const report = assembleBugReport(
+      parts({
+        patchFiles: [patchFile({ path: `src/${secret}.ts` })],
+        failureFrames: [{ file: `src/${secret}.ts`, line: 1 }],
+        nextActions: [`Review src/${secret}.ts`],
+      }),
+    );
+    expect(report.changedFiles[0]?.path).not.toContain(secret);
+    expect(report.verified.failureFrames[0]?.file).not.toContain(secret);
+    expect(report.nextActions[0]).not.toContain(secret);
+  });
+
   it("is JSON-serializable", () => {
     const report = assembleBugReport(parts());
     expect(JSON.parse(JSON.stringify(report))).toEqual(report);

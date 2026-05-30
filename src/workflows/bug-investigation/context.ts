@@ -9,9 +9,14 @@ import {
   buildContextPack,
   DEFAULT_DISCOVERY_OPTIONS,
   lexicalRetrievalStrategy,
+  SELECTION_REASON_PRIORITY,
   type ContextPack,
   type ContextPackDeps,
   type ContextRequest,
+  type DiscoveredFile,
+  type RankedFile,
+  type RetrievalStrategy,
+  type SelectionReason,
   type WorkspaceInfo,
 } from "../../workspace/index.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "../../workspace/fs.js";
@@ -32,6 +37,122 @@ function taskHint(description: string | undefined, evidence: FailureEvidence): s
   return files.length === 0 ? base : `${base} ${files.join(" ")}`;
 }
 
+function toPosix(path: string): string {
+  return path.split("\\").join("/");
+}
+
+function basename(path: string): string {
+  const normalized = toPosix(path);
+  const idx = normalized.lastIndexOf("/");
+  return idx === -1 ? normalized : normalized.slice(idx + 1);
+}
+
+function stem(path: string): string {
+  const base = basename(path);
+  const idx = base.lastIndexOf(".");
+  return idx <= 0 ? base : base.slice(0, idx);
+}
+
+function testStem(path: string): string {
+  const parts = stem(path).split(".");
+  const marker = parts.findIndex((part) => part === "test" || part === "spec");
+  return marker === -1 ? parts.join(".") : parts.slice(0, marker).join(".");
+}
+
+function underDir(path: string, dir: string): boolean {
+  const normalized = toPosix(dir);
+  return path === normalized || path.startsWith(`${normalized}/`);
+}
+
+function toWorkspaceRelative(path: string, workspace: WorkspaceInfo): string {
+  const normalized = toPosix(path);
+  const root = toPosix(workspace.root);
+  return normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : normalized;
+}
+
+function evidencePaths(evidence: FailureEvidence, workspace: WorkspaceInfo): readonly string[] {
+  return Array.from(
+    new Set(evidence.frames.map((frame) => toWorkspaceRelative(frame.file, workspace))),
+  );
+}
+
+function isEvidenceTarget(
+  path: string,
+  workspace: WorkspaceInfo,
+  evidence: FailureEvidence,
+): boolean {
+  return evidencePaths(evidence, workspace).includes(toPosix(path));
+}
+
+function isTestCandidate(
+  path: string,
+  workspace: WorkspaceInfo,
+  selectionReason: SelectionReason,
+): boolean {
+  return (
+    selectionReason === "test" ||
+    workspace.testDirs.some((testDir) => underDir(path, testDir)) ||
+    stem(path)
+      .split(".")
+      .some((part) => part === "test" || part === "spec")
+  );
+}
+
+function isNearbyEvidenceTest(
+  path: string,
+  workspace: WorkspaceInfo,
+  evidence: FailureEvidence,
+  selectionReason: SelectionReason,
+): boolean {
+  if (!isTestCandidate(path, workspace, selectionReason)) {
+    return false;
+  }
+  const candidateStem = testStem(path);
+  return evidencePaths(evidence, workspace).some((target) => candidateStem === stem(target));
+}
+
+function priorityIndex(reason: SelectionReason): number {
+  return SELECTION_REASON_PRIORITY.indexOf(reason);
+}
+
+function issue9Priority(
+  ranked: RankedFile,
+  workspace: WorkspaceInfo,
+  evidence: FailureEvidence,
+): number {
+  const path = toPosix(ranked.file.relativePath);
+  if (isEvidenceTarget(path, workspace, evidence)) {
+    return 0;
+  }
+  if (isNearbyEvidenceTest(path, workspace, evidence, ranked.selectionReason)) {
+    return 1;
+  }
+  return 2;
+}
+
+function createBugRetrievalStrategy(
+  workspace: WorkspaceInfo,
+  evidence: FailureEvidence,
+): RetrievalStrategy {
+  return {
+    rank: (files: readonly DiscoveredFile[], task: string | undefined): readonly RankedFile[] => {
+      const ranked = lexicalRetrievalStrategy.rank(files, task);
+      return [...ranked].sort((a, b) => {
+        const byIssue9 =
+          issue9Priority(a, workspace, evidence) - issue9Priority(b, workspace, evidence);
+        if (byIssue9 !== 0) {
+          return byIssue9;
+        }
+        const byReason = priorityIndex(a.selectionReason) - priorityIndex(b.selectionReason);
+        if (byReason !== 0) {
+          return byReason;
+        }
+        return a.file.relativePath.localeCompare(b.file.relativePath);
+      });
+    },
+  };
+}
+
 export function buildBugContext(
   workspace: WorkspaceInfo,
   description: string | undefined,
@@ -49,7 +170,7 @@ export function buildBugContext(
   // the #5 barrel default explicitly so we hand a complete deps object without reaching past #5.
   const packDeps: ContextPackDeps = {
     fs: deps.fs ?? nodeWorkspaceFs,
-    strategy: lexicalRetrievalStrategy,
+    strategy: createBugRetrievalStrategy(workspace, evidence),
   };
   return buildContextPack(workspace, request, packDeps);
 }

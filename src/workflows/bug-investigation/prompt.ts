@@ -13,6 +13,7 @@ import type { ContextPack } from "../../workspace/index.js";
 import type { BugReportInput, FailureEvidence } from "./types.js";
 
 const MAX_PROMPT_TEXT_BYTES = 16_384;
+const REDACTION_LOOKAHEAD_BYTES = 512;
 
 const OUTPUT_CONTRACT =
   "Respond with an OPTIONAL minimal fix as a unified diff inside a single fenced code block opened " +
@@ -60,7 +61,8 @@ function safePromptText(value: string | undefined): string | undefined {
   if (trimmed.length === 0) {
     return undefined;
   }
-  return clampToBytes(redact(trimmed), MAX_PROMPT_TEXT_BYTES).text;
+  const bounded = clampToBytes(trimmed, MAX_PROMPT_TEXT_BYTES + REDACTION_LOOKAHEAD_BYTES).text;
+  return clampToBytes(redact(bounded), MAX_PROMPT_TEXT_BYTES).text;
 }
 
 function evidenceBlock(report: BugReportInput, evidence: FailureEvidence): string {

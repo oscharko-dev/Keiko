@@ -58,6 +58,9 @@ function enforcePath(workspace: WorkspaceInfo, fs: WorkspaceFs, path: string): s
   if (!realPathMatchesLexicalTarget(fs, resolved, rel, info.realRelative)) {
     throw new PathDeniedError("path resolves through an in-workspace alias", path);
   }
+  if (fs.exists(resolved) && (fs.stat(resolved).hardLinkCount ?? 1) > 1) {
+    throw new PathDeniedError("path resolves through a hard-linked alias", path);
+  }
   if (isDenied(info.realRelative)) {
     throw new PathDeniedError("path matches an always-on deny pattern", path);
   }

@@ -39,6 +39,37 @@ describe("buildBugContext (AC #9 context selection)", () => {
     expect(pack.selected.map((e) => e.path)).toContain("src/other.ts");
   });
 
+  it("maps absolute stack-frame paths under the workspace back to relative context paths", () => {
+    const fs = memFs(ROOT, {
+      "package.json": "{}",
+      "src/absolute.ts": "export const x = 1;",
+    });
+    const ws = makeWorkspaceInfo({ root: ROOT });
+    const evidence = parseFailureEvidence({ stackTrace: `at x (${ROOT}/src/absolute.ts:1:20)` });
+    const pack = buildBugContext(ws, undefined, evidence, DEFAULT_BUG_WORKFLOW_LIMITS, { fs });
+    expect(pack.selected.map((e) => e.path)).toContain("src/absolute.ts");
+  });
+
+  it("prioritizes implicated source and nearby test files under a tight budget", () => {
+    const fs = memFs(ROOT, {
+      "package.json": JSON.stringify({ name: "demo", devDependencies: { vitest: "^4" } }),
+      "src/a.ts": "a".repeat(2_000),
+      "src/b.ts": "b".repeat(2_000),
+      "src/z.ts": "export const z = (): number => 1;\n",
+      "tests/z.test.ts": "import { z } from '../src/z';\ntest('z', () => expect(z()).toBe(2));\n",
+    });
+    const ws = makeWorkspaceInfo({ root: ROOT, testDirs: ["tests"] });
+    const evidence = parseFailureEvidence({ targetFiles: ["src/z.ts"] });
+    const pack = buildBugContext(
+      ws,
+      undefined,
+      evidence,
+      { ...DEFAULT_BUG_WORKFLOW_LIMITS, contextBudgetBytes: 256, maxBytesPerFile: 128 },
+      { fs },
+    );
+    expect(pack.selected.map((e) => e.path).slice(0, 2)).toEqual(["src/z.ts", "tests/z.test.ts"]);
+  });
+
   it("respects the configured context byte budget", () => {
     const fs = memFs(ROOT, {
       "package.json": "{}",

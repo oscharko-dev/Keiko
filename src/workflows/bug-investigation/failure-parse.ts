@@ -141,10 +141,17 @@ function scanText(acc: Accumulator, text: string | undefined): void {
   if (text === undefined) {
     return;
   }
-  const lines = text.split("\n");
-  const limit = Math.min(lines.length, MAX_LINES_SCANNED);
-  for (let i = 0; i < limit; i += 1) {
-    scanLine(acc, lines[i] ?? "");
+  let start = 0;
+  let scanned = 0;
+  while (scanned < MAX_LINES_SCANNED && start <= text.length) {
+    const newline = text.indexOf("\n", start);
+    const end = newline === -1 ? text.length : newline;
+    scanLine(acc, text.slice(start, end));
+    scanned += 1;
+    if (newline === -1) {
+      break;
+    }
+    start = newline + 1;
   }
 }
 

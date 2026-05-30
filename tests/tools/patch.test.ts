@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyPatch, renderDryRun, validatePatch } from "../../src/tools/patch.js";
@@ -129,6 +129,41 @@ describe("validatePatch — rejections", () => {
       PatchValidationError,
     );
     expect(read("src/add.ts")).toBe("export const add = () => 1;\n");
+  });
+
+  it("rejects a hard-linked alias before it can rewrite a denied workspace target", () => {
+    write(".env", "SECRET=1\n");
+    mkdirSync(join(root, "src"), { recursive: true });
+    linkSync(join(root, ".env"), join(root, "src", "alias.env"));
+    const diff =
+      "--- a/src/alias.env\n+++ b/src/alias.env\n@@ -1,1 +1,1 @@\n-SECRET=1\n+SECRET=2\n";
+    const validation = validatePatch(info, diff);
+    expect(validation.ok).toBe(false);
+    expect(validation.reasons.map((reason) => reason.code)).toContain("path-denied");
+    expect(() => applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() })).toThrow(
+      PatchValidationError,
+    );
+    expect(read(".env")).toBe("SECRET=1\n");
+  });
+
+  it("rejects a hard-linked alias before it can rewrite an out-of-workspace target", () => {
+    const outside = makeWorkspace();
+    try {
+      writeFileSync(join(outside.root, "victim.txt"), "one\ntwo\n", "utf8");
+      mkdirSync(join(root, "src"), { recursive: true });
+      linkSync(join(outside.root, "victim.txt"), join(root, "src", "alias.txt"));
+      const diff =
+        "--- a/src/alias.txt\n+++ b/src/alias.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+PWNED\n";
+      const validation = validatePatch(info, diff);
+      expect(validation.ok).toBe(false);
+      expect(validation.reasons.map((reason) => reason.code)).toContain("path-denied");
+      expect(() => applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() })).toThrow(
+        PatchValidationError,
+      );
+      expect(readFileSync(join(outside.root, "victim.txt"), "utf8")).toBe("one\ntwo\n");
+    } finally {
+      rmSync(outside.root, { recursive: true, force: true });
+    }
   });
 });
 

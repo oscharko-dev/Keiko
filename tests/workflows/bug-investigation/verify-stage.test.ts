@@ -41,7 +41,10 @@ function runState(
           ...(opts.withTestScript === true ? { scripts: { test: "vitest run" } } : {}),
           devDependencies: { vitest: "^4" },
         })
-      : JSON.stringify({ name: "d" });
+      : JSON.stringify({
+          name: "d",
+          ...(opts.withTestScript === true ? { scripts: { test: "node test.js" } } : {}),
+        });
   const fs = memFs(ROOT, { "package.json": pkg, ...(opts.files ?? {}) });
   const workspace = detectWorkspace(ROOT, fs);
   const input: BugInvestigationInput = {
@@ -66,11 +69,24 @@ function changed(path: string): PatchFileChange {
 }
 
 describe("runBugVerification (D11)", () => {
-  it("skips when the test framework is unknown", async () => {
+  it("skips when the test framework is unknown and no runnable test script exists", async () => {
     const { state, workspace, fs } = runState("unknown");
     const out = await runBugVerification(state, workspace, [changed("src/buggy.ts")], fs);
     expect(out.summary).toBeUndefined();
     expect(out.skipReason).toBe(SKIP_UNRESOLVED);
+  });
+
+  it("falls back to npm test when the framework is unknown but a test script exists", async () => {
+    const spawn = recordingSpawn();
+    const { state, workspace, fs } = runState("unknown", {
+      withTestScript: true,
+      spawn: spawn.fn,
+    });
+    scriptChildClose(spawn.child, { stdout: "1 passed", exitCode: 0 });
+    const out = await runBugVerification(state, workspace, [changed("src/buggy.ts")], fs);
+    expect(out.skipReason).toBeUndefined();
+    expect(out.summary?.overallStatus).toBe("passed");
+    expect(spawn.calls().length).toBe(1);
   });
 
   it("skips when no test command resolves for the changed source", async () => {
@@ -96,5 +112,20 @@ describe("runBugVerification (D11)", () => {
     expect(out.skipReason).toBeUndefined();
     expect(out.summary?.overallStatus).toBe("passed");
     expect(spawn.calls().length).toBe(1);
+  });
+
+  it("runs a changed regression test file directly instead of falling back to the full suite", async () => {
+    const spawn = recordingSpawn();
+    const { state, workspace, fs } = runState("vitest", {
+      withTestScript: true,
+      files: { "tests/buggy.test.ts": "import { test } from 'vitest';\ntest('x', () => {});\n" },
+      spawn: spawn.fn,
+    });
+    scriptChildClose(spawn.child, { stdout: "1 passed", exitCode: 0 });
+    const out = await runBugVerification(state, workspace, [changed("tests/buggy.test.ts")], fs);
+    expect(out.skipReason).toBeUndefined();
+    expect(out.summary?.overallStatus).toBe("passed");
+    expect(spawn.calls()[0]?.command).toContain("npx");
+    expect(spawn.calls()[0]?.args).toEqual(["vitest", "run", "tests/buggy.test.ts"]);
   });
 });
