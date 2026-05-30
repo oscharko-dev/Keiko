@@ -140,6 +140,28 @@ describe("GET /api/workflows", () => {
     expect(body.explainPlan.inputs[0]).toMatchObject({ name: "filePath", required: true });
     expect(body.explainPlan.inputs[1]).toMatchObject({ name: "question", required: false });
   });
+
+  it("exposes a verify synth entry with workspaceRoot required and targetFiles optional", () => {
+    const result = handleWorkflows();
+    const body = result.body as {
+      verify: {
+        inputs: { name: string; type: string; required: boolean }[];
+        defaultLimits: Record<string, unknown>;
+      };
+    };
+    expect(body.verify.inputs).toHaveLength(2);
+    expect(body.verify.inputs[0]).toMatchObject({
+      name: "workspaceRoot",
+      type: "string",
+      required: true,
+    });
+    expect(body.verify.inputs[1]).toMatchObject({
+      name: "targetFiles",
+      type: "string[]",
+      required: false,
+    });
+    expect(body.verify.defaultLimits).toEqual(expect.any(Object));
+  });
 });
 
 describe("GET /api/workspace", () => {
