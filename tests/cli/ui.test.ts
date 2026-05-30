@@ -38,6 +38,7 @@ describe("parseUiArgs", () => {
       port: DEFAULT_UI_PORT,
       evidenceDir: undefined,
       config: undefined,
+      uiDbPath: undefined,
     });
   });
 
@@ -71,6 +72,19 @@ describe("parseUiArgs", () => {
     const parsed = parseUiArgs(["--evidence-dir", "/e", "--config", "/c.json"]);
     expect(parsed?.evidenceDir).toBe("/e");
     expect(parsed?.config).toBe("/c.json");
+  });
+
+  it("captures --ui-db", () => {
+    const parsed = parseUiArgs(["--ui-db", "/tmp/keiko-ui.db"]);
+    expect(parsed?.uiDbPath).toBe("/tmp/keiko-ui.db");
+  });
+
+  it("rejects --ui-db without a value", () => {
+    expect(parseUiArgs(["--ui-db"])).toBeNull();
+  });
+
+  it("rejects --ui-db with a flag-shaped value", () => {
+    expect(parseUiArgs(["--ui-db", "--port"])).toBeNull();
   });
 });
 
@@ -113,6 +127,112 @@ describe("runUiCli", () => {
     expect(code).toBe(0);
     expect(record.port).toBe(4399);
     expect(out.join("")).toContain("http://127.0.0.1:4399");
+  });
+});
+
+describe("runUiCli — node:sqlite re-exec guard (ADR-0013 D2)", () => {
+  function fakeChild(exit: number): EventEmitter & { kill: () => void } {
+    const emitter = new EventEmitter() as EventEmitter & { kill: () => void };
+    emitter.kill = (): void => {
+      /* no-op */
+    };
+    queueMicrotask(() => {
+      emitter.emit("exit", exit, null);
+    });
+    return emitter;
+  }
+
+  it("re-execs and propagates the child exit code when sqlite is unavailable", async () => {
+    const { io } = captureIo();
+    const spawnCalls: { command: string; args: readonly string[] }[] = [];
+    const code = await runUiCli(
+      [],
+      io,
+      {},
+      {
+        currentExecArgv: () => [],
+        sqliteProbe: () => false,
+        spawnFn: (cmd: string, args: readonly string[]) => {
+          spawnCalls.push({ command: cmd, args });
+          return fakeChild(7) as unknown as import("node:child_process").ChildProcess;
+        },
+      },
+    );
+    expect(code).toBe(7);
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0]?.args[0]).toBe("--experimental-sqlite");
+  });
+
+  it("does not re-exec when sqlite is already importable", async () => {
+    const { io, err } = captureIo();
+    let spawned = 0;
+    const code = await runUiCli(
+      ["--host", "0.0.0.0"], // invalid → returns 2 after the (no-op) guard
+      io,
+      {},
+      {
+        currentExecArgv: () => [],
+        sqliteProbe: () => true,
+        spawnFn: () => {
+          spawned += 1;
+          return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
+        },
+      },
+    );
+    expect(code).toBe(2);
+    expect(err.join("")).toContain("Usage:");
+    expect(spawned).toBe(0);
+  });
+
+  it("does not re-exec when an injected createServer is supplied (test path)", async () => {
+    const { io } = captureIo();
+    let spawned = 0;
+    const record: { port?: number } = {};
+    const dir = await mkdtemp(join(tmpdir(), "keiko-ui-cli-noexec-"));
+    await writeFile(join(dir, "index.html"), "<html></html>", "utf8");
+    try {
+      const code = await runUiCli(
+        ["--port", "4399"],
+        io,
+        {},
+        {
+          staticRoot: dir,
+          hashesFile: join(dir, "csp-hashes.json"),
+          createServer: () => fakeServer(record),
+          currentExecArgv: () => [],
+          sqliteProbe: () => false, // would normally trigger re-exec
+          spawnFn: () => {
+            spawned += 1;
+            return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
+          },
+        },
+      );
+      expect(code).toBe(0);
+      expect(spawned).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not re-exec when --experimental-sqlite is already on NODE_OPTIONS", async () => {
+    const { io } = captureIo();
+    let spawned = 0;
+    const code = await runUiCli(
+      ["--host", "0.0.0.0"],
+      io,
+      { NODE_OPTIONS: "--experimental-sqlite" },
+      {
+        currentExecArgv: () => [],
+        sqliteProbe: () => false,
+        spawnFn: () => {
+          spawned += 1;
+          return fakeChild(0) as unknown as import("node:child_process").ChildProcess;
+        },
+      },
+    );
+    // alreadyFlagged short-circuits the guard → falls through to flag parsing → 2.
+    expect(code).toBe(2);
+    expect(spawned).toBe(0);
   });
 });
 
