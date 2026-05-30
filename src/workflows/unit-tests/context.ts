@@ -9,9 +9,14 @@ import {
   buildContextPack,
   DEFAULT_DISCOVERY_OPTIONS,
   lexicalRetrievalStrategy,
+  SELECTION_REASON_PRIORITY,
   type ContextPack,
   type ContextPackDeps,
   type ContextRequest,
+  type DiscoveredFile,
+  type RankedFile,
+  type RetrievalStrategy,
+  type SelectionReason,
   type WorkspaceInfo,
 } from "../../workspace/index.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "../../workspace/fs.js";
@@ -19,6 +24,127 @@ import type { UnitTestTarget, UnitTestWorkflowInput, WorkflowLimits } from "./ty
 
 export interface TestGenContextDeps {
   readonly fs?: WorkspaceFs | undefined;
+}
+
+function toPosix(path: string): string {
+  return path.split("\\").join("/");
+}
+
+function underDir(path: string, dir: string): boolean {
+  const normalized = toPosix(dir);
+  return path === normalized || path.startsWith(`${normalized}/`);
+}
+
+function basename(path: string): string {
+  const normalized = toPosix(path);
+  const idx = normalized.lastIndexOf("/");
+  return idx === -1 ? normalized : normalized.slice(idx + 1);
+}
+
+function stem(path: string): string {
+  const base = basename(path);
+  const idx = base.lastIndexOf(".");
+  return idx <= 0 ? base : base.slice(0, idx);
+}
+
+function testStem(path: string): string {
+  const parts = stem(path).split(".");
+  const marker = parts.findIndex((part) => part === "test" || part === "spec");
+  return marker === -1 ? parts.join(".") : parts.slice(0, marker).join(".");
+}
+
+function targetPaths(target: UnitTestTarget): readonly string[] {
+  if (target.kind === "file") {
+    return [toPosix(target.filePath)];
+  }
+  if (target.kind === "changedFiles") {
+    return target.filePaths.map(toPosix);
+  }
+  return [];
+}
+
+function moduleDir(target: UnitTestTarget): string | undefined {
+  return target.kind === "module" ? toPosix(target.moduleDir) : undefined;
+}
+
+function isRequestedTarget(path: string, input: UnitTestWorkflowInput): boolean {
+  const module = moduleDir(input.target);
+  return (
+    targetPaths(input.target).includes(path) || (module !== undefined && underDir(path, module))
+  );
+}
+
+function isTestCandidate(
+  path: string,
+  workspace: WorkspaceInfo,
+  selectionReason: SelectionReason,
+): boolean {
+  return (
+    selectionReason === "test" ||
+    workspace.testDirs.some((testDir) => underDir(path, testDir)) ||
+    stem(path)
+      .split(".")
+      .some((part) => part === "test" || part === "spec")
+  );
+}
+
+function isNearbyTest(
+  path: string,
+  workspace: WorkspaceInfo,
+  input: UnitTestWorkflowInput,
+  selectionReason: SelectionReason,
+): boolean {
+  if (!isTestCandidate(path, workspace, selectionReason)) {
+    return false;
+  }
+  const targets = targetPaths(input.target);
+  if (targets.length === 0) {
+    const module = moduleDir(input.target);
+    return module !== undefined && path.includes(basename(module));
+  }
+  const candidateStem = testStem(path);
+  return targets.some((target) => candidateStem === stem(target));
+}
+
+function priorityIndex(reason: SelectionReason): number {
+  return SELECTION_REASON_PRIORITY.indexOf(reason);
+}
+
+function issue8Priority(
+  ranked: RankedFile,
+  workspace: WorkspaceInfo,
+  input: UnitTestWorkflowInput,
+): number {
+  const path = toPosix(ranked.file.relativePath);
+  if (isRequestedTarget(path, input)) {
+    return 0;
+  }
+  if (isNearbyTest(path, workspace, input, ranked.selectionReason)) {
+    return 1;
+  }
+  return 2;
+}
+
+function createUnitTestRetrievalStrategy(
+  workspace: WorkspaceInfo,
+  input: UnitTestWorkflowInput,
+): RetrievalStrategy {
+  return {
+    rank: (files: readonly DiscoveredFile[], task: string | undefined): readonly RankedFile[] => {
+      const ranked = lexicalRetrievalStrategy.rank(files, task);
+      return [...ranked].sort((a, b) => {
+        const byIssue8 = issue8Priority(a, workspace, input) - issue8Priority(b, workspace, input);
+        if (byIssue8 !== 0) {
+          return byIssue8;
+        }
+        const byReason = priorityIndex(a.selectionReason) - priorityIndex(b.selectionReason);
+        if (byReason !== 0) {
+          return byReason;
+        }
+        return a.file.relativePath.localeCompare(b.file.relativePath);
+      });
+    },
+  };
 }
 
 function taskHint(target: UnitTestTarget): string {
@@ -49,7 +175,7 @@ export function buildTestGenContext(
   // the #5 barrel default explicitly so we hand a complete deps object without reaching past #5.
   const packDeps: ContextPackDeps = {
     fs: deps.fs ?? nodeWorkspaceFs,
-    strategy: lexicalRetrievalStrategy,
+    strategy: createUnitTestRetrievalStrategy(workspace, input),
   };
   return buildContextPack(workspace, request, packDeps);
 }

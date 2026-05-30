@@ -55,10 +55,25 @@ function enforcePath(workspace: WorkspaceInfo, fs: WorkspaceFs, path: string): s
     throw new PathDeniedError("path matches an always-on deny pattern", path);
   }
   const info = containedRealPathInfo(fs, workspace.root, resolved);
+  if (!realPathMatchesLexicalTarget(fs, resolved, rel, info.realRelative)) {
+    throw new PathDeniedError("path resolves through an in-workspace alias", path);
+  }
   if (isDenied(info.realRelative)) {
     throw new PathDeniedError("path matches an always-on deny pattern", path);
   }
   return resolved;
+}
+
+function realPathMatchesLexicalTarget(
+  fs: WorkspaceFs,
+  absolutePath: string,
+  rel: string,
+  realRelative: string,
+): boolean {
+  if (fs.exists(absolutePath)) {
+    return realRelative === rel;
+  }
+  return realRelative === "" || rel === realRelative || rel.startsWith(`${realRelative}/`);
 }
 
 function safePath(

@@ -137,8 +137,13 @@ function verificationOf(report: unknown): EvidenceManifest["verification"] {
   if (!isRecord(report)) {
     return undefined;
   }
-  const summary = report.verificationSummary;
+  const summary = report.verificationSummary ?? verifiedVerificationOf(report);
   return isRecord(summary) ? (summary as unknown as EvidenceManifest["verification"]) : undefined;
+}
+
+function verifiedVerificationOf(report: Record<string, unknown>): unknown {
+  const verified = report.verified;
+  return isRecord(verified) ? verified.verification : undefined;
 }
 
 // Builds patch metadata (counts/bytes only, never the raw diff) from a workflow report. unit-tests
@@ -155,13 +160,21 @@ function patchOf(report: unknown): EvidenceManifest["patch"] {
   }
   return {
     proposed,
-    applied: report.status === "fix-applied",
+    applied: patchApplied(report),
     targetFileCount: changedFiles,
     patchBytes: typeof proposedDiff === "string" ? Buffer.byteLength(proposedDiff, "utf8") : 0,
     changedFiles,
     created: 0,
     deleted: 0,
   };
+}
+
+function patchApplied(report: Record<string, unknown>): boolean {
+  if (report.status === "completed" || report.status === "fix-applied") {
+    return true;
+  }
+  const verified = report.verified;
+  return isRecord(verified) && verified.patchApplied === true;
 }
 
 function changedFileCount(report: Record<string, unknown>): number {
