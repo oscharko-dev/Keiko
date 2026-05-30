@@ -14,6 +14,7 @@ import {
   persistWorkflowEvidence,
   resolveEvidenceDir,
   type EvidenceStore,
+  type WorkflowEventLike,
 } from "../audit/index.js";
 import type { ModelPort } from "../harness/ports.js";
 import { canonicalise, HARNESS_VERSION, type TaskType } from "../harness/index.js";
@@ -141,25 +142,31 @@ function persistAndCheck(
   runId: string,
   workspaceRoot: string,
   modelId: string,
-): boolean {
+  events: readonly WorkflowEventLike[],
+  startedAt: number,
+  finishedAt: number,
+): { readonly manifestValid: boolean; readonly evidenceRef: string } {
   const status = typeof report.status === "string" ? report.status : "failed";
-  persistWorkflowEvidence(
+  const evidence = persistWorkflowEvidence(
     {
       runId,
       fingerprint: evalFingerprint(fixture, workspaceRoot, modelId),
       modelId: typeof report.modelId === "string" ? report.modelId : "eval-model",
       kind: fixture.workflowKind,
       status: status === "rejected" || status === "failed" ? "failed" : "completed",
-      startedAt: FIXED_EVAL_EPOCH_MS,
-      finishedAt: FIXED_EVAL_EPOCH_MS,
+      startedAt,
+      finishedAt,
       workspaceRoot,
     },
     report,
-    [],
+    events,
     { store, env },
   );
   const raw = store.get(runId);
-  return raw !== undefined && isManifestValid(raw);
+  return {
+    manifestValid: raw !== undefined && isManifestValid(raw),
+    evidenceRef: evidence.evidenceLocation,
+  };
 }
 
 function evalFingerprint(
@@ -183,15 +190,32 @@ function evalFingerprint(
   return createHash("sha256").update(canonical, "utf8").digest("hex");
 }
 
+function buildFixtureRunResult(
+  fixture: EvaluationFixture,
+  report: Record<string, unknown>,
+  writer: RecordingWriter,
+  manifestValid: boolean,
+): FixtureRunResult {
+  const scoring = toScoringInput(report, writer.writeCount(), manifestValid);
+  return {
+    fixtureName: fixture.name,
+    workflowKind: fixture.workflowKind,
+    durationMs: typeof report.durationMs === "number" ? report.durationMs : 0,
+    dimensionResults: scoreFixture(fixture, scoring),
+    report,
+  };
+}
+
 async function runFixture(
   fixture: EvaluationFixture,
   options: EvalRunOptions,
   deps: EvalRunnerDeps,
   store: EvidenceStore,
-): Promise<FixtureRunResult> {
+): Promise<{ readonly result: FixtureRunResult; readonly evidenceRef: string }> {
   const modelId = fixtureModelId(fixture, options.modelIdOverride);
   const workspace = materializeFixture(fixture);
   const writer = recordingWriter();
+  const sink = recordingSink();
   const now = deps.now ?? ((): number => FIXED_EVAL_EPOCH_MS);
   // Use the injectable idSource to generate the evidence runId. When no idSource is injected (real
   // CLI), randomUUID makes each run unique so repeat runs don't collide in the #10 O_EXCL store.
@@ -199,15 +223,17 @@ async function runFixture(
   const idSource = deps.idSource ?? randomUUID;
   const runId = idSource();
   try {
+    const startedAt = now();
     const report = await runWorkflow(fixture, workspace.root, modelId, {
       model: resolveModelPort(fixture, options, deps, modelId),
       writer,
-      sink: recordingSink(),
+      sink,
       spawn: fixture.apply === true ? fakeSpawn(0, "ok") : undefined,
       now,
       idSource,
     });
-    const manifestValid = persistAndCheck(
+    const finishedAt = now();
+    const { manifestValid, evidenceRef } = persistAndCheck(
       fixture,
       report,
       store,
@@ -215,14 +241,13 @@ async function runFixture(
       runId,
       workspace.root,
       modelId,
+      sink.events(),
+      startedAt,
+      finishedAt,
     );
-    const scoring = toScoringInput(report, writer.writeCount(), manifestValid);
     return {
-      fixtureName: fixture.name,
-      workflowKind: fixture.workflowKind,
-      durationMs: typeof report.durationMs === "number" ? report.durationMs : 0,
-      dimensionResults: scoreFixture(fixture, scoring),
-      report,
+      result: buildFixtureRunResult(fixture, report, writer, manifestValid),
+      evidenceRef,
     };
   } finally {
     workspace.cleanup();
@@ -256,12 +281,15 @@ export async function runEvaluationSuite(
   const store = emptyEvidenceStore(deps);
   const evaluatedAt = new Date(deps.now?.() ?? FIXED_EVAL_EPOCH_MS).toISOString();
   const fixtureResults: FixtureRunResult[] = [];
+  const evidenceRefs: string[] = [];
   for (const fixture of options.fixtures) {
-    fixtureResults.push(await runFixture(fixture, options, deps, store));
+    const fixtureRun = await runFixture(fixture, options, deps, store);
+    fixtureResults.push(fixtureRun.result);
+    evidenceRefs.push(fixtureRun.evidenceRef);
   }
   const dimensions = aggregateScorecard(fixtureResults);
   const surfaceParity = await checkSurfaceParity();
-  const live = liveContext(options, store.list());
+  const live = liveContext(options, evidenceRefs);
   return {
     schemaVersion: EVAL_SCORECARD_SCHEMA_VERSION,
     evaluatedAt,

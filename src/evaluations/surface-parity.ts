@@ -20,6 +20,23 @@ interface DescriptorExpectation {
   readonly requiredInputs: readonly string[];
 }
 
+interface CliExpectation {
+  readonly kind: WorkflowKind;
+  readonly help: string;
+  readonly requiredTokens: readonly string[];
+}
+
+interface SdkExportExpectation {
+  readonly kind: WorkflowKind;
+  readonly functionExport: string;
+  readonly descriptorExport: string;
+}
+
+interface RunRequestExpectation {
+  readonly kind: WorkflowKind;
+  readonly workflowId: string;
+}
+
 const DESCRIPTOR_EXPECTATIONS: readonly DescriptorExpectation[] = [
   {
     kind: "unit-tests",
@@ -33,16 +50,51 @@ const DESCRIPTOR_EXPECTATIONS: readonly DescriptorExpectation[] = [
   },
 ];
 
+const SDK_EXPORT_EXPECTATIONS: readonly SdkExportExpectation[] = [
+  {
+    kind: "unit-tests",
+    functionExport: "generateUnitTests",
+    descriptorExport: "UNIT_TEST_WORKFLOW_DESCRIPTOR",
+  },
+  {
+    kind: "bug-investigation",
+    functionExport: "investigateBug",
+    descriptorExport: "BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR",
+  },
+];
+
+const RUN_REQUEST_EXPECTATIONS: readonly RunRequestExpectation[] = [
+  { kind: "unit-tests", workflowId: "unit-test-generation" },
+  { kind: "bug-investigation", workflowId: "bug-investigation" },
+];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function checkDescriptor(expectation: DescriptorExpectation): SurfaceParityCheckResult {
   const missing = expectation.requiredInputs.filter(
     (name) => !expectation.descriptor.inputs.some((input) => input.name === name && input.required),
   );
+  const hasLimitsInput = expectation.descriptor.inputs.some(
+    (input) => input.name === "limits" && input.type === "object" && !input.required,
+  );
+  const hasDefaultLimits =
+    isRecord(expectation.descriptor.defaultLimits) &&
+    Object.keys(expectation.descriptor.defaultLimits).length > 0;
   const dryRunApply = expectation.descriptor.supportsDryRun && expectation.descriptor.supportsApply;
   if (missing.length > 0) {
     return failed(
       "descriptor-inputs",
       expectation.kind,
       `missing required inputs: ${missing.join(", ")}`,
+    );
+  }
+  if (!hasLimitsInput || !hasDefaultLimits) {
+    return failed(
+      "descriptor-inputs",
+      expectation.kind,
+      "descriptor must expose optional limits input and non-empty defaultLimits",
     );
   }
   if (!dryRunApply) {
@@ -73,58 +125,99 @@ async function checkCliFlags(): Promise<readonly SurfaceParityCheckResult[]> {
   const genTestsHelp = captureCliHelp((args, io, env) => runGenTestsCli(args, io, env, {}));
   const investigateHelp = captureCliHelp((args, io, env) => runInvestigateCli(args, io, env, {}));
   await Promise.resolve();
-  const unitFlags = ["--file", "--apply"].filter((flag) => !genTestsHelp.includes(flag));
-  const bugFlags = ["--apply"].filter((flag) => !investigateHelp.includes(flag));
-  return [
-    unitFlags.length === 0
-      ? passed("cli-flags", "unit-tests")
-      : failed("cli-flags", "unit-tests", `help missing flags: ${unitFlags.join(", ")}`),
-    bugFlags.length === 0
-      ? passed("cli-flags", "bug-investigation")
-      : failed("cli-flags", "bug-investigation", `help missing flags: ${bugFlags.join(", ")}`),
+  const expectations: readonly CliExpectation[] = [
+    {
+      kind: "unit-tests",
+      help: genTestsHelp,
+      requiredTokens: ["--file", "--dir", "--changed", "--model", "--apply"],
+    },
+    {
+      kind: "bug-investigation",
+      help: investigateHelp,
+      requiredTokens: [
+        "--description",
+        "--output",
+        "--output-file",
+        "--stack",
+        "--stack-file",
+        "--file",
+        "--model",
+        "--apply",
+      ],
+    },
   ];
+  return expectations.map(checkCliExpectation);
+}
+
+function checkCliExpectation(expectation: CliExpectation): SurfaceParityCheckResult {
+  const missing = expectation.requiredTokens.filter((token) => !expectation.help.includes(token));
+  const hasDryRunDefault = expectation.help.toLowerCase().includes("dry-run by default");
+  if (missing.length > 0) {
+    return failed("cli-flags", expectation.kind, `help missing flags: ${missing.join(", ")}`);
+  }
+  if (!hasDryRunDefault) {
+    return failed("cli-flags", expectation.kind, "help does not state dry-run by default");
+  }
+  return passed("cli-flags", expectation.kind);
 }
 
 // The SDK named exports each workflow must surface. A dynamic import breaks the load-time cycle the
 // static import would create (the SDK barrel re-exports this evaluation module).
-const SDK_FUNCTION_EXPORTS = ["generateUnitTests", "investigateBug"] as const;
-const SDK_OBJECT_EXPORTS = [
-  "UNIT_TEST_WORKFLOW_DESCRIPTOR",
-  "BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR",
-] as const;
-
 async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
   const sdk = (await import("../sdk/index.js")) as Record<string, unknown>;
-  const missingFns = SDK_FUNCTION_EXPORTS.filter((name) => typeof sdk[name] !== "function");
-  const missingObjs = SDK_OBJECT_EXPORTS.filter(
-    (name) => typeof sdk[name] !== "object" || sdk[name] === null,
-  );
-  return [
-    missingFns.length === 0 && missingObjs.length === 0
-      ? passed("sdk-exports", "unit-tests")
-      : failed(
-          "sdk-exports",
-          "unit-tests",
-          `missing SDK exports: ${[...missingFns, ...missingObjs].join(", ")}`,
-        ),
-  ];
+  return SDK_EXPORT_EXPECTATIONS.map((expectation) => {
+    const missing = [
+      ...(typeof sdk[expectation.functionExport] === "function"
+        ? []
+        : [expectation.functionExport]),
+      ...(typeof sdk[expectation.descriptorExport] === "object" &&
+      sdk[expectation.descriptorExport] !== null
+        ? []
+        : [expectation.descriptorExport]),
+    ];
+    return missing.length === 0
+      ? passed("sdk-exports", expectation.kind)
+      : failed("sdk-exports", expectation.kind, `missing SDK exports: ${missing.join(", ")}`);
+  });
 }
 
 // The UI RunRequest carries the minimum fields the BFF needs to invoke either workflow. The compile-
 // time guarantee is enforced by the TypeScript check; this is the runtime shape assertion (D7 d).
-function checkRunRequestShape(): SurfaceParityCheckResult {
-  const sample: Record<string, unknown> = {
-    kind: "unit-tests",
-    modelId: "m",
-    apply: false,
-    input: {},
-    limits: undefined,
-  };
-  const required = ["kind", "modelId", "apply", "input"];
-  const missing = required.filter((field) => !(field in sample));
-  return missing.length === 0
-    ? passed("run-request-shape", "unit-tests")
-    : failed("run-request-shape", "unit-tests", `RunRequest missing fields: ${missing.join(", ")}`);
+async function checkRunRequestShapes(): Promise<readonly SurfaceParityCheckResult[]> {
+  const { parseRunRequest } = await import("../ui/run-request.js");
+  return RUN_REQUEST_EXPECTATIONS.map((expectation) => {
+    const parsed = parseRunRequest(
+      JSON.stringify({
+        workflowId: expectation.workflowId,
+        modelId: "m",
+        input: {},
+        apply: true,
+        limits: { maxPromptBytes: 1 },
+      }),
+    );
+    if ("code" in parsed) {
+      return failed("run-request-shape", expectation.kind, parsed.message);
+    }
+    const required = ["kind", "modelId", "apply", "input", "limits"];
+    const missing = required.filter((field) => !(field in parsed));
+    if (missing.length > 0) {
+      return failed(
+        "run-request-shape",
+        expectation.kind,
+        `RunRequest missing fields: ${missing.join(", ")}`,
+      );
+    }
+    if (
+      parsed.kind !== expectation.kind ||
+      typeof parsed.modelId !== "string" ||
+      parsed.apply ||
+      !isRecord(parsed.input) ||
+      !isRecord(parsed.limits)
+    ) {
+      return failed("run-request-shape", expectation.kind, "RunRequest field types mismatch");
+    }
+    return passed("run-request-shape", expectation.kind);
+  });
 }
 
 function passed(check: string, kind: WorkflowKind): SurfaceParityCheckResult {
@@ -140,7 +233,7 @@ export async function checkSurfaceParity(): Promise<SurfaceParityResult> {
     ...DESCRIPTOR_EXPECTATIONS.map(checkDescriptor),
     ...(await checkCliFlags()),
     ...(await checkSdkExports()),
-    checkRunRequestShape(),
+    ...(await checkRunRequestShapes()),
   ];
   return { allPassed: checks.every((check) => check.passed), checks };
 }

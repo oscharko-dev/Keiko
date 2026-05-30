@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { runEvaluationSuite } from "../../src/evaluations/runner.js";
 import {
   ALL_FIXTURES,
+  createScriptedModelPort,
   fixtureByName,
   fixturesForSuite,
   EVAL_SCORECARD_SCHEMA_VERSION,
@@ -30,6 +31,49 @@ function makeDeps(fixtureName = "test"): EvalRunnerDeps {
 
 function makeOfflineOptions(fixtures = ALL_FIXTURES): EvalRunOptions {
   return { mode: "offline", fixtures };
+}
+
+function sequenceIds(ids: readonly string[]): () => string {
+  let index = 0;
+  return (): string => {
+    const id = ids[Math.min(index, ids.length - 1)];
+    index += 1;
+    return id ?? "eval-test-fallback";
+  };
+}
+
+function tickingClock(startMs: number, stepMs: number): () => number {
+  let current = startMs;
+  return (): number => {
+    const value = current;
+    current += stepMs;
+    return value;
+  };
+}
+
+interface ManifestProbe {
+  readonly run: {
+    readonly startedAt: number;
+    readonly finishedAt: number;
+    readonly durationMs: number;
+  };
+  readonly usageTotals: {
+    readonly promptTokens: number;
+    readonly completionTokens: number;
+    readonly requestCount: number;
+    readonly totalLatencyMs: number;
+  };
+}
+
+function readManifest(
+  store: ReturnType<typeof createInMemoryEvidenceStore>,
+  runId: string,
+): ManifestProbe {
+  const raw = store.get(runId);
+  if (raw === undefined) {
+    throw new Error(`manifest ${runId} not found`);
+  }
+  return JSON.parse(raw) as ManifestProbe;
 }
 
 // Helper to get a dimension outcome from a fixture result
@@ -83,6 +127,33 @@ describe("EvalScorecard shape", () => {
   it("summary.totalFixtures matches input fixture count", async () => {
     const sc = await runEvaluationSuite(makeOfflineOptions(ALL_FIXTURES), makeDeps());
     expect(sc.summary.totalFixtures).toBe(ALL_FIXTURES.length);
+  });
+});
+
+describe("live-mode evidence semantics", () => {
+  it("records current-run evidence refs, real timestamps, and folded model usage", async () => {
+    const fixture = must(fixtureByName("unit-tests/happy-path"));
+    const store = createInMemoryEvidenceStore();
+    store.put("old-run", "{}");
+    const scorecard = await runEvaluationSuite(
+      { mode: "live", fixtures: [fixture] },
+      {
+        store,
+        now: tickingClock(FIXED_NOW, 10),
+        idSource: sequenceIds(["current-run", "workflow-run", "workflow-event"]),
+        modelProviderFactory: (candidate): ReturnType<typeof createScriptedModelPort> =>
+          createScriptedModelPort(candidate.mockTranscript),
+      },
+    );
+
+    expect(scorecard.liveRunContext?.evidenceRefs).toEqual(["current-run.json"]);
+    const manifest = readManifest(store, "current-run");
+    expect(manifest.run.startedAt).toBeGreaterThan(FIXED_NOW);
+    expect(manifest.run.finishedAt).toBeGreaterThanOrEqual(manifest.run.startedAt);
+    expect(manifest.run.durationMs).toBe(manifest.run.finishedAt - manifest.run.startedAt);
+    expect(manifest.usageTotals.requestCount).toBeGreaterThan(0);
+    expect(manifest.usageTotals.promptTokens).toBeGreaterThan(0);
+    expect(manifest.usageTotals.completionTokens).toBeGreaterThan(0);
   });
 });
 

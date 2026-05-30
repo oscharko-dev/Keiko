@@ -82,26 +82,17 @@ describe("task-completion", () => {
     expect(outcomeFor(fixture, makeInput({ status: "completed" }), "task-completion")).toBe("pass");
   });
 
-  it("passes when status is 'dry-run'", () => {
-    expect(outcomeFor(fixture, makeInput({ status: "dry-run" }), "task-completion")).toBe("pass");
+  it("passes when status is in the fixture oracle's expectedStatuses", () => {
+    const statusFixture = makeFixture(["task-completion"], {
+      expectedStatuses: ["dry-run", "fix-applied", "fix-proposed", "investigation-only"],
+    });
+    for (const status of ["dry-run", "fix-applied", "fix-proposed", "investigation-only"]) {
+      expect(outcomeFor(statusFixture, makeInput({ status }), "task-completion")).toBe("pass");
+    }
   });
 
-  it("passes when status is 'fix-applied'", () => {
-    expect(outcomeFor(fixture, makeInput({ status: "fix-applied" }), "task-completion")).toBe(
-      "pass",
-    );
-  });
-
-  it("passes when status is 'fix-proposed'", () => {
-    expect(outcomeFor(fixture, makeInput({ status: "fix-proposed" }), "task-completion")).toBe(
-      "pass",
-    );
-  });
-
-  it("passes when status is 'investigation-only'", () => {
-    expect(
-      outcomeFor(fixture, makeInput({ status: "investigation-only" }), "task-completion"),
-    ).toBe("pass");
+  it("fails when status is a success terminal outside the fixture oracle", () => {
+    expect(outcomeFor(fixture, makeInput({ status: "dry-run" }), "task-completion")).toBe("fail");
   });
 
   it("fails when status is 'rejected'", () => {

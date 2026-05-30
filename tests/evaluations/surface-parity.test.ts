@@ -22,12 +22,12 @@ describe("checkSurfaceParity (real codebase)", () => {
     expect(result.allPassed).toBe(true);
   });
 
-  it("returns exactly 6 checks (2 descriptor + 2 cli-flags + 1 sdk-exports + 1 run-request)", async () => {
+  it("returns exactly 8 checks (2 descriptor + 2 cli-flags + 2 sdk-exports + 2 run-request)", async () => {
     const result = await checkSurfaceParity();
-    expect(result.checks).toHaveLength(6);
+    expect(result.checks).toHaveLength(8);
   });
 
-  it("all 6 checks have a non-empty check name and a workflowKind", async () => {
+  it("all checks have a non-empty check name and a workflowKind", async () => {
     const result = await checkSurfaceParity();
     for (const check of result.checks) {
       expect(check.check.length).toBeGreaterThan(0);
@@ -55,6 +55,12 @@ describe("UNIT_TEST_WORKFLOW_DESCRIPTOR required inputs", () => {
     expect(UNIT_TEST_WORKFLOW_DESCRIPTOR.supportsDryRun).toBe(true);
     expect(UNIT_TEST_WORKFLOW_DESCRIPTOR.supportsApply).toBe(true);
   });
+
+  it("exposes optional limits input and non-empty defaultLimits", () => {
+    const limits = UNIT_TEST_WORKFLOW_DESCRIPTOR.inputs.find((i) => i.name === "limits");
+    expect(limits?.required).toBe(false);
+    expect(Object.keys(UNIT_TEST_WORKFLOW_DESCRIPTOR.defaultLimits)).not.toHaveLength(0);
+  });
 });
 
 describe("BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR required inputs", () => {
@@ -73,6 +79,12 @@ describe("BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR required inputs", () => {
   it("has supportsDryRun=true and supportsApply=true", () => {
     expect(BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR.supportsDryRun).toBe(true);
     expect(BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR.supportsApply).toBe(true);
+  });
+
+  it("exposes optional limits input and non-empty defaultLimits", () => {
+    const limits = BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR.inputs.find((i) => i.name === "limits");
+    expect(limits?.required).toBe(false);
+    expect(Object.keys(BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR.defaultLimits)).not.toHaveLength(0);
   });
 });
 
@@ -100,12 +112,32 @@ describe("gen-tests CLI --help", () => {
     const help = captureHelp((args, io, env) => runGenTestsCli(args, io, env, {}));
     expect(help).toContain("--apply");
   });
+
+  it("includes model, target, and dry-run surface text", () => {
+    const help = captureHelp((args, io, env) => runGenTestsCli(args, io, env, {}));
+    expect(help).toContain("--model");
+    expect(help).toContain("--dir");
+    expect(help).toContain("--changed");
+    expect(help).toMatch(/dry-run by default/i);
+  });
 });
 
 describe("investigate CLI --help", () => {
   it("includes --apply flag", () => {
     const help = captureHelp((args, io, env) => runInvestigateCli(args, io, env, {}));
     expect(help).toContain("--apply");
+  });
+
+  it("includes model, evidence-input, and dry-run surface text", () => {
+    const help = captureHelp((args, io, env) => runInvestigateCli(args, io, env, {}));
+    expect(help).toContain("--model");
+    expect(help).toContain("--description");
+    expect(help).toContain("--output");
+    expect(help).toContain("--output-file");
+    expect(help).toContain("--stack");
+    expect(help).toContain("--stack-file");
+    expect(help).toContain("--file");
+    expect(help).toMatch(/dry-run by default/i);
   });
 });
 
@@ -146,7 +178,7 @@ describe("RunRequest shape (UI BFF contract)", () => {
     if ("code" in result) throw new Error(`Unexpected error: ${result.message}`);
     expect(result.kind).toBe("unit-tests");
     expect(typeof result.modelId).toBe("string");
-    expect(typeof result.apply).toBe("boolean");
+    expect(result.apply).toBe(false);
     expect(typeof result.input).toBe("object");
     // limits is present in the shape (may be undefined)
     expect("limits" in result).toBe(true);
@@ -159,5 +191,16 @@ describe("RunRequest shape (UI BFF contract)", () => {
     );
     if ("code" in result) throw new Error(`Unexpected error: ${result.message}`);
     expect(result.kind).toBe("bug-investigation");
+  });
+
+  it("parseRunRequest carries limits for both workflow request shapes", async () => {
+    const { parseRunRequest } = await import("../../src/ui/run-request.js");
+    for (const workflowId of ["unit-test-generation", "bug-investigation"]) {
+      const result = parseRunRequest(
+        JSON.stringify({ workflowId, modelId: "m", input: {}, limits: { maxPromptBytes: 1 } }),
+      );
+      if ("code" in result) throw new Error(`Unexpected error: ${result.message}`);
+      expect(result.limits).toEqual({ maxPromptBytes: 1 });
+    }
   });
 });

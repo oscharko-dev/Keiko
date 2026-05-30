@@ -12,7 +12,7 @@ import {
   isSuiteName,
   EVALUATION_DIMENSIONS,
 } from "../../src/evaluations/index.js";
-import { materializeFixture } from "../../src/evaluations/runner-support.js";
+import { materializeFixture, recordingWriter } from "../../src/evaluations/runner-support.js";
 import type { EvaluationFixture } from "../../src/evaluations/types.js";
 import { must } from "./_support.js";
 
@@ -318,5 +318,16 @@ describe("materializeFixture", () => {
       },
     };
     expect(() => materializeFixture(malicious)).toThrow(/resolves outside the temp root/);
+  });
+});
+
+describe("recordingWriter", () => {
+  it("counts every mutating WorkspaceWriter operation", () => {
+    const writer = recordingWriter();
+    writer.mkdirp("/tmp/x");
+    writer.writeFileUtf8("/tmp/x/file.ts", "content");
+    writer.rename("/tmp/x/file.ts", "/tmp/x/file2.ts");
+    writer.remove("/tmp/x/file2.ts");
+    expect(writer.writeCount()).toBe(4);
   });
 });

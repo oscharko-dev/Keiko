@@ -56,14 +56,15 @@ export interface RecordingWriter extends WorkspaceWriter {
 // zero writes and an apply fixture can confirm the apply phase attempted exactly the expected writes.
 export function recordingWriter(): RecordingWriter {
   let writes = 0;
+  const recordWrite = (): void => {
+    writes += 1;
+  };
   return {
     writeCount: (): number => writes,
-    writeFileUtf8: (): void => {
-      writes += 1;
-    },
-    mkdirp: (): void => undefined,
-    remove: (): void => undefined,
-    rename: (): void => undefined,
+    writeFileUtf8: recordWrite,
+    mkdirp: recordWrite,
+    remove: recordWrite,
+    rename: recordWrite,
   };
 }
 

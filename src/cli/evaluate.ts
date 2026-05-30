@@ -57,6 +57,7 @@ function flagValue(args: readonly string[], name: string): string | undefined | 
 
 const VALUE_FLAGS = ["--suite", "--fixture", "--model", "--config", "--output"] as const;
 type ValueFlag = (typeof VALUE_FLAGS)[number];
+const BOOLEAN_FLAGS = ["--live", "--json"] as const;
 
 function readValueFlags(args: readonly string[]): Record<ValueFlag, string | undefined> | null {
   const values = {} as Record<ValueFlag, string | undefined>;
@@ -68,6 +69,36 @@ function readValueFlags(args: readonly string[]): Record<ValueFlag, string | und
     values[flag] = value;
   }
   return values;
+}
+
+function isValueFlag(value: string): value is ValueFlag {
+  return (VALUE_FLAGS as readonly string[]).includes(value);
+}
+
+function isBooleanFlag(value: string): boolean {
+  return (BOOLEAN_FLAGS as readonly string[]).includes(value);
+}
+
+function findUsageError(args: readonly string[]): string | undefined {
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === undefined) {
+      continue;
+    }
+    if (isValueFlag(arg)) {
+      const value = args[i + 1];
+      if (value === undefined || value.startsWith("--")) {
+        return `missing value for ${arg}`;
+      }
+      i += 1;
+      continue;
+    }
+    if (isBooleanFlag(arg)) {
+      continue;
+    }
+    return arg.startsWith("--") ? `unknown flag ${arg}` : `unexpected argument ${arg}`;
+  }
+  return undefined;
 }
 
 function parseArgs(args: readonly string[]): EvaluateArgs | null {
@@ -115,14 +146,35 @@ function redactedScorecard(scorecard: EvalScorecard, live: boolean, env: EnvSour
   if (!live) {
     return scorecard;
   }
-  const redactFn = createAuditRedactor({ additionalSecrets: [] }, env);
+  const redactFn = createAuditRedactor({ additionalSecrets: keikoApiKeySecrets(env) }, env);
   return deepRedactStrings(scorecard, redactFn);
+}
+
+function isKeikoApiKeyEnvName(name: string): boolean {
+  return (
+    name === "KEIKO_DEFAULT_API_KEY" ||
+    (name.startsWith("KEIKO_MODEL_") && name.endsWith("_API_KEY"))
+  );
+}
+
+function keikoApiKeySecrets(env: EnvSource): readonly string[] {
+  const secrets: string[] = [];
+  for (const [name, value] of Object.entries(env)) {
+    if (value !== undefined && isKeikoApiKeyEnvName(name)) {
+      secrets.push(value);
+    }
+  }
+  return secrets;
+}
+
+function writeScorecard(path: string, output: unknown): void {
+  writeFileSync(path, `${JSON.stringify(output, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
 }
 
 function emit(scorecard: EvalScorecard, parsed: EvaluateArgs, io: CliIo, env: EnvSource): void {
   const output = redactedScorecard(scorecard, parsed.live, env);
   if (parsed.output !== undefined) {
-    writeFileSync(parsed.output, `${JSON.stringify(output, null, 2)}\n`, "utf8");
+    writeScorecard(parsed.output, output);
   }
   if (parsed.json) {
     io.out(`${JSON.stringify(output, null, 2)}\n`);
@@ -148,6 +200,11 @@ export async function runEvaluateCli(
   if (args.includes("--help")) {
     io.out(USAGE);
     return 0;
+  }
+  const usageError = findUsageError(args);
+  if (usageError !== undefined) {
+    io.err(`Error: ${usageError}.\n${USAGE}`);
+    return 2;
   }
   const parsed = parseArgs(args);
   if (parsed === null) {
@@ -184,8 +241,21 @@ async function runSuite(
     emit(scorecard, parsed, io, env);
     return exitCodeFor(scorecard);
   } catch (error) {
+    if (isOutputAlreadyExistsError(error)) {
+      io.err(`Error: output file already exists: ${parsed.output ?? "<unknown>"}\n`);
+      return 1;
+    }
     return handleRunError(error, parsed, io);
   }
+}
+
+function isOutputAlreadyExistsError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { readonly code?: unknown }).code === "EEXIST"
+  );
 }
 
 // Live-mode fail-closed: a GatewayError (incl. ConfigInvalidError) means no resolvable config or
