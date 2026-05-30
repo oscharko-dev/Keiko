@@ -125,7 +125,7 @@ export function ProjectRow({
           }
           disabled={favoriteLoading}
           onClick={(e) => { void handleFavorite(e); }}
-          className={`shrink-0 rounded p-0.5 text-xs
+          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded text-xs
             opacity-0 transition-opacity
             group-hover:opacity-100 focus-visible:opacity-100
             focus:outline-none focus-visible:ring-1 focus-visible:ring-focus
@@ -141,7 +141,7 @@ export function ProjectRow({
           type="button"
           aria-label={`Remove ${displayName} from sidebar`}
           onClick={handleRemoveClick}
-          className={`shrink-0 rounded p-0.5 text-xs text-ink-dim
+          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded text-xs text-ink-dim
             transition-opacity
             focus:outline-none focus-visible:ring-1 focus-visible:ring-focus
             hover:text-red-400
