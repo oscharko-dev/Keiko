@@ -8,6 +8,11 @@ import { ShellChrome } from "./ShellChrome";
 // Mocks
 // ---------------------------------------------------------------------------
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn() }),
+  useSearchParams: () => new URLSearchParams(),
+}));
+
 vi.mock("next/link", () => ({
   default: ({
     href,
@@ -26,6 +31,11 @@ vi.mock("next/link", () => ({
 
 vi.mock("@/lib/api", () => ({
   fetchProjects: vi.fn().mockResolvedValue({ projects: [] }),
+  fetchChats: vi.fn().mockResolvedValue({ chats: [] }),
+  createProject: vi.fn(),
+  updateProject: vi.fn(),
+  deleteProject: vi.fn(),
+  createChat: vi.fn(),
   ApiError: class ApiError extends Error {
     code: string;
     status: number;

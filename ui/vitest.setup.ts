@@ -9,6 +9,12 @@ afterEach(() => {
   cleanup();
 });
 
+// jsdom does not implement HTMLElement.prototype.scrollIntoView — stub it so
+// components that call scrollIntoView do not throw.
+if (typeof window !== "undefined" && !HTMLElement.prototype.scrollIntoView) {
+  HTMLElement.prototype.scrollIntoView = function () {};
+}
+
 // jsdom does not implement window.matchMedia — provide a minimal mock so
 // components that call matchMedia during useEffect do not throw.
 if (typeof window !== "undefined" && window.matchMedia === undefined) {
