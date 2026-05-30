@@ -84,7 +84,7 @@ function BooleanCell({ value }: { value: boolean }): ReactNode {
   return (
     <td className="py-2 pr-3">
       <span
-        className={value ? "text-green-700" : "text-ink-muted"}
+        className={value ? "text-emerald-400" : "text-ink-muted"}
         aria-label={value ? "yes" : "no"}
       >
         {value ? "✓" : "–"}
@@ -195,7 +195,7 @@ function ModelDetailList({ models }: { models: ModelCapability[] }): ReactNode {
               <p className="text-xs font-medium text-ink-muted">Known limitations</p>
               <ul className="mt-1 grid gap-0.5">
                 {m.knownLimitations.map((lim) => (
-                  <li key={lim} className="text-xs text-orange-700">
+                  <li key={lim} className="text-xs text-amber-300">
                     {lim}
                   </li>
                 ))}
@@ -251,7 +251,7 @@ export default function ConfigPage(): ReactNode {
       </p>
 
       {loadError !== null && (
-        <p role="alert" className="mt-4 rounded bg-red-50 px-4 py-3 text-sm text-red-700">
+        <p role="alert" className="mt-4 rounded bg-red-950/40 px-4 py-3 text-sm text-red-300 border border-red-800/40">
           {loadError}
         </p>
       )}

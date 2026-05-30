@@ -95,7 +95,7 @@ function EvidenceDetailInner(): ReactNode {
     return (
       <section aria-labelledby="evidence-detail-heading">
         <h1 id="evidence-detail-heading" className="text-heading text-ink">Evidence detail</h1>
-        <p role="alert" className="mt-4 rounded bg-red-50 px-4 py-3 text-sm text-red-700">{safeMessage}</p>
+        <p role="alert" className="mt-4 rounded bg-red-950/40 px-4 py-3 text-sm text-red-300 border border-red-800/40">{safeMessage}</p>
         <button type="button" onClick={() => { router.push("/evidence"); }}
           className="mt-4 text-sm text-ink-muted underline hover:text-ink focus:outline-none focus:ring-2 focus:ring-focus">
           ← Back to evidence browser
@@ -176,7 +176,7 @@ function EvidenceDetailInner(): ReactNode {
                     <span className="text-ink-muted">({formatMs(r.durationMs)})</span>
                     {r.appliedLimits.map((lim) => (
                       <span key={lim.dimension}
-                        className={`rounded px-1 py-0.5 text-xs ${lim.breached === true ? "bg-red-100 text-red-800" : "bg-gray-100 text-gray-700"}`}
+                        className={`rounded px-1 py-0.5 text-xs ${lim.breached === true ? "bg-red-950/40 text-red-300" : "bg-elevated text-ink-muted"}`}
                         title={lim.note ?? ""}>
                         {lim.dimension}: {lim.enforced ? "enforced" : "not enforced"}{lim.breached === true ? " (breached)" : ""}
                       </span>
@@ -208,9 +208,9 @@ function EvidenceDetailInner(): ReactNode {
       {failure !== undefined && (
         <section aria-labelledby="failure-heading" className="mt-section">
           <h2 id="failure-heading" className="text-subheading text-ink">Failure</h2>
-          <div className="mt-4 rounded border border-red-200 bg-red-50 p-4">
-            <p className="text-sm font-medium text-red-800">{failure.category}</p>
-            <p className="mt-1 text-sm text-red-700">{failure.message}</p>
+          <div className="mt-4 rounded border border-red-800/40 bg-red-950/40 p-4">
+            <p className="text-sm font-medium text-red-300">{failure.category}</p>
+            <p className="mt-1 text-sm text-red-300/80">{failure.message}</p>
           </div>
         </section>
       )}

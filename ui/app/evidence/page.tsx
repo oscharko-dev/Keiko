@@ -273,7 +273,7 @@ export default function EvidencePage(): ReactNode {
       </p>
 
       {loadError !== null && (
-        <p role="alert" className="mt-4 rounded bg-red-50 px-4 py-3 text-sm text-red-700">
+        <p role="alert" className="mt-4 rounded bg-red-950/40 px-4 py-3 text-sm text-red-300 border border-red-800/40">
           {loadError}
         </p>
       )}
