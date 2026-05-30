@@ -8,6 +8,7 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { parseRunRequest } from "./run-request.js";
+import type { RunRequest } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
 import { ActiveRunLimitError, type RunRecord } from "./runs.js";
 import { SSE_HEADERS, writeEvent, readyMessage } from "./sse.js";
@@ -59,6 +60,20 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
+// Verify runs operate on the host filesystem. Reject workspaceRoot paths not registered in the
+// local project store so a CSRF-equipped local client cannot trigger verification in arbitrary
+// directories. Returns a RouteResult to return, or null when the check passes.
+function rejectUnregisteredVerify(parsed: RunRequest, deps: UiHandlerDeps): RouteResult | null {
+  if (parsed.kind !== "verify") {
+    return null;
+  }
+  const root = typeof parsed.input.workspaceRoot === "string" ? parsed.input.workspaceRoot : "";
+  const registered = deps.store.listProjects().some((p) => p.path === root);
+  return registered
+    ? null
+    : { status: 403, body: errorBody("WORKSPACE_NOT_REGISTERED", "The workspaceRoot is not a registered project.") };
+}
+
 // Route 5 — POST /api/runs. Validates the body, resolves the ModelPort, starts the run, returns 202.
 export async function handleCreateRun(
   ctx: RouteContext,
@@ -79,6 +94,10 @@ export async function handleCreateRun(
   const parsed = parseRunRequest(raw);
   if ("code" in parsed) {
     return { status: 400, body: errorBody(parsed.code, parsed.message) };
+  }
+  const unregistered = rejectUnregisteredVerify(parsed, deps);
+  if (unregistered !== null) {
+    return unregistered;
   }
   const model = deps.modelPortFactory(parsed.modelId);
   if (model === undefined) {
