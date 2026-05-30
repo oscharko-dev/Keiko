@@ -105,7 +105,7 @@ export function FilesPanel({ project, onClose }: FilesPanelProps): ReactNode {
         if (!active) return;
         const message =
           err instanceof ApiError
-            ? workspaceErrorMessage(err.code, err.message)
+            ? workspaceErrorMessage(err.code)
             : "Could not load workspace information.";
         setState({ kind: "error", message });
       });
@@ -119,7 +119,8 @@ export function FilesPanel({ project, onClose }: FilesPanelProps): ReactNode {
       ref={panelRef}
       tabIndex={-1}
       aria-labelledby={PANEL_HEADING_ID}
-      className="flex w-72 flex-col overflow-hidden bg-panel focus:outline-none"
+      className="flex w-72 flex-col overflow-hidden bg-panel focus:outline-none
+        focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
       style={{ borderLeft: "1px solid #3a4052" }}
     >
       {/* Panel header */}
@@ -160,7 +161,7 @@ export function FilesPanel({ project, onClose }: FilesPanelProps): ReactNode {
         {state.kind === "error" && (
           <div
             role="alert"
-            className="rounded bg-elevated px-3 py-2 text-sm text-ink-muted"
+            className="rounded bg-elevated px-3 py-2 text-sm text-ink"
           >
             {state.message}
           </div>

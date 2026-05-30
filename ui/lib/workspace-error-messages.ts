@@ -1,6 +1,8 @@
 /**
  * Maps BFF ApiError.code values from the workspace endpoint to human-readable UI labels.
- * Falls back to the verbatim ApiError.message for unknown codes.
+ * Falls back to a generic message for unknown codes — the BFF's verbatim message can
+ * contain filesystem paths or byte sizes from WorkspaceError constructors, which the UI
+ * deliberately does not surface.
  */
 
 const WORKSPACE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
@@ -13,6 +15,8 @@ const WORKSPACE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   INTERNAL: "An internal error occurred while loading the workspace.",
 };
 
-export function workspaceErrorMessage(code: string, fallbackMessage: string): string {
-  return WORKSPACE_ERROR_MESSAGES[code] ?? fallbackMessage;
+const GENERIC_WORKSPACE_ERROR = "An unexpected workspace error occurred.";
+
+export function workspaceErrorMessage(code: string): string {
+  return WORKSPACE_ERROR_MESSAGES[code] ?? GENERIC_WORKSPACE_ERROR;
 }

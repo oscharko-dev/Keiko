@@ -106,7 +106,8 @@ export function PlannedToolPanel({
       ref={panelRef}
       tabIndex={-1}
       aria-labelledby={PANEL_HEADING_ID}
-      className="flex w-72 flex-col overflow-hidden bg-panel focus:outline-none"
+      className="flex w-72 flex-col overflow-hidden bg-panel focus:outline-none
+        focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
       style={{ borderLeft: "1px solid #3a4052" }}
     >
       {/* Panel header */}
@@ -152,7 +153,7 @@ export function PlannedToolPanel({
           <ul className="space-y-1 text-ink-muted">
             {copy.willNotDo.map((item) => (
               <li key={item} className="flex gap-2 leading-relaxed">
-                <span aria-hidden="true" className="mt-0.5 shrink-0 text-ink-dim">−</span>
+                <span aria-hidden="true" className="mt-0.5 shrink-0 text-ink-muted">−</span>
                 <span>{item}</span>
               </li>
             ))}
@@ -166,15 +167,15 @@ export function PlannedToolPanel({
               href={followUpIssueUrl}
               target="_blank"
               rel="noopener noreferrer"
+              aria-label={`Open the follow-up issue for the ${copy.label} tool on GitHub (opens in new tab)`}
               className="text-accent underline underline-offset-2 hover:opacity-80"
             >
               follow-up issue
-              <span className="sr-only"> (opens in new tab)</span>
             </a>
             .
           </p>
         ) : (
-          <p className="text-ink-dim">
+          <p className="text-ink-muted">
             A follow-up issue will be linked here once it is created.
           </p>
         )}

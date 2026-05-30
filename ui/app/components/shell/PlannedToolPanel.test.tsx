@@ -99,7 +99,7 @@ describe("PlannedToolPanel", () => {
     expect(link).toHaveAttribute("rel", "noopener noreferrer");
   });
 
-  it("follow-up link includes sr-only 'opens in new tab' text", () => {
+  it("follow-up link accessible name conveys 'opens in new tab'", () => {
     render(
       <PlannedToolPanel
         tool="browser"
@@ -108,7 +108,8 @@ describe("PlannedToolPanel", () => {
         followUpIssueUrl={FOLLOW_UP_URL}
       />,
     );
-    expect(screen.getByText(/opens in new tab/i)).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: /follow-up issue/i });
+    expect(link.getAttribute("aria-label")).toMatch(/opens in new tab/i);
   });
 
   it("renders placeholder message when followUpIssueUrl is empty", () => {
