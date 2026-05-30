@@ -13,9 +13,9 @@ import { PlannedToolPanel } from "./PlannedToolPanel";
 // ---------------------------------------------------------------------------
 
 export const FOLLOWUP_ISSUES: Record<"browser" | "review" | "terminal", string> = {
-  browser: "",
-  review: "",
-  terminal: "",
+  browser: "https://github.com/oscharko-dev/Keiko/issues/76",
+  review: "https://github.com/oscharko-dev/Keiko/issues/77",
+  terminal: "https://github.com/oscharko-dev/Keiko/issues/78",
 };
 
 // ---------------------------------------------------------------------------
