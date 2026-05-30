@@ -11,6 +11,7 @@ import {
   handleEvidenceDetail,
 } from "../../src/ui/read-handlers.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../src/ui/index.js";
+import { createInMemoryUiStore } from "../../src/ui/store/index.js";
 import type { RouteContext, RouteResult } from "../../src/ui/routes.js";
 import { STREAMING } from "../../src/ui/routes.js";
 import type { GatewayConfig } from "../../src/gateway/index.js";
@@ -80,6 +81,7 @@ function depsWith(overrides: Partial<UiHandlerDeps>): UiHandlerDeps {
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
+    store: createInMemoryUiStore(),
     ...overrides,
   };
 }

@@ -25,6 +25,7 @@ import {
 } from "./routes.js";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createRunRegistry } from "./runs.js";
+import { createInMemoryUiStore } from "./store/index.js";
 
 export const DEFAULT_UI_PORT = 4319;
 export const UI_HOST = "127.0.0.1";
@@ -72,7 +73,9 @@ function rejectCsrf(res: ServerResponse): void {
 }
 
 // A minimal default deps object so a 3-arg server can still serve the deps-bound read routes (e.g.
-// `/api/models` and `/api/workspace`, which need no config) without a config or evidence dir.
+// `/api/models` and `/api/workspace`, which need no config) without a config or evidence dir. The
+// fallback UI store is in-memory: a 3-arg server is used by the Wave 1 host smoke and by tests that
+// never exercise the store routes, so an ephemeral in-memory store is the safe degraded shape.
 function fallbackDeps(): UiHandlerDeps {
   return {
     config: undefined,
@@ -82,6 +85,7 @@ function fallbackDeps(): UiHandlerDeps {
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
+    store: createInMemoryUiStore(),
   };
 }
 

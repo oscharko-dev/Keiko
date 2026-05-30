@@ -16,6 +16,11 @@ import { createNodeEvidenceStore, resolveEvidenceDir } from "../audit/store.js";
 import type { EvidenceStore } from "../audit/index.js";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
+import {
+  createNodeUiStore,
+  resolveUiDbPath,
+  type UiStore,
+} from "./store/index.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -44,6 +49,9 @@ export interface UiHandlerDeps {
   readonly modelPortFactory: ModelPortFactory;
   // Exact secret literals used by evidence persistence in addition to gateway redaction patterns.
   readonly redactionSecrets?: readonly string[] | undefined;
+  // UI-local persistence (ADR-0013). Holds projects, chats, and chat messages. Tests inject the
+  // in-memory store via createInMemoryUiStore; production wiring resolves a node:sqlite file path.
+  readonly store: UiStore;
 }
 
 export interface BuildHandlerDepsOptions {
@@ -56,6 +64,11 @@ export interface BuildHandlerDepsOptions {
   readonly registry?: RunRegistry | undefined;
   // Optional injected ModelPort factory (tests); the GatewayModelPort builder is used otherwise.
   readonly modelPortFactory?: ModelPortFactory | undefined;
+  // UI-local SQLite DB path (`keiko ui --ui-db`); resolved via UI-store precedence (explicit →
+  // KEIKO_UI_DATA_DIR → homedir/.keiko/keiko-ui.db). Mirrors evidenceDir's shape.
+  readonly uiDbPath?: string | undefined;
+  // Optional injected UiStore (tests); a node store opened at the resolved path is built otherwise.
+  readonly store?: UiStore | undefined;
 }
 
 // Loads the config without leaking the path or any secret on failure: a missing/invalid config file
@@ -126,19 +139,26 @@ function defaultModelPortFactory(config: GatewayConfig | undefined): ModelPortFa
 }
 
 // Assembles the handler deps for the real `keiko ui` process, mirroring the CLI config/evidence
-// wiring (loadConfigFromFile / resolveEvidenceDir / createNodeEvidenceStore).
+// wiring (loadConfigFromFile / resolveEvidenceDir / createNodeEvidenceStore). The UI store is
+// created at the resolved UI-DB path (explicit → KEIKO_UI_DATA_DIR → ~/.keiko/keiko-ui.db) unless
+// an injected store is supplied (tests).
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const { config, configPresent } = resolveConfig(options.configPath, options.env);
-  const store = createNodeEvidenceStore(resolveEvidenceDir(options.evidenceDir, options.env));
+  const evidenceStore = createNodeEvidenceStore(
+    resolveEvidenceDir(options.evidenceDir, options.env),
+  );
   const secrets = redactionSecrets(options.env, config);
+  const uiStore =
+    options.store ?? createNodeUiStore(resolveUiDbPath(options.uiDbPath, options.env));
   return {
     config,
     configPresent,
-    evidenceStore: store,
+    evidenceStore,
     env: options.env,
     redactor: buildRedactor(options.env, config),
     registry: options.registry ?? createRunRegistry(),
     modelPortFactory: options.modelPortFactory ?? defaultModelPortFactory(config),
     redactionSecrets: secrets,
+    store: uiStore,
   };
 }
