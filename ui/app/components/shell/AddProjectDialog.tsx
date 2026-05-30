@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode, FormEvent } from "react";
 import { createProject, ApiError } from "@/lib/api";
+import type { CreateProjectInput } from "@/lib/api";
 import { projectErrorMessage } from "@/lib/error-messages";
 
 // ---------------------------------------------------------------------------
@@ -66,7 +67,8 @@ export function AddProjectDialog({ onSuccess, onClose }: AddProjectDialogProps):
 
     setSubmitState({ kind: "submitting" });
     try {
-      await createProject({ path, name: name || undefined });
+      const payload: CreateProjectInput = name ? { path, name } : { path };
+      await createProject(payload);
       onSuccess();
     } catch (err: unknown) {
       if (err instanceof ApiError) {
