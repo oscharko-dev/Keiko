@@ -4,7 +4,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 interface Migration {
   readonly version: number;
@@ -48,7 +48,17 @@ CREATE INDEX idx_messages_chat_id ON chat_messages(chat_id);
 CREATE INDEX idx_messages_chat_ts ON chat_messages(chat_id, timestamp);
 `;
 
-const MIGRATIONS: readonly Migration[] = [{ version: 1, sql: V1_SQL }];
+// V2 (issue #66) adds an additive `task_type` column to chat_messages so the chat can label
+// non-workflow task runs (verify, explain-plan) without overloading workflow_id. STRICT tables
+// require an explicit type for ALTER ... ADD COLUMN; existing rows materialise NULL.
+const V2_SQL = `
+ALTER TABLE chat_messages ADD COLUMN task_type TEXT;
+`;
+
+const MIGRATIONS: readonly Migration[] = [
+  { version: 1, sql: V1_SQL },
+  { version: 2, sql: V2_SQL },
+];
 
 function currentUserVersion(db: DatabaseSync): number {
   const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;

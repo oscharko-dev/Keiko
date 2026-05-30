@@ -86,6 +86,7 @@ describe("deleteChat", () => {
       workflowId: undefined,
       workflowStatus: undefined,
       shortResult: undefined,
+      taskType: undefined,
     });
     store.deleteChat(c.id);
     expect(store.listChats(proj)).toHaveLength(0);

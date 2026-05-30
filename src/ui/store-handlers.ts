@@ -157,7 +157,23 @@ const WORKFLOW_STATUSES: ReadonlySet<string> = new Set([
   "running",
   "completed",
   "failed",
+  "cancelled",
 ]);
+
+// Issue #66 — taskType labels non-workflow harness runs (verify, explain-plan) so the chat can
+// render a non-ambiguous label. Constrained to a-z/0-9/`-` so the value stays URL-safe and
+// matches the BFF descriptor taskType identifiers (verify, explain-plan).
+const MAX_TASK_TYPE = 64;
+const TASK_TYPE_RE = /^[a-z][a-z0-9-]*$/;
+
+function optionalTaskType(body: Record<string, unknown>): string | undefined {
+  const v = body.taskType;
+  if (v === undefined) return undefined;
+  if (typeof v !== "string" || v.length === 0 || v.length > MAX_TASK_TYPE || !TASK_TYPE_RE.test(v)) {
+    throw new InvalidRequest('Field "taskType" must match [a-z][a-z0-9-]* (≤ 64 chars).');
+  }
+  return v;
+}
 
 function requireRole(body: Record<string, unknown>): ChatRole {
   const v = body.role;
@@ -398,6 +414,7 @@ export async function handleCreateMessage(
       workflowId: optionalString(body, "workflowId"),
       workflowStatus: optionalWorkflowStatus(body),
       shortResult: optionalString(body, "shortResult"),
+      taskType: optionalTaskType(body),
     });
     return { status: 201, body: { message } };
   });

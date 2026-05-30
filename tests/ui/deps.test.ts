@@ -98,6 +98,7 @@ describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () 
       workflowId: undefined,
       workflowStatus: undefined,
       shortResult: `leak ${SECRET} tail`,
+      taskType: undefined,
     });
 
     // shortResult returned by listMessages must not contain the literal secret.
