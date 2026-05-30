@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { join } from "node:path";
 import { classifyScripts, detectScripts } from "../../src/verification/detect.js";
-import { makeWorkspace } from "./_support.js";
+import { makeWorkspace, memoryFs } from "./_support.js";
 
 describe("classifyScripts — name heuristics (no regex, no ReDoS)", () => {
   it("maps a full vitest project: test, typecheck, lint, build", () => {
@@ -35,6 +36,26 @@ describe("classifyScripts — name heuristics (no regex, no ReDoS)", () => {
     });
     expect(mapping.typecheck).toBe("type-check");
     expect(mapping.lint).toBe("lint:js");
+  });
+
+  it("prefers real verification script names over npm lifecycle wrappers", () => {
+    const mapping = classifyScripts({
+      prebuild: "node setup.js",
+      "build:prod": "tsc -p tsconfig.build.json",
+      postlint: "node cleanup.js",
+      "lint:js": "eslint src",
+      pretest: "node setup-tests.js",
+      "test:unit": "vitest run",
+    });
+    expect(mapping.build).toBe("build:prod");
+    expect(mapping.lint).toBe("lint:js");
+    expect(mapping.test).toBe("test:unit");
+  });
+
+  it("does not select lifecycle wrappers when no real verification script exists", () => {
+    const mapping = classifyScripts({ prebuild: "node setup.js", posttest: "node cleanup.js" });
+    expect(mapping.build).toBeUndefined();
+    expect(mapping.test).toBeUndefined();
   });
 
   it("recognises eslint and tsc script names without the words lint/typecheck", () => {
@@ -82,5 +103,24 @@ describe("detectScripts — reads package.json through WorkspaceFs", () => {
     const catalog = detectScripts(ws.info);
     expect(catalog.scripts).toEqual({});
     expect(catalog.mapping.test).toBeUndefined();
+  });
+
+  it("returns an empty catalog instead of throwing for malformed or unreadable package.json", () => {
+    const ws = makeWorkspace();
+    const malformed = detectScripts(
+      ws.info,
+      memoryFs({ [join(ws.info.root, "package.json")]: "{not-json" }),
+    );
+    const unreadable = detectScripts(ws.info, memoryFs({}));
+
+    for (const catalog of [malformed, unreadable]) {
+      expect(catalog.scripts).toEqual({});
+      expect(catalog.mapping).toEqual({
+        test: undefined,
+        typecheck: undefined,
+        lint: undefined,
+        build: undefined,
+      });
+    }
   });
 });

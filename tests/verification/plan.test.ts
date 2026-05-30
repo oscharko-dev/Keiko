@@ -93,6 +93,15 @@ describe("resolveTargetedTests", () => {
     expect(steps[0]?.args).toEqual(["jest", "tests/util.spec.ts"]);
   });
 
+  it("preserves the source subdirectory for mirrored tests under a testDir", () => {
+    const ws = makeWorkspace({ testFramework: "vitest" });
+    ws.writeFile("src/nested/math.ts", "export const add = 1;");
+    ws.writeFile("tests/nested/math.test.ts", "test('x', () => {});");
+    const steps = resolveTargetedTests(ws.info, ["src/nested/math.ts"]);
+    expect(steps).toHaveLength(1);
+    expect(steps[0]?.args).toEqual(["vitest", "run", "tests/nested/math.test.ts"]);
+  });
+
   it("returns no step when no test file resolves", () => {
     const ws = makeWorkspace();
     ws.writeFile("src/orphan.ts", "export const o = 1;");

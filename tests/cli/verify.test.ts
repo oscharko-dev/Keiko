@@ -1,6 +1,6 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runVerifyCli } from "../../src/cli/verify.js";
 import type { CliIo } from "../../src/cli/runner.js";
@@ -26,14 +26,54 @@ function makeIo(): Captured {
 
 let dir: string;
 
-// The scripts use `node -e` (an allowlisted, deterministic, sub-second invocation) so the CLI
-// exercises the real #6 spawn path end-to-end without depending on an installed test runner.
-function writePackage(scripts: Record<string, string>): void {
+interface PackageOptions {
+  readonly devDependencies?: Record<string, string> | undefined;
+}
+
+// The scripts use `node -e` through npm scripts so the CLI exercises the real #6 spawn path
+// end-to-end without depending on an installed test runner.
+function writePackage(scripts: Record<string, string>, options: PackageOptions = {}): void {
   writeFileSync(
     join(dir, "package.json"),
-    JSON.stringify({ name: "verify-demo", version: "0.1.0", scripts }, null, 2),
+    JSON.stringify(
+      {
+        name: "verify-demo",
+        version: "0.1.0",
+        scripts,
+        ...(options.devDependencies === undefined
+          ? {}
+          : { devDependencies: options.devDependencies }),
+      },
+      null,
+      2,
+    ),
     "utf8",
   );
+}
+
+function writeWorkspaceFile(relPath: string, content: string): void {
+  const abs = join(dir, relPath);
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, content, "utf8");
+}
+
+function prependFakeNpxToPath(): () => void {
+  const fakeBin = mkdtempSync(join(tmpdir(), "keiko-verify-bin-"));
+  const executable = join(fakeBin, process.platform === "win32" ? "npx.cmd" : "npx");
+  const body =
+    process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/usr/bin/env sh\nexit 0\n";
+  writeFileSync(executable, body, "utf8");
+  chmodSync(executable, 0o755);
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}${delimiter}${oldPath ?? ""}`;
+  return (): void => {
+    if (oldPath === undefined) {
+      delete process.env.PATH;
+    } else {
+      process.env.PATH = oldPath;
+    }
+    rmSync(fakeBin, { recursive: true, force: true });
+  };
 }
 
 beforeEach(() => {
@@ -52,6 +92,8 @@ describe("runVerifyCli", () => {
     expect(code).toBe(0);
     expect(c.out()).toContain("Verification: passed");
     expect(c.out()).toContain("test\tpassed");
+    expect(c.out()).toContain("\tCOMMAND\t");
+    expect(c.out()).toContain("\tnpm test\t");
   });
 
   it("exits 1 when a step fails", async () => {
@@ -83,6 +125,54 @@ describe("runVerifyCli", () => {
     expect(code).toBe(0);
     const parsed = JSON.parse(c.out()) as { results: { kind: string }[] };
     expect(parsed.results.map((r) => r.kind)).toEqual(["lint"]);
+  });
+
+  it("runs a targeted-test step from --changed and reports command evidence", async () => {
+    writePackage({ test: 'node -e "process.exit(0)"' }, { devDependencies: { vitest: "4.1.7" } });
+    writeWorkspaceFile("src/add.ts", "export const add = (a, b) => a + b;\n");
+    writeWorkspaceFile("src/add.test.ts", "test('add', () => {});\n");
+    const restorePath = prependFakeNpxToPath();
+    try {
+      const c = makeIo();
+      const code = await runVerifyCli(
+        ["--dir", dir, "--only", "targeted-test", "--changed", "src/add.ts", "--json"],
+        c.io,
+      );
+      expect(code).toBe(0);
+      const parsed = JSON.parse(c.out()) as {
+        results: { kind: string; status: string; command: string }[];
+      };
+      expect(parsed.results).toHaveLength(1);
+      expect(parsed.results[0]).toMatchObject({
+        kind: "targeted-test",
+        status: "passed",
+        command: "npx vitest run src/add.test.ts",
+      });
+    } finally {
+      restorePath();
+    }
+  });
+
+  it("fails instead of reporting a false pass when targeted verification has no changed files", async () => {
+    writePackage({ test: 'node -e "process.exit(0)"' }, { devDependencies: { vitest: "4.1.7" } });
+    const c = makeIo();
+    const code = await runVerifyCli(["--dir", dir, "--only", "targeted-test", "--json"], c.io);
+    expect(code).toBe(1);
+    expect(c.err()).toContain("VERIFICATION_PLAN_EMPTY");
+    expect(c.out()).toBe("");
+  });
+
+  it("fails instead of reporting a false pass when --changed resolves no targeted test", async () => {
+    writePackage({ test: 'node -e "process.exit(0)"' }, { devDependencies: { vitest: "4.1.7" } });
+    writeWorkspaceFile("src/orphan.ts", "export const orphan = 1;\n");
+    const c = makeIo();
+    const code = await runVerifyCli(
+      ["--dir", dir, "--only", "targeted-test", "--changed", "src/orphan.ts", "--json"],
+      c.io,
+    );
+    expect(code).toBe(1);
+    expect(c.err()).toContain("VERIFICATION_PLAN_EMPTY");
+    expect(c.out()).toBe("");
   });
 
   it("reports a missing requested kind as skipped (exit 0), no process run", async () => {

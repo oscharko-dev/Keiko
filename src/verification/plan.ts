@@ -3,7 +3,7 @@
 // boundary (resolveWithinWorkspace + WorkspaceFs.exists); no raw node:fs. Candidate test-path
 // derivation uses plain string ops (no regex), so there is no ReDoS surface.
 
-import { basename, dirname, extname, join } from "node:path";
+import { basename, dirname, extname, join, relative } from "node:path";
 import {
   resolveWithinWorkspace,
   type WorkspaceFs,
@@ -75,10 +75,25 @@ function candidateTestPaths(workspace: WorkspaceInfo, file: string): readonly st
   const stem = basename(file, ext);
   const suffixes = [".test", ".spec"];
   const siblings = suffixes.map((s) => join(dir, `${stem}${s}${ext}`));
+  const sourceSubdir = sourceRelativeDir(workspace, file);
   const mirrored = workspace.testDirs.flatMap((testDir) =>
-    suffixes.map((s) => join(testDir, `${stem}${s}${ext}`)),
+    suffixes.map((s) => join(testDir, sourceSubdir, `${stem}${s}${ext}`)),
   );
   return [...siblings, ...mirrored];
+}
+
+function sourceRelativeDir(workspace: WorkspaceInfo, file: string): string {
+  const dir = dirname(file);
+  for (const sourceDir of workspace.sourceDirs) {
+    const rel = relative(sourceDir, dir);
+    if (rel === "") {
+      return "";
+    }
+    if (!rel.startsWith("..") && !rel.startsWith("/") && !rel.includes(":")) {
+      return rel;
+    }
+  }
+  return dir === "." ? "" : dir;
 }
 
 function existsInWorkspace(workspace: WorkspaceInfo, fs: WorkspaceFs, relPath: string): boolean {

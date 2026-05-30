@@ -68,7 +68,13 @@ describe("runVerification — outcomes", () => {
   it("a skipReason step is skipped and never spawns", async () => {
     const ws = makeWorkspace();
     const rec = recordingSpawn();
-    const skip = step({ kind: "lint", scriptName: undefined, skipReason: "no lint script" });
+    const skip = step({
+      kind: "lint",
+      scriptName: undefined,
+      command: "npm",
+      args: ["run", "lint"],
+      skipReason: "no lint script",
+    });
     const report = await runVerification(planOf([skip], ws.info.root), depsWith(ws, rec.fn));
     expect(report.results[0]?.status).toBe("skipped");
     expect(report.results[0]?.detail).toContain("no lint script");
@@ -107,6 +113,49 @@ describe("runVerification — outcomes", () => {
     const out = result?.appliedLimits.find((l) => l.dimension === "output-size");
     expect(out?.breached).toBe(true);
   });
+
+  it("arbitrary npx verification commands are denied before spawn", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    const invalid = step({
+      kind: "build",
+      scriptName: "build",
+      command: "npx",
+      args: ["eslint"],
+    });
+    const report = await runVerification(planOf([invalid], ws.info.root), depsWith(ws, rec.fn));
+    expect(report.results[0]?.status).toBe("denied");
+    expect(rec.calls()).toHaveLength(0);
+    expect(report.overallStatus).toBe("failed");
+  });
+
+  it("targeted-test npx invocations reject flags and non-file arguments before spawn", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    const invalid = step({
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "npx",
+      args: ["jest", "--config=jest.config.js", "src/add.test.ts"],
+    });
+    const report = await runVerification(planOf([invalid], ws.info.root), depsWith(ws, rec.fn));
+    expect(report.results[0]?.status).toBe("denied");
+    expect(rec.calls()).toHaveLength(0);
+  });
+
+  it("npm script-backed steps reject non-verification lifecycle script names before spawn", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    const invalid = step({
+      kind: "build",
+      scriptName: "postinstall",
+      command: "npm",
+      args: ["run", "postinstall"],
+    });
+    const report = await runVerification(planOf([invalid], ws.info.root), depsWith(ws, rec.fn));
+    expect(report.results[0]?.status).toBe("denied");
+    expect(rec.calls()).toHaveLength(0);
+  });
 });
 
 describe("runVerification — cancellation (D5)", () => {
@@ -121,7 +170,10 @@ describe("runVerification — cancellation (D5)", () => {
       queueMicrotask(() => child.emit("close", null, "SIGTERM"));
     });
     const plan = planOf(
-      [step({ kind: "test" }), step({ kind: "build", args: ["run", "build"] })],
+      [
+        step({ kind: "test" }),
+        step({ kind: "build", scriptName: "build", args: ["run", "build"] }),
+      ],
       ws.info.root,
     );
     const report = await runVerification(plan, depsWith(ws, rec.fn, { signal: ac.signal }));
@@ -140,6 +192,19 @@ describe("runVerification — cancellation (D5)", () => {
       depsWith(ws, rec.fn, { signal: ac.signal }),
     );
     expect(report.results[0]?.status).toBe("cancelled");
+    expect(rec.calls()).toHaveLength(0);
+  });
+
+  it("a mismatched workspace root fails closed before any step executes", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    const report = await runVerification(
+      planOf([step()], `${ws.info.root}/other`),
+      depsWith(ws, rec.fn),
+    );
+    expect(report.workspaceRoot).toBe(ws.info.root);
+    expect(report.results[0]?.status).toBe("denied");
+    expect(report.overallStatus).toBe("failed");
     expect(rec.calls()).toHaveLength(0);
   });
 });
@@ -186,7 +251,18 @@ describe("runVerification — memory breach (D3) and no monitor-interval leak", 
     // 2) a skipped step never spawns, so watch is never called and stop count is unchanged
     const recB = recordingSpawn();
     await runVerification(
-      planOf([step({ scriptName: undefined, skipReason: "no script" })], ws.info.root),
+      planOf(
+        [
+          step({
+            kind: "lint",
+            scriptName: undefined,
+            command: "npm",
+            args: ["run", "lint"],
+            skipReason: "no script",
+          }),
+        ],
+        ws.info.root,
+      ),
       { workspace: ws.info, spawn: recB.fn, monitor, now: () => 1 },
     );
     expect(monitor.watched()).toHaveLength(1); // unchanged: no spawn on a skip
@@ -194,16 +270,19 @@ describe("runVerification — memory breach (D3) and no monitor-interval leak", 
 });
 
 describe("runVerification — redaction", () => {
-  it("a secret-shaped token in stdout never appears in outputSummary or detail", async () => {
+  it("command stdout never appears in outputSummary or detail", async () => {
     const ws = makeWorkspace();
     const rec = recordingSpawn();
     const secret = "ghp_" + "0123456789abcdefABCDEFghijklmnopqrst";
-    scriptChildClose(rec.child, { stdout: `leaking ${secret} now\n`, exitCode: 1 });
+    const customerData = "customer_ssn=123-45-6789";
+    scriptChildClose(rec.child, { stdout: `leaking ${secret} ${customerData} now\n`, exitCode: 1 });
     const report = await runVerification(planOf([step()], ws.info.root), depsWith(ws, rec.fn));
     const result = report.results[0];
     expect(result?.outputSummary).not.toContain(secret);
-    expect(result?.outputSummary).toContain("[REDACTED]");
+    expect(result?.outputSummary).not.toContain(customerData);
+    expect(result?.outputSummary).toContain("omitted from summary");
     expect(JSON.stringify(report)).not.toContain(secret);
+    expect(JSON.stringify(report)).not.toContain(customerData);
   });
 });
 
@@ -213,7 +292,16 @@ describe("runVerification — counts and report shape", () => {
     const rec = recordingSpawn();
     scriptChildClose(rec.child, { exitCode: 0 });
     const plan = planOf(
-      [step(), step({ kind: "lint", scriptName: undefined, skipReason: "no lint script" })],
+      [
+        step(),
+        step({
+          kind: "lint",
+          scriptName: undefined,
+          command: "npm",
+          args: ["run", "lint"],
+          skipReason: "no lint script",
+        }),
+      ],
       ws.info.root,
     );
     const report = await runVerification(plan, depsWith(ws, rec.fn));
@@ -253,7 +341,26 @@ describe("runVerification — wall-time wiring (D2)", () => {
     clearTimeout(closeTimer);
     const result = report.results[0];
     expect(result?.status).toBe("timed-out");
+    expect(result?.durationMs).toBe(0);
     const wt = result?.appliedLimits.find((l) => l.dimension === "wall-time");
     expect(wt?.breached).toBe(true);
+  });
+
+  it("records elapsed duration on rejected timeout paths", async () => {
+    const ws = makeWorkspace();
+    const child = makeFakeChild();
+    const rec = recordingSpawn(child);
+    const limits = { ...DEFAULT_VERIFICATION_LIMITS, wallTimeMs: 1 };
+    const readings = [0, 10, 95];
+    const closeTimer = setTimeout(() => child.emit("close", null, "SIGTERM"), 20);
+    const report = await runVerification(
+      planOf([step({ limits })], ws.info.root),
+      depsWith(ws, rec.fn, {
+        now: () => readings.shift() ?? 95,
+      }),
+    );
+    clearTimeout(closeTimer);
+    expect(report.results[0]?.status).toBe("timed-out");
+    expect(report.results[0]?.durationMs).toBe(85);
   });
 });
