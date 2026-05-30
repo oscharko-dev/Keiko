@@ -334,7 +334,7 @@ The offline suite checks workflow plumbing deterministically. It does not measur
 
 ### `keiko ui`
 
-Launch the local UI. The server binds to `127.0.0.1` (loopback only), prints its URL, and runs until interrupted (Ctrl+C). It serves prebuilt UI assets. The published npm package ships these assets, so `keiko ui` works immediately after install; from a source checkout, run `npm run build:ui` first.
+Launch the local UI. The server binds to `127.0.0.1` (loopback only), prints its URL, and runs until interrupted (Ctrl+C). It serves prebuilt UI assets. The published npm package ships these assets, so `keiko ui` works immediately after install; from a source checkout, run `npm run ui:ci && npm run build:ui` first.
 
 ```bash
 keiko ui
@@ -552,7 +552,7 @@ See [Go/No-Go criteria](docs/pilot/go-no-go.md) and the [model capability guide]
 
 ## Packaging
 
-The published tarball ships only `dist/`, `README.md`, and `LICENSE` (the `files` allowlist). Repository docs stay in the repository. A surface check (`npm run check:package-surface`) runs in the `prepack` and `prepublishOnly` chains and asserts the built CLI, SDK, type declarations, and UI assets ship while source, UI source maps, `.env` files, and docs do not.
+The published tarball ships only `dist/`, `README.md`, and `LICENSE` (the `files` allowlist). Repository docs stay in the repository. A surface check (`npm run check:package-surface`) runs in the `prepack` and `prepublishOnly` chains and asserts the built CLI, SDK, type declarations, and UI assets ship while source, source maps, `.env` files, and docs do not.
 
 Keiko has zero runtime dependencies. Supply-chain review is covered by the CI dependency-review job, CodeQL, root/UI audit steps, and SBOM builds. Inspect the surface with:
 

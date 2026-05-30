@@ -88,7 +88,11 @@ export async function handleCreateRun(
     request: parsed,
     model,
     registry: deps.registry,
-    evidence: { store: deps.evidenceStore, env: deps.env },
+    evidence: {
+      store: deps.evidenceStore,
+      env: deps.env,
+      additionalSecrets: deps.redactionSecrets ?? [],
+    },
   };
   try {
     const started = startRun(engineCtx, deps.redactor);
@@ -134,8 +138,12 @@ function openSseStream(
 ): void {
   res.writeHead(200, SSE_HEADERS);
   const writer: SseWriter = {
-    write: (event: StreamEvent): void => {
-      writeEvent(res, event, redactor);
+    write: (event: StreamEvent): boolean => {
+      const accepted = writeEvent(res, event, redactor);
+      if (!accepted) {
+        res.destroy();
+      }
+      return accepted;
     },
     close: (): void => {
       res.end();

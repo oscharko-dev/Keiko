@@ -24,11 +24,15 @@ import {
 // ---------------------------------------------------------------------------
 
 type DiffLineKind = "add" | "remove" | "header" | "context";
-interface DiffLine { kind: DiffLineKind; text: string; }
+interface DiffLine {
+  kind: DiffLineKind;
+  text: string;
+}
 
 function parseDiffLines(diff: string): DiffLine[] {
   return diff.split("\n").map((line): DiffLine => {
-    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@")) return { kind: "header", text: line };
+    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@"))
+      return { kind: "header", text: line };
     if (line.startsWith("+")) return { kind: "add", text: line };
     if (line.startsWith("-")) return { kind: "remove", text: line };
     return { kind: "context", text: line };
@@ -37,18 +41,25 @@ function parseDiffLines(diff: string): DiffLine[] {
 
 function lineClasses(kind: DiffLineKind): string {
   switch (kind) {
-    case "add": return "bg-green-50 text-green-900";
-    case "remove": return "bg-red-50 text-red-900";
-    case "header": return "bg-surface-subtle text-ink-muted font-semibold";
-    case "context": return "text-ink-muted";
+    case "add":
+      return "bg-green-50 text-green-900";
+    case "remove":
+      return "bg-red-50 text-red-900";
+    case "header":
+      return "bg-surface-subtle text-ink-muted font-semibold";
+    case "context":
+      return "text-ink-muted";
   }
 }
 
 function linePrefix(kind: DiffLineKind): string {
   switch (kind) {
-    case "add": return "[+] ";
-    case "remove": return "[-] ";
-    default: return "    ";
+    case "add":
+      return "[+] ";
+    case "remove":
+      return "[-] ";
+    default:
+      return "    ";
   }
 }
 
@@ -66,7 +77,10 @@ function DiffViewer({ diff }: { diff: string }): ReactNode {
       >
         <pre className="font-mono text-xs leading-5">
           {lines.map((line, idx) => (
-            <span key={`${String(idx)}-${line.kind}`} className={`block whitespace-pre ${lineClasses(line.kind)}`}>
+            <span
+              key={`${String(idx)}-${line.kind}`}
+              className={`block whitespace-pre ${lineClasses(line.kind)}`}
+            >
               <span aria-hidden="true">{linePrefix(line.kind)}</span>
               {line.text}
             </span>
@@ -88,23 +102,38 @@ function ChangedFilesTable({ files }: { files: ChangedFile[] }): ReactNode {
         <caption className="sr-only">Changed files in proposed patch</caption>
         <thead>
           <tr className="border-b border-ink/10 text-left text-xs text-ink-muted">
-            <th scope="col" className="py-2 pr-4 font-medium">Path</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Kind</th>
-            <th scope="col" className="py-2 pr-4 font-medium">+Lines</th>
-            <th scope="col" className="py-2 pr-4 font-medium">-Lines</th>
-            <th scope="col" className="py-2 font-medium">Review flag</th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              Path
+            </th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              Kind
+            </th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              +Lines
+            </th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              -Lines
+            </th>
+            <th scope="col" className="py-2 font-medium">
+              Review flag
+            </th>
           </tr>
         </thead>
         <tbody>
           {files.map((f) => (
-            <tr key={f.path} className={`border-b border-ink/10 ${f.elevatedReview ? "bg-orange-50" : ""}`}>
+            <tr
+              key={f.path}
+              className={`border-b border-ink/10 ${f.elevatedReview ? "bg-orange-50" : ""}`}
+            >
               <td className="py-2 pr-4 font-mono text-xs">{f.path}</td>
               <td className="py-2 pr-4 text-ink-muted">{f.kind}</td>
               <td className="py-2 pr-4 text-green-700">+{f.addedLines.toString()}</td>
               <td className="py-2 pr-4 text-red-700">-{f.removedLines.toString()}</td>
               <td className="py-2">
                 {f.elevatedReview ? (
-                  <span className="rounded bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800">Elevated review</span>
+                  <span className="rounded bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800">
+                    Elevated review
+                  </span>
                 ) : (
                   <span className="text-ink-muted">—</span>
                 )}
@@ -126,7 +155,9 @@ function VerificationSummary({ summary }: { summary: VerificationAuditSummary })
     <div className="rounded-lg border border-ink/10 p-4">
       <div className="flex items-center gap-3">
         <span className="text-sm font-medium text-ink">Dry-run verification</span>
-        <span className={`rounded px-2 py-0.5 text-xs font-medium ${verificationStatusClasses(summary.overallStatus)}`}>
+        <span
+          className={`rounded px-2 py-0.5 text-xs font-medium ${verificationStatusClasses(summary.overallStatus)}`}
+        >
           {verificationStatusLabel(summary.overallStatus)}
         </span>
         <span className="text-xs text-ink-muted">{formatMs(summary.durationMs)}</span>
@@ -134,8 +165,15 @@ function VerificationSummary({ summary }: { summary: VerificationAuditSummary })
       {summary.results.length > 0 && (
         <ul className="mt-3 grid gap-1">
           {summary.results.map((r, idx) => (
-            <li key={`${r.kind}-${String(idx)}`} className="flex items-center gap-2 text-xs text-ink-muted">
-              <span className={`rounded px-1.5 py-0.5 font-medium ${verificationStatusClasses(r.status)}`}>{r.status}</span>
+            <li
+              key={`${r.kind}-${String(idx)}`}
+              className="flex items-center gap-2 text-xs text-ink-muted"
+            >
+              <span
+                className={`rounded px-1.5 py-0.5 font-medium ${verificationStatusClasses(r.status)}`}
+              >
+                {r.status}
+              </span>
               <span className="font-mono">{r.command}</span>
               <span>({formatMs(r.durationMs)})</span>
             </li>
@@ -150,11 +188,18 @@ function VerificationSummary({ summary }: { summary: VerificationAuditSummary })
 // Apply confirm
 // ---------------------------------------------------------------------------
 
-interface ApplyConfirmProps { onConfirm: () => void; onCancel: () => void; applying: boolean; }
+interface ApplyConfirmProps {
+  onConfirm: () => void;
+  onCancel: () => void;
+  applying: boolean;
+}
 
 function ApplyConfirm({ onConfirm, onCancel, applying }: ApplyConfirmProps): ReactNode {
   const confirmRef = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => { confirmRef.current?.focus(); }, []);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    confirmRef.current?.focus();
+  }, []);
 
   // Escape dismisses the dialog. A document-level listener (rather than a handler on the
   // non-interactive alertdialog container) keeps Escape working whichever control inside the dialog
@@ -164,6 +209,25 @@ function ApplyConfirm({ onConfirm, onCancel, applying }: ApplyConfirmProps): Rea
       if (e.key === "Escape" && !applying) {
         e.preventDefault();
         onCancel();
+        return;
+      }
+      if (e.key === "Tab") {
+        const focusable = [confirmRef.current, cancelRef.current].filter(
+          (el): el is HTMLButtonElement => el !== null && !el.disabled,
+        );
+        if (focusable.length === 0) {
+          e.preventDefault();
+          return;
+        }
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
       }
     }
     document.addEventListener("keydown", onKey);
@@ -180,15 +244,30 @@ function ApplyConfirm({ onConfirm, onCancel, applying }: ApplyConfirmProps): Rea
       aria-describedby="apply-confirm-desc"
       className="rounded-lg border border-orange-300 bg-orange-50 p-4"
     >
-      <h3 id="apply-confirm-heading" className="font-semibold text-orange-900">Apply patch to workspace?</h3>
-      <p id="apply-confirm-desc" className="mt-1 text-sm text-orange-800">This will write the proposed changes to your workspace. Use version control to revert if needed.</p>
+      <h3 id="apply-confirm-heading" className="font-semibold text-orange-900">
+        Apply patch to workspace?
+      </h3>
+      <p id="apply-confirm-desc" className="mt-1 text-sm text-orange-800">
+        This will write the proposed changes to your workspace. Use version control to revert if
+        needed.
+      </p>
       <div className="mt-4 flex gap-3">
-        <button ref={confirmRef} type="button" onClick={onConfirm} disabled={applying}
-          className="rounded bg-orange-700 px-4 py-1.5 text-sm font-semibold text-white hover:bg-orange-800 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50">
+        <button
+          ref={confirmRef}
+          type="button"
+          onClick={onConfirm}
+          disabled={applying}
+          className="rounded bg-orange-700 px-4 py-1.5 text-sm font-semibold text-white hover:bg-orange-800 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50"
+        >
           {applying ? "Applying…" : "Confirm apply"}
         </button>
-        <button type="button" onClick={onCancel} disabled={applying}
-          className="rounded border border-orange-300 px-4 py-1.5 text-sm text-orange-800 hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50">
+        <button
+          ref={cancelRef}
+          type="button"
+          onClick={onCancel}
+          disabled={applying}
+          className="rounded border border-orange-300 px-4 py-1.5 text-sm text-orange-800 hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50"
+        >
           Cancel
         </button>
       </div>
@@ -203,7 +282,10 @@ function ApplyConfirm({ onConfirm, onCancel, applying }: ApplyConfirmProps): Rea
 type ApplyState = "idle" | "confirming" | "applying" | "done" | "error";
 
 function isAppliable(report: RunReport): boolean {
-  return (report.status === "dry-run" || report.status === "fix-proposed") && report.proposedDiff !== undefined;
+  return (
+    (report.status === "dry-run" || report.status === "fix-proposed") &&
+    report.proposedDiff !== undefined
+  );
 }
 
 function PatchViewInner(): ReactNode {
@@ -217,18 +299,23 @@ function PatchViewInner(): ReactNode {
   const [applyError, setApplyError] = useState<string | null>(null);
   const [applyReport, setApplyReport] = useState<RunReport | null>(null);
   const applyBtnRef = useRef<HTMLButtonElement | null>(null);
+  const backgroundRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (runId === "") return;
     let active = true;
     fetchRunReport(runId)
-      .then(({ report: r }) => { if (active) setReport(r); })
+      .then(({ report: r }) => {
+        if (active) setReport(r);
+      })
       .catch((err) => {
         if (!active) return;
         const msg = err instanceof ApiError ? err.message : "Failed to load run report";
         setLoadError(msg);
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [runId]);
 
   async function handleApply(): Promise<void> {
@@ -256,10 +343,28 @@ function PatchViewInner(): ReactNode {
     }
   }, [applyState]);
 
+  useEffect(() => {
+    const background = backgroundRef.current;
+    if (background === null) return;
+    if (applyState === "confirming") {
+      background.setAttribute("inert", "");
+      background.setAttribute("aria-hidden", "true");
+    } else {
+      background.removeAttribute("inert");
+      background.removeAttribute("aria-hidden");
+    }
+    return (): void => {
+      background.removeAttribute("inert");
+      background.removeAttribute("aria-hidden");
+    };
+  }, [applyState]);
+
   if (runId === "") {
     return (
       <section aria-labelledby="patch-heading">
-        <h1 id="patch-heading" className="text-heading text-ink">Patch review</h1>
+        <h1 id="patch-heading" className="text-heading text-ink">
+          Patch review
+        </h1>
         <p className="mt-4 text-sm text-ink-muted">No run ID specified.</p>
       </section>
     );
@@ -268,8 +373,12 @@ function PatchViewInner(): ReactNode {
   if (loadError !== null) {
     return (
       <section aria-labelledby="patch-heading">
-        <h1 id="patch-heading" className="text-heading text-ink">Patch review</h1>
-        <p role="alert" className="mt-4 rounded bg-red-50 px-4 py-3 text-sm text-red-700">{loadError}</p>
+        <h1 id="patch-heading" className="text-heading text-ink">
+          Patch review
+        </h1>
+        <p role="alert" className="mt-4 rounded bg-red-50 px-4 py-3 text-sm text-red-700">
+          {loadError}
+        </p>
       </section>
     );
   }
@@ -277,8 +386,12 @@ function PatchViewInner(): ReactNode {
   if (report === null) {
     return (
       <section aria-labelledby="patch-heading">
-        <h1 id="patch-heading" className="text-heading text-ink">Patch review</h1>
-        <p className="mt-4 text-ink-muted" aria-busy="true">Loading run report…</p>
+        <h1 id="patch-heading" className="text-heading text-ink">
+          Patch review
+        </h1>
+        <p className="mt-4 text-ink-muted" aria-busy="true">
+          Loading run report…
+        </p>
       </section>
     );
   }
@@ -287,113 +400,173 @@ function PatchViewInner(): ReactNode {
 
   return (
     <section aria-labelledby="patch-heading">
-      <div className="flex items-center gap-4">
-        <h1 id="patch-heading" className="text-heading text-ink">Patch review</h1>
-        <span className={`rounded px-2 py-0.5 text-xs font-medium ${outcomeClasses(report.status)}`}>
-          {outcomeLabel(report.status)}
-        </span>
+      <div ref={backgroundRef}>
+        <div className="flex items-center gap-4">
+          <h1 id="patch-heading" className="text-heading text-ink">
+            Patch review
+          </h1>
+          <span
+            className={`rounded px-2 py-0.5 text-xs font-medium ${outcomeClasses(report.status)}`}
+          >
+            {outcomeLabel(report.status)}
+          </span>
+        </div>
+        <p className="mt-1 font-mono text-xs text-ink-muted">{runId}</p>
+
+        {report.dryRunPreview !== undefined && (
+          <section aria-labelledby="preview-heading" className="mt-6">
+            <h2 id="preview-heading" className="text-subheading text-ink">
+              Validation summary
+            </h2>
+            <p className="mt-2 rounded border border-ink/10 bg-surface-subtle px-4 py-3 font-mono text-xs text-ink-muted">
+              {report.dryRunPreview}
+            </p>
+          </section>
+        )}
+
+        {report.verificationSummary !== undefined && (
+          <section aria-labelledby="verify-heading" className="mt-6">
+            <h2 id="verify-heading" className="text-subheading text-ink">
+              Verification
+            </h2>
+            <div className="mt-2">
+              <VerificationSummary summary={report.verificationSummary} />
+            </div>
+          </section>
+        )}
+
+        {report.changedFiles !== undefined && report.changedFiles.length > 0 && (
+          <section aria-labelledby="files-heading" className="mt-6">
+            <h2 id="files-heading" className="text-subheading text-ink">
+              Changed files
+            </h2>
+            <div className="mt-2">
+              <ChangedFilesTable files={report.changedFiles} />
+            </div>
+          </section>
+        )}
+
+        {report.addedTestFiles !== undefined && report.addedTestFiles.length > 0 && (
+          <section aria-labelledby="test-files-heading" className="mt-6">
+            <h2 id="test-files-heading" className="text-subheading text-ink">
+              Added test files
+            </h2>
+            <ul className="mt-2 grid gap-1">
+              {report.addedTestFiles.map((f) => (
+                <li key={f.path} className="font-mono text-sm text-ink">
+                  {f.path}
+                  {f.estimatedTestCount !== undefined && (
+                    <span className="ml-2 text-xs text-ink-muted">
+                      (~{f.estimatedTestCount.toString()} tests)
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {report.proposedDiff !== undefined ? (
+          <section aria-labelledby="diff-heading" className="mt-6">
+            <h2 id="diff-heading" className="text-subheading text-ink">
+              Proposed diff
+            </h2>
+            <div className="mt-2">
+              <DiffViewer diff={report.proposedDiff} />
+            </div>
+          </section>
+        ) : (
+          <p className="mt-6 text-sm text-ink-muted">No diff available for this run.</p>
+        )}
+
+        <section aria-labelledby="apply-heading" className="mt-section">
+          <h2 id="apply-heading" className="text-subheading text-ink">
+            Apply patch
+          </h2>
+          {!appliable && applyState !== "done" && (
+            <p className="mt-2 text-sm text-ink-muted">
+              The patch can only be applied when the run is in a dry-run-success state. Current:{" "}
+              {outcomeLabel(report.status)}.
+            </p>
+          )}
+          {appliable && applyState === "idle" && (
+            <div className="mt-4">
+              <p className="text-sm text-ink-muted">
+                No files changed yet. Review the diff carefully before applying.
+              </p>
+              <button
+                ref={applyBtnRef}
+                type="button"
+                onClick={() => {
+                  setApplyState("confirming");
+                }}
+                className="mt-3 rounded bg-accent px-6 py-2 text-sm font-semibold text-ink-inverse hover:bg-accent-strong focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2"
+              >
+                Apply patch
+              </button>
+            </div>
+          )}
+          {applyState === "applying" && (
+            <p className="mt-4 text-sm text-ink-muted" aria-busy="true">
+              Applying patch…
+            </p>
+          )}
+          {applyState === "error" && applyError !== null && (
+            <p role="alert" className="mt-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+              {applyError}
+            </p>
+          )}
+          {applyState === "done" && applyReport !== null && (
+            <div className="mt-4 rounded-lg border border-green-300 bg-green-50 p-4">
+              <p className="font-semibold text-green-900">Patch applied successfully.</p>
+              <p className="mt-1 text-sm text-green-800">
+                Status: {outcomeLabel(applyReport.status)}
+              </p>
+            </div>
+          )}
+        </section>
+
+        <div className="mt-8">
+          <button
+            type="button"
+            onClick={() => {
+              router.push(`/run?id=${encodeURIComponent(runId)}`);
+            }}
+            className="text-sm text-ink-muted underline hover:text-ink focus:outline-none focus:ring-2 focus:ring-focus"
+          >
+            ← Back to run view
+          </button>
+        </div>
       </div>
-      <p className="mt-1 font-mono text-xs text-ink-muted">{runId}</p>
-
-      {report.dryRunPreview !== undefined && (
-        <section aria-labelledby="preview-heading" className="mt-6">
-          <h2 id="preview-heading" className="text-subheading text-ink">Validation summary</h2>
-          <p className="mt-2 rounded border border-ink/10 bg-surface-subtle px-4 py-3 font-mono text-xs text-ink-muted">{report.dryRunPreview}</p>
-        </section>
+      {applyState === "confirming" && (
+        <div className="mt-4">
+          <ApplyConfirm
+            onConfirm={() => {
+              void handleApply();
+            }}
+            onCancel={handleCancelConfirm}
+            applying={false}
+          />
+        </div>
       )}
-
-      {report.verificationSummary !== undefined && (
-        <section aria-labelledby="verify-heading" className="mt-6">
-          <h2 id="verify-heading" className="text-subheading text-ink">Verification</h2>
-          <div className="mt-2"><VerificationSummary summary={report.verificationSummary} /></div>
-        </section>
-      )}
-
-      {report.changedFiles !== undefined && report.changedFiles.length > 0 && (
-        <section aria-labelledby="files-heading" className="mt-6">
-          <h2 id="files-heading" className="text-subheading text-ink">Changed files</h2>
-          <div className="mt-2"><ChangedFilesTable files={report.changedFiles} /></div>
-        </section>
-      )}
-
-      {report.addedTestFiles !== undefined && report.addedTestFiles.length > 0 && (
-        <section aria-labelledby="test-files-heading" className="mt-6">
-          <h2 id="test-files-heading" className="text-subheading text-ink">Added test files</h2>
-          <ul className="mt-2 grid gap-1">
-            {report.addedTestFiles.map((f) => (
-              <li key={f.path} className="font-mono text-sm text-ink">
-                {f.path}
-                {f.estimatedTestCount !== undefined && (
-                  <span className="ml-2 text-xs text-ink-muted">(~{f.estimatedTestCount.toString()} tests)</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
-      {report.proposedDiff !== undefined ? (
-        <section aria-labelledby="diff-heading" className="mt-6">
-          <h2 id="diff-heading" className="text-subheading text-ink">Proposed diff</h2>
-          <div className="mt-2"><DiffViewer diff={report.proposedDiff} /></div>
-        </section>
-      ) : (
-        <p className="mt-6 text-sm text-ink-muted">No diff available for this run.</p>
-      )}
-
-      <section aria-labelledby="apply-heading" className="mt-section">
-        <h2 id="apply-heading" className="text-subheading text-ink">Apply patch</h2>
-        {!appliable && applyState !== "done" && (
-          <p className="mt-2 text-sm text-ink-muted">
-            The patch can only be applied when the run is in a dry-run-success state. Current: {outcomeLabel(report.status)}.
-          </p>
-        )}
-        {appliable && applyState === "idle" && (
-          <div className="mt-4">
-            <p className="text-sm text-ink-muted">No files changed yet. Review the diff carefully before applying.</p>
-            <button ref={applyBtnRef} type="button" onClick={() => { setApplyState("confirming"); }}
-              className="mt-3 rounded bg-accent px-6 py-2 text-sm font-semibold text-ink-inverse hover:bg-accent-strong focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2">
-              Apply patch
-            </button>
-          </div>
-        )}
-        {applyState === "confirming" && (
-          <div className="mt-4">
-            <ApplyConfirm onConfirm={() => { void handleApply(); }} onCancel={handleCancelConfirm} applying={false} />
-          </div>
-        )}
-        {applyState === "applying" && (
-          <p className="mt-4 text-sm text-ink-muted" aria-busy="true">Applying patch…</p>
-        )}
-        {applyState === "error" && applyError !== null && (
-          <p role="alert" className="mt-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{applyError}</p>
-        )}
-        {applyState === "done" && applyReport !== null && (
-          <div className="mt-4 rounded-lg border border-green-300 bg-green-50 p-4">
-            <p className="font-semibold text-green-900">Patch applied successfully.</p>
-            <p className="mt-1 text-sm text-green-800">Status: {outcomeLabel(applyReport.status)}</p>
-          </div>
-        )}
-      </section>
-
-      <div className="mt-8">
-        <button type="button" onClick={() => { router.push(`/run?id=${encodeURIComponent(runId)}`); }}
-          className="text-sm text-ink-muted underline hover:text-ink focus:outline-none focus:ring-2 focus:ring-focus">
-          ← Back to run view
-        </button>
-      </div>
     </section>
   );
 }
 
 export default function PatchPage(): ReactNode {
   return (
-    <Suspense fallback={
-      <section aria-labelledby="patch-heading">
-        <h1 id="patch-heading" className="text-heading text-ink">Patch review</h1>
-        <p className="mt-4 text-ink-muted" aria-busy="true">Loading…</p>
-      </section>
-    }>
+    <Suspense
+      fallback={
+        <section aria-labelledby="patch-heading">
+          <h1 id="patch-heading" className="text-heading text-ink">
+            Patch review
+          </h1>
+          <p className="mt-4 text-ink-muted" aria-busy="true">
+            Loading…
+          </p>
+        </section>
+      }
+    >
       <PatchViewInner />
     </Suspense>
   );

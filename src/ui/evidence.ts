@@ -32,6 +32,7 @@ type TerminalStatus = Exclude<RunStatus, "running">;
 export interface EvidencePersistContext {
   readonly store: EvidenceStore;
   readonly env: EnvSource;
+  readonly additionalSecrets?: readonly string[] | undefined;
 }
 
 // Identity + timing the BFF already holds when a run terminates. `modelId` is the request model; the
@@ -44,6 +45,7 @@ export interface RunIdentity {
   readonly status: TerminalStatus;
   readonly startedAt: number;
   readonly finishedAt: number;
+  readonly workspaceRoot?: string | undefined;
 }
 
 // explain-plan is the only RunKind that is NOT a workflow kind; the workflow caller never passes it.
@@ -68,6 +70,7 @@ export function persistWorkflowEvidence(
       status: identity.status,
       startedAt: identity.startedAt,
       finishedAt: identity.finishedAt,
+      ...(identity.workspaceRoot === undefined ? {} : { workspaceRoot: identity.workspaceRoot }),
     },
     report,
     events,
@@ -84,7 +87,10 @@ export function persistExplainEvidence(
   ctx: EvidencePersistContext,
 ): EvidenceReport {
   const manifest = buildExplainManifest(identity, result);
-  const redactor = createAuditRedactor({}, ctx.env);
+  const redactor = createAuditRedactor(
+    { additionalSecrets: ctx.additionalSecrets ?? [] },
+    ctx.env,
+  );
   const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
   const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
   return buildEvidenceReport(redacted, location);
@@ -97,6 +103,17 @@ const KIND_TO_TASK_TYPE: Readonly<Record<RunKind, TaskType>> = {
 };
 
 function buildExplainManifest(identity: RunIdentity, result: RunResult): EvidenceManifest {
+  const context =
+    identity.workspaceRoot === undefined
+      ? undefined
+      : {
+          workspaceRoot: identity.workspaceRoot,
+          totalCandidates: 0,
+          usedBytes: 0,
+          budgetBytes: 0,
+          droppedForBudget: 0,
+          entries: [],
+        };
   return {
     evidenceSchemaVersion: EVIDENCE_SCHEMA_VERSION,
     run: {
@@ -111,6 +128,7 @@ function buildExplainManifest(identity: RunIdentity, result: RunResult): Evidenc
     },
     model: { modelId: identity.modelId, costClass: resolveCostClass(identity.modelId) },
     usageTotals: foldHarnessUsage(result.events),
+    ...(context === undefined ? {} : { context }),
     stateTransitions: [],
     toolCalls: [],
     commandExecutions: [],

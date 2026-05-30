@@ -8,7 +8,12 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { DryRunToolPort } from "../harness/index.js";
-import { canonicalise, createSession, HARNESS_VERSION, type AgentConfig } from "../harness/index.js";
+import {
+  canonicalise,
+  createSession,
+  HARNESS_VERSION,
+  type AgentConfig,
+} from "../harness/index.js";
 import type { ModelPort } from "../harness/index.js";
 import { generateUnitTests, investigateBug } from "../workflows/index.js";
 import type {
@@ -163,11 +168,11 @@ function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: strin
       appliable: unitTestAppliable(ctx.request, report),
     }));
     return {
-    result,
-    cancel: (reason?: string): void => {
-      controller.abort(reason);
-    },
-  };
+      result,
+      cancel: (reason?: string): void => {
+        controller.abort(reason);
+      },
+    };
   }
   const result = investigateBug(bugInput(ctx.request), commonDeps).then((report) => ({
     status: bugStatusToRun(report.status),
@@ -188,7 +193,12 @@ function dispatchExplain(
   ctx: EngineContext,
   sink: QueueEventSink,
 ): { dispatched: Dispatched; runId: string; fingerprint: string } {
-  const config: AgentConfig = { model: ctx.request.modelId, workingDirectory: ".", dryRun: true };
+  const config: AgentConfig = {
+    model: ctx.request.modelId,
+    workingDirectory: workspaceRoot(ctx.request),
+    dryRun: true,
+    ...(ctx.request.limits === undefined ? {} : { limits: ctx.request.limits }),
+  };
   const session = createSession(explainTask(ctx.request), config, {
     model: ctx.model,
     tools: new DryRunToolPort(),
@@ -217,7 +227,10 @@ function dispatchExplain(
 // Registers the run, wires completion capture, and returns the synchronous {runId, fingerprint}. The
 // caller (POST /api/runs) has already validated the request and resolved the ModelPort. Throws
 // ActiveRunLimitError when the registry is at capacity (mapped to 429 upstream).
-export function startRun(ctx: EngineContext, redactReport: (value: unknown) => unknown): StartRunResult {
+export function startRun(
+  ctx: EngineContext,
+  redactReport: (value: unknown) => unknown,
+): StartRunResult {
   const sink = new QueueEventSink();
   const startedAt = Date.now();
   if (ctx.request.kind === "explain-plan") {
@@ -263,16 +276,20 @@ function registerAndCapture(
       );
     })
     .catch((error: unknown) => {
-      ctx.registry.complete(identity.runId, "failed", redactReport({ error: String(error) }), undefined);
+      ctx.registry.complete(
+        identity.runId,
+        "failed",
+        redactReport({ error: String(error) }),
+        undefined,
+      );
     })
     .finally(() => {
       identity.sink.closeAll();
     });
 }
 
-// Persists a terminated run's redacted evidence manifest (AC5). Best-effort and never throwing: the
-// evidence helpers swallow their own errors, and this is only invoked after the registry already
-// recorded the terminal outcome, so a missing evidence config simply skips persistence.
+// Persists a terminated run's redacted evidence manifest (AC5). Persistence errors intentionally
+// surface to the final registry payload so a terminal UI run cannot silently omit required evidence.
 function persistOutcome(
   ctx: EngineContext,
   identity: RegisterIdentity,
@@ -289,11 +306,17 @@ function persistOutcome(
     status: outcome.status,
     startedAt: identity.startedAt,
     finishedAt: Date.now(),
+    workspaceRoot: workspaceRoot(ctx.request),
   };
   if (ctx.request.kind === "explain-plan" && outcome.result !== undefined) {
     return persistExplainEvidence(runIdentity, outcome.result, ctx.evidence);
   }
-  return persistWorkflowEvidence(runIdentity, outcome.report, identity.sink.buffered(), ctx.evidence);
+  return persistWorkflowEvidence(
+    runIdentity,
+    outcome.report,
+    identity.sink.buffered(),
+    ctx.evidence,
+  );
 }
 
 function attachEvidenceReport(report: unknown, evidence: EvidenceReport | undefined): unknown {

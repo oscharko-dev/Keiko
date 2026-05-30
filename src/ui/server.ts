@@ -9,7 +9,7 @@
 // `createUiServer({ staticRoot, csp, port })` form still works (Wave 1 server tests, `keiko ui` smoke).
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 import { applySecurityHeaders } from "./headers.js";
 import { isAllowedHost } from "./host-check.js";
 import { resolveContainedPath, serveFile } from "./static.js";
@@ -47,6 +47,30 @@ function writeJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+function isJsonRequest(req: IncomingMessage): boolean {
+  const header = req.headers["content-type"];
+  const value = typeof header === "string" ? header : header?.[0];
+  return value?.split(";", 1)[0]?.trim().toLowerCase() === "application/json";
+}
+
+function hasCsrfHeader(req: IncomingMessage): boolean {
+  const header = req.headers["x-keiko-csrf"];
+  const value = Array.isArray(header) ? header[0] : header;
+  return value === "1";
+}
+
+function rejectUnsupportedMediaType(res: ServerResponse): void {
+  writeJson(
+    res,
+    415,
+    errorBody("UNSUPPORTED_MEDIA_TYPE", "State-changing API requests must use JSON."),
+  );
+}
+
+function rejectCsrf(res: ServerResponse): void {
+  writeJson(res, 403, errorBody("FORBIDDEN_CSRF", "Missing state-changing request guard."));
+}
+
 // A minimal default deps object so a 3-arg server can still serve the deps-bound read routes (e.g.
 // `/api/models` and `/api/workspace`, which need no config) without a config or evidence dir.
 function fallbackDeps(): UiHandlerDeps {
@@ -77,6 +101,16 @@ async function dispatchApi(
     writeJson(res, 405, methodNotAllowedBody());
     return;
   }
+  if (method === "POST") {
+    if (!isJsonRequest(req)) {
+      rejectUnsupportedMediaType(res);
+      return;
+    }
+    if (!hasCsrfHeader(req)) {
+      rejectCsrf(res);
+      return;
+    }
+  }
   const ctx: RouteContext = { req, res, params: match.params, url };
   const handlerDeps = deps.handlerDeps ?? fallbackDeps();
   const outcome = await match.definition.handler(ctx, handlerDeps);
@@ -91,10 +125,17 @@ async function serveStatic(
   staticRoot: string,
   pathname: string,
 ): Promise<void> {
-  const target = pathname === "/" ? "/index.html" : pathname;
-  const resolved = resolveContainedPath(staticRoot, target);
-  if (resolved !== undefined && (await serveFile(res, resolved))) {
-    return;
+  const targets =
+    pathname === "/"
+      ? ["/index.html"]
+      : extname(pathname) === ""
+        ? [pathname, `${pathname}.html`, `${pathname}/index.html`]
+        : [pathname];
+  for (const target of targets) {
+    const resolved = resolveContainedPath(staticRoot, target);
+    if (resolved !== undefined && (await serveFile(res, resolved))) {
+      return;
+    }
   }
   const indexPath = join(staticRoot, "index.html");
   if (await serveFile(res, indexPath)) {

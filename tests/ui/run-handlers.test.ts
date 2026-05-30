@@ -45,7 +45,9 @@ const TEST_DIFF =
   `+// token ${SECRET}\n` +
   "+describe('add', () => {\n" +
   "+  it('adds', () => expect(add(1, 2)).toBe(3));\n" +
-  "+});\n";
+	  "+});\n";
+
+const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 
 function fakeModel(content: string): ModelPort {
   const response: NormalizedResponse = {
@@ -107,6 +109,7 @@ interface CreateResponse {
 async function createRun(apply = false): Promise<{ status: number; body: CreateResponse }> {
   const res = await fetch(`${base()}/api/runs`, {
     method: "POST",
+    headers: POST_JSON_HEADERS,
     body: JSON.stringify({
       workflowId: "unit-test-generation",
       input: { workspaceRoot: workspace, target: { kind: "file", filePath: "src/add.ts" } },
@@ -165,6 +168,7 @@ describe("POST /api/runs", () => {
     await new Promise<void>((res) => server.listen(port, UI_HOST, res));
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
+      headers: POST_JSON_HEADERS,
       body: JSON.stringify({ taskType: "explain-plan", input: { filePath: "x" }, modelId: "m" }),
     });
     expect(res.status).toBe(400);
@@ -177,6 +181,7 @@ describe("POST /api/runs", () => {
     await start(fakeModel("noop"));
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
+      headers: POST_JSON_HEADERS,
       body: JSON.stringify({ input: {}, modelId: "m" }),
     });
     expect(res.status).toBe(400);
@@ -244,17 +249,29 @@ describe("POST /api/runs/:runId/cancel", () => {
   it("is idempotent and returns ok", async () => {
     await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
     const { body } = await createRun();
-    const first = await fetch(`${base()}/api/runs/${body.runId}/cancel`, { method: "POST" });
+    const first = await fetch(`${base()}/api/runs/${body.runId}/cancel`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
     expect(first.status).toBe(200);
     expect((await first.json()) as { ok: boolean }).toEqual({ ok: true });
     await awaitTerminal(body.runId);
-    const second = await fetch(`${base()}/api/runs/${body.runId}/cancel`, { method: "POST" });
+    const second = await fetch(`${base()}/api/runs/${body.runId}/cancel`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
     expect(second.status).toBe(200);
   });
 
   it("returns 404 for an unknown run", async () => {
     await start(fakeModel("noop"));
-    const res = await fetch(`${base()}/api/runs/none/cancel`, { method: "POST" });
+    const res = await fetch(`${base()}/api/runs/none/cancel`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
     expect(res.status).toBe(404);
   });
 });
@@ -262,7 +279,11 @@ describe("POST /api/runs/:runId/cancel", () => {
 describe("POST /api/runs/:runId/apply (gated write path)", () => {
   it("returns 404 for an unknown run", async () => {
     await start(fakeModel("noop"));
-    const res = await fetch(`${base()}/api/runs/none/apply`, { method: "POST" });
+    const res = await fetch(`${base()}/api/runs/none/apply`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
     expect(res.status).toBe(404);
   });
 
@@ -270,6 +291,7 @@ describe("POST /api/runs/:runId/apply (gated write path)", () => {
     await start(fakeModel("a read-only explanation, no patch"));
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
+      headers: POST_JSON_HEADERS,
       body: JSON.stringify({
         taskType: "explain-plan",
         input: { filePath: "src/add.ts" },
@@ -278,7 +300,11 @@ describe("POST /api/runs/:runId/apply (gated write path)", () => {
     });
     const created = (await res.json()) as CreateResponse;
     await awaitTerminal(created.runId);
-    const apply = await fetch(`${base()}/api/runs/${created.runId}/apply`, { method: "POST" });
+    const apply = await fetch(`${base()}/api/runs/${created.runId}/apply`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
     expect(apply.status).toBe(409);
     expect((await apply.json()) as { error: { code: string } }).toMatchObject({
       error: { code: "NOT_APPLIABLE" },
@@ -306,7 +332,11 @@ maybeApply("POST /api/runs/:runId/apply — applies through the gated workflow",
     await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
     const { body } = await createRun();
     await awaitTerminal(body.runId);
-    const res = await fetch(`${base()}/api/runs/${body.runId}/apply`, { method: "POST" });
+    const res = await fetch(`${base()}/api/runs/${body.runId}/apply`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
     expect(res.status).toBe(200);
     const json = (await res.json()) as { report: { status: string } };
     expect(["completed", "dry-run"]).toContain(json.report.status);
@@ -366,7 +396,11 @@ describe("FIX 1 — UI runs persist a redacted evidence manifest (AC5)", () => {
   it("persists a cancelled run with a cancelled outcome (literal AC5)", async () => {
     await start(abortableModel());
     const { body } = await createRun();
-    await fetch(`${base()}/api/runs/${body.runId}/cancel`, { method: "POST" });
+    await fetch(`${base()}/api/runs/${body.runId}/cancel`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ confirm: true }),
+    });
     await awaitTerminal(body.runId);
     await awaitEvidence(body.runId);
 
@@ -527,6 +561,7 @@ describe("FIX G/H — oversized request body returns 413 PAYLOAD_TOO_LARGE", () 
     const oversized = "x".repeat(1_000_001);
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
+      headers: POST_JSON_HEADERS,
       body: oversized,
     });
     expect(res.status).toBe(413);

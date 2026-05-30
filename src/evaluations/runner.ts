@@ -152,6 +152,7 @@ function persistAndCheck(
       status: status === "rejected" || status === "failed" ? "failed" : "completed",
       startedAt: FIXED_EVAL_EPOCH_MS,
       finishedAt: FIXED_EVAL_EPOCH_MS,
+      workspaceRoot,
     },
     report,
     [],

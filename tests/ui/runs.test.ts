@@ -63,6 +63,16 @@ describe("run registry TTL eviction", () => {
     registry.register(registerInput("b"));
     expect(registry.get("a")).toBeDefined();
   });
+
+  it("evicts expired terminated records during idle reads", () => {
+    let clock = 0;
+    const registry = reg(() => clock, 4, 10);
+    registry.register(registerInput("a"));
+    registry.complete("a", "completed", { ok: true }, undefined);
+    clock = 50;
+    expect(registry.get("a")).toBeUndefined();
+    expect(registry.size()).toBe(0);
+  });
 });
 
 describe("run registry completion capture", () => {

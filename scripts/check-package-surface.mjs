@@ -35,10 +35,7 @@ if (!paths.includes("dist/ui/csp-hashes.json")) {
 }
 
 const forbidden = [
-  // Browser source maps must never ship in the UI export (productionBrowserSourceMaps: false). The
-  // root library's `.d.ts.map`/`.js.map` are the pre-existing, intentional SDK surface and are out
-  // of scope here; only the UI static assets are checked for maps.
-  { test: (p) => p.startsWith("dist/ui/static/") && p.endsWith(".map"), label: "a UI source map" },
+  { test: (p) => p.endsWith(".map"), label: "a source map" },
   { test: (p) => p === ".env" || p.startsWith(".env."), label: "an environment file" },
   { test: (p) => p === "ui" || p.startsWith("ui/"), label: "ui/ source" },
   { test: (p) => p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p), label: "an absolute local path" },

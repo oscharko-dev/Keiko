@@ -239,6 +239,8 @@ describe("GET /api/evidence", () => {
     taskType: string,
     outcome: string,
     startedAt: number,
+    modelId = "m",
+    workspaceRoot?: string,
   ): string {
     return JSON.stringify({
       evidenceSchemaVersion: "1",
@@ -252,8 +254,20 @@ describe("GET /api/evidence", () => {
         finishedAt: startedAt + 100,
         durationMs: 100,
       },
-      model: { modelId: "m", costClass: "low" },
+      model: { modelId, costClass: "low" },
       usageTotals: { promptTokens: 0, completionTokens: 0, requestCount: 0, totalLatencyMs: 0 },
+      ...(workspaceRoot === undefined
+        ? {}
+        : {
+            context: {
+              workspaceRoot,
+              totalCandidates: 0,
+              usedBytes: 0,
+              budgetBytes: 0,
+              droppedForBudget: 0,
+              entries: [],
+            },
+          }),
       stateTransitions: [],
       toolCalls: [],
       commandExecutions: [],
@@ -283,6 +297,20 @@ describe("GET /api/evidence", () => {
     expect(entries[0]?.runId).toBe("run-b");
   });
 
+  it("filters by workflow", () => {
+    const store = storeFrom([
+      manifestJson("run-a", "generate-unit-tests", "completed", Date.parse("2026-05-01T10:00:00Z")),
+      manifestJson("run-b", "investigate-bug", "failed", Date.parse("2026-05-02T10:00:00Z")),
+    ]);
+    const result = handleEvidenceList(
+      ctx("/api/evidence?workflow=generate-unit-tests"),
+      depsWith({ evidenceStore: store }),
+    );
+    const entries = (result.body as { entries: { runId: string }[] }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.runId).toBe("run-a");
+  });
+
   it("filters by started-at calendar day", () => {
     const store = storeFrom([
       manifestJson("run-a", "generate-unit-tests", "completed", Date.parse("2026-05-01T10:00:00Z")),
@@ -295,6 +323,34 @@ describe("GET /api/evidence", () => {
     const entries = (result.body as { entries: { runId: string }[] }).entries;
     expect(entries).toHaveLength(1);
     expect(entries[0]?.runId).toBe("run-b");
+  });
+
+  it("filters by model and workspace metadata", () => {
+    const store = storeFrom([
+      manifestJson(
+        "run-a",
+        "generate-unit-tests",
+        "completed",
+        Date.parse("2026-05-01T10:00:00Z"),
+        "model-a",
+        "/workspaces/customer-a",
+      ),
+      manifestJson(
+        "run-b",
+        "investigate-bug",
+        "completed",
+        Date.parse("2026-05-02T10:00:00Z"),
+        "model-b",
+        "/workspaces/customer-b",
+      ),
+    ]);
+    const result = handleEvidenceList(
+      ctx("/api/evidence?model=model-b&workspace=customer-b"),
+      depsWith({ evidenceStore: store }),
+    );
+    const entries = (result.body as { entries: { runId: string; modelId: string }[] }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ runId: "run-b", modelId: "model-b" });
   });
 });
 

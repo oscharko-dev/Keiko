@@ -44,7 +44,7 @@ AGPL-3.0, LGPL-2.1, LGPL-3.0`. Whatever the UI introduces must keep all seven gr
 
 **Zero new runtime dependencies (ADR-0001, load-bearing).** The shipped package today has an empty
 `dependencies` map and `files: ["dist", "README.md", "LICENSE"]`. The supply-chain gates measure
-the *shipped, production* surface (`npm audit --audit-level=high` over the install tree; `npm sbom
+the _shipped, production_ surface (`npm audit --audit-level=high` over the install tree; `npm sbom
 --omit dev`). A UI framework that ends up in the package's runtime dependency tree expands that
 surface to the entire Next/React runtime — a large, high-CVE-churn, regulated-pilot install burden
 and a standing red-check risk. The frontend toolchain (Next, React, Tailwind, test libraries) must
@@ -62,8 +62,8 @@ toolchain can see it breaks `ci` and `Build, scan, SBOM, smoke`. The frontend mu
 **The harness `EventSink` is push-only and synchronous.** `EventSink = { emit(event): void;
 retainsRawContent?: boolean }` (`src/harness/ports.ts`). The Issue #4 async-iterable upgrade was
 deferred to #13. The emitter (`src/harness/emitter.ts`) redacts SENSITIVE fields before `emit`
-**unless** the sink sets `retainsRawContent === true`. The browser needs a *pull/stream* (SSE) view
-of a *push* sink, and it must only ever see redacted events. Bridging push→stream is a real design
+**unless** the sink sets `retainsRawContent === true`. The browser needs a _pull/stream_ (SSE) view
+of a _push_ sink, and it must only ever see redacted events. Bridging push→stream is a real design
 question (D7); doing it without setting `retainsRawContent` is the security crux for the live view.
 
 **The browser is an untrusted presentation tier.** It must hold no secret, no filesystem authority,
@@ -91,8 +91,8 @@ the static shell, colocated route segments). Static export is the **narrower alt
 explicitly permits when the ADR records a concrete implementation reason**. The concrete reason is
 threefold and load-bearing:
 
-1. **Supply-chain leanness and green security gates (the decisive reason).** A Next *standalone
-   server* would place the entire Next + React runtime into the **shipped package's runtime
+1. **Supply-chain leanness and green security gates (the decisive reason).** A Next _standalone
+   server_ would place the entire Next + React runtime into the **shipped package's runtime
    dependency tree**. `npm audit --audit-level=high`, `npm sbom --omit dev`, the
    `dependency-review` license/vulnerability gate, and package-surface review would all expand from
    today's empty runtime tree to the full Next server runtime — a large, fast-churning CVE surface
@@ -204,20 +204,20 @@ superseding ADR. Base URL `http://127.0.0.1:<port>` (default `4319`, configurabl
 JSON over HTTP; live events over SSE. **Every response body is redacted** (D9). All shapes below are
 the existing public types from the seam map (ADR-0003/0004/0007/0008/0009/0010).
 
-| # | Method & path | Request body | Success response | Notes |
-|---|---|---|---|---|
-| 1 | `GET /api/health` | — | `{ "status": "ok", "version": string }` | Liveness + package version. The `keiko ui` smoke hits this. |
-| 2 | `GET /api/config` | — | `{ "config": SafeGatewayConfig \| null, "configPresent": boolean }` | Via `toSafeObject(config)`. **Never** `apiKey`. `null` when no config file resolved. |
-| 3 | `GET /api/models` | — | `{ "models": ModelCapability[] }` | `CAPABILITY_REGISTRY` (9 entries). UI filters `kind === "chat"` for pickers. |
-| 4 | `GET /api/workflows` | — | `{ "descriptors": WorkflowDescriptor[], "explainPlan": { "inputs": [{ "name": "filePath", "type": "string", "required": true }, { "name": "question", "type": "string", "required": false }] } }` | Launch-form metadata; forms render FROM `descriptors`. `explain-plan` has no descriptor — synthesized inputs supplied. |
-| 5 | `POST /api/runs` | `{ "workflowId"?: string, "taskType"?: TaskType, "input": object, "modelId": string, "limits"?: object }` | `202` `{ "runId": string, "fingerprint": string }` | Exactly one of `workflowId`/`taskType`. The run is **always dry-run**; the create route never writes and **ignores any client `apply` field** — applying is performed only by route 9 after explicit review (D8). Server starts the run, registers the streaming sink (D7), returns immediately. |
-| 6 | `GET /api/runs/:runId/events` | — (SSE) | `text/event-stream`: framed `event: <HarnessEvent\|WorkflowEvent type>\ndata: <redacted JSON>\n\n` | Replays buffered events on connect (late subscribers see history), then live, terminating after the terminal event (`run:completed`/`cancelled`/`failed`, or workflow `completed`/`failed`). See D7. |
-| 7 | `POST /api/runs/:runId/cancel` | — | `{ "ok": true }` | Calls `session.cancel(reason?)`; the harness emits `run:cancelled`; the outcome is recorded in the evidence manifest. Idempotent: cancelling an already-terminal run returns `{ "ok": true }`. |
-| 8 | `GET /api/runs/:runId` | — | `{ "report": <redacted workflow/harness report projection> }` | Final projection: `status`, `proposedDiff` (redacted), `changedFiles`/`addedTestFiles`, `dryRunPreview`, `verificationSummary`, usage. `404` if the run is unknown. |
-| 9 | `POST /api/runs/:runId/apply` | — (optionally `{ "confirm": true }`) | `{ "report": <apply+verify result> }` | **The only write path.** Re-runs the workflow / applies the proposed patch through the existing gated path with `apply: true` (D8). Returns the apply+verify result. |
-| 10 | `GET /api/evidence` | query: `?workspace&date&workflow&model&outcome` (all optional filters) | `{ "entries": EvidenceListEntry[] }` | `listEvidence(store)` header projection; filters applied server-side. |
-| 11 | `GET /api/evidence/:runId` | — | `{ "manifest": EvidenceManifest }` | `loadEvidence(store, runId)`; served **as-is** (already redacted on disk, D9). `404` if absent; `422` on `EvidenceSchemaError` with the safe pre-redacted `.message`. |
-| 12 | `GET /api/workspace` | query: `?dir&task&budget` (`dir` defaults to `.`; optional `task`; optional positive integer `budget`) | `{ "summary": WorkspaceSummary }` | Workspace-layer summary endpoint. Builds the summary from the safe workspace primitives, and includes a context pack when `task` or `budget` is provided. Response bodies are redacted before serialization. |
+| #   | Method & path                  | Request body                                                                                              | Success response                                                                                                                                                                                  | Notes                                                                                                                                                                                                                                                                                            |
+| --- | ------------------------------ | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1   | `GET /api/health`              | —                                                                                                         | `{ "status": "ok", "version": string }`                                                                                                                                                           | Liveness + package version. The `keiko ui` smoke hits this.                                                                                                                                                                                                                                      |
+| 2   | `GET /api/config`              | —                                                                                                         | `{ "config": SafeGatewayConfig \| null, "configPresent": boolean }`                                                                                                                               | Via `toSafeObject(config)`. **Never** `apiKey`. `null` when no config file resolved.                                                                                                                                                                                                             |
+| 3   | `GET /api/models`              | —                                                                                                         | `{ "models": ModelCapability[] }`                                                                                                                                                                 | `CAPABILITY_REGISTRY` (9 entries). UI filters `kind === "chat"` for pickers.                                                                                                                                                                                                                     |
+| 4   | `GET /api/workflows`           | —                                                                                                         | `{ "descriptors": WorkflowDescriptor[], "explainPlan": { "inputs": [{ "name": "filePath", "type": "string", "required": true }, { "name": "question", "type": "string", "required": false }] } }` | Launch-form metadata; forms render FROM `descriptors`. `explain-plan` has no descriptor — synthesized inputs supplied.                                                                                                                                                                           |
+| 5   | `POST /api/runs`               | `{ "workflowId"?: string, "taskType"?: TaskType, "input": object, "modelId": string, "limits"?: object }` | `202` `{ "runId": string, "fingerprint": string }`                                                                                                                                                | Exactly one of `workflowId`/`taskType`. The run is **always dry-run**; the create route never writes and **ignores any client `apply` field** — applying is performed only by route 9 after explicit review (D8). Server starts the run, registers the streaming sink (D7), returns immediately. |
+| 6   | `GET /api/runs/:runId/events`  | — (SSE)                                                                                                   | `text/event-stream`: framed `event: <HarnessEvent\|WorkflowEvent type>\ndata: <redacted JSON>\n\n`                                                                                                | Replays buffered events on connect (late subscribers see history), then live, terminating after the terminal event (`run:completed`/`cancelled`/`failed`, or workflow `completed`/`failed`). See D7.                                                                                             |
+| 7   | `POST /api/runs/:runId/cancel` | —                                                                                                         | `{ "ok": true }`                                                                                                                                                                                  | Calls `session.cancel(reason?)`; the harness emits `run:cancelled`; the outcome is recorded in the evidence manifest. Idempotent: cancelling an already-terminal run returns `{ "ok": true }`.                                                                                                   |
+| 8   | `GET /api/runs/:runId`         | —                                                                                                         | `{ "report": <redacted workflow/harness report projection> }`                                                                                                                                     | Final projection: `status`, `proposedDiff` (redacted), `changedFiles`/`addedTestFiles`, `dryRunPreview`, `verificationSummary`, usage. `404` if the run is unknown.                                                                                                                              |
+| 9   | `POST /api/runs/:runId/apply`  | — (optionally `{ "confirm": true }`)                                                                      | `{ "report": <apply+verify result> }`                                                                                                                                                             | **The only write path.** Re-runs the workflow / applies the proposed patch through the existing gated path with `apply: true` (D8). Returns the apply+verify result.                                                                                                                             |
+| 10  | `GET /api/evidence`            | query: `?workspace&date&workflow&model&outcome` (all optional filters)                                    | `{ "entries": EvidenceListEntry[] }`                                                                                                                                                              | `listEvidence(store)` header projection; filters applied server-side.                                                                                                                                                                                                                            |
+| 11  | `GET /api/evidence/:runId`     | —                                                                                                         | `{ "manifest": EvidenceManifest }`                                                                                                                                                                | `loadEvidence(store, runId)`; served **as-is** (already redacted on disk, D9). `404` if absent; `422` on `EvidenceSchemaError` with the safe pre-redacted `.message`.                                                                                                                            |
+| 12  | `GET /api/workspace`           | query: `?dir&task&budget` (`dir` defaults to `.`; optional `task`; optional positive integer `budget`)    | `{ "summary": WorkspaceSummary }`                                                                                                                                                                 | Workspace-layer summary endpoint. Builds the summary from the safe workspace primitives, and includes a context pack when `task` or `budget` is provided. Response bodies are redacted before serialization.                                                                                     |
 
 **SSE framing.** Each event is one SSE message: `event:` is the harness/workflow event `type`;
 `data:` is the redacted event JSON on a single line; messages are separated by a blank line. The
@@ -235,8 +235,8 @@ no detail). `code` is a stable machine string (e.g. `BAD_REQUEST`, `NOT_FOUND`,
 **Security headers the BFF sets on every response.**
 
 - `Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline';
-  img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none';
-  frame-ancestors 'none'` (`'unsafe-inline'` is limited to `style-src` for Tailwind's injected
+img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none';
+frame-ancestors 'none'` (`'unsafe-inline'` is limited to `style-src` for Tailwind's injected
   styles; **no** `unsafe-inline`/`unsafe-eval` in `script-src`; no remote origins because everything
   is same-origin on `127.0.0.1`).
 - `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`,
@@ -256,11 +256,12 @@ acceptance check).
 We will keep `npm run build` as **`tsc` only** (so `Build, scan, SBOM, smoke` is unchanged) and add a
 separate UI build path:
 
-- A new `build:ui` script: `npm --prefix ui ci && npm --prefix ui run build` (produces `ui/out/`),
-  then copies `ui/out/` into **`dist/ui/static/`**.
+- A new `ui:ci` script: `npm --prefix ui ci --ignore-scripts`, which installs the UI dependency graph
+  deterministically without lifecycle scripts.
+- A `build:ui` script runs the UI export and then copies `ui/out/` into **`dist/ui/static/`**.
 - `package.json#files` already includes `dist`, so `dist/ui/static/` ships as part of `dist`; no
   `ui/` sources and no `.tsx` are shipped. (The list stays `["dist", "README.md", "LICENSE"]`.)
-- A `prepack`/`prepublishOnly` hook runs `npm run build && npm run build:ui` and then a
+- A `prepack`/`prepublishOnly` hook runs `npm run build && npm run ui:ci && npm run build:ui` and then a
   **package-surface verification** step that asserts the tarball (`npm pack --dry-run`) contains the
   UI assets and contains **no source maps, no `.env`, no secrets, no local absolute paths, and no
   `ui/` source**. The production Next export is configured with `productionBrowserSourceMaps: false`
@@ -269,10 +270,10 @@ separate UI build path:
 
 **Consequence.** The required `Build, scan, SBOM, smoke` job's command set is byte-unchanged (still
 `npm run build` = `tsc`), so it cannot regress; the UI is built and verified by a separate script and
-the new `ui` CI job (D10) and by `prepack` at publish time. The cost: a publisher must run
-`build:ui` (the hook does it automatically); a developer who only runs `npm run build` gets a package
-without UI assets — acceptable because the `prepack` hook and the `ui` CI job enforce it for any real
-publish or merge.
+the new `ui` CI job (D10) and by `prepack` at publish time. The cost: a publisher must run `ui:ci`
+and `build:ui` (the hook does both automatically); a developer who only runs `npm run build` gets a
+package without UI assets — acceptable because the `prepack` hook and the `ui` CI job enforce it for
+any real publish or merge.
 
 ### D7 — Bridging the push-only `EventSink` to SSE inside the BFF (no harness change)
 
@@ -294,7 +295,7 @@ BFF boundary; it needs nothing from the harness beyond the existing `emit` contr
 
 We **reject shipping the deferred `EventSink` async-iterable upgrade in the harness** as part of
 #13. Reasons: (1) it would edit `src/harness/**`, breaking the reuse-unchanged invariant (D2) that
-keeps the audited core frozen; (2) the BFF needs *multi-subscriber fan-out with replay*, which a
+keeps the audited core frozen; (2) the BFF needs _multi-subscriber fan-out with replay_, which a
 single async iterator does not provide without additional buffering anyway — so the buffering work
 exists either way and belongs at the consumer; (3) keeping it in the BFF localizes the change to the
 new, otherwise-unreviewed layer and leaves the harness's deliberate push/redaction design intact.
@@ -344,7 +345,7 @@ required gate, ADR-0002). Concretely:
 construction at the BFF boundary; the ReDoS gate stays green because no new pattern is added. The
 cost: redaction completeness inherits `redact()`'s known-shape coverage plus configured literals
 (the same honest bound as ADR-0006/0010) — a novel secret format not matched and not configured
-could pass through a *live* payload; manifests are unaffected (redacted on disk).
+could pass through a _live_ payload; manifests are unaffected (redacted on disk).
 
 ### D10 — CI: a dedicated, SHA-pinned `ui` job, promoted to required
 
@@ -352,13 +353,14 @@ We will add a **new `ui` job** to `.github/workflows/ci.yml`. The existing four 
 (`ci`, `actionlint`, `Verify pinned action SHAs`, `Build, scan, SBOM, smoke`) stay **byte-identical**;
 the CodeQL and dependency-review jobs in the other two workflow files are unchanged. The `ui` job:
 
-1. `npm --prefix ui ci` (offline-deterministic install from `ui/package-lock.json`),
+1. `npm --prefix ui ci --ignore-scripts` (offline-deterministic install from `ui/package-lock.json`,
+   with lifecycle scripts disabled),
 2. `npm --prefix ui run lint` (Next/a11y ESLint),
 3. `npm --prefix ui run typecheck` (the UI's own DOM-aware `tsc --noEmit`),
 4. `npm --prefix ui run build` (static export),
 5. `npm --prefix ui run test` (jsdom + Testing Library component/smoke tests + `jest-axe` a11y
    assertions with **zero critical violations**),
-6. a `keiko ui` **startup smoke**: build the package (`npm run build && npm run build:ui`), launch
+6. a `keiko ui` **startup smoke**: build the package (`npm run build && npm run ui:ci && npm run build:ui`), launch
    `node dist/cli/index.js ui` bound to `127.0.0.1` on an ephemeral port, poll `GET /api/health`
    until `{ status: "ok" }`, then shut it down.
 
@@ -446,7 +448,7 @@ any edit to the frozen core layers (D2).
 - **The harness is untouched.** The push→SSE bridge lives entirely in the BFF; the reuse-unchanged
   invariant holds (D7).
 - **Offline, deterministic CI** with a new required `ui` gate (build/lint/typecheck/jsdom+axe/`keiko
-  ui` smoke) and the seven existing checks byte-unchanged (D10).
+ui` smoke) and the seven existing checks byte-unchanged (D10).
 - **Accessibility is enforced in CI** to WCAG 2.2 AA with an axe-core zero-critical gate (D11).
 
 ### Negative
@@ -458,7 +460,7 @@ any edit to the frozen core layers (D2).
   it separately (documented), and the `ui/` dependency set is constrained to permissive-licensed,
   low-CVE versions kept current under `dependency-review` (D3/D4).
 - **Redaction completeness for live payloads inherits `redact()`'s bounds.** A novel secret shape not
-  matched and not configured could pass through a *live* payload; manifests are unaffected (redacted
+  matched and not configured could pass through a _live_ payload; manifests are unaffected (redacted
   on disk). Honest bound inherited from ADR-0006/0010 (D9).
 - **CSP forbids inline scripts.** The static export must not emit inline `<script>`; verified as an
   implementation acceptance check (D5).
@@ -549,7 +551,7 @@ build-time dependency surface further.
   keeping Next build-time-only (it is absent from the shipped runtime regardless). Hand-building six
   accessible, tested surfaces without a component model is more code, more risk, and weaker a11y
   ergonomics.
-- **Why rejected**: D1 already removes the *runtime* cost of Next (static export, zero runtime deps),
+- **Why rejected**: D1 already removes the _runtime_ cost of Next (static export, zero runtime deps),
   so the only remaining cost is build-time, which `dependency-review` over `ui/package-lock.json`
   governs with pinned permissive-licensed versions (D4). Keeping the App Router satisfies the issue's
   stated architecture preference at no runtime cost; replacing it would forgo that for a marginal

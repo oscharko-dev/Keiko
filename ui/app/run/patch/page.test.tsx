@@ -6,7 +6,7 @@ import PatchPage from "./page";
 import * as api from "@/lib/api";
 
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => ({ get: (key: string) => key === "id" ? "run-patch-456" : null }),
+  useSearchParams: () => ({ get: (key: string) => (key === "id" ? "run-patch-456" : null) }),
   useRouter: () => ({ push: vi.fn() }),
 }));
 
@@ -27,14 +27,35 @@ vi.mock("@/lib/api", () => ({
 const dryRunReport = {
   report: {
     status: "dry-run" as const,
-    proposedDiff: "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,2 +1,3 @@\n const x = 1;\n+const y = 2;\n",
-    changedFiles: [{
-      path: "src/foo.ts",
-      kind: "modified",
-      addedLines: 1,
-      removedLines: 0,
-      elevatedReview: false,
-    }],
+    proposedDiff:
+      "--- a/src/foo.ts\n+++ b/src/foo.ts\n@@ -1,2 +1,3 @@\n const x = 1;\n+const y = 2;\n",
+    changedFiles: [
+      {
+        path: "src/foo.ts",
+        kind: "modified",
+        addedLines: 1,
+        removedLines: 0,
+        elevatedReview: false,
+      },
+    ],
+    addedTestFiles: [{ path: "tests/foo.test.ts", estimatedTestCount: 2 }],
+    verificationSummary: {
+      workspaceRoot: "/repo",
+      overallStatus: "passed" as const,
+      durationMs: 800,
+      counts: { passed: 1 },
+      results: [
+        {
+          kind: "test" as const,
+          command: "npm test",
+          status: "passed" as const,
+          exitCode: 0,
+          durationMs: 800,
+          truncated: false,
+          appliedLimits: [],
+        },
+      ],
+    },
   },
 };
 
@@ -55,6 +76,18 @@ describe("PatchPage (/run/patch?id=)", () => {
     render(<PatchPage />);
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: /proposed diff/i })).toBeInTheDocument();
+    });
+  });
+
+  it("renders verification, changed-file, and added-test secondary sections", async () => {
+    render(<PatchPage />);
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /verification/i })).toBeInTheDocument();
+      expect(screen.getByText("npm test")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: /changed files/i })).toBeInTheDocument();
+      expect(screen.getByText("src/foo.ts")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: /added test files/i })).toBeInTheDocument();
+      expect(screen.getByText("tests/foo.test.ts")).toBeInTheDocument();
     });
   });
 
@@ -119,6 +152,25 @@ describe("PatchPage (/run/patch?id=)", () => {
     await user.click(screen.getByRole("button", { name: /apply patch/i }));
     const dialog = screen.getByRole("alertdialog");
     expect(dialog).toHaveAttribute("aria-modal", "true");
+  });
+
+  it("traps Tab focus inside the confirmation dialog", async () => {
+    const user = userEvent.setup();
+    render(<PatchPage />);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /apply patch/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /apply patch/i }));
+    const confirm = screen.getByRole("button", { name: /confirm apply/i });
+    const cancel = screen.getByRole("button", { name: /^cancel$/i });
+    expect(document.activeElement).toBe(confirm);
+
+    await user.keyboard("{Tab}");
+    expect(document.activeElement).toBe(cancel);
+    await user.keyboard("{Tab}");
+    expect(document.activeElement).toBe(confirm);
+    await user.keyboard("{Shift>}{Tab}{/Shift}");
+    expect(document.activeElement).toBe(cancel);
   });
 
   it("has no axe-detectable accessibility violations", async () => {

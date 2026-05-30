@@ -3,7 +3,7 @@
  * Tests cover: product heading, surface nav cards, quick-start section, axe.
  */
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import HomePage from "./page";
 
@@ -17,17 +17,19 @@ describe("HomePage (home dashboard)", () => {
 
   it("renders surface navigation cards with links to all primary areas", () => {
     render(<HomePage />);
-    expect(screen.getByRole("link", { name: /open the workflow launch surface/i })).toHaveAttribute(
+    const nav = screen.getByRole("navigation", { name: /surface navigation/i });
+    expect(within(nav).getByRole("link", { name: /launch workflow/i })).toHaveAttribute(
       "href",
       "/launch",
     );
-    expect(screen.getByRole("link", { name: /open the evidence browser/i })).toHaveAttribute(
+    expect(within(nav).getByRole("link", { name: /evidence browser/i })).toHaveAttribute(
       "href",
       "/evidence",
     );
-    expect(
-      screen.getByRole("link", { name: /open the configuration and model inspector/i }),
-    ).toHaveAttribute("href", "/config");
+    expect(within(nav).getByRole("link", { name: /config.*model inspector/i })).toHaveAttribute(
+      "href",
+      "/config",
+    );
   });
 
   it("surface nav landmark is present and keyboard-reachable", () => {

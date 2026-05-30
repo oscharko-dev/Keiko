@@ -12,8 +12,9 @@ function recordingWriter(): { writer: SseWriter; events: StreamEvent[]; closed: 
     events,
     closed: () => isClosed,
     writer: {
-      write: (e): void => {
+      write: (e): undefined => {
         events.push(e);
+        return undefined;
       },
       close: (): void => {
         isClosed = true;
@@ -61,6 +62,50 @@ describe("QueueEventSink ring buffer", () => {
     detach();
     sink.emit(event(2));
     expect(a.events.map((e) => e.seq)).toEqual([1]);
+  });
+
+  it("drops and closes a writer that reports backpressure", () => {
+    const sink = new QueueEventSink();
+    let writes = 0;
+    let closed = false;
+    sink.attach(
+      {
+        write: (): boolean => {
+          writes += 1;
+          return false;
+        },
+        close: (): void => {
+          closed = true;
+        },
+      },
+      -1,
+    );
+    sink.emit(event(1));
+    sink.emit(event(2));
+    expect(writes).toBe(1);
+    expect(closed).toBe(true);
+  });
+
+  it("does not attach a replaying writer that reports backpressure", () => {
+    const sink = new QueueEventSink();
+    sink.emit(event(1));
+    let writes = 0;
+    let closed = false;
+    sink.attach(
+      {
+        write: (): boolean => {
+          writes += 1;
+          return false;
+        },
+        close: (): void => {
+          closed = true;
+        },
+      },
+      -1,
+    );
+    sink.emit(event(2));
+    expect(writes).toBe(1);
+    expect(closed).toBe(true);
   });
 
   it("closes every attached writer once and is idempotent on terminate", () => {

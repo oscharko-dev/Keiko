@@ -4,6 +4,7 @@ import {
   createInMemoryEvidenceStore,
   loadEvidence,
   persistWorkflowEvidence,
+  type WorkflowEventLike,
   type WorkflowRunIdentity,
 } from "../../src/audit/index.js";
 import type { VerificationAuditSummary } from "../../src/verification/index.js";
@@ -69,11 +70,34 @@ describe("buildWorkflowManifest", () => {
     expect(manifest.patch?.applied).toBe(true);
     expect(manifest.verification?.overallStatus).toBe("passed");
   });
+
+  it("folds bug-investigation model usage and workspace metadata", () => {
+    const manifest = buildWorkflowManifest(
+      identity({ kind: "bug-investigation", workspaceRoot: "/repo" }),
+      [
+        {
+          type: "bug:model:call:completed",
+          promptTokens: 3,
+          completionTokens: 5,
+          latencyMs: 7,
+        } as unknown as WorkflowEventLike,
+      ],
+      { workflowId: "bug-investigation", status: "investigation-only" },
+    );
+    expect(manifest.usageTotals).toEqual({
+      promptTokens: 3,
+      completionTokens: 5,
+      requestCount: 1,
+      totalLatencyMs: 7,
+    });
+    expect(manifest.context?.workspaceRoot).toBe("/repo");
+  });
 });
 
 describe("persistWorkflowEvidence", () => {
   it("returns an EvidenceReport and persists the redacted manifest", () => {
     const store = createInMemoryEvidenceStore();
+    const literalSecret = "CORPSECRET_123456789";
     const events = [
       { type: "workflow:model:call:completed", promptTokens: 1, completionTokens: 2, latencyMs: 3 },
     ] as const;
@@ -84,15 +108,15 @@ describe("persistWorkflowEvidence", () => {
         status: "dry-run",
         proposedDiff: "--- /dev/null\n+++ b/tests/add.test.ts\n",
         addedTestFiles: [{ path: "tests/add.test.ts", estimatedTestCount: 1 }],
-        verificationSummary: { ...verification, workspaceRoot: "sk-" + "z".repeat(24) },
+        verificationSummary: { ...verification, workspaceRoot: literalSecret },
       },
       events,
-      { store, env: {} },
+      { store, env: {}, additionalSecrets: [literalSecret] },
     );
     expect(report.runId).toBe("run-1");
     expect(report.evidenceLocation).toBe("run-1.json");
     expect(report.usageTotals.requestCount).toBe(1);
     const loaded = loadEvidence(store, "run-1");
-    expect(JSON.stringify(loaded)).not.toContain("sk-" + "z".repeat(24));
+    expect(JSON.stringify(loaded)).not.toContain(literalSecret);
   });
 });

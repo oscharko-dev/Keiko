@@ -42,6 +42,7 @@ describe("listEvidence", () => {
       outcome: "completed",
       startedAt: 100,
       finishedAt: 110,
+      modelId: "m1",
     });
   });
 

@@ -12,7 +12,9 @@ import { formatDate, outcomeClasses, outcomeLabel, toDateString } from "@/lib/fo
 // ---------------------------------------------------------------------------
 
 interface Filters {
+  workspace: string;
   workflow: string;
+  model: string;
   outcome: string;
   date: string;
 }
@@ -31,8 +33,26 @@ function FilterBar({ filters, onChange }: FilterBarProps): ReactNode {
       role="search"
       aria-label="Filter evidence runs"
       className="flex flex-wrap gap-3"
-      onSubmit={(e) => { e.preventDefault(); }}
+      onSubmit={(e) => {
+        e.preventDefault();
+      }}
     >
+      <div>
+        <label htmlFor="filter-workspace" className="block text-xs text-ink-muted">
+          Workspace
+        </label>
+        <input
+          type="text"
+          id="filter-workspace"
+          value={filters.workspace}
+          onChange={(e) => {
+            onChange({ ...filters, workspace: e.target.value });
+          }}
+          placeholder="/repo or fragment"
+          className="mt-1 rounded border border-ink/20 bg-surface px-2 py-1 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-focus"
+        />
+      </div>
+
       <div>
         <label htmlFor="filter-workflow" className="block text-xs text-ink-muted">
           Workflow
@@ -40,7 +60,9 @@ function FilterBar({ filters, onChange }: FilterBarProps): ReactNode {
         <select
           id="filter-workflow"
           value={filters.workflow}
-          onChange={(e) => { onChange({ ...filters, workflow: e.target.value }); }}
+          onChange={(e) => {
+            onChange({ ...filters, workflow: e.target.value });
+          }}
           className="mt-1 rounded border border-ink/20 bg-surface px-2 py-1 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-focus"
         >
           {WORKFLOWS.map((w) => (
@@ -52,13 +74,31 @@ function FilterBar({ filters, onChange }: FilterBarProps): ReactNode {
       </div>
 
       <div>
+        <label htmlFor="filter-model" className="block text-xs text-ink-muted">
+          Model
+        </label>
+        <input
+          type="text"
+          id="filter-model"
+          value={filters.model}
+          onChange={(e) => {
+            onChange({ ...filters, model: e.target.value });
+          }}
+          placeholder="Exact model ID"
+          className="mt-1 rounded border border-ink/20 bg-surface px-2 py-1 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-focus"
+        />
+      </div>
+
+      <div>
         <label htmlFor="filter-outcome" className="block text-xs text-ink-muted">
           Outcome
         </label>
         <select
           id="filter-outcome"
           value={filters.outcome}
-          onChange={(e) => { onChange({ ...filters, outcome: e.target.value }); }}
+          onChange={(e) => {
+            onChange({ ...filters, outcome: e.target.value });
+          }}
           className="mt-1 rounded border border-ink/20 bg-surface px-2 py-1 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-focus"
         >
           {OUTCOMES.map((o) => (
@@ -77,7 +117,9 @@ function FilterBar({ filters, onChange }: FilterBarProps): ReactNode {
           type="date"
           id="filter-date"
           value={filters.date}
-          onChange={(e) => { onChange({ ...filters, date: e.target.value }); }}
+          onChange={(e) => {
+            onChange({ ...filters, date: e.target.value });
+          }}
           className="mt-1 rounded border border-ink/20 bg-surface px-2 py-1 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-focus"
         />
       </div>
@@ -96,9 +138,7 @@ interface EvidenceListProps {
 function EvidenceList({ entries }: EvidenceListProps): ReactNode {
   if (entries.length === 0) {
     return (
-      <p className="mt-6 text-sm text-ink-muted">
-        No evidence entries match the current filters.
-      </p>
+      <p className="mt-6 text-sm text-ink-muted">No evidence entries match the current filters.</p>
     );
   }
 
@@ -108,19 +148,32 @@ function EvidenceList({ entries }: EvidenceListProps): ReactNode {
         <caption className="sr-only">Evidence run list, newest first</caption>
         <thead>
           <tr className="border-b border-ink/10 text-left text-xs text-ink-muted">
-            <th scope="col" className="py-2 pr-4 font-medium">Run ID</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Workflow</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Outcome</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Started</th>
-            <th scope="col" className="py-2 font-medium">Finished</th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              Run ID
+            </th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              Workflow
+            </th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              Model
+            </th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              Workspace
+            </th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              Outcome
+            </th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              Started
+            </th>
+            <th scope="col" className="py-2 font-medium">
+              Finished
+            </th>
           </tr>
         </thead>
         <tbody>
           {entries.map((entry) => (
-            <tr
-              key={entry.runId}
-              className="border-b border-ink/10 hover:bg-surface-subtle"
-            >
+            <tr key={entry.runId} className="border-b border-ink/10 hover:bg-surface-subtle">
               <td className="py-2 pr-4">
                 <Link
                   href={`/evidence/detail?id=${encodeURIComponent(entry.runId)}`}
@@ -130,6 +183,10 @@ function EvidenceList({ entries }: EvidenceListProps): ReactNode {
                 </Link>
               </td>
               <td className="py-2 pr-4 text-ink-muted">{entry.taskType}</td>
+              <td className="py-2 pr-4 font-mono text-xs text-ink-muted">{entry.modelId}</td>
+              <td className="max-w-xs truncate py-2 pr-4 font-mono text-xs text-ink-muted">
+                {entry.workspaceRoot ?? "—"}
+              </td>
               <td className="py-2 pr-4">
                 <span
                   className={`rounded px-2 py-0.5 text-xs font-medium ${outcomeClasses(entry.outcome)}`}
@@ -153,7 +210,13 @@ function EvidenceList({ entries }: EvidenceListProps): ReactNode {
 
 function clientFilter(entries: EvidenceListEntry[], filters: Filters): EvidenceListEntry[] {
   return entries.filter((e) => {
+    if (
+      filters.workspace !== "" &&
+      (e.workspaceRoot === undefined || !e.workspaceRoot.includes(filters.workspace))
+    )
+      return false;
     if (filters.workflow !== "" && e.taskType !== filters.workflow) return false;
+    if (filters.model !== "" && e.modelId !== filters.model) return false;
     if (filters.outcome !== "" && e.outcome !== filters.outcome) return false;
     if (filters.date !== "") {
       // FIX F: startedAt is epoch-ms (number). Derive the YYYY-MM-DD date string
@@ -168,7 +231,13 @@ export default function EvidencePage(): ReactNode {
   const [allEntries, setAllEntries] = useState<EvidenceListEntry[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState<Filters>({ workflow: "", outcome: "", date: "" });
+  const [filters, setFilters] = useState<Filters>({
+    workspace: "",
+    workflow: "",
+    model: "",
+    outcome: "",
+    date: "",
+  });
 
   useEffect(() => {
     let active = true;
@@ -186,7 +255,9 @@ export default function EvidencePage(): ReactNode {
         setLoadError(msg);
         setLoading(false);
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
   const visible = clientFilter(allEntries, filters);
@@ -197,7 +268,8 @@ export default function EvidencePage(): ReactNode {
         Evidence browser
       </h1>
       <p className="mt-2 text-sm text-ink-muted">
-        Browse past runs and their evidence manifests. Filter by workflow, outcome, or date.
+        Browse past runs and their evidence manifests. Filter by workspace, workflow, model,
+        outcome, or date.
       </p>
 
       {loadError !== null && (

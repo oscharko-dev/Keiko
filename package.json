@@ -31,10 +31,11 @@
     "format:check": "prettier --check .",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "ui:ci": "npm --prefix ui ci --ignore-scripts",
     "build:ui": "node scripts/build-ui.mjs",
     "check:package-surface": "node scripts/check-package-surface.mjs",
-    "prepack": "npm run build && npm run build:ui && npm run check:package-surface",
-    "prepublishOnly": "npm run build && npm run build:ui && npm run check:package-surface",
+    "prepack": "npm run clean && npm run build && npm run ui:ci && npm run build:ui && npm run check:package-surface",
+    "prepublishOnly": "npm run clean && npm run build && npm run ui:ci && npm run build:ui && npm run check:package-surface",
     "clean": "rm -rf dist coverage"
   },
   "devDependencies": {

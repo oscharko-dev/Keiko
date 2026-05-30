@@ -12,9 +12,7 @@ import { costClassClasses, costClassLabel } from "@/lib/format";
 
 function ProviderTable({ providers }: { providers: readonly SafeProviderConfig[] }): ReactNode {
   if (providers.length === 0) {
-    return (
-      <p className="mt-4 text-sm text-ink-muted">No providers configured.</p>
-    );
+    return <p className="mt-4 text-sm text-ink-muted">No providers configured.</p>;
   }
 
   return (
@@ -23,25 +21,57 @@ function ProviderTable({ providers }: { providers: readonly SafeProviderConfig[]
         <caption className="sr-only">Gateway provider configuration</caption>
         <thead>
           <tr className="border-b border-ink/10 text-left text-xs text-ink-muted">
-            <th scope="col" className="py-2 pr-4 font-medium">Name</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Model ID</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Base URL</th>
-            <th scope="col" className="py-2 pr-4 font-medium">Timeout</th>
-            <th scope="col" className="py-2 font-medium">Retries</th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              Model ID
+            </th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              Base URL
+            </th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              Timeout
+            </th>
+            <th scope="col" className="py-2 pr-4 font-medium">
+              Max retries
+            </th>
+            <th scope="col" className="py-2 font-medium">
+              Retry base delay
+            </th>
           </tr>
         </thead>
         <tbody>
           {providers.map((p) => (
-            <tr key={p.name} className="border-b border-ink/10 hover:bg-surface-subtle">
-              <td className="py-2 pr-4 font-medium text-ink">{p.name}</td>
+            <tr key={p.modelId} className="border-b border-ink/10 hover:bg-surface-subtle">
               <td className="py-2 pr-4 font-mono text-xs text-ink">{p.modelId}</td>
               <td className="py-2 pr-4 font-mono text-xs text-ink-muted">{p.baseUrl}</td>
               <td className="py-2 pr-4 text-ink-muted">{p.timeoutMs.toString()} ms</td>
-              <td className="py-2 text-ink-muted">{p.retries.toString()}</td>
+              <td className="py-2 pr-4 text-ink-muted">{p.maxRetries.toString()}</td>
+              <td className="py-2 text-ink-muted">{p.retryBaseDelayMs.toString()} ms</td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function CircuitBreakerPanel({ config }: { config: SafeGatewayConfig }): ReactNode {
+  return (
+    <div className="mt-6 rounded-lg border border-ink/10 bg-surface-subtle p-4">
+      <h3 className="text-sm font-semibold text-ink">Circuit breaker</h3>
+      <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-3">
+        <div>
+          <dt className="text-xs text-ink-muted">Failure threshold</dt>
+          <dd className="font-mono">{config.circuitBreaker.failureThreshold.toString()}</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-ink-muted">Cooldown</dt>
+          <dd className="font-mono">{config.circuitBreaker.cooldownMs.toString()} ms</dd>
+        </div>
+        <div>
+          <dt className="text-xs text-ink-muted">Half-open probes</dt>
+          <dd className="font-mono">{config.circuitBreaker.halfOpenProbes.toString()}</dd>
+        </div>
+      </dl>
     </div>
   );
 }
@@ -74,15 +104,33 @@ function ModelTable({ models }: { models: ModelCapability[] }): ReactNode {
         <caption className="sr-only">Model capability registry</caption>
         <thead>
           <tr className="border-b border-ink/10 text-left text-xs text-ink-muted">
-            <th scope="col" className="py-2 pr-3 font-medium">Model ID</th>
-            <th scope="col" className="py-2 pr-3 font-medium">Kind</th>
-            <th scope="col" className="py-2 pr-3 font-medium">Context</th>
-            <th scope="col" className="py-2 pr-3 font-medium">Max output</th>
-            <th scope="col" className="py-2 pr-3 font-medium">Cost</th>
-            <th scope="col" className="py-2 pr-3 font-medium">Latency</th>
-            <th scope="col" className="py-2 pr-3 font-medium">Tools</th>
-            <th scope="col" className="py-2 pr-3 font-medium">Structured</th>
-            <th scope="col" className="py-2 font-medium">Streaming</th>
+            <th scope="col" className="py-2 pr-3 font-medium">
+              Model ID
+            </th>
+            <th scope="col" className="py-2 pr-3 font-medium">
+              Kind
+            </th>
+            <th scope="col" className="py-2 pr-3 font-medium">
+              Context
+            </th>
+            <th scope="col" className="py-2 pr-3 font-medium">
+              Max output
+            </th>
+            <th scope="col" className="py-2 pr-3 font-medium">
+              Cost
+            </th>
+            <th scope="col" className="py-2 pr-3 font-medium">
+              Latency
+            </th>
+            <th scope="col" className="py-2 pr-3 font-medium">
+              Tools
+            </th>
+            <th scope="col" className="py-2 pr-3 font-medium">
+              Structured
+            </th>
+            <th scope="col" className="py-2 font-medium">
+              Streaming
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -187,7 +235,9 @@ export default function ConfigPage(): ReactNode {
         setLoadError(msg);
         setLoading(false);
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
   return (
@@ -228,7 +278,10 @@ export default function ConfigPage(): ReactNode {
                 </p>
               </div>
             ) : (
-              <ProviderTable providers={config.providers} />
+              <>
+                <ProviderTable providers={config.providers} />
+                <CircuitBreakerPanel config={config} />
+              </>
             )}
           </section>
 

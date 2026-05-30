@@ -28,7 +28,8 @@ export function readyMessage(): string {
   return `event: ready\ndata: {}\n\n`;
 }
 
-// Writes one framed event to the response stream.
-export function writeEvent(res: ServerResponse, event: StreamEvent, redactor: Redactor): void {
-  res.write(frameEvent(event, redactor));
+// Writes one framed event to the response stream. Returns Node's backpressure signal so the caller can
+// detach a slow client instead of letting the HTTP response buffer grow without bound.
+export function writeEvent(res: ServerResponse, event: StreamEvent, redactor: Redactor): boolean {
+  return res.write(frameEvent(event, redactor));
 }

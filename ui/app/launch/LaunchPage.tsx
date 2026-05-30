@@ -34,12 +34,18 @@ function WorkflowField({ spec, value, onChange, idPrefix }: FieldProps): ReactNo
           id={id}
           name={spec.name}
           checked={typeof value === "boolean" ? value : false}
-          onChange={(e) => { onChange(spec.name, e.target.checked); }}
+          onChange={(e) => {
+            onChange(spec.name, e.target.checked);
+          }}
           className="h-4 w-4 rounded border-ink/30 text-accent"
         />
         <label htmlFor={id} className="text-sm text-ink">
           {spec.description}
-          {spec.required && <span className="ml-1 text-red-600" aria-hidden="true">*</span>}
+          {spec.required && (
+            <span className="ml-1 text-red-600" aria-hidden="true">
+              *
+            </span>
+          )}
         </label>
       </div>
     );
@@ -50,7 +56,11 @@ function WorkflowField({ spec, value, onChange, idPrefix }: FieldProps): ReactNo
       <div>
         <label htmlFor={id} className="block text-sm font-medium text-ink">
           {spec.description}
-          {spec.required && <span className="ml-1 text-red-600" aria-hidden="true">*</span>}
+          {spec.required && (
+            <span className="ml-1 text-red-600" aria-hidden="true">
+              *
+            </span>
+          )}
         </label>
         <input
           type="text"
@@ -79,7 +89,11 @@ function WorkflowField({ spec, value, onChange, idPrefix }: FieldProps): ReactNo
     <div>
       <label htmlFor={id} className="block text-sm font-medium text-ink">
         {spec.description}
-        {spec.required && <span className="ml-1 text-red-600" aria-hidden="true">*</span>}
+        {spec.required && (
+          <span className="ml-1 text-red-600" aria-hidden="true">
+            *
+          </span>
+        )}
       </label>
       {spec.type === "object" ? (
         <textarea
@@ -88,7 +102,9 @@ function WorkflowField({ spec, value, onChange, idPrefix }: FieldProps): ReactNo
           rows={4}
           placeholder='{ "key": "value" }'
           value={typeof value === "string" ? value : ""}
-          onChange={(e) => { onChange(spec.name, e.target.value); }}
+          onChange={(e) => {
+            onChange(spec.name, e.target.value);
+          }}
           required={spec.required}
           className="mt-1 block w-full rounded border border-ink/20 bg-surface px-3 py-2 font-mono text-sm text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-focus"
           aria-describedby={`${id}-hint`}
@@ -99,7 +115,9 @@ function WorkflowField({ spec, value, onChange, idPrefix }: FieldProps): ReactNo
           id={id}
           name={spec.name}
           value={typeof value === "string" ? value : ""}
-          onChange={(e) => { onChange(spec.name, e.target.value); }}
+          onChange={(e) => {
+            onChange(spec.name, e.target.value);
+          }}
           required={spec.required}
           className="mt-1 block w-full rounded border border-ink/20 bg-surface px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-focus"
         />
@@ -119,6 +137,20 @@ function WorkflowField({ spec, value, onChange, idPrefix }: FieldProps): ReactNo
 
 type LimitsRecord = Record<string, number | undefined>;
 
+function limitsFromRecord(defaultLimits: Record<string, unknown>): LimitsRecord {
+  const out: LimitsRecord = {};
+  for (const [key, value] of Object.entries(defaultLimits)) {
+    if (typeof value === "number") {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 interface LimitsEditorProps {
   limits: LimitsRecord;
   onChange: (limits: LimitsRecord) => void;
@@ -133,7 +165,9 @@ function LimitsEditor({ limits, onChange, contentId }: LimitsEditorProps): React
     <div className="rounded border border-ink/10">
       <button
         type="button"
-        onClick={() => { setOpen((o) => !o); }}
+        onClick={() => {
+          setOpen((o) => !o);
+        }}
         aria-expanded={open}
         aria-controls={contentId}
         className="flex w-full items-center justify-between px-4 py-2 text-left text-sm font-medium text-ink-muted hover:text-ink"
@@ -141,28 +175,32 @@ function LimitsEditor({ limits, onChange, contentId }: LimitsEditorProps): React
         Advanced harness limits
         <span aria-hidden="true">{open ? "▲" : "▼"}</span>
       </button>
-      <div id={contentId} hidden={!open} className="grid gap-3 border-t border-ink/10 p-4 sm:grid-cols-2">
-          {Object.entries(limits).map(([key, val]) => (
-            <div key={key}>
-              <label htmlFor={`limit-${key}`} className="block text-xs text-ink-muted">
-                {key}
-              </label>
-              <input
-                type="number"
-                id={`limit-${key}`}
-                min={0}
-                value={val ?? ""}
-                onChange={(e) => {
-                  onChange({
-                    ...limits,
-                    [key]: e.target.value === "" ? undefined : Number(e.target.value),
-                  });
-                }}
-                className="mt-1 block w-full rounded border border-ink/20 bg-surface px-2 py-1 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-focus"
-              />
-            </div>
-          ))}
-        </div>
+      <div
+        id={contentId}
+        hidden={!open}
+        className="grid gap-3 border-t border-ink/10 p-4 sm:grid-cols-2"
+      >
+        {Object.entries(limits).map(([key, val]) => (
+          <div key={key}>
+            <label htmlFor={`limit-${key}`} className="block text-xs text-ink-muted">
+              {key}
+            </label>
+            <input
+              type="number"
+              id={`limit-${key}`}
+              min={0}
+              value={val ?? ""}
+              onChange={(e) => {
+                onChange({
+                  ...limits,
+                  [key]: e.target.value === "" ? undefined : Number(e.target.value),
+                });
+              }}
+              className="mt-1 block w-full rounded border border-ink/20 bg-surface px-2 py-1 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-focus"
+            />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -195,20 +233,10 @@ function WorkflowSection({
     }
     return defaults;
   });
-  const [selectedModel, setSelectedModel] = useState<string>(
-    chatModels[0]?.id ?? "",
+  const [selectedModel, setSelectedModel] = useState<string>(chatModels[0]?.id ?? "");
+  const [limits, setLimits] = useState<LimitsRecord>(() =>
+    limitsFromRecord(descriptor.defaultLimits),
   );
-  const [applyMode, setApplyMode] = useState(false);
-  const [limits, setLimits] = useState<LimitsRecord>(() => {
-    const dl = descriptor.defaultLimits;
-    const out: LimitsRecord = {};
-    if (dl && typeof dl === "object") {
-      for (const [k, v] of Object.entries(dl)) {
-        if (typeof v === "number") out[k] = v;
-      }
-    }
-    return out;
-  });
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -229,8 +257,38 @@ function WorkflowSection({
     e.preventDefault();
     setFormError(null);
 
-    // Build the input object for this workflow's specs
-    const input: Record<string, unknown> = { ...fieldValues };
+    const input: Record<string, unknown> = {};
+    for (const spec of userFacingInputs) {
+      const raw = fieldValues[spec.name];
+      if (spec.type === "object") {
+        const text = typeof raw === "string" ? raw.trim() : "";
+        if (text === "") {
+          if (spec.required) {
+            setFormError(`${spec.name} must be a JSON object.`);
+            return;
+          }
+          continue;
+        }
+        try {
+          const parsed = JSON.parse(text) as unknown;
+          if (!isJsonObject(parsed)) {
+            setFormError(`${spec.name} must be a JSON object.`);
+            return;
+          }
+          input[spec.name] = parsed;
+        } catch {
+          setFormError(`${spec.name} must be valid JSON.`);
+          return;
+        }
+      } else if (spec.type === "string[]" && Array.isArray(raw)) {
+        input[spec.name] = raw;
+      } else if (raw !== "" && raw !== undefined) {
+        input[spec.name] = raw;
+      } else if (spec.required) {
+        setFormError(`${spec.name} is required.`);
+        return;
+      }
+    }
     if (workspaceRoot) input.workspaceRoot = workspaceRoot;
 
     try {
@@ -239,7 +297,7 @@ function WorkflowSection({
         workflowId: descriptor.workflowId,
         input,
         modelId: selectedModel,
-        apply: applyMode,
+        apply: false,
         limits,
       });
       router.push(`/run?id=${encodeURIComponent(runId)}`);
@@ -301,14 +359,19 @@ function WorkflowSection({
               htmlFor={`${sectionId}-workspace`}
               className="block text-sm font-medium text-ink"
             >
-              Workspace path <span className="ml-1 text-red-600" aria-hidden="true">*</span>
+              Workspace path{" "}
+              <span className="ml-1 text-red-600" aria-hidden="true">
+                *
+              </span>
             </label>
             <input
               ref={firstInputRef}
               type="text"
               id={`${sectionId}-workspace`}
               value={workspaceRoot}
-              onChange={(e) => { setWorkspaceRoot(e.target.value); }}
+              onChange={(e) => {
+                setWorkspaceRoot(e.target.value);
+              }}
               placeholder="/path/to/project"
               required
               className="mt-1 block w-full rounded border border-ink/20 bg-surface px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-focus"
@@ -328,16 +391,15 @@ function WorkflowSection({
 
           {/* Model picker */}
           <div>
-            <label
-              htmlFor={`${sectionId}-model`}
-              className="block text-sm font-medium text-ink"
-            >
+            <label htmlFor={`${sectionId}-model`} className="block text-sm font-medium text-ink">
               Model
             </label>
             <select
               id={`${sectionId}-model`}
               value={selectedModel}
-              onChange={(e) => { setSelectedModel(e.target.value); }}
+              onChange={(e) => {
+                setSelectedModel(e.target.value);
+              }}
               className="mt-1 block w-full rounded border border-ink/20 bg-surface px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-focus"
             >
               {chatModels.map((m) => (
@@ -348,42 +410,17 @@ function WorkflowSection({
             </select>
           </div>
 
-          {/* Dry-run / apply toggle */}
-          {descriptor.supportsApply && (
-            <fieldset className="rounded border border-ink/10 p-4">
-              <legend className="px-1 text-sm font-medium text-ink">Execution mode</legend>
-              <div className="mt-2 flex gap-6">
-                <label className="flex cursor-pointer items-center gap-2 text-sm">
-                  <input
-                    type="radio"
-                    name={`${sectionId}-apply-mode`}
-                    value="dry-run"
-                    checked={!applyMode}
-                    onChange={() => { setApplyMode(false); }}
-                  />
-                  Dry-run (review before applying)
-                </label>
-                <label className="flex cursor-pointer items-center gap-2 text-sm">
-                  <input
-                    type="radio"
-                    name={`${sectionId}-apply-mode`}
-                    value="apply"
-                    checked={applyMode}
-                    onChange={() => { setApplyMode(true); }}
-                  />
-                  Apply immediately
-                </label>
-              </div>
-              {applyMode && (
-                <p className="mt-2 text-xs text-orange-700" role="alert">
-                  Apply mode will write files to your workspace after the workflow completes.
-                </p>
-              )}
-            </fieldset>
-          )}
+          <p className="rounded border border-ink/10 bg-surface-subtle px-4 py-3 text-sm text-ink-muted">
+            Runs always start in dry-run mode. Apply is available only after reviewing the proposed
+            patch on the patch-review screen.
+          </p>
 
           {/* Limits editor */}
-          <LimitsEditor limits={limits} onChange={setLimits} contentId={`${sectionId}-limits-content`} />
+          <LimitsEditor
+            limits={limits}
+            onChange={setLimits}
+            contentId={`${sectionId}-limits-content`}
+          />
 
           {/* Error */}
           {formError !== null && (
@@ -411,16 +448,23 @@ function WorkflowSection({
 
 interface ExplainPlanSectionProps {
   models: ModelCapability[];
+  defaultLimits: Record<string, unknown>;
   isSelected: boolean;
   onSelect: () => void;
 }
 
-function ExplainPlanSection({ models, isSelected, onSelect }: ExplainPlanSectionProps): ReactNode {
+function ExplainPlanSection({
+  models,
+  defaultLimits,
+  isSelected,
+  onSelect,
+}: ExplainPlanSectionProps): ReactNode {
   const chatModels = models.filter((m) => m.kind === "chat");
   const [filePath, setFilePath] = useState("");
   const [question, setQuestion] = useState("");
   const [selectedModel, setSelectedModel] = useState(chatModels[0]?.id ?? "");
   const [workspaceRoot, setWorkspaceRoot] = useState("");
+  const [limits, setLimits] = useState<LimitsRecord>(() => limitsFromRecord(defaultLimits));
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const router = useRouter();
@@ -450,6 +494,7 @@ function ExplainPlanSection({ models, isSelected, onSelect }: ExplainPlanSection
         },
         modelId: selectedModel,
         apply: false,
+        limits,
       });
       router.push(`/run?id=${encodeURIComponent(runId)}`);
     } catch (err) {
@@ -487,7 +532,9 @@ function ExplainPlanSection({ models, isSelected, onSelect }: ExplainPlanSection
 
       {isSelected && (
         <form
-          onSubmit={(e) => { void handleSubmit(e); }}
+          onSubmit={(e) => {
+            void handleSubmit(e);
+          }}
           noValidate
           className="mt-6 grid gap-4"
         >
@@ -500,20 +547,27 @@ function ExplainPlanSection({ models, isSelected, onSelect }: ExplainPlanSection
               type="text"
               id="explain-workspace"
               value={workspaceRoot}
-              onChange={(e) => { setWorkspaceRoot(e.target.value); }}
+              onChange={(e) => {
+                setWorkspaceRoot(e.target.value);
+              }}
               placeholder="/path/to/project (optional)"
               className="mt-1 block w-full rounded border border-ink/20 bg-surface px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-focus"
             />
           </div>
           <div>
             <label htmlFor="explain-file" className="block text-sm font-medium text-ink">
-              File path <span className="ml-1 text-red-600" aria-hidden="true">*</span>
+              File path{" "}
+              <span className="ml-1 text-red-600" aria-hidden="true">
+                *
+              </span>
             </label>
             <input
               type="text"
               id="explain-file"
               value={filePath}
-              onChange={(e) => { setFilePath(e.target.value); }}
+              onChange={(e) => {
+                setFilePath(e.target.value);
+              }}
               placeholder="src/foo/bar.ts"
               required
               className="mt-1 block w-full rounded border border-ink/20 bg-surface px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-focus"
@@ -527,7 +581,9 @@ function ExplainPlanSection({ models, isSelected, onSelect }: ExplainPlanSection
               type="text"
               id="explain-question"
               value={question}
-              onChange={(e) => { setQuestion(e.target.value); }}
+              onChange={(e) => {
+                setQuestion(e.target.value);
+              }}
               placeholder="What does this function do?"
               className="mt-1 block w-full rounded border border-ink/20 bg-surface px-3 py-2 text-sm text-ink focus:border-accent focus:outline-none focus:ring-1 focus:ring-focus"
             />
@@ -539,7 +595,9 @@ function ExplainPlanSection({ models, isSelected, onSelect }: ExplainPlanSection
             <select
               id="explain-model"
               value={selectedModel}
-              onChange={(e) => { setSelectedModel(e.target.value); }}
+              onChange={(e) => {
+                setSelectedModel(e.target.value);
+              }}
               className="mt-1 block w-full rounded border border-ink/20 bg-surface px-3 py-2 text-sm text-ink focus:outline-none focus:ring-1 focus:ring-focus"
             >
               {chatModels.map((m) => (
@@ -549,6 +607,7 @@ function ExplainPlanSection({ models, isSelected, onSelect }: ExplainPlanSection
               ))}
             </select>
           </div>
+          <LimitsEditor limits={limits} onChange={setLimits} contentId="explain-limits-content" />
           {formError !== null && (
             <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700">
               {formError}
@@ -571,10 +630,7 @@ function ExplainPlanSection({ models, isSelected, onSelect }: ExplainPlanSection
 // LaunchPage
 // ---------------------------------------------------------------------------
 
-type WorkflowSelection =
-  | { kind: "workflow"; id: string }
-  | { kind: "explain-plan" }
-  | null;
+type WorkflowSelection = { kind: "workflow"; id: string } | { kind: "explain-plan" } | null;
 
 export default function LaunchPage(): ReactNode {
   const [workflows, setWorkflows] = useState<WorkflowsResponse | null>(null);
@@ -601,7 +657,9 @@ export default function LaunchPage(): ReactNode {
       }
     }
     void load();
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, []);
 
   if (loadError !== null) {
@@ -646,9 +704,7 @@ export default function LaunchPage(): ReactNode {
             key={descriptor.workflowId}
             descriptor={descriptor}
             models={models}
-            isSelected={
-              selection?.kind === "workflow" && selection.id === descriptor.workflowId
-            }
+            isSelected={selection?.kind === "workflow" && selection.id === descriptor.workflowId}
             onSelect={() => {
               setSelection({ kind: "workflow", id: descriptor.workflowId });
             }}
@@ -657,8 +713,11 @@ export default function LaunchPage(): ReactNode {
 
         <ExplainPlanSection
           models={models}
+          defaultLimits={workflows.explainPlan.defaultLimits}
           isSelected={selection?.kind === "explain-plan"}
-          onSelect={() => { setSelection({ kind: "explain-plan" }); }}
+          onSelect={() => {
+            setSelection({ kind: "explain-plan" });
+          }}
         />
       </div>
     </section>

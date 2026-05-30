@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import LaunchPage from "./LaunchPage";
@@ -31,19 +31,19 @@ vi.mock("@/lib/api", () => ({
 const mockWorkflows = {
   descriptors: [
     {
-      workflowId: "generate-unit-tests",
+      workflowId: "unit-test-generation",
       name: "Generate unit tests",
       description: "Generates unit tests for a target file.",
       inputs: [
         {
           name: "target",
-          type: "string" as const,
+          type: "object" as const,
           required: true,
-          description: "Target file path",
+          description: "Target: { kind: 'file', filePath }",
           defaultValue: "",
         },
       ],
-      defaultLimits: { maxModelCalls: 3, maxRetries: 2 },
+      defaultLimits: { maxModelCalls: 3, maxFailureAttempts: 2 },
       modelSelectionOptions: { arbitrary: true, preferredCostClass: "medium" as const },
       supportsDryRun: true,
       supportsApply: true,
@@ -54,6 +54,7 @@ const mockWorkflows = {
       { name: "filePath", type: "string" as const, required: true },
       { name: "question", type: "string" as const, required: false },
     ],
+    defaultLimits: { maxModelCalls: 3, maxWallTimeMs: 1000 },
   },
 };
 
@@ -82,8 +83,10 @@ const mockModels = {
 
 describe("LaunchPage", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.mocked(api.fetchWorkflows).mockResolvedValue(mockWorkflows);
     vi.mocked(api.fetchModels).mockResolvedValue(mockModels);
+    vi.mocked(api.startRun).mockResolvedValue({ runId: "run-1", fingerprint: "fp" });
   });
 
   it("renders the launch heading and loads workflows", async () => {
@@ -125,6 +128,73 @@ describe("LaunchPage", () => {
     render(<LaunchPage />);
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+  });
+
+  it("parses object workflow inputs before starting a dry-run", async () => {
+    const user = userEvent.setup();
+    render(<LaunchPage />);
+    await waitFor(() => {
+      expect(screen.getByText("Generate unit tests")).toBeInTheDocument();
+    });
+
+    await user.type(screen.getByLabelText(/workspace path/i), "/repo");
+    fireEvent.change(screen.getByLabelText(/target:/i), {
+      target: { value: JSON.stringify({ kind: "file", filePath: "src/add.ts" }) },
+    });
+    await user.click(screen.getByRole("button", { name: /start run/i }));
+
+    await waitFor(() => {
+      expect(api.startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workflowId: "unit-test-generation",
+          apply: false,
+          input: {
+            workspaceRoot: "/repo",
+            target: { kind: "file", filePath: "src/add.ts" },
+          },
+        }),
+      );
+    });
+  });
+
+  it("blocks invalid object input JSON", async () => {
+    const user = userEvent.setup();
+    render(<LaunchPage />);
+    await waitFor(() => {
+      expect(screen.getByText("Generate unit tests")).toBeInTheDocument();
+    });
+
+    await user.type(screen.getByLabelText(/workspace path/i), "/repo");
+    fireEvent.change(screen.getByLabelText(/target:/i), { target: { value: "{not-json" } });
+    await user.click(screen.getByRole("button", { name: /start run/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/target must be valid json/i);
+    expect(api.startRun).not.toHaveBeenCalled();
+  });
+
+  it("submits explain-plan limits from the launch surface", async () => {
+    const user = userEvent.setup();
+    render(<LaunchPage />);
+    await waitFor(() => {
+      expect(screen.getByText("Explain plan")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("radio", { name: /explain plan/i }));
+    await user.type(screen.getByLabelText(/file path/i), "src/add.ts");
+    await user.click(screen.getByRole("button", { name: /advanced harness limits/i }));
+    const maxModelCalls = screen.getByLabelText("maxModelCalls");
+    await user.clear(maxModelCalls);
+    await user.type(maxModelCalls, "5");
+    await user.click(screen.getByRole("button", { name: /^explain$/i }));
+
+    await waitFor(() => {
+      expect(api.startRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskType: "explain-plan",
+          limits: expect.objectContaining({ maxModelCalls: 5 }),
+        }),
+      );
     });
   });
 

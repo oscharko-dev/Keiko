@@ -68,6 +68,7 @@ async function closeServer(): Promise<void> {
 beforeEach(async () => {
   staticRoot = await mkdtemp(join(tmpdir(), "keiko-ui-static-"));
   await writeFile(join(staticRoot, "index.html"), "<html><body>home</body></html>", "utf8");
+  await writeFile(join(staticRoot, "launch.html"), "<html><body>launch</body></html>", "utf8");
   await mkdir(join(staticRoot, "_next"), { recursive: true });
   await writeFile(join(staticRoot, "_next", "app.js"), "console.log(1)", "utf8");
   // Bind on an ephemeral port first, then rebuild the server with that port so the Host/Origin
@@ -138,6 +139,13 @@ describe("static serving", () => {
     expect(res.text).toContain("home");
   });
 
+  it("serves exported static route HTML for deep links before SPA fallback", async () => {
+    const res = await fetchRaw("/launch");
+    expect(res.status).toBe(200);
+    expect(res.text).toContain("launch");
+    expect(res.text).not.toContain("home");
+  });
+
   it("does not serve files outside the static root", async () => {
     const res = await fetchRaw("/../../../../etc/hosts");
     // Traversal is refused and the SPA index is served instead; the secret file never leaks.
@@ -171,5 +179,21 @@ describe("unknown API routes", () => {
     const body = JSON.parse(res.text) as { models: unknown[] };
     expect(Array.isArray(body.models)).toBe(true);
     expect(body.models.length).toBeGreaterThan(0);
+  });
+
+  it("rejects state-changing API requests without JSON content type", async () => {
+    const response = await fetch(`${baseUrl()}/api/runs`, { method: "POST", body: "x" });
+    expect(response.status).toBe(415);
+    expect(await response.json()).toMatchObject({ error: { code: "UNSUPPORTED_MEDIA_TYPE" } });
+  });
+
+  it("rejects state-changing API requests without the CSRF header", async () => {
+    const response = await fetch(`${baseUrl()}/api/runs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input: {}, modelId: "m" }),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
   });
 });
