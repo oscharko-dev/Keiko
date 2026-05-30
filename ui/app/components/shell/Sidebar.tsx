@@ -171,7 +171,7 @@ export function Sidebar({ collapsed }: SidebarProps): ReactNode {
           )}
 
           {state.kind === "loaded" && state.projects.length > 0 && (
-            <ul role="list" className="space-y-0.5">
+            <ul className="space-y-0.5">
               {state.projects.map((project) => (
                 <li key={project.path}>
                   <ProjectRow

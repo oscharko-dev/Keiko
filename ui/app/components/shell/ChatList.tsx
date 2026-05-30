@@ -85,7 +85,7 @@ export function ChatList({
   }
 
   return (
-    <ul role="list" className="space-y-0.5">
+    <ul className="space-y-0.5">
       {state.chats.map((chat) => (
         <li key={chat.id}>
           <button

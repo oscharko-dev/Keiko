@@ -115,7 +115,7 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
         )}
 
         {state.kind === "loaded" && state.messages.length > 0 && (
-          <ul role="list" className="space-y-3">
+          <ul className="space-y-3">
             {state.messages.map((msg) => (
               <li
                 key={msg.id}
