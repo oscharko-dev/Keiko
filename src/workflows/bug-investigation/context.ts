@@ -70,18 +70,18 @@ function toWorkspaceRelative(path: string, workspace: WorkspaceInfo): string {
   return normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : normalized;
 }
 
-function evidencePaths(evidence: FailureEvidence, workspace: WorkspaceInfo): readonly string[] {
-  return Array.from(
-    new Set(evidence.frames.map((frame) => toWorkspaceRelative(frame.file, workspace))),
-  );
+interface EvidenceIndex {
+  readonly paths: ReadonlySet<string>;
+  readonly stems: ReadonlySet<string>;
 }
 
-function isEvidenceTarget(
-  path: string,
-  workspace: WorkspaceInfo,
-  evidence: FailureEvidence,
-): boolean {
-  return evidencePaths(evidence, workspace).includes(toPosix(path));
+function buildEvidenceIndex(evidence: FailureEvidence, workspace: WorkspaceInfo): EvidenceIndex {
+  const paths = new Set(evidence.frames.map((frame) => toWorkspaceRelative(frame.file, workspace)));
+  return { paths, stems: new Set([...paths].map(stem)) };
+}
+
+function isEvidenceTarget(path: string, evidence: EvidenceIndex): boolean {
+  return evidence.paths.has(toPosix(path));
 }
 
 function isTestCandidate(
@@ -101,27 +101,27 @@ function isTestCandidate(
 function isNearbyEvidenceTest(
   path: string,
   workspace: WorkspaceInfo,
-  evidence: FailureEvidence,
+  evidence: EvidenceIndex,
   selectionReason: SelectionReason,
 ): boolean {
   if (!isTestCandidate(path, workspace, selectionReason)) {
     return false;
   }
   const candidateStem = testStem(path);
-  return evidencePaths(evidence, workspace).some((target) => candidateStem === stem(target));
+  return evidence.stems.has(candidateStem);
 }
 
 function priorityIndex(reason: SelectionReason): number {
   return SELECTION_REASON_PRIORITY.indexOf(reason);
 }
 
-function issue9Priority(
+function evidencePriority(
   ranked: RankedFile,
   workspace: WorkspaceInfo,
-  evidence: FailureEvidence,
+  evidence: EvidenceIndex,
 ): number {
   const path = toPosix(ranked.file.relativePath);
-  if (isEvidenceTarget(path, workspace, evidence)) {
+  if (isEvidenceTarget(path, evidence)) {
     return 0;
   }
   if (isNearbyEvidenceTest(path, workspace, evidence, ranked.selectionReason)) {
@@ -134,14 +134,15 @@ function createBugRetrievalStrategy(
   workspace: WorkspaceInfo,
   evidence: FailureEvidence,
 ): RetrievalStrategy {
+  const index = buildEvidenceIndex(evidence, workspace);
   return {
     rank: (files: readonly DiscoveredFile[], task: string | undefined): readonly RankedFile[] => {
       const ranked = lexicalRetrievalStrategy.rank(files, task);
       return [...ranked].sort((a, b) => {
-        const byIssue9 =
-          issue9Priority(a, workspace, evidence) - issue9Priority(b, workspace, evidence);
-        if (byIssue9 !== 0) {
-          return byIssue9;
+        const byEvidence =
+          evidencePriority(a, workspace, index) - evidencePriority(b, workspace, index);
+        if (byEvidence !== 0) {
+          return byEvidence;
         }
         const byReason = priorityIndex(a.selectionReason) - priorityIndex(b.selectionReason);
         if (byReason !== 0) {
