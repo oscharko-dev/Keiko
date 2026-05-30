@@ -11,6 +11,7 @@ import {
   isProjectAvailable,
   type ChatRole,
   type Project,
+  type UpdateChatMessagePatch,
   type UpdateChatPatch,
   type UpdateProjectPatch,
   type WorkflowStatus,
@@ -417,6 +418,40 @@ export async function handleCreateMessage(
       taskType: optionalTaskType(body),
     });
     return { status: 201, body: { message } };
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Route 23 — PATCH /api/chats/messages?id=... (issue #66)
+// ──────────────────────────────────────────────────────────────────────────
+
+// Builds a typed UpdateChatMessagePatch from the JSON body. At least one updatable field must
+// appear; the store layer also fails-closed on this, but throwing here surfaces the friendlier
+// INVALID_REQUEST envelope without spending a SQL prepare.
+function buildMessagePatch(body: Record<string, unknown>): UpdateChatMessagePatch {
+  const workflowStatus = optionalWorkflowStatus(body);
+  const shortResult = optionalString(body, "shortResult");
+  const taskType = optionalTaskType(body);
+  if (workflowStatus === undefined && shortResult === undefined && taskType === undefined) {
+    throw new InvalidRequest("PATCH body must include at least one updatable field.");
+  }
+  return {
+    ...(workflowStatus !== undefined ? { workflowStatus } : {}),
+    ...(shortResult !== undefined ? { shortResult } : {}),
+    ...(taskType !== undefined ? { taskType } : {}),
+  };
+}
+
+export async function handleUpdateMessage(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
+    const id = requireQuery(ctx, "id");
+    const body = await readJsonObject(ctx.req);
+    const patch = buildMessagePatch(body);
+    const message = deps.store.updateMessage(id, patch);
+    return { status: 200, body: { message } };
   });
 }
 

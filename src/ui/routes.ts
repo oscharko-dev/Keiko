@@ -34,6 +34,7 @@ import {
   handleDeleteChat,
   handleListMessages,
   handleCreateMessage,
+  handleUpdateMessage,
 } from "./store-handlers.js";
 
 export interface ApiError {
@@ -100,6 +101,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "DELETE", pattern: "/api/chats", handler: handleDeleteChat },
   { method: "GET", pattern: "/api/chats/messages", handler: handleListMessages },
   { method: "POST", pattern: "/api/chats/messages", handler: handleCreateMessage },
+  // Issue #66 — PATCH a run-summary message (status/shortResult/taskType).
+  { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured
