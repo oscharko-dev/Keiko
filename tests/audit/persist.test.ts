@@ -65,6 +65,8 @@ function buildInput(): EvidenceBuildInput {
     taskInput,
     limits: DEFAULT_LIMITS,
     modelId: "m1",
+    workingDirectory: "/repo",
+    dryRun: true,
     startedAt: "2026-05-29T00:00:00.000Z",
     events: evs,
   };

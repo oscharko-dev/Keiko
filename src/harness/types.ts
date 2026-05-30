@@ -120,6 +120,8 @@ export interface RunManifest {
   readonly taskInput: TaskInput;
   readonly limits: HarnessLimits;
   readonly modelId: string;
+  readonly workingDirectory: string;
+  readonly dryRun: boolean;
   readonly startedAt: string;
   readonly events: readonly HarnessEvent[];
 }

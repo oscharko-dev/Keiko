@@ -21,13 +21,37 @@ import { DEFAULT_LIMITS, type HarnessLimits, type TaskInput } from "../../src/ha
 
 export function stubClock(start = 0): { clock: Clock; set: (ms: number) => void } {
   let current = start;
+  const pendingSleeps = new Set<() => void>();
   return {
     set: (ms: number): void => {
       current = ms;
+      for (const resolve of pendingSleeps) {
+        resolve();
+      }
+      pendingSleeps.clear();
     },
     clock: {
       now: (): number => current,
-      sleep: (): Promise<void> => Promise.resolve(),
+      sleep: (_ms: number, signal?: AbortSignal): Promise<void> =>
+        new Promise((resolve, reject) => {
+          if (signal?.aborted === true) {
+            reject(new Error("aborted"));
+            return;
+          }
+          const finish = (): void => {
+            pendingSleeps.delete(finish);
+            resolve();
+          };
+          pendingSleeps.add(finish);
+          signal?.addEventListener(
+            "abort",
+            () => {
+              pendingSleeps.delete(finish);
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+        }),
     },
   };
 }
@@ -128,6 +152,7 @@ export function buildContext(options: CtxOptions): { ctx: RunContext; sink: Memo
     report: undefined,
     failure: undefined,
     cancelReason: undefined,
+    cancelledAtState: undefined,
   };
   return { ctx, sink };
 }

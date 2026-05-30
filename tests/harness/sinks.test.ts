@@ -94,6 +94,8 @@ describe("MemoryEventSink", () => {
       taskInput: { taskType: "explain-plan", input: { filePath: "src/foo.ts" } },
       limits: DEFAULT_LIMITS,
       modelId: "m",
+      workingDirectory: "/repo",
+      dryRun: true,
       startedAt: "2026-05-28T00:00:00.000Z",
     });
     expect(manifest.runId).toBe("run-1");

@@ -15,12 +15,20 @@ function abortStep(reason: string): StateStep {
   return { to: "cancelled", reason };
 }
 
-// Limit checks evaluated at the top of the loop before re-entering planning (iterations,
-// wall time) — the bounded-resource gate for the run as a whole.
-function checkLoopLimits(ctx: RunContext): StateStep | null {
+function checkWallTime(ctx: RunContext): StateStep | null {
   if (ctx.clock.now() - ctx.startedAt > ctx.limits.maxWallTimeMs) {
     ctx.failure = toFailure(HARNESS_CODES.LIMIT_WALL_TIME, "wall-time budget exhausted");
     return { to: "limit-exceeded", reason: "maxWallTimeMs exceeded" };
+  }
+  return null;
+}
+
+// Limit checks evaluated when re-entering planning (iterations) plus the wall-time gate for
+// the run as a whole.
+function checkLoopLimits(ctx: RunContext): StateStep | null {
+  const wallTime = checkWallTime(ctx);
+  if (wallTime !== null) {
+    return wallTime;
   }
   if (ctx.counters.iterations >= ctx.limits.maxIterations) {
     ctx.failure = toFailure(HARNESS_CODES.LIMIT_ITERATIONS, "iteration budget exhausted");
@@ -50,6 +58,10 @@ function checkModelCallLimits(ctx: RunContext): StateStep | null {
 // Per-state-entry guards: abort is honoured before any state; call-count limits are
 // enforced immediately before the state that consumes the bounded resource.
 function checkEntryGuards(ctx: RunContext, state: HarnessStateName): StateStep | null {
+  const wallTime = checkWallTime(ctx);
+  if (wallTime !== null) {
+    return wallTime;
+  }
   if (ctx.signal.aborted) {
     return abortStep("abort detected before state entry");
   }
@@ -99,6 +111,9 @@ async function dispatch(ctx: RunContext, state: HarnessStateName): Promise<State
 }
 
 function transition(ctx: RunContext, from: HarnessStateName, step: StateStep): HarnessStateName {
+  if (step.to === "cancelled") {
+    ctx.cancelledAtState = from;
+  }
   ctx.emitter.emit({ type: "state:transition", from, to: step.to, reason: step.reason });
   return step.to;
 }
@@ -115,7 +130,7 @@ function emitTerminal(ctx: RunContext, state: HarnessStateName): void {
   if (state === "cancelled") {
     ctx.emitter.emit({
       type: "run:cancelled",
-      atState: state,
+      atState: ctx.cancelledAtState ?? state,
       ...(ctx.cancelReason === undefined ? {} : { reason: ctx.cancelReason }),
     });
     return;
@@ -144,7 +159,16 @@ export async function runLoop(ctx: RunContext): Promise<RunOutcome> {
       state = transition(ctx, state, guard);
       continue;
     }
-    state = transition(ctx, state, await dispatch(ctx, state));
+    const dispatched = await dispatch(ctx, state);
+    const postDispatchGuard = checkWallTime(ctx);
+    state = transition(ctx, state, postDispatchGuard ?? dispatched);
+  }
+  if (!TERMINAL_STATES.has(state)) {
+    ctx.failure = toFailure(HARNESS_CODES.INTERNAL, "state-machine safety step limit exceeded");
+    state = transition(ctx, state, {
+      to: "failed",
+      reason: "internal: state-machine step limit exceeded",
+    });
   }
   emitTerminal(ctx, state);
   return state as RunOutcome;

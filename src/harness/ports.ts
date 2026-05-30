@@ -69,6 +69,8 @@ export interface FingerprintInput {
   readonly taskInput: TaskInput;
   readonly limits: HarnessLimits;
   readonly modelId: string;
+  readonly workingDirectory: string;
+  readonly dryRun: boolean;
   readonly harnessVersion: string;
 }
 

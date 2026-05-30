@@ -21,6 +21,8 @@ export interface ManifestSeed {
   readonly taskInput: RunManifest["taskInput"];
   readonly limits: RunManifest["limits"];
   readonly modelId: string;
+  readonly workingDirectory: string;
+  readonly dryRun: boolean;
   readonly startedAt: string;
 }
 

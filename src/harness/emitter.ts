@@ -17,34 +17,54 @@ type EventBody = HarnessEvent extends infer E
     : never
   : never;
 
+function redactReasoningTrace(
+  event: Extract<HarnessEvent, { type: "reasoning:trace" }>,
+): HarnessEvent {
+  return {
+    ...event,
+    rationale: redact(event.rationale),
+    ...(event.modelResponse === undefined ? {} : { modelResponse: redact(event.modelResponse) }),
+  };
+}
+
+function redactRunCompleted(event: Extract<HarnessEvent, { type: "run:completed" }>): HarnessEvent {
+  // WHY: report and patchDiff carry full model output; keep known secret formats out of every
+  // sink that does not explicitly retain raw content for replay.
+  return {
+    ...event,
+    report: redact(event.report),
+    ...(event.patchDiff === undefined ? {} : { patchDiff: redact(event.patchDiff) }),
+  };
+}
+
+function redactRunFailed(event: Extract<HarnessEvent, { type: "run:failed" }>): HarnessEvent {
+  const failure = {
+    ...event.failure,
+    message: redact(event.failure.message),
+    ...(event.failure.detail === undefined ? {} : { detail: redact(event.failure.detail) }),
+  };
+  return { ...event, failure };
+}
+
+const REDACTORS: {
+  readonly [K in HarnessEvent["type"]]?: (
+    event: Extract<HarnessEvent, { type: K }>,
+  ) => HarnessEvent;
+} = {
+  "reasoning:trace": redactReasoningTrace,
+  "patch:proposed": (event) => ({ ...event, diff: redact(event.diff) }),
+  "model:call:failed": (event) => ({ ...event, message: redact(event.message) }),
+  "tool:call:failed": (event) => ({ ...event, message: redact(event.message) }),
+  "verification:result": (event) => ({ ...event, detail: redact(event.detail) }),
+  "run:completed": redactRunCompleted,
+  "run:cancelled": (event) =>
+    event.reason === undefined ? event : { ...event, reason: redact(event.reason) },
+  "run:failed": redactRunFailed,
+};
+
 function redactSensitive(event: HarnessEvent): HarnessEvent {
-  switch (event.type) {
-    case "reasoning:trace":
-      return {
-        ...event,
-        rationale: redact(event.rationale),
-        ...(event.modelResponse === undefined
-          ? {}
-          : { modelResponse: redact(event.modelResponse) }),
-      };
-    case "patch:proposed":
-      return { ...event, diff: redact(event.diff) };
-    case "run:completed":
-      // WHY: report and patchDiff carry full model output — redact() now scrubs the common
-      // third-party credential shapes (GitHub/AWS/Slack/Google/PEM) added for issue #6 in
-      // addition to the OpenAI/Bearer shapes, so known secret formats never reach a sink.
-      return {
-        ...event,
-        report: redact(event.report),
-        ...(event.patchDiff === undefined ? {} : { patchDiff: redact(event.patchDiff) }),
-      };
-    case "run:failed":
-      return event.failure.detail === undefined
-        ? event
-        : { ...event, failure: { ...event.failure, detail: redact(event.failure.detail) } };
-    default:
-      return event;
-  }
+  const redactor = REDACTORS[event.type] as ((e: HarnessEvent) => HarnessEvent) | undefined;
+  return redactor === undefined ? event : redactor(event);
 }
 
 export class Emitter {

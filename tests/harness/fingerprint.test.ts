@@ -14,6 +14,8 @@ function baseInput(): FingerprintInput {
     taskInput: { taskType: "explain-plan", input: { filePath: "src/foo.ts" } },
     limits: DEFAULT_LIMITS,
     modelId: "model-a",
+    workingDirectory: "/repo",
+    dryRun: true,
     harnessVersion: "0.1.0",
   };
 }
@@ -32,6 +34,8 @@ describe("configFingerprint", () => {
     const reordered: FingerprintInput = {
       harnessVersion: "0.1.0",
       modelId: "model-a",
+      workingDirectory: "/repo",
+      dryRun: true,
       limits: DEFAULT_LIMITS,
       taskInput: { input: { filePath: "src/foo.ts" }, taskType: "explain-plan" },
       taskType: "explain-plan",
@@ -51,6 +55,18 @@ describe("configFingerprint", () => {
       limits: { ...DEFAULT_LIMITS, maxIterations: 11 },
     };
     expect(configFingerprint(tweaked)).not.toBe(configFingerprint(baseInput()));
+  });
+
+  it("differs when workingDirectory differs", () => {
+    expect(configFingerprint({ ...baseInput(), workingDirectory: "/other-repo" })).not.toBe(
+      configFingerprint(baseInput()),
+    );
+  });
+
+  it("differs when dryRun differs", () => {
+    expect(configFingerprint({ ...baseInput(), dryRun: false })).not.toBe(
+      configFingerprint(baseInput()),
+    );
   });
 });
 

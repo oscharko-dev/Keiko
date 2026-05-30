@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { CancelledError } from "../../src/gateway/errors.js";
 import type { NormalizedResponse } from "../../src/gateway/types.js";
+import type { Clock } from "../../src/gateway/types.js";
 import { createSession, type AgentConfig, type HarnessDeps } from "../../src/harness/session.js";
 import { counterIdSource } from "../../src/harness/fingerprint.js";
 import type { ModelPort, ToolPort } from "../../src/harness/ports.js";
@@ -17,6 +19,36 @@ function deps(model: ModelPort, sink: MemoryEventSink, tools?: ToolPort): Harnes
     sink,
     clock: stubClock().clock,
     idSource: counterIdSource(),
+  };
+}
+
+function manualDeadlineClock(): { clock: Clock; expire: () => void } {
+  let current = 0;
+  let resolveSleep: (() => void) | undefined;
+  const clock: Clock = {
+    now: () => current,
+    sleep: (_ms, signal) =>
+      new Promise<void>((resolve, reject) => {
+        resolveSleep = (): void => {
+          current = 51;
+          resolve();
+        };
+        signal?.addEventListener(
+          "abort",
+          () => {
+            reject(new Error("deadline cleared"));
+          },
+          {
+            once: true,
+          },
+        );
+      }),
+  };
+  return {
+    clock,
+    expire: (): void => {
+      resolveSleep?.();
+    },
   };
 }
 
@@ -60,6 +92,26 @@ describe("createSession", () => {
     expect(tweaked.fingerprint).not.toBe(base.fingerprint);
   });
 
+  it("changes the fingerprint when replay-relevant config changes", () => {
+    const base = createSession(
+      EXPLAIN,
+      CONFIG,
+      deps(scriptedModel([response()]).port, new MemoryEventSink()),
+    );
+    const otherWorkspace = createSession(
+      EXPLAIN,
+      { ...CONFIG, workingDirectory: "/other-repo" },
+      deps(scriptedModel([response()]).port, new MemoryEventSink()),
+    );
+    const applyIntent = createSession(
+      EXPLAIN,
+      { ...CONFIG, dryRun: false },
+      deps(scriptedModel([response()]).port, new MemoryEventSink()),
+    );
+    expect(otherWorkspace.fingerprint).not.toBe(base.fingerprint);
+    expect(applyIntent.fingerprint).not.toBe(base.fingerprint);
+  });
+
   it("resolves result to a completed RunResult on the happy path", async () => {
     const sink = new MemoryEventSink();
     const session = createSession(
@@ -98,6 +150,7 @@ describe("createSession", () => {
     expect(cancelled?.type).toBe("run:cancelled");
     if (cancelled?.type === "run:cancelled") {
       expect(cancelled.reason).toBe("user pressed ctrl-c");
+      expect(cancelled.atState).toBe("planning");
     }
   });
 
@@ -138,5 +191,60 @@ describe("createSession", () => {
     expect(result.outcome).toBe("cancelled");
     expect(calls).toBe(1);
     expect(result.patchDiff).toBeUndefined();
+  });
+
+  it("classifies a signal-aware in-flight model cancellation as cancelled", async () => {
+    let calls = 0;
+    const model: ModelPort = {
+      call: (_request, signal): Promise<NormalizedResponse> => {
+        calls += 1;
+        return new Promise<NormalizedResponse>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              reject(new CancelledError("aborted by signal"));
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+    const session = createSession(EXPLAIN, CONFIG, deps(model, new MemoryEventSink()));
+    for (let i = 0; i < 20 && calls === 0; i += 1) {
+      await Promise.resolve();
+    }
+    session.cancel("mid-flight");
+    const result = await session.result;
+    expect(result.outcome).toBe("cancelled");
+    expect(result.failure).toBeUndefined();
+  });
+
+  it("turns an in-flight wall-time deadline into HARNESS_LIMIT_WALL_TIME", async () => {
+    const deadline = manualDeadlineClock();
+    const sink = new MemoryEventSink();
+    const model: ModelPort = {
+      call: (_request, signal): Promise<NormalizedResponse> =>
+        new Promise<NormalizedResponse>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              reject(new CancelledError("deadline exceeded"));
+            },
+            { once: true },
+          );
+          deadline.expire();
+        }),
+    };
+    const session = createSession(
+      EXPLAIN,
+      { ...CONFIG, limits: { maxWallTimeMs: 50 } },
+      {
+        ...deps(model, sink),
+        clock: deadline.clock,
+      },
+    );
+    const result = await session.result;
+    expect(result.outcome).toBe("limit-exceeded");
+    expect(result.failure?.category).toBe("HARNESS_LIMIT_WALL_TIME");
   });
 });
