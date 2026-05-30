@@ -1,9 +1,10 @@
 // UI packaging step (ADR-0011 D6). Runs after `npm run build` (tsc) so `dist/ui/csp.js` exists.
-// It installs the nested ui/ package deterministically, produces the static export, copies it into
-// `dist/ui/static/`, and writes `dist/ui/csp-hashes.json` — the inline-script SHA-256 hashes the
-// BFF folds into `script-src` (see src/ui/load-csp.ts). Pure Node ESM, no shell-isms.
+// It requires the nested ui/ package to be installed explicitly by the caller, produces the static
+// export, copies it into `dist/ui/static/`, and writes `dist/ui/csp-hashes.json` — the inline-script
+// SHA-256 hashes the BFF folds into `script-src` (see src/ui/load-csp.ts). Pure Node ESM, no shell-isms.
 
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, readFile, writeFile, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +20,20 @@ function run(command, args) {
   const result = spawnSync(command, args, { cwd: repoRoot, stdio: "inherit" });
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(" ")} exited with ${String(result.status)}`);
+  }
+}
+
+function assertUiDependenciesInstalled() {
+  const nextBin = join(
+    uiDir,
+    "node_modules",
+    ".bin",
+    process.platform === "win32" ? "next.cmd" : "next",
+  );
+  if (!existsSync(nextBin)) {
+    throw new Error(
+      "UI dependencies are missing. Run `npm --prefix ui ci --ignore-scripts` first.",
+    );
   }
 }
 
@@ -45,7 +60,7 @@ async function writeCspHashes() {
 }
 
 async function main() {
-  run("npm", ["--prefix", "ui", "ci"]);
+  assertUiDependenciesInstalled();
   run("npm", ["--prefix", "ui", "run", "build"]);
   await rm(staticDir, { recursive: true, force: true });
   await mkdir(staticDir, { recursive: true });

@@ -67,9 +67,12 @@ npm run check:package-surface
 
 `prepack` runs on `npm pack` and on `npm publish`; `prepublishOnly` runs only on `npm publish`. The surface check is the last step, so the assets it asserts have already been built. The check itself runs `npm pack --dry-run` with `--ignore-scripts` to avoid re-triggering `prepack` recursively.
 
+The UI build step expects the nested UI dependencies to already be installed. Prepare them explicitly with `npm --prefix ui ci --ignore-scripts` in a release workspace; `prepack` does not perform a hidden nested install.
+
 To reproduce the full pre-publish state locally:
 
 ```bash
+npm --prefix ui ci --ignore-scripts
 npm run build && npm run build:ui && npm run check:package-surface
 ```
 

@@ -286,9 +286,9 @@ describe("materializeFixture", () => {
   });
 
   it("creates parent directories for nested workspace file paths", () => {
-    const fixture = must(ALL_FIXTURES.find((f) =>
-      Object.keys(f.workspaceFiles).some((k) => k.includes("/")),
-    ));
+    const fixture = must(
+      ALL_FIXTURES.find((f) => Object.keys(f.workspaceFiles).some((k) => k.includes("/"))),
+    );
     const { root, cleanup } = materializeFixture(fixture);
 
     try {

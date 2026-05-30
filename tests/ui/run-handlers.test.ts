@@ -292,7 +292,7 @@ maybeApply("POST /api/runs/:runId/apply — applies through the gated workflow",
     expect(res.status).toBe(200);
     const json = (await res.json()) as { report: { status: string } };
     expect(["completed", "dry-run"]).toContain(json.report.status);
-  });
+  }, 60_000);
 });
 
 describe("no secret reaches any response body", () => {

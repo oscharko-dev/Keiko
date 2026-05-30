@@ -16,6 +16,22 @@ updates:
         patterns:
           - "*"
 
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: daily
+      time: "05:15"
+      timezone: Europe/Berlin
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: ui-deps
+      include: scope
+    groups:
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
