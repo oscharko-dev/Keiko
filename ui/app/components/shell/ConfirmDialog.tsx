@@ -12,6 +12,8 @@ interface ConfirmDialogProps {
   description: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** Optional error message rendered inside the dialog (e.g. confirm action failed). */
+  errorMessage?: string | null;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -26,6 +28,7 @@ export function ConfirmDialog({
   description,
   confirmLabel = "Confirm",
   cancelLabel = "Cancel",
+  errorMessage = null,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps): ReactNode {
@@ -61,6 +64,12 @@ export function ConfirmDialog({
         {title}
       </h2>
       <p className="mt-2 text-xs text-ink-muted">{description}</p>
+
+      {errorMessage !== null && errorMessage.length > 0 && (
+        <p role="alert" className="mt-3 text-xs text-red-400">
+          {errorMessage}
+        </p>
+      )}
 
       <div className="mt-4 flex justify-end gap-2">
         <button

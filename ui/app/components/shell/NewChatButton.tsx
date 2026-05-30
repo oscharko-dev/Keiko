@@ -30,8 +30,7 @@ export function NewChatButton({ collapsed }: NewChatButtonProps): ReactNode {
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(false);
 
-  const rawProject = searchParams.get("project");
-  const projectPath = rawProject ? decodeURIComponent(rawProject) : null;
+  const projectPath = searchParams.get("project");
   const disabled = !projectPath || loading;
 
   async function handleClick(): Promise<void> {

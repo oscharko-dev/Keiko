@@ -166,7 +166,7 @@ describe("Sidebar", () => {
   });
 
   it("selected project row has aria-current=true", async () => {
-    mockSearchParams.set("project", encodeURIComponent("/workspace/foo"));
+    mockSearchParams.set("project", "/workspace/foo");
     vi.mocked(api.fetchProjects).mockResolvedValueOnce({
       projects: [mockProjects[0]!],
     });

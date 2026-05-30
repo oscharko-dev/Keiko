@@ -37,8 +37,7 @@ export function Sidebar({ collapsed }: SidebarProps): ReactNode {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const rawProject = searchParams.get("project");
-  const selectedProject = rawProject ? decodeURIComponent(rawProject) : null;
+  const selectedProject = searchParams.get("project");
   const selectedChat = searchParams.get("chat");
 
   const [state, setState] = useState<SidebarState>({ kind: "loading" });
@@ -76,7 +75,7 @@ export function Sidebar({ collapsed }: SidebarProps): ReactNode {
 
   function selectProject(path: string): void {
     const params = new URLSearchParams(searchParams.toString());
-    params.set("project", encodeURIComponent(path));
+    params.set("project", path);
     params.delete("chat");
     router.replace(`/?${params.toString()}`);
   }

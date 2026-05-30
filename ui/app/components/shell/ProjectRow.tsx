@@ -2,10 +2,9 @@
 
 import { useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { updateProject, ApiError } from "@/lib/api";
+import { ApiError, deleteProject, updateProject } from "@/lib/api";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { deleteProject } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -36,6 +35,7 @@ export function ProjectRow({
 }: ProjectRowProps): ReactNode {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [favoriteLoading, setFavoriteLoading] = useState(false);
+  const [removeError, setRemoveError] = useState<string | null>(null);
   const removeButtonRef = useRef<HTMLButtonElement>(null);
 
   const displayName = project.name;
@@ -66,9 +66,17 @@ export function ProjectRow({
   }
 
   async function handleConfirmRemove(): Promise<void> {
-    await deleteProject(project.path);
-    setConfirmOpen(false);
-    onRemoved(project.path);
+    try {
+      setRemoveError(null);
+      await deleteProject(project.path);
+      setConfirmOpen(false);
+      onRemoved(project.path);
+    } catch (err: unknown) {
+      const message = err instanceof ApiError
+        ? err.message
+        : "Could not remove the project. Please try again.";
+      setRemoveError(message);
+    }
   }
 
   if (collapsed) {
@@ -156,9 +164,11 @@ export function ProjectRow({
           title={`Remove ${displayName}?`}
           description="The directory on disk is not deleted. Existing chats will be removed from the sidebar."
           confirmLabel="Remove"
+          errorMessage={removeError}
           onConfirm={() => { void handleConfirmRemove(); }}
           onCancel={() => {
             setConfirmOpen(false);
+            setRemoveError(null);
             setTimeout(() => { removeButtonRef.current?.focus(); }, 0);
           }}
         />

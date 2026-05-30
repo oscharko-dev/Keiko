@@ -169,6 +169,36 @@ describe("ProjectRow", () => {
     expect(api.deleteProject).not.toHaveBeenCalled();
   });
 
+  it("delete failure surfaces an inline error without crashing the dialog", async () => {
+    const user = userEvent.setup();
+    const onRemoved = vi.fn();
+    const ApiErrorClass = (await import("@/lib/api")).ApiError;
+    vi.mocked(api.deleteProject).mockRejectedValueOnce(
+      new ApiErrorClass("internal", "Persistence layer unavailable", 500),
+    );
+    renderRow({}, { onRemoved });
+    await user.click(screen.getByRole("button", { name: /remove foo project/i }));
+    await user.click(screen.getByRole("button", { name: /^remove$/i }));
+    await waitFor(() => {
+      expect(api.deleteProject).toHaveBeenCalledWith("/workspace/foo");
+    });
+    // The dialog stays open with an inline alert; onRemoved is not invoked.
+    expect(onRemoved).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/persistence layer unavailable/i);
+    expect(screen.getByRole("heading", { name: /remove foo project/i })).toBeInTheDocument();
+  });
+
+  it("delete failure with a non-ApiError shows a generic safe message", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.deleteProject).mockRejectedValueOnce(new Error("network exploded"));
+    renderRow();
+    await user.click(screen.getByRole("button", { name: /remove foo project/i }));
+    await user.click(screen.getByRole("button", { name: /^remove$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/could not remove the project/i);
+    });
+  });
+
   it("collapsed mode shows only first letter of name", () => {
     renderRow({}, { collapsed: true });
     // Collapsed shows single char, not full name

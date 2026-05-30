@@ -37,6 +37,13 @@ describe("ChatComposer", () => {
     expect(screen.getByRole("textbox", { name: /message/i })).toBeInTheDocument();
   });
 
+  it("attaches the textareaRef prop to the underlying textarea element", () => {
+    const ref: { current: HTMLTextAreaElement | null } = { current: null };
+    render(<ChatComposer chatId="chat-1" onMessageSent={vi.fn()} textareaRef={ref} />);
+    const textarea = screen.getByRole("textbox", { name: /message/i });
+    expect(ref.current).toBe(textarea);
+  });
+
   it("send button is disabled when textarea is empty", () => {
     render(<ChatComposer chatId="chat-1" onMessageSent={vi.fn()} />);
     expect(screen.getByRole("button", { name: /send message/i })).toBeDisabled();

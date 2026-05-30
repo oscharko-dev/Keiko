@@ -59,12 +59,11 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
     }
   }, [state]);
 
-  // Focus composer on mount (D8: New chat → focus composer)
+  // Focus composer on mount (D8: New chat → focus composer).
+  // The ref is attached to ChatComposer's <textarea> via the textareaRef prop,
+  // so it is available synchronously after the first render.
   useEffect(() => {
-    const id = setTimeout(() => {
-      composerRef.current?.focus();
-    }, 50);
-    return () => { clearTimeout(id); };
+    composerRef.current?.focus();
   }, [chatId]);
 
   function handleMessageSent(): void {
@@ -140,7 +139,11 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
 
       {/* Composer — hidden for unavailable projects */}
       {available && (
-        <ChatComposer chatId={chatId} onMessageSent={handleMessageSent} />
+        <ChatComposer
+          chatId={chatId}
+          onMessageSent={handleMessageSent}
+          textareaRef={composerRef}
+        />
       )}
     </div>
   );

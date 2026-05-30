@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState } from "react";
-import type { ReactNode, KeyboardEvent } from "react";
+import { useState } from "react";
+import type { ReactNode, KeyboardEvent, Ref } from "react";
 import { createChatMessage, ApiError } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -12,22 +12,20 @@ interface ChatComposerProps {
   chatId: string;
   /** Called after message is successfully persisted so the parent can refresh. */
   onMessageSent: () => void;
+  /** Optional ref attached to the textarea so the parent can focus it programmatically. */
+  textareaRef?: Ref<HTMLTextAreaElement>;
 }
 
-type SendState =
-  | { kind: "idle" }
-  | { kind: "sending" }
-  | { kind: "error"; message: string };
+type SendState = { kind: "idle" } | { kind: "sending" } | { kind: "error"; message: string };
 
 /**
  * Text composer for a chat. Sends a user message via POST /api/chats/messages.
  * No workflow execution — this creates the user message row only (#64 scope).
  * Workflow wiring is reserved for epic #61 child issues.
  */
-export function ChatComposer({ chatId, onMessageSent }: ChatComposerProps): ReactNode {
+export function ChatComposer({ chatId, onMessageSent, textareaRef }: ChatComposerProps): ReactNode {
   const [text, setText] = useState("");
   const [sendState, setSendState] = useState<SendState>({ kind: "idle" });
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const errorId = "composer-error";
 
   const isEmpty = text.trim().length === 0;
@@ -95,7 +93,9 @@ export function ChatComposer({ chatId, onMessageSent }: ChatComposerProps): Reac
         <button
           type="button"
           disabled={isEmpty || isSending}
-          onClick={() => { void send(); }}
+          onClick={() => {
+            void send();
+          }}
           aria-label="Send message"
           className="shrink-0 rounded bg-accent px-3 py-2 text-xs font-medium text-ink-inverse
             hover:bg-accent-strong

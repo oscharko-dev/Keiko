@@ -68,8 +68,7 @@ type ProjectLookupState =
  */
 export function CentralArea(): ReactNode {
   const searchParams = useSearchParams();
-  const rawProject = searchParams.get("project");
-  const projectPath = rawProject ? decodeURIComponent(rawProject) : null;
+  const projectPath = searchParams.get("project");
   const chatId = searchParams.get("chat");
 
   const [projectState, setProjectState] = useState<ProjectLookupState>({ kind: "idle" });
