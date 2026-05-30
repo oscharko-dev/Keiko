@@ -162,6 +162,25 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
         <div ref={bottomRef} aria-hidden="true" />
       </div>
 
+      {/* Chat-record error surface — distinct from a message-list error so the composer is
+          held back without misattributing the failure to the message stream. */}
+      {available && chatState.kind === "error" && (
+        <div
+          role="alert"
+          className="border-t border-border bg-chrome px-4 py-3 text-xs text-red-300"
+        >
+          {chatState.message}
+        </div>
+      )}
+      {available && chatState.kind === "notfound" && (
+        <div
+          role="alert"
+          className="border-t border-border bg-chrome px-4 py-3 text-xs text-ink-muted"
+        >
+          This chat is no longer available.
+        </div>
+      )}
+
       {/* Composer — hidden for unavailable projects or while the chat record is still loading. */}
       {available && chatState.kind === "loaded" && (
         <ChatComposer
