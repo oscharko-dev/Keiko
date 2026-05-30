@@ -47,13 +47,13 @@ export function costClassLabel(costClass: CostClass | "unknown"): string {
 export function costClassClasses(costClass: CostClass | "unknown"): string {
   switch (costClass) {
     case "low":
-      return "bg-green-100 text-green-800";
+      return "bg-emerald-950/40 text-emerald-300 border border-emerald-800/40";
     case "medium":
-      return "bg-yellow-100 text-yellow-800";
+      return "bg-yellow-950/40 text-yellow-300 border border-yellow-800/40";
     case "high":
-      return "bg-red-100 text-red-800";
+      return "bg-red-950/40 text-red-300 border border-red-800/40";
     case "unknown":
-      return "bg-gray-100 text-gray-700";
+      return "bg-elevated text-ink-muted";
   }
 }
 
@@ -83,16 +83,16 @@ export function verificationStatusLabel(status: VerificationStatus): string {
 export function verificationStatusClasses(status: VerificationStatus): string {
   switch (status) {
     case "passed":
-      return "bg-green-100 text-green-800";
+      return "bg-emerald-950/40 text-emerald-300 border border-emerald-800/40";
     case "failed":
     case "resource-exceeded":
-      return "bg-red-100 text-red-800";
+      return "bg-red-950/40 text-red-300 border border-red-800/40";
     case "timed-out":
     case "denied":
-      return "bg-orange-100 text-orange-800";
+      return "bg-amber-950/40 text-amber-300 border border-amber-800/40";
     case "skipped":
     case "cancelled":
-      return "bg-gray-100 text-gray-700";
+      return "bg-elevated text-ink-muted";
   }
 }
 
@@ -152,17 +152,17 @@ export function outcomeClasses(outcome: string): string {
   switch (outcome) {
     case "completed":
     case "fix-applied":
-      return "bg-green-100 text-green-800";
+      return "bg-emerald-950/40 text-emerald-300 border border-emerald-800/40";
     case "cancelled":
-      return "bg-gray-100 text-gray-700";
+      return "bg-elevated text-ink-muted";
     case "failed":
     case "limit-exceeded":
-      return "bg-red-100 text-red-800";
+      return "bg-red-950/40 text-red-300 border border-red-800/40";
     case "dry-run":
     case "fix-proposed":
-      return "bg-blue-100 text-blue-800";
+      return "bg-sky-950/40 text-sky-300 border border-sky-800/40";
     default:
-      return "bg-gray-100 text-gray-700";
+      return "bg-elevated text-ink-muted";
   }
 }
 

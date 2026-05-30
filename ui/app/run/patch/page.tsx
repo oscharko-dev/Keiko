@@ -42,9 +42,9 @@ function parseDiffLines(diff: string): DiffLine[] {
 function lineClasses(kind: DiffLineKind): string {
   switch (kind) {
     case "add":
-      return "bg-green-50 text-green-900";
+      return "bg-emerald-950/40 text-emerald-300";
     case "remove":
-      return "bg-red-50 text-red-900";
+      return "bg-red-950/40 text-red-300";
     case "header":
       return "bg-surface-subtle text-ink-muted font-semibold";
     case "context":
@@ -123,15 +123,15 @@ function ChangedFilesTable({ files }: { files: ChangedFile[] }): ReactNode {
           {files.map((f) => (
             <tr
               key={f.path}
-              className={`border-b border-ink/10 ${f.elevatedReview ? "bg-orange-50" : ""}`}
+              className={`border-b border-ink/10 ${f.elevatedReview ? "bg-amber-950/30" : ""}`}
             >
               <td className="py-2 pr-4 font-mono text-xs">{f.path}</td>
               <td className="py-2 pr-4 text-ink-muted">{f.kind}</td>
-              <td className="py-2 pr-4 text-green-700">+{f.addedLines.toString()}</td>
-              <td className="py-2 pr-4 text-red-700">-{f.removedLines.toString()}</td>
+              <td className="py-2 pr-4 text-emerald-400">+{f.addedLines.toString()}</td>
+              <td className="py-2 pr-4 text-red-400">-{f.removedLines.toString()}</td>
               <td className="py-2">
                 {f.elevatedReview ? (
-                  <span className="rounded bg-orange-100 px-2 py-0.5 text-xs font-medium text-orange-800">
+                  <span className="rounded bg-amber-950/40 px-2 py-0.5 text-xs font-medium text-amber-300 border border-amber-800/40">
                     Elevated review
                   </span>
                 ) : (
@@ -242,12 +242,12 @@ function ApplyConfirm({ onConfirm, onCancel, applying }: ApplyConfirmProps): Rea
       aria-modal="true"
       aria-labelledby="apply-confirm-heading"
       aria-describedby="apply-confirm-desc"
-      className="rounded-lg border border-orange-300 bg-orange-50 p-4"
+      className="rounded-lg border border-amber-800/40 bg-amber-950/40 p-4"
     >
-      <h3 id="apply-confirm-heading" className="font-semibold text-orange-900">
+      <h3 id="apply-confirm-heading" className="font-semibold text-amber-300">
         Apply patch to workspace?
       </h3>
-      <p id="apply-confirm-desc" className="mt-1 text-sm text-orange-800">
+      <p id="apply-confirm-desc" className="mt-1 text-sm text-amber-300/80">
         This will write the proposed changes to your workspace. Use version control to revert if
         needed.
       </p>
@@ -257,7 +257,7 @@ function ApplyConfirm({ onConfirm, onCancel, applying }: ApplyConfirmProps): Rea
           type="button"
           onClick={onConfirm}
           disabled={applying}
-          className="rounded bg-orange-700 px-4 py-1.5 text-sm font-semibold text-white hover:bg-orange-800 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50"
+          className="rounded bg-accent px-4 py-1.5 text-sm font-semibold text-ink-inverse hover:bg-accent-strong focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50"
         >
           {applying ? "Applying…" : "Confirm apply"}
         </button>
@@ -266,7 +266,7 @@ function ApplyConfirm({ onConfirm, onCancel, applying }: ApplyConfirmProps): Rea
           type="button"
           onClick={onCancel}
           disabled={applying}
-          className="rounded border border-orange-300 px-4 py-1.5 text-sm text-orange-800 hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50"
+          className="rounded border border-amber-800/40 px-4 py-1.5 text-sm text-amber-300 hover:bg-amber-950/60 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:opacity-50"
         >
           Cancel
         </button>
@@ -376,7 +376,7 @@ function PatchViewInner(): ReactNode {
         <h1 id="patch-heading" className="text-heading text-ink">
           Patch review
         </h1>
-        <p role="alert" className="mt-4 rounded bg-red-50 px-4 py-3 text-sm text-red-700">
+        <p role="alert" className="mt-4 rounded bg-red-950/40 px-4 py-3 text-sm text-red-300 border border-red-800/40">
           {loadError}
         </p>
       </section>
@@ -512,14 +512,14 @@ function PatchViewInner(): ReactNode {
             </p>
           )}
           {applyState === "error" && applyError !== null && (
-            <p role="alert" className="mt-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+            <p role="alert" className="mt-4 rounded bg-red-950/40 px-3 py-2 text-sm text-red-300 border border-red-800/40">
               {applyError}
             </p>
           )}
           {applyState === "done" && applyReport !== null && (
-            <div className="mt-4 rounded-lg border border-green-300 bg-green-50 p-4">
-              <p className="font-semibold text-green-900">Patch applied successfully.</p>
-              <p className="mt-1 text-sm text-green-800">
+            <div className="mt-4 rounded-lg border border-emerald-800/40 bg-emerald-950/40 p-4">
+              <p className="font-semibold text-emerald-300">Patch applied successfully.</p>
+              <p className="mt-1 text-sm text-emerald-300/80">
                 Status: {outcomeLabel(applyReport.status)}
               </p>
             </div>

@@ -348,12 +348,12 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
 function StatusBadge({ status }: { status: SseStatus }): ReactNode {
   const classes =
     status === "live"
-      ? "bg-green-100 text-green-800"
+      ? "bg-emerald-950/40 text-emerald-300 border border-emerald-800/40"
       : status === "terminal"
-        ? "bg-gray-100 text-gray-700"
+        ? "bg-elevated text-ink-muted"
         : status === "error"
-          ? "bg-red-100 text-red-800"
-          : "bg-yellow-100 text-yellow-800";
+          ? "bg-red-950/40 text-red-300 border border-red-800/40"
+          : "bg-yellow-950/40 text-yellow-300 border border-yellow-800/40";
   const label =
     status === "live"
       ? "Live"
@@ -476,7 +476,7 @@ function RunViewInner(): ReactNode {
             }}
             disabled={isTerminal || cancelling}
             aria-label="Cancel this run"
-            className="rounded border border-red-300 bg-red-50 px-4 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40"
+            className="rounded border border-red-800/40 bg-red-950/40 px-4 py-1.5 text-sm font-medium text-red-300 hover:bg-red-950/60 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {cancelling ? "Cancelling…" : "Cancel"}
           </button>
@@ -484,12 +484,12 @@ function RunViewInner(): ReactNode {
       </div>
 
       {error !== null && (
-        <p role="alert" className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p role="alert" className="mt-3 rounded bg-red-950/40 px-3 py-2 text-sm text-red-300 border border-red-800/40">
           {error}
         </p>
       )}
       {cancelError !== null && (
-        <p role="alert" className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+        <p role="alert" className="mt-3 rounded bg-red-950/40 px-3 py-2 text-sm text-red-300 border border-red-800/40">
           {cancelError}
         </p>
       )}
@@ -515,7 +515,7 @@ function RunViewInner(): ReactNode {
             Run result
           </h2>
           {reportError !== null && (
-            <p role="alert" className="mt-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+            <p role="alert" className="mt-4 rounded bg-red-950/40 px-3 py-2 text-sm text-red-300 border border-red-800/40">
               {reportError}
             </p>
           )}
@@ -562,7 +562,7 @@ function RunViewInner(): ReactNode {
                   )}
               </dl>
               {report.proposedDiff !== undefined && (
-                <div className="mt-6 rounded border border-accent/30 bg-blue-50 p-4">
+                <div className="mt-6 rounded border border-accent/30 bg-panel p-4">
                   <p className="text-sm font-medium text-ink">
                     A patch has been proposed. Review and apply it below.
                   </p>

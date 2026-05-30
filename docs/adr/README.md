@@ -23,6 +23,7 @@ supersedes the old one — the old one is not deleted.
 | [ADR-0011](ADR-0011-wave-1-user-interface-and-packaging.md) | Wave-1 User Interface and Packaging | Accepted | 2026-05-29 |
 | [ADR-0012](ADR-0012-wave-1-evaluation-harness-and-model-benchmarks.md) | Wave 1 Evaluation Harness and Model Benchmarks | Accepted | 2026-05-29 |
 | [ADR-0013](ADR-0013-ui-local-persistence-for-projects-and-chats.md) | UI-Local SQLite Persistence for Projects and Chats | Accepted | 2026-05-30 |
+| [ADR-0014](ADR-0014-keiko-workspace-shell-architecture.md) | Keiko Workspace Shell Architecture | Accepted | 2026-05-30 |
 
 ## Adding a new ADR
 

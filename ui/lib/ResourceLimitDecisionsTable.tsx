@@ -19,8 +19,8 @@ interface Props {
  * Does NOT rely on colour alone — the text also conveys meaning.
  */
 function limitCellClasses(enforced: boolean, breached: boolean | undefined): string {
-  if (breached === true) return "bg-red-50 text-red-800 font-medium";
-  if (enforced) return "bg-yellow-50 text-yellow-800";
+  if (breached === true) return "bg-red-950/40 text-red-300 font-medium";
+  if (enforced) return "bg-yellow-950/40 text-yellow-300";
   return "text-ink-muted";
 }
 
@@ -52,7 +52,7 @@ export function ResourceLimitDecisionsTable({ results }: Props): ReactNode {
               return (
                 <tr
                   key={rowKey}
-                  className={`border-b border-ink/10 ${breached ? "bg-red-50" : ""}`}
+                  className={`border-b border-ink/10 ${breached ? "bg-red-950/20" : ""}`}
                 >
                   <td className="py-1.5 pr-4 font-mono text-ink-muted">{r.command}</td>
                   <td className="py-1.5 pr-4 font-mono">{lim.dimension}</td>
