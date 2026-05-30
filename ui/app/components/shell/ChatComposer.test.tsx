@@ -376,6 +376,71 @@ describe("AC6 + AC7 — per-mode startRun payload", () => {
   });
 });
 
+// Issue #66 — the system run-summary message carries the right discriminator. Workflow runs
+// carry workflowId; task runs carry taskType. createChatMessage is called exactly twice (user
+// + system) per AC1.
+describe("AC1 (#66) — system run-summary message discriminator", () => {
+  function systemCallArg(): Record<string, unknown> | undefined {
+    const calls = vi.mocked(api.createChatMessage).mock.calls;
+    const found = calls.find((c) => (c[0] as { role?: string }).role === "system");
+    return found?.[0] as Record<string, unknown> | undefined;
+  }
+
+  it("Verify run summary carries taskType=verify and no workflowId", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    await selectMode("Verify");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.createChatMessage)).toHaveBeenCalledTimes(2);
+    const sys = systemCallArg();
+    expect(sys).toBeDefined();
+    expect(sys?.taskType).toBe("verify");
+    expect(sys?.workflowId).toBeUndefined();
+    expect(sys?.workflowStatus).toBe("running");
+    expect(sys?.runId).toBe("run-1");
+  });
+
+  it("Explain Plan run summary carries taskType=explain-plan", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    await selectMode("Explain Plan");
+    await user.type(screen.getByRole("textbox", { name: /message/i }), "src/foo.ts");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
+    const sys = systemCallArg();
+    expect(sys?.taskType).toBe("explain-plan");
+    expect(sys?.workflowId).toBeUndefined();
+  });
+
+  it("Generate Tests run summary carries workflowId and no taskType", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    await selectMode("Generate Tests");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
+    const sys = systemCallArg();
+    expect(sys?.workflowId).toBe("unit-test-generation");
+    expect(sys?.taskType).toBeUndefined();
+  });
+
+  it("Investigate Bug run summary carries workflowId=bug-investigation", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    await selectMode("Investigate Bug");
+    await user.type(screen.getByRole("textbox", { name: /message/i }), "NPE");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
+    const sys = systemCallArg();
+    expect(sys?.workflowId).toBe("bug-investigation");
+    expect(sys?.taskType).toBeUndefined();
+  });
+});
+
 describe("AC8 — security anti-leak", () => {
   it("never fetches /api/config across any of the four modes", async () => {
     const user = userEvent.setup();

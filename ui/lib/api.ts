@@ -16,6 +16,8 @@ import type {
   MessageResponse,
   MessagesResponse,
   ModelCapability,
+  PatchChatMessageBody,
+  PatchMessageResponse,
   ProjectResponse,
   ProjectsResponse,
   RunReport,
@@ -312,8 +314,23 @@ export interface CreateMessageInput {
   workflowId?: string;
   workflowStatus?: ChatWorkflowStatus;
   shortResult?: string;
+  /** Issue #66 — labels harness task runs (verify, explain-plan). */
+  taskType?: string;
 }
 
 export async function createChatMessage(input: CreateMessageInput): Promise<MessageResponse> {
   return fetchJson("/api/chats/messages", { method: "POST", body: JSON.stringify(input) });
+}
+
+// Issue #66 — PATCH the run-summary message in place. The id query-param is encoded with
+// encodeURIComponent in the raw template (the established repo pattern in updateChat above);
+// we avoid URLSearchParams.set to dodge the double-encoding trap (memory #64 CP1).
+export async function patchChatMessage(
+  id: string,
+  body: PatchChatMessageBody,
+): Promise<PatchMessageResponse> {
+  return fetchJson(`/api/chats/messages?id=${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
 }

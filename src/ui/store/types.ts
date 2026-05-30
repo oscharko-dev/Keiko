@@ -21,7 +21,7 @@ export interface Chat {
 }
 
 export type ChatRole = "user" | "assistant" | "system";
-export type WorkflowStatus = "pending" | "running" | "completed" | "failed";
+export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
 export interface ChatMessage {
   readonly id: string;
@@ -33,6 +33,7 @@ export interface ChatMessage {
   readonly workflowId: string | undefined;
   readonly workflowStatus: WorkflowStatus | undefined;
   readonly shortResult: string | undefined;
+  readonly taskType: string | undefined;
 }
 
 export interface CreateChatOptions {
@@ -60,6 +61,16 @@ export interface NewChatMessage {
   readonly workflowId: string | undefined;
   readonly workflowStatus: WorkflowStatus | undefined;
   readonly shortResult: string | undefined;
+  readonly taskType: string | undefined;
+}
+
+// Issue #66 — partial PATCH for a run-summary system message. Every field is independently
+// optional; an empty patch is an error (the route returns INVALID_REQUEST). The store re-runs
+// the same redact-then-truncate pipeline as createMessage when shortResult is present.
+export interface UpdateChatMessagePatch {
+  readonly workflowStatus?: WorkflowStatus;
+  readonly shortResult?: string;
+  readonly taskType?: string;
 }
 
 export interface UiStore {
@@ -80,6 +91,7 @@ export interface UiStore {
 
   readonly listMessages: (chatId: string) => readonly ChatMessage[];
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;
+  readonly updateMessage: (id: string, patch: UpdateChatMessagePatch) => ChatMessage;
 
   readonly close: () => void;
 }

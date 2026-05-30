@@ -14,6 +14,7 @@ import type {
   Project,
   UiStore,
   UiStoreFactoryOptions,
+  UpdateChatMessagePatch,
   UpdateChatPatch,
   UpdateProjectPatch,
 } from "./types.js";
@@ -30,7 +31,11 @@ import {
   listChats as sqlListChats,
   updateChat as sqlUpdateChat,
 } from "./chats.js";
-import { insertMessage as sqlInsertMessage, listMessages as sqlListMessages } from "./messages.js";
+import {
+  insertMessage as sqlInsertMessage,
+  listMessages as sqlListMessages,
+  updateMessage as sqlUpdateMessage,
+} from "./messages.js";
 import { validateProjectPath } from "./validation.js";
 import { basename } from "node:path";
 import { invalidRequest } from "./errors.js";
@@ -109,6 +114,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     listMessages: (chatId: string): readonly ChatMessage[] => sqlListMessages(db, chatId),
     createMessage: (msg: NewChatMessage): ChatMessage =>
       sqlInsertMessage(db, options.newId(), msg, options.redactString),
+    updateMessage: (id: string, patch: UpdateChatMessagePatch): ChatMessage =>
+      sqlUpdateMessage(db, id, patch, options.redactString),
     close: (): void => {
       db.close();
     },

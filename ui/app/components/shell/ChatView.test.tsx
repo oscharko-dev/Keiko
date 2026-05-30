@@ -17,6 +17,11 @@ vi.mock("@/lib/api", () => ({
   fetchModels: vi.fn(),
   updateChat: vi.fn(),
   startRun: vi.fn(),
+  // Issue #66 — RunSummaryCard reads these via useRunStatusSync. Keep them as resolving
+  // no-ops so the cards never PATCH during ChatView tests.
+  fetchRunReport: vi.fn(),
+  fetchEvidenceManifest: vi.fn(),
+  patchChatMessage: vi.fn(),
   ApiError: class ApiError extends Error {
     code: string;
     status: number;
@@ -27,6 +32,15 @@ vi.mock("@/lib/api", () => ({
       this.status = status;
     }
   },
+}));
+
+// next/link → plain <a> for jsdom.
+vi.mock("next/link", () => ({
+  default: ({ children, href, ...rest }: { children: React.ReactNode; href: string } & React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
+  ),
 }));
 
 // ---------------------------------------------------------------------------
@@ -69,6 +83,11 @@ describe("ChatView", () => {
     // the composer rendered override `fetchChats` with `mockResolvedValueOnce`.
     vi.mocked(api.fetchChats).mockReturnValue(new Promise(() => { /* never resolves */ }));
     vi.mocked(api.fetchModels).mockResolvedValue({ models: [] });
+    // Default for the run-sync mocks: stay running forever so cards render but never PATCH.
+    vi.mocked(api.fetchRunReport).mockReturnValue(new Promise(() => { /* never resolves */ }));
+    vi.mocked(api.fetchEvidenceManifest).mockReturnValue(
+      new Promise(() => { /* never resolves */ }),
+    );
   });
 
   it("renders loading state initially", () => {
@@ -198,6 +217,106 @@ describe("ChatView", () => {
       // fetchChatMessages called at least twice: initial load + after send
       expect(api.fetchChatMessages).toHaveBeenCalledTimes(2);
     });
+  });
+
+  // Issue #66 — system messages with runId render the RunSummaryCard surface.
+  it("renders RunSummaryCard for a system message with runId (#66)", async () => {
+    vi.mocked(api.fetchChatMessages).mockResolvedValueOnce({
+      messages: [
+        {
+          id: "u1",
+          chatId: "c1",
+          role: "user",
+          content: "go",
+          timestamp: 1000,
+        },
+        {
+          id: "s1",
+          chatId: "c1",
+          role: "system",
+          content: "Verify started",
+          timestamp: 1001,
+          runId: "11111111-2222-3333-4444-555555555555",
+          taskType: "verify",
+          workflowStatus: "running",
+        },
+      ],
+    });
+    render(<ChatView chatId="c1" project={availableProject} />);
+    await waitFor(() => {
+      // Card label
+      expect(screen.getByText("Verify")).toBeInTheDocument();
+      // Badge for running
+      expect(screen.getByText("Running")).toBeInTheDocument();
+      // Both nav links present
+      expect(screen.getByLabelText("View run details")).toBeInTheDocument();
+      expect(screen.getByLabelText("View evidence manifest")).toBeInTheDocument();
+    });
+  });
+
+  it("renders the plain panel for a system message without runId (#66)", async () => {
+    vi.mocked(api.fetchChatMessages).mockResolvedValueOnce({
+      messages: [
+        {
+          id: "s2",
+          chatId: "c1",
+          role: "system",
+          content: "system note",
+          timestamp: 1,
+        },
+      ],
+    });
+    render(<ChatView chatId="c1" project={availableProject} />);
+    await waitFor(() => {
+      expect(screen.getByText("system note")).toBeInTheDocument();
+    });
+    expect(screen.queryByLabelText("View run details")).toBeNull();
+  });
+
+  it("PATCHed message reflects in DOM without a refetch (#66)", async () => {
+    // First fetch returns the running message; the polling hook will receive a 'completed'
+    // report; the PATCH mock returns the completed row; the card should re-render from props.
+    vi.mocked(api.fetchChatMessages).mockResolvedValueOnce({
+      messages: [
+        {
+          id: "s1",
+          chatId: "c1",
+          role: "system",
+          content: "Verify started",
+          timestamp: 1,
+          runId: "11111111-2222-3333-4444-555555555555",
+          taskType: "verify",
+          workflowStatus: "running",
+        },
+      ],
+    });
+    vi.mocked(api.fetchRunReport).mockResolvedValue({
+      report: {
+        status: "completed",
+        verificationSummary: { results: [{}, {}, {}] },
+      } as never,
+    });
+    vi.mocked(api.patchChatMessage).mockResolvedValue({
+      message: {
+        id: "s1",
+        chatId: "c1",
+        role: "system",
+        content: "Verify started",
+        timestamp: 1,
+        runId: "11111111-2222-3333-4444-555555555555",
+        taskType: "verify",
+        workflowStatus: "completed",
+        shortResult: "Verification passed: 3 classifications.",
+      },
+    });
+    const initialFetchCalls = vi.mocked(api.fetchChatMessages).mock.calls.length;
+    render(<ChatView chatId="c1" project={availableProject} />);
+    await waitFor(() => {
+      expect(screen.getByText("Completed")).toBeInTheDocument();
+      expect(screen.getByText("Verification passed: 3 classifications.")).toBeInTheDocument();
+    });
+    // No second list-fetch — handlePatched mutates local state by id.
+    expect(vi.mocked(api.fetchChatMessages).mock.calls.length).toBe(initialFetchCalls + 1);
   });
 
   it("has no axe-detectable accessibility violations (available project)", async () => {

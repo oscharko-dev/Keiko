@@ -98,6 +98,7 @@ describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () 
       workflowId: undefined,
       workflowStatus: undefined,
       shortResult: `leak ${SECRET} tail`,
+      taskType: undefined,
     });
 
     // shortResult returned by listMessages must not contain the literal secret.
@@ -113,6 +114,59 @@ describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () 
     const row = db.prepare("SELECT short_result FROM chat_messages LIMIT 1").get() as {
       short_result: string | null;
     };
+    db.close();
+    expect(row.short_result).not.toContain(SECRET);
+    expect(row.short_result).toContain("[REDACTED]");
+  });
+
+  // Issue #66 — the PATCH route's updateMessage seam must hit the same production redactor as
+  // createMessage. The bug we are guarding against (memory #62 H1) is shipping a default-identity
+  // redactor through createNodeUiStore for updateMessage while createMessage uses the real one.
+  // The test uses the REAL buildUiHandlerDeps (no injection) and reads the raw row off disk.
+  it("redacts API-key-shaped env value through updateMessage (#66 PATCH H1)", () => {
+    const SECRET = "sk-keiko-test-h1-patch-NOT-A-REAL-SECRET";
+    const uiDir = tmp("h1p-");
+    const evidenceDir = tmp("h1p-ev-");
+    const dbPath = join(uiDir, "keiko-ui.db");
+
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { KEIKO_DEFAULT_API_KEY: SECRET },
+      uiDbPath: dbPath,
+    });
+
+    const proj = deps.store.createProject(uiDir);
+    const chat = deps.store.createChat(proj.path, "t", "m");
+    const created = deps.store.createMessage({
+      chatId: chat.id,
+      role: "system",
+      content: "running",
+      timestamp: Date.now(),
+      runId: "r-66",
+      workflowId: undefined,
+      workflowStatus: "running",
+      shortResult: undefined,
+      taskType: "verify",
+    });
+
+    deps.store.updateMessage(created.id, {
+      workflowStatus: "completed",
+      shortResult: `leak ${SECRET} tail`,
+    });
+
+    const reread = deps.store.listMessages(chat.id);
+    expect(reread).toHaveLength(1);
+    expect(reread[0]?.shortResult).not.toContain(SECRET);
+    expect(reread[0]?.shortResult).toContain("[REDACTED]");
+    expect(reread[0]?.workflowStatus).toBe("completed");
+
+    deps.store.close();
+
+    const db = new DatabaseSync(dbPath);
+    const row = db
+      .prepare("SELECT short_result FROM chat_messages WHERE id = ?")
+      .get(created.id) as { short_result: string | null };
     db.close();
     expect(row.short_result).not.toContain(SECRET);
     expect(row.short_result).toContain("[REDACTED]");

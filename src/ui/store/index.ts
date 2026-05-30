@@ -9,6 +9,7 @@ export type {
   Project,
   UiStore,
   UiStoreFactoryOptions,
+  UpdateChatMessagePatch,
   UpdateChatPatch,
   UpdateProjectPatch,
   WorkflowStatus,
