@@ -150,11 +150,20 @@ function executableExtensions(processEnv: NodeJS.ProcessEnv): readonly string[] 
     .filter((value) => value.length > 0);
 }
 
-function candidateExecutable(command: string, rawEntry: string, ext: string): string | undefined {
+interface ExecutableCandidate {
+  readonly path: string;
+  readonly real: string;
+}
+
+function candidateExecutable(
+  command: string,
+  rawEntry: string,
+  ext: string,
+): ExecutableCandidate | undefined {
   const candidate = resolvePath(resolvePath(rawEntry), command + ext);
   try {
     accessSync(candidate, constants.X_OK);
-    return realpathSync(candidate);
+    return { path: candidate, real: realpathSync(candidate) };
   } catch {
     return undefined;
   }
@@ -162,10 +171,14 @@ function candidateExecutable(command: string, rawEntry: string, ext: string): st
 
 function assertExecutableOutsideWorkspace(
   command: string,
-  workspaceRoot: string,
-  real: string,
+  lexicalWorkspaceRoot: string,
+  realWorkspaceRoot: string,
+  candidate: ExecutableCandidate,
 ): void {
-  if (isWithinWorkspace(workspaceRoot, real)) {
+  if (
+    isWithinWorkspace(lexicalWorkspaceRoot, candidate.path) ||
+    isWithinWorkspace(realWorkspaceRoot, candidate.real)
+  ) {
     throw new CommandDeniedError(`executable resolves inside workspace: ${command}`, command);
   }
 }
@@ -173,15 +186,16 @@ function assertExecutableOutsideWorkspace(
 function defaultResolveExecutable(command: string, deps: ExecutableResolverDeps): string {
   assertBareExecutable(command);
   const fs = deps.fs ?? nodeWorkspaceFs;
-  const workspaceRoot = realRoot(fs, deps.workspace.root);
+  const lexicalWorkspaceRoot = deps.workspace.root;
+  const realWorkspaceRoot = realRoot(fs, lexicalWorkspaceRoot);
   for (const rawEntry of pathEntries(deps.processEnv)) {
     for (const ext of executableExtensions(deps.processEnv)) {
-      const real = candidateExecutable(command, rawEntry, ext);
-      if (real === undefined) {
+      const candidate = candidateExecutable(command, rawEntry, ext);
+      if (candidate === undefined) {
         continue;
       }
-      assertExecutableOutsideWorkspace(command, workspaceRoot, real);
-      return real;
+      assertExecutableOutsideWorkspace(command, lexicalWorkspaceRoot, realWorkspaceRoot, candidate);
+      return candidate.real;
     }
   }
   throw new CommandDeniedError(`executable not found on PATH: ${command}`, command);

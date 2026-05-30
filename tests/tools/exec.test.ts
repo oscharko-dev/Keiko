@@ -1,4 +1,12 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -183,6 +191,26 @@ describe("runCommand — allowlist guard (before spawn)", () => {
     mkdirSync(bin, { recursive: true });
     writeFileSync(fakeNode, "#!/bin/sh\nexit 0\n", "utf8");
     chmodSync(fakeNode, 0o755);
+    const spawn = recordingSpawn();
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: ["-e", "1"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        fakeDeps(spawn.fn, { PATH: bin }),
+      ),
+    ).rejects.toBeInstanceOf(CommandDeniedError);
+    expect(spawn.calls()).toHaveLength(0);
+  });
+
+  it("rejects a workspace PATH symlink to an outside executable without spawning", async () => {
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    symlinkSync(process.execPath, join(bin, "node"));
     const spawn = recordingSpawn();
     await expect(
       runCommand(
