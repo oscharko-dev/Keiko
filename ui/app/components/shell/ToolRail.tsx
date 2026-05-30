@@ -9,7 +9,9 @@ import { FilesPanel } from "./FilesPanel";
 import { PlannedToolPanel } from "./PlannedToolPanel";
 
 // ---------------------------------------------------------------------------
-// Follow-up issue references — coordinator fills these in after issue creation
+// Follow-up issue references — PlannedToolPanel surfaces these as the
+// "Track progress" link. Tools without a tracked follow-up issue should
+// keep an empty string, and PlannedToolPanel will degrade to a placeholder.
 // ---------------------------------------------------------------------------
 
 export const FOLLOWUP_ISSUES: Record<"browser" | "review" | "terminal", string> = {
@@ -204,7 +206,7 @@ export function ToolRail(): ReactNode {
       } else {
         next.set("tool", name);
       }
-      router.replace(`?${next.toString()}`);
+      router.replace(`/?${next.toString()}`);
     },
     [avail, rawTool, searchParams, router],
   );

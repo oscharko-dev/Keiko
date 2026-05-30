@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { fetchProjects, ApiError } from "@/lib/api";
+import { fetchProjects } from "@/lib/api";
 import type { ProjectWithAvailability } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -43,13 +43,9 @@ export function useSelectedProject(): ProjectLookupState {
           setState({ kind: "notfound" });
         }
       })
-      .catch((err: unknown) => {
+      .catch(() => {
         if (!active) return;
-        if (err instanceof ApiError) {
-          setState({ kind: "notfound" });
-        } else {
-          setState({ kind: "notfound" });
-        }
+        setState({ kind: "notfound" });
       });
     return () => {
       active = false;
