@@ -75,7 +75,7 @@ function ToolButton({ name, label, icon }: ToolButtonProps): ReactNode {
       <span
         id={tipId}
         role="tooltip"
-        className="mt-0.5 text-center text-xs text-ink-dim"
+        className="mt-0.5 text-center text-xs text-ink-muted"
       >
         Available in a later release
       </span>

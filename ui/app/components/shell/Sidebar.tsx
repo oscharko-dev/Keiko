@@ -121,6 +121,7 @@ export function Sidebar({ collapsed }: SidebarProps): ReactNode {
           </div>
         )}
 
+        {/* Project selection is wired in #64; items are non-interactive here. */}
         {state.kind === "loaded" && state.projects.length > 0 && (
           <ul className="space-y-0.5">
             {state.projects.map((project) => (
@@ -128,7 +129,7 @@ export function Sidebar({ collapsed }: SidebarProps): ReactNode {
                 <div
                   title={project.path}
                   className={`rounded px-2 py-1.5 text-sm truncate
-                    ${project.available === false ? "text-ink-dim" : "text-ink-muted hover:bg-elevated hover:text-ink"}`}
+                    ${project.available === false ? "text-ink-dim" : "text-ink-muted"}`}
                 >
                   {collapsed ? (
                     <span
