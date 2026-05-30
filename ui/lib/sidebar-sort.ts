@@ -10,7 +10,7 @@ import type { ProjectWithAvailability, Chat } from "./types";
 export function sortProjects(
   projects: readonly ProjectWithAvailability[],
 ): readonly ProjectWithAvailability[] {
-  return projects.toSorted((a, b) => {
+  return [...projects].sort((a, b) => {
     // Favorites first
     if (a.favorite !== b.favorite) return a.favorite ? -1 : 1;
     // Most recently opened first
@@ -21,7 +21,7 @@ export function sortProjects(
 }
 
 export function sortChats(chats: readonly Chat[]): readonly Chat[] {
-  return chats.toSorted((a, b) => {
+  return [...chats].sort((a, b) => {
     if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt;
     return a.id.localeCompare(b.id);
   });
