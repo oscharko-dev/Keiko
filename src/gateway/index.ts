@@ -46,6 +46,12 @@ export { Gateway, type GatewayDeps } from "./gateway.js";
 
 export { OpenAiAdapter, type AdapterDeps } from "./openai-adapter.js";
 
+export {
+  assertConfiguredModel,
+  selectConfiguredModel,
+  type ModelSelectionQuery,
+} from "./model-selection.js";
+
 export { CircuitBreaker, executeWithRetry, systemClock, type RetryConfig } from "./resilience.js";
 
 export { normalizeChatResponse, type UsageSeed } from "./normalize.js";

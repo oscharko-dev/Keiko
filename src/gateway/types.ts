@@ -53,6 +53,7 @@ export interface ChatMessage {
   readonly role: "system" | "user" | "assistant" | "tool";
   readonly content: string;
   readonly toolCallId?: string | undefined;
+  readonly toolCalls?: readonly NormalizedToolCall[] | undefined;
 }
 
 export interface ToolDefinition {
@@ -138,7 +139,7 @@ export interface ProviderAdapter {
 
 export interface Clock {
   readonly now: () => number;
-  readonly sleep: (ms: number) => Promise<void>;
+  readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 // ─── Circuit-breaker observable state ────────────────────────────────────────

@@ -128,7 +128,9 @@ The first match wins:
 2. Config-file value for that model's `apiKey` / `baseUrl`
 3. Global environment variables: `KEIKO_DEFAULT_API_KEY` / `_BASE_URL`
 
-Config-file selection is surface-specific: `keiko models validate` and `keiko ui` accept `--config` or `KEIKO_CONFIG_FILE`; `keiko gen-tests` and `keiko investigate` read `./keiko.config.json` from the working directory.
+Live model surfaces (`keiko models validate`, `keiko gen-tests`, `keiko investigate`, `keiko evaluate --live`, and `keiko ui`) read a config only from `--config PATH` or `KEIKO_CONFIG_FILE`. Keiko does not implicitly trust `./keiko.config.json` from the target repository.
+
+Provider `baseUrl` values must use `https:` unless they target `localhost` or loopback for local development.
 
 ### Per-model variables
 
@@ -252,43 +254,45 @@ keiko verify --only typecheck,lint --changed src/a.ts
 Generate a reviewable unit-test patch. Dry-run by default; `--apply` writes the tests and runs verification. The patch may only create or modify test files (a production-code guard rejects anything else). The model provider comes from config, never a flag. Exit `0` on a successful dry-run or apply, `1` on a rejected/cancelled/failed run or workspace error, `2` on a usage error.
 
 ```bash
-keiko gen-tests --file src/add.ts
+keiko gen-tests --file src/add.ts --config ~/keiko/config.json
 keiko gen-tests --file src/add.ts --function add --apply
 keiko gen-tests --dir src/math --changed src/math/sum.ts
 ```
 
-| Option                  | Description                                                  |
-| ----------------------- | ------------------------------------------------------------ |
-| `--file PATH`           | Source file to test (exactly one of `--file` / `--dir`)      |
-| `--dir PATH`            | Module directory to test (exactly one of `--file` / `--dir`) |
-| `--function NAME`       | Focus on one function (with `--file`)                        |
-| `--changed FILE[,FILE]` | Authoritative changed-file target set                        |
-| `--apply`               | Write the patch and run verification (default: dry-run)      |
-| `--model ID`            | Registered model id (default: first configured provider)     |
-| `--json`                | Emit the workflow report as JSON                             |
-| `--dir-root PATH`       | Workspace root (default: cwd)                                |
+| Option                  | Description                                                                 |
+| ----------------------- | --------------------------------------------------------------------------- |
+| `--file PATH`           | Source file to test (exactly one of `--file` / `--dir`)                     |
+| `--dir PATH`            | Module directory to test (exactly one of `--file` / `--dir`)                |
+| `--function NAME`       | Focus on one function (with `--file`)                                       |
+| `--changed FILE[,FILE]` | Authoritative changed-file target set                                       |
+| `--apply`               | Write the patch and run verification (default: dry-run)                     |
+| `--model ID`            | Registered configured model id (default: cheapest capable configured model) |
+| `--config PATH`         | Gateway config file (or `KEIKO_CONFIG_FILE`)                                |
+| `--json`                | Emit the workflow report as JSON                                            |
+| `--dir-root PATH`       | Workspace root (default: cwd)                                               |
 
 ### `keiko investigate`
 
 Investigate a bounded bug report, then propose a minimal fix and a regression test, separating verified facts from the model's unverified hypothesis. Dry-run by default; `--apply` writes the fix and runs verification. A scope guard rejects edits to sensitive paths (version-control internals, CI config, git hooks, lockfiles). At least one evidence source is required. Exit `0` on `fix-applied`/`fix-proposed`/`investigation-only`, `1` on a rejected/cancelled/failed run or read error, `2` on a usage error.
 
 ```bash
-keiko investigate --description "login returns 500 on empty password"
+keiko investigate --description "login returns 500 on empty password" --config ~/keiko/config.json
 keiko investigate --output-file ./fail.txt --file src/auth.ts --apply
 ```
 
-| Option               | Description                                              |
-| -------------------- | -------------------------------------------------------- |
-| `--description TEXT` | Free-text bug description                                |
-| `--output TEXT`      | Failing command/test output (inline)                     |
-| `--output-file PATH` | Failing output read from a file                          |
-| `--stack TEXT`       | Stack trace (inline)                                     |
-| `--stack-file PATH`  | Stack trace read from a file                             |
-| `--file PATH[,PATH]` | Suspected target file(s)                                 |
-| `--apply`            | Apply the fix and run verification (default: dry-run)    |
-| `--model ID`         | Registered model id (default: first configured provider) |
-| `--json`             | Emit the investigation report as JSON                    |
-| `--dir-root PATH`    | Workspace root (default: cwd)                            |
+| Option               | Description                                                                 |
+| -------------------- | --------------------------------------------------------------------------- |
+| `--description TEXT` | Free-text bug description                                                   |
+| `--output TEXT`      | Failing command/test output (inline)                                        |
+| `--output-file PATH` | Failing output read from a file                                             |
+| `--stack TEXT`       | Stack trace (inline)                                                        |
+| `--stack-file PATH`  | Stack trace read from a file                                                |
+| `--file PATH[,PATH]` | Suspected target file(s)                                                    |
+| `--apply`            | Apply the fix and run verification (default: dry-run)                       |
+| `--model ID`         | Registered configured model id (default: cheapest capable configured model) |
+| `--config PATH`      | Gateway config file (or `KEIKO_CONFIG_FILE`)                                |
+| `--json`             | Emit the investigation report as JSON                                       |
+| `--dir-root PATH`    | Workspace root (default: cwd)                                               |
 
 ### `keiko evidence`
 
@@ -313,7 +317,7 @@ Run the evaluation harness against the built-in fixtures. Offline (deterministic
 ```bash
 keiko evaluate
 keiko evaluate --suite unit-tests --json
-keiko evaluate --live --model gpt-oss-120b
+keiko evaluate --live --model gpt-oss-120b --config ~/keiko/config.json
 ```
 
 | Option           | Description                                                 |
@@ -322,6 +326,7 @@ keiko evaluate --live --model gpt-oss-120b
 | `--fixture NAME` | Run one fixture by name (mutually exclusive with `--suite`) |
 | `--live`         | Evaluate against a configured model (default: offline)      |
 | `--model ID`     | Override the model id for all fixtures (live mode)          |
+| `--config PATH`  | Gateway config file (or `KEIKO_CONFIG_FILE`)                |
 | `--json`         | Emit the scorecard as JSON                                  |
 | `--output PATH`  | Write the scorecard JSON to a file                          |
 

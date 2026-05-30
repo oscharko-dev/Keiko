@@ -45,6 +45,20 @@ function modelReturning(content: string): ModelPort {
   return { call: (): Promise<NormalizedResponse> => Promise.resolve(response) };
 }
 
+function gatewayConfig(modelIds: readonly string[]): string {
+  return JSON.stringify({
+    providers: modelIds.map((modelId) => ({
+      modelId,
+      baseUrl: "https://provider.example/v1",
+      apiKey: "test-config-secret-value-1234567890",
+      timeoutMs: 30_000,
+      maxRetries: 0,
+      retryBaseDelayMs: 500,
+    })),
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+  });
+}
+
 const FIX = [
   "```diff",
   "--- a/src/buggy.ts",
@@ -164,5 +178,30 @@ describe("runInvestigateCli (AC #1 CLI)", () => {
     );
     expect(code).toBe(1);
     expect(cap.err()).toContain("could not read");
+  });
+
+  it("selects the cheapest configured capable model when --model is omitted", async () => {
+    const configPath = join(dir, "gateway.json");
+    writeFileSync(
+      configPath,
+      gatewayConfig(["gpt-oss-120b", "Mistral-Small-3.1-24B-Instruct-2503"]),
+      "utf8",
+    );
+    let seenModelId: string | undefined;
+    const model: ModelPort = {
+      call: (request): Promise<NormalizedResponse> => {
+        seenModelId = request.modelId;
+        return Promise.resolve(modelReturning(FIX).call(request, new AbortController().signal));
+      },
+    };
+    const cap = makeIo();
+    const code = await runInvestigateCli(
+      ["--description", "half is wrong", "--dir-root", dir, "--config", configPath],
+      cap.io,
+      {},
+      { model },
+    );
+    expect(code).toBe(0);
+    expect(seenModelId).toBe("Mistral-Small-3.1-24B-Instruct-2503");
   });
 });

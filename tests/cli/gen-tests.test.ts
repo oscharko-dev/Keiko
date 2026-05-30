@@ -38,6 +38,20 @@ function modelReturning(content: string): ModelPort {
   return { call: (): Promise<NormalizedResponse> => Promise.resolve(response) };
 }
 
+function gatewayConfig(modelIds: readonly string[]): string {
+  return JSON.stringify({
+    providers: modelIds.map((modelId) => ({
+      modelId,
+      baseUrl: "https://provider.example/v1",
+      apiKey: "test-config-secret-value-1234567890",
+      timeoutMs: 30_000,
+      maxRetries: 0,
+      retryBaseDelayMs: 500,
+    })),
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+  });
+}
+
 const VALID_DIFF =
   "--- /dev/null\n+++ b/tests/add.test.ts\n@@ -0,0 +1,2 @@\n" +
   "+import { add } from '../src/add';\n+test('adds', () => expect(add(1, 2)).toBe(3));\n";
@@ -162,6 +176,31 @@ describe("runGenTestsCli (AC #1)", () => {
     const code = await runGenTestsCli(["--file", "src/add.ts", "--dir-root", dir], c.io, {}, {});
     expect(code).toBe(1);
     expect(c.err()).toContain("model gateway configuration problem");
-    expect(c.err()).toContain("KEIKO_DEFAULT_API_KEY");
+    expect(c.err()).toContain("--config PATH");
+  });
+
+  it("selects the cheapest configured capable model when --model is omitted", async () => {
+    const configPath = join(dir, "gateway.json");
+    writeFileSync(
+      configPath,
+      gatewayConfig(["gpt-oss-120b", "Mistral-Small-3.1-24B-Instruct-2503"]),
+      "utf8",
+    );
+    let seenModelId: string | undefined;
+    const model: ModelPort = {
+      call: (request): Promise<NormalizedResponse> => {
+        seenModelId = request.modelId;
+        return Promise.resolve(modelReturning(FENCED).call(request, new AbortController().signal));
+      },
+    };
+    const c = makeIo();
+    const code = await runGenTestsCli(
+      ["--file", "src/add.ts", "--dir-root", dir, "--config", configPath],
+      c.io,
+      {},
+      { model },
+    );
+    expect(code).toBe(0);
+    expect(seenModelId).toBe("Mistral-Small-3.1-24B-Instruct-2503");
   });
 });

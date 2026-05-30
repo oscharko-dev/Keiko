@@ -1,7 +1,7 @@
 // Provider payload → NormalizedResponse. The internal contract is strict and small
 // so workflows fail closed when a provider response is unsafe or malformed.
 
-import { MalformedToolCallError } from "./errors.js";
+import { MalformedToolCallError, ModelRefusalError } from "./errors.js";
 import type {
   CostClass,
   FinishReason,
@@ -84,6 +84,16 @@ function parseStructuredOutput(content: string): Record<string, unknown> | null 
   }
 }
 
+function assertNotRefusal(message: Record<string, unknown>, finishReason: FinishReason): void {
+  if (finishReason === "content_filter") {
+    throw new ModelRefusalError("provider filtered the model response");
+  }
+  const refusal = message.refusal;
+  if (typeof refusal === "string" && refusal.length > 0) {
+    throw new ModelRefusalError("provider refused the model request");
+  }
+}
+
 function firstChoice(payload: Record<string, unknown>): Record<string, unknown> | undefined {
   const choices = payload.choices;
   if (!Array.isArray(choices) || choices.length === 0) {
@@ -103,6 +113,7 @@ export function normalizeChatResponse(
   const choice = firstChoice(payload);
   const message = choice !== undefined && isRecord(choice.message) ? choice.message : {};
   const finishReason = mapFinishReason(choice?.finish_reason);
+  assertNotRefusal(message, finishReason);
   const toolCalls = parseToolCalls(message);
   const content = typeof message.content === "string" ? message.content : "";
   const structuredOutput =

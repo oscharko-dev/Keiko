@@ -8,7 +8,8 @@
 
 import { Gateway } from "../gateway/gateway.js";
 import { loadConfigFromFile, type EnvSource } from "../gateway/config.js";
-import { GatewayError } from "../gateway/errors.js";
+import { ConfigInvalidError, GatewayError } from "../gateway/errors.js";
+import { assertConfiguredModel, selectConfiguredModel } from "../gateway/model-selection.js";
 import { redact } from "../gateway/redaction.js";
 import { GatewayModelPort } from "../harness/adapters.js";
 import type { ModelPort } from "../harness/ports.js";
@@ -17,11 +18,9 @@ import { generateUnitTests, renderMarkdownReport } from "../workflows/index.js";
 import type { UnitTestTarget, UnitTestWorkflowReport } from "../workflows/unit-tests/types.js";
 import type { CliIo } from "./runner.js";
 
-const DEFAULT_CONFIG_PATH = "./keiko.config.json";
-
 const USAGE = `Usage:
   keiko gen-tests (--file PATH | --dir PATH) [--function NAME] [--changed FILE[,FILE]]
-                  [--apply] [--model MODEL_ID] [--json] [--dir-root PATH]
+                  [--apply] [--model MODEL_ID] [--config PATH] [--json] [--dir-root PATH]
 
 Generates a reviewable unit-test patch for a target TypeScript file, function, or
 module. Dry-run by default (prints the proposed diff, writes nothing); pass --apply
@@ -40,6 +39,7 @@ interface GenTestsArgs {
   readonly changed: readonly string[] | undefined;
   readonly apply: boolean;
   readonly model: string | undefined;
+  readonly config: string | undefined;
   readonly json: boolean;
   readonly dirRoot: string;
 }
@@ -61,6 +61,7 @@ const VALUE_FLAGS = [
   "--function",
   "--changed",
   "--model",
+  "--config",
   "--dir-root",
 ] as const;
 type ValueFlag = (typeof VALUE_FLAGS)[number];
@@ -105,6 +106,7 @@ function parseArgs(args: readonly string[]): GenTestsArgs | null {
     changed: changedPaths === undefined || changedPaths.length === 0 ? undefined : changedPaths,
     apply: args.includes("--apply"),
     model: values["--model"],
+    config: values["--config"],
     json: args.includes("--json"),
     dirRoot: values["--dir-root"] ?? ".",
   };
@@ -126,17 +128,30 @@ function resolveTarget(parsed: GenTestsArgs): UnitTestTarget {
 }
 
 // Builds a ModelPort from the gateway config, or returns a usage/runtime error code via io. The
-// modelId defaults to the first configured provider when --model is omitted (ADR-0008 D9).
+// modelId defaults to the cheapest configured chat model that supports tools and structured output.
 function buildModel(
   parsed: GenTestsArgs,
   io: CliIo,
   env: EnvSource,
 ): { port: ModelPort; modelId: string } | number {
   try {
-    const config = loadConfigFromFile(DEFAULT_CONFIG_PATH, env);
-    const modelId = parsed.model ?? config.providers[0]?.modelId;
+    const path = parsed.config ?? env.KEIKO_CONFIG_FILE;
+    if (path === undefined) {
+      throw new ConfigInvalidError("no config source; pass --config PATH or set KEIKO_CONFIG_FILE");
+    }
+    const config = loadConfigFromFile(path, env);
+    if (parsed.model !== undefined) {
+      assertConfiguredModel(config, parsed.model);
+    }
+    const modelId =
+      parsed.model ??
+      selectConfiguredModel(config, {
+        kind: "chat",
+        toolCalling: true,
+        structuredOutput: true,
+      });
     if (modelId === undefined) {
-      io.err("Error: no model provider configured.\n");
+      io.err("Error: no configured chat model supports tools and structured output.\n");
       return 1;
     }
     return { port: new GatewayModelPort(new Gateway(config)), modelId };
@@ -144,12 +159,29 @@ function buildModel(
     if (error instanceof GatewayError) {
       io.err(
         `Error: model gateway configuration problem — ${redact(error.message)}\n` +
-          `Provide a model via keiko.config.json or KEIKO_DEFAULT_API_KEY / KEIKO_DEFAULT_BASE_URL.\n`,
+          `Provide a gateway config with --config PATH or KEIKO_CONFIG_FILE.\n`,
       );
       return 1;
     }
     throw error;
   }
+}
+
+function resolveConfiguredModelId(parsed: GenTestsArgs, env: EnvSource): string | undefined {
+  const path = parsed.config ?? env.KEIKO_CONFIG_FILE;
+  if (path === undefined) {
+    return parsed.model ?? "default";
+  }
+  const config = loadConfigFromFile(path, env);
+  if (parsed.model !== undefined) {
+    assertConfiguredModel(config, parsed.model);
+    return parsed.model;
+  }
+  return selectConfiguredModel(config, {
+    kind: "chat",
+    toolCalling: true,
+    structuredOutput: true,
+  });
 }
 
 function resolveModel(
@@ -159,7 +191,20 @@ function resolveModel(
   deps: GenTestsDeps,
 ): { port: ModelPort; modelId: string } | number {
   if (deps.model !== undefined) {
-    return { port: deps.model, modelId: parsed.model ?? "default" };
+    try {
+      const modelId = resolveConfiguredModelId(parsed, env);
+      if (modelId === undefined) {
+        io.err("Error: no configured chat model supports tools and structured output.\n");
+        return 1;
+      }
+      return { port: deps.model, modelId };
+    } catch (error) {
+      if (error instanceof GatewayError) {
+        io.err(`Error: model gateway configuration problem — ${redact(error.message)}\n`);
+        return 1;
+      }
+      throw error;
+    }
   }
   return buildModel(parsed, io, env);
 }

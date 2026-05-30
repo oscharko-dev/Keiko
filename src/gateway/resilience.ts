@@ -2,19 +2,35 @@
 // loop, and a per-(model,endpoint) circuit breaker. All time-dependent behaviour
 // flows through the injectable Clock so tests are deterministic and instant.
 
-import { CircuitOpenError, GatewayError, RateLimitError } from "./errors.js";
+import { CancelledError, CircuitOpenError, GatewayError, RateLimitError } from "./errors.js";
 import type { CircuitBreakerConfig, CircuitBreakerStatus, CircuitState, Clock } from "./types.js";
 
 const MAX_BACKOFF_MS = 30_000;
 
 export const systemClock: Clock = {
   now: (): number => Date.now(),
-  sleep: (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms)),
+  sleep: (ms: number, signal?: AbortSignal): Promise<void> => {
+    if (signal?.aborted === true) {
+      return Promise.reject(new DOMException("cancelled", "AbortError"));
+    }
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      function onAbort(): void {
+        clearTimeout(timeout);
+        reject(new DOMException("cancelled", "AbortError"));
+      }
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  },
 };
 
 export interface RetryConfig {
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
+  readonly timeoutMs?: number | undefined;
 }
 
 function backoffDelayMs(attempt: number, base: number): number {
@@ -28,31 +44,86 @@ function retryDelayMs(error: unknown, attempt: number, base: number): number | n
     return null;
   }
   if (error instanceof RateLimitError && error.retryAfterMs !== null && error.retryAfterMs > 0) {
-    return error.retryAfterMs;
+    return Math.min(error.retryAfterMs, MAX_BACKOFF_MS);
   }
   return backoffDelayMs(attempt, base);
 }
 
+function assertNotAborted(signal?: AbortSignal): void {
+  if (signal?.aborted === true) {
+    throw new CancelledError("request cancelled during retry");
+  }
+}
+
+function remainingBudgetMs(start: number, timeoutMs: number | undefined, clock: Clock): number {
+  if (timeoutMs === undefined) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.max(0, timeoutMs - (clock.now() - start));
+}
+
+function asError(error: unknown): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  return new Error(String(error));
+}
+
+async function sleepWithCancellation(
+  clock: Clock,
+  delayMs: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  assertNotAborted(signal);
+  try {
+    await clock.sleep(delayMs, signal);
+  } catch (error) {
+    if (signal?.aborted === true) {
+      throw new CancelledError("request cancelled during retry backoff");
+    }
+    throw error;
+  }
+  assertNotAborted(signal);
+}
+
 export async function executeWithRetry<T>(
-  operation: () => Promise<T>,
+  operation: (attemptTimeoutMs?: number) => Promise<T>,
   config: RetryConfig,
   clock: Clock,
+  signal?: AbortSignal,
 ): Promise<T> {
-  let lastError: unknown;
+  let lastError: Error | undefined;
+  const start = clock.now();
   for (let attempt = 1; attempt <= config.maxRetries + 1; attempt += 1) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error;
-      const delay =
-        attempt <= config.maxRetries ? retryDelayMs(error, attempt, config.retryBaseDelayMs) : null;
-      if (delay === null) {
-        throw error;
+    assertNotAborted(signal);
+    const attemptBudget = remainingBudgetMs(start, config.timeoutMs, clock);
+    if (attemptBudget <= 0) {
+      if (lastError) {
+        throw lastError;
       }
-      await clock.sleep(delay);
+      throw new CancelledError("request timeout budget exhausted before provider call");
+    }
+    try {
+      return await operation(
+        Number.isFinite(attemptBudget) ? Math.max(1, Math.floor(attemptBudget)) : undefined,
+      );
+    } catch (error) {
+      lastError = asError(error);
+      const delay =
+        attempt <= config.maxRetries
+          ? retryDelayMs(lastError, attempt, config.retryBaseDelayMs)
+          : null;
+      if (delay === null) {
+        throw lastError;
+      }
+      const remaining = remainingBudgetMs(start, config.timeoutMs, clock);
+      if (remaining <= 0) {
+        throw lastError;
+      }
+      await sleepWithCancellation(clock, Math.min(delay, remaining), signal);
     }
   }
-  throw lastError;
+  throw lastError ?? new CancelledError("request timeout budget exhausted after retries");
 }
 
 export class CircuitBreaker {

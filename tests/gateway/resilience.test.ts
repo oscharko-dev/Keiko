@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   AuthenticationError,
+  CancelledError,
   CircuitOpenError,
   RateLimitError,
+  TimeoutError,
   TransportError,
 } from "../../src/gateway/errors.js";
 import { CircuitBreaker, executeWithRetry } from "../../src/gateway/resilience.js";
@@ -129,6 +131,57 @@ describe("executeWithRetry", () => {
     ).resolves.toBe("ok");
     // The retry delay must be 2000 (retryAfterMs), not 500 (exponential-backoff base).
     expect(sleeps).toEqual([2000]);
+  });
+
+  it("caps RateLimitError.retryAfterMs at 30 seconds", async () => {
+    const { clock, sleeps } = stubClock();
+    await expect(
+      executeWithRetry(
+        () => Promise.reject(new RateLimitError("rate limited", 120_000)),
+        { maxRetries: 1, retryBaseDelayMs: 500 },
+        clock,
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(sleeps).toEqual([30_000]);
+  });
+
+  it("does not sleep or retry after the end-to-end timeout budget is exhausted", async () => {
+    const { clock, sleeps, advance } = stubClock();
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          advance(30_000);
+          return Promise.reject(new TimeoutError("timed out"));
+        },
+        { maxRetries: 3, retryBaseDelayMs: 500, timeoutMs: 30_000 },
+        clock,
+      ),
+    ).rejects.toBeInstanceOf(TimeoutError);
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([]);
+  });
+
+  it("propagates cancellation while sleeping between retries", async () => {
+    const controller = new AbortController();
+    const clock: Clock = {
+      now: () => 0,
+      sleep: (_ms, signal) => {
+        controller.abort();
+        return signal?.aborted === true
+          ? Promise.reject(new DOMException("cancelled", "AbortError"))
+          : Promise.resolve();
+      },
+    };
+    await expect(
+      executeWithRetry(
+        () => Promise.reject(new TransportError("retry me")),
+        { maxRetries: 1, retryBaseDelayMs: 500 },
+        clock,
+        controller.signal,
+      ),
+    ).rejects.toBeInstanceOf(CancelledError);
   });
 });
 

@@ -514,13 +514,12 @@ neither or both are given). `--changed` is composable with both.
 - `2` — usage error (missing required flag, unknown flag, mutual-exclusion violation).
 
 **Gateway construction.** The CLI builds a `GatewayModelPort` from:
-1. `loadConfigFromFile` (default path `./keiko.config.json`) → `GatewayConfig`.
+1. `loadConfigFromFile` (path from `--config PATH` or `KEIKO_CONFIG_FILE`) → `GatewayConfig`.
 2. `new Gateway(config)` → `ChatModel`.
 3. `new GatewayModelPort(gateway)` → `ModelPort`.
-When `loadConfigFromFile` throws `ConfigInvalidError` (no provider configured), the CLI
-prints a clear message to stderr (`Error: no model provider configured — set KEIKO_DEFAULT_API_KEY
-and KEIKO_DEFAULT_BASE_URL or create keiko.config.json`) and exits 1. It does NOT invent
-a default provider; tests mock the `ModelPort` directly.
+When `loadConfigFromFile` throws `ConfigInvalidError`, the CLI prints a clear message to stderr
+and exits 1. It does NOT invent a default provider or implicitly trust repository-local
+`./keiko.config.json`; tests mock the `ModelPort` directly.
 
 **Module:** `src/cli/gen-tests.ts`, registered in `src/cli/runner.ts` `dispatchCommand` and
 added to `HELP_TEXT`.

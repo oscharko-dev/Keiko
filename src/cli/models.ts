@@ -7,6 +7,7 @@
 import { listCapabilities } from "../gateway/capabilities.js";
 import { loadConfigFromFile, type EnvSource } from "../gateway/config.js";
 import { GatewayError } from "../gateway/errors.js";
+import { resolveConfigPathFromArgs } from "./gateway-config.js";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:
@@ -30,32 +31,20 @@ function listModels(io: CliIo): number {
   return 0;
 }
 
-function resolveConfigPath(args: readonly string[], env: EnvSource): string | undefined | null {
-  const flagIndex = args.indexOf("--config");
-  if (flagIndex === -1) {
-    return env.KEIKO_CONFIG_FILE;
-  }
-  const value = args[flagIndex + 1];
-  if (value === undefined || value.startsWith("--")) {
-    return null; // present but missing its value: usage error
-  }
-  return value;
-}
-
 function validateConfig(args: readonly string[], io: CliIo, env: EnvSource): number {
-  const path = resolveConfigPath(args, env);
-  if (path === null) {
+  const resolution = resolveConfigPathFromArgs(args, env);
+  if (resolution.kind === "missing-value") {
     io.err("Error: --config requires a path argument.\n");
     return 2;
   }
-  if (path === undefined) {
+  if (resolution.kind === "not-configured") {
     io.err(
       "Error [GATEWAY_CONFIG_INVALID]: no config source; pass --config PATH or set KEIKO_CONFIG_FILE.\n",
     );
     return 1;
   }
   try {
-    const config = loadConfigFromFile(path, env);
+    const config = loadConfigFromFile(resolution.path, env);
     io.out(
       `Gateway config valid. ${String(config.providers.length)} model providers configured.\n`,
     );
