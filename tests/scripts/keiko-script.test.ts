@@ -77,6 +77,22 @@ describe("scripts/keiko.sh", () => {
     });
   });
 
+  describe("timeout validation", () => {
+    // The validation runs before any asset check or process work, so it returns 2
+    // regardless of whether dist/ is built.
+    it("rejects a non-numeric start timeout with exit 2", () => {
+      const r = run(["start"], { KEIKO_STATE_DIR: stateDir, KEIKO_START_TIMEOUT_SECS: "abc" });
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("KEIKO_START_TIMEOUT_SECS must be a positive integer");
+    });
+
+    it("rejects a non-positive stop timeout with exit 2", () => {
+      const r = run(["stop"], { KEIKO_STATE_DIR: stateDir, KEIKO_STOP_TIMEOUT_SECS: "0" });
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("KEIKO_STOP_TIMEOUT_SECS must be a positive integer");
+    });
+  });
+
   describe("pid-file hygiene", () => {
     it("clears a stale pid file pointing at a dead process", () => {
       const pidFile = join(stateDir, "ui.pid");
