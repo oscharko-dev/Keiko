@@ -17,6 +17,7 @@ import {
   DEFAULT_VERIFICATION_LIMITS,
   type VerificationAuditSummary,
   type VerificationPlan,
+  type VerificationStep,
 } from "../../verification/index.js";
 import { isSensitivePath } from "./guard.js";
 import type { BugRunState } from "./internal.js";
@@ -28,6 +29,10 @@ export const SKIP_UNRESOLVED = "verification skipped: framework unknown or no te
 // path that is not itself a test file (basename marks .test/.spec) and not a sensitive path.
 function changedSourceFiles(files: readonly PatchFileChange[]): readonly string[] {
   return files.map((f) => f.path).filter((path) => !isSensitivePath(path) && !isTestFile(path));
+}
+
+function changedTestFiles(files: readonly PatchFileChange[]): readonly string[] {
+  return files.map((f) => f.path).filter((path) => !isSensitivePath(path) && isTestFile(path));
 }
 
 function isTestFile(path: string): boolean {
@@ -42,12 +47,49 @@ function buildPlanFallback(workspace: WorkspaceInfo, fs: WorkspaceFs): Verificat
   return buildVerificationPlan(workspace, catalog, { only: ["test"] }, fs);
 }
 
+function targetedChangedTests(
+  workspace: WorkspaceInfo,
+  testFiles: readonly string[],
+): VerificationStep | undefined {
+  if (testFiles.length === 0) {
+    return undefined;
+  }
+  if (workspace.testFramework === "vitest") {
+    return {
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "npx",
+      args: ["vitest", "run", ...testFiles],
+      limits: DEFAULT_VERIFICATION_LIMITS,
+    };
+  }
+  if (workspace.testFramework === "jest") {
+    return {
+      kind: "targeted-test",
+      scriptName: undefined,
+      command: "npx",
+      args: ["jest", ...testFiles],
+      limits: DEFAULT_VERIFICATION_LIMITS,
+    };
+  }
+  return undefined;
+}
+
 function resolveVerificationPlan(
   workspace: WorkspaceInfo,
-  changedSources: readonly string[],
+  changedFiles: readonly PatchFileChange[],
   fs: WorkspaceFs,
 ): VerificationPlan | undefined {
-  const targeted = resolveTargetedTests(workspace, changedSources, fs, DEFAULT_VERIFICATION_LIMITS);
+  const directTests = targetedChangedTests(workspace, changedTestFiles(changedFiles));
+  if (directTests !== undefined) {
+    return { workspaceRoot: workspace.root, steps: [directTests] };
+  }
+  const targeted = resolveTargetedTests(
+    workspace,
+    changedSourceFiles(changedFiles),
+    fs,
+    DEFAULT_VERIFICATION_LIMITS,
+  );
   if (targeted.length > 0) {
     return { workspaceRoot: workspace.root, steps: targeted };
   }
@@ -67,10 +109,7 @@ export async function runBugVerification(
   changedFiles: readonly PatchFileChange[],
   fs: WorkspaceFs,
 ): Promise<BugVerificationOutcome> {
-  if (workspace.testFramework === "unknown") {
-    return { summary: undefined, skipReason: SKIP_UNRESOLVED };
-  }
-  const plan = resolveVerificationPlan(workspace, changedSourceFiles(changedFiles), fs);
+  const plan = resolveVerificationPlan(workspace, changedFiles, fs);
   if (plan === undefined) {
     return { summary: undefined, skipReason: SKIP_UNRESOLVED };
   }

@@ -18,7 +18,7 @@ function fixtureFs(): ReturnType<typeof memFs> {
   });
 }
 
-// A valid in-scope fix diff touching only src/buggy.ts.
+// A valid in-scope fix diff touching the source and adding a regression assertion.
 const FIX_DIFF = [
   "```diff",
   "--- a/src/buggy.ts",
@@ -26,6 +26,11 @@ const FIX_DIFF = [
   "@@ -1 +1 @@",
   "-export const half = (n: number): number => n / 3;",
   "+export const half = (n: number): number => n / 2;",
+  "--- a/tests/buggy.test.ts",
+  "+++ b/tests/buggy.test.ts",
+  "@@ -1 +1,2 @@",
+  " import { half } from '../src/buggy';",
+  "+it('returns half of a positive number', () => expect(half(8)).toBe(4));",
   "```",
   "## Root cause",
   "The divisor was 3 instead of 2.",
@@ -64,6 +69,7 @@ describe("investigateBug (AC #2 SDK / AC #4/#5/#7)", () => {
     expect(report.verified.patchApplied).toBe(false);
     expect(report.hypothesis.rootCause).toContain("divisor was 3");
     expect(report.hypothesis.confidence).toBe("high");
+    expect(report.regressionCoverage).toBeGreaterThan(0);
   });
 
   it("writes nothing to disk in dry-run mode (AC #5)", async () => {

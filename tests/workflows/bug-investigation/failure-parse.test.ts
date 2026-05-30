@@ -62,6 +62,14 @@ describe("parseFailureEvidence (AC #4 / AC #9 failure-output handling)", () => {
     expect(out.frames.length).toBeLessThanOrEqual(MAX_FRAMES);
   });
 
+  it("does not inspect frames after the configured scan-line cap", () => {
+    const lines = Array.from({ length: 2_001 }, (_, i) =>
+      i === 2_000 ? "at late (src/late.ts:1:1)" : "noise",
+    );
+    const out = parseFailureEvidence({ failingOutput: lines.join("\n") });
+    expect(out.frames.some((frame) => frame.file === "src/late.ts")).toBe(false);
+  });
+
   it("returns empty evidence when no source is present", () => {
     const out = parseFailureEvidence({ description: "it just feels slow" });
     expect(out.frames).toEqual([]);
