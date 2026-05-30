@@ -255,11 +255,10 @@ describe("ToolRail", () => {
     render(<ToolRail />);
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button")[0]).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "Files" })).not.toBeDisabled();
     });
 
-    const [filesBtn] = screen.getAllByRole("button");
-    expect(filesBtn).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Files" })).toHaveAttribute("aria-pressed", "true");
   });
 
   it("inactive enabled buttons have aria-pressed=false", async () => {
@@ -268,14 +267,13 @@ describe("ToolRail", () => {
     render(<ToolRail />);
 
     await waitFor(() => {
-      expect(screen.getAllByRole("button")[0]).not.toBeDisabled();
+      expect(screen.getByRole("button", { name: "Files" })).not.toBeDisabled();
     });
 
-    const buttons = screen.getAllByRole("button");
-    // Browser, Review, Terminal should be aria-pressed=false
-    for (const btn of buttons.slice(1)) {
-      expect(btn).toHaveAttribute("aria-pressed", "false");
-    }
+    // The three non-active tool buttons should be aria-pressed=false
+    expect(screen.getByRole("button", { name: "Browser" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Review" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Terminal" })).toHaveAttribute("aria-pressed", "false");
   });
 
   // ── Axe accessibility ────────────────────────────────────────────────────
