@@ -114,8 +114,20 @@ export function ShellChrome({ children }: ShellChromeProps): ReactNode {
             {children}
           </main>
 
-          {/* Tool rail — omitted from DOM on mobile (ADR-0014 D8) */}
-          {isAboveMobile && <ToolRail />}
+          {/* Tool rail — omitted from DOM on mobile (ADR-0014 D8).
+           * Suspense required because ToolRail calls useSearchParams() and useRouter(). */}
+          {isAboveMobile && (
+            <Suspense
+              fallback={
+                <aside
+                  aria-label="Workspace tools"
+                  className="w-14 bg-chrome"
+                />
+              }
+            >
+              <ToolRail />
+            </Suspense>
+          )}
         </div>
       </div>
     </>
