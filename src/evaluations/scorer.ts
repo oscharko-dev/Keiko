@@ -14,15 +14,6 @@ import {
   type SurfaceParityResult,
 } from "./types.js";
 
-// The "success terminal" statuses across both workflows (D6 task-completion row).
-const SUCCESS_TERMINALS: ReadonlySet<string> = new Set([
-  "completed",
-  "dry-run",
-  "fix-applied",
-  "fix-proposed",
-  "investigation-only",
-]);
-
 // Everything the scorer needs about a single run. The runner builds this from the workflow report +
 // the recording writer's observed write count, so the scorer stays pure and report-shape-agnostic.
 export interface ScoringInput {
@@ -47,12 +38,15 @@ function fail(dimension: EvaluationDimension, reason: string): DimensionResult {
 }
 
 function scoreTaskCompletion(
-  _oracle: EvaluationFixture["oracle"],
+  oracle: EvaluationFixture["oracle"],
   input: ScoringInput,
 ): DimensionResult {
-  return SUCCESS_TERMINALS.has(input.status)
+  return oracle.expectedStatuses.includes(input.status)
     ? pass("task-completion")
-    : fail("task-completion", `terminal status "${input.status}" is not a success terminal`);
+    : fail(
+        "task-completion",
+        `terminal status "${input.status}" is not one of expected statuses: ${oracle.expectedStatuses.join(", ")}`,
+      );
 }
 
 function scorePatchCorrectness(

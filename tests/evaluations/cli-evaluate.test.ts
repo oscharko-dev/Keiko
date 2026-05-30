@@ -2,7 +2,7 @@
 // without spawning a child process: --help, offline run, --json, usage errors, --fixture selection,
 // --live fail-closed, and --output file write. No network or live model.
 
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,8 +10,13 @@ import { runEvaluateCli } from "../../src/cli/evaluate.js";
 import type { EvaluateDeps } from "../../src/cli/evaluate.js";
 import { createInMemoryEvidenceStore } from "../../src/audit/index.js";
 import { ConfigInvalidError } from "../../src/gateway/errors.js";
-import type { EvaluationFixture, EvaluationMode } from "../../src/evaluations/index.js";
+import {
+  createScriptedModelPort,
+  type EvaluationFixture,
+  type EvaluationMode,
+} from "../../src/evaluations/index.js";
 import type { ModelPort } from "../../src/harness/ports.js";
+import type { NormalizedResponse } from "../../src/gateway/types.js";
 
 // ─── IO capture helpers ───────────────────────────────────────────────────────
 
@@ -47,6 +52,23 @@ function offlineDeps(): EvaluateDeps {
   };
 }
 
+function modelResponse(content: string): NormalizedResponse {
+  return {
+    modelId: "eval-model",
+    content,
+    finishReason: "stop",
+    toolCalls: [],
+    structuredOutput: null,
+    usage: {
+      requestId: "cli-live-redaction",
+      promptTokens: 1,
+      completionTokens: 1,
+      latencyMs: 1,
+      costClass: "low",
+    },
+  };
+}
+
 // ─── --help ───────────────────────────────────────────────────────────────────
 
 describe("--help", () => {
@@ -65,6 +87,15 @@ describe("offline run (default)", () => {
     const { io } = makeIo();
     const code = await runEvaluateCli(["--suite", "all"], io, {}, offlineDeps());
     expect(code).toBe(0);
+  });
+
+  it("prints the concise text summary by default", async () => {
+    const { io, captured } = makeIo();
+    const code = await runEvaluateCli(["--suite", "all"], io, {}, offlineDeps());
+    expect(code).toBe(0);
+    expect(captured().out).toContain("Keiko evaluation summary");
+    expect(captured().out).toContain("unit-tests");
+    expect(captured().out).toContain("Verdict:");
   });
 
   it("exits 0 for --suite unit-tests", async () => {
@@ -117,6 +148,14 @@ describe("usage errors → exit 2", () => {
     expect(code).toBe(2);
     expect(captured().err).toContain("unknown fixture");
   });
+
+  it("unknown flags exit 2 instead of running the suite", async () => {
+    const { io, captured } = makeIo();
+    const code = await runEvaluateCli(["--definitely-unknown"], io, {}, offlineDeps());
+    expect(code).toBe(2);
+    expect(captured().err).toContain("unknown flag --definitely-unknown");
+    expect(captured().out).toBe("");
+  });
 });
 
 // ─── Single --fixture selection ───────────────────────────────────────────────
@@ -153,6 +192,14 @@ describe("--fixture selection", () => {
 // ─── --live fail-closed ───────────────────────────────────────────────────────
 
 describe("--live fail-closed", () => {
+  it("exits 1 on the default missing-config path", async () => {
+    const { io, captured } = makeIo();
+    const code = await runEvaluateCli(["--suite", "all", "--live"], io, {}, offlineDeps());
+    expect(code).toBe(1);
+    expect(captured().err).toContain("KEIKO_CONFIG_FILE");
+    expect(captured().out).toBe("");
+  });
+
   it("exits 1 when the injected modelProviderFactory throws ConfigInvalidError", async () => {
     const { io, captured } = makeIo();
     const failingFactory = (
@@ -207,6 +254,37 @@ describe("--live fail-closed", () => {
     expect(err.length).toBeGreaterThan(0);
     expect(out).toBe("");
   });
+
+  it("redacts exact Keiko API-key env literals from successful live JSON output", async () => {
+    const secret = "non-pattern-secret-12345";
+    const { io, captured } = makeIo();
+    const code = await runEvaluateCli(
+      ["--fixture", "bug-investigation/investigation-only", "--live", "--json"],
+      io,
+      { KEIKO_DEFAULT_API_KEY: secret },
+      {
+        runner: {
+          modelProviderFactory: (): ModelPort =>
+            createScriptedModelPort([
+              modelResponse(
+                [
+                  "## Root cause",
+                  `The configured key marker is ${secret}.`,
+                  "## Confidence",
+                  "low",
+                ].join("\n"),
+              ),
+            ]),
+          store: createInMemoryEvidenceStore(),
+          now: fixedNow,
+          idSource: fixedId,
+        },
+      },
+    );
+    expect(code).toBe(0);
+    expect(captured().out).not.toContain(secret);
+    expect(captured().out).toContain("[REDACTED]");
+  });
 });
 
 // ─── --output file write ──────────────────────────────────────────────────────
@@ -245,5 +323,20 @@ describe("--output flag", () => {
     const parsed = JSON.parse(readFileSync(outputPath, "utf8")) as Record<string, unknown>;
     expect(typeof parsed.evaluatedAt).toBe("string");
     expect(parsed.mode).toBe("offline");
+  });
+
+  it("refuses to overwrite an existing output file", async () => {
+    const outputPath = join(dir, "existing.json");
+    writeFileSync(outputPath, "keep me", "utf8");
+    const { io, captured } = makeIo();
+    const code = await runEvaluateCli(
+      ["--suite", "all", "--output", outputPath],
+      io,
+      {},
+      offlineDeps(),
+    );
+    expect(code).toBe(1);
+    expect(captured().err).toContain("output file already exists");
+    expect(readFileSync(outputPath, "utf8")).toBe("keep me");
   });
 });
