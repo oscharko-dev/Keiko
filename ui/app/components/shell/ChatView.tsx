@@ -55,7 +55,7 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
   // Scroll to bottom when messages load or new message arrives
   useEffect(() => {
     if (state.kind === "loaded") {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      bottomRef.current?.scrollIntoView?.({ behavior: "smooth" });
     }
   }, [state]);
 
