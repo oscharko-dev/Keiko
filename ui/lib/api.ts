@@ -35,11 +35,13 @@ export class ApiError extends Error {
 // ---------------------------------------------------------------------------
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
   const res = await fetch(path, {
     ...init,
     headers: {
       Accept: "application/json",
       ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(method === "GET" || method === "HEAD" ? {} : { "X-Keiko-CSRF": "1" }),
       ...(init?.headers ?? {}),
     },
   });
@@ -108,7 +110,9 @@ export interface StartRunInput {
   limits?: Record<string, unknown>;
 }
 
-export async function startRun(body: StartRunInput): Promise<{ runId: string; fingerprint: string }> {
+export async function startRun(
+  body: StartRunInput,
+): Promise<{ runId: string; fingerprint: string }> {
   return fetchJson("/api/runs", {
     method: "POST",
     body: JSON.stringify(body),
@@ -122,6 +126,7 @@ export async function startRun(body: StartRunInput): Promise<{ runId: string; fi
 export async function cancelRun(runId: string): Promise<{ ok: true }> {
   return fetchJson(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
     method: "POST",
+    body: JSON.stringify({ confirm: true }),
   });
 }
 

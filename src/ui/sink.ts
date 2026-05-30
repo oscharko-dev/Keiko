@@ -25,7 +25,7 @@ export interface StreamEvent {
 
 // A single attached SSE consumer. `write` frames+sends one event; `close` ends the response.
 export interface SseWriter {
-  readonly write: (event: StreamEvent) => void;
+  readonly write: (event: StreamEvent) => boolean | undefined;
   readonly close: () => void;
 }
 
@@ -49,8 +49,17 @@ export class QueueEventSink {
     if (this.buffer.length > this.capacity) {
       this.buffer.shift();
     }
-    for (const writer of this.writers) {
-      writer.write(event);
+    for (const writer of [...this.writers]) {
+      try {
+        const accepted = writer.write(event);
+        if (accepted === false) {
+          this.writers.delete(writer);
+          writer.close();
+        }
+      } catch {
+        this.writers.delete(writer);
+        writer.close();
+      }
     }
   };
 
@@ -64,7 +73,11 @@ export class QueueEventSink {
   attach(writer: SseWriter, afterSeq: number): () => void {
     for (const event of this.buffer) {
       if (event.seq > afterSeq) {
-        writer.write(event);
+        const accepted = writer.write(event);
+        if (accepted === false) {
+          writer.close();
+          return (): void => undefined;
+        }
       }
     }
     this.writers.add(writer);

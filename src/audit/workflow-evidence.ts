@@ -15,6 +15,7 @@ import { EVIDENCE_SCHEMA_VERSION, type EvidenceManifest } from "./types.js";
 import type { EvidenceStore } from "./store.js";
 import { HARNESS_VERSION, type TaskType } from "../harness/index.js";
 import type { EnvSource } from "../gateway/index.js";
+import type { AuditSummary } from "../workspace/index.js";
 
 // The two workflow families the evidence path serves. Distinct from the UI RunKind (which also
 // carries "explain-plan", handled by a separate harness-usage fold) so this module needs no ui import.
@@ -26,6 +27,7 @@ export type WorkflowTerminalStatus = "completed" | "cancelled" | "failed";
 export interface EvidencePersistContext {
   readonly store: EvidenceStore;
   readonly env: EnvSource;
+  readonly additionalSecrets?: readonly string[] | undefined;
 }
 
 // Identity + timing held when a workflow run terminates. `modelId` is the request model; the
@@ -38,6 +40,7 @@ export interface WorkflowRunIdentity {
   readonly status: WorkflowTerminalStatus;
   readonly startedAt: number;
   readonly finishedAt: number;
+  readonly workspaceRoot?: string | undefined;
 }
 
 // A structural workflow event: every workflow/harness event carries this envelope; the manifest fold
@@ -62,7 +65,10 @@ export function foldWorkflowUsage(
   let requestCount = 0;
   let totalLatencyMs = 0;
   for (const event of events) {
-    if (event.type !== "workflow:model:call:completed") {
+    if (
+      event.type !== "workflow:model:call:completed" &&
+      event.type !== "bug:model:call:completed"
+    ) {
       continue;
     }
     const record = event as unknown as Record<string, unknown>;
@@ -97,12 +103,29 @@ export function buildWorkflowManifest(
     },
     model: { modelId: identity.modelId, costClass: resolveCostClass(identity.modelId) },
     usageTotals: foldWorkflowUsage(events),
+    ...(contextOf(identity.workspaceRoot) === undefined
+      ? {}
+      : { context: contextOf(identity.workspaceRoot) }),
     stateTransitions: [],
     toolCalls: [],
     commandExecutions: [],
     verification: verificationOf(report),
     patch: patchOf(report),
     failure: undefined,
+  };
+}
+
+function contextOf(workspaceRoot: string | undefined): AuditSummary | undefined {
+  if (workspaceRoot === undefined) {
+    return undefined;
+  }
+  return {
+    workspaceRoot,
+    totalCandidates: 0,
+    usedBytes: 0,
+    budgetBytes: 0,
+    droppedForBudget: 0,
+    entries: [],
   };
 }
 
@@ -116,7 +139,7 @@ export function persistWorkflowEvidence(
   ctx: EvidencePersistContext,
 ): EvidenceReport {
   const manifest = buildWorkflowManifest(identity, events, report);
-  const redactor = createAuditRedactor({}, ctx.env);
+  const redactor = createAuditRedactor({ additionalSecrets: ctx.additionalSecrets ?? [] }, ctx.env);
   const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
   const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
   return buildEvidenceReport(redacted, location);

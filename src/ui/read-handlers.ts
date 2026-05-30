@@ -11,6 +11,7 @@ import {
   UNIT_TEST_WORKFLOW_DESCRIPTOR,
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
 } from "../workflows/index.js";
+import { DEFAULT_LIMITS } from "../harness/index.js";
 import {
   listEvidence,
   loadEvidence,
@@ -66,6 +67,7 @@ export function handleWorkflows(): RouteResult {
             description: "Optional focusing question for the explanation.",
           },
         ],
+        defaultLimits: DEFAULT_LIMITS,
       },
     },
   };
@@ -156,22 +158,28 @@ function readFilters(url: URL): EvidenceFilters {
 }
 
 // `EvidenceListEntry.startedAt` is epoch ms; the `date` filter matches the started-at calendar day
-// (UTC `YYYY-MM-DD`). `workspace`/`model` are not on the list projection (header-only), so they are
-// no-op filters here — applied at the detail level by the UI when a manifest is loaded.
+// (UTC `YYYY-MM-DD`). `workspace` is a substring match to support path-fragment filtering, while
+// `model` is an exact model-id match.
+function matchesOptionalFilter(value: string | undefined, filter: string | undefined): boolean {
+  return filter === undefined || value === filter;
+}
+
+function matchesDateFilter(entry: EvidenceListEntry, date: string | undefined): boolean {
+  return date === undefined || new Date(entry.startedAt).toISOString().slice(0, 10) === date;
+}
+
+function matchesWorkspaceFilter(entry: EvidenceListEntry, workspace: string | undefined): boolean {
+  return workspace === undefined || entry.workspaceRoot?.includes(workspace) === true;
+}
+
 function matchesFilters(entry: EvidenceListEntry, filters: EvidenceFilters): boolean {
-  if (filters.workflow !== undefined && entry.taskType !== filters.workflow) {
-    return false;
-  }
-  if (filters.outcome !== undefined && entry.outcome !== filters.outcome) {
-    return false;
-  }
-  if (filters.date !== undefined) {
-    const day = new Date(entry.startedAt).toISOString().slice(0, 10);
-    if (day !== filters.date) {
-      return false;
-    }
-  }
-  return true;
+  return (
+    matchesOptionalFilter(entry.taskType, filters.workflow) &&
+    matchesOptionalFilter(entry.outcome, filters.outcome) &&
+    matchesDateFilter(entry, filters.date) &&
+    matchesOptionalFilter(entry.modelId, filters.model) &&
+    matchesWorkspaceFilter(entry, filters.workspace)
+  );
 }
 
 // Route 10 — evidence list header projection, filtered server-side.

@@ -107,6 +107,7 @@ Temporary Items
 
 /.claude/
 /.codex/
+/.playwright-mcp/
 /.idea/
 /AGENTS.md
 /CLAUDE.md

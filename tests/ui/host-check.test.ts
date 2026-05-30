@@ -33,8 +33,8 @@ describe("isAllowedHost", () => {
     expect(isAllowedHost(reqWith({ host: "127.0.0.1:5000" }), PORT)).toBe(false);
   });
 
-  it("accepts a loopback host with no port (defaults match)", () => {
-    expect(isAllowedHost(reqWith({ host: "127.0.0.1" }), PORT)).toBe(true);
+  it("rejects a loopback host with no explicit bound port", () => {
+    expect(isAllowedHost(reqWith({ host: "127.0.0.1" }), PORT)).toBe(false);
   });
 
   it("rejects when Origin is present and non-loopback even if Host is loopback", () => {
@@ -47,8 +47,13 @@ describe("isAllowedHost", () => {
     expect(isAllowedHost(req, PORT)).toBe(true);
   });
 
-  it("accepts the opaque 'null' origin (file/sandbox) when Host is loopback", () => {
+  it("rejects the opaque 'null' origin (file/sandbox) even when Host is loopback", () => {
     const req = reqWith({ host: "localhost:4319", origin: "null" });
-    expect(isAllowedHost(req, PORT)).toBe(true);
+    expect(isAllowedHost(req, PORT)).toBe(false);
+  });
+
+  it("rejects an Origin without the bound port", () => {
+    const req = reqWith({ host: "localhost:4319", origin: "http://localhost" });
+    expect(isAllowedHost(req, PORT)).toBe(false);
   });
 });

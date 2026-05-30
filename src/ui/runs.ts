@@ -157,11 +157,20 @@ export function createRunRegistry(options: RunRegistryOptions = {}): RunRegistry
   };
   return {
     register: (input): RunRecord => registerRun(state, input),
-    get: (runId): RunRecord | undefined => state.records.get(runId),
+    get: (runId): RunRecord | undefined => {
+      evictExpired(state);
+      return state.records.get(runId);
+    },
     complete: (runId, status, report, appliable): void => {
       completeRun(state, runId, status, report, appliable);
     },
-    activeCount: (): number => countActive(state),
-    size: (): number => state.records.size,
+    activeCount: (): number => {
+      evictExpired(state);
+      return countActive(state);
+    },
+    size: (): number => {
+      evictExpired(state);
+      return state.records.size;
+    },
   };
 }

@@ -30,13 +30,14 @@ const mockConfig = {
   config: {
     providers: [
       {
-        name: "anthropic",
         modelId: "claude-3-5-sonnet",
         baseUrl: "https://api.anthropic.com",
         timeoutMs: 30000,
-        retries: 2,
+        maxRetries: 2,
+        retryBaseDelayMs: 500,
       },
     ],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
   },
   configPresent: true,
 };
@@ -110,10 +111,19 @@ describe("ConfigPage", () => {
     });
   });
 
+  it("renders retry and circuit-breaker settings from the safe config", async () => {
+    render(<ConfigPage />);
+    await waitFor(() => {
+      expect(screen.getByText("500 ms")).toBeInTheDocument();
+      expect(screen.getByText(/circuit breaker/i)).toBeInTheDocument();
+      expect(screen.getAllByText("30000 ms").length).toBeGreaterThan(0);
+    });
+  });
+
   it("headings and tables are in the DOM and reachable by keyboard via tab", async () => {
     render(<ConfigPage />);
     await waitFor(() => {
-      expect(screen.getByText("anthropic")).toBeInTheDocument();
+      expect(screen.getByText("https://api.anthropic.com")).toBeInTheDocument();
     });
     // Verify both section headings are present (keyboard users reach them via headings navigation)
     expect(screen.getByRole("heading", { name: /gateway configuration/i })).toBeInTheDocument();
@@ -150,21 +160,22 @@ describe("ConfigPage", () => {
       config: {
         providers: [
           {
-            name: "anthropic",
             modelId: "claude-3-5-sonnet",
             baseUrl: "https://api.anthropic.com",
             // SafeProviderConfig has no apiKey field — these values do not appear
             timeoutMs: 30000,
-            retries: 2,
+            maxRetries: 2,
+            retryBaseDelayMs: 500,
           },
         ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
       },
       configPresent: true,
     });
 
     const { container } = render(<ConfigPage />);
     await waitFor(() => {
-      expect(screen.getByText("anthropic")).toBeInTheDocument();
+      expect(screen.getByText("https://api.anthropic.com")).toBeInTheDocument();
     });
 
     const domText = container.textContent ?? "";

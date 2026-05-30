@@ -9,7 +9,7 @@ import * as api from "@/lib/api";
 // ---------------------------------------------------------------------------
 
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => ({ get: (key: string) => key === "id" ? "run-detail-789" : null }),
+  useSearchParams: () => ({ get: (key: string) => (key === "id" ? "run-detail-789" : null) }),
   useRouter: () => ({ push: vi.fn() }),
 }));
 
@@ -49,6 +49,34 @@ const mockManifest = {
     stateTransitions: [],
     toolCalls: [],
     commandExecutions: [],
+    verification: {
+      workspaceRoot: "/repo",
+      overallStatus: "passed" as const,
+      durationMs: 1200,
+      counts: { passed: 1 },
+      results: [
+        {
+          kind: "test" as const,
+          command: "npm test",
+          status: "passed" as const,
+          exitCode: 0,
+          durationMs: 1200,
+          truncated: false,
+          appliedLimits: [],
+        },
+      ],
+    },
+    patch: {
+      proposed: true,
+      applied: false,
+      targetFileCount: 1,
+      patchBytes: 128,
+      changedFiles: 1,
+      created: 1,
+      deleted: 0,
+    },
+    failure: { category: "HARNESS_MODEL_ERROR", message: "redacted failure" },
+    reasoning: [{ seq: 1, ts: new Date(0).toISOString(), phase: "planning", rationale: "safe" }],
   },
 };
 
@@ -79,12 +107,21 @@ describe("EvidenceDetailPage (/evidence/detail?id=)", () => {
     });
   });
 
+  it("displays verification, patch, failure, and reasoning sections", async () => {
+    render(<EvidenceDetailPage />);
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /verification/i })).toBeInTheDocument();
+      expect(screen.getByText("npm test")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: /^patch$/i })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: /failure/i })).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: /reasoning trace/i })).toBeInTheDocument();
+    });
+  });
+
   it("Back button is present and reachable by keyboard", async () => {
     render(<EvidenceDetailPage />);
     await waitFor(() => {
-      expect(
-        screen.getByRole("button", { name: /back to evidence browser/i }),
-      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /back to evidence browser/i })).toBeInTheDocument();
     });
     const btn = screen.getByRole("button", { name: /back to evidence browser/i });
     btn.focus();

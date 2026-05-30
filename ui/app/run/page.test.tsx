@@ -4,13 +4,14 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import RunPage from "./page";
 import * as api from "@/lib/api";
+import type { HarnessEvent } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => ({ get: (key: string) => key === "id" ? "run-test-123" : null }),
+  useSearchParams: () => ({ get: (key: string) => (key === "id" ? "run-test-123" : null) }),
   useRouter: () => ({ push: vi.fn() }),
 }));
 
@@ -48,6 +49,24 @@ describe("RunPage (/run?id=)", () => {
     vi.mocked(useSSE).mockReturnValue({ events: [], status: "connecting", error: null });
     vi.mocked(api.cancelRun).mockResolvedValue({ ok: true });
     vi.mocked(api.fetchRunReport).mockResolvedValue({ report: { status: "dry-run" } });
+    vi.mocked(api.fetchModels).mockResolvedValue({
+      models: [
+        {
+          id: "model-a",
+          kind: "chat",
+          contextWindow: 1000,
+          maxOutputTokens: 100,
+          toolCalling: true,
+          structuredOutput: true,
+          streaming: true,
+          costClass: "medium",
+          latencyClass: "fast",
+          throughputHint: "test",
+          preferredUseCases: [],
+          knownLimitations: [],
+        },
+      ],
+    });
   });
 
   it("renders the run heading with the runId", () => {
@@ -83,6 +102,86 @@ describe("RunPage (/run?id=)", () => {
   it("shows event timeline heading", () => {
     render(<RunPage />);
     expect(screen.getByRole("heading", { name: /event timeline/i })).toBeInTheDocument();
+  });
+
+  it("renders structured workflow, sandbox, command, and verification events", async () => {
+    const base = {
+      schemaVersion: "1" as const,
+      runId: "run-test-123",
+      fingerprint: "fp",
+      ts: new Date(0).toISOString(),
+    };
+    const events: HarnessEvent[] = [
+      {
+        ...base,
+        seq: 1,
+        type: "model:call:completed",
+        modelId: "model-a",
+        finishReason: "stop",
+        toolCallCount: 0,
+        usage: { requestId: "req", promptTokens: 10, completionTokens: 5, latencyMs: 20 },
+      },
+      {
+        ...base,
+        seq: 2,
+        type: "workflow:model:call:completed",
+        attempt: 1,
+        finishReason: "stop",
+        promptTokens: 11,
+        completionTokens: 7,
+        latencyMs: 30,
+      },
+      {
+        ...base,
+        seq: 3,
+        type: "sandbox:configured",
+        envAllowlist: ["PATH"],
+        network: "none",
+        maxOutputBytes: 4096,
+        timeoutMs: 1000,
+        terminationGraceMs: 100,
+        cwdRequested: true,
+      },
+      {
+        ...base,
+        seq: 4,
+        type: "command:executed",
+        executable: "npm",
+        argCount: 2,
+        exitCode: 0,
+        timedOut: false,
+        durationMs: 12,
+      },
+      {
+        ...base,
+        seq: 5,
+        type: "reasoning:trace",
+        phase: "planning",
+        rationale: "safe plan",
+      },
+      {
+        ...base,
+        seq: 6,
+        type: "bug:verification:result",
+        overallStatus: "passed",
+        stepCount: 2,
+        passedCount: 2,
+        durationMs: 40,
+      },
+    ];
+    vi.mocked(useSSE).mockReturnValue({ events, status: "live", error: null });
+
+    render(<RunPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/model call completed.*model-a/i)).toBeInTheDocument();
+      expect(screen.getByText(/medium cost/i)).toBeInTheDocument();
+      expect(screen.getByText(/workflow model call completed/i)).toBeInTheDocument();
+      expect(screen.getByText(/sandbox configured/i)).toBeInTheDocument();
+      expect(screen.getByText(/command executed.*npm/i)).toBeInTheDocument();
+      expect(screen.getByText(/reasoning.*planning/i)).toBeInTheDocument();
+      expect(screen.getByText(/workflow verification.*passed/i)).toBeInTheDocument();
+    });
   });
 
   it("shows resource-limit decisions table in terminal report", async () => {

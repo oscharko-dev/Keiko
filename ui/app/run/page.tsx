@@ -64,6 +64,8 @@ function EventCard({
 
 function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
   switch (ev.type) {
+    case "ready":
+      return <EventCard key={`${ev.seq}`} label="Event stream ready" variant="muted" />;
     case "run:started":
       return (
         <EventCard
@@ -75,6 +77,47 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
             .join(" ")}`}
         />
       );
+    case "workflow:started":
+    case "bug:started":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label={`Workflow started — ${ev.workflowId}`}
+          detail={`Model: ${ev.modelId} · ${ev.applyEnabled ? "apply enabled" : "dry-run"}`}
+          meta={`Limits: ${Object.entries(ev.limits)
+            .map(([k, v]) => `${k}=${String(v)}`)
+            .join(" ")}`}
+        />
+      );
+    case "conventions:detected":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label={`Conventions detected — ${ev.framework}`}
+          detail={`Tests: ${ev.testDirs.join(", ") || "none"} · ${ev.fileNamingStyle}`}
+          variant="muted"
+        />
+      );
+    case "context:selected":
+    case "bug:context:selected":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label="Context selected"
+          detail={`${ev.entryCount.toString()} entries · ${formatBytes(ev.usedBytes)} of ${formatBytes(ev.budgetBytes)}`}
+          meta={`Dropped for budget: ${ev.droppedForBudget.toString()}`}
+          variant="muted"
+        />
+      );
+    case "bug:failure:parsed":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label="Bug evidence parsed"
+          detail={`${ev.frameCount.toString()} stack frames · ${ev.messageCount.toString()} messages`}
+          variant="muted"
+        />
+      );
     case "state:transition":
       return (
         <EventCard
@@ -84,12 +127,52 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant="muted"
         />
       );
+    case "workflow:model:call:started":
+    case "bug:model:call:started":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label={`Workflow model call started — attempt ${ev.attempt.toString()}`}
+          detail={`${formatBytes(ev.contextBytes)} context`}
+        />
+      );
+    case "workflow:model:call:completed":
+    case "bug:model:call:completed":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label={`Workflow model call completed — attempt ${ev.attempt.toString()}`}
+          detail={`Tokens: ${formatTokens(ev.promptTokens)} in / ${formatTokens(ev.completionTokens)} out · ${formatMs(ev.latencyMs)}`}
+          meta={`Finish: ${ev.finishReason}`}
+          variant="success"
+        />
+      );
     case "model:call:started":
       return (
         <EventCard
           key={`${ev.seq}`}
           label={`Model call started — ${ev.modelId}`}
           detail={`${ev.messageCount.toString()} messages · ${formatBytes(ev.contextBytes)} context`}
+        />
+      );
+    case "command:executed":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label={`Command executed — ${ev.executable}`}
+          detail={`${ev.argCount.toString()} args · exit ${ev.exitCode === null ? "n/a" : ev.exitCode.toString()} · ${formatMs(ev.durationMs)}`}
+          meta={ev.timedOut ? "Timed out" : "Completed within timeout"}
+          variant={ev.exitCode === 0 ? "success" : "muted"}
+        />
+      );
+    case "sandbox:configured":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label="Sandbox configured"
+          detail={`Network: ${ev.network} · output cap ${formatBytes(ev.maxOutputBytes)} · timeout ${formatMs(ev.timeoutMs)}`}
+          meta={`Env allowlist: ${ev.envAllowlist.join(", ") || "none"} · cwd requested: ${ev.cwdRequested ? "yes" : "no"}`}
+          variant="muted"
         />
       );
     case "model:call:completed": {
@@ -159,6 +242,38 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant="success"
         />
       );
+    case "patch:validated":
+    case "bug:patch:validated":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label={`Patch ${ev.ok ? "validated" : "rejected"}`}
+          detail={`${formatBytes(ev.patchBytes)} · ${ev.filesChanged.toString()} files`}
+          {...(ev.rejectionCode === undefined ? {} : { meta: ev.rejectionCode })}
+          variant={ev.ok ? "success" : "error"}
+        />
+      );
+    case "patch:applied":
+    case "workflow:patch:applied":
+    case "bug:patch:applied":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label="Patch applied"
+          detail={`${ev.changedFiles.toString()} changed · ${ev.created.toString()} created · ${ev.deleted.toString()} deleted`}
+          variant="success"
+        />
+      );
+    case "bug:rootcause:proposed":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label="Root cause proposed"
+          detail={ev.hasPatch ? "Patch candidate included" : "No patch candidate"}
+          {...(ev.confidence === undefined ? {} : { meta: `Confidence: ${ev.confidence}` })}
+          variant="muted"
+        />
+      );
     case "verification:result":
       return (
         <EventCard
@@ -168,8 +283,28 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant={ev.passed ? "success" : "error"}
         />
       );
+    case "workflow:verification:result":
+    case "bug:verification:result":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label={`Workflow verification — ${ev.overallStatus}`}
+          detail={`${ev.passedCount.toString()} of ${ev.stepCount.toString()} steps passed · ${formatMs(ev.durationMs)}`}
+          variant={ev.overallStatus === "passed" ? "success" : "error"}
+        />
+      );
     case "run:completed":
       return <EventCard key={`${ev.seq}`} label="Run completed" variant="success" />;
+    case "workflow:completed":
+    case "bug:completed":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label={`Workflow completed — ${ev.status}`}
+          detail={formatMs(ev.durationMs)}
+          variant="success"
+        />
+      );
     case "run:cancelled":
       return (
         <EventCard
@@ -188,8 +323,25 @@ function renderEvent(ev: HarnessEvent, models: ModelCapability[]): ReactNode {
           variant="error"
         />
       );
+    case "workflow:failed":
+    case "bug:failed":
+      return (
+        <EventCard
+          key={`${ev.seq}`}
+          label="Workflow failed"
+          detail={`${ev.errorCode}: ${ev.message}`}
+          variant="error"
+        />
+      );
     default:
-      return null;
+      const unknownEvent = ev as { readonly seq: number; readonly type: string };
+      return (
+        <EventCard
+          key={`${unknownEvent.seq}`}
+          label={`Event: ${unknownEvent.type}`}
+          variant="muted"
+        />
+      );
   }
 }
 
@@ -229,8 +381,12 @@ function RunViewInner(): ReactNode {
   const [models, setModels] = useState<ModelCapability[]>([]);
   useEffect(() => {
     fetchModels()
-      .then(({ models: m }) => { setModels(m); })
-      .catch(() => { /* non-fatal */ });
+      .then(({ models: m }) => {
+        setModels(m);
+      })
+      .catch(() => {
+        /* non-fatal */
+      });
   }, []);
 
   const { events, status, error } = useSSE(runId || null);
@@ -255,13 +411,17 @@ function RunViewInner(): ReactNode {
     if (status !== "terminal" || runId === "") return;
     let active = true;
     fetchRunReport(runId)
-      .then(({ report: r }) => { if (active) setReport(r); })
+      .then(({ report: r }) => {
+        if (active) setReport(r);
+      })
       .catch((err) => {
         if (!active) return;
         const msg = err instanceof ApiError ? err.message : "Failed to load run report";
         setReportError(msg);
       });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [status, runId]);
 
   const isTerminal = status === "terminal";
@@ -269,7 +429,9 @@ function RunViewInner(): ReactNode {
   if (runId === "") {
     return (
       <section aria-labelledby="run-heading">
-        <h1 id="run-heading" className="text-heading text-ink">Run</h1>
+        <h1 id="run-heading" className="text-heading text-ink">
+          Run
+        </h1>
         <p className="mt-4 text-sm text-ink-muted">No run ID specified.</p>
       </section>
     );
@@ -290,18 +452,28 @@ function RunViewInner(): ReactNode {
 
   return (
     <section aria-labelledby="run-heading">
-      <div role="status" aria-live="polite" aria-atomic="true" ref={liveRegionRef} className="sr-only" />
+      <div
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        ref={liveRegionRef}
+        className="sr-only"
+      />
 
       <div className="flex items-center justify-between gap-4">
         <div>
-          <h1 id="run-heading" className="text-heading text-ink">Run</h1>
+          <h1 id="run-heading" className="text-heading text-ink">
+            Run
+          </h1>
           <p className="mt-1 font-mono text-xs text-ink-muted">{runId}</p>
         </div>
         <div className="flex items-center gap-3">
           <StatusBadge status={status} />
           <button
             type="button"
-            onClick={() => { void handleCancel(); }}
+            onClick={() => {
+              void handleCancel();
+            }}
             disabled={isTerminal || cancelling}
             aria-label="Cancel this run"
             className="rounded border border-red-300 bg-red-50 px-4 py-1.5 text-sm font-medium text-red-700 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-40"
@@ -312,14 +484,20 @@ function RunViewInner(): ReactNode {
       </div>
 
       {error !== null && (
-        <p role="alert" className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+        <p role="alert" className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </p>
       )}
       {cancelError !== null && (
-        <p role="alert" className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{cancelError}</p>
+        <p role="alert" className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+          {cancelError}
+        </p>
       )}
 
       <section aria-labelledby="timeline-heading" className="mt-section">
-        <h2 id="timeline-heading" className="text-subheading text-ink">Event timeline</h2>
+        <h2 id="timeline-heading" className="text-subheading text-ink">
+          Event timeline
+        </h2>
         {events.length === 0 ? (
           <p className="mt-4 text-sm text-ink-muted" aria-busy={status === "connecting"}>
             {status === "connecting" ? "Connecting to event stream…" : "No events yet."}
@@ -333,9 +511,13 @@ function RunViewInner(): ReactNode {
 
       {isTerminal && (
         <section aria-labelledby="report-heading" className="mt-section">
-          <h2 id="report-heading" className="text-subheading text-ink">Run result</h2>
+          <h2 id="report-heading" className="text-subheading text-ink">
+            Run result
+          </h2>
           {reportError !== null && (
-            <p role="alert" className="mt-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{reportError}</p>
+            <p role="alert" className="mt-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+              {reportError}
+            </p>
           )}
           {report !== null && (
             <div className="mt-4 rounded-lg border border-ink/10 p-6">
@@ -343,7 +525,9 @@ function RunViewInner(): ReactNode {
                 <div className="flex gap-2">
                   <dt className="w-28 font-medium text-ink-muted">Status</dt>
                   <dd>
-                    <span className={`rounded px-2 py-0.5 text-xs font-medium ${outcomeClasses(report.status)}`}>
+                    <span
+                      className={`rounded px-2 py-0.5 text-xs font-medium ${outcomeClasses(report.status)}`}
+                    >
                       {outcomeLabel(report.status)}
                     </span>
                   </dd>
@@ -364,19 +548,24 @@ function RunViewInner(): ReactNode {
                   <div className="flex gap-2">
                     <dt className="w-28 font-medium text-ink-muted">Verification</dt>
                     <dd>
-                      <span className={`rounded px-2 py-0.5 text-xs font-medium ${verificationStatusClasses(report.verificationSummary.overallStatus)}`}>
+                      <span
+                        className={`rounded px-2 py-0.5 text-xs font-medium ${verificationStatusClasses(report.verificationSummary.overallStatus)}`}
+                      >
                         {verificationStatusLabel(report.verificationSummary.overallStatus)}
                       </span>
                     </dd>
                   </div>
                 )}
-              {report.verificationSummary !== undefined && report.verificationSummary.results.length > 0 && (
-                <ResourceLimitDecisionsTable results={report.verificationSummary.results} />
-              )}
+                {report.verificationSummary !== undefined &&
+                  report.verificationSummary.results.length > 0 && (
+                    <ResourceLimitDecisionsTable results={report.verificationSummary.results} />
+                  )}
               </dl>
               {report.proposedDiff !== undefined && (
                 <div className="mt-6 rounded border border-accent/30 bg-blue-50 p-4">
-                  <p className="text-sm font-medium text-ink">A patch has been proposed. Review and apply it below.</p>
+                  <p className="text-sm font-medium text-ink">
+                    A patch has been proposed. Review and apply it below.
+                  </p>
                   <Link
                     href={`/run/patch?id=${encodeURIComponent(runId)}`}
                     className="mt-2 inline-block rounded bg-accent px-4 py-1.5 text-sm font-semibold text-ink-inverse hover:bg-accent-strong focus:outline-none focus:ring-2 focus:ring-focus focus:ring-offset-2"
@@ -393,7 +582,9 @@ function RunViewInner(): ReactNode {
       <div className="mt-8">
         <button
           type="button"
-          onClick={() => { router.push("/launch"); }}
+          onClick={() => {
+            router.push("/launch");
+          }}
           className="text-sm text-ink-muted underline hover:text-ink focus:outline-none focus:ring-2 focus:ring-focus"
         >
           ← Back to Launch
@@ -409,12 +600,18 @@ function RunViewInner(): ReactNode {
 
 export default function RunPage(): ReactNode {
   return (
-    <Suspense fallback={
-      <section aria-labelledby="run-heading">
-        <h1 id="run-heading" className="text-heading text-ink">Run</h1>
-        <p className="mt-4 text-ink-muted" aria-busy="true">Loading…</p>
-      </section>
-    }>
+    <Suspense
+      fallback={
+        <section aria-labelledby="run-heading">
+          <h1 id="run-heading" className="text-heading text-ink">
+            Run
+          </h1>
+          <p className="mt-4 text-ink-muted" aria-busy="true">
+            Loading…
+          </p>
+        </section>
+      }
+    >
       <RunViewInner />
     </Suspense>
   );

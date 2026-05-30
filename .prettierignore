@@ -2,6 +2,7 @@ dist/
 coverage/
 node_modules/
 package-lock.json
+.playwright-mcp/
 .github/ISSUE_TEMPLATE/
 .github/workflows/
 docs/adr/

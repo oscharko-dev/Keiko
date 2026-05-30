@@ -31,20 +31,34 @@ function isLoopbackAuthority(authority: string, expectedPort: number): boolean {
   if (!LOOPBACK_HOSTS.has(host)) {
     return false;
   }
-  return port === undefined || port === String(expectedPort);
+  return port === String(expectedPort);
+}
+
+function originAuthority(origin: string): string | undefined {
+  try {
+    const parsed = new URL(origin);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    return parsed.host;
+  } catch {
+    return undefined;
+  }
 }
 
 // A request is accepted only if its `Host` is a loopback authority on the bound port and, when an
-// `Origin` is present, that origin is also loopback. A missing `Host` is rejected.
+// `Origin` is present, that origin is also loopback on the bound port. Opaque `Origin: null` is
+// rejected because state-changing API routes are reachable from sandboxed/file origins otherwise.
+// A missing `Host` is rejected.
 export function isAllowedHost(req: IncomingMessage, expectedPort: number): boolean {
   const host = req.headers.host;
   if (host === undefined || !isLoopbackAuthority(host, expectedPort)) {
     return false;
   }
   const origin = req.headers.origin;
-  if (origin === undefined || origin === "null") {
+  if (origin === undefined) {
     return true;
   }
-  const withoutScheme = origin.replace(/^https?:\/\//, "");
-  return isLoopbackAuthority(withoutScheme, expectedPort);
+  const authority = originAuthority(origin);
+  return authority !== undefined && isLoopbackAuthority(authority, expectedPort);
 }

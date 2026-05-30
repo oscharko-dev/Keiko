@@ -29,6 +29,8 @@ const mockEntries = [
     outcome: "completed" as const,
     startedAt: 1780048800000, // 2026-05-29T10:00:00Z
     finishedAt: 1780048920000, // 2026-05-29T10:02:00Z
+    modelId: "model-a",
+    workspaceRoot: "/workspaces/a",
   },
   {
     runId: "run-bbb",
@@ -36,6 +38,8 @@ const mockEntries = [
     outcome: "failed" as const,
     startedAt: 1779958800000, // 2026-05-28T09:00:00Z
     finishedAt: 1779959100000, // 2026-05-28T09:05:00Z
+    modelId: "model-b",
+    workspaceRoot: "/workspaces/b",
   },
 ];
 
@@ -122,6 +126,28 @@ describe("EvidencePage", () => {
     await waitFor(() => {
       expect(screen.getByRole("link", { name: "run-bbb" })).toBeInTheDocument();
       expect(screen.queryByRole("link", { name: "run-aaa" })).not.toBeInTheDocument();
+    });
+  });
+
+  it("filters by workflow, model, and workspace", async () => {
+    render(<EvidencePage />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "run-aaa" })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByRole("combobox", { name: /workflow/i }), {
+      target: { value: "investigate-bug" },
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("link", { name: "run-aaa" })).not.toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "run-bbb" })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText(/model/i), { target: { value: "model-b" } });
+    fireEvent.change(screen.getByLabelText(/workspace/i), { target: { value: "/workspaces/b" } });
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "run-bbb" })).toBeInTheDocument();
     });
   });
 

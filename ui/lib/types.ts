@@ -32,15 +32,22 @@ export interface ModelCapability {
 // ---------------------------------------------------------------------------
 
 export interface SafeProviderConfig {
-  readonly name: string;
   readonly modelId: string;
   readonly baseUrl: string;
   readonly timeoutMs: number;
-  readonly retries: number;
+  readonly maxRetries: number;
+  readonly retryBaseDelayMs: number;
+}
+
+export interface SafeCircuitBreakerConfig {
+  readonly failureThreshold: number;
+  readonly cooldownMs: number;
+  readonly halfOpenProbes: number;
 }
 
 export interface SafeGatewayConfig {
   readonly providers: readonly SafeProviderConfig[];
+  readonly circuitBreaker: SafeCircuitBreakerConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -75,6 +82,7 @@ export interface WorkflowDescriptor {
 
 export interface ExplainPlanInputSpec {
   inputs: Array<{ name: string; type: WorkflowInputType; required: boolean }>;
+  defaultLimits: Record<string, unknown>;
 }
 
 export interface WorkflowsResponse {
@@ -258,26 +266,107 @@ export type HarnessEvent =
       deleted: number;
     })
   // Unit-test workflow events (src/workflows/unit-tests/events.ts)
-  | (BaseEvent & { type: "workflow:started"; workflowId: string; modelId: string; applyEnabled: boolean; limits: Record<string, unknown> })
-  | (BaseEvent & { type: "conventions:detected"; framework: string; testDirs: readonly string[]; fileNamingStyle: string })
-  | (BaseEvent & { type: "context:selected"; entryCount: number; usedBytes: number; budgetBytes: number; droppedForBudget: number })
+  | (BaseEvent & {
+      type: "workflow:started";
+      workflowId: string;
+      modelId: string;
+      applyEnabled: boolean;
+      limits: Record<string, unknown>;
+    })
+  | (BaseEvent & {
+      type: "conventions:detected";
+      framework: string;
+      testDirs: readonly string[];
+      fileNamingStyle: string;
+    })
+  | (BaseEvent & {
+      type: "context:selected";
+      entryCount: number;
+      usedBytes: number;
+      budgetBytes: number;
+      droppedForBudget: number;
+    })
   | (BaseEvent & { type: "workflow:model:call:started"; attempt: number; contextBytes: number })
-  | (BaseEvent & { type: "workflow:model:call:completed"; attempt: number; finishReason: string; promptTokens: number; completionTokens: number; latencyMs: number })
-  | (BaseEvent & { type: "patch:validated"; ok: boolean; patchBytes: number; filesChanged: number; rejectionCode?: string })
-  | (BaseEvent & { type: "workflow:patch:applied"; changedFiles: number; created: number; deleted: number })
-  | (BaseEvent & { type: "workflow:verification:result"; overallStatus: string; stepCount: number; passedCount: number; durationMs: number })
+  | (BaseEvent & {
+      type: "workflow:model:call:completed";
+      attempt: number;
+      finishReason: string;
+      promptTokens: number;
+      completionTokens: number;
+      latencyMs: number;
+    })
+  | (BaseEvent & {
+      type: "patch:validated";
+      ok: boolean;
+      patchBytes: number;
+      filesChanged: number;
+      rejectionCode?: string;
+    })
+  | (BaseEvent & {
+      type: "workflow:patch:applied";
+      changedFiles: number;
+      created: number;
+      deleted: number;
+    })
+  | (BaseEvent & {
+      type: "workflow:verification:result";
+      overallStatus: string;
+      stepCount: number;
+      passedCount: number;
+      durationMs: number;
+    })
   | (BaseEvent & { type: "workflow:completed"; status: string; durationMs: number })
   | (BaseEvent & { type: "workflow:failed"; errorCode: string; message: string })
   // Bug-investigation workflow events (src/workflows/bug-investigation/events.ts)
-  | (BaseEvent & { type: "bug:started"; workflowId: string; modelId: string; applyEnabled: boolean; limits: Record<string, unknown> })
+  | (BaseEvent & {
+      type: "bug:started";
+      workflowId: string;
+      modelId: string;
+      applyEnabled: boolean;
+      limits: Record<string, unknown>;
+    })
   | (BaseEvent & { type: "bug:failure:parsed"; frameCount: number; messageCount: number })
-  | (BaseEvent & { type: "bug:context:selected"; entryCount: number; usedBytes: number; budgetBytes: number; droppedForBudget: number })
+  | (BaseEvent & {
+      type: "bug:context:selected";
+      entryCount: number;
+      usedBytes: number;
+      budgetBytes: number;
+      droppedForBudget: number;
+    })
   | (BaseEvent & { type: "bug:model:call:started"; attempt: number; contextBytes: number })
-  | (BaseEvent & { type: "bug:model:call:completed"; attempt: number; finishReason: string; promptTokens: number; completionTokens: number; latencyMs: number })
-  | (BaseEvent & { type: "bug:rootcause:proposed"; hasPatch: boolean; confidence?: "low" | "medium" | "high" })
-  | (BaseEvent & { type: "bug:patch:validated"; ok: boolean; patchBytes: number; filesChanged: number; rejectionCode?: string })
-  | (BaseEvent & { type: "bug:patch:applied"; changedFiles: number; created: number; deleted: number })
-  | (BaseEvent & { type: "bug:verification:result"; overallStatus: string; stepCount: number; passedCount: number; durationMs: number })
+  | (BaseEvent & {
+      type: "bug:model:call:completed";
+      attempt: number;
+      finishReason: string;
+      promptTokens: number;
+      completionTokens: number;
+      latencyMs: number;
+    })
+  | (BaseEvent & {
+      type: "bug:rootcause:proposed";
+      hasPatch: boolean;
+      confidence?: "low" | "medium" | "high";
+    })
+  | (BaseEvent & {
+      type: "bug:patch:validated";
+      ok: boolean;
+      patchBytes: number;
+      filesChanged: number;
+      rejectionCode?: string;
+    })
+  | (BaseEvent & {
+      type: "bug:patch:applied";
+      changedFiles: number;
+      created: number;
+      deleted: number;
+    })
+  | (BaseEvent & {
+      type: "bug:verification:result";
+      overallStatus: string;
+      stepCount: number;
+      passedCount: number;
+      durationMs: number;
+    })
   | (BaseEvent & { type: "bug:completed"; status: string; durationMs: number })
   | (BaseEvent & { type: "bug:failed"; errorCode: string; message: string })
   // Synthetic BFF sentinel emitted on stream open
@@ -371,11 +460,7 @@ export const TERMINAL_EVENT_TYPES = new Set<string>([
 // Audit / Evidence
 // ---------------------------------------------------------------------------
 
-export type EvidenceOutcome =
-  | "completed"
-  | "cancelled"
-  | "failed"
-  | "limit-exceeded";
+export type EvidenceOutcome = "completed" | "cancelled" | "failed" | "limit-exceeded";
 
 export interface EvidenceListEntry {
   runId: string;
@@ -385,6 +470,8 @@ export interface EvidenceListEntry {
   startedAt: number;
   /** Epoch-ms timestamp from the audit layer (src/audit/index-api.ts finishedAt: number). */
   finishedAt: number;
+  modelId: string;
+  workspaceRoot?: string;
 }
 
 export interface EvidenceRunIdentity {
@@ -441,9 +528,9 @@ export interface EvidencePatch {
   applied: boolean;
   targetFileCount: number;
   patchBytes: number;
-  changedFiles: string[];
-  created: string[];
-  deleted: string[];
+  changedFiles: number;
+  created: number;
+  deleted: number;
   redactedDiff?: string;
 }
 

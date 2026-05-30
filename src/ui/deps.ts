@@ -42,6 +42,8 @@ export interface UiHandlerDeps {
   readonly registry: RunRegistry;
   // Builds the ModelPort a run uses. Default = GatewayModelPort from config; tests inject a fake.
   readonly modelPortFactory: ModelPortFactory;
+  // Exact secret literals used by evidence persistence in addition to gateway redaction patterns.
+  readonly redactionSecrets?: readonly string[] | undefined;
 }
 
 export interface BuildHandlerDepsOptions {
@@ -75,11 +77,39 @@ function resolveConfig(
   }
 }
 
+function isKeikoApiKeyEnvName(name: string): boolean {
+  return (
+    name === "KEIKO_DEFAULT_API_KEY" ||
+    (name.startsWith("KEIKO_MODEL_") && name.endsWith("_API_KEY"))
+  );
+}
+
+function envSecretValues(env: EnvSource): readonly string[] {
+  const values: string[] = [];
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined && isKeikoApiKeyEnvName(key)) {
+      values.push(value);
+    }
+  }
+  return values;
+}
+
+function configSecretValues(config: GatewayConfig | undefined): readonly string[] {
+  return config?.providers.map((provider) => provider.apiKey) ?? [];
+}
+
+function redactionSecrets(env: EnvSource, config: GatewayConfig | undefined): readonly string[] {
+  return [...envSecretValues(env), ...configSecretValues(config)];
+}
+
 // Builds the live-payload redactor from the configured redaction settings + env. No new regex: this
 // reuses `createAuditRedactor` (escaped literals + audited gateway patterns) wrapped by
 // `deepRedactStrings` so every string leaf of a serialized payload is scrubbed.
-export function buildRedactor(env: EnvSource): Redactor {
-  const redactString = createAuditRedactor({}, env);
+export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor {
+  const redactString = createAuditRedactor(
+    { additionalSecrets: redactionSecrets(env, config) },
+    env,
+  );
   return (value: unknown): unknown => deepRedactStrings(value, redactString);
 }
 
@@ -100,13 +130,15 @@ function defaultModelPortFactory(config: GatewayConfig | undefined): ModelPortFa
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const { config, configPresent } = resolveConfig(options.configPath, options.env);
   const store = createNodeEvidenceStore(resolveEvidenceDir(options.evidenceDir, options.env));
+  const secrets = redactionSecrets(options.env, config);
   return {
     config,
     configPresent,
     evidenceStore: store,
     env: options.env,
-    redactor: buildRedactor(options.env),
+    redactor: buildRedactor(options.env, config),
     registry: options.registry ?? createRunRegistry(),
     modelPortFactory: options.modelPortFactory ?? defaultModelPortFactory(config),
+    redactionSecrets: secrets,
   };
 }

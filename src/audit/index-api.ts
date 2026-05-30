@@ -17,6 +17,8 @@ export interface EvidenceListEntry {
   readonly outcome: RunOutcome;
   readonly startedAt: number;
   readonly finishedAt: number;
+  readonly modelId: string;
+  readonly workspaceRoot?: string | undefined;
 }
 
 // Parses raw JSON and verifies the schema version before trusting the shape. We narrow on the
@@ -148,6 +150,10 @@ function toListEntry(manifest: EvidenceManifest): EvidenceListEntry {
     outcome: manifest.run.outcome,
     startedAt: manifest.run.startedAt,
     finishedAt: manifest.run.finishedAt,
+    modelId: manifest.model.modelId,
+    ...(manifest.context?.workspaceRoot === undefined
+      ? {}
+      : { workspaceRoot: manifest.context.workspaceRoot }),
   };
 }
 
