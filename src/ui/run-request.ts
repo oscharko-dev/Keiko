@@ -6,7 +6,7 @@
 // (`isSensitivePath`, patch limits, target validation) are enforced by the workflow/harness entry
 // points the engine calls; the BFF never reimplements them.
 
-export type RunKind = "unit-tests" | "bug-investigation" | "explain-plan";
+export type RunKind = "unit-tests" | "bug-investigation" | "explain-plan" | "verify";
 
 export interface RunRequest {
   readonly kind: RunKind;
@@ -47,7 +47,33 @@ function resolveKind(body: Record<string, unknown>): RunKind | RunRequestError {
   if (taskType === "explain-plan") {
     return "explain-plan";
   }
+  if (taskType === "verify") {
+    return "verify";
+  }
   return { code: "BAD_REQUEST", message: "Unsupported taskType." };
+}
+
+// Verify shape: workspaceRoot is required, targetFiles (when present) must be a string[] of
+// non-empty entries. The deeper guards (path containment, script detection) run inside the
+// verification orchestrator; the BFF only validates shape here.
+function validateVerifyInput(input: Record<string, unknown>): RunRequestError | null {
+  const workspaceRoot = input.workspaceRoot;
+  if (typeof workspaceRoot !== "string" || workspaceRoot.length === 0) {
+    return { code: "BAD_REQUEST", message: "verify requires a non-empty workspaceRoot." };
+  }
+  const targetFiles = input.targetFiles;
+  if (targetFiles === undefined) {
+    return null;
+  }
+  if (!Array.isArray(targetFiles)) {
+    return { code: "BAD_REQUEST", message: "verify targetFiles must be a string array." };
+  }
+  for (const entry of targetFiles) {
+    if (typeof entry !== "string" || entry.length === 0) {
+      return { code: "BAD_REQUEST", message: "verify targetFiles must contain non-empty strings." };
+    }
+  }
+  return null;
 }
 
 // Parses the raw JSON text into a validated RunRequest, or a typed BAD_REQUEST error.
@@ -72,6 +98,12 @@ export function parseRunRequest(raw: string): RunRequest | RunRequestError {
   const input = parsed.input;
   if (!isRecord(input)) {
     return { code: "BAD_REQUEST", message: "An input object is required." };
+  }
+  if (kind === "verify") {
+    const verifyError = validateVerifyInput(input);
+    if (verifyError !== null) {
+      return verifyError;
+    }
   }
   const limits = parsed.limits;
   return {

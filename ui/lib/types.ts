@@ -85,9 +85,15 @@ export interface ExplainPlanInputSpec {
   defaultLimits: Record<string, unknown>;
 }
 
+export interface VerifyInputSpec {
+  inputs: Array<{ name: string; type: WorkflowInputType; required: boolean }>;
+  defaultLimits: Record<string, unknown>;
+}
+
 export interface WorkflowsResponse {
   descriptors: WorkflowDescriptor[];
   explainPlan: ExplainPlanInputSpec;
+  verify: VerifyInputSpec;
 }
 
 // ---------------------------------------------------------------------------

@@ -16,6 +16,13 @@ import {
 } from "../harness/index.js";
 import type { ModelPort } from "../harness/index.js";
 import { generateUnitTests, investigateBug } from "../workflows/index.js";
+import {
+  buildVerificationPlan,
+  detectScripts,
+  runVerification,
+  type VerificationReport,
+} from "../verification/index.js";
+import { detectWorkspace } from "../workspace/index.js";
 import type {
   UnitTestWorkflowInput,
   UnitTestWorkflowReport,
@@ -24,7 +31,15 @@ import type {
   BugInvestigationInput,
   BugInvestigationReport,
 } from "../workflows/bug-investigation/types.js";
-import type { TaskInput, RunResult, TaskType } from "../harness/index.js";
+import type {
+  HarnessEvent,
+  RunCompletedEvent,
+  RunStartedEvent,
+  TaskInput,
+  RunResult,
+  TaskType,
+} from "../harness/index.js";
+import { DEFAULT_LIMITS } from "../harness/index.js";
 import type { EvidenceReport } from "../audit/index.js";
 import type { RunRequest } from "./run-request.js";
 import { QueueEventSink } from "./sink.js";
@@ -32,6 +47,7 @@ import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";
 import {
   persistWorkflowEvidence,
   persistExplainEvidence,
+  persistVerifyEvidence,
   type EvidencePersistContext,
   type RunIdentity,
 } from "./evidence.js";
@@ -45,6 +61,7 @@ const KIND_TO_TASK_TYPE: Readonly<Record<RunRequest["kind"], TaskType>> = {
   "unit-tests": "generate-unit-tests",
   "bug-investigation": "investigate-bug",
   "explain-plan": "explain-plan",
+  verify: "verify",
 };
 
 interface EngineContext {
@@ -224,6 +241,107 @@ function dispatchExplain(
   };
 }
 
+// Maps a VerificationStatus to the BFF RunStatus. Verify has no "appliable" snapshot — the gates
+// either pass, fail/skip/deny (terminal), or are cancelled. `passed` → completed; `cancelled` →
+// cancelled; every other terminal status (failed/skipped/denied/timed-out/resource-exceeded) is
+// surfaced as `failed` so the registry stays in a known terminal state.
+function verifyStatusToRun(status: VerificationReport["overallStatus"]): TerminalStatus {
+  if (status === "passed") {
+    return "completed";
+  }
+  if (status === "cancelled") {
+    return "cancelled";
+  }
+  return "failed";
+}
+
+// Builds a structurally-valid HarnessEvent envelope for a verify run's run:started/run:completed
+// SSE events. Verify never enters the harness loop, but the SSE consumer keys on `type` and the
+// shared envelope (`schemaVersion`/`runId`/`fingerprint`/`seq`/`ts`) so a deterministic shape lets
+// the UI render a synthetic timeline alongside the workflow runs.
+function emitVerifyStart(
+  sink: QueueEventSink,
+  runId: string,
+  fingerprint: string,
+  modelId: string,
+): void {
+  const event: RunStartedEvent = {
+    schemaVersion: "1",
+    runId,
+    fingerprint,
+    seq: 0,
+    ts: Date.now(),
+    type: "run:started",
+    taskType: "verify",
+    modelId,
+    limits: DEFAULT_LIMITS,
+  };
+  sink.emit(event satisfies HarnessEvent);
+}
+
+function emitVerifyComplete(
+  sink: QueueEventSink,
+  runId: string,
+  fingerprint: string,
+  report: VerificationReport,
+): void {
+  const event: RunCompletedEvent = {
+    schemaVersion: "1",
+    runId,
+    fingerprint,
+    seq: 1,
+    ts: Date.now(),
+    type: "run:completed",
+    report: `verify overall=${report.overallStatus}`,
+  };
+  sink.emit(event satisfies HarnessEvent);
+}
+
+// Starts a deterministic verify run via the verification orchestrator. No model loop is entered;
+// the AbortController bridges the BFF cancel path to the orchestrator's signal. The two SSE events
+// (`run:started`, `run:completed`) frame the run for any attached UI subscriber.
+function dispatchVerify(ctx: EngineContext, sink: QueueEventSink, runId: string): Dispatched {
+  const controller = new AbortController();
+  const fingerprint = workflowFingerprint(ctx.request);
+  const root = workspaceRoot(ctx.request);
+  emitVerifyStart(sink, runId, fingerprint, ctx.request.modelId);
+  const result = runVerify(ctx, controller.signal, root).then((report): DispatchOutcome => {
+    emitVerifyComplete(sink, runId, fingerprint, report);
+    return {
+      status: verifyStatusToRun(report.overallStatus),
+      report,
+      appliable: undefined,
+    };
+  });
+  return {
+    result,
+    cancel: (reason?: string): void => {
+      controller.abort(reason);
+    },
+  };
+}
+
+async function runVerify(
+  ctx: EngineContext,
+  signal: AbortSignal,
+  root: string,
+): Promise<VerificationReport> {
+  const workspace = detectWorkspace(root);
+  const catalog = detectScripts(workspace);
+  const targetFiles = readTargetFiles(ctx.request.input.targetFiles);
+  const plan = buildVerificationPlan(workspace, catalog, {
+    ...(targetFiles === undefined ? {} : { changedFiles: targetFiles }),
+  });
+  return runVerification(plan, { workspace, signal });
+}
+
+function readTargetFiles(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  return value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+}
+
 // Registers the run, wires completion capture, and returns the synchronous {runId, fingerprint}. The
 // caller (POST /api/runs) has already validated the request and resolved the ModelPort. Throws
 // ActiveRunLimitError when the registry is at capacity (mapped to 429 upstream).
@@ -235,6 +353,13 @@ export function startRun(
   const startedAt = Date.now();
   if (ctx.request.kind === "explain-plan") {
     const { dispatched, runId, fingerprint } = dispatchExplain(ctx, sink);
+    registerAndCapture(ctx, { runId, fingerprint, sink, startedAt }, dispatched, redactReport);
+    return { runId, fingerprint };
+  }
+  if (ctx.request.kind === "verify") {
+    const runId = randomUUID();
+    const fingerprint = workflowFingerprint(ctx.request);
+    const dispatched = dispatchVerify(ctx, sink, runId);
     registerAndCapture(ctx, { runId, fingerprint, sink, startedAt }, dispatched, redactReport);
     return { runId, fingerprint };
   }
@@ -310,6 +435,9 @@ function persistOutcome(
   };
   if (ctx.request.kind === "explain-plan" && outcome.result !== undefined) {
     return persistExplainEvidence(runIdentity, outcome.result, ctx.evidence);
+  }
+  if (ctx.request.kind === "verify") {
+    return persistVerifyEvidence(runIdentity, ctx.evidence);
   }
   return persistWorkflowEvidence(
     runIdentity,
