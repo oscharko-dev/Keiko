@@ -14,6 +14,7 @@ import type {
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
+import { ComposerModeSelector } from "./ComposerModeSelector";
 
 // ---------------------------------------------------------------------------
 // Workflow modes (issue #65)
@@ -24,18 +25,6 @@ export type ComposerMode =
   | "investigate-bug"
   | "explain-plan"
   | "verify";
-
-interface ModeOption {
-  readonly id: ComposerMode;
-  readonly label: string;
-}
-
-const MODE_OPTIONS: readonly ModeOption[] = [
-  { id: "generate-tests", label: "Generate Tests" },
-  { id: "investigate-bug", label: "Investigate Bug" },
-  { id: "explain-plan", label: "Explain Plan" },
-  { id: "verify", label: "Verify" },
-];
 
 // Default model when the chat's selectedModel is not present in the registry's chat-kind slice.
 // If neither the chat's selectedModel nor this fallback are exposed, the dropdown shows no choice
@@ -147,7 +136,13 @@ function isSubmitReady(
 }
 
 function modeLabel(mode: ComposerMode): string {
-  return MODE_OPTIONS.find((o) => o.id === mode)?.label ?? mode;
+  const labels: Record<ComposerMode, string> = {
+    "generate-tests": "Generate Tests",
+    "investigate-bug": "Investigate Bug",
+    "explain-plan": "Explain Plan",
+    verify: "Verify",
+  };
+  return labels[mode];
 }
 
 function modePlaceholder(mode: ComposerMode | null): string {
@@ -313,35 +308,7 @@ export function ChatComposer({
         </select>
       </div>
 
-      <div
-        role="radiogroup"
-        aria-label="Workflow mode"
-        className="mb-2 flex flex-wrap gap-2"
-      >
-        {MODE_OPTIONS.map((opt) => {
-          const active = mode === opt.id;
-          return (
-            <button
-              key={opt.id}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              disabled={isSending}
-              onClick={() => setMode(opt.id)}
-              className={`rounded-full px-3 py-1 text-xs
-                focus:outline-none focus-visible:ring-2 focus-visible:ring-focus
-                disabled:opacity-50
-                ${
-                  active
-                    ? "bg-accent text-ink-inverse"
-                    : "bg-elevated text-ink-muted hover:bg-panel"
-                }`}
-            >
-              {opt.label}
-            </button>
-          );
-        })}
-      </div>
+      <ComposerModeSelector mode={mode} disabled={isSending} onChange={setMode} />
 
       <div className="flex items-end gap-2">
         <label htmlFor={`composer-${chatId}`} className="sr-only">
@@ -362,7 +329,7 @@ export function ChatComposer({
           aria-describedby={sendState.kind === "error" ? errorId : undefined}
           aria-invalid={sendState.kind === "error" ? "true" : undefined}
           className="flex-1 resize-none rounded border border-border bg-elevated px-3 py-2
-            text-sm text-ink placeholder:text-ink-dim
+            text-sm text-ink placeholder:text-ink-muted
             focus:outline-none focus-visible:ring-2 focus-visible:ring-focus
             disabled:opacity-50"
         />
@@ -381,6 +348,10 @@ export function ChatComposer({
           {isSending ? "…" : "Send"}
         </button>
       </div>
+      {/* sr-only live region announces sending state to AT (WCAG 4.1.3) */}
+      <span role="status" aria-live="polite" className="sr-only">
+        {isSending ? "Sending message" : ""}
+      </span>
     </div>
   );
 }

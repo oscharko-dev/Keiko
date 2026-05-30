@@ -153,7 +153,7 @@ async function selectMode(mode: string): Promise<void> {
 
 // Deep walk: returns true if any nested key (case-insensitive) matches a forbidden key.
 const FORBIDDEN_KEYS = new Set(
-  ["baseurl", "apikey", "deployment", "deploymentname", "endpoint", "apiversion"].map((k) =>
+  ["baseurl", "apikey", "apikeyenvvar", "deployment", "deploymentname", "endpoint", "apiversion"].map((k) =>
     k.toLowerCase(),
   ),
 );
@@ -499,6 +499,98 @@ describe("a11y — axe across UI states", () => {
     expect(results).toHaveNoViolations();
   });
 });
+
+describe("a11y — radiogroup keyboard navigation (WCAG 2.1.1)", () => {
+  it("first pill is the tabstop when no mode is selected", async () => {
+    renderComposer();
+    await waitForReady();
+    const pills = screen.getAllByRole("radio");
+    expect(pills[0]).toHaveAttribute("tabindex", "0");
+    for (let i = 1; i < pills.length; i++) {
+      expect(pills[i]).toHaveAttribute("tabindex", "-1");
+    }
+  });
+
+  it("selected pill becomes the tabstop; others become tabIndex=-1", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    await user.click(screen.getByRole("radio", { name: /investigate bug/i }));
+    const pills = screen.getAllByRole("radio");
+    const selected = screen.getByRole("radio", { name: /investigate bug/i });
+    expect(selected).toHaveAttribute("tabindex", "0");
+    for (const pill of pills) {
+      if (pill !== selected) {
+        expect(pill).toHaveAttribute("tabindex", "-1");
+      }
+    }
+  });
+
+  it("ArrowRight from first pill moves focus + selection to second pill", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    const first = screen.getByRole("radio", { name: /generate tests/i });
+    first.focus();
+    await user.keyboard("{ArrowRight}");
+    const second = screen.getByRole("radio", { name: /investigate bug/i });
+    expect(second).toHaveFocus();
+    expect(second).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("ArrowLeft from first pill wraps focus + selection to last pill", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    const first = screen.getByRole("radio", { name: /generate tests/i });
+    first.focus();
+    await user.keyboard("{ArrowLeft}");
+    const last = screen.getByRole("radio", { name: /verify/i });
+    expect(last).toHaveFocus();
+    expect(last).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("ArrowRight from last pill wraps focus + selection to first pill", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    const last = screen.getByRole("radio", { name: /verify/i });
+    last.focus();
+    await user.keyboard("{ArrowRight}");
+    const first = screen.getByRole("radio", { name: /generate tests/i });
+    expect(first).toHaveFocus();
+    expect(first).toHaveAttribute("aria-checked", "true");
+  });
+});
+
+describe("a11y — sending state announced via role=status (WCAG 4.1.3)", () => {
+  it("role=status region is empty while idle", async () => {
+    renderComposer();
+    await waitForReady();
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe("");
+  });
+
+  it('role=status region reads "Sending message" while a send is in-flight', async () => {
+    const user = userEvent.setup();
+    let resolveSend!: () => void;
+    vi.mocked(api.startRun).mockImplementation(
+      () => new Promise<typeof startRunOk>((res) => { resolveSend = () => res(startRunOk); }),
+    );
+    renderComposer();
+    await waitForReady();
+    await selectMode("Verify");
+    void user.click(screen.getByRole("button", { name: /send message/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe("Sending message");
+    });
+    resolveSend();
+    await waitFor(() => {
+      expect(screen.getByRole("status").textContent).toBe("");
+    });
+  });
+});
+
 
 // ---------------------------------------------------------------------------
 // Production-wiring integration test (per #62 audit lesson): exercises the real
