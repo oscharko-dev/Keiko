@@ -203,4 +203,25 @@ describe("runGenTestsCli (AC #1)", () => {
     expect(code).toBe(0);
     expect(seenModelId).toBe("Mistral-Small-3.1-24B-Instruct-2503");
   });
+
+  it("defaults to a configured chat model that does not advertise structured output", async () => {
+    const configPath = join(dir, "gateway.json");
+    writeFileSync(configPath, gatewayConfig(["Qwen2.5-Coder-7B-Instruct"]), "utf8");
+    let seenModelId: string | undefined;
+    const model: ModelPort = {
+      call: (request): Promise<NormalizedResponse> => {
+        seenModelId = request.modelId;
+        return Promise.resolve(modelReturning(FENCED).call(request, new AbortController().signal));
+      },
+    };
+    const c = makeIo();
+    const code = await runGenTestsCli(
+      ["--file", "src/add.ts", "--dir-root", dir, "--config", configPath],
+      c.io,
+      {},
+      { model },
+    );
+    expect(code).toBe(0);
+    expect(seenModelId).toBe("Qwen2.5-Coder-7B-Instruct");
+  });
 });

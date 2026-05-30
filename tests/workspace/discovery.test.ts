@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -190,6 +190,13 @@ describe("readWorkspaceFile", () => {
     file(".env", "SECRET=1");
     symlinkSync(join(dir, ".env"), join(dir, "alias.env"));
     expect(() => readWorkspaceFile(detectWorkspace(dir), "alias.env")).toThrow(PathDeniedError);
+  });
+
+  it("refuses to read hard-linked aliases for context ingestion", () => {
+    file(".env", "DB_PASSWORD=bank-super-secret\n");
+    mkdirSync(join(dir, "src"), { recursive: true });
+    linkSync(join(dir, ".env"), join(dir, "src", "config.ts"));
+    expect(() => readWorkspaceFile(detectWorkspace(dir), "src/config.ts")).toThrow(PathDeniedError);
   });
 
   it("denied-path error carries the WORKSPACE_PATH_DENIED code", () => {

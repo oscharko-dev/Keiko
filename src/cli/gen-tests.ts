@@ -128,7 +128,7 @@ function resolveTarget(parsed: GenTestsArgs): UnitTestTarget {
 }
 
 // Builds a ModelPort from the gateway config, or returns a usage/runtime error code via io. The
-// modelId defaults to the cheapest configured chat model that supports tools and structured output.
+// workflow sends plain chat messages, so the default only requires a configured chat model.
 function buildModel(
   parsed: GenTestsArgs,
   io: CliIo,
@@ -147,11 +147,9 @@ function buildModel(
       parsed.model ??
       selectConfiguredModel(config, {
         kind: "chat",
-        toolCalling: true,
-        structuredOutput: true,
       });
     if (modelId === undefined) {
-      io.err("Error: no configured chat model supports tools and structured output.\n");
+      io.err("Error: no configured chat model is available.\n");
       return 1;
     }
     return { port: new GatewayModelPort(new Gateway(config)), modelId };
@@ -179,8 +177,6 @@ function resolveConfiguredModelId(parsed: GenTestsArgs, env: EnvSource): string 
   }
   return selectConfiguredModel(config, {
     kind: "chat",
-    toolCalling: true,
-    structuredOutput: true,
   });
 }
 
@@ -194,7 +190,7 @@ function resolveModel(
     try {
       const modelId = resolveConfiguredModelId(parsed, env);
       if (modelId === undefined) {
-        io.err("Error: no configured chat model supports tools and structured output.\n");
+        io.err("Error: no configured chat model is available.\n");
         return 1;
       }
       return { port: deps.model, modelId };

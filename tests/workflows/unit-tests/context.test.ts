@@ -57,4 +57,26 @@ describe("buildTestGenContext (AC #9)", () => {
     expect(pack.budgetBytes).toBe(4_096);
     expect(pack.usedBytes).toBeLessThanOrEqual(4_096);
   });
+
+  it("prioritizes the requested source and nearby test under a tight budget", () => {
+    const fs = memFs(ROOT, {
+      "package.json": JSON.stringify({
+        name: "demo",
+        scripts: { test: "vitest run" },
+        devDependencies: { vitest: "^4" },
+      }),
+      "src/a.ts": "export const a = (value: number): number => value + 1;\n",
+      "src/z.ts": "export const z = (value: number): number => value + 1;\n",
+      "tests/z.test.ts": "import { z } from '../src/z';\ntest('z', () => expect(z(1)).toBe(2));\n",
+      "tsconfig.json": JSON.stringify({ compilerOptions: { strict: true } }),
+    });
+    const ws = makeWorkspaceInfo({ root: ROOT, testDirs: ["tests"] });
+    const pack = buildTestGenContext(
+      ws,
+      input({ target: { kind: "file", filePath: "src/z.ts" } }),
+      { ...DEFAULT_WORKFLOW_LIMITS, contextBudgetBytes: 96, maxBytesPerFile: 48 },
+      { fs },
+    );
+    expect(pack.selected.map((entry) => entry.path)).toEqual(["src/z.ts", "tests/z.test.ts"]);
+  });
 });

@@ -10,6 +10,7 @@ export interface WorkspaceStat {
   readonly isFile: boolean;
   readonly isDirectory: boolean;
   readonly isSymbolicLink: boolean;
+  readonly hardLinkCount?: number | undefined;
 }
 
 export interface WorkspaceDirEntry {
@@ -40,6 +41,7 @@ export const nodeWorkspaceFs: WorkspaceFs = {
       isFile: stats.isFile(),
       isDirectory: stats.isDirectory(),
       isSymbolicLink: isSymlink(absolutePath),
+      hardLinkCount: stats.nlink,
     };
   },
   readDir: (absolutePath: string): readonly WorkspaceDirEntry[] =>

@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyPatch, renderDryRun, validatePatch } from "../../src/tools/patch.js";
@@ -115,6 +115,20 @@ describe("validatePatch — rejections", () => {
     expect(v.ok).toBe(true);
     expect(v.reasons).toHaveLength(0);
     expect(v.conflicts).toHaveLength(0);
+  });
+
+  it("rejects an in-workspace symlink alias before it can rewrite the real target", () => {
+    write("src/add.ts", "export const add = () => 1;\n");
+    symlinkSync(join(root, "src"), join(root, "tests"));
+    const diff =
+      "--- a/tests/add.ts\n+++ b/tests/add.ts\n@@ -1,1 +1,2 @@\n export const add = () => 1;\n+export const injected = true;\n";
+    const validation = validatePatch(info, diff);
+    expect(validation.ok).toBe(false);
+    expect(validation.reasons.map((reason) => reason.code)).toContain("path-denied");
+    expect(() => applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() })).toThrow(
+      PatchValidationError,
+    );
+    expect(read("src/add.ts")).toBe("export const add = () => 1;\n");
   });
 });
 

@@ -67,9 +67,6 @@ export async function runWorkflowVerification(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
 ): Promise<VerificationOutcome> {
-  if (workspace.testFramework === "unknown") {
-    return { summary: undefined, skipReason: SKIP_UNRESOLVED };
-  }
   const plan = resolveVerificationPlan(workspace, state.input.target, fs);
   if (plan === undefined) {
     return { summary: undefined, skipReason: SKIP_UNRESOLVED };
