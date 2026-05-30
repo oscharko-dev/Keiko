@@ -1,1 +1,1 @@
-export { default } from "./home/HomePage";
+export { WorkspaceShellEntry as default } from "./components/shell/WorkspaceShellEntry";
