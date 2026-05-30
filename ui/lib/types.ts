@@ -658,7 +658,9 @@ export interface Chat {
 }
 
 export type ChatMessageRole = "user" | "assistant" | "system";
-export type ChatWorkflowStatus = "pending" | "running" | "completed" | "failed";
+// Issue #66 — chat-side workflow status. `cancelled` matches src/ui/runs.ts RunStatus so the
+// chat can faithfully record a terminal cancellation.
+export type ChatWorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled";
 
 export interface ChatMessage {
   readonly id: string;
@@ -670,6 +672,19 @@ export interface ChatMessage {
   readonly workflowId?: string;
   readonly workflowStatus?: ChatWorkflowStatus;
   readonly shortResult?: string;
+  /** Issue #66 — labels non-workflow harness task runs (verify, explain-plan). */
+  readonly taskType?: string;
+}
+
+// Issue #66 — partial PATCH body for /api/chats/messages?id=...
+export interface PatchChatMessageBody {
+  readonly workflowStatus?: ChatWorkflowStatus;
+  readonly shortResult?: string;
+  readonly taskType?: string;
+}
+
+export interface PatchMessageResponse {
+  readonly message: ChatMessage;
 }
 
 export interface ProjectsResponse {
