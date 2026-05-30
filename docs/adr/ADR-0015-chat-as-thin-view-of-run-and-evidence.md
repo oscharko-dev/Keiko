@@ -89,9 +89,13 @@ after 60 s) is sufficient because the chat does not render events; it only needs
 status and the short result. SSE for the chat would require event-type discrimination and replay
 logic the chat has no use for.
 
-The poll stops on terminal status, component unmount, or `unavailable=true`. An `AbortController`
-cancels in-flight fetches on unmount so a slow request cannot PATCH after the card leaves the
-tree.
+The poll stops on terminal status, component unmount, or `unavailable=true`. The current
+`fetchJson` wrapper does not expose an `AbortSignal`, so cancellation uses a closure-scoped
+`cancelled` flag that is the single source of truth for loop termination: an in-flight fetch
+at unmount-time still resolves, but the flag gates every subsequent state mutation, including
+the PATCH on a terminal report. A slow request therefore cannot PATCH or rerender after the
+card leaves the tree. A transient PATCH failure reschedules the loop (subject to the same
+backoff) rather than stranding the row in a non-terminal status until reload.
 
 ### D4 — Extend `WorkflowStatus` with `"cancelled"`.
 

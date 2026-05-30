@@ -102,7 +102,11 @@ export function useRunStatusSync(
         const result = await patchChatMessage(messageId, { workflowStatus, shortResult });
         if (!cancelled) onPatchedRef.current(result.message);
       } catch (error) {
+        // A transient PATCH failure (5xx, network blip) must not strand the row in a
+        // non-terminal status — without rescheduling, the loop stops and reload becomes the
+        // only recovery. scheduleNext() honours `cancelled`, so unmount still cleans up.
         logSyncError("patch", error);
+        scheduleNext();
       }
     }
 

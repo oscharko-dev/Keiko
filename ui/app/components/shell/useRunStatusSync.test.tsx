@@ -216,6 +216,31 @@ describe("useRunStatusSync", () => {
     );
   });
 
+  // Copilot review (#66) — a transient PATCH failure (5xx, network blip) must reschedule, not
+  // strand the row in a non-terminal status until reload.
+  it("reschedules the loop when a terminal PATCH fails transiently", async () => {
+    vi.mocked(api.fetchRunReport).mockResolvedValue({
+      report: { status: "completed" } as never,
+    });
+    vi.mocked(api.patchChatMessage)
+      .mockRejectedValueOnce(new ApiError("INTERNAL", "transient", 500))
+      .mockResolvedValueOnce(patchedReply({ workflowStatus: "completed" }));
+    const onPatched = vi.fn();
+    render(<Probe message={makeMessage()} onPatched={onPatched} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.patchChatMessage).toHaveBeenCalledTimes(1);
+    expect(onPatched).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(api.fetchRunReport).toHaveBeenCalledTimes(2);
+    expect(api.patchChatMessage).toHaveBeenCalledTimes(2);
+    expect(onPatched).toHaveBeenCalledTimes(1);
+  });
+
   it("does not PATCH after unmount even if a fetch resolved late", async () => {
     let resolveReport: ((value: unknown) => void) | undefined;
     vi.mocked(api.fetchRunReport).mockImplementation(
