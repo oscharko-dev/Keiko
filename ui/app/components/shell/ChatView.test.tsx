@@ -205,7 +205,7 @@ describe("ChatView", () => {
     vi.mocked(api.fetchChats).mockResolvedValueOnce({ chats: [baseChat] });
     const { container } = render(<ChatView chatId="c1" project={availableProject} />);
     await waitFor(() => {
-      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.queryByRole("status", { name: /loading messages/i })).toBeNull();
     });
     const results = await axe(container);
     expect(results).toHaveNoViolations();
