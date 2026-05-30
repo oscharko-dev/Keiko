@@ -1,10 +1,120 @@
-import { describe, expect, it } from "vitest";
-import { buildRedactor } from "../../src/ui/deps.js";
+import { describe, expect, it, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { buildRedactor, buildUiHandlerDeps } from "../../src/ui/deps.js";
+import { createInMemoryUiStore } from "../../src/ui/store/index.js";
+import { DatabaseSync } from "node:sqlite";
+
+const tmpDirs: string[] = [];
+
+afterEach(() => {
+  for (const d of tmpDirs.splice(0)) {
+    rmSync(d, { recursive: true, force: true });
+  }
+});
+
+function tmp(prefix: string): string {
+  const d = mkdtempSync(join(tmpdir(), prefix));
+  tmpDirs.push(d);
+  return d;
+}
 
 describe("buildRedactor", () => {
   it("scrubs non-pattern secret values from sensitive environment variables", () => {
     const secret = "CORPSECRET_123456789";
     const redactor = buildRedactor({ KEIKO_DEFAULT_API_KEY: secret });
     expect(redactor({ message: `token=${secret}` })).toEqual({ message: "token=[REDACTED]" });
+  });
+});
+
+describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
+  it("uses the injected store unchanged when supplied", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      store,
+    });
+    expect(deps.store).toBe(store);
+  });
+
+  it("creates a node store at uiDbPath when no store is injected", () => {
+    const uiDir = tmp("ui-");
+    const evidenceDir = tmp("ev-");
+    const dbPath = join(uiDir, "keiko-ui.db");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: dbPath,
+    });
+    expect(deps.store).toBeDefined();
+    expect(deps.store.listProjects()).toEqual([]);
+    deps.store.close();
+  });
+
+  it("resolves the DB path via KEIKO_UI_DATA_DIR when no explicit path is supplied", () => {
+    const uiDir = tmp("ui-env-");
+    const evidenceDir = tmp("ev-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { KEIKO_UI_DATA_DIR: uiDir },
+    });
+    expect(deps.store).toBeDefined();
+    expect(deps.store.listProjects()).toEqual([]);
+    deps.store.close();
+  });
+});
+
+describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () => {
+  it("redacts API-key-shaped env value from persisted shortResult (H1)", () => {
+    // Build deps with a real env containing a synthetic API-key-shaped secret.
+    // The secret MUST NOT appear verbatim in the on-disk DB after a message is persisted.
+    const SECRET = "sk-keiko-test-h1-NOT-A-REAL-SECRET";
+    const uiDir = tmp("h1-");
+    const evidenceDir = tmp("h1-ev-");
+    const dbPath = join(uiDir, "keiko-ui.db");
+
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { KEIKO_DEFAULT_API_KEY: SECRET },
+      uiDbPath: dbPath,
+    });
+
+    // Create the minimum store entities to reach createMessage.
+    const proj = deps.store.createProject(uiDir);
+    const chat = deps.store.createChat(proj.path, "t", "m");
+    deps.store.createMessage({
+      chatId: chat.id,
+      role: "user",
+      content: "content",
+      timestamp: Date.now(),
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: `leak ${SECRET} tail`,
+    });
+
+    // shortResult returned by listMessages must not contain the literal secret.
+    const messages = deps.store.listMessages(chat.id);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.shortResult).not.toContain(SECRET);
+    expect(messages[0]?.shortResult).toContain("[REDACTED]");
+
+    deps.store.close();
+
+    // On-disk raw row must also not contain the literal secret.
+    const db = new DatabaseSync(dbPath);
+    const row = db.prepare("SELECT short_result FROM chat_messages LIMIT 1").get() as {
+      short_result: string | null;
+    };
+    db.close();
+    expect(row.short_result).not.toContain(SECRET);
+    expect(row.short_result).toContain("[REDACTED]");
   });
 });

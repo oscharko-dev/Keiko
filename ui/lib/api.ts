@@ -6,9 +6,18 @@
 
 import type {
   BffError,
+  ChatResponse,
+  ChatsResponse,
+  ChatStatus,
+  ChatMessageRole,
+  ChatWorkflowStatus,
   EvidenceListEntry,
   EvidenceManifest,
+  MessageResponse,
+  MessagesResponse,
   ModelCapability,
+  ProjectResponse,
+  ProjectsResponse,
   RunReport,
   SafeGatewayConfig,
   WorkspaceSummary,
@@ -207,4 +216,104 @@ export async function fetchWorkspaceSummary(
   }
   const qs = params.toString();
   return fetchJson(`/api/workspace${qs ? `?${qs}` : ""}`);
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0013 — UI-local persistence client (routes 13–22)
+// ---------------------------------------------------------------------------
+
+export async function fetchProjects(): Promise<ProjectsResponse> {
+  return fetchJson("/api/projects");
+}
+
+export interface CreateProjectInput {
+  path: string;
+  name?: string;
+}
+
+export async function createProject(input: CreateProjectInput): Promise<ProjectResponse> {
+  return fetchJson("/api/projects", { method: "POST", body: JSON.stringify(input) });
+}
+
+export interface UpdateProjectInput {
+  name?: string;
+  favorite?: boolean;
+}
+
+export async function updateProject(
+  path: string,
+  patch: UpdateProjectInput,
+): Promise<ProjectResponse> {
+  return fetchJson(`/api/projects?path=${encodeURIComponent(path)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteProject(path: string): Promise<void> {
+  await fetchJson<unknown>(`/api/projects?path=${encodeURIComponent(path)}`, {
+    method: "DELETE",
+  }).catch((err: unknown) => {
+    // DELETE returns 204 (empty body). fetchJson tries to parse it as JSON which throws; swallow
+    // here only when the original response was OK. Distinguished by ApiError having status >= 400.
+    if (err instanceof ApiError) throw err;
+    return undefined;
+  });
+}
+
+export async function fetchChats(projectPath: string): Promise<ChatsResponse> {
+  return fetchJson(`/api/chats?projectPath=${encodeURIComponent(projectPath)}`);
+}
+
+export interface CreateChatInput {
+  projectPath: string;
+  title: string;
+  selectedModel: string;
+  branchLabel?: string;
+}
+
+export async function createChat(input: CreateChatInput): Promise<ChatResponse> {
+  return fetchJson("/api/chats", { method: "POST", body: JSON.stringify(input) });
+}
+
+export interface UpdateChatInput {
+  title?: string;
+  selectedModel?: string;
+  branchLabel?: string;
+  status?: ChatStatus;
+}
+
+export async function updateChat(id: string, patch: UpdateChatInput): Promise<ChatResponse> {
+  return fetchJson(`/api/chats?id=${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteChat(id: string): Promise<void> {
+  await fetchJson<unknown>(`/api/chats?id=${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  }).catch((err: unknown) => {
+    if (err instanceof ApiError) throw err;
+    return undefined;
+  });
+}
+
+export async function fetchChatMessages(chatId: string): Promise<MessagesResponse> {
+  return fetchJson(`/api/chats/messages?chatId=${encodeURIComponent(chatId)}`);
+}
+
+export interface CreateMessageInput {
+  chatId: string;
+  role: ChatMessageRole;
+  content: string;
+  timestamp: number;
+  runId?: string;
+  workflowId?: string;
+  workflowStatus?: ChatWorkflowStatus;
+  shortResult?: string;
+}
+
+export async function createChatMessage(input: CreateMessageInput): Promise<MessageResponse> {
+  return fetchJson("/api/chats/messages", { method: "POST", body: JSON.stringify(input) });
 }

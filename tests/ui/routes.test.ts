@@ -7,6 +7,7 @@ import {
   type RouteContext,
 } from "../../src/ui/routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../src/ui/index.js";
+import { createInMemoryUiStore } from "../../src/ui/store/index.js";
 import { SDK_VERSION } from "../../src/sdk/index.js";
 
 const emptyCtx: RouteContext = {
@@ -24,11 +25,12 @@ const stubDeps: UiHandlerDeps = {
   redactor: buildRedactor({}),
   registry: createRunRegistry(),
   modelPortFactory: () => undefined,
+  store: createInMemoryUiStore(),
 };
 
 describe("API route contract", () => {
-  it("declares the twelve D5 routes", () => {
-    expect(API_ROUTES).toHaveLength(12);
+  it("declares the 22 route contract (12 D5 + 10 D13)", () => {
+    expect(API_ROUTES).toHaveLength(22);
   });
 
   it("exposes every contract path exactly once per method", () => {

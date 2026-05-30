@@ -22,6 +22,7 @@ import {
   QueueEventSink,
   type UiHandlerDeps,
 } from "../../src/ui/index.js";
+import { createInMemoryUiStore } from "../../src/ui/store/index.js";
 import {
   createInMemoryEvidenceStore,
   listEvidence,
@@ -77,6 +78,7 @@ function handlerDeps(model: ModelPort): UiHandlerDeps {
     redactor: buildRedactor({ KEY: SECRET }),
     registry,
     modelPortFactory: () => model,
+    store: createInMemoryUiStore(),
   };
 }
 
@@ -489,6 +491,7 @@ describe("FIX 4 — apply rebuilds the ModelPort from the run's modelId, not the
       env: {},
       redactor: buildRedactor({}),
       registry: localRegistry,
+      store: createInMemoryUiStore(),
       modelPortFactory: (modelId): undefined => {
         seen.push(modelId);
         return undefined;
@@ -540,6 +543,7 @@ describe("FIX B — apply snapshot retains the original limits from the dry-run"
       env: {},
       redactor: buildRedactor({}),
       registry: localRegistry,
+      store: createInMemoryUiStore(),
       modelPortFactory: (): ModelPort => failingModel,
     };
     const ctx = {

@@ -72,6 +72,7 @@ All flags are optional:
 - `--host 127.0.0.1|localhost` — validate a loopback host value for compatibility. The server always binds `127.0.0.1` and never binds `0.0.0.0`.
 - `--config <path>` — path to a gateway config file (JSON) required for model-backed workflow runs.
 - `--evidence-dir <path>` — custom directory for evidence manifests. Defaults to `$KEIKO_EVIDENCE_DIR` or a `.keiko/evidence` subdirectory in the detected workspace.
+- `--ui-db <path>` — explicit path to the UI-local SQLite database file. Defaults to `<KEIKO_UI_DATA_DIR>/keiko-ui.db` when that environment variable is set, otherwise `~/.keiko/keiko-ui.db`. See **UI-local SQLite database** below.
 
 Example:
 
@@ -135,6 +136,26 @@ The manifest is redacted before persistent: API keys, literals matching configur
 **Wave 1 limitation (documented follow-up):** When you click apply in the UI, the proposed patch is re-run through the workflow engine and the result is returned to you in the browser. This result is not separately persisted as its own evidence manifest in Wave 1. Only the initial dry-run is recorded in evidence. Full apply-run evidence persistence is a documented issue #10 follow-up and will ship in a future wave.
 
 You can always export the final report shown in the patch-review surface manually, or consult the evidence browser to see all persisted dry-runs.
+
+## UI-local SQLite database
+
+The UI maintains a small SQLite database for **projects** (workspace entries the developer has opened), **chats** scoped to those projects, and **chat messages** (with optional lightweight workflow references). This persistence is local to the user account running `keiko ui` and is never shared, synced, or transmitted off the machine. The database engine is Node's built-in `node:sqlite`, so no additional runtime dependency is shipped (ADR-0013).
+
+**Location and resolution precedence.** Highest-priority first:
+
+1. `keiko ui --ui-db <path>` — explicit file path. Tests use a `mkdtemp` path here.
+2. `KEIKO_UI_DATA_DIR` environment variable. The DB file is `<KEIKO_UI_DATA_DIR>/keiko-ui.db`.
+3. Default: `~/.keiko/keiko-ui.db` under the user's home directory.
+
+The database lives under the **Keiko application data directory** and **never inside a target repository**. This is a security boundary, not a convention: a target repo's `.git/`, `.gitignore`, and `node_modules/` rules must not interact with persistence. The directory is created with mode `0o700` on first run; the DB file (and its WAL/SHM sidecars) are chmodded to `0o600`. On Windows the OS-default ACL applies.
+
+**What the database holds.** Per project: the normalized absolute path (primary key), display name, favorite flag, `created_at`/`last_opened_at` timestamps. Per chat: a UUID id, project path (FK with `ON DELETE CASCADE`), title, the selected model's **registry id only** (e.g. `claude-opus-4-5` — never an API key, never a provider URL), optional branch label and status, timestamps. Per chat message: a UUID id, chat id (FK with `ON DELETE CASCADE`), role (`user|assistant|system`), content, timestamp, and optional `run_id`/`workflow_id`/`workflow_status`/`short_result` columns. The `short_result` column is truncated to 200 characters and run through the BFF redactor **before** persistence.
+
+**What the database does NOT hold.** Provider credentials, API keys, base URLs, the full evidence manifest payloads, the full SSE event stream, reasoning traces, or any decrypted secret. Evidence manifests remain in `~/.keiko/evidence/` (or the path configured by `--evidence-dir`); the UI DB only stores ids and short summaries.
+
+**Schema and migrations.** The schema is versioned via SQLite's `PRAGMA user_version`. Migrations are forward-only and applied transactionally on first open by the migration runner in `src/ui/store/schema.ts`. A failed migration rolls back and surfaces a typed error; the database is left at the previous version. The current schema is v1: three `STRICT` tables (`projects`, `chats`, `chat_messages`) plus three indexes. `PRAGMA foreign_keys = ON` and `PRAGMA journal_mode = WAL` are set on every open.
+
+**Project availability is derived, not stored.** When you delete a project's directory on disk, the row is **not** silently removed from the DB. `GET /api/projects` reports `available: false` for the missing entry so you can see and explicitly delete stale records. This avoids accidental data loss and surfaces what the UI knows.
 
 ## Accessibility status
 

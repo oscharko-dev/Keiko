@@ -621,3 +621,71 @@ export interface BffError {
 // ---------------------------------------------------------------------------
 
 export type SseStatus = "connecting" | "live" | "terminal" | "error";
+
+// ---------------------------------------------------------------------------
+// UI-local persistence (ADR-0013) — wire-shape mirrors of src/ui/store types.
+// ---------------------------------------------------------------------------
+
+export interface Project {
+  readonly path: string;
+  readonly name: string;
+  readonly favorite: boolean;
+  readonly createdAt: number;
+  readonly lastOpenedAt: number;
+}
+
+export interface ProjectWithAvailability extends Project {
+  readonly available: boolean;
+}
+
+export type ChatStatus = "open" | "closed";
+
+export interface Chat {
+  readonly id: string;
+  readonly projectPath: string;
+  readonly title: string;
+  readonly selectedModel: string;
+  readonly branchLabel?: string;
+  readonly status?: ChatStatus;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+export type ChatMessageRole = "user" | "assistant" | "system";
+export type ChatWorkflowStatus = "pending" | "running" | "completed" | "failed";
+
+export interface ChatMessage {
+  readonly id: string;
+  readonly chatId: string;
+  readonly role: ChatMessageRole;
+  readonly content: string;
+  readonly timestamp: number;
+  readonly runId?: string;
+  readonly workflowId?: string;
+  readonly workflowStatus?: ChatWorkflowStatus;
+  readonly shortResult?: string;
+}
+
+export interface ProjectsResponse {
+  readonly projects: readonly ProjectWithAvailability[];
+}
+
+export interface ProjectResponse {
+  readonly project: ProjectWithAvailability;
+}
+
+export interface ChatsResponse {
+  readonly chats: readonly Chat[];
+}
+
+export interface ChatResponse {
+  readonly chat: Chat;
+}
+
+export interface MessagesResponse {
+  readonly messages: readonly ChatMessage[];
+}
+
+export interface MessageResponse {
+  readonly message: ChatMessage;
+}

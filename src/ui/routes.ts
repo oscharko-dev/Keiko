@@ -23,6 +23,18 @@ import {
   handleGetRun,
   handleApplyRun,
 } from "./run-handlers.js";
+import {
+  handleListProjects,
+  handleCreateProject,
+  handleUpdateProject,
+  handleDeleteProject,
+  handleListChats,
+  handleCreateChat,
+  handleUpdateChat,
+  handleDeleteChat,
+  handleListMessages,
+  handleCreateMessage,
+} from "./store-handlers.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -62,7 +74,8 @@ function health(): RouteResult {
   return { status: 200, body: { status: "ok", version: SDK_VERSION } };
 }
 
-// The full twelve-route contract (D5), in contract order.
+// The full 22-route contract: the twelve original (ADR-0011 D5) plus the 10 additive UI-store
+// routes (ADR-0013 D7), in contract order.
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
   { method: "GET", pattern: "/api/config", handler: handleConfig },
@@ -76,6 +89,17 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/evidence", handler: handleEvidenceList },
   { method: "GET", pattern: "/api/evidence/:runId", handler: handleEvidenceDetail },
   { method: "GET", pattern: "/api/workspace", handler: handleWorkspace },
+  // ADR-0013 D7 — UI-local persistence routes (additive).
+  { method: "GET", pattern: "/api/projects", handler: handleListProjects },
+  { method: "POST", pattern: "/api/projects", handler: handleCreateProject },
+  { method: "PATCH", pattern: "/api/projects", handler: handleUpdateProject },
+  { method: "DELETE", pattern: "/api/projects", handler: handleDeleteProject },
+  { method: "GET", pattern: "/api/chats", handler: handleListChats },
+  { method: "POST", pattern: "/api/chats", handler: handleCreateChat },
+  { method: "PATCH", pattern: "/api/chats", handler: handleUpdateChat },
+  { method: "DELETE", pattern: "/api/chats", handler: handleDeleteChat },
+  { method: "GET", pattern: "/api/chats/messages", handler: handleListMessages },
+  { method: "POST", pattern: "/api/chats/messages", handler: handleCreateMessage },
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured
