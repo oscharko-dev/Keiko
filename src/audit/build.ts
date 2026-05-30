@@ -11,6 +11,7 @@ import type {
   PatchProposedEvent,
   ReasoningTraceEvent,
   RunResult,
+  SandboxConfiguredEvent,
   StateTransitionEvent,
   ToolCallCompletedEvent,
   ToolCallFailedEvent,
@@ -26,6 +27,7 @@ import type {
   EvidencePatch,
   EvidenceReasoningEntry,
   EvidenceRunIdentity,
+  EvidenceSandboxConfiguration,
   EvidenceStateTransition,
   EvidenceToolCall,
 } from "./types.js";
@@ -83,6 +85,19 @@ function mapCommand(e: CommandExecutedEvent): EvidenceCommandExecution {
     exitCode: e.exitCode,
     timedOut: e.timedOut,
     durationMs: e.durationMs,
+  };
+}
+
+function mapSandbox(e: SandboxConfiguredEvent): EvidenceSandboxConfiguration {
+  return {
+    seq: e.seq,
+    ts: e.ts,
+    envAllowlist: e.envAllowlist,
+    network: e.network,
+    maxOutputBytes: e.maxOutputBytes,
+    timeoutMs: e.timeoutMs,
+    terminationGraceMs: e.terminationGraceMs,
+    cwdRequested: e.cwdRequested,
   };
 }
 
@@ -174,6 +189,7 @@ interface FoldState {
   readonly stateTransitions: EvidenceStateTransition[];
   readonly toolCalls: EvidenceToolCall[];
   readonly commandExecutions: EvidenceCommandExecution[];
+  readonly sandboxConfigurations: EvidenceSandboxConfiguration[];
   readonly reasoning: EvidenceReasoningEntry[];
   readonly patch: PatchAccumulator;
 }
@@ -192,6 +208,8 @@ function foldEvent(
     state.toolCalls.push(mapToolFailed(event));
   } else if (event.type === "command:executed") {
     state.commandExecutions.push(mapCommand(event));
+  } else if (event.type === "sandbox:configured") {
+    state.sandboxConfigurations.push(mapSandbox(event));
   } else if (event.type === "patch:proposed") {
     foldPatchProposed(state.patch, event, redact, options.includeDiff);
   } else if (event.type === "patch:applied") {
@@ -232,6 +250,7 @@ export function buildEvidenceManifest(
     stateTransitions: [],
     toolCalls: [],
     commandExecutions: [],
+    sandboxConfigurations: [],
     reasoning: [],
     patch: newPatchAccumulator(),
   };
@@ -246,6 +265,9 @@ export function buildEvidenceManifest(
     stateTransitions: state.stateTransitions,
     toolCalls: state.toolCalls,
     commandExecutions: state.commandExecutions,
+    ...(state.sandboxConfigurations.length === 0
+      ? {}
+      : { sandboxConfigurations: state.sandboxConfigurations }),
     ...optionalSections(input, state, redact, includeReasoning),
   };
   // C2: the #5 context and #7 verification summaries are embedded VERBATIM above, so per-field

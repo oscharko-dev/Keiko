@@ -240,6 +240,19 @@ export interface CommandExecutedEvent extends BaseEvent {
   readonly durationMs: number;
 }
 
+// Redacted sandbox configuration snapshot used for the command. Names-only env allowlist,
+// documented network policy, limits, and whether a non-root cwd was requested. No env values,
+// command arguments, stdout/stderr, or paths.
+export interface SandboxConfiguredEvent extends BaseEvent {
+  readonly type: "sandbox:configured";
+  readonly envAllowlist: readonly string[];
+  readonly network: "inherit" | "none";
+  readonly maxOutputBytes: number;
+  readonly timeoutMs: number;
+  readonly terminationGraceMs: number;
+  readonly cwdRequested: boolean;
+}
+
 // S-M1: redacted audit record that a patch was APPLIED (issue #10 ledger). File COUNTS only —
 // never file paths, never file contents.
 export interface PatchAppliedEvent extends BaseEvent {
@@ -299,6 +312,7 @@ export type HarnessEvent =
   | ToolCallCompletedEvent
   | ToolCallFailedEvent
   | CommandExecutedEvent
+  | SandboxConfiguredEvent
   | PatchAppliedEvent
   | ReasoningTraceEvent
   | PatchProposedEvent

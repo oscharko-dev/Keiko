@@ -68,6 +68,16 @@ function fullEventMix(): readonly HarnessEvent[] {
     },
     {
       ...base(6, 160),
+      type: "sandbox:configured",
+      envAllowlist: ["PATH", "TZ"],
+      network: "inherit",
+      maxOutputBytes: 1_048_576,
+      timeoutMs: 30_000,
+      terminationGraceMs: 2_000,
+      cwdRequested: true,
+    },
+    {
+      ...base(7, 165),
       type: "command:executed",
       executable: "node",
       argCount: 2,
@@ -76,21 +86,21 @@ function fullEventMix(): readonly HarnessEvent[] {
       durationMs: 40,
     },
     {
-      ...base(7, 170),
+      ...base(8, 170),
       type: "patch:proposed",
       targetFile: "src/x.ts",
       patchBytes: 64,
       diff: `--- a\n+++ b\n+const k = "${GITHUB}";`,
     },
-    { ...base(8, 180), type: "patch:applied", changedFiles: 1, created: 0, deleted: 0 },
+    { ...base(9, 180), type: "patch:applied", changedFiles: 1, created: 0, deleted: 0 },
     {
-      ...base(9, 190),
+      ...base(10, 190),
       type: "reasoning:trace",
       phase: "planning",
       rationale: `mentions ${ENV_SECRET}`,
       modelResponse: "ok",
     },
-    { ...base(10, 200), type: "run:completed", report: "done" },
+    { ...base(11, 200), type: "run:completed", report: "done" },
   ];
 }
 
@@ -192,6 +202,20 @@ describe("buildEvidenceManifest — full event mix mapping", () => {
     });
   });
 
+  it("maps sandbox configurations with names and limits only", () => {
+    expect(manifest.sandboxConfigurations).toHaveLength(1);
+    expect(manifest.sandboxConfigurations?.[0]).toMatchObject({
+      seq: 6,
+      envAllowlist: ["PATH", "TZ"],
+      network: "inherit",
+      maxOutputBytes: 1_048_576,
+      timeoutMs: 30_000,
+      terminationGraceMs: 2_000,
+      cwdRequested: true,
+    });
+    expect(JSON.stringify(manifest.sandboxConfigurations)).not.toContain(ENV_SECRET);
+  });
+
   it("maps patch counts and excludes the diff by default", () => {
     expect(manifest.patch).toMatchObject({
       proposed: true,
@@ -228,6 +252,7 @@ describe("buildEvidenceManifest — absent sections are undefined", () => {
     expect(m.reasoning).toBeUndefined();
     expect(m.toolCalls).toEqual([]);
     expect(m.commandExecutions).toEqual([]);
+    expect(m.sandboxConfigurations).toBeUndefined();
     expect(m.stateTransitions).toEqual([]);
   });
 });
@@ -253,7 +278,7 @@ describe("buildEvidenceManifest — opt-ins", () => {
       { env },
     );
     expect(m.reasoning).toHaveLength(1);
-    expect(m.reasoning?.[0]?.seq).toBe(9);
+    expect(m.reasoning?.[0]?.seq).toBe(10);
     expect(m.reasoning?.[0]?.rationale).not.toContain(ENV_SECRET);
     expect(m.reasoning?.[0]?.rationale).toContain("[REDACTED]");
   });

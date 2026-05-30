@@ -3,7 +3,7 @@
 // Every message is redacted at construction so errors are always safe to log or surface.
 
 import { redact } from "../gateway/redaction.js";
-import type { PatchRejection } from "./types.js";
+import type { PatchConflict, PatchRejection } from "./types.js";
 
 export const TOOL_CODES = {
   ARGUMENT: "TOOL_ARGUMENT",
@@ -92,14 +92,17 @@ export class OutputLimitError extends ToolError {
 export class PatchValidationError extends ToolError {
   readonly code = TOOL_CODES.PATCH_INVALID;
   readonly reasons: readonly PatchRejection[];
+  readonly conflicts: readonly PatchConflict[];
 
   constructor(
     message: string,
     reasons: readonly PatchRejection[],
+    conflicts: readonly PatchConflict[],
     secrets: readonly string[] = [],
   ) {
     super(message, secrets);
     this.reasons = reasons;
+    this.conflicts = conflicts;
   }
 }
 

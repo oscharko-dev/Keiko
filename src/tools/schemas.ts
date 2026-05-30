@@ -14,7 +14,8 @@ function obj(
 export const TOOL_DEFINITIONS: readonly ToolDefinition[] = Object.freeze([
   {
     name: "read_file",
-    description: "Read a UTF-8 file inside the workspace. Output is redacted and size-capped.",
+    description:
+      "Read a UTF-8 file inside the workspace. Output is redacted; files above the byte cap are rejected.",
     parameters: obj(
       {
         path: { type: "string", description: "Workspace-relative file path." },
@@ -46,8 +47,8 @@ export const TOOL_DEFINITIONS: readonly ToolDefinition[] = Object.freeze([
   {
     name: "run_command",
     description:
-      "Run an allowlisted command (node/npx/npm/git read-only) with no shell, a clean env, " +
-      "a workspace cwd, a timeout, and capped redacted output.",
+      "Run an allowlisted read-only command (npm/git by default) with no shell, a clean env, " +
+      "a trusted executable path, a workspace cwd, a timeout, and capped redacted output.",
     parameters: obj(
       {
         command: { type: "string", description: "Bare executable name (PATH-resolved)." },

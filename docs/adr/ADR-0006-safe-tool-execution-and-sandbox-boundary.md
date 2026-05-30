@@ -55,33 +55,32 @@ The allowlist is minimal and justified:
 
 | Executable | Policy | Rationale |
 |---|---|---|
-| `node` | unrestricted | Core runtime; test runners and scripts depend on it |
-| `npx` | unrestricted EXCEPT `-c`/`--call` denied | Package runner; `--call` runs a string in a shell (transitive shell escape), so it is denied |
-| `npm` | denylist: publish/unpublish/login/logout/adduser/token/version/deprecate/owner/access/star/profile/**exec/x**; `-c`/`--call` denied; deny-by-default on an unrecognized subcommand | Allow run/test/ci/install; deny account/registry-mutating ops AND `exec`/`x` (which spawn an arbitrary binary or a transitive shell) |
+| `npm` | allowlist: audit/ls/list/outdated/view/info/help/ping; `-c`/`--call` denied | Read-only npm inspection only; install/script/account/registry mutation is excluded by omission |
 | `git` | allowlist: status/diff/log/show/rev-parse/ls-files/describe/blame/cat-file | Read-only git only; push/reset/checkout/commit/merge/rebase/clean/config/remote are all denied |
 
-**What the allowlist does and does NOT buy us (honest framing — corrected after the S-H2 audit).**
-`node` and `npx` are, by design, **unrestricted arbitrary code execution**: `node -e "<any JS>"`
-can read/write the workspace, open sockets, and spawn further processes. The command allowlist is
-therefore NOT a sandbox and does NOT reduce the set of possible behaviours to a finite, enumerable
-list of spawns. Its real value is narrower and still worth having: it blocks **casual/accidental
-misuse** (a model reaching for `curl`, `bash`, `rm`, `ssh`, `python`) and it specifically denies
-**account- and repository-mutating** subcommands (`npm publish`, `git push`) and **transitive-shell
-escapes** (`npm exec`/`x`, `-c`/`--call`). The controls that actually contain a malicious `node`
-payload are **environment isolation** (no credential reaches the child — D2 Dimension 1) and
-**output redaction** (D5), NOT the allowlist. OS-level filesystem/network isolation is deferred to
-the container wave (D7).
+**What the allowlist does and does NOT buy us (honest framing — corrected after the Issue #6
+audit).** The model-facing default does not allow raw interpreters (`node`) or package runners
+(`npx`) because either one is arbitrary code execution and can bypass the patch workflow by writing
+directly to the workspace. Verification workflows that Keiko constructs deterministically use an
+explicit verification-only rule set for `npm test`/`npm run` and targeted `npx` invocations, but
+those rules are not exposed as the model-facing `run_command` defaults. The default allowlist blocks
+casual/accidental misuse (`curl`, `bash`, `rm`, `ssh`, `python`), package installation/script
+execution (`npm install`, `npm run`, `npm ci`), account/registry mutation (`npm publish`,
+`git push`), and transitive-shell escapes (`npm exec`/`x`, `-c`/`--call`). OS-level
+filesystem/network isolation is deferred to the container wave (D7).
 
 **Flag-aware subcommand resolution (S-H2).** Subcommand detection is value-flag aware: the resolver
-skips a leading value-taking flag AND its value (`npm --prefix DIR publish` → subcommand `publish`,
-denied; `git -C DIR push` → `push`, denied), so a flag value can no longer masquerade as the
-subcommand. For npm (denylist mode) the resolved first non-flag token must additionally be a
-recognized npm subcommand — an unrecognized stray token (e.g. a path left by an unhandled value
-flag) is denied by default (`src/tools/sandbox.ts`).
+skips a leading value-taking flag AND its value (`git -C DIR push` → `push`, denied), so a flag
+value can no longer masquerade as the subcommand. In allowlist mode, the resolved first non-flag
+token must be explicitly allowed; an unrecognized stray token is denied by default
+(`src/tools/sandbox.ts`).
 
 Executables must be bare names (no `/` or `\` path separators, no NUL bytes). The check matches
 `basename(executable)` against the table, so a caller cannot bypass the allowlist by passing an
-absolute path to an allowed executable. Unknown executables are denied by default.
+absolute path to an allowed executable. After the rule match, `runCommand` resolves the bare name to
+an absolute executable path from `PATH`, rejects workspace-controlled resolutions (including symlink
+realpaths inside the workspace), and passes the resolved absolute path to `spawn`. Unknown or
+unresolvable executables are denied by default.
 
 All spawns use `{ shell: false }` unconditionally. Args are passed as an array to
 `child_process.spawn`; no argument string is ever interpolated into a shell command. (Note that
@@ -106,14 +105,14 @@ never spreads `...process.env`. `DEFAULT_ENV_ALLOWLIST` contains `PATH`, `LANG`,
 forwarded to a child process.
 
 `HOME` and `USERPROFILE` are deliberately NOT in the allowlist (C5). Forwarding the developer's real
-home would let an allowed subprocess (`npm`/`git`/`node`) read `~/.npmrc` (npm tokens),
+home would let an allowed subprocess (`npm`/`git`) read `~/.npmrc` (npm tokens),
 `~/.git-credentials`, and `~/.aws/…` via standard home-directory lookup — bypassing the env
 allowlist entirely, because the credential is read off disk, not off the environment. Instead,
 `runCommand` redirects `HOME` and `USERPROFILE` to a per-run **ephemeral, empty directory** created
 under the OS temp dir (`mkdtempSync(join(tmpdir(), "keiko-home-"))`) and removed after the command
 in every settle path — success, denial-before-spawn (no dir is created), timeout, cancellation, and
 spawn error (`src/tools/exec.ts`, `HomeProvider`/`nodeHomeProvider`). The child still receives a
-valid, writable `HOME` (so `node`/`npm` work), but it is empty: a home-directory credential lookup
+valid, writable `HOME` (so `npm` works), but it is empty: a home-directory credential lookup
 resolves to nothing. The provider is injected as a `RunCommandDeps.home` dependency with a Node
 default, so tests use a recording/fake provider and assert the child `HOME` is a real, existing,
 empty dir that is never the parent's real home, and that the dir is cleaned up.
@@ -137,8 +136,9 @@ metacharacter interpolation is possible.
 isolation. The `SandboxPolicy.network` field carries `"inherit"` as its current value
 (`src/tools/types.ts:48`), meaning the child process inherits the parent's network namespace.
 The mitigation is the combination of the env allowlist (no proxy credentials or auth tokens reach
-the child) and the command allowlist (only `node`, `npx`, `npm`, and read-only `git` may execute;
-arbitrary `curl`/`wget`/`ssh` commands are denied). This is documented explicitly, not papered over.
+the child) and the command allowlist (only read-only `npm` and read-only `git` may execute by
+default; arbitrary `curl`/`wget`/`ssh` commands are denied). This is documented explicitly, not
+papered over.
 
 The `NetworkPolicy = "inherit" | "none"` type and the `SandboxPolicy.network` field are the seam a
 later wave flips to `"none"` when the container layer lands. Tool consumers depend on
@@ -154,8 +154,8 @@ Windows is a documented limitation.
 
 The `runCommand` promise rejects with `CommandCancelledError` on abort and `CommandTimeoutError` on
 timeout — both caught from the `close` event after cleanup (`src/tools/exec.ts:194–202`). The
-`applyPatch` function checks `signal.aborted` before the write phase (`src/tools/patch.ts:284`),
-guaranteeing no partial patch state.
+`applyPatch` function checks `signal.aborted` before planning and during the write phase; a
+mid-apply cancellation rolls back completed writes before surfacing `CommandCancelledError`.
 
 ### D3 — Separate `WorkspaceWriter` port as the single controlled write surface
 
@@ -187,7 +187,7 @@ and surfaced as a `malformed` entry in `reasons` (it is NOT re-thrown). The only
 
 1. **Size limit** — `Buffer.byteLength(diff, "utf8") <= maxPatchBytes` (default 65 536 bytes, matching the harness `maxPatchBytes` limit from ADR-0004 D3).
 2. **Binary rejection** — any diff containing `GIT binary patch`, `Binary files … differ`, or NUL bytes is rejected.
-3. **Path safety** — every target path is checked via `resolveWithinWorkspace` (rejects `..`, abs, NUL), `isDenied` (always-on deny list from ADR-0005 D3: `.env*`, `*.pem`, `*.key`, `.git/**`, `node_modules/**`, etc.), AND `assertContainedRealPath` — the same symlink/realpath gate the read path applies (ADR-0005 D2). The realpath gate resolves the target (or, for a create, the nearest existing parent) and rejects a path whose real location escapes the root, closing the symlink-write/`.git/hooks` escalation (a lexically-contained `link/…` whose `link` points outside). The write path re-asserts it at `planWrites` as defence in depth.
+3. **Path safety** — every target path is checked via `resolveWithinWorkspace` (rejects `..`, abs, NUL), `isDenied` (always-on deny list from ADR-0005 D3: `.env*`, `*.pem`, `*.key`, `.git/**`, `node_modules/**`, etc.), AND `containedRealPathInfo` — the same symlink/realpath gate the read path applies (ADR-0005 D2). The realpath gate resolves the target (or, for a create, the nearest existing parent) and rejects a path whose real location escapes the root or resolves to an always-denied in-workspace target, closing both symlink-write/outside and symlink-alias-to-denied-file escalations. The write path re-asserts it at `planWrites` as defence in depth.
 4. **Line-count limits** — `maxChangedLines` (default 2 000) and `maxFilesChanged` (default 50).
 5. **Conflict detection** — pre-image context and removed lines must match the current file at the stated line numbers; a mismatch yields a structured `PatchConflict`. Creation of an existing file or modify/delete of a missing file is also a conflict. Conflict detection only runs after all structural and path checks pass, so a denied or oversized patch never reads target files.
 
@@ -203,10 +203,11 @@ forwarding to non-replay sinks.
 `deps.applyEnabled === true` — raising `PatchApplyDisabledError` otherwise
 (`src/tools/patch.ts:267–270`). The default `ToolHostConfig.applyEnabled` is `false`
 (`src/tools/types.ts:213`). When apply is enabled, the order is: (a) validate — any rejection
-raises `PatchValidationError` and writes nothing; (b) check `signal.aborted` — raises
-`CommandCancelledError` and writes nothing; (c) compute all new file contents in memory (pure);
-(d) write phase with rollback: if any write fails, already-written files are restored from their
-in-memory originals before the error propagates (`src/tools/patch.ts:233–255`). The atomicity
+raises `PatchValidationError` and writes nothing; (b) check `signal.aborted` before and during write
+planning — raises `CommandCancelledError` and writes nothing; (c) compute all new file contents in
+memory (pure); (d) write phase with rollback: if any write fails or cancellation is requested after
+a write, already-written files are restored from their in-memory originals before the error
+propagates. The atomicity
 bound is best-effort: a process kill during the rollback itself (e.g. OOM) can leave files in a
 partially reverted state, as there is no journal. This is documented, not papered over.
 
@@ -214,10 +215,11 @@ partially reverted state, as there is no journal. This is documented, not papere
 
 Tool `output` strings are redacted at two points:
 
-1. **Command stdout/stderr** — `redact(text, sensitiveValues)` is called with both the built-in
-   patterns and the values of all non-allowlisted parent env vars collected by
-   `collectSensitiveEnvValues` (`src/tools/exec.ts:120–131`). This is applied before
-   `CommandResult` leaves `runCommand`.
+1. **Command stdout/stderr** — if output fits under `maxOutputBytes`, `redact(text,
+   sensitiveValues)` is called with both the built-in patterns and the values of all non-allowlisted
+   parent env vars collected by `collectSensitiveEnvValues`. If the cap is hit, `runCommand`
+   returns a constant truncated-output marker instead of a partial raw prefix, so a secret split
+   across the cap boundary cannot leak.
 
 2. **ToolCallResult.output** — the `WorkspaceToolHost.execute` method returns `output` that is
    already the redacted string from step 1 (or the structured JSON from read/list/patch tools,
@@ -295,10 +297,11 @@ Tool consumers (`WorkspaceToolHost` callers) depend only on the `ToolPort` inter
 
 ### Negative
 
-- **Network is not isolated in Wave 1.** An allowlisted command (`node -e`) can make arbitrary
-  outbound TCP connections. The mitigation — no credentials in the child env — reduces the impact
-  of exfiltration but does not eliminate it (hardcoded URLs, timing side-channels). This is the
-  most significant residual risk in this wave. It is documented, not hidden.
+- **Network is not isolated in Wave 1.** An allowlisted command can make outbound TCP connections
+  if the underlying tool does so. The mitigation — no credentials in the child env and no raw
+  interpreter/package-runner defaults — reduces the impact of exfiltration but does not eliminate
+  it (hardcoded URLs, timing side-channels). This is the most significant residual risk in this
+  wave. It is documented, not hidden.
 - **Rollback atomicity is best-effort.** Multi-file patch apply uses an in-memory originals buffer
   and re-writes files on failure. A process kill (OOM, `SIGKILL` from the OS) during rollback can
   leave the working tree in a partially reverted state. There is no write-ahead log or journal. For
@@ -340,10 +343,11 @@ command strings before execution.
 - **Why rejected**: shell execution is incompatible with fail-closed security in a regulated
   environment. The no-shell, deny-by-default allowlist provides a smaller and more legible attack
   surface: a model cannot reach for `curl`/`bash`/`rm`, cannot chain pipes/redirections, and cannot
-  trigger metacharacter expansion. We do NOT claim it reduces behaviour to a finite enumerable set
-  of spawns — an allowed `node`/`npx` is still arbitrary code execution by design (see D1's honest
-  framing). The allowlist removes the shell-injection class and the casual-misuse class; credential
-  isolation (D2) and redaction (D5), not the allowlist, are what contain a hostile `node` payload.
+  trigger metacharacter expansion. We do NOT claim it is OS-level isolation; verification-specific
+  `npm`/`npx` paths can still run repository code by design. The model-facing default allowlist
+  removes the shell-injection class, the casual-misuse class, and raw interpreter/package-runner
+  bypasses of the patch workflow; credential isolation (D2) and redaction (D5) remain defence in
+  depth.
 
 ### Alternative 2: Full `process.env` passthrough with output redaction vs. name-copied env allowlist
 

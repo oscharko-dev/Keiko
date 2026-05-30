@@ -52,7 +52,7 @@ export const DEFAULT_ENV_ALLOWLIST: readonly string[] = Object.freeze([
 export const DEFAULT_SANDBOX_POLICY: SandboxPolicy = {
   envAllowlist: DEFAULT_ENV_ALLOWLIST,
   network: "inherit",
-  maxOutputBytes: 1_048_576,
+  maxOutputBytes: 262_144,
   defaultTimeoutMs: 30_000,
   terminationGraceMs: 2_000,
 } as const;
@@ -79,93 +79,21 @@ export interface CommandRule {
 
 // Minimal, justified default rules. Everything not listed is denied (deny-by-default).
 export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
-  { executable: "node" },
-  {
-    executable: "npx",
-    // `-c`/`--call` runs its argument in a SHELL — our shell:false is irrelevant once npx spawns
-    // it (S-H2). Deny the flag outright.
-    denyFlags: Object.freeze(["-c", "--call"]),
-  },
   {
     executable: "npm",
-    // Deny account/registry-mutating subcommands AND exec/x (which spawn an arbitrary binary or a
-    // transitive shell, bypassing the allowlist). Allow run/test/ci/ls/install.
-    deniedSubcommands: Object.freeze([
-      "publish",
-      "unpublish",
-      "login",
-      "logout",
-      "adduser",
-      "token",
-      "version",
-      "deprecate",
-      "owner",
-      "access",
-      "star",
-      "profile",
-      "exec",
-      "x",
-    ]),
-    // `-c`/`--call` execute a command string in a shell; deny outright (S-H2).
-    denyFlags: Object.freeze(["-c", "--call"]),
-    // Value-taking global flags. The resolver skips the flag AND its value so the value cannot be
-    // mistaken for the subcommand (`npm --prefix /x publish` → publish, denied).
-    valueFlags: Object.freeze([
-      "--prefix",
-      "--registry",
-      "--loglevel",
-      "--workspace",
-      "-w",
-      "--userconfig",
-      "--globalconfig",
-      "--cache",
-      "--tag",
-      "--otp",
-      "--node-options",
-    ]),
-    // Deny-by-default on the subcommand: the resolved first non-flag token must be a recognized
-    // npm subcommand. A stray path (left by an unhandled value flag) is not recognized → denied.
-    knownSubcommands: Object.freeze([
-      "run",
-      "run-script",
-      "test",
-      "t",
-      "tst",
-      "ci",
-      "install",
-      "i",
-      "install-ci-test",
+    // Read-only npm only. Mutating/package-installing subcommands are excluded by omission.
+    allowedSubcommands: Object.freeze([
+      "audit",
       "ls",
       "list",
-      "ll",
-      "la",
-      "audit",
       "outdated",
       "view",
       "info",
-      "ping",
-      "doctor",
       "help",
-      "config",
-      "rebuild",
-      "dedupe",
-      "prune",
-      "pkg",
-      "publish",
-      "unpublish",
-      "login",
-      "logout",
-      "adduser",
-      "token",
-      "version",
-      "deprecate",
-      "owner",
-      "access",
-      "star",
-      "profile",
-      "exec",
-      "x",
+      "ping",
     ]),
+    // `-c`/`--call` execute a command string in a shell; deny outright (S-H2).
+    denyFlags: Object.freeze(["-c", "--call"]),
   },
   {
     executable: "git",

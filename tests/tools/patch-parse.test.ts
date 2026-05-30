@@ -54,6 +54,16 @@ describe("parseUnifiedDiff", () => {
     expect(() => parseUnifiedDiff("--- a/x\n+++ b/x\n@@ not a header @@\n+y\n")).toThrow();
   });
 
+  it("throws when a hunk body has fewer lines than its header declares", () => {
+    const diff = "--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-a\n+b\n";
+    expect(() => parseUnifiedDiff(diff)).toThrow(/fewer lines/);
+  });
+
+  it("throws when a hunk body has more lines than its header declares", () => {
+    const diff = "--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n-a\n+b\n+extra\n";
+    expect(() => parseUnifiedDiff(diff)).toThrow(/more lines/);
+  });
+
   it("treats body lines beginning '-- '/'++ ' as hunk content, not a new file header (C6)", () => {
     // The added line renders as `+-- dashes` and the removed as `--- text`/`+++ text`. With a
     // hunk line-count budget, these stay BODY until the hunk is consumed.

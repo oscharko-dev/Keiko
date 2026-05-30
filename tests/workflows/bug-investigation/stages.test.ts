@@ -75,10 +75,10 @@ describe("terminal stages via investigateBug", () => {
     expect(report.verificationSkipReason).toBeDefined();
   });
 
-  it("reports patchApplied: true when cancelled AFTER apply (M1 — ledger matches disk)", async () => {
+  it("reports patchApplied: false when cancelled during apply rollback", async () => {
     // The signal is not aborted when finishPipeline checks it, so applyAndVerify runs; the writer
-    // aborts mid-apply so the post-apply `signal.aborted` check fires. The patch is on disk, so the
-    // cancelled report must reflect patchApplied: true (not the pre-apply hard-coded false).
+    // aborts during the write phase. applyPatch rolls back the write before surfacing cancellation,
+    // so the cancelled report must reflect that no patch remains applied.
     const controller = new AbortController();
     const base = recordingWriter();
     const writer = {
@@ -93,8 +93,8 @@ describe("terminal stages via investigateBug", () => {
       deps({ writer, signal: controller.signal }),
     );
     expect(report.status).toBe("cancelled");
-    expect(report.verified.patchApplied).toBe(true);
+    expect(report.verified.patchApplied).toBe(false);
     expect(base.writes().length).toBeGreaterThan(0);
-    expect(report.nextActions.some((a) => a.includes("applied"))).toBe(true);
+    expect(report.nextActions.some((a) => a.includes("applied"))).toBe(false);
   });
 });

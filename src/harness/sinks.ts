@@ -61,6 +61,8 @@ const SUMMARISERS: {
   "tool:call:started": (e) => `tool=${e.toolName} id=${e.toolCallId}`,
   "tool:call:completed": (e) => `tool=${e.toolName} id=${e.toolCallId}`,
   "tool:call:failed": (e) => `tool=${e.toolName} code=${e.errorCode}`,
+  "sandbox:configured": (e) =>
+    `env=${e.envAllowlist.join(",")} network=${e.network} timeoutMs=${String(e.timeoutMs)} maxOutputBytes=${String(e.maxOutputBytes)} cwdRequested=${String(e.cwdRequested)}`,
   "command:executed": (e) =>
     `exec=${e.executable} args=${String(e.argCount)} exit=${String(e.exitCode)} timedOut=${String(e.timedOut)}`,
   "patch:applied": (e) =>

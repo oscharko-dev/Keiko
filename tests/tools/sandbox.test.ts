@@ -4,7 +4,16 @@ import {
   collectSensitiveEnvValues,
   isCommandAllowed,
 } from "../../src/tools/sandbox.js";
-import { DEFAULT_COMMAND_RULES, DEFAULT_ENV_ALLOWLIST } from "../../src/tools/types.js";
+import {
+  DEFAULT_COMMAND_RULES,
+  DEFAULT_ENV_ALLOWLIST,
+  type CommandRule,
+} from "../../src/tools/types.js";
+
+const NODE_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+  { executable: "node" },
+  ...DEFAULT_COMMAND_RULES,
+]);
 
 describe("buildSandboxEnv", () => {
   it("copies only allowlisted names that are present", () => {
@@ -45,8 +54,13 @@ describe("collectSensitiveEnvValues", () => {
 });
 
 describe("isCommandAllowed — deny-by-default", () => {
-  it("allows an allowlisted executable with no subcommand restriction", () => {
-    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "node", ["-e", "1"]).allowed).toBe(true);
+  it("allows an explicitly-allowlisted executable with no subcommand restriction", () => {
+    expect(isCommandAllowed(NODE_COMMAND_RULES, "node", ["-e", "1"]).allowed).toBe(true);
+  });
+
+  it("denies raw interpreters and package runners by default", () => {
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "node", ["-e", "1"]).allowed).toBe(false);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npx", ["eslint", "."]).allowed).toBe(false);
   });
 
   it("denies an unlisted executable", () => {
@@ -90,11 +104,21 @@ describe("isCommandAllowed — deny-by-default", () => {
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", []).allowed).toBe(false);
   });
 
-  it("denies an npm publish/mutating subcommand but allows run/test", () => {
+  it("allows only read-only npm subcommands by default", () => {
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["ls"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["list"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["outdated"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["view", "keiko"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["info", "keiko"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["help"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["ping"]).allowed).toBe(true);
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["publish"]).allowed).toBe(false);
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["login"]).allowed).toBe(false);
-    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["run", "test"]).allowed).toBe(true);
-    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["ci"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["run", "test"]).allowed).toBe(false);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["ci"]).allowed).toBe(false);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["install"]).allowed).toBe(false);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["config"]).allowed).toBe(false);
   });
 
   it("skips leading flags when locating the subcommand", () => {
@@ -165,13 +189,13 @@ describe("isCommandAllowed — S-H2 value-flag bypass + transitive shell", () =>
     );
   });
 
-  it("positive controls still pass: npm test, npm run build, git status, npx eslint", () => {
-    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["test"]).allowed).toBe(true);
-    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["run", "build"]).allowed).toBe(true);
+  it("positive controls still pass: npm audit, npm view, git status", () => {
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["view", "keiko"]).allowed).toBe(true);
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["status"]).allowed).toBe(true);
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["-C", "sub", "status"]).allowed).toBe(
       true,
     );
-    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npx", ["eslint", "."]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npx", ["eslint", "."]).allowed).toBe(false);
   });
 });

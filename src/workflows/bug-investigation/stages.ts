@@ -6,7 +6,12 @@
 // selects the branch; emitCompleted stamps the terminal event. All redaction is inside assembleBugReport.
 
 import { redact } from "../../gateway/redaction.js";
-import { applyPatch, renderDryRun, type PatchApplyResult } from "../../tools/index.js";
+import {
+  applyPatch,
+  CommandCancelledError,
+  renderDryRun,
+  type PatchApplyResult,
+} from "../../tools/index.js";
 import { nodeWorkspaceFs } from "../../workspace/fs.js";
 import type { WorkspaceInfo } from "../../workspace/index.js";
 import { assembleBugReport } from "./report.js";
@@ -192,6 +197,22 @@ export function failedReport(state: BugRunState, error: unknown): BugInvestigati
   });
 }
 
+function applyBugPatch(
+  state: BugRunState,
+  workspace: WorkspaceInfo,
+  accepted: AcceptedBugPatch,
+): { readonly fs: typeof nodeWorkspaceFs; readonly applyResult: PatchApplyResult } {
+  const fs = state.deps.fs ?? nodeWorkspaceFs;
+  const applyResult = applyPatch(workspace, accepted.diff, {
+    applyEnabled: true,
+    signal: state.signal,
+    fs,
+    limits: patchLimitsFrom(state.limits),
+    ...(state.deps.writer === undefined ? {} : { writer: state.deps.writer }),
+  });
+  return { fs, applyResult };
+}
+
 async function applyAndVerify(
   state: BugRunState,
   workspace: WorkspaceInfo,
@@ -199,14 +220,16 @@ async function applyAndVerify(
   accepted: AcceptedBugPatch,
   evidence: FailureEvidence,
 ): Promise<BugInvestigationReport> {
-  const fs = state.deps.fs ?? nodeWorkspaceFs;
-  const applyResult: PatchApplyResult = applyPatch(workspace, accepted.diff, {
-    applyEnabled: true,
-    signal: state.signal,
-    fs,
-    limits: patchLimitsFrom(state.limits),
-    ...(state.deps.writer === undefined ? {} : { writer: state.deps.writer }),
-  });
+  let applyResult: PatchApplyResult;
+  let fs: typeof nodeWorkspaceFs;
+  try {
+    ({ fs, applyResult } = applyBugPatch(state, workspace, accepted));
+  } catch (error) {
+    if (error instanceof CommandCancelledError) {
+      return cancelledReport(state, loop, accepted, evidence);
+    }
+    throw error;
+  }
   state.emitter.emit({
     type: "bug:patch:applied",
     changedFiles: applyResult.changedFiles.length,

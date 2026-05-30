@@ -15,7 +15,7 @@ import type {
 import { discoverWithStats, readWorkspaceFile } from "../workspace/discovery.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
 import type { WorkspaceInfo } from "../workspace/types.js";
-import { nodeSpawnFn, runCommand, type SpawnFn } from "./exec.js";
+import { nodeSpawnFn, runCommand, type ExecutableResolver, type SpawnFn } from "./exec.js";
 import { CommandCancelledError, ToolArgumentError, UnknownToolError } from "./errors.js";
 import { applyPatch, renderDryRun, validatePatch } from "./patch.js";
 import { TOOL_DEFINITIONS } from "./schemas.js";
@@ -104,6 +104,7 @@ export class WorkspaceToolHost implements ToolPort {
   private readonly fs: WorkspaceFs;
   private readonly writer: WorkspaceWriter;
   private readonly spawn: SpawnFn;
+  private readonly resolveExecutable: ExecutableResolver | undefined;
   private readonly config: ToolHostConfig;
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly now: () => number;
@@ -113,6 +114,7 @@ export class WorkspaceToolHost implements ToolPort {
     readonly fs?: WorkspaceFs | undefined;
     readonly writer?: WorkspaceWriter | undefined;
     readonly spawn?: SpawnFn | undefined;
+    readonly resolveExecutable?: ExecutableResolver | undefined;
     readonly config?: ToolHostConfigInput | undefined;
     readonly processEnv?: NodeJS.ProcessEnv | undefined;
     readonly now?: (() => number) | undefined;
@@ -121,6 +123,7 @@ export class WorkspaceToolHost implements ToolPort {
     this.fs = deps.fs ?? nodeWorkspaceFs;
     this.writer = deps.writer ?? nodeWorkspaceWriter;
     this.spawn = deps.spawn ?? nodeSpawnFn;
+    this.resolveExecutable = deps.resolveExecutable;
     this.config = resolveToolHostConfig(deps.config);
     this.processEnv = deps.processEnv ?? process.env;
     this.now = deps.now ?? Date.now;
@@ -212,6 +215,7 @@ export class WorkspaceToolHost implements ToolPort {
         policy: this.config.sandbox,
         commandRules: this.config.commandRules,
         spawn: this.spawn,
+        resolveExecutable: this.resolveExecutable,
         processEnv: this.processEnv,
         now: this.now,
       },
@@ -225,6 +229,14 @@ export class WorkspaceToolHost implements ToolPort {
         argCount: cmdArgs.length,
         exitCode: result.exitCode,
         timedOut: result.timedOut,
+        sandbox: {
+          envAllowlist: this.config.sandbox.envAllowlist,
+          network: this.config.sandbox.network,
+          maxOutputBytes: this.config.sandbox.maxOutputBytes,
+          timeoutMs: timeoutMs ?? this.config.sandbox.defaultTimeoutMs,
+          terminationGraceMs: this.config.sandbox.terminationGraceMs,
+          cwdRequested: cwd !== undefined,
+        },
       },
     };
   }

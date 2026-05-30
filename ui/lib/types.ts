@@ -243,6 +243,15 @@ export type HarnessEvent =
       durationMs: number;
     })
   | (BaseEvent & {
+      type: "sandbox:configured";
+      envAllowlist: readonly string[];
+      network: "inherit" | "none";
+      maxOutputBytes: number;
+      timeoutMs: number;
+      terminationGraceMs: number;
+      cwdRequested: boolean;
+    })
+  | (BaseEvent & {
       type: "patch:applied";
       changedFiles: number;
       created: number;
@@ -307,6 +316,7 @@ export const ALL_SSE_EVENT_TYPES: readonly HarnessEventType[] = [
   "run:failed",
   // Harness tool-pipeline (S-M1)
   "command:executed",
+  "sandbox:configured",
   "patch:applied",
   // Unit-test workflow
   "workflow:started",
