@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 import { ApiError, fetchChatMessages, fetchChats } from "@/lib/api";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 import { ChatComposer } from "./ChatComposer";
+import { RunSummaryCard } from "./RunSummaryCard";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -95,6 +96,19 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
     setRefreshKey((k) => k + 1);
   }
 
+  // Issue #66 — replace a message by id in-place so a PATCHed run summary updates the DOM
+  // without a full refetch. The hook only patches system messages with a runId; the
+  // role+runId discriminator in the render branch routes the render path.
+  const handlePatched = useCallback((updated: ChatMessage): void => {
+    setState((prev) => {
+      if (prev.kind !== "loaded") return prev;
+      return {
+        kind: "loaded",
+        messages: prev.messages.map((m) => (m.id === updated.id ? updated : m)),
+      };
+    });
+  }, []);
+
   const projectName = project.name;
   const available = project.available !== false;
 
@@ -145,16 +159,20 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
                 key={msg.id}
                 className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
               >
-                <div
-                  className={`max-w-[80%] rounded-lg px-3 py-2 text-sm
-                    ${
-                      msg.role === "user"
-                        ? "bg-accent text-ink-inverse"
-                        : "bg-panel text-ink"
-                    }`}
-                >
-                  <p className="whitespace-pre-wrap break-words">{msg.content}</p>
-                </div>
+                {msg.role === "system" && msg.runId !== undefined ? (
+                  <RunSummaryCard message={msg} onPatched={handlePatched} />
+                ) : (
+                  <div
+                    className={`max-w-[80%] rounded-lg px-3 py-2 text-sm
+                      ${
+                        msg.role === "user"
+                          ? "bg-accent text-ink-inverse"
+                          : "bg-panel text-ink"
+                      }`}
+                  >
+                    <p className="whitespace-pre-wrap break-words">{msg.content}</p>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

@@ -278,6 +278,9 @@ export function ChatComposer({
         timestamp: Date.now(),
         runId: run.runId,
         ...(payload.workflowId === undefined ? {} : { workflowId: payload.workflowId }),
+        // Issue #66 — non-workflow task runs (verify, explain-plan) carry taskType so the
+        // chat renders an unambiguous label instead of "Workflow run".
+        ...(payload.taskType === undefined ? {} : { taskType: payload.taskType }),
         workflowStatus: "running",
       });
       setText("");
