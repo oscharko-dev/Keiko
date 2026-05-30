@@ -21,14 +21,13 @@ The UI binds `127.0.0.1` only (never the public interface) and never contacts ex
 **Model gateway configuration:** a configured model provider is required to run workflows. Without it:
 
 - The UI loads and all read surfaces (config inspector, evidence browser, workflow descriptors) work.
-- Launching a run returns a clear error: "No model configured."
+- Launching a run returns a clear error: "No model provider is configured."
 
-Configure the gateway via:
+Configure the gateway by providing a JSON config file:
 
-- A JSON file passed with `keiko ui --config <path>`, or
-- The `KEIKO_CONFIG_FILE` environment variable, or
-- Per-model environment variables (`KEIKO_MODEL_<UPPER_ID>_API_KEY` and `_BASE_URL`), or
-- Global fallback variables (`KEIKO_DEFAULT_API_KEY` and `_BASE_URL`).
+- A JSON file passed with `keiko ui --config <path>`.
+
+Per-model variables (`KEIKO_MODEL_<UPPER_ID>_API_KEY` and `_BASE_URL`) and global fallback variables (`KEIKO_DEFAULT_API_KEY` and `_BASE_URL`) can supply or override provider secrets referenced by that config file. They are not a standalone UI configuration source.
 
 See the [main README](../README.md#configuration-and-secrets) for the full precedence and variable names.
 
@@ -42,12 +41,12 @@ npm --prefix ui ci --ignore-scripts
 npm run build:ui # Build the Next.js static export and copy into dist/ui/static/
 ```
 
-The two build commands run automatically during `npm pack` (via `prepack`). The result:
+The `prepack` and `prepublishOnly` chains run `npm run clean`, `npm run build`, `npm run ui:ci`, `npm run build:ui`, and `npm run check:package-surface`. The result:
 
 - `dist/ui/static/` — the static HTML/CSS/JS export
 - `dist/ui/csp-hashes.json` — precomputed inline-script hashes for Content-Security-Policy
 
-The `build:ui` script expects the nested `ui/` dependencies to already be installed with scripts disabled, builds the static export, and verifies the CSP hashes are present before copying assets into the root package.
+The chain installs the nested `ui/` dependencies with scripts disabled before `build:ui`, then builds the static export and verifies the CSP hashes before copying assets into the root package.
 
 ## Launching the UI
 
@@ -70,8 +69,8 @@ Open that URL in your browser. Stop the server with Ctrl-C (SIGINT).
 All flags are optional:
 
 - `--port <number>` — listen on a different port (default `4319`). Must be between 1 and 65535.
-- `--host 127.0.0.1|localhost` — choose the loopback host (default `127.0.0.1`). Only loopback addresses are allowed; the server never binds `0.0.0.0`.
-- `--config <path>` — path to a gateway config file (JSON). Takes precedence over environment variables.
+- `--host 127.0.0.1|localhost` — validate a loopback host value for compatibility. The server always binds `127.0.0.1` and never binds `0.0.0.0`.
+- `--config <path>` — path to a gateway config file (JSON) required for model-backed workflow runs.
 - `--evidence-dir <path>` — custom directory for evidence manifests. Defaults to `$KEIKO_EVIDENCE_DIR` or a `.keiko/evidence` subdirectory in the detected workspace.
 
 Example:
@@ -207,15 +206,15 @@ Refused to load the script because it violates the Content-Security-Policy direc
 2. Verify `dist/ui/csp-hashes.json` exists and is valid JSON.
 3. If either is missing, run `npm run build:ui` again.
 
-### Runs error with "No model configured"
+### Runs error with "No model provider is configured"
 
 You try to launch a workflow and see:
 
 ```json
 {
   "error": {
-    "code": "NO_MODEL_CONFIGURED",
-    "message": "No model configured. Provide a gateway config via --config or environment variables."
+    "code": "NO_MODEL",
+    "message": "No model provider is configured."
   }
 }
 ```
@@ -240,13 +239,6 @@ You try to launch a workflow and see:
 
    ```bash
    keiko ui --config ./keiko.json
-   ```
-
-   Or set the environment variable:
-
-   ```bash
-   export KEIKO_CONFIG_FILE=./keiko.json
-   keiko ui
    ```
 
 See the [main README](../README.md#configuration-and-secrets) for the full precedence and available environment variables.
