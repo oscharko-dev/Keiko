@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { ShellHeader } from "./ShellHeader";
 import { Sidebar } from "./Sidebar";
@@ -89,7 +89,21 @@ export function ShellChrome({ children }: ShellChromeProps): ReactNode {
 
         {/* Content row: [sidebar | main | tool-rail] */}
         <div className="flex min-h-0 overflow-hidden">
-          <Sidebar collapsed={collapsed} />
+          {/*
+           * Suspense boundary required because Sidebar calls useSearchParams().
+           * In Next.js 15 App Router static export, useSearchParams() must be
+           * inside a Suspense boundary to avoid the build-time bail-out.
+           */}
+          <Suspense
+            fallback={
+              <nav
+                aria-label="Project navigation"
+                className={`flex flex-col overflow-hidden bg-chrome ${collapsed ? "w-12" : "w-60"}`}
+              />
+            }
+          >
+            <Sidebar collapsed={collapsed} />
+          </Suspense>
 
           <main
             id="main-content"

@@ -5,8 +5,25 @@ import { axe } from "jest-axe";
 import { Sidebar } from "./Sidebar";
 import * as api from "@/lib/api";
 
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
+
+const mockReplace = vi.fn();
+const mockSearchParams = new URLSearchParams();
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: mockReplace }),
+  useSearchParams: () => mockSearchParams,
+}));
+
 vi.mock("@/lib/api", () => ({
   fetchProjects: vi.fn(),
+  fetchChats: vi.fn().mockResolvedValue({ chats: [] }),
+  createProject: vi.fn(),
+  updateProject: vi.fn(),
+  deleteProject: vi.fn(),
+  createChat: vi.fn(),
   ApiError: class ApiError extends Error {
     code: string;
     status: number;
@@ -18,14 +35,41 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
 const mockProjects = [
-  { path: "/workspace/foo", name: "Foo Project", available: true, favorite: false, createdAt: 1000, lastOpenedAt: 2000 },
-  { path: "/workspace/bar", name: "Bar Project", available: false, favorite: false, createdAt: 1000, lastOpenedAt: 2000 },
+  {
+    path: "/workspace/foo",
+    name: "Foo Project",
+    available: true,
+    favorite: false,
+    createdAt: 1000,
+    lastOpenedAt: 2000,
+  },
+  {
+    path: "/workspace/bar",
+    name: "Bar Project",
+    available: false,
+    favorite: false,
+    createdAt: 1000,
+    lastOpenedAt: 2000,
+  },
 ];
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 describe("Sidebar", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Reset search params to empty
+    mockSearchParams.delete("project");
+    mockSearchParams.delete("chat");
+    // Default fetchChats mock
+    vi.mocked(api.fetchChats).mockResolvedValue({ chats: [] });
   });
 
   it("renders loading state with role=status and aria-live=polite", () => {
@@ -59,13 +103,14 @@ describe("Sidebar", () => {
     });
   });
 
-  it("renders empty state with disabled Add project CTA", async () => {
+  it("renders empty state with Add project button (not disabled)", async () => {
     vi.mocked(api.fetchProjects).mockResolvedValueOnce({ projects: [] });
     render(<Sidebar collapsed={false} />);
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /add project/i })).toBeDisabled();
+      expect(screen.getByText(/no projects yet/i)).toBeInTheDocument();
     });
-    expect(screen.getByText(/no projects yet/i)).toBeInTheDocument();
+    // The add-project button at the bottom is now always functional
+    expect(screen.getByRole("button", { name: /\+ add project/i })).toBeInTheDocument();
   });
 
   it("renders project list when loaded", async () => {
@@ -86,6 +131,22 @@ describe("Sidebar", () => {
     });
   });
 
+  it("clicking a project row writes ?project= to URL", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchProjects).mockResolvedValueOnce({
+      projects: [mockProjects[0]],
+    });
+    render(<Sidebar collapsed={false} />);
+    await waitFor(() => {
+      expect(screen.getByText("Foo Project")).toBeInTheDocument();
+    });
+    // The main row button has the project name as text
+    const projectBtns = screen.getAllByRole("button", { name: /foo project/i });
+    // The first match is the row select button (title attribute = path)
+    await user.click(projectBtns[0]);
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining("project="));
+  });
+
   it("renders project nav landmark", async () => {
     vi.mocked(api.fetchProjects).mockResolvedValueOnce({ projects: [] });
     render(<Sidebar collapsed={false} />);
@@ -102,6 +163,31 @@ describe("Sidebar", () => {
     await waitFor(() => {
       expect(document.getElementById("shell-sidebar")).not.toBeNull();
     });
+  });
+
+  it("selected project row has aria-current=true", async () => {
+    mockSearchParams.set("project", encodeURIComponent("/workspace/foo"));
+    vi.mocked(api.fetchProjects).mockResolvedValueOnce({
+      projects: [mockProjects[0]],
+    });
+    vi.mocked(api.fetchChats).mockResolvedValue({ chats: [] });
+    render(<Sidebar collapsed={false} />);
+    await waitFor(() => {
+      // The row button for the selected project has aria-current=true
+      const allWithCurrent = document
+        .querySelectorAll('[aria-current="true"]');
+      expect(allWithCurrent.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("New chat button is disabled when no project is selected", async () => {
+    vi.mocked(api.fetchProjects).mockResolvedValueOnce({ projects: mockProjects });
+    render(<Sidebar collapsed={false} />);
+    await waitFor(() => {
+      expect(screen.getByText("Foo Project")).toBeInTheDocument();
+    });
+    const newChatBtn = screen.getByRole("button", { name: /\+ new chat/i });
+    expect(newChatBtn).toBeDisabled();
   });
 
   it("has no axe-detectable accessibility violations when loaded", async () => {
