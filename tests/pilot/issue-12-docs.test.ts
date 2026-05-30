@@ -80,6 +80,19 @@ describe("Issue #12 docs drift", () => {
     );
   });
 
+  it("keeps UI host documentation aligned with the loopback bind implementation", () => {
+    const readme = readText("README.md");
+    const uiRunbook = readText("docs/ui-runbook.md");
+    const uiCli = readText("src/cli/ui.ts");
+    const uiServer = readText("src/ui/server.ts");
+    const hostContract = /validate a loopback host value.*server always binds `127\.0\.0\.1`/i;
+
+    expect(readme).toMatch(hostContract);
+    expect(uiRunbook).toMatch(hostContract);
+    expect(uiCli).toContain('new Set(["127.0.0.1", "localhost"])');
+    expect(uiServer).toContain('export const UI_HOST = "127.0.0.1"');
+  });
+
   it("states that structured-diff model capability routing is guidance, not enforced selection", () => {
     const guide = readText("docs/pilot/model-capability-guide.md");
 
