@@ -95,12 +95,18 @@ function fullEventMix(): readonly HarnessEvent[] {
     { ...base(9, 180), type: "patch:applied", changedFiles: 1, created: 0, deleted: 0 },
     {
       ...base(10, 190),
+      type: "verification:result",
+      passed: true,
+      detail: `verified ${GITHUB}`,
+    },
+    {
+      ...base(11, 195),
       type: "reasoning:trace",
       phase: "planning",
       rationale: `mentions ${ENV_SECRET}`,
       modelResponse: "ok",
     },
-    { ...base(11, 200), type: "run:completed", report: "done" },
+    { ...base(12, 200), type: "run:completed", report: "done" },
   ];
 }
 
@@ -227,6 +233,15 @@ describe("buildEvidenceManifest — full event mix mapping", () => {
     expect(manifest.patch?.redactedDiff).toBeUndefined();
   });
 
+  it("maps verification results and redacts their detail", () => {
+    expect(manifest.verificationResults).toHaveLength(1);
+    expect(manifest.verificationResults?.[0]).toMatchObject({
+      seq: 10,
+      passed: true,
+    });
+    expect(manifest.verificationResults?.[0]?.detail).not.toContain(GITHUB);
+  });
+
   it("omits reasoning by default", () => {
     expect(manifest.reasoning).toBeUndefined();
   });
@@ -253,6 +268,7 @@ describe("buildEvidenceManifest — absent sections are undefined", () => {
     expect(m.toolCalls).toEqual([]);
     expect(m.commandExecutions).toEqual([]);
     expect(m.sandboxConfigurations).toBeUndefined();
+    expect(m.verificationResults).toBeUndefined();
     expect(m.stateTransitions).toEqual([]);
   });
 });
@@ -278,7 +294,7 @@ describe("buildEvidenceManifest — opt-ins", () => {
       { env },
     );
     expect(m.reasoning).toHaveLength(1);
-    expect(m.reasoning?.[0]?.seq).toBe(10);
+    expect(m.reasoning?.[0]?.seq).toBe(11);
     expect(m.reasoning?.[0]?.rationale).not.toContain(ENV_SECRET);
     expect(m.reasoning?.[0]?.rationale).toContain("[REDACTED]");
   });

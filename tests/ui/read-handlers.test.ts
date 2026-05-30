@@ -351,7 +351,29 @@ describe("GET /api/evidence/:runId", () => {
   });
 
   it("serves a present manifest as-is", () => {
-    const json = JSON.stringify({ evidenceSchemaVersion: "1", run: { runId: "run-x" } });
+    const json = JSON.stringify({
+      evidenceSchemaVersion: "1",
+      run: {
+        runId: "run-x",
+        fingerprint: "fp",
+        harnessVersion: "0.1.0",
+        taskType: "explain-plan",
+        outcome: "completed",
+        startedAt: 1,
+        finishedAt: 2,
+        durationMs: 1,
+      },
+      model: { modelId: "m", costClass: "unknown" },
+      usageTotals: {
+        promptTokens: 0,
+        completionTokens: 0,
+        requestCount: 0,
+        totalLatencyMs: 0,
+      },
+      stateTransitions: [],
+      toolCalls: [],
+      commandExecutions: [],
+    });
     const store: EvidenceStore = {
       put: () => "",
       list: () => ["run-x"],

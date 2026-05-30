@@ -11,6 +11,7 @@
 // JSON-escaped secrets and risk corrupting the document). It catches a secret smuggled in through a
 // verbatim-embedded summary (context/verification) that the builder does not itself redact.
 
+import { isAbsolute, resolve } from "node:path";
 import { buildEvidenceManifest } from "./build.js";
 import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
 import { buildEvidenceReport, type EvidenceReport } from "./report.js";
@@ -30,6 +31,11 @@ export interface PersistResult {
   readonly report: EvidenceReport;
 }
 
+function defaultEvidenceDir(input: EvidenceBuildInput, env: EvidenceDeps["env"]): string {
+  const configured = resolveEvidenceDir(undefined, env);
+  return isAbsolute(configured) ? configured : resolve(input.manifest.workingDirectory, configured);
+}
+
 export function persistEvidence(
   input: EvidenceBuildInput,
   deps: EvidenceDeps,
@@ -46,7 +52,7 @@ export function persistEvidence(
   // C5/AC#6: with no explicit store, persist to the predictable local node store (resolved dir incl.
   // KEIKO_EVIDENCE_DIR), NOT an in-memory store that would silently discard the evidence. Tests
   // inject createInMemoryEvidenceStore explicitly so they never write to the repository tree.
-  const store = deps.store ?? createNodeEvidenceStore(resolveEvidenceDir(undefined, deps.env));
+  const store = deps.store ?? createNodeEvidenceStore(defaultEvidenceDir(input, deps.env));
   const location = store.put(safeManifest.run.runId, json);
   applyRetention(store, retention);
   return { manifest: safeManifest, location, report: buildEvidenceReport(safeManifest, location) };

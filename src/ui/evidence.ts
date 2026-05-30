@@ -6,14 +6,16 @@
 // The WORKFLOW manifest mapping now lives in the shared audit module `workflow-evidence.ts` (ADR-0012
 // C2), so the evaluation harness and this BFF build it from one implementation. This module keeps the
 // EXPLAIN-PLAN harness path (whose `usage` shape differs) local, and adapts the UI RunKind/RunStatus
-// to the shared module's narrow workflow types. Persistence stays BEST-EFFORT: a failure here must
-// never crash the BFF, abort the run, or mask the run outcome.
+// to the shared module's narrow workflow types. Persistence errors surface to the run engine so the
+// final registry payload cannot silently omit required evidence.
 
 import {
+  buildEvidenceReport,
   createAuditRedactor,
   EVIDENCE_SCHEMA_VERSION,
   resolveCostClass,
   persistWorkflowEvidence as persistWorkflowEvidenceCore,
+  type EvidenceReport,
   type EvidenceManifest,
   type WorkflowRunKind,
 } from "../audit/index.js";
@@ -56,8 +58,8 @@ export function persistWorkflowEvidence(
   report: unknown,
   events: readonly StreamEvent[],
   ctx: EvidencePersistContext,
-): void {
-  persistWorkflowEvidenceCore(
+): EvidenceReport {
+  return persistWorkflowEvidenceCore(
     {
       runId: identity.runId,
       fingerprint: identity.fingerprint,
@@ -80,15 +82,12 @@ export function persistExplainEvidence(
   identity: RunIdentity,
   result: RunResult,
   ctx: EvidencePersistContext,
-): void {
-  try {
-    const manifest = buildExplainManifest(identity, result);
-    const redactor = createAuditRedactor({}, ctx.env);
-    const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
-    ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
-  } catch {
-    // Best-effort: a persist failure must not surface to the caller (AC5 / coordinator guardrail).
-  }
+): EvidenceReport {
+  const manifest = buildExplainManifest(identity, result);
+  const redactor = createAuditRedactor({}, ctx.env);
+  const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
+  const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
+  return buildEvidenceReport(redacted, location);
 }
 
 const KIND_TO_TASK_TYPE: Readonly<Record<RunKind, TaskType>> = {

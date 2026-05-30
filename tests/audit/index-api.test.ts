@@ -72,6 +72,12 @@ describe("loadEvidence", () => {
     expect(() => loadEvidence(store, "run-x")).toThrow(EvidenceSchemaError);
   });
 
+  it("raises EvidenceSchemaError when a version-1 manifest lacks required fields", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("run-x", JSON.stringify({ evidenceSchemaVersion: "1" }));
+    expect(() => loadEvidence(store, "run-x")).toThrow(EvidenceSchemaError);
+  });
+
   it("raises a typed EvidenceReadError (not a raw SyntaxError) for malformed JSON (C1)", () => {
     const store = createInMemoryEvidenceStore();
     store.put("run-x", '{"evidenceSchemaVersion": "1", run');
@@ -82,5 +88,11 @@ describe("loadEvidence", () => {
     const store = createInMemoryEvidenceStore();
     store.put("run-x", "not json at all");
     expect(() => listEvidence(store)).toThrow(EvidenceReadError);
+  });
+
+  it("propagates a typed schema error through listEvidence too", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put("run-x", JSON.stringify({ evidenceSchemaVersion: "1" }));
+    expect(() => listEvidence(store)).toThrow(EvidenceSchemaError);
   });
 });

@@ -123,7 +123,24 @@ describe("runAgentCli evidence-by-default", () => {
     const raw = store.get(runId);
     expect(raw).toContain('"evidenceSchemaVersion": "1"');
     expect(c.out()).toContain("Evidence:");
+    expect(c.out()).toContain("fingerprint");
+    expect(c.out()).toContain("usage");
+    expect(c.out()).toContain("cost class");
+    expect(c.out()).toContain("verification");
     expect(c.out()).toContain("known limitations");
+  });
+
+  it("reports harness verification results from the evidence report", async () => {
+    const c = capture();
+    const store = createInMemoryEvidenceStore();
+    const code = await runAgentCli(
+      ["generate-unit-tests", "--file", "src/foo.ts"],
+      c.io,
+      {},
+      { store },
+    );
+    expect(code).toBe(0);
+    expect(c.out()).toContain("verification   passed");
   });
 
   it("makes zero filesystem writes when --no-evidence is passed (mocked writers throw)", async () => {

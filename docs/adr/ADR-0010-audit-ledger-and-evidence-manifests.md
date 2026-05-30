@@ -10,13 +10,11 @@ builder is redacted-by-construction (primary); the DiD pass in `persist.ts` re-a
 to **every string leaf** of the assembled manifest object via a generic recursive walk **before**
 `JSON.stringify` (superseding D3's "re-runs the redactor over the serialized JSON string" wording).
 A serialized-string pass could miss JSON-escaped secrets and risk corrupting the document; the
-field-wise walk is idempotent and cannot break JSON structure. (2) **The harness is left
-unedited.** The reuse-unchanged rule is absolute (zero edits to
-`src/{gateway,harness,workspace,tools,verification,workflows}`), so `runAgent`/`createSession` are
-NOT modified (superseding any D9/D11 wording implying an edit to `runAgent`). The "SDK runs write
-evidence" requirement is satisfied at the CLI layer (`keiko run` writes by default via a tee
-EventSink + `MemoryEventSink.collectManifest`) and by the supported SDK persist entry
-`persistEvidence(input, deps)` exported from the audit layer. (3) **CLI tests never write into the
+field-wise walk is idempotent and cannot break JSON structure. (2) **The harness core is left
+unedited.** `createSession` remains the deterministic harness entry; the SDK barrel now exposes a
+thin `runAgent` wrapper that composes `createSession` and writes evidence by default. The "SDK runs
+write evidence" requirement is therefore satisfied without moving persistence into the harness
+state machine. (3) **CLI tests never write into the
 repo tree.** `runAgentCli`/`runEvidenceCli` take a `deps` injection point (mirroring
 `runGenTestsCli`) so every test that exercises evidence writes to an injected in-memory
 `EvidenceStore` or an OS `mkdtemp` dir cleaned up in `afterEach`, or passes `--no-evidence`; `.keiko/`
@@ -53,12 +51,12 @@ sinks that do **not** retain raw content. Therefore the audit layer is the redac
 the persisted artifact: the manifest must be **redacted by construction**, and the writer must
 never receive un-redacted data. This is the single most important property of the layer.
 
-**The reuse-unchanged rule is absolute.** Issues #3–#9 are accepted, audited, and CI-green. This
-layer makes **zero** edits to `src/{gateway,harness,workspace,tools,verification,workflows}` —
-provable via an empty `git diff origin/dev` over those paths. The audit layer depends **inward**
-on those layers' public types and functions only. In particular, `costClass` is **not** added to
-the harness `model:call:completed` event (it is recovered from the gateway capability registry at
-build time, D7).
+**Preserve the deterministic core.** Issues #3–#9 are accepted, audited, and CI-green. This layer
+does not move persistence, storage policy, or report construction into the harness state machine;
+the audit layer depends inward on public types and functions and the SDK wrapper composes the
+existing session API. In particular, `costClass` is **not** added to the harness
+`model:call:completed` event (it is recovered from the gateway capability registry at build time,
+D7).
 
 **Zero new runtime dependencies (ADR-0001, load-bearing).** Every mechanism — atomic write,
 directory listing, retention deletion, realpath containment — uses Node 22 built-ins. No JSON
@@ -167,6 +165,26 @@ export interface EvidenceCommandExecution {
   readonly durationMs: number;
 }
 
+// One sandbox configuration snapshot (from sandbox:configured). Names/limits only.
+export interface EvidenceSandboxConfiguration {
+  readonly seq: number;
+  readonly ts: number;
+  readonly envAllowlist: readonly string[];
+  readonly network: "inherit" | "none";
+  readonly maxOutputBytes: number;
+  readonly timeoutMs: number;
+  readonly terminationGraceMs: number;
+  readonly cwdRequested: boolean;
+}
+
+// One harness verification result (from verification:result), redacted at build time.
+export interface EvidenceVerificationResult {
+  readonly seq: number;
+  readonly ts: number;
+  readonly passed: boolean;
+  readonly detail: string;
+}
+
 // Generated-patch metadata (from patch:proposed / patch:applied). Byte/file counts always;
 // the diff itself ONLY under includeDiff opt-in, and ALWAYS redacted (D3).
 export interface EvidencePatch {
@@ -200,6 +218,8 @@ export interface EvidenceManifest {
   readonly stateTransitions: readonly EvidenceStateTransition[];
   readonly toolCalls: readonly EvidenceToolCall[];
   readonly commandExecutions: readonly EvidenceCommandExecution[];
+  readonly sandboxConfigurations?: readonly EvidenceSandboxConfiguration[] | undefined;
+  readonly verificationResults?: readonly EvidenceVerificationResult[] | undefined;
   readonly patch?: EvidencePatch | undefined;             // absent when no patch events occurred
   // Verification audit summary: output-text-free, command-redacted. The #7 projection verbatim.
   readonly verification?: VerificationAuditSummary | undefined; // from src/verification (ADR-0007)
@@ -317,6 +337,8 @@ export interface EvidenceStore {
   readonly list: () => readonly string[];
   // Load one manifest's raw JSON by runId, or undefined if absent.
   readonly get: (runId: string) => string | undefined;
+  // Return the manifest location used in reports.
+  readonly location?: ((runId: string) => string) | undefined;
   // Delete one ledger-created manifest by runId (used by retention, D6). No-op if absent.
   readonly delete: (runId: string) => void;
 }
@@ -332,14 +354,15 @@ boundary into two and leak the manifest-record vocabulary into two ports. A sing
 manifest-record-typed `EvidenceStore` is the cleaner boundary ("one reason to change"). The node
 adapter internally uses Node 22 `fs` built-ins, exactly as `nodeWorkspaceWriter` does.
 
-**(iii) Path containment.** The node adapter resolves and realpath-contains its base dir once at
-construction using `resolveWithinWorkspace` + `assertContainedRealPath` (reused from #5/#6) against
-the workspace root, creating the dir if absent. The manifest filename is **always** derived from a
-**validated** `runId`: `assertValidRunId(runId)` rejects any value containing a path separator
+**(iii) Path containment.** The node adapter creates and realpath-contains its base dir on write;
+read-only `list`/`get` operations do **not** create a missing directory. The manifest filename is
+**always** derived from a **validated** `runId`: `assertValidRunId(runId)` rejects any value containing a path separator
 (`/` or `\`), `..`, a NUL byte, or a leading dot, accepting only a bounded `[A-Za-z0-9._-]` set
 with a length cap — so a malicious `runId` cannot escape the base dir or overwrite an arbitrary
 file. The file path is `join(baseDir, runId + ".json")` and is re-checked to remain within the
-realpath-contained base dir before any write or delete.
+realpath-contained base dir before any write or delete. Listing/get/delete skip symlinks and
+manifest-looking hardlinks so the evidence store only treats ledger-owned single-link regular
+files as readable/deletable manifests.
 
 **(iv) Atomic write.** `put` writes to a temp file (`<runId>.json.<rand>.tmp` in the same base dir,
 so `rename` is same-filesystem and atomic on POSIX) then `rename`s it over the final name. A
@@ -378,8 +401,10 @@ reads a small header projection from each manifest. `loadEvidence` parses one ma
 because the persisted JSON is redacted by construction (D3), the loaded data is
 **redacted-by-construction** — there is no un-redaction path. A manifest whose
 `evidenceSchemaVersion` is not a recognised version is reported with a typed error, not silently
-coerced. This is the #13 UI seam: the UI lists runs and loads one without bypassing redaction or
-the workspace boundary.
+coerced. Version-1 manifests are also checked for the required top-level contract (`run`, `model`,
+`usageTotals`, and the required arrays); malformed developer-edited JSON raises a typed
+`EvidenceSchemaError` instead of a raw `TypeError`. This is the #13 UI seam: the UI lists runs and
+loads one without bypassing redaction or the workspace boundary.
 
 ### D6 — Retention and rotation
 
@@ -467,8 +492,10 @@ the product value.
 `HELP_TEXT`:
 - `keiko evidence list` — print the `EvidenceListEntry[]` (text or `--json`).
 - `keiko evidence show <runId>` — print one `EvidenceReport` / full manifest (`--json`).
-- `--evidence-dir PATH` overrides the base dir. Exit codes 0/1/2 per the existing convention
-  (2 for usage errors such as an invalid `runId` or missing subcommand).
+- `--evidence-dir PATH` overrides `$KEIKO_EVIDENCE_DIR`, which overrides `./.keiko/evidence`.
+  `show` reports the actual store location through `EvidenceStore.location` when available. Exit
+  codes 0/1/2 follow the existing convention (2 for usage errors such as an invalid `runId` or
+  missing subcommand).
 
 **SDK exports + name-collision discipline.** The root barrels (`src/index.ts`, `src/sdk/index.ts`)
 already host two `summarizeForAudit` names (workspace canonical + verification aliased) and the
@@ -480,6 +507,8 @@ two workflow event families. The audit layer's exports are chosen to **not colli
   `EVIDENCE_SCHEMA_VERSION`, `DEFAULT_RETENTION`, and the types
   (`EvidenceManifest`, `EvidenceStore`, `EvidenceReport`, `EvidenceListEntry`, `RetentionPolicy`,
   `AuditRedactionConfig`, plus the `Evidence*` record interfaces).
+- The SDK barrel's `runAgent` is the evidence-writing wrapper over harness `createSession`; callers
+  can set `evidence.write: false` to opt out or inject an `EvidenceStore` for deterministic tests.
 - None of these names is exported by any existing layer. In particular the layer does **not**
   export a bare `summarizeForAudit` or `redact` (it composes them internally). The audit barrel is
   surfaced with an explicit named re-export block (not `export *`) at both root barrels, matching

@@ -90,6 +90,16 @@ export interface EvidenceSandboxConfiguration {
   readonly cwdRequested: boolean;
 }
 
+// One harness verification result (from verification:result). The full #7 verification audit summary
+// remains in `verification`; this compact event projection keeps the #4 harness structural
+// verification visible even when no #7 report was supplied.
+export interface EvidenceVerificationResult {
+  readonly seq: number;
+  readonly ts: number;
+  readonly passed: boolean;
+  readonly detail: string;
+}
+
 // Generated-patch metadata (from patch:proposed / patch:applied). Byte/file counts always; the
 // diff itself ONLY under the includeDiff opt-in, and ALWAYS redacted (D2/D3).
 export interface EvidencePatch {
@@ -127,6 +137,7 @@ export interface EvidenceManifest {
   readonly toolCalls: readonly EvidenceToolCall[];
   readonly commandExecutions: readonly EvidenceCommandExecution[];
   readonly sandboxConfigurations?: readonly EvidenceSandboxConfiguration[] | undefined;
+  readonly verificationResults?: readonly EvidenceVerificationResult[] | undefined;
   readonly patch?: EvidencePatch | undefined;
   readonly verification?: VerificationAuditSummary | undefined;
   readonly failure?: EvidenceFailure | undefined;

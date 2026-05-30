@@ -10,20 +10,20 @@
 // only real `<runId>.json` files and never follows a symlink (lstat skip).
 
 import {
-  mkdirSync,
   readdirSync,
   readFileSync,
   lstatSync,
+  mkdirSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
 import { resolveWithinWorkspace } from "../workspace/paths.js";
 import { assertContainedRealPath } from "../workspace/realpath.js";
-import { EvidenceWriteError } from "./errors.js";
+import { EvidenceReadError, EvidenceWriteError } from "./errors.js";
 import { assertValidRunId } from "./runid.js";
 
 const MANIFEST_SUFFIX = ".json";
@@ -48,6 +48,9 @@ export interface EvidenceStore {
   readonly list: () => readonly string[];
   // Load one manifest's raw JSON by runId, or undefined if absent.
   readonly get: (runId: string) => string | undefined;
+  // Return the location used for reports for this runId. Optional so custom SDK stores from earlier
+  // callers remain source-compatible; consumers fall back to <runId>.json when absent.
+  readonly location?: ((runId: string) => string) | undefined;
   // Delete one ledger-created manifest by runId (retention, D6). No-op if absent.
   readonly delete: (runId: string) => void;
 }
@@ -67,6 +70,10 @@ export function createInMemoryEvidenceStore(): EvidenceStore {
       assertValidRunId(runId);
       return data.get(runId);
     },
+    location: (runId: string): string => {
+      assertValidRunId(runId);
+      return `${runId}${MANIFEST_SUFFIX}`;
+    },
     delete: (runId: string): void => {
       assertValidRunId(runId);
       data.delete(runId);
@@ -81,12 +88,25 @@ export function createInMemoryEvidenceStore(): EvidenceStore {
 function prepareBaseDir(baseDir: string, fs: WorkspaceFs): string {
   try {
     mkdirSync(baseDir, { recursive: true });
+    return fs.realPath(baseDir);
   } catch (error) {
     throw new EvidenceWriteError(
       `cannot create evidence directory: ${error instanceof Error ? error.message : "unknown"}`,
     );
   }
-  return fs.realPath(baseDir);
+}
+
+function existingBaseDir(baseDir: string, fs: WorkspaceFs): string | undefined {
+  if (!fs.exists(baseDir)) {
+    return undefined;
+  }
+  try {
+    return fs.realPath(baseDir);
+  } catch (error) {
+    throw new EvidenceReadError(
+      `cannot read evidence directory: ${error instanceof Error ? error.message : "unknown"}`,
+    );
+  }
 }
 
 // Returns the realpath-contained absolute path of <runId>.json inside the base dir, or throws if it
@@ -110,14 +130,36 @@ function isManifestName(name: string): boolean {
   }
 }
 
-function listManifestRunIds(realBase: string): readonly string[] {
+function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
+  try {
+    const stat = fs.stat(path);
+    return stat.isFile && (stat.hardLinkCount ?? 1) <= 1;
+  } catch (error) {
+    throw new EvidenceReadError(
+      `cannot inspect evidence manifest: ${error instanceof Error ? error.message : "unknown"}`,
+    );
+  }
+}
+
+function listManifestRunIds(realBase: string, fs: WorkspaceFs): readonly string[] {
   const runIds: string[] = [];
-  for (const entry of readdirSync(realBase, { withFileTypes: true })) {
-    // Never follow a symlink: only count entries the ledger itself wrote as regular files.
-    if (entry.isSymbolicLink() || !entry.isFile() || !isManifestName(entry.name)) {
-      continue;
+  try {
+    for (const entry of readdirSync(realBase, { withFileTypes: true })) {
+      // Never follow a symlink: only count entries the ledger itself wrote as regular files.
+      if (
+        entry.isSymbolicLink() ||
+        !entry.isFile() ||
+        !isManifestName(entry.name) ||
+        !isSingleLinkRegularFile(join(realBase, entry.name), fs)
+      ) {
+        continue;
+      }
+      runIds.push(entry.name.slice(0, entry.name.length - MANIFEST_SUFFIX.length));
     }
-    runIds.push(entry.name.slice(0, entry.name.length - MANIFEST_SUFFIX.length));
+  } catch (error) {
+    throw new EvidenceReadError(
+      `cannot list evidence manifests: ${error instanceof Error ? error.message : "unknown"}`,
+    );
   }
   return runIds.sort();
 }
@@ -138,30 +180,82 @@ function atomicWrite(target: string, json: string, randomSuffix: () => string): 
   }
 }
 
+function reportLocation(baseDir: string, fs: WorkspaceFs, runId: string): string {
+  assertValidRunId(runId);
+  const realBase = existingBaseDir(baseDir, fs);
+  return realBase === undefined
+    ? join(resolve(baseDir), `${runId}${MANIFEST_SUFFIX}`)
+    : containedManifestPath(runId, realBase, fs);
+}
+
+function putManifest(
+  baseDir: string,
+  fs: WorkspaceFs,
+  randomSuffix: () => string,
+  runId: string,
+  json: string,
+): string {
+  const realBase = prepareBaseDir(baseDir, fs);
+  const target = containedManifestPath(runId, realBase, fs);
+  atomicWrite(target, json, randomSuffix);
+  return target;
+}
+
+function listManifests(baseDir: string, fs: WorkspaceFs): readonly string[] {
+  const realBase = existingBaseDir(baseDir, fs);
+  return realBase === undefined ? [] : listManifestRunIds(realBase, fs);
+}
+
+function getManifest(baseDir: string, fs: WorkspaceFs, runId: string): string | undefined {
+  assertValidRunId(runId);
+  const realBase = existingBaseDir(baseDir, fs);
+  if (realBase === undefined) {
+    return undefined;
+  }
+  const target = join(realBase, `${runId}${MANIFEST_SUFFIX}`);
+  try {
+    if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
+      return undefined;
+    }
+    if (!isSingleLinkRegularFile(target, fs)) {
+      return undefined;
+    }
+    return readFileSync(target, "utf8");
+  } catch (error) {
+    throw new EvidenceReadError(
+      `cannot read evidence manifest: ${error instanceof Error ? error.message : "unknown"}`,
+    );
+  }
+}
+
+function deleteManifest(baseDir: string, fs: WorkspaceFs, runId: string): void {
+  const realBase = existingBaseDir(baseDir, fs);
+  if (realBase === undefined) {
+    return;
+  }
+  const target = containedManifestPath(runId, realBase, fs);
+  if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
+    return;
+  }
+  if (!isSingleLinkRegularFile(target, fs)) {
+    return;
+  }
+  rmSync(target, { force: true });
+}
+
 export function createNodeEvidenceStore(
   baseDir: string,
   fs: WorkspaceFs = nodeWorkspaceFs,
   randomSuffix: () => string = randomUUID,
 ): EvidenceStore {
-  const realBase = prepareBaseDir(baseDir, fs);
   return {
-    put: (runId: string, json: string): string => {
-      const target = containedManifestPath(runId, realBase, fs);
-      atomicWrite(target, json, randomSuffix);
-      return target;
-    },
-    list: (): readonly string[] => listManifestRunIds(realBase),
-    get: (runId: string): string | undefined => {
-      assertValidRunId(runId);
-      const target = join(realBase, `${runId}${MANIFEST_SUFFIX}`);
-      if (lstatSync(target, { throwIfNoEntry: false })?.isFile() !== true) {
-        return undefined;
-      }
-      return readFileSync(target, "utf8");
-    },
+    put: (runId: string, json: string): string =>
+      putManifest(baseDir, fs, randomSuffix, runId, json),
+    list: (): readonly string[] => listManifests(baseDir, fs),
+    get: (runId: string): string | undefined => getManifest(baseDir, fs, runId),
+    location: (runId: string): string => reportLocation(baseDir, fs, runId),
     delete: (runId: string): void => {
-      const target = containedManifestPath(runId, realBase, fs);
-      rmSync(target, { force: true });
+      deleteManifest(baseDir, fs, runId);
     },
   };
 }

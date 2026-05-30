@@ -8,10 +8,7 @@
 // `WorkflowRunKind` / `WorkflowTerminalStatus` so it never depends on src/ui types. The UI
 // re-exports it (behaviour-preserving); the evaluation runner imports it directly.
 //
-// Persistence is BEST-EFFORT: a failure anywhere (a malformed report, a redactor error, an fs error)
-// is swallowed so the run outcome already recorded by the caller stands. Nothing is logged, so no
-// secret can leak through a log line.
-
+import { buildEvidenceReport, type EvidenceReport } from "./report.js";
 import { resolveCostClass } from "./aggregate.js";
 import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
 import { EVIDENCE_SCHEMA_VERSION, type EvidenceManifest } from "./types.js";
@@ -109,22 +106,20 @@ export function buildWorkflowManifest(
   };
 }
 
-// Builds, redacts, and writes the workflow manifest through the store. The WHOLE operation is
-// best-effort: a failure anywhere is swallowed so the caller's already-recorded outcome stands.
+// Builds, redacts, writes the workflow manifest through the store, and returns the structured
+// EvidenceReport. Errors intentionally surface to the caller so UI/evaluation paths cannot silently
+// claim a terminal run without a durable evidence artifact.
 export function persistWorkflowEvidence(
   identity: WorkflowRunIdentity,
   report: unknown,
   events: readonly WorkflowEventLike[],
   ctx: EvidencePersistContext,
-): void {
-  try {
-    const manifest = buildWorkflowManifest(identity, events, report);
-    const redactor = createAuditRedactor({}, ctx.env);
-    const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
-    ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
-  } catch {
-    // Best-effort: a persist failure must not surface to the caller (AC5 / coordinator guardrail).
-  }
+): EvidenceReport {
+  const manifest = buildWorkflowManifest(identity, events, report);
+  const redactor = createAuditRedactor({}, ctx.env);
+  const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
+  const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
+  return buildEvidenceReport(redacted, location);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

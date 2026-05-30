@@ -190,8 +190,26 @@ describe("GET /api/runs/:runId", () => {
     await awaitTerminal(body.runId);
     const res = await fetch(`${base()}/api/runs/${body.runId}`);
     expect(res.status).toBe(200);
-    const json = (await res.json()) as { report: { status: string } };
+    const json = (await res.json()) as {
+      report: {
+        status: string;
+        evidence: {
+          runId: string;
+          fingerprint: string;
+          evidenceLocation: string;
+          usageTotals: { requestCount: number };
+          verificationStatus: string;
+          knownLimitations: readonly string[];
+        };
+      };
+    };
     expect(json.report.status).toBe("dry-run");
+    expect(json.report.evidence.runId).toBe(body.runId);
+    expect(json.report.evidence.fingerprint).toBe(body.fingerprint);
+    expect(json.report.evidence.evidenceLocation).toBe(`${body.runId}.json`);
+    expect(json.report.evidence.usageTotals.requestCount).toBe(1);
+    expect(json.report.evidence.verificationStatus).toBe("not-run");
+    expect(json.report.evidence.knownLimitations.length).toBeGreaterThan(0);
   });
 
   it("returns 404 for an unknown run", async () => {
@@ -341,6 +359,7 @@ describe("FIX 1 — UI runs persist a redacted evidence manifest (AC5)", () => {
     const manifest = loadEvidence(evidenceStore, body.runId);
     expect(manifest?.evidenceSchemaVersion).toBe("1");
     expect(manifest?.run.runId).toBe(body.runId);
+    expect(manifest?.run.fingerprint).toBe(body.fingerprint);
     expect(JSON.stringify(manifest)).not.toContain(SECRET);
   });
 

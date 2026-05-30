@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildWorkflowManifest, type WorkflowRunIdentity } from "../../src/audit/index.js";
+import {
+  buildWorkflowManifest,
+  createInMemoryEvidenceStore,
+  loadEvidence,
+  persistWorkflowEvidence,
+  type WorkflowRunIdentity,
+} from "../../src/audit/index.js";
 import type { VerificationAuditSummary } from "../../src/verification/index.js";
 
 const verification: VerificationAuditSummary = {
@@ -62,5 +68,31 @@ describe("buildWorkflowManifest", () => {
     });
     expect(manifest.patch?.applied).toBe(true);
     expect(manifest.verification?.overallStatus).toBe("passed");
+  });
+});
+
+describe("persistWorkflowEvidence", () => {
+  it("returns an EvidenceReport and persists the redacted manifest", () => {
+    const store = createInMemoryEvidenceStore();
+    const events = [
+      { type: "workflow:model:call:completed", promptTokens: 1, completionTokens: 2, latencyMs: 3 },
+    ] as const;
+    const report = persistWorkflowEvidence(
+      identity(),
+      {
+        workflowId: "unit-test-generation",
+        status: "dry-run",
+        proposedDiff: "--- /dev/null\n+++ b/tests/add.test.ts\n",
+        addedTestFiles: [{ path: "tests/add.test.ts", estimatedTestCount: 1 }],
+        verificationSummary: { ...verification, workspaceRoot: "sk-" + "z".repeat(24) },
+      },
+      events,
+      { store, env: {} },
+    );
+    expect(report.runId).toBe("run-1");
+    expect(report.evidenceLocation).toBe("run-1.json");
+    expect(report.usageTotals.requestCount).toBe(1);
+    const loaded = loadEvidence(store, "run-1");
+    expect(JSON.stringify(loaded)).not.toContain("sk-" + "z".repeat(24));
   });
 });

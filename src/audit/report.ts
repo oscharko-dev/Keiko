@@ -7,7 +7,7 @@
 import type { CostClass } from "../gateway/types.js";
 import type { RunOutcome, TaskType } from "../harness/types.js";
 import type { VerificationStatus } from "../verification/types.js";
-import type { EvidenceManifest, EvidenceUsageTotals } from "./types.js";
+import type { EvidenceManifest, EvidenceUsageTotals, EvidenceVerificationResult } from "./types.js";
 
 export interface EvidenceReport {
   readonly evidenceLocation: string;
@@ -28,6 +28,21 @@ const KNOWN_LIMITATIONS: readonly string[] = [
   "Cost attribution is per-run (the declared model's class), not per model call.",
 ];
 
+function statusFromHarnessResults(
+  results: readonly EvidenceVerificationResult[] | undefined,
+): VerificationStatus | "not-run" {
+  if (results === undefined || results.length === 0) {
+    return "not-run";
+  }
+  return results.every((result) => result.passed) ? "passed" : "failed";
+}
+
+function verificationStatus(manifest: EvidenceManifest): VerificationStatus | "not-run" {
+  return (
+    manifest.verification?.overallStatus ?? statusFromHarnessResults(manifest.verificationResults)
+  );
+}
+
 export function buildEvidenceReport(manifest: EvidenceManifest, location: string): EvidenceReport {
   return {
     evidenceLocation: location,
@@ -38,7 +53,7 @@ export function buildEvidenceReport(manifest: EvidenceManifest, location: string
     changedFiles: manifest.patch?.changedFiles ?? 0,
     usageTotals: manifest.usageTotals,
     costClass: manifest.model.costClass,
-    verificationStatus: manifest.verification?.overallStatus ?? "not-run",
+    verificationStatus: verificationStatus(manifest),
     knownLimitations: KNOWN_LIMITATIONS,
   };
 }

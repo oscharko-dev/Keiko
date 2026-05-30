@@ -1,29 +1,30 @@
 // `keiko evidence` — inspects previously written evidence manifests (ADR-0010 D9). `list` prints the
 // EvidenceListEntry[] (text or --json); `show <runId>` prints one EvidenceReport / full manifest
-// (--json). It reads ONLY the contained base dir via the EvidenceStore (default ./.keiko/evidence,
-// overridable with --evidence-dir). Because manifests are redacted by construction there is no
-// un-redaction path. Exit 0 on success, 1 on a missing runId / read error, 2 on usage (unknown or
-// missing subcommand, invalid runId). Tests inject an in-memory store via deps so no disk is touched.
+// (--json). It reads ONLY the contained base dir via the EvidenceStore (default $KEIKO_EVIDENCE_DIR
+// or ./.keiko/evidence, overridable with --evidence-dir). Because manifests are redacted by
+// construction there is no un-redaction path. Exit 0 on success, 1 on a missing runId / read error,
+// 2 on usage (unknown or missing subcommand, invalid runId). Tests inject an in-memory store via deps
+// so no disk is touched.
 
 import { buildEvidenceReport, renderEvidenceReport } from "../audit/report.js";
 import { listEvidence, loadEvidence, type EvidenceListEntry } from "../audit/index-api.js";
-import { createNodeEvidenceStore, type EvidenceStore } from "../audit/store.js";
+import { createNodeEvidenceStore, resolveEvidenceDir, type EvidenceStore } from "../audit/store.js";
 import { AuditError, InvalidRunIdError } from "../audit/errors.js";
+import type { EnvSource } from "../gateway/config.js";
 import type { CliIo } from "./runner.js";
-
-const DEFAULT_EVIDENCE_DIR = "./.keiko/evidence";
 
 const USAGE = `Usage:
   keiko evidence list [--evidence-dir PATH] [--json]
   keiko evidence show <runId> [--evidence-dir PATH] [--json]
 
 Lists or shows redacted evidence manifests written by \`keiko run\`. Reads only the
-evidence base dir (default ./.keiko/evidence; override with --evidence-dir).
+evidence base dir (default $KEIKO_EVIDENCE_DIR or ./.keiko/evidence; override with --evidence-dir).
 `;
 
 // Test seam: inject an EvidenceStore so unit tests never touch the filesystem.
 export interface EvidenceCliDeps {
   readonly store?: EvidenceStore | undefined;
+  readonly env?: EnvSource | undefined;
 }
 
 function flagValue(args: readonly string[], name: string): string | undefined {
@@ -39,7 +40,7 @@ function resolveStore(args: readonly string[], deps: EvidenceCliDeps): EvidenceS
   if (deps.store !== undefined) {
     return deps.store;
   }
-  return createNodeEvidenceStore(flagValue(args, "--evidence-dir") ?? DEFAULT_EVIDENCE_DIR);
+  return createNodeEvidenceStore(resolveEvidenceDir(flagValue(args, "--evidence-dir"), deps.env));
 }
 
 function renderListText(entries: readonly EvidenceListEntry[]): string {
@@ -69,7 +70,9 @@ function runShow(store: EvidenceStore, runId: string, json: boolean, io: CliIo):
     io.out(`${JSON.stringify(manifest, null, 2)}\n`);
     return 0;
   }
-  io.out(renderEvidenceReport(buildEvidenceReport(manifest, runId)));
+  io.out(
+    renderEvidenceReport(buildEvidenceReport(manifest, store.location?.(runId) ?? `${runId}.json`)),
+  );
   return 0;
 }
 
