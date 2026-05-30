@@ -33,7 +33,7 @@ describe("tool errors", () => {
     expect(new CommandTimeoutError("m", 1).name).toBe("CommandTimeoutError");
     expect(new CommandCancelledError("m").name).toBe("CommandCancelledError");
     expect(new OutputLimitError("m", 1).name).toBe("OutputLimitError");
-    expect(new PatchValidationError("m", []).name).toBe("PatchValidationError");
+    expect(new PatchValidationError("m", [], []).name).toBe("PatchValidationError");
     expect(new PatchApplyDisabledError("m").name).toBe("PatchApplyDisabledError");
     expect(new PatchApplyError("m", "p").name).toBe("PatchApplyError");
   });
@@ -45,7 +45,7 @@ describe("tool errors", () => {
     expect(new CommandTimeoutError("m", 1).code).toBe(TOOL_CODES.COMMAND_TIMEOUT);
     expect(new CommandCancelledError("m").code).toBe(TOOL_CODES.COMMAND_CANCELLED);
     expect(new OutputLimitError("m", 1).code).toBe(TOOL_CODES.OUTPUT_LIMIT);
-    expect(new PatchValidationError("m", []).code).toBe(TOOL_CODES.PATCH_INVALID);
+    expect(new PatchValidationError("m", [], []).code).toBe(TOOL_CODES.PATCH_INVALID);
     expect(new PatchApplyDisabledError("m").code).toBe(TOOL_CODES.PATCH_APPLY_DISABLED);
     expect(new PatchApplyError("m", "p").code).toBe(TOOL_CODES.PATCH_APPLY_FAILED);
   });
@@ -58,7 +58,10 @@ describe("tool errors", () => {
     expect(new OutputLimitError("m", 1024).limitBytes).toBe(1024);
     expect(new PatchApplyError("m", "src/x.ts").path).toBe("src/x.ts");
     const reasons = [{ code: "size-limit" as const, message: "too big" }];
-    expect(new PatchValidationError("m", reasons).reasons).toEqual(reasons);
+    const conflicts = [{ path: "src/x.ts", hunkIndex: 0, reason: "conflict" }];
+    const error = new PatchValidationError("m", reasons, conflicts);
+    expect(error.reasons).toEqual(reasons);
+    expect(error.conflicts).toEqual(conflicts);
   });
 
   it("instances are ToolError subclasses and real Errors", () => {

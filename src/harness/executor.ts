@@ -3,6 +3,8 @@
 // response is never executed as an instruction (ADR-0004 D1).
 
 import { CancelledError, GatewayError } from "../gateway/errors.js";
+import { ToolError } from "../tools/errors.js";
+import { WorkspaceError } from "../workspace/errors.js";
 import type {
   ChatMessage,
   GatewayRequest,
@@ -14,6 +16,13 @@ import { HARNESS_CODES, toFailure } from "./errors.js";
 import type { ToolCallMetadata } from "./ports.js";
 
 const RUN_COMMAND_TOOL = "run_command";
+
+function toolFailureCode(error: unknown): string {
+  if (error instanceof ToolError || error instanceof WorkspaceError) {
+    return error.code;
+  }
+  return "TOOL_ERROR";
+}
 
 function buildRequest(ctx: RunContext): GatewayRequest {
   const tools = ctx.plan.allowsTools ? ctx.tools.listTools() : undefined;
@@ -118,6 +127,15 @@ function emitToolMetadata(
   }
   if (metadata.kind === "command") {
     ctx.emitter.emit({
+      type: "sandbox:configured",
+      envAllowlist: metadata.sandbox.envAllowlist,
+      network: metadata.sandbox.network,
+      maxOutputBytes: metadata.sandbox.maxOutputBytes,
+      timeoutMs: metadata.sandbox.timeoutMs,
+      terminationGraceMs: metadata.sandbox.terminationGraceMs,
+      cwdRequested: metadata.sandbox.cwdRequested,
+    });
+    ctx.emitter.emit({
       type: "command:executed",
       executable: metadata.executable,
       argCount: metadata.argCount,
@@ -189,7 +207,7 @@ async function runOneTool(
       type: "tool:call:failed",
       toolName: call.name,
       toolCallId: call.id,
-      errorCode: "TOOL_ERROR",
+      errorCode: toolFailureCode(error),
       message,
     });
     if (ctx.signal.aborted || error instanceof CancelledError) {

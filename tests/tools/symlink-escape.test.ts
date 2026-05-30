@@ -19,13 +19,22 @@ import { applyPatch, validatePatch } from "../../src/tools/patch.js";
 import { runCommand } from "../../src/tools/exec.js";
 import { nodeSpawnFn } from "../../src/tools/exec.js";
 import { PatchValidationError } from "../../src/tools/errors.js";
-import { PathEscapeError } from "../../src/workspace/errors.js";
-import { DEFAULT_COMMAND_RULES, DEFAULT_SANDBOX_POLICY } from "../../src/tools/types.js";
+import { PathDeniedError, PathEscapeError } from "../../src/workspace/errors.js";
+import {
+  DEFAULT_COMMAND_RULES,
+  DEFAULT_SANDBOX_POLICY,
+  type CommandRule,
+} from "../../src/tools/types.js";
 import type { WorkspaceInfo } from "../../src/workspace/types.js";
 
 let root: string;
 let outside: string;
 let info: WorkspaceInfo;
+
+const NODE_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+  { executable: "node" },
+  ...DEFAULT_COMMAND_RULES,
+]);
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "keiko-symlink-ws-"));
@@ -93,6 +102,19 @@ describe("S-H1 — patch write through an escaping symlink", () => {
     expect(readdirSync(join(realGit, "hooks"))).not.toContain("pre-commit");
     rmSync(realGit, { recursive: true, force: true });
   });
+
+  it("rejects a symlink alias whose real target is a denied in-workspace file", () => {
+    writeFileSync(join(root, ".env"), "SECRET=1\n", "utf8");
+    symlinkSync(join(root, ".env"), join(root, "alias.env"));
+    const diff = "--- a/alias.env\n+++ b/alias.env\n@@ -1,1 +1,1 @@\n-SECRET=1\n+SECRET=2\n";
+    const v = validatePatch(info, diff);
+    expect(v.ok).toBe(false);
+    expect(v.reasons.map((r) => r.code)).toContain("path-denied");
+    expect(() => applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() })).toThrow(
+      PatchValidationError,
+    );
+    expect(readFileSync(join(root, ".env"), "utf8")).toBe("SECRET=1\n");
+  });
 });
 
 describe("S-H1 — positive control: a normal in-root path still applies", () => {
@@ -108,7 +130,7 @@ describe("S-H1 — run_command cwd through an escaping symlink", () => {
     return {
       workspace: info,
       policy: { ...DEFAULT_SANDBOX_POLICY, defaultTimeoutMs: 10_000 },
-      commandRules: DEFAULT_COMMAND_RULES,
+      commandRules: NODE_COMMAND_RULES,
       spawn: nodeSpawnFn,
       processEnv: { PATH: process.env.PATH ?? "" },
       now: () => Date.now(),
@@ -129,6 +151,23 @@ describe("S-H1 — run_command cwd through an escaping symlink", () => {
         realDeps(),
       ),
     ).rejects.toBeInstanceOf(PathEscapeError);
+  });
+
+  it("rejects a cwd that resolves to a denied in-workspace .git path", async () => {
+    mkdirSync(join(root, ".git"), { recursive: true });
+    symlinkSync(join(root, ".git"), join(root, "cwdgit"));
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: ["-e", "1"],
+          cwd: "cwdgit",
+          timeoutMs: undefined,
+          signal: liveSignal(),
+        },
+        realDeps(),
+      ),
+    ).rejects.toBeInstanceOf(PathDeniedError);
   });
 
   it("positive control: a normal in-root cwd runs", async () => {

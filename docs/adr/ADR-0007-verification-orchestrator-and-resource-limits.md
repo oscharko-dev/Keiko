@@ -172,8 +172,9 @@ within the #6 termination bound: SIGTERM, then SIGKILL after `SandboxPolicy.term
   process that allocates and exits within one interval can momentarily exceed the ceiling
   undetected. This is documented, not papered over.
 - **Network is not OS-isolated.** Inherited from ADR-0006 D2 Dimension 4: a verification command
-  (`node -e`, a test that opens a socket) can make outbound connections. The mitigation is the #6
-  env allowlist (no credential reaches the child) and command allowlist, not OS network isolation.
+  (for example, a repository test that opens a socket) can make outbound connections. The
+  mitigation is the #6 env allowlist (no credential reaches the child) and command allowlist, not OS
+  network isolation.
 - **Targeted-test resolution is best-effort.** It resolves sibling/mirrored `.test`/`.spec` files
   for vitest and jest; when the framework is `unknown` or no test file is resolvable, no targeted
   step is added rather than guessing an invocation that might run nothing or everything.
@@ -200,8 +201,9 @@ are safe npm scripts").
   separately, and an `npm run <script>` runs whatever the repository's `package.json` defines —
   which is exactly the model-influenceable content #6 exists to contain.
 - **Why rejected**: a regulated environment cannot have two execution boundaries with different
-  guarantees. Reusing `runCommand` means one boundary, one audit. A test asserts the concrete
-  `npm`/`npx` invocations pass `isCommandAllowed(DEFAULT_COMMAND_RULES, …)`.
+  guarantees. Reusing `runCommand` means one boundary, one audit. The verification orchestrator
+  supplies an explicit verification-only command rule set for the concrete `npm`/`npx` invocations,
+  while the model-facing `DEFAULT_COMMAND_RULES` remain read-only.
 
 ### Alternative 2: Enforce memory via an OS mechanism (cgroups / ulimit) now vs. a best-effort sampler
 

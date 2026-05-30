@@ -40,6 +40,45 @@ function realNearestExisting(fs: WorkspaceFs, absolutePath: string): string {
   }
 }
 
+function toRelative(root: string, absolutePath: string): string {
+  return absolutePath.slice(root.length).replace(/^[/\\]/, "");
+}
+
+export interface ContainedRealPathInfo {
+  readonly path: string;
+  readonly realRelative: string;
+}
+
+export function containedRealPathInfo(
+  fs: WorkspaceFs,
+  root: string,
+  absolutePath: string,
+): ContainedRealPathInfo {
+  const realBase = realRoot(fs, root);
+  try {
+    const target = fs.realPath(absolutePath);
+    if (!isWithinWorkspace(realBase, target)) {
+      throw new PathEscapeError(
+        `path escapes the workspace boundary via symlink: ${absolutePath}`,
+        absolutePath,
+      );
+    }
+    return { path: target, realRelative: toRelative(realBase, target) };
+  } catch (error) {
+    if (error instanceof PathEscapeError) {
+      throw error;
+    }
+    const parentReal = realNearestExisting(fs, absolutePath);
+    if (!isWithinWorkspace(realBase, parentReal)) {
+      throw new PathEscapeError(
+        `path escapes the workspace boundary via symlink: ${absolutePath}`,
+        absolutePath,
+      );
+    }
+    return { path: absolutePath, realRelative: toRelative(realBase, parentReal) };
+  }
+}
+
 // Asserts that `absolutePath` (already lexically contained) does not escape `root` via a symlink.
 // For an existing target, the target's own realpath must stay within the real root. For a
 // not-yet-existing target (create), the nearest existing ancestor's realpath must stay within it,
@@ -50,22 +89,8 @@ export function assertContainedRealPath(
   fs: WorkspaceFs,
   root: string,
   absolutePath: string,
-  label: string,
+  _label: string,
 ): string {
-  const realBase = realRoot(fs, root);
-  let target: string;
-  try {
-    target = fs.realPath(absolutePath);
-  } catch {
-    // Target does not exist (create): validate its nearest existing parent instead.
-    const parentReal = realNearestExisting(fs, absolutePath);
-    if (!isWithinWorkspace(realBase, parentReal)) {
-      throw new PathEscapeError(`path escapes the workspace boundary via symlink: ${label}`, label);
-    }
-    return absolutePath;
-  }
-  if (!isWithinWorkspace(realBase, target)) {
-    throw new PathEscapeError(`path escapes the workspace boundary via symlink: ${label}`, label);
-  }
-  return target;
+  const info = containedRealPathInfo(fs, root, absolutePath);
+  return info.path;
 }

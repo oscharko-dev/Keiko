@@ -7,8 +7,8 @@
 
 import { isDenied } from "../workspace/ignore.js";
 import { resolveWithinWorkspace } from "../workspace/paths.js";
-import { assertContainedRealPath } from "../workspace/realpath.js";
-import { PathEscapeError } from "../workspace/errors.js";
+import { containedRealPathInfo } from "../workspace/realpath.js";
+import { PathDeniedError, PathEscapeError } from "../workspace/errors.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
 import type { WorkspaceInfo } from "../workspace/types.js";
 import {
@@ -40,36 +40,44 @@ function isBinaryDiff(diff: string): boolean {
   );
 }
 
-function safePath(
-  workspace: WorkspaceInfo,
-  fs: WorkspaceFs,
-  path: string,
-): PatchRejection | undefined {
+function enforcePath(workspace: WorkspaceInfo, fs: WorkspaceFs, path: string): string {
   let resolved: string;
   try {
     resolved = resolveWithinWorkspace(workspace.root, path);
   } catch (error) {
     if (error instanceof PathEscapeError) {
-      return { code: "path-unsafe", message: "path escapes the workspace", path };
+      throw error;
     }
     throw error;
   }
   const rel = resolved.slice(workspace.root.length).replace(/^[/\\]/, "");
   if (isDenied(rel === "" ? path : rel)) {
-    return { code: "path-denied", message: "path matches an always-on deny pattern", path };
+    throw new PathDeniedError("path matches an always-on deny pattern", path);
   }
-  // Symlink containment: a lexically-contained target whose real path (or, for a create target,
-  // whose nearest existing parent) escapes the root is rejected here — the same gate the read
-  // path applies. This blocks the symlink-write/.git-hooks escalation (ADR-0006 D2, S-H1).
+  const info = containedRealPathInfo(fs, workspace.root, resolved);
+  if (isDenied(info.realRelative)) {
+    throw new PathDeniedError("path matches an always-on deny pattern", path);
+  }
+  return resolved;
+}
+
+function safePath(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  path: string,
+): PatchRejection | undefined {
   try {
-    assertContainedRealPath(fs, workspace.root, resolved, rel === "" ? path : rel);
+    enforcePath(workspace, fs, path);
+    return undefined;
   } catch (error) {
     if (error instanceof PathEscapeError) {
-      return { code: "path-unsafe", message: "path escapes the workspace via symlink", path };
+      return { code: "path-unsafe", message: "path escapes the workspace", path };
+    }
+    if (error instanceof PathDeniedError) {
+      return { code: "path-denied", message: "path matches an always-on deny pattern", path };
     }
     throw error;
   }
-  return undefined;
 }
 
 function collectPathReasons(
@@ -227,18 +235,26 @@ interface PlannedWrite {
 function planWrites(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
+  signal: AbortSignal,
   files: readonly PatchFileChange[],
 ): readonly PlannedWrite[] {
-  return files.map((file) => {
-    const absolute = resolveWithinWorkspace(workspace.root, file.path);
-    // Defense in depth: re-assert symlink containment at the write boundary so the validated
-    // absolute path handed to the WorkspaceWriter cannot escape via a symlink even if a caller
-    // reached applyPatch without validatePatch (S-H1). Throws PathEscapeError on escape.
-    assertContainedRealPath(fs, workspace.root, absolute, file.path);
+  const plans: PlannedWrite[] = [];
+  for (const file of files) {
+    if (signal.aborted) {
+      throw new CommandCancelledError("apply cancelled before write planning completed");
+    }
+    const absolute = enforcePath(workspace, fs, file.path);
     const original = readCurrent(workspace, fs, file.path);
     const outcome = computeFileContent(file, original);
-    return { path: file.path, absolute, kind: file.kind, newContent: outcome.content, original };
-  });
+    plans.push({
+      path: file.path,
+      absolute,
+      kind: file.kind,
+      newContent: outcome.content,
+      original,
+    });
+  }
+  return plans;
 }
 
 function applyOne(writer: WorkspaceWriter, plan: PlannedWrite): void {
@@ -261,9 +277,17 @@ function rollback(writer: WorkspaceWriter, done: readonly PlannedWrite[]): void 
   }
 }
 
-function commit(writer: WorkspaceWriter, plans: readonly PlannedWrite[]): void {
+function commit(
+  writer: WorkspaceWriter,
+  plans: readonly PlannedWrite[],
+  signal: AbortSignal,
+): void {
   const done: PlannedWrite[] = [];
   for (const plan of plans) {
+    if (isAbortRequested(signal)) {
+      rollback(writer, done);
+      throw new CommandCancelledError("apply cancelled during write phase");
+    }
     try {
       applyOne(writer, plan);
       done.push(plan);
@@ -272,7 +296,15 @@ function commit(writer: WorkspaceWriter, plans: readonly PlannedWrite[]): void {
       const message = error instanceof Error ? error.message : "write failed";
       throw new PatchApplyError(`apply failed, rolled back: ${message}`, plan.path);
     }
+    if (isAbortRequested(signal)) {
+      rollback(writer, done);
+      throw new CommandCancelledError("apply cancelled during write phase");
+    }
   }
+}
+
+function isAbortRequested(signal: AbortSignal): boolean {
+  return signal.aborted;
 }
 
 function summarize(plans: readonly PlannedWrite[]): PatchApplyResult {
@@ -300,12 +332,16 @@ export function applyPatch(
     ...(deps.limits ? { limits: deps.limits } : {}),
   });
   if (!validation.ok) {
-    throw new PatchValidationError("patch failed validation", validation.reasons);
+    throw new PatchValidationError(
+      "patch failed validation",
+      validation.reasons,
+      validation.conflicts,
+    );
   }
   if (deps.signal.aborted) {
     throw new CommandCancelledError("apply cancelled before write phase");
   }
-  const plans = planWrites(workspace, fs, validation.files);
-  commit(writer, plans);
+  const plans = planWrites(workspace, fs, deps.signal, validation.files);
+  commit(writer, plans, deps.signal);
   return summarize(plans);
 }

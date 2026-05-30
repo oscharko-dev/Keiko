@@ -27,6 +27,14 @@ export type ToolCallMetadata =
       readonly argCount: number;
       readonly exitCode: number | null;
       readonly timedOut: boolean;
+      readonly sandbox: {
+        readonly envAllowlist: readonly string[];
+        readonly network: "inherit" | "none";
+        readonly maxOutputBytes: number;
+        readonly timeoutMs: number;
+        readonly terminationGraceMs: number;
+        readonly cwdRequested: boolean;
+      };
     }
   | {
       readonly kind: "patch-apply";

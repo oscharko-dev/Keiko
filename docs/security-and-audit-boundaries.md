@@ -47,17 +47,16 @@ See [ADR-0005](adr/ADR-0005-repository-context-and-workspace-access.md).
 
 The tool layer exposes two capabilities: a command runner and a patch applier. The command runner is bounded on several axes.
 
-- **Deny-by-default executable rules.** Only four executables can run, and the executable name is matched by `basename` so a path cannot disguise it. The frozen `DEFAULT_COMMAND_RULES` are:
-  - `node` — **unrestricted** (see the honest limits below).
-  - `npx` — unrestricted except `-c`/`--call` (which run their argument in a shell) are denied.
-  - `npm` — a denylist that rejects account-, registry-, and shell-escaping subcommands (`publish`, `unpublish`, `login`, `logout`, `adduser`, `token`, `version`, `deprecate`, `owner`, `access`, `star`, `profile`, `exec`, `x`); other subcommands (such as `run`, `test`, `ci`, `install`) are allowed.
+- **Deny-by-default executable rules.** Only read-only default executables can run. The executable name must be bare, is matched by `basename`, is then resolved to a trusted absolute executable path, and workspace-controlled `PATH` resolutions are rejected. The frozen `DEFAULT_COMMAND_RULES` are:
+  - `npm` — read-only inspection subcommands only (`audit`, `ls`, `list`, `outdated`, `view`, `info`, `help`, `ping`); install/script/account/registry mutation is denied by omission.
   - `git` — a read-only allowlist (`status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`, `describe`, `blame`, `cat-file`); mutating subcommands such as `push`, `reset`, `checkout`, `commit`, and `merge` are denied.
-  - Any other executable is rejected before it is spawned. Operators can narrow the rules further via configuration. The project's own gates (lint, typecheck, test, build) run _through_ `npm run`, so they need no separate rule.
+  - Raw interpreters and package runners such as `node` and `npx` are not model-facing defaults. Keiko's deterministic verification workflow uses an explicit verification-only rule set for `npm test`/`npm run` and targeted `npx` test invocations.
+  - Any other executable is rejected before it is spawned. Operators can narrow the rules further via configuration.
 - **No shell.** Commands are spawned directly, with no shell interpretation, so quoting and metacharacters cannot inject a second command.
 - **Ephemeral HOME.** Each command runs with `HOME` (and `USERPROFILE`) redirected to a per-run empty temporary directory, so a home-directory credential lookup (`~/.npmrc`, `~/.git-credentials`, `~/.aws/…`) resolves to nothing.
 - **Environment name allowlist.** The child receives only a frozen allowlist of environment variable names copied from the parent, never a spread of the full environment.
 - **Resource bounds.** A wall-clock timeout, an output cap, and a per-run command-execution ceiling.
-- **Workspace-rooted working directory.** Commands run with their working directory set to the workspace root. The realpath/symlink write gate is enforced by the patch applier (below) and by workspace discovery ([ADR-0005](adr/ADR-0005-repository-context-and-workspace-access.md)); the command runner itself does not constrain an unrestricted `node` process, which is why `node`/`npx` are called out as arbitrary code execution.
+- **Workspace-rooted working directory.** Commands run with their working directory set to the workspace root unless a workspace-relative cwd is requested. Cwd realpaths that escape the workspace or resolve into always-denied paths are rejected before spawn.
 
 See [ADR-0006](adr/ADR-0006-safe-tool-execution-and-sandbox-boundary.md).
 
@@ -65,7 +64,7 @@ See [ADR-0006](adr/ADR-0006-safe-tool-execution-and-sandbox-boundary.md).
 
 The honest limits, stated in [ADR-0006](adr/ADR-0006-safe-tool-execution-and-sandbox-boundary.md):
 
-- **Node execution is remote-code-execution by design.** `npm test` runs arbitrary repository-authored code. The sandbox bounds the _process environment_, not the _semantics_ of allowlisted commands. A reviewer must trust the repository's own scripts to the same degree they would when running them by hand.
+- **Repository script execution is remote-code-execution by design.** `npm test` and `npm run` in the verification workflow run repository-authored code. The sandbox bounds the _process environment_, not the _semantics_ of those scripts. A reviewer must trust the repository's own scripts to the same degree they would when running them by hand.
 - **No network isolation.** Wave 1 adds no OS-level network namespace or firewall. A command can reach the network if the host can.
 - **No filesystem isolation beyond the workspace boundary.** Path containment is enforced in-process; it is not a chroot or a container mount namespace.
 

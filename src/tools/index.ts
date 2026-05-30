@@ -60,6 +60,8 @@ export {
   runCommand,
   type RunCommandDeps,
   type RunCommandInput,
+  type ExecutableResolver,
+  type ExecutableResolverDeps,
   type SpawnFn,
   type SpawnOptions,
 } from "./exec.js";

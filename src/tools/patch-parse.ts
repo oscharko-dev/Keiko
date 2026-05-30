@@ -113,6 +113,9 @@ function newFileAccumulator(): FileAccumulator {
 
 function finishHunk(file: FileAccumulator): void {
   if (file.current !== undefined) {
+    if (file.current.oldRemaining !== 0 || file.current.newRemaining !== 0) {
+      throw new PatchParseError("hunk body has fewer lines than declared");
+    }
     file.hunks.push(toHunk(file.current));
     file.current = undefined;
   }
@@ -168,6 +171,15 @@ function hunkActive(file: FileAccumulator): boolean {
 }
 
 // Draws down the hunk's old/new line budget for a body line (context draws both, `-` old, `+` new).
+function assertBudgetAvailable(hunk: HunkAccumulator, line: string): void {
+  const marker = line.charAt(0);
+  const oldNeeded = marker === " " || marker === "-" ? 1 : 0;
+  const newNeeded = marker === " " || marker === "+" ? 1 : 0;
+  if (hunk.oldRemaining < oldNeeded || hunk.newRemaining < newNeeded) {
+    throw new PatchParseError("hunk body has more lines than declared");
+  }
+}
+
 function consumeBudget(hunk: HunkAccumulator, line: string): void {
   const marker = line.charAt(0);
   if (marker === " ") {
@@ -194,6 +206,7 @@ function handleBodyLine(file: FileAccumulator, line: string): void {
     finishHunk(file);
     return;
   }
+  assertBudgetAvailable(file.current, line);
   file.current.lines.push(line);
   countBody(file, line);
   consumeBudget(file.current, line);

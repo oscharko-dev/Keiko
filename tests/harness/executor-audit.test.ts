@@ -6,7 +6,18 @@ import { describe, expect, it } from "vitest";
 import { handleToolCall } from "../../src/harness/executor.js";
 import type { ToolCallRequest, ToolCallResult, ToolPort } from "../../src/harness/ports.js";
 import type { HarnessEvent } from "../../src/harness/types.js";
+import { CommandDeniedError } from "../../src/tools/errors.js";
+import { PathDeniedError } from "../../src/workspace/errors.js";
 import { response, toolCall, buildContext } from "./_support.js";
+
+const COMMAND_SANDBOX = {
+  envAllowlist: ["PATH", "TZ"],
+  network: "inherit" as const,
+  maxOutputBytes: 1_024,
+  timeoutMs: 500,
+  terminationGraceMs: 50,
+  cwdRequested: false,
+};
 
 function toolWith(result: Partial<ToolCallResult>): ToolPort {
   return {
@@ -32,7 +43,14 @@ describe("executor — S-M1 command:executed audit event", () => {
   it("emits command:executed with redacted counts/flags when a command tool returns metadata", async () => {
     const tools = toolWith({
       commandExecuted: true,
-      metadata: { kind: "command", executable: "node", argCount: 2, exitCode: 0, timedOut: false },
+      metadata: {
+        kind: "command",
+        executable: "node",
+        argCount: 2,
+        exitCode: 0,
+        timedOut: false,
+        sandbox: COMMAND_SANDBOX,
+      },
     });
     const { ctx, sink } = buildContext({
       task: { taskType: "generate-unit-tests", input: { filePath: "src/a.ts" } },
@@ -56,10 +74,52 @@ describe("executor — S-M1 command:executed audit event", () => {
     expect(eventsOfType(sink.events(), "tool:call:completed")).toHaveLength(1);
   });
 
+  it("emits sandbox:configured with safe names and limits when command metadata is present", async () => {
+    const tools = toolWith({
+      commandExecuted: true,
+      metadata: {
+        kind: "command",
+        executable: "node",
+        argCount: 2,
+        exitCode: 0,
+        timedOut: false,
+        sandbox: { ...COMMAND_SANDBOX, cwdRequested: true },
+      },
+    });
+    const { ctx, sink } = buildContext({
+      task: { taskType: "generate-unit-tests", input: { filePath: "src/a.ts" } },
+      model: { call: () => Promise.resolve(response()) },
+      tools,
+    });
+    ctx.lastResponse = response({
+      finishReason: "tool_calls",
+      toolCalls: [toolCall("c1", "run_command")],
+    });
+    await handleToolCall(ctx);
+    const emitted = eventsOfType(sink.events(), "sandbox:configured");
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0]).toMatchObject({
+      envAllowlist: ["PATH", "TZ"],
+      network: "inherit",
+      maxOutputBytes: 1_024,
+      timeoutMs: 500,
+      terminationGraceMs: 50,
+      cwdRequested: true,
+    });
+    expect(JSON.stringify(emitted[0])).not.toContain("SECRET");
+  });
+
   it("carries a null exitCode and timedOut:true through unchanged", async () => {
     const tools = toolWith({
       commandExecuted: true,
-      metadata: { kind: "command", executable: "npm", argCount: 1, exitCode: null, timedOut: true },
+      metadata: {
+        kind: "command",
+        executable: "npm",
+        argCount: 1,
+        exitCode: null,
+        timedOut: true,
+        sandbox: COMMAND_SANDBOX,
+      },
     });
     const { ctx, sink } = buildContext({
       task: { taskType: "generate-unit-tests", input: { filePath: "src/a.ts" } },
@@ -101,7 +161,7 @@ describe("executor — S-M1 patch:applied audit event", () => {
 });
 
 describe("executor — S-M1 no metadata, no audit event", () => {
-  it("emits neither command:executed nor patch:applied when the result has no metadata", async () => {
+  it("emits no command/sandbox/patch event when the result has no metadata", async () => {
     const tools = toolWith({ output: "read output" });
     const { ctx, sink } = buildContext({
       task: { taskType: "generate-unit-tests", input: { filePath: "src/a.ts" } },
@@ -114,6 +174,7 @@ describe("executor — S-M1 no metadata, no audit event", () => {
     });
     await handleToolCall(ctx);
     expect(eventsOfType(sink.events(), "command:executed")).toHaveLength(0);
+    expect(eventsOfType(sink.events(), "sandbox:configured")).toHaveLength(0);
     expect(eventsOfType(sink.events(), "patch:applied")).toHaveLength(0);
     expect(eventsOfType(sink.events(), "tool:call:completed")).toHaveLength(1);
   });
@@ -134,6 +195,48 @@ describe("executor — S-M1 no metadata, no audit event", () => {
     });
     await handleToolCall(ctx);
     expect(eventsOfType(sink.events(), "command:executed")).toHaveLength(0);
+    expect(eventsOfType(sink.events(), "sandbox:configured")).toHaveLength(0);
     expect(eventsOfType(sink.events(), "tool:call:failed")).toHaveLength(1);
+  });
+
+  it("preserves stable tool error codes on tool:call:failed", async () => {
+    const tools: ToolPort = {
+      execute: () => Promise.reject(new CommandDeniedError("command denied", "node")),
+      listTools: () => [],
+    };
+    const { ctx, sink } = buildContext({
+      task: { taskType: "generate-unit-tests", input: { filePath: "src/a.ts" } },
+      model: { call: () => Promise.resolve(response()) },
+      tools,
+    });
+    ctx.lastResponse = response({
+      finishReason: "tool_calls",
+      toolCalls: [toolCall("c1", "run_command")],
+    });
+    await handleToolCall(ctx);
+    expect(eventsOfType(sink.events(), "tool:call:failed")[0]?.errorCode).toBe(
+      "TOOL_COMMAND_DENIED",
+    );
+  });
+
+  it("preserves stable workspace error codes on tool:call:failed", async () => {
+    const tools: ToolPort = {
+      execute: () =>
+        Promise.reject(new PathDeniedError("path matches an always-on deny pattern", ".env")),
+      listTools: () => [],
+    };
+    const { ctx, sink } = buildContext({
+      task: { taskType: "generate-unit-tests", input: { filePath: "src/a.ts" } },
+      model: { call: () => Promise.resolve(response()) },
+      tools,
+    });
+    ctx.lastResponse = response({
+      finishReason: "tool_calls",
+      toolCalls: [toolCall("c1", "read_file")],
+    });
+    await handleToolCall(ctx);
+    expect(eventsOfType(sink.events(), "tool:call:failed")[0]?.errorCode).toBe(
+      "WORKSPACE_PATH_DENIED",
+    );
   });
 });

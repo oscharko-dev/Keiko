@@ -10,6 +10,7 @@ import {
   DEFAULT_SANDBOX_POLICY,
   nodeSpawnFn,
   runCommand,
+  type CommandRule,
   type CommandResult,
   type RunCommandDeps,
   type SandboxPolicy,
@@ -41,6 +42,22 @@ export interface VerificationDeps {
 }
 
 const OUTPUT_DIGEST_BYTES = 4_096;
+
+// Verification runs deterministic repository gates selected by Keiko, not arbitrary model-issued
+// run_command calls. Keep the model-facing defaults read-only while allowing the verification
+// orchestrator to invoke npm scripts and framework-targeted npx runs through the same #6 boundary.
+export const VERIFICATION_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+  {
+    executable: "npm",
+    allowedSubcommands: Object.freeze(["test", "run"]),
+    denyFlags: Object.freeze(["-c", "--call"]),
+  },
+  {
+    executable: "npx",
+    denyFlags: Object.freeze(["-c", "--call"]),
+  },
+  ...DEFAULT_COMMAND_RULES,
+]);
 
 const ALL_STATUSES: readonly VerificationStatus[] = [
   "passed",
@@ -153,7 +170,7 @@ function buildRunDeps(
   return {
     workspace: deps.workspace,
     policy: policyForStep(step.limits),
-    commandRules: DEFAULT_COMMAND_RULES,
+    commandRules: VERIFICATION_COMMAND_RULES,
     spawn,
     processEnv: deps.processEnv ?? process.env,
     now: deps.now ?? Date.now,

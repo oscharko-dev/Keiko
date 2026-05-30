@@ -168,6 +168,32 @@ describe("applyPatch — fail-closed", () => {
     expect(read("src/x.txt")).toBe("DIFFERENT\n");
   });
 
+  it("preserves conflict details on PatchValidationError", () => {
+    write("src/x.txt", "DIFFERENT\n");
+    try {
+      applyPatch(info, MODIFY_DIFF, { applyEnabled: true, signal: liveSignal() });
+      throw new Error("applyPatch should reject the conflicting patch");
+    } catch (error) {
+      expect(error).toBeInstanceOf(PatchValidationError);
+      expect((error as PatchValidationError).conflicts).toHaveLength(1);
+      expect((error as PatchValidationError).conflicts[0]?.path).toBe("src/x.txt");
+    }
+  });
+
+  it("throws PatchValidationError with conflicts for a conflict-only failure", () => {
+    write("src/new.txt", "already here\n");
+    let caught: unknown;
+    try {
+      applyPatch(info, CREATE_DIFF, { applyEnabled: true, signal: liveSignal() });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(PatchValidationError);
+    expect((caught as PatchValidationError).reasons).toHaveLength(0);
+    expect((caught as PatchValidationError).conflicts).toHaveLength(1);
+    expect((caught as PatchValidationError).conflicts[0]?.path).toBe("src/new.txt");
+  });
+
   it("refuses to write after abort (no partial state)", () => {
     write("src/x.txt", "one\ntwo\n");
     const ctrl = new AbortController();
@@ -176,6 +202,46 @@ describe("applyPatch — fail-closed", () => {
       applyPatch(info, MODIFY_DIFF, { applyEnabled: true, signal: ctrl.signal }),
     ).toThrow(CommandCancelledError);
     expect(read("src/x.txt")).toBe("one\ntwo\n");
+  });
+
+  it("rolls back already-written files when the signal aborts mid-apply", () => {
+    write("src/a.txt", "A0\n");
+    write("src/b.txt", "B0\n");
+    const diffA = "--- a/src/a.txt\n+++ b/src/a.txt\n@@ -1,1 +1,1 @@\n-A0\n+A1\n";
+    const diffB = "--- a/src/b.txt\n+++ b/src/b.txt\n@@ -1,1 +1,1 @@\n-B0\n+B1\n";
+    const ctrl = new AbortController();
+    const writes: string[] = [];
+    const writer = {
+      writeFileUtf8: (abs: string, content: string): void => {
+        writes.push(`${abs}:${content}`);
+        if (abs.endsWith("a.txt")) {
+          ctrl.abort();
+        }
+        writeFileSync(abs, content, "utf8");
+      },
+      mkdirp: (): void => {
+        // The files already exist for this regression.
+      },
+      remove: (abs: string): void => {
+        writes.push(`rm:${abs}`);
+        rmSync(abs, { force: true });
+      },
+      rename: (): void => {
+        // Not used by applyPatch.
+      },
+    };
+    expect(() =>
+      applyPatch(info, diffA + diffB, {
+        applyEnabled: true,
+        signal: ctrl.signal,
+        writer,
+      }),
+    ).toThrow(CommandCancelledError);
+    expect(read("src/a.txt")).toBe("A0\n");
+    expect(read("src/b.txt")).toBe("B0\n");
+    expect(writes).toContain(`${join(root, "src/a.txt")}:A1\n`);
+    expect(writes).toContain(`${join(root, "src/a.txt")}:A0\n`);
+    expect(writes.some((line) => line === `${join(root, "src/b.txt")}:B1\n`)).toBe(false);
   });
 });
 
@@ -197,5 +263,44 @@ describe("applyPatch — multi-file atomicity (rollback)", () => {
     // a.txt was restored to its original buffered content during rollback.
     const restoredA = rec.writes().filter((w) => w.path === join(root, "src/a.txt"));
     expect(restoredA.at(-1)?.content).toBe("A0\n");
+  });
+
+  it("rolls back and stops when cancellation is requested during the write phase", () => {
+    write("src/a.txt", "A0\n");
+    write("src/b.txt", "B0\n");
+    const diffA = "--- a/src/a.txt\n+++ b/src/a.txt\n@@ -1,1 +1,1 @@\n-A0\n+A1\n";
+    const diffB = "--- a/src/b.txt\n+++ b/src/b.txt\n@@ -1,1 +1,1 @@\n-B0\n+B1\n";
+    const ctrl = new AbortController();
+    const writes: { path: string; content: string }[] = [];
+    const writer = {
+      writeFileUtf8: (absPath: string, content: string): void => {
+        writes.push({ path: absPath, content });
+        if (absPath === join(root, "src/a.txt") && content === "A1\n") {
+          ctrl.abort();
+        }
+      },
+      mkdirp: (absPath: string): void => {
+        writes.push({ path: absPath, content: "mkdir" });
+      },
+      remove: (absPath: string): void => {
+        writes.push({ path: absPath, content: "remove" });
+      },
+      rename: (fromAbsolute: string, toAbsolute: string): void => {
+        writes.push({ path: fromAbsolute, content: `rename:${toAbsolute}` });
+      },
+    };
+
+    expect(() =>
+      applyPatch(info, diffA + diffB, {
+        applyEnabled: true,
+        signal: ctrl.signal,
+        writer,
+      }),
+    ).toThrow(CommandCancelledError);
+    expect(writes.map((w) => [w.path, w.content])).toEqual([
+      [join(root, "src"), "mkdir"],
+      [join(root, "src/a.txt"), "A1\n"],
+      [join(root, "src/a.txt"), "A0\n"],
+    ]);
   });
 });

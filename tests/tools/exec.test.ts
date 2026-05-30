@@ -1,6 +1,14 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   nodeSpawnFn,
@@ -14,12 +22,21 @@ import {
   CommandTimeoutError,
 } from "../../src/tools/errors.js";
 import { PathEscapeError } from "../../src/workspace/errors.js";
-import { DEFAULT_COMMAND_RULES, DEFAULT_SANDBOX_POLICY } from "../../src/tools/types.js";
+import {
+  DEFAULT_COMMAND_RULES,
+  DEFAULT_SANDBOX_POLICY,
+  type CommandRule,
+} from "../../src/tools/types.js";
 import { makeWorkspace, recordingSpawn } from "./_support.js";
 import type { WorkspaceInfo } from "../../src/workspace/types.js";
 
 let root: string;
 let info: WorkspaceInfo;
+
+const NODE_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+  { executable: "node" },
+  ...DEFAULT_COMMAND_RULES,
+]);
 
 beforeEach(() => {
   ({ root, info } = makeWorkspace());
@@ -31,12 +48,12 @@ afterEach(() => {
 
 function fakeDeps(
   spawnFn: RunCommandDeps["spawn"],
-  processEnv: NodeJS.ProcessEnv = {},
+  processEnv: NodeJS.ProcessEnv = { PATH: process.env.PATH ?? "" },
 ): RunCommandDeps {
   return {
     workspace: info,
     policy: DEFAULT_SANDBOX_POLICY,
-    commandRules: DEFAULT_COMMAND_RULES,
+    commandRules: NODE_COMMAND_RULES,
     spawn: spawnFn,
     processEnv,
     now: () => 0,
@@ -47,7 +64,7 @@ function realDeps(processEnv: NodeJS.ProcessEnv): RunCommandDeps {
   return {
     workspace: info,
     policy: { ...DEFAULT_SANDBOX_POLICY, defaultTimeoutMs: 10_000 },
-    commandRules: DEFAULT_COMMAND_RULES,
+    commandRules: NODE_COMMAND_RULES,
     spawn: nodeSpawnFn,
     processEnv,
     now: () => Date.now(),
@@ -167,12 +184,55 @@ describe("runCommand — allowlist guard (before spawn)", () => {
     ).rejects.toBeInstanceOf(PathEscapeError);
     expect(spawn.calls()).toHaveLength(0);
   });
+
+  it("rejects a PATH-resolved executable inside the workspace without spawning", async () => {
+    const bin = join(root, "bin");
+    const fakeNode = join(bin, "node");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(fakeNode, "#!/bin/sh\nexit 0\n", "utf8");
+    chmodSync(fakeNode, 0o755);
+    const spawn = recordingSpawn();
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: ["-e", "1"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        fakeDeps(spawn.fn, { PATH: bin }),
+      ),
+    ).rejects.toBeInstanceOf(CommandDeniedError);
+    expect(spawn.calls()).toHaveLength(0);
+  });
+
+  it("rejects a workspace PATH symlink to an outside executable without spawning", async () => {
+    const bin = join(root, "bin");
+    mkdirSync(bin, { recursive: true });
+    symlinkSync(process.execPath, join(bin, "node"));
+    const spawn = recordingSpawn();
+    await expect(
+      runCommand(
+        {
+          command: "node",
+          args: ["-e", "1"],
+          cwd: undefined,
+          timeoutMs: undefined,
+          signal: controller().signal,
+        },
+        fakeDeps(spawn.fn, { PATH: bin }),
+      ),
+    ).rejects.toBeInstanceOf(CommandDeniedError);
+    expect(spawn.calls()).toHaveLength(0);
+  });
 });
 
 describe("runCommand — spawn options (no shell, clean env, detached)", () => {
   it("always spawns with shell:false and a name-allowlisted env (+ ephemeral HOME)", async () => {
     const spawn = recordingSpawn();
     const home = recordingHome();
+    const path = process.env.PATH ?? "";
     const promise = runCommand(
       {
         command: "node",
@@ -182,7 +242,7 @@ describe("runCommand — spawn options (no shell, clean env, detached)", () => {
         signal: controller().signal,
       },
       {
-        ...fakeDeps(spawn.fn, { PATH: "/bin", SECRET_TOKEN: "leak-me-please" }),
+        ...fakeDeps(spawn.fn, { PATH: path, SECRET_TOKEN: "leak-me-please" }),
         home: home.provider,
       },
     );
@@ -191,9 +251,11 @@ describe("runCommand — spawn options (no shell, clean env, detached)", () => {
     const call = spawn.calls()[0];
     const made = home.made()[0] ?? "";
     expect(call?.options.shell).toBe(false);
+    expect(call?.command).not.toBe("node");
+    expect(isAbsolute(call?.command ?? "")).toBe(true);
     // PATH is name-copied; the planted secret never reaches the child; HOME/USERPROFILE are the
     // ephemeral dir (C5), so the env is exactly {PATH, HOME, USERPROFILE} — no parent spread.
-    expect(call?.options.env).toEqual({ PATH: "/bin", HOME: made, USERPROFILE: made });
+    expect(call?.options.env).toEqual({ PATH: path, HOME: made, USERPROFILE: made });
     expect("SECRET_TOKEN" in (call?.options.env ?? {})).toBe(false);
   });
 
@@ -303,7 +365,8 @@ describe("runCommand — output flood protection (F12)", () => {
     spawn.child.emit("close", null, "SIGTERM");
     const result = await promise;
     expect(result.truncated).toBe(true);
-    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(4);
+    expect(result.stdout).toBe("[TRUNCATED OUTPUT REDACTED]");
+    expect(result.stderr).toBe("[TRUNCATED OUTPUT REDACTED]");
     kills.restore();
   });
 });
@@ -400,7 +463,7 @@ describe("runCommand — real node integration", () => {
       },
       {
         ...fakeDeps(spawn.fn, {
-          PATH: "/bin",
+          PATH: process.env.PATH ?? "",
           HOME: "/Users/parent",
           USERPROFILE: "/Users/parent",
         }),

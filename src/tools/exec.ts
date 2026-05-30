@@ -9,13 +9,15 @@
 
 import { spawn as nodeSpawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join, resolve as resolvePath } from "node:path";
 import { redact } from "../gateway/redaction.js";
-import { resolveWithinWorkspace } from "../workspace/paths.js";
-import { assertContainedRealPath } from "../workspace/realpath.js";
+import { isDenied } from "../workspace/ignore.js";
+import { isWithinWorkspace, resolveWithinWorkspace } from "../workspace/paths.js";
+import { containedRealPathInfo } from "../workspace/realpath.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
+import { PathDeniedError } from "../workspace/errors.js";
 import type { WorkspaceInfo } from "../workspace/types.js";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { buildSandboxEnv, collectSensitiveEnvValues, isCommandAllowed } from "./sandbox.js";
@@ -33,6 +35,14 @@ export type SpawnFn = (
   args: readonly string[],
   options: SpawnOptions,
 ) => ChildProcess;
+
+export interface ExecutableResolverDeps {
+  readonly workspace: WorkspaceInfo;
+  readonly processEnv: NodeJS.ProcessEnv;
+  readonly fs?: WorkspaceFs | undefined;
+}
+
+export type ExecutableResolver = (command: string, deps: ExecutableResolverDeps) => string;
 
 export const nodeSpawnFn: SpawnFn = (command, args, options) =>
   nodeSpawn(command, [...args], options);
@@ -58,6 +68,7 @@ export interface RunCommandDeps {
   readonly policy: SandboxPolicy;
   readonly commandRules: readonly CommandRule[];
   readonly spawn: SpawnFn;
+  readonly resolveExecutable?: ExecutableResolver | undefined;
   readonly processEnv: NodeJS.ProcessEnv;
   readonly now: () => number;
   // Read-only port used solely for the cwd symlink-containment check. Defaults to nodeWorkspaceFs.
@@ -101,6 +112,95 @@ interface Buffers {
   truncated: boolean;
 }
 
+const TRUNCATED_OUTPUT_MARKER = "[TRUNCATED OUTPUT REDACTED]";
+
+function hasPathSeparator(value: string): boolean {
+  return value.includes("/") || value.includes("\\");
+}
+
+function hasNul(value: string): boolean {
+  return value.includes("\u0000");
+}
+
+function realRoot(fs: WorkspaceFs, root: string): string {
+  try {
+    return fs.realPath(root);
+  } catch {
+    return root;
+  }
+}
+
+function assertBareExecutable(command: string): void {
+  if (command.length === 0 || hasNul(command) || hasPathSeparator(command)) {
+    throw new CommandDeniedError("executable must be a bare PATH-resolved name", command);
+  }
+}
+
+function pathEntries(processEnv: NodeJS.ProcessEnv): readonly string[] {
+  const pathValue = processEnv.PATH ?? "";
+  return pathValue.length === 0 ? [] : pathValue.split(delimiter).filter(Boolean);
+}
+
+function executableExtensions(processEnv: NodeJS.ProcessEnv): readonly string[] {
+  if (process.platform !== "win32") {
+    return [""];
+  }
+  return (processEnv.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
+    .split(";")
+    .filter((value) => value.length > 0);
+}
+
+interface ExecutableCandidate {
+  readonly path: string;
+  readonly real: string;
+}
+
+function candidateExecutable(
+  command: string,
+  rawEntry: string,
+  ext: string,
+): ExecutableCandidate | undefined {
+  const candidate = resolvePath(resolvePath(rawEntry), command + ext);
+  try {
+    accessSync(candidate, constants.X_OK);
+    return { path: candidate, real: realpathSync(candidate) };
+  } catch {
+    return undefined;
+  }
+}
+
+function assertExecutableOutsideWorkspace(
+  command: string,
+  lexicalWorkspaceRoot: string,
+  realWorkspaceRoot: string,
+  candidate: ExecutableCandidate,
+): void {
+  if (
+    isWithinWorkspace(lexicalWorkspaceRoot, candidate.path) ||
+    isWithinWorkspace(realWorkspaceRoot, candidate.real)
+  ) {
+    throw new CommandDeniedError(`executable resolves inside workspace: ${command}`, command);
+  }
+}
+
+function defaultResolveExecutable(command: string, deps: ExecutableResolverDeps): string {
+  assertBareExecutable(command);
+  const fs = deps.fs ?? nodeWorkspaceFs;
+  const lexicalWorkspaceRoot = deps.workspace.root;
+  const realWorkspaceRoot = realRoot(fs, lexicalWorkspaceRoot);
+  for (const rawEntry of pathEntries(deps.processEnv)) {
+    for (const ext of executableExtensions(deps.processEnv)) {
+      const candidate = candidateExecutable(command, rawEntry, ext);
+      if (candidate === undefined) {
+        continue;
+      }
+      assertExecutableOutsideWorkspace(command, lexicalWorkspaceRoot, realWorkspaceRoot, candidate);
+      return candidate.real;
+    }
+  }
+  throw new CommandDeniedError(`executable not found on PATH: ${command}`, command);
+}
+
 function appendCapped(buffers: Buffers, sink: Buffer[], chunk: Buffer, max: number): boolean {
   if (buffers.truncated) {
     return false;
@@ -133,12 +233,21 @@ interface RunState {
 }
 
 // Resolves the validated cwd. Lexical containment first, then symlink containment via realpath
-// (S-H1): a cwd that is a symlink escaping the root must not become the spawn cwd. Both escapes
-// surface as PathEscapeError, which the host maps to a tool error — the command never spawns.
+// (S-H1): a cwd that is a symlink escaping the root or resolving into an always-denied path must
+// not become the spawn cwd. Both cases surface as workspace path errors, which the host maps to a
+// tool error — the command never spawns.
 function resolveCwd(deps: RunCommandDeps, cwd: string | undefined): string {
   const lexical = resolveWithinWorkspace(deps.workspace.root, cwd ?? ".");
   const fs = deps.fs ?? nodeWorkspaceFs;
-  return assertContainedRealPath(fs, deps.workspace.root, lexical, cwd ?? ".");
+  const rel = lexical.slice(deps.workspace.root.length).replace(/^[/\\]/, "");
+  if (isDenied(rel === "" ? (cwd ?? ".") : rel)) {
+    throw new PathDeniedError("path matches an always-on deny pattern", cwd ?? ".");
+  }
+  const info = containedRealPathInfo(fs, deps.workspace.root, lexical);
+  if (isDenied(info.realRelative)) {
+    throw new PathDeniedError("path matches an always-on deny pattern", cwd ?? ".");
+  }
+  return lexical;
 }
 
 function buildResult(
@@ -151,6 +260,19 @@ function buildResult(
   startedAt: number,
 ): CommandResult {
   const secrets = collectSensitiveEnvValues(deps.processEnv, deps.policy.envAllowlist);
+  if (buffers.truncated) {
+    return {
+      command: input.command,
+      args: input.args,
+      exitCode,
+      signal: termSignal,
+      stdout: TRUNCATED_OUTPUT_MARKER,
+      stderr: TRUNCATED_OUTPUT_MARKER,
+      durationMs: deps.now() - startedAt,
+      timedOut: state.timedOut,
+      truncated: true,
+    };
+  }
   return {
     command: input.command,
     args: input.args,
@@ -272,41 +394,31 @@ function armTimersAndAbort(ctx: ExecContext): void {
   }
 }
 
-// Runs an allowlisted command. Rejects with CommandDeniedError (before spawn) for a denied
-// command or a workspace-escaping cwd (PathEscapeError), CommandTimeoutError on timeout, and
-// CommandCancelledError on abort; otherwise resolves a redacted, byte-capped CommandResult. All
-// failure paths are Promise rejections — the function never throws synchronously.
-export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promise<CommandResult> {
-  // Defensive: an empty/non-array envAllowlist would make buildSandboxEnv produce an empty child
-  // env (no PATH → spawn ENOENT, or worse a misconfiguration). Reject cleanly so the "never throws
-  // synchronously" contract holds even under a malformed config (S-M2).
+function asError(error: unknown, fallback: string): Error {
+  return error instanceof Error ? error : new Error(fallback);
+}
+
+function validateRunCommandInput(input: RunCommandInput, deps: RunCommandDeps): void {
   if (!Array.isArray(deps.policy.envAllowlist) || deps.policy.envAllowlist.length === 0) {
-    return Promise.reject(
-      new CommandDeniedError("sandbox envAllowlist must be a non-empty array", input.command),
-    );
+    throw new CommandDeniedError("sandbox envAllowlist must be a non-empty array", input.command);
   }
   const decision = isCommandAllowed(deps.commandRules, input.command, input.args);
   if (!decision.allowed) {
-    return Promise.reject(
-      new CommandDeniedError(decision.reason ?? "command denied", input.command),
-    );
+    throw new CommandDeniedError(decision.reason ?? "command denied", input.command);
   }
-  // Resolve cwd inside the workspace BEFORE spawning; a PathEscapeError here means no spawn.
-  let cwd: string;
-  try {
-    cwd = resolveCwd(deps, input.cwd);
-  } catch (error) {
-    return Promise.reject(error instanceof Error ? error : new Error("cwd resolution failed"));
-  }
-  const env = buildSandboxEnv(deps.processEnv, deps.policy.envAllowlist);
-  // C5: the child gets an ephemeral, EMPTY HOME/USERPROFILE — never the developer's real home — so
-  // ~/.npmrc, ~/.git-credentials, ~/.aws/… are out of reach. Created only after the deny/cwd gates
-  // pass (a denied command allocates nothing); removed once after settle via cleanup().
-  const home = deps.home ?? nodeHomeProvider;
-  const homeDir = home.make();
-  env.HOME = homeDir;
-  env.USERPROFILE = homeDir;
-  const state: RunState = {
+}
+
+function resolveExecutable(input: RunCommandInput, deps: RunCommandDeps): string {
+  const resolver = deps.resolveExecutable ?? defaultResolveExecutable;
+  return resolver(input.command, {
+    workspace: deps.workspace,
+    processEnv: deps.processEnv,
+    fs: deps.fs,
+  });
+}
+
+function createRunState(home: HomeProvider, homeDir: string): RunState {
+  return {
     settled: false,
     timedOut: false,
     timer: undefined,
@@ -316,20 +428,52 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
     homeDir,
     homeCleaned: false,
   };
-  let child: ChildProcess;
+}
+
+function spawnChild(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  executable: string,
+  cwd: string,
+  env: Record<string, string>,
+  state: RunState,
+): ChildProcess {
   try {
-    child = deps.spawn(input.command, input.args, { cwd, env, shell: false, detached: POSIX });
+    return deps.spawn(executable, input.args, { cwd, env, shell: false, detached: POSIX });
   } catch (error) {
-    // A synchronous spawn failure must still clean the ephemeral home and reject (never throw):
-    // the "never throws synchronously" contract holds and no temp dir leaks.
     cleanup(state, input.signal);
-    return Promise.reject(error instanceof Error ? error : new Error("spawn failed"));
+    throw asError(error, "spawn failed");
   }
-  const buffers: Buffers = { out: [], err: [], total: 0, truncated: false };
-  const ctx: ExecContext = { child, input, deps, buffers, state, startedAt: deps.now() };
+}
+
+function runSpawnedChild(ctx: ExecContext): Promise<CommandResult> {
   return new Promise<CommandResult>((resolve, reject) => {
-    wireStreams(child, buffers, deps.policy, state);
+    wireStreams(ctx.child, ctx.buffers, ctx.deps.policy, ctx.state);
     settleOnClose(ctx, resolve, reject);
     armTimersAndAbort(ctx);
   });
+}
+
+// Runs an allowlisted command. Rejects with CommandDeniedError (before spawn) for a denied
+// command or a workspace-escaping cwd (PathEscapeError), CommandTimeoutError on timeout, and
+// CommandCancelledError on abort; otherwise resolves a redacted, byte-capped CommandResult. All
+// failure paths are Promise rejections — the function never throws synchronously.
+export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promise<CommandResult> {
+  try {
+    validateRunCommandInput(input, deps);
+    const executable = resolveExecutable(input, deps);
+    const cwd = resolveCwd(deps, input.cwd);
+    const env = buildSandboxEnv(deps.processEnv, deps.policy.envAllowlist);
+    const home = deps.home ?? nodeHomeProvider;
+    const homeDir = home.make();
+    env.HOME = homeDir;
+    env.USERPROFILE = homeDir;
+    const state = createRunState(home, homeDir);
+    const child = spawnChild(input, deps, executable, cwd, env, state);
+    const buffers: Buffers = { out: [], err: [], total: 0, truncated: false };
+    const ctx: ExecContext = { child, input, deps, buffers, state, startedAt: deps.now() };
+    return runSpawnedChild(ctx);
+  } catch (error) {
+    return Promise.reject(asError(error, "command execution failed"));
+  }
 }

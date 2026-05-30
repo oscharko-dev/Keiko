@@ -10,12 +10,18 @@ import {
   UnknownToolError,
 } from "../../src/tools/errors.js";
 import { nodeSpawnFn } from "../../src/tools/exec.js";
+import { DEFAULT_COMMAND_RULES, type CommandRule } from "../../src/tools/types.js";
 import { makeWorkspace, recordingSpawn } from "./_support.js";
 import type { ToolCallRequest } from "../../src/harness/ports.js";
 import type { WorkspaceInfo } from "../../src/workspace/types.js";
 
 let root: string;
 let info: WorkspaceInfo;
+
+const NODE_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+  { executable: "node" },
+  ...DEFAULT_COMMAND_RULES,
+]);
 
 beforeEach(() => {
   ({ root, info } = makeWorkspace());
@@ -158,7 +164,10 @@ describe("WorkspaceToolHost — run_command", () => {
   });
 
   it("runs an allowed command and sets commandExecuted:true (real node)", async () => {
-    const result = await host({ spawn: nodeSpawnFn }).execute(
+    const result = await host({
+      spawn: nodeSpawnFn,
+      config: { commandRules: NODE_COMMAND_RULES },
+    }).execute(
       request("run_command", { command: "node", args: ["-e", "process.stdout.write('ok')"] }),
     );
     expect(result.commandExecuted).toBe(true);
@@ -168,7 +177,10 @@ describe("WorkspaceToolHost — run_command", () => {
   });
 
   it("redacts a planted secret in command stdout", async () => {
-    const result = await host({ spawn: nodeSpawnFn }).execute(
+    const result = await host({
+      spawn: nodeSpawnFn,
+      config: { commandRules: NODE_COMMAND_RULES },
+    }).execute(
       request("run_command", {
         command: "node",
         args: [
@@ -183,16 +195,30 @@ describe("WorkspaceToolHost — run_command", () => {
   });
 
   it("S-M1: run_command attaches redacted command metadata (no stdout/arg values)", async () => {
-    const result = await host({ spawn: nodeSpawnFn }).execute(
+    const result = await host({
+      spawn: nodeSpawnFn,
+      config: { commandRules: NODE_COMMAND_RULES },
+    }).execute(
       request("run_command", { command: "node", args: ["-e", "process.stdout.write('ok')"] }),
     );
-    expect(result.metadata).toEqual({
+    expect(result.metadata).toMatchObject({
       kind: "command",
       executable: "node",
       argCount: 2,
       exitCode: 0,
       timedOut: false,
+      sandbox: {
+        network: "inherit",
+        cwdRequested: false,
+      },
     });
+    expect(result.metadata?.kind).toBe("command");
+    if (result.metadata?.kind === "command") {
+      expect(result.metadata.sandbox.envAllowlist).toContain("PATH");
+      expect(typeof result.metadata.sandbox.maxOutputBytes).toBe("number");
+      expect(typeof result.metadata.sandbox.timeoutMs).toBe("number");
+      expect(typeof result.metadata.sandbox.terminationGraceMs).toBe("number");
+    }
     // The metadata must not carry the argument VALUES or any captured stdout.
     expect(JSON.stringify(result.metadata)).not.toContain("process.stdout");
     expect(JSON.stringify(result.metadata)).not.toContain("ok");
@@ -204,7 +230,7 @@ describe("WorkspaceToolHost — S-M2 config deep-merge + envAllowlist validation
     // Overriding only maxOutputBytes must NOT drop envAllowlist (the shallow-spread bug).
     const result = await host({
       spawn: nodeSpawnFn,
-      config: { sandbox: { maxOutputBytes: 4_096 } },
+      config: { sandbox: { maxOutputBytes: 4_096 }, commandRules: NODE_COMMAND_RULES },
       processEnv: { PATH: process.env.PATH ?? "" },
     }).execute(
       request("run_command", {

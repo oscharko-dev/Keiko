@@ -77,6 +77,19 @@ export interface EvidenceCommandExecution {
   readonly durationMs: number;
 }
 
+// One sandbox configuration snapshot (from sandbox:configured). Names/limits only — no env values,
+// command args, output, or paths.
+export interface EvidenceSandboxConfiguration {
+  readonly seq: number;
+  readonly ts: number;
+  readonly envAllowlist: readonly string[];
+  readonly network: "inherit" | "none";
+  readonly maxOutputBytes: number;
+  readonly timeoutMs: number;
+  readonly terminationGraceMs: number;
+  readonly cwdRequested: boolean;
+}
+
 // Generated-patch metadata (from patch:proposed / patch:applied). Byte/file counts always; the
 // diff itself ONLY under the includeDiff opt-in, and ALWAYS redacted (D2/D3).
 export interface EvidencePatch {
@@ -113,6 +126,7 @@ export interface EvidenceManifest {
   readonly stateTransitions: readonly EvidenceStateTransition[];
   readonly toolCalls: readonly EvidenceToolCall[];
   readonly commandExecutions: readonly EvidenceCommandExecution[];
+  readonly sandboxConfigurations?: readonly EvidenceSandboxConfiguration[] | undefined;
   readonly patch?: EvidencePatch | undefined;
   readonly verification?: VerificationAuditSummary | undefined;
   readonly failure?: EvidenceFailure | undefined;

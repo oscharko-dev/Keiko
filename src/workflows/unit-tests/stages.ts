@@ -5,7 +5,12 @@
 // terminal event. All prose/diff redaction happens inside assembleReport.
 
 import { redact } from "../../gateway/redaction.js";
-import { applyPatch, renderDryRun, type PatchApplyResult } from "../../tools/index.js";
+import {
+  applyPatch,
+  CommandCancelledError,
+  renderDryRun,
+  type PatchApplyResult,
+} from "../../tools/index.js";
 import { nodeWorkspaceFs } from "../../workspace/fs.js";
 import type { WorkspaceInfo } from "../../workspace/index.js";
 import { assembleReport } from "./report.js";
@@ -111,12 +116,20 @@ async function applyAndVerify(
   accepted: AcceptedPatch,
 ): Promise<UnitTestWorkflowReport> {
   const fs = state.deps.fs ?? nodeWorkspaceFs;
-  const applyResult: PatchApplyResult = applyPatch(workspace, accepted.diff, {
-    applyEnabled: true,
-    signal: state.signal,
-    fs,
-    ...(state.deps.writer === undefined ? {} : { writer: state.deps.writer }),
-  });
+  let applyResult: PatchApplyResult;
+  try {
+    applyResult = applyPatch(workspace, accepted.diff, {
+      applyEnabled: true,
+      signal: state.signal,
+      fs,
+      ...(state.deps.writer === undefined ? {} : { writer: state.deps.writer }),
+    });
+  } catch (error) {
+    if (error instanceof CommandCancelledError) {
+      return cancelledReport(state, loop, accepted);
+    }
+    throw error;
+  }
   state.emitter.emit({
     type: "workflow:patch:applied",
     changedFiles: applyResult.changedFiles.length,

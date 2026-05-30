@@ -110,6 +110,36 @@ describe("FIX C — all SSE event types are received", () => {
     });
   });
 
+  it("receives sandbox:configured event", async () => {
+    const { result } = renderHook(() => useSSE("run-sandbox"));
+
+    await waitFor(() => MockEventSource.instances.length > 0);
+    const es = MockEventSource.instances[0]!;
+    act(() => {
+      es.open();
+    });
+
+    const event: HarnessEvent = {
+      ...base(0, "run-sandbox"),
+      type: "sandbox:configured",
+      envAllowlist: ["PATH", "TZ"],
+      network: "inherit",
+      maxOutputBytes: 262144,
+      timeoutMs: 30000,
+      terminationGraceMs: 2000,
+      cwdRequested: true,
+    };
+
+    act(() => {
+      es.emit("sandbox:configured", event);
+    });
+
+    await waitFor(() => {
+      expect(result.current.events).toHaveLength(1);
+      expect(result.current.events[0]!.type).toBe("sandbox:configured");
+    });
+  });
+
   it("receives workflow:completed event and sets terminal status (FIX E)", async () => {
     const { result } = renderHook(() => useSSE("run-wf-2"));
 
