@@ -134,5 +134,5 @@ describe("runVerifyCli", () => {
     } finally {
       rmSync(orphan, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });

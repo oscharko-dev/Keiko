@@ -277,7 +277,9 @@ describe("nodeWorkspaceFs.exists", () => {
     let statCallCount = 0;
     const eaccesStat = (): WorkspaceStat => {
       statCallCount += 1;
-      throw Object.assign(new Error("EACCES: permission denied, stat '/locked'"), { code: "EACCES" });
+      throw Object.assign(new Error("EACCES: permission denied, stat '/locked'"), {
+        code: "EACCES",
+      });
     };
     const fs: WorkspaceFs = {
       readFileUtf8: (): string => "",

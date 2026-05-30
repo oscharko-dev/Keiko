@@ -38,15 +38,16 @@ The npm-published package includes the built UI assets, so `keiko ui` works dire
 
 ```bash
 npm run build    # Compile src/ -> dist/ (includes src/ui/**, the BFF)
+npm --prefix ui ci --ignore-scripts
 npm run build:ui # Build the Next.js static export and copy into dist/ui/static/
 ```
 
-Both commands run automatically during `npm pack` (via `prepack`). The result:
+The two build commands run automatically during `npm pack` (via `prepack`). The result:
 
 - `dist/ui/static/` — the static HTML/CSS/JS export
 - `dist/ui/csp-hashes.json` — precomputed inline-script hashes for Content-Security-Policy
 
-The `build:ui` script performs an offline `npm ci` in the nested `ui/` package, builds the static export, and verifies the CSP hashes are present before copying assets into the root package. No external network is contacted.
+The `build:ui` script expects the nested `ui/` dependencies to already be installed with scripts disabled, builds the static export, and verifies the CSP hashes are present before copying assets into the root package.
 
 ## Launching the UI
 
@@ -155,13 +156,15 @@ Axe-core covers automatable accessibility rules (roughly 30–50% of WCAG). The 
 
 ## CI and verification
 
-The UI is built and tested in a dedicated, offline `ui` job:
+The UI is built and tested in a dedicated `ui` job:
 
 ```
-npm --prefix ui ci           # Install ui/ dependencies (offline, from ui/package-lock.json)
+npm --prefix ui ci --ignore-scripts # Install ui/ dependencies from ui/package-lock.json
+npm --prefix ui audit --audit-level=moderate
 npm --prefix ui run lint     # ESLint + a11y rules
 npm --prefix ui run typecheck # Type-check (DOM-aware TypeScript)
 npm --prefix ui run build    # Static export
+npm --prefix ui sbom --sbom-format cyclonedx --omit dev
 npm --prefix ui run test     # Component and smoke tests (jsdom, no browser download)
 keiko ui (health smoke)      # Start the server and poll /api/health
 ```

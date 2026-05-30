@@ -112,13 +112,17 @@ jobs:
           cache: "npm"
           cache-dependency-path: ui/package-lock.json
       - name: Install UI dependencies
-        run: npm --prefix ui ci
+        run: npm --prefix ui ci --ignore-scripts
+      - name: Security audit UI dependencies (moderate and above)
+        run: npm --prefix ui audit --audit-level=moderate
       - name: Lint UI
         run: npm --prefix ui run lint
       - name: Typecheck UI
         run: npm --prefix ui run typecheck
       - name: Build UI (static export)
         run: npm --prefix ui run build
+      - name: Generate UI CycloneDX SBOM
+        run: npm --prefix ui sbom --sbom-format cyclonedx --omit dev > ui-sbom.cdx.json
       - name: Test UI (jsdom + axe a11y)
         run: npm --prefix ui run test
       - name: Install root dependencies
@@ -127,6 +131,8 @@ jobs:
         run: |
           npm run build
           npm run build:ui
+      - name: Verify package surface
+        run: npm run check:package-surface
       - name: Smoke - keiko ui serves /api/health
         run: |
           set -euo pipefail
@@ -136,3 +142,9 @@ jobs:
           body=$(curl --retry 10 --retry-connrefused --retry-delay 1 -fsS http://127.0.0.1:4399/api/health)
           echo "health: $body"
           echo "$body" | grep -q '"status":"ok"'
+      - name: Upload UI SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ui-sbom-cyclonedx
+          path: ui-sbom.cdx.json
+          retention-days: 90
