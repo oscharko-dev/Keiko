@@ -2,6 +2,7 @@
 // Asserts perms 0o700/0o600 on the dir/file (Unix), and that the DB file is NOT inside process.cwd().
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync, statSync, existsSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -101,6 +102,21 @@ describe("createNodeUiStore — on-disk file", () => {
     // A .corrupt.<timestamp> sibling file must exist.
     const siblings = readdirSync(tmpDir);
     const corruptFiles = siblings.filter((f) => f.startsWith("corrupt.db.corrupt."));
+    expect(corruptFiles).toHaveLength(1);
+  });
+
+  it("quarantines a schema-tampered DB and opens a fresh store", () => {
+    const dbPath = join(tmpDir, "schema-tampered.db");
+    const db = new DatabaseSync(dbPath);
+    db.exec("CREATE TABLE projects (id TEXT) STRICT; PRAGMA user_version = 0");
+    db.close();
+
+    const store = createNodeUiStore(dbPath);
+    expect(store.listProjects()).toEqual([]);
+    store.close();
+
+    const siblings = readdirSync(tmpDir);
+    const corruptFiles = siblings.filter((f) => f.startsWith("schema-tampered.db.corrupt."));
     expect(corruptFiles).toHaveLength(1);
   });
 

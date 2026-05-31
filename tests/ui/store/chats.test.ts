@@ -48,6 +48,22 @@ describe("createChat", () => {
     expect(() => store.createChat(proj, "t", "")).toThrow(UiStoreError);
   });
 
+  it("rejects provider-shaped selectedModel values before persistence", () => {
+    expect(() => store.createChat(proj, "t", "https://provider.example/model")).toThrow(
+      UiStoreError,
+    );
+  });
+
+  it("rejects JSON-shaped selectedModel values before persistence", () => {
+    expect(() =>
+      store.createChat(proj, "t", '{"provider":"azure","modelId":"gpt-oss-120b"}'),
+    ).toThrow(UiStoreError);
+  });
+
+  it("rejects secret-shaped selectedModel values before persistence", () => {
+    expect(() => store.createChat(proj, "t", "secret-token")).toThrow(UiStoreError);
+  });
+
   it("lists chats for the given project only", () => {
     const otherProj = join(tmp, "other");
     mkdirSync(otherProj);
@@ -71,6 +87,13 @@ describe("updateChat", () => {
 
   it("throws not_found for unknown id", () => {
     expect(() => store.updateChat("missing-id", { title: "x" })).toThrow(UiStoreError);
+  });
+
+  it("rejects invalid selectedModel patches", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, { selectedModel: '{"apiKey":"secret","modelId":"m"}' }),
+    ).toThrow(UiStoreError);
   });
 });
 

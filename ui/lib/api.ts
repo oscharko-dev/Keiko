@@ -70,6 +70,10 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(code, message, res.status);
   }
 
+  if (res.status === 204) {
+    return undefined as T;
+  }
+
   return res.json() as Promise<T>;
 }
 
@@ -253,13 +257,8 @@ export async function updateProject(
 }
 
 export async function deleteProject(path: string): Promise<void> {
-  await fetchJson<unknown>(`/api/projects?path=${encodeURIComponent(path)}`, {
+  await fetchJson<void>(`/api/projects?path=${encodeURIComponent(path)}`, {
     method: "DELETE",
-  }).catch((err: unknown) => {
-    // DELETE returns 204 (empty body). fetchJson tries to parse it as JSON which throws; swallow
-    // here only when the original response was OK. Distinguished by ApiError having status >= 400.
-    if (err instanceof ApiError) throw err;
-    return undefined;
   });
 }
 
@@ -293,11 +292,8 @@ export async function updateChat(id: string, patch: UpdateChatInput): Promise<Ch
 }
 
 export async function deleteChat(id: string): Promise<void> {
-  await fetchJson<unknown>(`/api/chats?id=${encodeURIComponent(id)}`, {
+  await fetchJson<void>(`/api/chats?id=${encodeURIComponent(id)}`, {
     method: "DELETE",
-  }).catch((err: unknown) => {
-    if (err instanceof ApiError) throw err;
-    return undefined;
   });
 }
 

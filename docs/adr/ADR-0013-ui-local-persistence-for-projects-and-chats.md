@@ -219,11 +219,16 @@ factory built alongside the real adapter) and never touches the filesystem.
 **DB path precedence (mirrors `resolveEvidenceDir`).** `resolveUiDbPath(explicit, env)` in
 `src/ui/store/paths.ts`:
 
-1. An `explicit` option (e.g. `--db-path` / a test injection).
-2. The `KEIKO_UI_DB` environment variable.
-3. Default: `homedir()/.keiko/ui.db` — the user-level app-data directory, **not** a workspace
-   directory. The DB must never reside inside a target repository (contrast with evidence, which
-   is workspace-relative for co-location reasons — projects/chats are user-global, not per-repo).
+1. An `explicit` option (e.g. `--ui-db` / a test injection).
+2. The `KEIKO_UI_DATA_DIR` environment variable, resolved to `keiko-ui.db` inside that directory.
+3. Default: `homedir()/.keiko/keiko-ui.db` — the user-level app-data directory, **not** a
+   workspace directory. The DB must never reside inside a target repository (contrast with
+   evidence, which is workspace-relative for co-location reasons — projects/chats are user-global,
+   not per-repo).
+
+Explicit `--ui-db` values and `KEIKO_UI_DATA_DIR` must be absolute, must not resolve inside the
+current workspace, and must not point at a symlinked database file or symlinked data directory.
+The default app-data path remains `~/.keiko/keiko-ui.db`.
 
 ### D5 — Schema, PRAGMA user_version, and migration runner
 
@@ -301,24 +306,27 @@ fail-open (show the record) rather than silently destructive (delete the record)
 
 ### D6 — Path validation policy (fail-closed)
 
-All path validation for project paths is centralized in `src/ui/store/validate.ts`. No path
+All path validation for project paths is centralized in `src/ui/store/validation.ts`. No path
 reaches the database without passing every check. The policy is:
 
 1. **Null-byte rejection.** Any path containing `\x00` → `invalid_path` (400).
-2. **Absolute path required.** Paths not starting with `/` (POSIX) or a drive letter `X:\`
-   (Windows) → `invalid_path` (400).
+2. **Absolute POSIX-style path required.** Paths not starting with `/` → `invalid_path` (400).
+   Windows drive-letter, UNC, and device-root forms are rejected in V1 rather than normalized
+   cross-platform.
 3. **No remote URL forms.** Paths matching `/^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\//` (scheme + `//`)
    → `invalid_path` (400). This rejects `http://`, `file://`, `ssh://`, etc.
-4. **Normalize and re-check.** `path.normalize(input)` followed by `path.resolve(input)` to
+4. **No Windows/UNC path forms.** Reject `C:\repo`, `\\server\share\repo`,
+   `//server/share/repo`, and backslash traversal segments such as `\..\`.
+5. **Normalize and re-check.** `path.normalize(input)` followed by `path.resolve(input)` to
    produce the canonical absolute path; re-verify the result is still absolute.
-5. **No trailing traversal residue.** Reject any path containing `/../` or ending in `/..` after
+6. **No trailing traversal residue.** Reject any path containing `/../` or ending in `/..` after
    normalization — defense in depth against edge cases not caught by `path.resolve`.
-6. **`stat` as existing directory (CREATE only).** At project create time, the normalized path
+7. **`stat` as existing directory (CREATE only).** At project create time, the normalized path
    must `fs.statSync` as a directory (`stat.isDirectory() === true`). A regular file → 
    `path_not_directory` (400). A missing path → `path_not_found` (400). After creation,
    availability is computed on read (D5 note on derived availability), not re-validated on every
    mutation.
-7. **Length cap.** Paths longer than 4096 characters → `invalid_path` (400).
+8. **Length cap.** Paths longer than 4096 characters → `invalid_path` (400).
 
 **Stable error codes (for the `{ error: { code, message } }` envelope):**
 
@@ -332,7 +340,7 @@ reaches the database without passing every check. The policy is:
 
 ### D7 — Route contract (additive to ADR-0011 D5)
 
-We will add **nine new routes** to `src/ui/routes.ts`, dispatched from the same `routeRequest`
+We will add **ten new routes** to `src/ui/routes.ts`, dispatched from the same `routeRequest`
 function that handles the existing twelve routes. They are a new dispatch branch for
 `/api/projects` and `/api/chats` alongside the existing `/api/runs`, `/api/evidence`, and
 `/api/workspace` branches. All responses use the existing `{ error: { code, message } }` error
@@ -341,26 +349,26 @@ envelope and `SECURITY_HEADERS` from `src/ui/headers.ts`. JSON body reading reus
 GET/POST/PATCH/DELETE via HTTP method; resources are addressed by **query parameters** (not path
 parameters for mutable entities), preserving static-export compatibility per ADR-0011 D1.
 
-**New routes (numbered 13–21, additive to the D5 contract):**
+**New routes (numbered 13–22, additive to the D5 contract):**
 
 | # | Method | Path | Query params | Notes |
 |---|---|---|---|---|
 | 13 | `GET` | `/api/projects` | — | Returns `{ projects: (Project & { available: boolean })[] }`, availability derived from `fs.existsSync` at read time. |
 | 14 | `POST` | `/api/projects` | — | Body: `{ path: string, name?: string }`. Validates path (D6). Returns `201 { project: Project & { available: boolean } }`. |
-| 15 | `PATCH` | `/api/projects` | `?path=...` | Body: `{ name?: string, favorite?: boolean }`. Returns `{ project: Project }`. 404 if unknown. |
+| 15 | `PATCH` | `/api/projects` | `?path=...` | Body: `{ name?: string, favorite?: boolean }`. Returns `{ project: Project & { available: boolean } }`. 404 if unknown. |
 | 16 | `DELETE` | `/api/projects` | `?path=...` | Cascades to chats + messages via `ON DELETE CASCADE`. Returns `204`. 404 if unknown. |
 | 17 | `GET` | `/api/chats` | `?projectPath=...` | Returns `{ chats: Chat[] }` for the given project. 400 if `projectPath` is missing. |
-| 18 | `POST` | `/api/chats` | — | Body: `{ projectPath: string, title: string, selectedModel: string, branchLabel?: string }`. Returns `201 { chat: Chat }`. 404 if project unknown. |
-| 19 | `PATCH` | `/api/chats` | `?id=...` | Body: `{ title?: string, selectedModel?: string, branchLabel?: string, status?: string }`. Returns `{ chat: Chat }`. 404 if unknown. |
+| 18 | `POST` | `/api/chats` | — | Body: `{ projectPath: string, title: string, selectedModel: string, branchLabel?: string }`. `selectedModel` must be an existing capability registry id with `kind === "chat"`. Returns `201 { chat: Chat }`. 404 if project unknown. |
+| 19 | `PATCH` | `/api/chats` | `?id=...` | Body: `{ title?: string, selectedModel?: string, branchLabel?: string, status?: string }`. If present, `selectedModel` must be an existing capability registry id with `kind === "chat"`. Returns `{ chat: Chat }`. 404 if unknown. |
 | 20 | `DELETE` | `/api/chats` | `?id=...` | Cascades to messages. Returns `204`. 404 if unknown. |
 | 21 | `GET` | `/api/chats/messages` | `?chatId=...` | Returns `{ messages: ChatMessage[] }`. 400 if `chatId` missing. |
 | 22 | `POST` | `/api/chats/messages` | — | Body: `{ chatId, role, content, timestamp, runId?, workflowId?, workflowStatus?, shortResult? }`. Returns `201 { message: ChatMessage }`. `shortResult` truncated to 200 chars + redacted before persist. |
 
-`PATCH /api/projects` accepts `lastOpenedAt` for the UI to record the most-recent open
-timestamp; the implementation bumps `last_opened_at` to `Date.now()` if the client sends no
-explicit value, mirroring the "touch on open" pattern expected by the issue.
+`PATCH /api/projects` does not accept client-supplied timestamps. The implementation bumps
+`last_opened_at` to `Date.now()` server-side for every accepted patch, mirroring the "touch on
+open" pattern expected by the issue without trusting the browser clock.
 
-**Static-export compatibility.** All nine new routes use fixed path strings and query
+**Static-export compatibility.** All ten new routes use fixed path strings and query
 parameters — no `:param` path segments on mutable resources. The route matcher in
 `src/ui/routes.ts` can match them exactly, just as it matches the existing twelve routes.
 
@@ -381,20 +389,21 @@ when present). Permissions are applied after `openDatabase` and before any migra
 is never world-readable.
 
 **No secrets or provider details persisted.** `selectedModel` stores the registry id only (e.g.
-`"claude-opus-4-5"`) — never an API key, provider URL, or authentication credential. The
-`short_result` column (chat messages) is passed through `deepRedactStrings(value, redactor)`
-before persistence, using the same `UiHandlerDeps.redactor` the BFF already applies to live
-payloads (ADR-0011 D9). No reasoning traces, no evidence payloads, no SSE event data are stored
-in the DB.
+`"Mistral-Small-3.1-24B-Instruct-2503"`) — never an API key, provider URL, deployment mapping,
+or authentication credential. The BFF accepts only capability registry entries with
+`kind === "chat"`; the store layer also rejects URL-, JSON-, and secret-shaped values before they
+can be written. The `short_result` column (chat messages) is passed through
+`deepRedactStrings(value, redactor)` before persistence, using the same `UiHandlerDeps.redactor`
+the BFF already applies to live payloads (ADR-0011 D9). No reasoning traces, no evidence
+payloads, no SSE event data are stored in the DB.
 
 **DB location never inside a target repository.** The default path is
-`homedir()/.keiko/ui.db`. The `KEIKO_UI_DB` env var and the `--db-path` option allow relocation
-(for tests: an OS-temp `mkdtemp` path). The validate function rejects any DB path under a
-workspace directory when that workspace is also a registered project (the BFF enforces this by
-construction: `resolveUiDbPath` is called once at server start, not per-request, so the DB path
-is stable and does not interact with project path validation). Adding `~/.keiko/` to `.gitignore`
-is unnecessary (it is outside any repository) but `~/.keiko/` is documented in the runbook as
-the app-data directory.
+`homedir()/.keiko/keiko-ui.db`. The `KEIKO_UI_DATA_DIR` env var and the `--ui-db` option allow
+relocation (for tests: an OS-temp `mkdtemp` path) only to absolute, non-workspace, non-symlink
+locations. The BFF enforces the app-data boundary by construction: `resolveUiDbPath` is called
+once at server start, not per-request, so the DB path is stable and does not interact with
+project path validation. Adding `~/.keiko/` to `.gitignore` is unnecessary (it is outside any
+repository) but `~/.keiko/` is documented in the runbook as the app-data directory.
 
 **Reuse-unchanged invariant.** Zero edits to `src/{gateway,harness,workspace,tools,
 verification,workflows,audit}`. The existing twelve routes (ADR-0011 D5) are not modified; they
@@ -412,8 +421,8 @@ WAL mode (`PRAGMA journal_mode = WAL`) is set at DB open. WAL allows a reader to
 concurrently with a single writer at the SQLite level; in practice, for this single-process
 server, WAL's primary benefit is that a crash or signal mid-write leaves the DB in a clean state
 (WAL frames are rolled back or replayed on the next open), not a torn journal. The WAL sidecar
-files (`ui.db-wal`, `ui.db-shm`) are part of the normal operation and are documented in the
-runbook.
+files (`keiko-ui.db-wal`, `keiko-ui.db-shm`) are part of the normal operation and are documented
+in the runbook.
 
 `DatabaseSync`'s blocking behaviour means the store must not be called from within an SSE event
 callback or any hot path that could starve the event loop for meaningful durations. Route handlers
@@ -473,25 +482,22 @@ migration (`user_version` 2) under a follow-up issue.
 - **Blocking event loop on store operations.** `DatabaseSync` is synchronous. While operations
   are fast and infrequent, any future bulk-write requirement would require a worker-thread
   migration. This is documented as a known constraint.
-- **WAL sidecar files.** WAL mode creates `ui.db-wal` and `ui.db-shm` alongside `ui.db`. These
-  are normal and safe but may surprise developers who inspect `~/.keiko/` directly.
+- **WAL sidecar files.** WAL mode creates `keiko-ui.db-wal` and `keiko-ui.db-shm` alongside
+  `keiko-ui.db`. These are normal and safe but may surprise developers who inspect `~/.keiko/`
+  directly.
 - **Single-process, local-only persistence.** The DB cannot be shared across machines or users.
   This is a stated scope boundary for the local developer UI, not a bug.
 
 ### Neutral
 
-- `homedir()/.keiko/ui.db` is the default DB path; `~/.keiko/` is outside any repository and
+- `homedir()/.keiko/keiko-ui.db` is the default DB path; `~/.keiko/` is outside any repository and
   does not need a `.gitignore` entry (contrast with `.keiko/evidence/` which IS inside the repo).
-- A test-injected `KEIKO_UI_DB` env var mirrors `KEIKO_EVIDENCE_DIR`; both follow the same
-  precedence pattern.
+- A test-injected `KEIKO_UI_DATA_DIR` env var mirrors the data-directory precedence pattern used
+  by other local Keiko stores.
 - `STRICT` tables catch type mismatches at the SQLite level; no separate schema-validation
   library is needed.
 - Cascade deletes (`ON DELETE CASCADE`) mean `deleteProject` removes all chats and messages for
   that project in one SQL operation without BFF-layer loop logic.
-
-### Known follow-ups
-
-- L1 hardening: chmod-follows-symlink path-pivot defense pending; tracked separately.
 
 ## Alternatives Considered
 
@@ -588,7 +594,7 @@ process so that DB operations do not block the main event loop.
 - ADR-0010: Audit Ledger and Evidence Manifests — `EvidenceStore` port pattern mirrored by
   `UiStore`; `resolveEvidenceDir` pattern mirrored by `resolveUiDbPath`; `createAuditRedactor` /
   `deepRedactStrings` reused for `short_result` redaction before persist; DB path is
-  `~/.keiko/ui.db` (user-level, not workspace-relative, contrast with evidence's
+  `~/.keiko/keiko-ui.db` (user-level, not workspace-relative, contrast with evidence's
   `.keiko/evidence/`).
 - ADR-0011: Wave-1 User Interface and Packaging — `UiHandlerDeps` injection pattern extended;
   `SECURITY_HEADERS` + error envelope reused; static-export constraint governs query-parameter

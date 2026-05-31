@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchWorkspaceSummary } from "./api";
+import { deleteChat, deleteProject, fetchWorkspaceSummary } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -45,6 +45,63 @@ describe("fetchWorkspaceSummary", () => {
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),
+    );
+  });
+});
+
+describe("delete helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("treats 204 DELETE responses as success", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await deleteProject("/repo/project");
+    await deleteChat("chat-123");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/projects?path=%2Frepo%2Fproject",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/chats?id=chat-123",
+      expect.objectContaining({
+        method: "DELETE",
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
+  });
+
+  it("propagates fetch network errors for deleteProject and deleteChat", async () => {
+    const networkError = new TypeError("fetch failed");
+    const fetchMock = vi.fn().mockRejectedValue(networkError);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(deleteProject("/repo/project")).rejects.toBe(networkError);
+    await expect(deleteChat("chat-123")).rejects.toBe(networkError);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/projects?path=%2Frepo%2Fproject",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/chats?id=chat-123",
+      expect.objectContaining({ method: "DELETE" }),
     );
   });
 });

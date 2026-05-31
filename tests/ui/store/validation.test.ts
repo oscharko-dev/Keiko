@@ -41,7 +41,7 @@ describe("validateProjectPath — happy path", () => {
   });
 
   it("accepts a path with redundant separators and normalizes", () => {
-    const messy = realDir.replace(/\//g, "//");
+    const messy = `/${realDir.slice(1).replace(/\//g, "//")}`;
     const out = validateProjectPath(messy, { mustExist: true });
     expect(out).toBe(realDir);
   });
@@ -80,6 +80,31 @@ describe("validateProjectPath — fail-closed", () => {
       () => validateProjectPath("file:///etc/passwd", { mustExist: false }),
       "invalid_path",
     );
+  });
+
+  it("rejects Windows drive paths → invalid_path", () => {
+    expectCode(
+      () => validateProjectPath("C:\\Users\\dev\\repo", { mustExist: false }),
+      "invalid_path",
+    );
+  });
+
+  it("rejects Windows UNC paths → invalid_path", () => {
+    expectCode(
+      () => validateProjectPath("\\\\server\\share\\repo", { mustExist: false }),
+      "invalid_path",
+    );
+  });
+
+  it("rejects forward-slash UNC paths → invalid_path", () => {
+    expectCode(
+      () => validateProjectPath("//server/share/repo", { mustExist: false }),
+      "invalid_path",
+    );
+  });
+
+  it("rejects Windows-style traversal segments → invalid_path", () => {
+    expectCode(() => validateProjectPath("/tmp\\..\\etc", { mustExist: false }), "invalid_path");
   });
 
   it("rejects a path with a /../ traversal segment → invalid_path", () => {

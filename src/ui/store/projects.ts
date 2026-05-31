@@ -25,10 +25,14 @@ function rowToProject(row: ProjectRow): Project {
 const SQL_LIST = "SELECT path, name, favorite, created_at, last_opened_at FROM projects ORDER BY path";
 const SQL_GET = "SELECT path, name, favorite, created_at, last_opened_at FROM projects WHERE path = ?";
 // UPSERT: if path already exists, bump last_opened_at; createdAt is preserved by ON CONFLICT DO UPDATE.
+// A re-add with an explicit name repairs the display name; implicit basename derivation never
+// overwrites a user-chosen existing name.
 const SQL_UPSERT = `
 INSERT INTO projects (path, name, favorite, created_at, last_opened_at)
 VALUES (?, ?, 0, ?, ?)
-ON CONFLICT(path) DO UPDATE SET last_opened_at = excluded.last_opened_at
+ON CONFLICT(path) DO UPDATE SET
+  name = CASE WHEN ? THEN excluded.name ELSE name END,
+  last_opened_at = excluded.last_opened_at
 RETURNING path, name, favorite, created_at, last_opened_at
 `;
 const SQL_UPDATE = `
@@ -54,11 +58,12 @@ export function upsertProject(
   db: DatabaseSync,
   normalizedPath: string,
   name: string,
+  hasExplicitName: boolean,
   now: number,
 ): Project {
   const row = db
     .prepare(SQL_UPSERT)
-    .get(normalizedPath, name, now, now) as unknown as ProjectRow;
+    .get(normalizedPath, name, now, now, hasExplicitName ? 1 : 0) as unknown as ProjectRow;
   return rowToProject(row);
 }
 

@@ -76,7 +76,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
   const create = (path: string, name?: string): Project => {
     const normalized = validateProjectPath(path, { mustExist: true });
     const resolvedName = deriveProjectName(name, normalized);
-    return sqlUpsertProject(db, normalized, resolvedName, options.now());
+    return sqlUpsertProject(db, normalized, resolvedName, name !== undefined, options.now());
   };
   const update = (path: string, patch: UpdateProjectPatch): Project => {
     const normalized = validateProjectPath(path, { mustExist: false });
@@ -179,14 +179,15 @@ export function createNodeUiStore(dbPath: string, opts?: UiStoreFactoryOptions):
   let db = preparedDatabase(dbPath);
   try {
     db.exec("PRAGMA journal_mode = WAL");
+    runMigrations(db);
   } catch {
     // Corrupt DB: quarantine (rename to .corrupt.<iso>) and open a fresh one.
     db.close();
     quarantineCorruptDb(dbPath);
     db = preparedDatabase(dbPath);
     db.exec("PRAGMA journal_mode = WAL");
+    runMigrations(db);
   }
-  runMigrations(db);
   chmodIfPresent(dbPath, 0o600);
   chmodIfPresent(`${dbPath}-wal`, 0o600);
   chmodIfPresent(`${dbPath}-shm`, 0o600);

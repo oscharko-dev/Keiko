@@ -33,7 +33,7 @@ afterEach(() => {
 
 describe("createProject", () => {
   it("normalizes the supplied path and stores absolute form", () => {
-    const messy = projA.replace(/\//g, "//");
+    const messy = `/${projA.slice(1).replace(/\//g, "//")}`;
     const p = store.createProject(messy);
     expect(p.path).toBe(projA);
     expect(p.name).toBe("a");
@@ -54,6 +54,24 @@ describe("createProject", () => {
     expect(p2.lastOpenedAt).toBeGreaterThan(p1.lastOpenedAt);
     expect(p2.createdAt).toBe(p1.createdAt);
     expect(store.listProjects()).toHaveLength(1);
+  });
+
+  it("repairs the display name when a duplicate path is re-added with an explicit name", () => {
+    const p1 = store.createProject(projA);
+    const p2 = store.createProject(projA, "Reconnected Project");
+    expect(p2.path).toBe(p1.path);
+    expect(p2.name).toBe("Reconnected Project");
+    expect(p2.createdAt).toBe(p1.createdAt);
+    expect(p2.lastOpenedAt).toBeGreaterThan(p1.lastOpenedAt);
+    expect(store.listProjects()).toHaveLength(1);
+  });
+
+  it("preserves an existing display name when a duplicate path is re-added without a name", () => {
+    const p1 = store.createProject(projA, "Pinned Name");
+    const p2 = store.createProject(projA);
+    expect(p2.name).toBe("Pinned Name");
+    expect(p2.createdAt).toBe(p1.createdAt);
+    expect(p2.lastOpenedAt).toBeGreaterThan(p1.lastOpenedAt);
   });
 
   it("rejects an invalid path via UiStoreError", () => {

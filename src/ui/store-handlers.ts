@@ -6,6 +6,7 @@ import type { IncomingMessage } from "node:http";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { findCapability } from "../gateway/index.js";
 import {
   UiStoreError,
   isProjectAvailable,
@@ -135,6 +136,25 @@ function optionalString(body: Record<string, unknown>, name: string): string | u
   if (v === undefined) return undefined;
   if (typeof v !== "string") throw new InvalidRequest(`Field "${name}" must be a string.`);
   return v;
+}
+
+function assertChatModelRegistryId(modelId: string): void {
+  const capability = findCapability(modelId);
+  if (capability?.kind !== "chat") {
+    throw new InvalidRequest('Field "selectedModel" must be a chat model registry id.');
+  }
+}
+
+function requireChatModelId(body: Record<string, unknown>, name: string): string {
+  const modelId = requireString(body, name);
+  assertChatModelRegistryId(modelId);
+  return modelId;
+}
+
+function optionalChatModelId(body: Record<string, unknown>, name: string): string | undefined {
+  const modelId = optionalString(body, name);
+  if (modelId !== undefined) assertChatModelRegistryId(modelId);
+  return modelId;
 }
 
 function optionalBoolean(body: Record<string, unknown>, name: string): boolean | undefined {
@@ -269,7 +289,7 @@ export async function handleUpdateProject(
     const body = await readJsonObject(ctx.req);
     const patch = buildProjectPatch(body);
     const project = deps.store.updateProject(targetPath, patch);
-    return { status: 200, body: { project } };
+    return { status: 200, body: { project: projectWithAvailability(project) } };
   });
 }
 
@@ -322,7 +342,7 @@ export async function handleCreateChat(
     const body = await readJsonObject(ctx.req);
     const projectPath = requireString(body, "projectPath");
     const title = requireString(body, "title");
-    const selectedModel = requireString(body, "selectedModel");
+    const selectedModel = requireChatModelId(body, "selectedModel");
     const branchLabel = optionalString(body, "branchLabel");
     const chat = deps.store.createChat(
       projectPath,
@@ -340,7 +360,7 @@ export async function handleCreateChat(
 
 function buildChatPatch(body: Record<string, unknown>): UpdateChatPatch {
   const title = optionalString(body, "title");
-  const selectedModel = optionalString(body, "selectedModel");
+  const selectedModel = optionalChatModelId(body, "selectedModel");
   const branchLabel = optionalString(body, "branchLabel");
   const statusRaw = body.status;
   const patch: UpdateChatPatch = {
