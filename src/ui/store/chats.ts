@@ -4,6 +4,21 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Chat, CreateChatOptions, UpdateChatPatch } from "./types.js";
 import { invalidRequest, notFound } from "./errors.js";
 
+const MAX_SELECTED_MODEL_LEN = 160;
+const SELECTED_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._/\- ]*$/;
+const FORBIDDEN_SELECTED_MODEL_TERMS = [
+  "apiKey",
+  "api_key",
+  "baseUrl",
+  "base_url",
+  "provider",
+  "deployment",
+  "endpoint",
+  "secret",
+  "token",
+  "credential",
+] as const;
+
 interface ChatRow {
   readonly id: string;
   readonly project_path: string;
@@ -51,6 +66,21 @@ RETURNING id, project_path, title, selected_model, branch_label, status, created
 const SQL_DELETE = "DELETE FROM chats WHERE id = ?";
 const SQL_PROJECT_EXISTS = "SELECT 1 FROM projects WHERE path = ?";
 
+function validateSelectedModel(value: string): void {
+  if (value.length === 0) throw invalidRequest("selectedModel is required.");
+  if (value.length > MAX_SELECTED_MODEL_LEN || !SELECTED_MODEL_RE.test(value)) {
+    throw invalidRequest("selectedModel must be a registry id.");
+  }
+  const lower = value.toLowerCase();
+  if (
+    value.includes("://") ||
+    value.trim().startsWith("{") ||
+    FORBIDDEN_SELECTED_MODEL_TERMS.some((term) => lower.includes(term.toLowerCase()))
+  ) {
+    throw invalidRequest("selectedModel must be a registry id.");
+  }
+}
+
 export function listChats(db: DatabaseSync, projectPath: string): readonly Chat[] {
   return (db.prepare(SQL_LIST).all(projectPath) as unknown as ChatRow[]).map(rowToChat);
 }
@@ -72,7 +102,7 @@ export function insertChat(
   },
 ): Chat {
   if (args.title.length === 0) throw invalidRequest("Title is required.");
-  if (args.selectedModel.length === 0) throw invalidRequest("selectedModel is required.");
+  validateSelectedModel(args.selectedModel);
   const projectExists = db.prepare(SQL_PROJECT_EXISTS).get(args.projectPath) !== undefined;
   if (!projectExists) throw notFound("Project");
   const branch = args.opts?.branchLabel ?? null;
@@ -107,6 +137,7 @@ export function updateChat(
   now: number,
 ): Chat {
   validateChatPatch(patch);
+  if (patch.selectedModel !== undefined) validateSelectedModel(patch.selectedModel);
   const titleParam = patch.title ?? null;
   const modelParam = patch.selectedModel ?? null;
   const branchParam = patch.branchLabel ?? null;

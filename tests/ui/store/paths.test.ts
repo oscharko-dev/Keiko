@@ -1,18 +1,46 @@
 // ADR-0013 D4 — resolveUiDbPath precedence: explicit → KEIKO_UI_DATA_DIR/keiko-ui.db → ~/.keiko/keiko-ui.db.
 
-import { describe, expect, it } from "vitest";
-import { resolveUiDbPath } from "../../../src/ui/store/index.js";
-import { homedir } from "node:os";
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { resolveUiDbPath, UiStoreError } from "../../../src/ui/store/index.js";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+
+const cleanup: string[] = [];
+
+afterEach(() => {
+  for (const path of cleanup.splice(0)) {
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
+function makeTempDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "keiko-paths-"));
+  cleanup.push(dir);
+  return dir;
+}
+
+function expectCode(fn: () => unknown, code: string): void {
+  try {
+    fn();
+  } catch (e) {
+    expect(e).toBeInstanceOf(UiStoreError);
+    expect((e as UiStoreError).code).toBe(code);
+    return;
+  }
+  expect.unreachable(`expected ${code}`);
+}
 
 describe("resolveUiDbPath", () => {
   it("prefers an explicit path when supplied", () => {
-    expect(resolveUiDbPath("/tmp/x.db", { KEIKO_UI_DATA_DIR: "/ignored" })).toBe("/tmp/x.db");
+    const dbPath = join(makeTempDir(), "x.db");
+    expect(resolveUiDbPath(dbPath, { KEIKO_UI_DATA_DIR: "/ignored" })).toBe(dbPath);
   });
 
   it("uses KEIKO_UI_DATA_DIR + keiko-ui.db when no explicit value", () => {
-    expect(resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: "/data" })).toBe(
-      join("/data", "keiko-ui.db"),
+    const dataDir = makeTempDir();
+    expect(resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: dataDir })).toBe(
+      join(dataDir, "keiko-ui.db"),
     );
   });
 
@@ -21,12 +49,35 @@ describe("resolveUiDbPath", () => {
   });
 
   it("treats an empty explicit string as not set", () => {
-    expect(resolveUiDbPath("", { KEIKO_UI_DATA_DIR: "/data" })).toBe(join("/data", "keiko-ui.db"));
+    const dataDir = makeTempDir();
+    expect(resolveUiDbPath("", { KEIKO_UI_DATA_DIR: dataDir })).toBe(
+      join(dataDir, "keiko-ui.db"),
+    );
   });
 
   it("treats an empty env value as not set", () => {
     expect(resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: "" })).toBe(
       join(homedir(), ".keiko", "keiko-ui.db"),
     );
+  });
+
+  it("rejects a relative explicit path", () => {
+    expectCode(() => resolveUiDbPath("keiko-ui.db", {}), "invalid_request");
+  });
+
+  it("rejects a relative KEIKO_UI_DATA_DIR value", () => {
+    expectCode(() => resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: "." }), "invalid_request");
+  });
+
+  it("rejects an explicit database path inside the current workspace", () => {
+    expectCode(() => resolveUiDbPath(join(process.cwd(), "keiko-ui.db"), {}), "invalid_request");
+  });
+
+  it("rejects a symlinked data directory", () => {
+    if (process.platform === "win32") return;
+    const target = makeTempDir();
+    const link = join(makeTempDir(), "data-link");
+    symlinkSync(target, link, "dir");
+    expectCode(() => resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: link }), "invalid_request");
   });
 });
