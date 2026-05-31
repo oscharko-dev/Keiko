@@ -4,9 +4,8 @@ import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode, KeyboardEvent, Ref } from "react";
 import {
   ApiError,
-  createChatMessage,
   fetchModels,
-  startRun,
+  startChatRun,
   updateChat,
 } from "@/lib/api";
 import type {
@@ -309,26 +308,19 @@ export function ChatComposer({
     try {
       const modelOk = await persistModelChange();
       if (!modelOk) return;
-      await createChatMessage({
+      const timestamp = Date.now();
+      await startChatRun({
         chatId,
         projectPath: project.path,
-        role: "user",
-        content: userMessageContent(mode, workflowText),
-        timestamp: Date.now(),
-      });
-      const run = await startRun(payload);
-      await createChatMessage({
-        chatId,
-        projectPath: project.path,
-        role: "system",
-        content: `${modeLabel(mode)} started`,
-        timestamp: Date.now(),
-        runId: run.runId,
-        ...(payload.workflowId === undefined ? {} : { workflowId: payload.workflowId }),
-        // Issue #66 — non-workflow task runs (verify, explain-plan) carry taskType so the
-        // chat renders an unambiguous label instead of "Workflow run".
-        ...(payload.taskType === undefined ? {} : { taskType: payload.taskType }),
-        workflowStatus: "running",
+        run: payload,
+        user: {
+          content: userMessageContent(mode, workflowText),
+          timestamp,
+        },
+        summary: {
+          content: `${modeLabel(mode)} started`,
+          timestamp: timestamp + 1,
+        },
       });
       setText("");
       setSendState({ kind: "idle" });

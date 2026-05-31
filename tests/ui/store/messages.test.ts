@@ -78,7 +78,7 @@ describe("createMessage", () => {
   it("persists optional workflow ref columns", () => {
     const m = store.createMessage({
       chatId,
-      role: "assistant",
+      role: "system",
       content: "ok",
       timestamp: 200,
       runId: "run-1",
@@ -93,17 +93,49 @@ describe("createMessage", () => {
     expect(m.shortResult).toBe("all good");
   });
 
+  it("rejects run summary fields on non-system messages", () => {
+    expect(() =>
+      store.createMessage({
+        chatId,
+        role: "assistant",
+        content: "ok",
+        timestamp: 200,
+        runId: "run-1",
+        workflowId: "unit-tests",
+        workflowStatus: "completed",
+        shortResult: "all good",
+        taskType: undefined,
+      }),
+    ).toThrow(UiStoreError);
+  });
+
+  it("rejects run summary fields without a runId", () => {
+    expect(() =>
+      store.createMessage({
+        chatId,
+        role: "system",
+        content: "Verify started",
+        timestamp: 200,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: "running",
+        shortResult: undefined,
+        taskType: "verify",
+      }),
+    ).toThrow(UiStoreError);
+  });
+
   it("redacts shortResult before persist (no secret on disk)", () => {
     const m = store.createMessage({
       chatId,
-      role: "assistant",
+      role: "system",
       content: "this content is NOT redacted",
       timestamp: 1,
-      runId: undefined,
+      runId: "run-redacted",
       workflowId: undefined,
-      workflowStatus: undefined,
+      workflowStatus: "running",
       shortResult: "leaked SECRET-TOKEN here",
-      taskType: undefined,
+      taskType: "verify",
     });
     expect(m.shortResult).toBe("leaked [REDACTED] here");
     // Reload from DB; redaction is at-rest.
@@ -115,14 +147,14 @@ describe("createMessage", () => {
     const huge = "x".repeat(500);
     const m = store.createMessage({
       chatId,
-      role: "assistant",
+      role: "system",
       content: "c",
       timestamp: 1,
-      runId: undefined,
+      runId: "run-truncated",
       workflowId: undefined,
-      workflowStatus: undefined,
+      workflowStatus: "running",
       shortResult: huge,
-      taskType: undefined,
+      taskType: "verify",
     });
     expect(m.shortResult?.length).toBeLessThanOrEqual(200);
   });
@@ -171,6 +203,22 @@ describe("createMessage", () => {
         workflowStatus: undefined,
         shortResult: undefined,
         taskType: undefined,
+      }),
+    ).toThrow(UiStoreError);
+  });
+
+  it("rejects an empty runId when run summary fields are present", () => {
+    expect(() =>
+      store.createMessage({
+        chatId,
+        role: "system",
+        content: "Verify started",
+        timestamp: 1,
+        runId: "",
+        workflowId: undefined,
+        workflowStatus: "running",
+        shortResult: undefined,
+        taskType: "verify",
       }),
     ).toThrow(UiStoreError);
   });
@@ -242,6 +290,67 @@ describe("createMessage — cancelled + taskType (issue #66)", () => {
   });
 });
 
+describe("createMessages (issue #66 atomic composer write)", () => {
+  it("persists the user message and system run summary in one ordered batch", () => {
+    const created = store.createMessages([
+      {
+        chatId,
+        role: "user",
+        content: "Verify requested.",
+        timestamp: 10,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      {
+        chatId,
+        role: "system",
+        content: "Verify started",
+        timestamp: 11,
+        runId: "run-batch",
+        workflowId: undefined,
+        workflowStatus: "running",
+        shortResult: undefined,
+        taskType: "verify",
+      },
+    ]);
+    expect(created).toHaveLength(2);
+    expect(store.listMessages(chatId).map((m) => m.role)).toEqual(["user", "system"]);
+  });
+
+  it("rolls back the whole batch when the run summary row is invalid", () => {
+    expect(() =>
+      store.createMessages([
+        {
+          chatId,
+          role: "user",
+          content: "Verify requested.",
+          timestamp: 10,
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: undefined,
+          shortResult: undefined,
+          taskType: undefined,
+        },
+        {
+          chatId,
+          role: "system",
+          content: "Verify started",
+          timestamp: 11,
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: "running",
+          shortResult: undefined,
+          taskType: "verify",
+        },
+      ]),
+    ).toThrow(UiStoreError);
+    expect(store.listMessages(chatId)).toHaveLength(0);
+  });
+});
+
 describe("updateMessage (issue #66)", () => {
   it("patches workflowStatus + shortResult + taskType together", () => {
     const created = store.createMessage({
@@ -286,6 +395,23 @@ describe("updateMessage (issue #66)", () => {
 
   it("throws on an unknown message id (404 shape)", () => {
     expect(() => store.updateMessage("no-such-id", { workflowStatus: "completed" })).toThrow(
+      UiStoreError,
+    );
+  });
+
+  it("rejects patching a non-run-summary message", () => {
+    const created = store.createMessage({
+      chatId,
+      role: "user",
+      content: "ordinary chat note",
+      timestamp: 12,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    expect(() => store.updateMessage(created.id, { workflowStatus: "completed" })).toThrow(
       UiStoreError,
     );
   });

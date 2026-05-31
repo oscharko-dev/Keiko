@@ -3,9 +3,9 @@
 //   AC2 — DOM order matches registry-fixture order
 //   AC3 — default selection picks chat.selectedModel when present in the chat slice
 //   AC4 — empty chat slice: submit disabled + role="alert" "No chat models available"
-//   AC5 — picking a different model: updateChat PATCHes BEFORE startRun
-//   AC6 — per-mode startRun payload (4 modes)
-//   AC7 — every startRun payload has input.workspaceRoot === project.path and the picked modelId
+//   AC5 — picking a different model: updateChat PATCHes BEFORE startChatRun
+//   AC6 — per-mode startChatRun payload (4 modes)
+//   AC7 — every startChatRun payload has input.workspaceRoot === project.path and the picked modelId
 //   AC8 — security anti-leak: payloads never contain provider keys; /api/config never fetched
 //   AC9 — explicit OCR/embedding exclusion in the dropdown <option> set
 // Plus: disabled-state matrix, keyboard behaviour, axe across UI states, and a production-
@@ -95,11 +95,10 @@ function makeChat(selectedModel: string): Chat {
 // ---------------------------------------------------------------------------
 
 vi.mock("@/lib/api", () => ({
-  createChatMessage: vi.fn(),
+  startChatRun: vi.fn(),
   fetchModels: vi.fn(),
   fetchConfig: vi.fn(),
   updateChat: vi.fn(),
-  startRun: vi.fn(),
   ApiError: class ApiError extends Error {
     code: string;
     status: number;
@@ -112,16 +111,19 @@ vi.mock("@/lib/api", () => ({
   },
 }));
 
-const startRunOk = { runId: "run-1", fingerprint: "f" };
+const startChatRunOk = {
+  run: { runId: "run-1", fingerprint: "f" },
+  messages: [
+    { id: "user-m", chatId: "chat-1", role: "user", content: "x", timestamp: 0 },
+    { id: "system-m", chatId: "chat-1", role: "system", content: "s", timestamp: 1 },
+  ],
+} as const;
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.fetchModels).mockResolvedValue({ models: [...REGISTRY_FIXTURE] });
-  vi.mocked(api.createChatMessage).mockResolvedValue({
-    message: { id: "m", chatId: "chat-1", role: "user", content: "x", timestamp: 0 },
-  });
   vi.mocked(api.updateChat).mockResolvedValue({ chat: makeChat("Mistral-Small-3.1-24B-Instruct-2503") });
-  vi.mocked(api.startRun).mockResolvedValue(startRunOk);
+  vi.mocked(api.startChatRun).mockResolvedValue(startChatRunOk);
 });
 
 function renderComposer(chat = makeChat("Mistral-Small-3.1-24B-Instruct-2503")): void {
@@ -241,17 +243,17 @@ describe("AC4 — no chat models: alert + submit disabled", () => {
     expect(screen.getByRole("button", { name: /send message/i })).toBeDisabled();
   });
 
-  it("does not call startRun even when the user clicks send", async () => {
+  it("does not call startChatRun even when the user clicks send", async () => {
     vi.mocked(api.fetchModels).mockResolvedValueOnce({ models: [] });
     const user = userEvent.setup();
     renderComposer();
     await waitFor(() => screen.getByRole("alert"));
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    expect(api.startRun).not.toHaveBeenCalled();
+    expect(api.startChatRun).not.toHaveBeenCalled();
   });
 });
 
-describe("AC5 — picking a different model PATCHes the chat before startRun", () => {
+describe("AC5 — picking a different model PATCHes the chat before startChatRun", () => {
   it("persists the selected model id immediately without starting a run", async () => {
     const user = userEvent.setup();
     renderComposer();
@@ -265,19 +267,19 @@ describe("AC5 — picking a different model PATCHes the chat before startRun", (
         selectedModel: "Qwen2.5-Coder-7B-Instruct",
       });
     });
-    expect(api.startRun).not.toHaveBeenCalled();
+    expect(api.startChatRun).not.toHaveBeenCalled();
   });
 
-  it("calls updateChat with the new model id BEFORE startRun", async () => {
+  it("calls updateChat with the new model id BEFORE startChatRun", async () => {
     const user = userEvent.setup();
     const callOrder: string[] = [];
     vi.mocked(api.updateChat).mockImplementation((id, patch) => {
       callOrder.push(`updateChat:${patch.selectedModel ?? ""}`);
       return Promise.resolve({ chat: makeChat(patch.selectedModel ?? "") });
     });
-    vi.mocked(api.startRun).mockImplementation((body) => {
-      callOrder.push(`startRun:${body.modelId}`);
-      return Promise.resolve(startRunOk);
+    vi.mocked(api.startChatRun).mockImplementation((body) => {
+      callOrder.push(`startChatRun:${body.run.modelId}`);
+      return Promise.resolve(startChatRunOk);
     });
     renderComposer();
     await waitForReady();
@@ -286,11 +288,11 @@ describe("AC5 — picking a different model PATCHes the chat before startRun", (
     await waitFor(() => expect(api.updateChat).toHaveBeenCalledTimes(1));
     await selectMode("Verify");
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
     expect(api.updateChat).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual([
       "updateChat:Qwen2.5-Coder-7B-Instruct",
-      "startRun:Qwen2.5-Coder-7B-Instruct",
+      "startChatRun:Qwen2.5-Coder-7B-Instruct",
     ]);
   });
 
@@ -300,7 +302,7 @@ describe("AC5 — picking a different model PATCHes the chat before startRun", (
     await waitForReady();
     await selectMode("Verify");
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
     expect(api.updateChat).not.toHaveBeenCalled();
   });
 
@@ -323,19 +325,19 @@ describe("AC5 — picking a different model PATCHes the chat before startRun", (
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
     // The dropdown must show a valid option, not a blank/unavailable ID.
     expect(combo.value).toBe("Mistral-Small-3.1-24B-Instruct-2503");
-    expect(api.startRun).not.toHaveBeenCalled();
+    expect(api.startChatRun).not.toHaveBeenCalled();
   });
 });
 
-describe("AC6 + AC7 — per-mode startRun payload", () => {
+describe("AC6 + AC7 — per-mode startChatRun payload", () => {
   it("Generate Tests sends workflowId=unit-test-generation with the moduleDir target", async () => {
     const user = userEvent.setup();
     renderComposer();
     await waitForReady();
     await selectMode("Generate Tests");
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
-    const arg = vi.mocked(api.startRun).mock.calls[0]?.[0];
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
+    const arg = vi.mocked(api.startChatRun).mock.calls[0]?.[0].run;
     expect(arg).toBeDefined();
     expect(arg).toMatchObject({
       workflowId: "unit-test-generation",
@@ -345,9 +347,7 @@ describe("AC6 + AC7 — per-mode startRun payload", () => {
         workspaceRoot: "/repo",
       },
     });
-    const userMessage = vi.mocked(api.createChatMessage).mock.calls.find(
-      (call) => call[0].role === "user",
-    )?.[0];
+    const userMessage = vi.mocked(api.startChatRun).mock.calls[0]?.[0].user;
     expect(userMessage?.content).toBe("Generate Tests requested.");
   });
 
@@ -358,8 +358,8 @@ describe("AC6 + AC7 — per-mode startRun payload", () => {
     await selectMode("Investigate Bug");
     await user.type(screen.getByRole("textbox", { name: /message/i }), "NPE on login");
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
-    const arg = vi.mocked(api.startRun).mock.calls[0]?.[0];
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
+    const arg = vi.mocked(api.startChatRun).mock.calls[0]?.[0].run;
     expect(arg).toMatchObject({
       workflowId: "bug-investigation",
       modelId: "Mistral-Small-3.1-24B-Instruct-2503",
@@ -379,8 +379,8 @@ describe("AC6 + AC7 — per-mode startRun payload", () => {
     await user.keyboard("{Shift>}{Enter}{/Shift}");
     await user.type(textarea, "what does it do?");
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
-    const arg = vi.mocked(api.startRun).mock.calls[0]?.[0];
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
+    const arg = vi.mocked(api.startChatRun).mock.calls[0]?.[0].run;
     expect(arg).toMatchObject({
       taskType: "explain-plan",
       modelId: "Mistral-Small-3.1-24B-Instruct-2503",
@@ -394,82 +394,88 @@ describe("AC6 + AC7 — per-mode startRun payload", () => {
     await waitForReady();
     await selectMode("Verify");
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
-    const arg = vi.mocked(api.startRun).mock.calls[0]?.[0];
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
+    const arg = vi.mocked(api.startChatRun).mock.calls[0]?.[0].run;
     expect(arg).toMatchObject({
       taskType: "verify",
       modelId: "Mistral-Small-3.1-24B-Instruct-2503",
       input: { workspaceRoot: "/repo" },
     });
-    const userMessage = vi.mocked(api.createChatMessage).mock.calls.find(
-      (call) => call[0].role === "user",
-    )?.[0];
+    const userMessage = vi.mocked(api.startChatRun).mock.calls[0]?.[0].user;
     expect(userMessage?.content).toBe("Verify requested.");
   });
 });
 
-// Issue #66 — the system run-summary message carries the right discriminator. Workflow runs
-// carry workflowId; task runs carry taskType. createChatMessage is called exactly twice (user
-// + system) per AC1.
-describe("AC1 (#66) — system run-summary message discriminator", () => {
-  function systemCallArg(): Record<string, unknown> | undefined {
-    const calls = vi.mocked(api.createChatMessage).mock.calls;
-    const found = calls.find((c) => (c[0] as { role?: string }).role === "system");
-    return found?.[0] as Record<string, unknown> | undefined;
+// Issue #66 — workflow runs carry workflowId; task runs carry taskType. The composer sends one
+// server-side launch request that persists the user/system pair and starts the run as a BFF unit.
+describe("AC1 (#66) — chat-run launch request discriminator", () => {
+  function runCallArg(): Record<string, unknown> | undefined {
+    return vi.mocked(api.startChatRun).mock.calls[0]?.[0].run as
+      | Record<string, unknown>
+      | undefined;
   }
 
-  it("Verify run summary carries taskType=verify and no workflowId", async () => {
+  it("Verify launch carries taskType=verify and no workflowId", async () => {
     const user = userEvent.setup();
     renderComposer();
     await waitForReady();
     await selectMode("Verify");
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
-    expect(vi.mocked(api.createChatMessage)).toHaveBeenCalledTimes(2);
-    const sys = systemCallArg();
-    expect(sys).toBeDefined();
-    expect(sys?.taskType).toBe("verify");
-    expect(sys?.workflowId).toBeUndefined();
-    expect(sys?.workflowStatus).toBe("running");
-    expect(sys?.runId).toBe("run-1");
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.startChatRun)).toHaveBeenCalledTimes(1);
+    const run = runCallArg();
+    expect(run).toBeDefined();
+    expect(run?.taskType).toBe("verify");
+    expect(run?.workflowId).toBeUndefined();
   });
 
-  it("Explain Plan run summary carries taskType=explain-plan", async () => {
+  it("Explain Plan launch carries taskType=explain-plan", async () => {
     const user = userEvent.setup();
     renderComposer();
     await waitForReady();
     await selectMode("Explain Plan");
     await user.type(screen.getByRole("textbox", { name: /message/i }), "src/foo.ts");
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
-    const sys = systemCallArg();
-    expect(sys?.taskType).toBe("explain-plan");
-    expect(sys?.workflowId).toBeUndefined();
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
+    const run = runCallArg();
+    expect(run?.taskType).toBe("explain-plan");
+    expect(run?.workflowId).toBeUndefined();
   });
 
-  it("Generate Tests run summary carries workflowId and no taskType", async () => {
+  it("Generate Tests launch carries workflowId and no taskType", async () => {
     const user = userEvent.setup();
     renderComposer();
     await waitForReady();
     await selectMode("Generate Tests");
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
-    const sys = systemCallArg();
-    expect(sys?.workflowId).toBe("unit-test-generation");
-    expect(sys?.taskType).toBeUndefined();
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
+    const run = runCallArg();
+    expect(run?.workflowId).toBe("unit-test-generation");
+    expect(run?.taskType).toBeUndefined();
   });
 
-  it("Investigate Bug run summary carries workflowId=bug-investigation", async () => {
+  it("Investigate Bug launch carries workflowId=bug-investigation", async () => {
     const user = userEvent.setup();
     renderComposer();
     await waitForReady();
     await selectMode("Investigate Bug");
     await user.type(screen.getByRole("textbox", { name: /message/i }), "NPE");
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
-    const sys = systemCallArg();
-    expect(sys?.workflowId).toBe("bug-investigation");
-    expect(sys?.taskType).toBeUndefined();
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
+    const run = runCallArg();
+    expect(run?.workflowId).toBe("bug-investigation");
+    expect(run?.taskType).toBeUndefined();
+  });
+
+  it("surfaces an error when the server-side chat-run launch fails", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.startChatRun).mockRejectedValueOnce(new Error("run rejected"));
+    renderComposer();
+    await waitForReady();
+    await selectMode("Verify");
+    await user.click(screen.getByRole("button", { name: /send message/i }));
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("alert")).toHaveTextContent("Failed to send message.");
   });
 });
 
@@ -481,10 +487,7 @@ describe("AC8 — security anti-leak", () => {
       cleanup();
       vi.clearAllMocks();
       vi.mocked(api.fetchModels).mockResolvedValue({ models: [...REGISTRY_FIXTURE] });
-      vi.mocked(api.createChatMessage).mockResolvedValue({
-        message: { id: "m", chatId: "chat-1", role: "user", content: "x", timestamp: 0 },
-      });
-      vi.mocked(api.startRun).mockResolvedValue(startRunOk);
+      vi.mocked(api.startChatRun).mockResolvedValue(startChatRunOk);
       renderComposer();
       await waitForReady();
       await selectMode(mode);
@@ -492,22 +495,19 @@ describe("AC8 — security anti-leak", () => {
         await user.type(screen.getByRole("textbox", { name: /message/i }), "x");
       }
       await user.click(screen.getByRole("button", { name: /send message/i }));
-      await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
       expect(api.fetchConfig).not.toHaveBeenCalled();
     }
   });
 
-  it("startRun payloads contain no provider-config-shaped keys in any mode", async () => {
+  it("startChatRun payloads contain no provider-config-shaped keys in any mode", async () => {
     const user = userEvent.setup();
     const modes = ["Generate Tests", "Investigate Bug", "Explain Plan", "Verify"];
     for (const mode of modes) {
       cleanup();
       vi.clearAllMocks();
       vi.mocked(api.fetchModels).mockResolvedValue({ models: [...REGISTRY_FIXTURE] });
-      vi.mocked(api.createChatMessage).mockResolvedValue({
-        message: { id: "m", chatId: "chat-1", role: "user", content: "x", timestamp: 0 },
-      });
-      vi.mocked(api.startRun).mockResolvedValue(startRunOk);
+      vi.mocked(api.startChatRun).mockResolvedValue(startChatRunOk);
       renderComposer();
       await waitForReady();
       await selectMode(mode);
@@ -515,8 +515,8 @@ describe("AC8 — security anti-leak", () => {
         await user.type(screen.getByRole("textbox", { name: /message/i }), "x");
       }
       await user.click(screen.getByRole("button", { name: /send message/i }));
-      await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
-      const arg = vi.mocked(api.startRun).mock.calls[0]?.[0];
+      await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
+      const arg = vi.mocked(api.startChatRun).mock.calls[0]?.[0].run;
       expect(containsForbiddenKey(arg)).toBe(false);
     }
   });
@@ -605,8 +605,8 @@ describe("disabled state matrix", () => {
     await user.keyboard("{Shift>}{Enter}{/Shift}");
     await user.type(textarea, "Why?");
     await user.click(screen.getByRole("button", { name: /send message/i }));
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
-    const arg = vi.mocked(api.startRun).mock.calls[0]?.[0];
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
+    const arg = vi.mocked(api.startChatRun).mock.calls[0]?.[0].run;
     expect(arg).toMatchObject({
       taskType: "explain-plan",
       input: { filePath: "path/to/file.ts", question: "Why?", workspaceRoot: "/repo" },
@@ -664,9 +664,9 @@ describe("keyboard behaviour", () => {
     const textarea = screen.getByRole("textbox", { name: /message/i });
     await user.click(textarea);
     await user.keyboard("{Shift>}{Enter}{/Shift}");
-    expect(api.startRun).not.toHaveBeenCalled();
+    expect(api.startChatRun).not.toHaveBeenCalled();
     await user.keyboard("{Enter}");
-    await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.startChatRun).toHaveBeenCalledTimes(1));
   });
 });
 
@@ -790,8 +790,8 @@ describe("a11y — sending state announced via role=status (WCAG 4.1.3)", () => 
   it('role=status region reads "Sending message" while a send is in-flight', async () => {
     const user = userEvent.setup();
     let resolveSend!: () => void;
-    vi.mocked(api.startRun).mockImplementation(
-      () => new Promise<typeof startRunOk>((res) => { resolveSend = () => res(startRunOk); }),
+    vi.mocked(api.startChatRun).mockImplementation(
+      () => new Promise<typeof startChatRunOk>((res) => { resolveSend = () => res(startChatRunOk); }),
     );
     renderComposer();
     await waitForReady();

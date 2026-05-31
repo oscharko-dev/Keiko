@@ -1,4 +1,4 @@
-// BFF route dispatch (ADR-0011 D5). The twelve-route contract is wired here. The route TABLE
+// BFF route dispatch (ADR-0011 D5). The route contract is wired here. The route TABLE
 // (method + pattern) is static and dependency-free; each entry names a handler that receives the
 // request context AND the per-server handler dependencies (resolved config, evidence store, run
 // registry, redactor — see deps.ts). A handler returns a RouteResult (status + JSON body, which the
@@ -18,6 +18,7 @@ import {
 } from "./read-handlers.js";
 import {
   handleCreateRun,
+  handleCreateChatRun,
   handleRunEvents,
   handleCancelRun,
   handleGetRun,
@@ -34,6 +35,7 @@ import {
   handleDeleteChat,
   handleListMessages,
   handleCreateMessage,
+  handleCreateRunSummaryPair,
   handleUpdateMessage,
 } from "./store-handlers.js";
 
@@ -75,8 +77,8 @@ function health(): RouteResult {
   return { status: 200, body: { status: "ok", version: SDK_VERSION } };
 }
 
-// The full 22-route contract: the twelve original (ADR-0011 D5) plus the 10 additive UI-store
-// routes (ADR-0013 D7), in contract order.
+// The full 25-route contract: the twelve original (ADR-0011 D5), the 10 additive UI-store
+// routes (ADR-0013 D7), and three Issue #66 run-summary routes, in contract order.
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
   { method: "GET", pattern: "/api/config", handler: handleConfig },
@@ -97,10 +99,14 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "DELETE", pattern: "/api/projects", handler: handleDeleteProject },
   { method: "GET", pattern: "/api/chats", handler: handleListChats },
   { method: "POST", pattern: "/api/chats", handler: handleCreateChat },
+  // Issue #66 — composer launch path: persist chat pair and start the run as one BFF operation.
+  { method: "POST", pattern: "/api/chats/runs", handler: handleCreateChatRun },
   { method: "PATCH", pattern: "/api/chats", handler: handleUpdateChat },
   { method: "DELETE", pattern: "/api/chats", handler: handleDeleteChat },
   { method: "GET", pattern: "/api/chats/messages", handler: handleListMessages },
   { method: "POST", pattern: "/api/chats/messages", handler: handleCreateMessage },
+  // Issue #66 — atomic composer write: exactly one user message plus one run-summary system message.
+  { method: "POST", pattern: "/api/chats/messages/run-summary-pair", handler: handleCreateRunSummaryPair },
   // Issue #66 — PATCH a run-summary message (status/shortResult/taskType).
   { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
 ];

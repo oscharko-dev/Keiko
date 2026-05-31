@@ -29,14 +29,23 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 23 route contract (12 D5 + 10 D13 + 1 D15)", () => {
-    expect(API_ROUTES).toHaveLength(23);
+  it("declares the 25 route contract (12 D5 + 10 D13 + 3 D15)", () => {
+    expect(API_ROUTES).toHaveLength(25);
   });
 
-  it("includes the PATCH messages route (#66)", () => {
-    const route = API_ROUTES.find(
+  it("includes the run-summary message routes (#66)", () => {
+    const patchRoute = API_ROUTES.find(
       (r) => r.method === "PATCH" && r.pattern === "/api/chats/messages",
     );
+    const pairRoute = API_ROUTES.find(
+      (r) => r.method === "POST" && r.pattern === "/api/chats/messages/run-summary-pair",
+    );
+    expect(patchRoute).toBeDefined();
+    expect(pairRoute).toBeDefined();
+  });
+
+  it("includes the composer chat-run route (#66)", () => {
+    const route = API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/chats/runs");
     expect(route).toBeDefined();
   });
 

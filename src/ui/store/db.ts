@@ -96,25 +96,72 @@ function createChatRecord(
   });
 }
 
+function createMessageRecord(
+  db: DatabaseSync,
+  options: ResolvedFactoryOptions,
+  msg: NewChatMessage,
+): ChatMessage {
+  return sqlInsertMessage(db, options.newId(), msg, options.redactString);
+}
+
+function createProjectRecord(
+  db: DatabaseSync,
+  options: ResolvedFactoryOptions,
+  path: string,
+  name?: string,
+): Project {
+  const normalized = validateProjectPath(path, { mustExist: true });
+  const resolvedName = deriveProjectName(name, normalized);
+  return sqlUpsertProject(db, normalized, resolvedName, name !== undefined, options.now());
+}
+
+function updateProjectRecord(
+  db: DatabaseSync,
+  options: ResolvedFactoryOptions,
+  path: string,
+  patch: UpdateProjectPatch,
+): Project {
+  const normalized = validateProjectPath(path, { mustExist: false });
+  return sqlUpdateProject(db, normalized, patch, options.now());
+}
+
+function deleteProjectRecord(db: DatabaseSync, path: string): void {
+  const normalized = validateProjectPath(path, { mustExist: false });
+  sqlDeleteProject(db, normalized);
+}
+
+function createMessageBatch(
+  db: DatabaseSync,
+  options: ResolvedFactoryOptions,
+  messages: readonly NewChatMessage[],
+): readonly ChatMessage[] {
+  if (messages.length === 0) {
+    throw invalidRequest("At least one message is required.");
+  }
+  db.exec("BEGIN");
+  try {
+    const created = messages.map((msg) => createMessageRecord(db, options, msg));
+    for (const chatId of new Set(messages.map((msg) => msg.chatId))) {
+      sqlTouchChat(db, chatId, options.now());
+    }
+    db.exec("COMMIT");
+    return created;
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
-  const create = (path: string, name?: string): Project => {
-    const normalized = validateProjectPath(path, { mustExist: true });
-    const resolvedName = deriveProjectName(name, normalized);
-    return sqlUpsertProject(db, normalized, resolvedName, name !== undefined, options.now());
-  };
-  const update = (path: string, patch: UpdateProjectPatch): Project => {
-    const normalized = validateProjectPath(path, { mustExist: false });
-    return sqlUpdateProject(db, normalized, patch, options.now());
-  };
-  const remove = (path: string): void => {
-    const normalized = validateProjectPath(path, { mustExist: false });
-    sqlDeleteProject(db, normalized);
-  };
   return {
     listProjects: () => sqlListProjects(db),
-    createProject: create,
-    updateProject: update,
-    deleteProject: remove,
+    createProject: (path: string, name?: string): Project =>
+      createProjectRecord(db, options, path, name),
+    updateProject: (path: string, patch: UpdateProjectPatch): Project =>
+      updateProjectRecord(db, options, path, patch),
+    deleteProject: (path: string): void => {
+      deleteProjectRecord(db, path);
+    },
     listChats: (projectPath: string) => sqlListChats(db, projectPath),
     createChat: (
       projectPath: string,
@@ -129,10 +176,12 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     },
     listMessages: (chatId: string): readonly ChatMessage[] => sqlListMessages(db, chatId),
     createMessage: (msg: NewChatMessage): ChatMessage => {
-      const message = sqlInsertMessage(db, options.newId(), msg, options.redactString);
+      const message = createMessageRecord(db, options, msg);
       sqlTouchChat(db, msg.chatId, options.now());
       return message;
     },
+    createMessages: (messages: readonly NewChatMessage[]): readonly ChatMessage[] =>
+      createMessageBatch(db, options, messages),
     updateMessage: (id: string, patch: UpdateChatMessagePatch): ChatMessage =>
       sqlUpdateMessage(db, id, patch, options.redactString),
     close: (): void => {

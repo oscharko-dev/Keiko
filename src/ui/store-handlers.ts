@@ -1,4 +1,4 @@
-// ADR-0013 D7 — Route handlers for the 10 additive store routes (13–22). All inputs are validated;
+// ADR-0013 D7 — Route handlers for UI-local store routes. All inputs are validated;
 // every error path uses the redacted `{ error: { code, message } }` envelope; SECURITY_HEADERS are
 // applied uniformly by the server layer. JSON body reading is bounded by MAX_STORE_BODY_BYTES.
 
@@ -11,6 +11,7 @@ import {
   UiStoreError,
   isProjectAvailable,
   type ChatRole,
+  type NewChatMessage,
   type Project,
   type UpdateChatMessagePatch,
   type UpdateChatPatch,
@@ -170,6 +171,14 @@ function requireNumber(body: Record<string, unknown>, name: string): number {
     throw new InvalidRequest(`Field "${name}" must be a finite number.`);
   }
   return v;
+}
+
+function requireObject(body: Record<string, unknown>, name: string): Record<string, unknown> {
+  const v = body[name];
+  if (typeof v !== "object" || v === null || Array.isArray(v)) {
+    throw new InvalidRequest(`Field "${name}" must be a JSON object.`);
+  }
+  return v as Record<string, unknown>;
 }
 
 const ROLES: ReadonlySet<string> = new Set(["user", "assistant", "system"]);
@@ -466,7 +475,64 @@ export async function handleCreateMessage(
 }
 
 // ──────────────────────────────────────────────────────────────────────────
-// Route 23 — PATCH /api/chats/messages?id=... (issue #66)
+// Route 23 — POST /api/chats/messages/run-summary-pair (issue #66)
+// ──────────────────────────────────────────────────────────────────────────
+
+function buildRunSummaryPair(body: Record<string, unknown>): readonly [NewChatMessage, NewChatMessage] {
+  const chatId = requireString(body, "chatId");
+  const user = requireObject(body, "user");
+  const summary = requireObject(body, "summary");
+  const workflowId = optionalString(summary, "workflowId");
+  const taskType = optionalTaskType(summary);
+  if ((workflowId === undefined) === (taskType === undefined)) {
+    throw new InvalidRequest('Run summary requires exactly one of "workflowId" or "taskType".');
+  }
+  const userMessage: NewChatMessage = {
+    chatId,
+    role: "user",
+    content: requireString(user, "content"),
+    timestamp: requireNumber(user, "timestamp"),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  };
+  const summaryMessage: NewChatMessage = {
+    chatId,
+    role: "system",
+    content: requireString(summary, "content"),
+    timestamp: requireNumber(summary, "timestamp"),
+    runId: requireString(summary, "runId"),
+    workflowId,
+    workflowStatus: optionalWorkflowStatus(summary),
+    shortResult: optionalString(summary, "shortResult"),
+    taskType,
+  };
+  if (summaryMessage.workflowStatus === undefined) {
+    throw new InvalidRequest('Field "summary.workflowStatus" is required.');
+  }
+  return [userMessage, summaryMessage];
+}
+
+export async function handleCreateRunSummaryPair(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
+    const body = await readJsonObject(ctx.req);
+    const chatId = requireString(body, "chatId");
+    const projectPath = requireString(body, "projectPath");
+    if (!chatBelongsToProject(deps, projectPath, chatId)) {
+      return notFoundResult("Chat not found.");
+    }
+    const messages = deps.store.createMessages(buildRunSummaryPair(body));
+    return { status: 201, body: { messages } };
+  });
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Route 24 — PATCH /api/chats/messages?id=... (issue #66)
 // ──────────────────────────────────────────────────────────────────────────
 
 // Builds a typed UpdateChatMessagePatch from the JSON body. At least one updatable field must
