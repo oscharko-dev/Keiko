@@ -29,6 +29,8 @@ export interface WorkspaceApi {
   readonly splitFront: () => void;
   readonly cascade: () => void;
   readonly startConnect: (fromId: string, e: ReactPointerEvent<Element>) => void;
+  readonly confirmConnect: (toId: string, e: ReactPointerEvent<Element>) => void;
+  readonly cancelConnect: () => void;
   readonly removeConn: (connId: string) => void;
   readonly linkedFilesRoot: (id: string) => string | null;
   readonly zoomTo: (z: number) => void;

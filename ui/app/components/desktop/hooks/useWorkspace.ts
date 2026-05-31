@@ -281,6 +281,7 @@ function useHydrate({ wsRef, setWins, setConns, zc }: UseHydrateArgs): void {
 interface UseKeyboardArgs {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly rect: () => DOMRect | null;
+  readonly cancelConnectRef: MutableRefObject<() => void>;
 }
 
 function handleContentZoomKey(
@@ -309,10 +310,14 @@ function handleArrowKey(
   });
 }
 
-function useKeyboardCtrls({ setWins, rect }: UseKeyboardArgs): void {
+function useKeyboardCtrls({ setWins, rect, cancelConnectRef }: UseKeyboardArgs): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (isFormField(document.activeElement)) return;
+      if (e.key === "Escape") {
+        cancelConnectRef.current();
+        return;
+      }
       if ((e.metaKey || e.ctrlKey) && ["=", "+", "-", "_", "0"].includes(e.key)) {
         e.preventDefault();
         handleContentZoomKey(setWins, e.key);
@@ -331,7 +336,7 @@ function useKeyboardCtrls({ setWins, rect }: UseKeyboardArgs): void {
     return () => {
       window.removeEventListener("keydown", onKey);
     };
-  }, [setWins, rect]);
+  }, [setWins, rect, cancelConnectRef]);
 }
 
 interface UseFitMaximizedArgs {
@@ -395,6 +400,14 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
   winsRef.current = wins ?? [];
   const connsRef = useRef<Connection[]>([]);
   connsRef.current = conns;
+  // Refs for the click-to-connect flow. connectingRef is a synchronous view of
+  // the `connecting` state for handlers fired from child components (confirm).
+  // connectCleanupRef stores the global pointermove listener disposer so we
+  // can tear it down from cancel/confirm without re-attaching effects.
+  const connectingRef = useRef<ConnectingState | null>(null);
+  connectingRef.current = connecting;
+  const connectCleanupRef = useRef<(() => void) | null>(null);
+  const cancelConnectRef = useRef<() => void>(() => undefined);
 
   const { viewRef, worldVP, zoomTo, resetView, panBy, rect } = usePanZoom({ wsRef, view, setView });
 
@@ -410,20 +423,35 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
     if (wins !== null) persistList(WS_LS, wins);
   }, [wins]);
 
-  useKeyboardCtrls({ setWins, rect });
+  useKeyboardCtrls({ setWins, rect, cancelConnectRef });
   useFitMaximized({ wsRef, viewRef, setWins });
 
   const { update, focus, close, maximize, add, toggleTool } = makeMutations({ setWins, zc, worldVP });
   const { tileAll, splitFront, cascade } = makeLayoutActions({ setWins, worldVP });
   const { setSnap, commitSnap } = makeSnapActions({ setSnapPrev, snapZone, worldVP, update });
-  const { startConnect, removeConn, linkedFilesRoot } = makeConnectActions({
-    wsRef,
-    viewRef,
-    winsRef,
-    connsRef,
-    setConns,
-    setConnecting,
-  });
+  const { startConnect, confirmConnect, cancelConnect, removeConn, linkedFilesRoot } =
+    makeConnectActions({
+      wsRef,
+      viewRef,
+      winsRef,
+      connsRef,
+      connectingRef,
+      connectCleanupRef,
+      setConns,
+      setConnecting,
+    });
+  cancelConnectRef.current = cancelConnect;
+
+  // Component unmount must also drop the global listener.
+  useEffect(
+    () => () => {
+      if (connectCleanupRef.current !== null) {
+        connectCleanupRef.current();
+        connectCleanupRef.current = null;
+      }
+    },
+    [],
+  );
 
   const api: WorkspaceApi = {
     add,
@@ -438,6 +466,8 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
     splitFront,
     cascade,
     startConnect,
+    confirmConnect,
+    cancelConnect,
     removeConn,
     linkedFilesRoot,
     zoomTo,

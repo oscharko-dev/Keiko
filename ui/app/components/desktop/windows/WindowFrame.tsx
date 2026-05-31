@@ -240,6 +240,11 @@ export function WindowFrame({
   const onHeaderPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLElement>): void => {
       if (e.button !== 0) return;
+      // When this window is a valid drop target for an in-flight connect, the
+      // bubbling onPointerDown on <section> below confirms the link — don't
+      // also start a header-drag, which would tear the window away from the
+      // user's cursor mid-click.
+      if (connState === "valid") return;
       e.preventDefault();
       api.focus(win.id);
       const el = wsRef.current;
@@ -254,7 +259,7 @@ export function WindowFrame({
       if (wasMax) api.update(win.id, { max: false, w: restoredW, h: restoredH });
       attachDragListeners(api, geo, { winId: win.id, offX, offY, W: restoredW });
     },
-    [api, win.id, win.x, win.y, win.w, win.h, win.max, win.prev, view, wsRef],
+    [api, win.id, win.x, win.y, win.w, win.h, win.max, win.prev, view, wsRef, connState],
   );
 
   const startResize = useCallback(
@@ -313,7 +318,10 @@ export function WindowFrame({
       data-max={win.max ? "true" : "false"}
       data-conn={connState ?? undefined}
       style={sectionStyle}
-      onPointerDown={() => api.focus(win.id)}
+      onPointerDown={(e) => {
+        if (connState === "valid") api.confirmConnect(win.id, e);
+        api.focus(win.id);
+      }}
     >
       {/* Header is a drag surface; keyboard equivalent is ⌘+Arrows handled by useKeyboardCtrls. */}
       {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
@@ -397,7 +405,7 @@ export function WindowFrame({
             <div
               key={`p${d}`}
               className={`win-port wp-${d}`}
-              title="Drag to connect to another card"
+              title="Click to connect to another card"
               aria-label={`Connect from ${d === "t" ? "top" : d === "r" ? "right" : d === "b" ? "bottom" : "left"} edge`}
               role="button"
               tabIndex={0}

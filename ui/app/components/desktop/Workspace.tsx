@@ -42,28 +42,25 @@ function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
   return best;
 }
 
-function bgPanHandler(
+function startBgPan(
   panBy: (dx: number, dy: number) => void,
-): (event: ReactPointerEvent<HTMLDivElement>) => void {
-  return (event) => {
-    if (event.button !== 0) return;
-    if (isInteractive(event.target)) return;
-    let lastX = event.clientX;
-    let lastY = event.clientY;
-    document.body.style.cursor = "grabbing";
-    const move = (moveEvent: PointerEvent): void => {
-      panBy(moveEvent.clientX - lastX, moveEvent.clientY - lastY);
-      lastX = moveEvent.clientX;
-      lastY = moveEvent.clientY;
-    };
-    const up = (): void => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      document.body.style.cursor = "";
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+  event: ReactPointerEvent<HTMLDivElement>,
+): void {
+  let lastX = event.clientX;
+  let lastY = event.clientY;
+  document.body.style.cursor = "grabbing";
+  const move = (moveEvent: PointerEvent): void => {
+    panBy(moveEvent.clientX - lastX, moveEvent.clientY - lastY);
+    lastX = moveEvent.clientX;
+    lastY = moveEvent.clientY;
   };
+  const up = (): void => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", up);
+    document.body.style.cursor = "";
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up);
 }
 
 export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
@@ -80,7 +77,15 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     return canConnect(connFrom.type, w.type) ? "valid" : "invalid";
   };
 
-  const onBgPointerDown = bgPanHandler(api.panBy);
+  const onBgPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0) return;
+    if (isInteractive(event.target)) return;
+    if (connecting !== null) {
+      api.cancelConnect();
+      return;
+    }
+    startBgPan(api.panBy, event);
+  };
 
   const bgStyle: CSSProperties = useMemo(
     () => ({
@@ -104,6 +109,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     <div
       className="workspace"
       ref={wsRef}
+      data-connecting={connecting !== null ? "true" : undefined}
       onPointerDown={onBgPointerDown}
     >
       <WorkspaceShader />

@@ -271,73 +271,93 @@ interface ConnectArgs {
   readonly viewRef: MutableRefObject<View>;
   readonly winsRef: MutableRefObject<AppWindow[]>;
   readonly connsRef: MutableRefObject<Connection[]>;
+  readonly connectingRef: MutableRefObject<ConnectingState | null>;
+  readonly connectCleanupRef: MutableRefObject<(() => void) | null>;
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
   readonly setConnecting: Dispatch<SetStateAction<ConnectingState | null>>;
-}
-
-function findHitWindow(
-  list: readonly AppWindow[],
-  fromId: string,
-  px: number,
-  py: number,
-): AppWindow | undefined {
-  const hits = list.filter(
-    (w) => w.id !== fromId && px >= w.x && px <= w.x + w.w && py >= w.y && py <= w.y + w.h,
-  );
-  if (hits.length === 0) return undefined;
-  return [...hits].sort((a, b) => b.z - a.z)[0];
 }
 
 function isDuplicate(cs: readonly Connection[], a: string, b: string): boolean {
   return cs.some((c) => (c.a === a && c.b === b) || (c.a === b && c.b === a));
 }
 
-function setupConnectListeners(
-  args: ConnectArgs,
-  fromId: string,
-  toWX: (cx: number) => number,
-  toWY: (cy: number) => number,
-): void {
-  const { winsRef, setConns, setConnecting } = args;
-  const move = (ev: PointerEvent): void => {
-    setConnecting({ from: fromId, x: toWX(ev.clientX), y: toWY(ev.clientY) });
-  };
-  const up = (ev: PointerEvent): void => {
-    window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", up);
-    const px = toWX(ev.clientX);
-    const py = toWY(ev.clientY);
-    const list = winsRef.current;
-    const from = list.find((w) => w.id === fromId);
-    const hit = findHitWindow(list, fromId, px, py);
-    if (hit !== undefined && from !== undefined && canConnect(from.type, hit.type)) {
-      setConns((cs) =>
-        isDuplicate(cs, fromId, hit.id)
-          ? cs
-          : [...cs, { id: `${fromId}~${hit.id}`, a: fromId, b: hit.id }],
-      );
+type ConnectApi = Pick<
+  WorkspaceApi,
+  "startConnect" | "confirmConnect" | "cancelConnect" | "removeConn" | "linkedFilesRoot"
+>;
+
+// Click-to-Connect flow (replaces the old pointerdown→drag→pointerup gesture):
+//   1. startConnect(from): rubber-band Bezier follows the cursor live
+//   2. confirmConnect(to): clicks on a valid target window snap the link in
+//   3. cancelConnect(): ESC, background click, or same-port re-click cancel
+// Synchronous reads of the live connecting state go through connectingRef so
+// confirmConnect (fired from a child component) sees the latest source.
+export function makeConnectActions(args: ConnectArgs): ConnectApi {
+  const {
+    wsRef,
+    viewRef,
+    winsRef,
+    connsRef,
+    connectingRef,
+    connectCleanupRef,
+    setConns,
+    setConnecting,
+  } = args;
+
+  const cancelConnect: WorkspaceApi["cancelConnect"] = () => {
+    if (connectCleanupRef.current !== null) {
+      connectCleanupRef.current();
+      connectCleanupRef.current = null;
     }
     setConnecting(null);
   };
-  window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", up);
-}
 
-export function makeConnectActions(
-  args: ConnectArgs,
-): Pick<WorkspaceApi, "startConnect" | "removeConn" | "linkedFilesRoot"> {
-  const { wsRef, viewRef, winsRef, connsRef, setConns, setConnecting } = args;
+  const confirmConnect: WorkspaceApi["confirmConnect"] = (toId, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const c = connectingRef.current;
+    if (c === null) return;
+    const list = winsRef.current;
+    const from = list.find((w) => w.id === c.from);
+    const to = list.find((w) => w.id === toId);
+    if (from !== undefined && to !== undefined && canConnect(from.type, to.type)) {
+      setConns((cs) =>
+        isDuplicate(cs, c.from, toId)
+          ? cs
+          : [...cs, { id: `${c.from}~${toId}`, a: c.from, b: toId }],
+      );
+    }
+    cancelConnect();
+  };
+
   const startConnect: WorkspaceApi["startConnect"] = (fromId, e) => {
     e.preventDefault();
     e.stopPropagation();
+    // Toggle: clicking the same source port a second time cancels.
+    if (connectingRef.current !== null && connectingRef.current.from === fromId) {
+      cancelConnect();
+      return;
+    }
     const el = wsRef.current;
     if (el === null) return;
     const r = el.getBoundingClientRect();
     const v = viewRef.current;
     const toWX = (cx: number): number => (cx - r.left - v.x) / v.zoom;
     const toWY = (cy: number): number => (cy - r.top - v.y) / v.zoom;
+    // Defensive: a previous flow's listener could still be live (e.g. user
+    // clicks a different port without first cancelling). Drop it cleanly.
+    if (connectCleanupRef.current !== null) {
+      connectCleanupRef.current();
+      connectCleanupRef.current = null;
+    }
     setConnecting({ from: fromId, x: toWX(e.clientX), y: toWY(e.clientY) });
-    setupConnectListeners(args, fromId, toWX, toWY);
+    const move = (ev: PointerEvent): void => {
+      setConnecting({ from: fromId, x: toWX(ev.clientX), y: toWY(ev.clientY) });
+    };
+    window.addEventListener("pointermove", move);
+    connectCleanupRef.current = (): void => {
+      window.removeEventListener("pointermove", move);
+    };
   };
 
   const removeConn: WorkspaceApi["removeConn"] = (id) =>
@@ -356,7 +376,7 @@ export function makeConnectActions(
     return null;
   };
 
-  return { startConnect, removeConn, linkedFilesRoot };
+  return { startConnect, confirmConnect, cancelConnect, removeConn, linkedFilesRoot };
 }
 
 // Re-exports for callers that need the lower-level type

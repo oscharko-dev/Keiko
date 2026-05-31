@@ -386,12 +386,30 @@ button { font-family: inherit; color: inherit; cursor: pointer; border: none; ba
 
 /* ---------- CARD CONNECTIONS (workflow-style) ---------- */
 .conn-layer { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
-.conn-svg { position: absolute; inset: 0; overflow: visible; }
+/* SVG-Viewport-Fix: .ws-scene is 0×0 (transform-only origin). A `width:100%`
+   SVG would inherit 0×0 and Chrome refuses to paint paths outside that frame
+   even with overflow:visible. A real, fixed-size viewport (±10000px world
+   coords, 1:1 user/pixel mapping) restores visible connection lines. */
+.conn-svg { position: absolute; left: -10000px; top: -10000px; width: 20000px; height: 20000px; overflow: visible; }
 .conn-path { fill: none; stroke: var(--accent); stroke-width: 2.25; stroke-linecap: round; opacity: .9; }
-.conn-temp { stroke-dasharray: 5 6; opacity: .7; }
+.conn-temp { stroke-dasharray: 6 5; opacity: .85; stroke-width: 2.5; }
+.conn-dot {
+  fill: var(--accent);
+  opacity: .95;
+  filter: drop-shadow(0 0 4px var(--accent));
+  animation: conn-dot-pulse 1s ease-in-out infinite;
+}
+@keyframes conn-dot-pulse {
+  0%, 100% { r: 5; opacity: .95; }
+  50%       { r: 7; opacity: .6;  }
+}
 .conn-badge { position: absolute; transform: translate(-50%, -50%); pointer-events: auto; display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; background: var(--card); border: 1px solid var(--accent-line); color: var(--accent); font-size: 11px; font-family: var(--font-mono); box-shadow: var(--shadow-card); white-space: nowrap; }
 .conn-badge svg { display: block; }
 .conn-badge:hover { border-color: var(--danger); color: var(--danger); background: color-mix(in oklch, var(--danger) 14%, var(--card)); }
+
+/* Click-to-Connect cursor signals */
+.workspace[data-connecting="true"] { cursor: crosshair; }
+.workspace[data-connecting="true"] .window[data-conn="valid"] { cursor: cell; }
 
 /* Connection ports — invisible at rest, revealed on .window:hover.
    pointer-events: auto is set explicitly so the user can grab a port
@@ -401,6 +419,15 @@ button { font-family: inherit; color: inherit; cursor: pointer; border: none; ba
 .window:hover .win-port, .window[data-conn] .win-port { opacity: 1; }
 .win-port:hover { box-shadow: 0 0 0 4px var(--accent-glow); opacity: 1; }
 .win-port:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; opacity: 1; }
+/* Source-port pulse while connecting — signals which port started the flow */
+.workspace[data-connecting="true"] .window[data-conn="source"] .win-port {
+  opacity: 1;
+  animation: port-pulse 1s ease-in-out infinite;
+}
+@keyframes port-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  50%       { box-shadow: 0 0 0 6px transparent;      }
+}
 .wp-t { left: 50%; top: 0; }
 .wp-b { left: 50%; top: 100%; }
 .wp-l { left: 0; top: 50%; }
@@ -862,7 +889,10 @@ select.dlg-input { appearance: none; cursor: pointer; }
 .rb-foot { font-size: 11px; color: var(--fg-faint); text-align: center; padding-top: 10px; border-top: 1px solid var(--line-soft); }
 
 /* ---------- WIDGET: FILES ---------- */
-.files { padding: 6px 6px; }
+.files { position: relative; padding: 6px 6px; }
+.files-refresh { position: absolute; top: 4px; right: 6px; z-index: 1; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; color: var(--fg-faint); opacity: 0; transition: opacity .12s, color .12s, background .12s; }
+.window:hover .files-refresh, .files-refresh:focus-visible { opacity: 1; }
+.files-refresh:hover { background: var(--card-2); color: var(--fg); }
 .file-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 7px; font-size: 13px; color: var(--fg-muted); cursor: default; }
 .file-row:hover { background: var(--card-2); }
 .file-row[data-active="true"] { background: var(--accent-dim); color: var(--fg); }
