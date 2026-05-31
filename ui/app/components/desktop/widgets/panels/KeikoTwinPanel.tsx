@@ -67,7 +67,7 @@ function PolicyTab({
     setPolicy((p) => p.map((r) => (r.id === id ? { ...r, decision: DEC_CYCLE[r.decision] } : r)));
   return (
     <div className="pol">
-      <div className="pol-hint">Rights an agent inherits when Keiko governs. Tap a decision to change it.</div>
+      <div className="pol-hint">Rights an agent inherits when Keiko governs. Tap a decision to cycle through Allow → Ask → Deny.</div>
       {policy.map((r) => {
         const m = DEC_META[r.decision];
         return (

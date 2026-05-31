@@ -32,13 +32,29 @@ const DEFAULT_MODELS: readonly ModelRow[] = [
 
 const KEY = "keiko.models.v1";
 
+const ALLOWED_TYPES = new Set<ModelType>(["chat", "coding", "reasoning", "embedding"]);
+const ALLOWED_STATUSES = new Set<ModelStatus>(["connected", "error", "untested", "testing"]);
+
+function isValidRow(row: unknown): row is ModelRow {
+  if (typeof row !== "object" || row === null) return false;
+  const r = row as Record<string, unknown>;
+  if (typeof r.id !== "string" || typeof r.name !== "string") return false;
+  if (typeof r.url !== "string" || typeof r.key !== "string") return false;
+  if (typeof r.type !== "string" || !ALLOWED_TYPES.has(r.type as ModelType)) return false;
+  if (typeof r.status !== "string" || !ALLOWED_STATUSES.has(r.status as ModelStatus)) return false;
+  // url must be https://, http://, or empty — guards against javascript: XSS if url is ever rendered as an <a href>
+  if (r.url.length > 0 && !r.url.startsWith("https://") && !r.url.startsWith("http://")) return false;
+  return true;
+}
+
 function readModels(): readonly ModelRow[] {
   if (typeof window === "undefined") return DEFAULT_MODELS;
   try {
     const raw = window.localStorage.getItem(KEY);
     if (raw === null) return DEFAULT_MODELS;
     const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as readonly ModelRow[]) : DEFAULT_MODELS;
+    if (!Array.isArray(parsed) || !parsed.every(isValidRow)) return DEFAULT_MODELS;
+    return parsed;
   } catch {
     return DEFAULT_MODELS;
   }

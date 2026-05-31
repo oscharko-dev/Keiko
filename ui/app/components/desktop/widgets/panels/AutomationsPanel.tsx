@@ -17,22 +17,24 @@ const AUTOMATIONS: AutomationRow[] = [
   { id: "weekly-digest", name: "Weekly digest", when: "Mon 09:00", defaultOn: false },
 ];
 
+const STORE_KEY = "keiko.automations.v1";
+const INITIAL: Record<string, boolean> = Object.fromEntries(AUTOMATIONS.map((r) => [r.id, r.defaultOn]));
+
 function loadDefaults(): Record<string, boolean> {
-  if (typeof window === "undefined") {
-    return Object.fromEntries(AUTOMATIONS.map((r) => [r.id, r.defaultOn]));
-  }
+  if (typeof window === "undefined") return { ...INITIAL };
   try {
-    const raw = localStorage.getItem("keiko.automations.v1");
-    if (raw !== null) {
-      const parsed: unknown = JSON.parse(raw);
-      if (typeof parsed === "object" && parsed !== null) {
-        return parsed as Record<string, boolean>;
-      }
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw === null) return { ...INITIAL };
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { ...INITIAL };
+    const out: Record<string, boolean> = { ...INITIAL };
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (k in INITIAL && typeof v === "boolean") out[k] = v;
     }
+    return out;
   } catch {
-    // corrupt storage — fall through to defaults
+    return { ...INITIAL };
   }
-  return Object.fromEntries(AUTOMATIONS.map((r) => [r.id, r.defaultOn]));
 }
 
 export function AutomationsPanel(): ReactNode {
@@ -42,7 +44,7 @@ export function AutomationsPanel(): ReactNode {
     setState((prev) => {
       const next = { ...prev, [id]: !(prev[id] ?? false) };
       if (typeof window !== "undefined") {
-        localStorage.setItem("keiko.automations.v1", JSON.stringify(next));
+        localStorage.setItem(STORE_KEY, JSON.stringify(next));
       }
       return next;
     });
