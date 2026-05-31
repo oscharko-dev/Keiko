@@ -96,6 +96,15 @@ export function NewWindowDialog({
   const [cfg, setCfg] = useState<Cfg>(() => initialCfg(fields));
   const [shown, setShown] = useState(false);
   const firstFieldRef = useRef<HTMLElement | null>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    // capture the element that opened this dialog so we can return focus on close
+    triggerRef.current = document.activeElement as HTMLElement | null;
+    return () => {
+      triggerRef.current?.focus?.();
+    };
+  }, []);
 
   useEffect(() => {
     const r = requestAnimationFrame(() => {

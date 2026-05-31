@@ -26,6 +26,15 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps): Reac
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    // capture the element that opened the palette so we can return focus on close
+    triggerRef.current = document.activeElement as HTMLElement | null;
+    return () => {
+      triggerRef.current?.focus?.();
+    };
+  }, []);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
@@ -78,21 +87,29 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps): Reac
           <Icons.search size={16} />
           <input
             ref={inputRef}
-            placeholder="Type a command…"
+            role="combobox"
+            aria-expanded="true"
+            aria-controls="cmdk-list"
+            aria-activedescendant={filtered.length > 0 ? `cmdk-row-${String(sel)}` : undefined}
             aria-label="Command query"
+            placeholder="Type a command…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />
           <span className="kbd">esc</span>
         </div>
-        <div className="cmdk-list">
+        <div id="cmdk-list" role="listbox" className="cmdk-list">
           {filtered.length === 0 && <div className="cmdk-empty">No matching commands</div>}
           {filtered.map((c, i) => (
-            <button
-              type="button"
+            // eslint-disable-next-line jsx-a11y/click-events-have-key-events -- keyboard navigation is handled at the combobox input level via arrow keys; options are reached via aria-activedescendant, not focus
+            <div
+              role="option"
+              id={`cmdk-row-${String(i)}`}
+              aria-selected={i === sel}
               key={c.id}
               className="cmdk-row"
               data-sel={i === sel}
+              tabIndex={-1}
               onMouseEnter={() => setSel(i)}
               onClick={() => run(c)}
             >
@@ -100,7 +117,7 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps): Reac
               <span className="cmdk-label">{c.label}</span>
               <span className="spacer" />
               {c.group !== undefined && <span className="cmdk-group mono">{c.group}</span>}
-            </button>
+            </div>
           ))}
         </div>
       </div>
