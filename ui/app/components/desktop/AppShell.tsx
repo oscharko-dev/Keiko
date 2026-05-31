@@ -199,7 +199,32 @@ function AppShellInner(): ReactNode {
   );
 }
 
+// Tool windows reachable from ⌘K (design app.jsx command list). keiko + settings
+// open from the rails only, matching the prototype.
+const TOOL_ORDER: readonly WindowType[] = [
+  "project",
+  "search",
+  "plugins",
+  "automations",
+  "mobile",
+  "inspector",
+  "activity",
+  "notifications",
+  "resources",
+];
+
 export function AppShell(): ReactNode {
+  // Mount gate: the entire shell depends on client-only state (localStorage-backed
+  // theme/twin/editor, the WebGL canvas, window dimensions). Under static export the
+  // build-time prerender has none of that, so rendering the shell during hydration
+  // mismatches the client and trips React #418. Gating on a post-mount flag makes the
+  // server prerender and the client's first render byte-identical (an empty .app), then
+  // swaps in the live shell after mount — eliminating every hydration mismatch at once.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+  if (!mounted) return <div className="app" aria-hidden="true" />;
   return (
     <TwinProvider>
       <AppShellInner />
