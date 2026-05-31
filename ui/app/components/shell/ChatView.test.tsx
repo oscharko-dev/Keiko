@@ -77,11 +77,8 @@ const baseChat = {
 describe("ChatView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // ChatView now fetches the chat record so ChatComposer can read selectedModel (issue #65).
-    // The default keeps fetchChats pending forever so the composer stays in its loading state
-    // and individual existing tests stay focused on the message-list surface. Tests that need
-    // the composer rendered override `fetchChats` with `mockResolvedValueOnce`.
-    vi.mocked(api.fetchChats).mockReturnValue(new Promise(() => { /* never resolves */ }));
+    // ChatView must prove the chat belongs to the selected project before loading messages.
+    vi.mocked(api.fetchChats).mockResolvedValue({ chats: [baseChat] });
     vi.mocked(api.fetchModels).mockResolvedValue({ models: [] });
     // Default for the run-sync mocks: stay running forever so cards render but never PATCH.
     vi.mocked(api.fetchRunReport).mockReturnValue(new Promise(() => { /* never resolves */ }));
@@ -100,7 +97,7 @@ describe("ChatView", () => {
     vi.mocked(api.fetchChatMessages).mockRejectedValueOnce(new Error("Network error"));
     render(<ChatView chatId="c1" project={availableProject} />);
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(screen.getByText("Failed to load messages")).toBeInTheDocument();
     });
   });
 
@@ -173,6 +170,27 @@ describe("ChatView", () => {
     });
   });
 
+  it("does not render messages when the chat is not associated with the selected project", async () => {
+    vi.mocked(api.fetchChats).mockResolvedValueOnce({ chats: [] });
+    vi.mocked(api.fetchChatMessages).mockResolvedValueOnce({
+      messages: [
+        {
+          id: "leaked",
+          chatId: "other-chat",
+          role: "user",
+          content: "Cross-project message",
+          timestamp: 1000,
+        },
+      ],
+    });
+    render(<ChatView chatId="other-chat" project={availableProject} />);
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent(/chat is no longer available/i);
+    });
+    expect(screen.queryByText("Cross-project message")).toBeNull();
+    expect(api.fetchChatMessages).not.toHaveBeenCalled();
+  });
+
   it("sending a message re-fetches messages", async () => {
     const user = userEvent.setup();
     vi.mocked(api.fetchChatMessages).mockResolvedValue({ messages: [] });
@@ -219,6 +237,25 @@ describe("ChatView", () => {
     });
   });
 
+  it("focuses the composer after the async chat ownership check completes", async () => {
+    let resolveChats!: (value: { chats: (typeof baseChat)[] }) => void;
+    vi.mocked(api.fetchChatMessages).mockResolvedValueOnce({ messages: [] });
+    vi.mocked(api.fetchChats).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveChats = resolve;
+      }),
+    );
+    render(<ChatView chatId="c1" project={availableProject} />);
+    expect(screen.queryByRole("textbox", { name: /message/i })).toBeNull();
+
+    resolveChats({ chats: [baseChat] });
+
+    const textarea = await screen.findByRole("textbox", { name: /message/i });
+    await waitFor(() => {
+      expect(textarea).toHaveFocus();
+    });
+  });
+
   // Issue #66 — system messages with runId render the RunSummaryCard surface.
   it("renders RunSummaryCard for a system message with runId (#66)", async () => {
     vi.mocked(api.fetchChatMessages).mockResolvedValueOnce({
@@ -245,7 +282,7 @@ describe("ChatView", () => {
     render(<ChatView chatId="c1" project={availableProject} />);
     await waitFor(() => {
       // Card label
-      expect(screen.getByText("Verify")).toBeInTheDocument();
+      expect(screen.getAllByText("Verify").length).toBeGreaterThan(0);
       // Badge for running
       expect(screen.getByText("Running")).toBeInTheDocument();
       // Both nav links present

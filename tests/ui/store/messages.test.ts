@@ -58,6 +58,23 @@ describe("createMessage", () => {
     expect(m.shortResult).toBeUndefined();
   });
 
+  it("bumps the parent chat updatedAt so recent chat ordering tracks message activity", () => {
+    const before = store.listChats(proj).find((chat) => chat.id === chatId);
+    store.createMessage({
+      chatId,
+      role: "user",
+      content: "recent activity",
+      timestamp: 101,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const after = store.listChats(proj).find((chat) => chat.id === chatId);
+    expect(after?.updatedAt).toBeGreaterThan(before?.updatedAt ?? 0);
+  });
+
   it("persists optional workflow ref columns", () => {
     const m = store.createMessage({
       chatId,

@@ -69,11 +69,12 @@ function badgeFor(status: ChatWorkflowStatus | undefined): BadgeStyle {
 
 interface RunSummaryCardProps {
   readonly message: ChatMessage;
+  readonly projectPath: string;
   readonly onPatched: (m: ChatMessage) => void;
 }
 
-export function RunSummaryCard({ message, onPatched }: RunSummaryCardProps): ReactNode {
-  const { unavailable } = useRunStatusSync(message, onPatched);
+export function RunSummaryCard({ message, projectPath, onPatched }: RunSummaryCardProps): ReactNode {
+  const { unavailable } = useRunStatusSync(message, projectPath, onPatched);
   const badge = badgeFor(message.workflowStatus);
   const label = deriveLabel(message);
   const runId = message.runId ?? "";

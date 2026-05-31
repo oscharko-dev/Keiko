@@ -21,6 +21,7 @@ import type {
 import { runMigrations } from "./schema.js";
 import {
   deleteProject as sqlDeleteProject,
+  getProject as sqlGetProject,
   listProjects as sqlListProjects,
   updateProject as sqlUpdateProject,
   upsertProject as sqlUpsertProject,
@@ -29,6 +30,7 @@ import {
   deleteChat as sqlDeleteChat,
   insertChat as sqlInsertChat,
   listChats as sqlListChats,
+  touchChat as sqlTouchChat,
   updateChat as sqlUpdateChat,
 } from "./chats.js";
 import {
@@ -72,6 +74,28 @@ function deriveProjectName(explicit: string | undefined, path: string): string {
   return explicit;
 }
 
+function createChatRecord(
+  db: DatabaseSync,
+  options: ResolvedFactoryOptions,
+  projectPath: string,
+  title: string,
+  selectedModel: string,
+  opts: CreateChatOptions | undefined,
+): Chat {
+  const project = sqlGetProject(db, projectPath);
+  if (project !== undefined && !isProjectAvailable(project)) {
+    throw invalidRequest("Project path is unavailable.");
+  }
+  return sqlInsertChat(db, {
+    id: options.newId(),
+    projectPath,
+    title,
+    selectedModel,
+    opts,
+    now: options.now(),
+  });
+}
+
 function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
   const create = (path: string, name?: string): Project => {
     const normalized = validateProjectPath(path, { mustExist: true });
@@ -97,23 +121,18 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       title: string,
       selectedModel: string,
       opts?: CreateChatOptions,
-    ): Chat =>
-      sqlInsertChat(db, {
-        id: options.newId(),
-        projectPath,
-        title,
-        selectedModel,
-        opts,
-        now: options.now(),
-      }),
+    ): Chat => createChatRecord(db, options, projectPath, title, selectedModel, opts),
     updateChat: (id: string, patch: UpdateChatPatch): Chat =>
       sqlUpdateChat(db, id, patch, options.now()),
     deleteChat: (id: string): void => {
       sqlDeleteChat(db, id);
     },
     listMessages: (chatId: string): readonly ChatMessage[] => sqlListMessages(db, chatId),
-    createMessage: (msg: NewChatMessage): ChatMessage =>
-      sqlInsertMessage(db, options.newId(), msg, options.redactString),
+    createMessage: (msg: NewChatMessage): ChatMessage => {
+      const message = sqlInsertMessage(db, options.newId(), msg, options.redactString);
+      sqlTouchChat(db, msg.chatId, options.now());
+      return message;
+    },
     updateMessage: (id: string, patch: UpdateChatMessagePatch): ChatMessage =>
       sqlUpdateMessage(db, id, patch, options.redactString),
     close: (): void => {

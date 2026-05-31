@@ -324,6 +324,20 @@ describe("POST /api/chats", () => {
     expect(res.status).toBe(404);
   });
 
+  it("returns 400 when the project path is registered but unavailable", async () => {
+    store.createProject(projDir);
+    rmSync(projDir, { recursive: true, force: true });
+    const res = await fetch(url("/api/chats"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ projectPath: projDir, title: "t", selectedModel: CHAT_MODEL }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.message).toBe("Project path is unavailable.");
+  });
+
   it("returns 400 invalid_request for missing title", async () => {
     store.createProject(projDir);
     const res = await fetch(url("/api/chats"), {
@@ -490,11 +504,40 @@ describe("GET /api/chats/messages", () => {
       shortResult: undefined,
       taskType: undefined,
     });
-    const res = await fetch(url(`/api/chats/messages?chatId=${encodeURIComponent(c.id)}`));
+    const res = await fetch(
+      url(
+        `/api/chats/messages?chatId=${encodeURIComponent(c.id)}&projectPath=${encodeURIComponent(projDir)}`,
+      ),
+    );
     expect(res.status).toBe(200);
     const body = (await res.json()) as { messages: { content: string }[] };
     expect(body.messages).toHaveLength(1);
     expect(body.messages[0]?.content).toBe("hello");
+  });
+
+  it("returns 404 instead of leaking messages when chat belongs to another project", async () => {
+    store.createProject(projDir);
+    const otherDir = join(tmp, "other");
+    mkdirSync(otherDir);
+    store.createProject(otherDir);
+    const c = store.createChat(otherDir, "t", "m");
+    store.createMessage({
+      chatId: c.id,
+      role: "user",
+      content: "other project",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const res = await fetch(
+      url(
+        `/api/chats/messages?chatId=${encodeURIComponent(c.id)}&projectPath=${encodeURIComponent(projDir)}`,
+      ),
+    );
+    expect(res.status).toBe(404);
   });
 
   it("returns 400 when chatId is missing", async () => {
@@ -513,6 +556,7 @@ describe("POST /api/chats/messages", () => {
       headers: POST_HEADERS,
       body: JSON.stringify({
         chatId: c.id,
+        projectPath: projDir,
         role: "user",
         content: "hello",
         timestamp: 12345,
@@ -533,6 +577,27 @@ describe("POST /api/chats/messages", () => {
       headers: POST_HEADERS,
       body: JSON.stringify({
         chatId: "nope",
+        projectPath: projDir,
+        role: "user",
+        content: "x",
+        timestamp: 1,
+      }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 404 when chatId belongs to another project", async () => {
+    store.createProject(projDir);
+    const otherDir = join(tmp, "other-post");
+    mkdirSync(otherDir);
+    store.createProject(otherDir);
+    const c = store.createChat(otherDir, "t", "m");
+    const res = await fetch(url("/api/chats/messages"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({
+        chatId: c.id,
+        projectPath: projDir,
         role: "user",
         content: "x",
         timestamp: 1,
@@ -547,7 +612,7 @@ describe("POST /api/chats/messages", () => {
     const res = await fetch(url("/api/chats/messages"), {
       method: "POST",
       headers: POST_HEADERS,
-      body: JSON.stringify({ chatId: c.id, role: "user", content: "", timestamp: 1 }),
+      body: JSON.stringify({ chatId: c.id, projectPath: projDir, role: "user", content: "", timestamp: 1 }),
     });
     expect(res.status).toBe(400);
   });
@@ -558,7 +623,7 @@ describe("POST /api/chats/messages", () => {
     const res = await fetch(url("/api/chats/messages"), {
       method: "POST",
       headers: POST_HEADERS,
-      body: JSON.stringify({ chatId: c.id, role: "root", content: "x", timestamp: 1 }),
+      body: JSON.stringify({ chatId: c.id, projectPath: projDir, role: "root", content: "x", timestamp: 1 }),
     });
     expect(res.status).toBe(400);
   });
@@ -571,6 +636,7 @@ describe("POST /api/chats/messages", () => {
       headers: POST_HEADERS,
       body: JSON.stringify({
         chatId: c.id,
+        projectPath: projDir,
         role: "system",
         content: "Verify started",
         timestamp: 1,
@@ -592,6 +658,7 @@ describe("POST /api/chats/messages", () => {
       headers: POST_HEADERS,
       body: JSON.stringify({
         chatId: c.id,
+        projectPath: projDir,
         role: "system",
         content: "x",
         timestamp: 1,
@@ -604,7 +671,13 @@ describe("POST /api/chats/messages", () => {
 
 // ─── Route 23: PATCH /api/chats/messages (issue #66) ────────────────────────
 describe("PATCH /api/chats/messages", () => {
-  function seedRunningMessage(): string {
+  function patchMessagesUrl(id: string, chatId: string): string {
+    return url(
+      `/api/chats/messages?id=${encodeURIComponent(id)}&chatId=${encodeURIComponent(chatId)}&projectPath=${encodeURIComponent(projDir)}`,
+    );
+  }
+
+  function seedRunningMessage(): { id: string; chatId: string } {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
     const created = store.createMessage({
@@ -618,12 +691,12 @@ describe("PATCH /api/chats/messages", () => {
       shortResult: undefined,
       taskType: "verify",
     });
-    return created.id;
+    return { id: created.id, chatId: c.id };
   }
 
   it("patches workflowStatus and shortResult and returns 200 with the updated row", async () => {
-    const id = seedRunningMessage();
-    const res = await fetch(url(`/api/chats/messages?id=${encodeURIComponent(id)}`), {
+    const { id, chatId } = seedRunningMessage();
+    const res = await fetch(patchMessagesUrl(id, chatId), {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
@@ -641,8 +714,8 @@ describe("PATCH /api/chats/messages", () => {
   });
 
   it("accepts cancelled as a workflowStatus on PATCH", async () => {
-    const id = seedRunningMessage();
-    const res = await fetch(url(`/api/chats/messages?id=${encodeURIComponent(id)}`), {
+    const { id, chatId } = seedRunningMessage();
+    const res = await fetch(patchMessagesUrl(id, chatId), {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({ workflowStatus: "cancelled" }),
@@ -653,7 +726,9 @@ describe("PATCH /api/chats/messages", () => {
   });
 
   it("returns 404 for an unknown message id", async () => {
-    const res = await fetch(url("/api/chats/messages?id=no-such-id"), {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    const res = await fetch(patchMessagesUrl("no-such-id", chat.id), {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({ workflowStatus: "failed" }),
@@ -661,9 +736,27 @@ describe("PATCH /api/chats/messages", () => {
     expect(res.status).toBe(404);
   });
 
+  it("returns 404 when patching a message through the wrong project path", async () => {
+    const { id, chatId } = seedRunningMessage();
+    const otherDir = join(tmp, "other-patch");
+    mkdirSync(otherDir);
+    store.createProject(otherDir);
+    const res = await fetch(
+      url(
+        `/api/chats/messages?id=${encodeURIComponent(id)}&chatId=${encodeURIComponent(chatId)}&projectPath=${encodeURIComponent(otherDir)}`,
+      ),
+      {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({ workflowStatus: "completed" }),
+      },
+    );
+    expect(res.status).toBe(404);
+  });
+
   it("returns 400 invalid_request for an empty patch body", async () => {
-    const id = seedRunningMessage();
-    const res = await fetch(url(`/api/chats/messages?id=${encodeURIComponent(id)}`), {
+    const { id, chatId } = seedRunningMessage();
+    const res = await fetch(patchMessagesUrl(id, chatId), {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({}),
@@ -672,8 +765,8 @@ describe("PATCH /api/chats/messages", () => {
   });
 
   it("returns 400 invalid_request for an invalid workflowStatus", async () => {
-    const id = seedRunningMessage();
-    const res = await fetch(url(`/api/chats/messages?id=${encodeURIComponent(id)}`), {
+    const { id, chatId } = seedRunningMessage();
+    const res = await fetch(patchMessagesUrl(id, chatId), {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({ workflowStatus: "banana" }),
@@ -691,9 +784,9 @@ describe("PATCH /api/chats/messages", () => {
   });
 
   it("returns 413 payload_too_large for an oversized body", async () => {
-    const id = seedRunningMessage();
+    const { id, chatId } = seedRunningMessage();
     const padded = JSON.stringify({ shortResult: "x".repeat(300_000) });
-    const res = await fetch(url(`/api/chats/messages?id=${encodeURIComponent(id)}`), {
+    const res = await fetch(patchMessagesUrl(id, chatId), {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: padded,
@@ -702,8 +795,8 @@ describe("PATCH /api/chats/messages", () => {
   });
 
   it("rejects PATCH without the CSRF guard header", async () => {
-    const id = seedRunningMessage();
-    const res = await fetch(url(`/api/chats/messages?id=${encodeURIComponent(id)}`), {
+    const { id, chatId } = seedRunningMessage();
+    const res = await fetch(patchMessagesUrl(id, chatId), {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workflowStatus: "failed" }),

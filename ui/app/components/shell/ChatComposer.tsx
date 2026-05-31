@@ -264,6 +264,7 @@ export function ChatComposer({
     try {
       await createChatMessage({
         chatId,
+        projectPath: project.path,
         role: "user",
         content,
         timestamp: Date.now(),
@@ -273,6 +274,7 @@ export function ChatComposer({
       const run = await startRun(payload);
       await createChatMessage({
         chatId,
+        projectPath: project.path,
         role: "system",
         content: `${modeLabel(mode)} started`,
         timestamp: Date.now(),

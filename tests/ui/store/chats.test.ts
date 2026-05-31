@@ -40,6 +40,11 @@ describe("createChat", () => {
     expect(() => store.createChat(join(tmp, "nope"), "t", "m")).toThrow(UiStoreError);
   });
 
+  it("rejects creating a chat for an unavailable project path", () => {
+    rmSync(proj, { recursive: true, force: true });
+    expect(() => store.createChat(proj, "t", "m")).toThrow(UiStoreError);
+  });
+
   it("rejects an empty title", () => {
     expect(() => store.createChat(proj, "", "claude-opus-4-5")).toThrow(UiStoreError);
   });

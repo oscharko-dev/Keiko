@@ -92,6 +92,31 @@ export function CentralArea(): ReactNode {
     return <WorkspaceShellEntry />;
   }
 
+  if (projectState.kind === "error") {
+    return (
+      <section
+        aria-labelledby="project-load-error-title"
+        className="flex h-full min-w-0 flex-col items-center justify-center px-6 text-center"
+      >
+        <div role="alert" className="max-w-sm rounded bg-panel px-4 py-3 text-sm text-ink-muted">
+          <h1 id="project-load-error-title" className="text-base font-semibold text-ink">
+            Could not load the selected project
+          </h1>
+          <p className="mt-2 text-xs">{projectState.message}</p>
+          <button
+            type="button"
+            onClick={projectState.retry}
+            className="mt-3 rounded bg-accent px-3 py-1.5 text-xs font-medium text-ink-inverse
+              hover:bg-accent-strong
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-focus"
+          >
+            Retry
+          </button>
+        </div>
+      </section>
+    );
+  }
+
   const project = projectState.project;
 
   // Project selected, chat selected → ChatView

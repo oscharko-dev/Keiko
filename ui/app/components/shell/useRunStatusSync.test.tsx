@@ -39,7 +39,7 @@ interface ProbeProps {
 }
 
 function Probe({ message, onPatched }: ProbeProps): ReactNode {
-  const { unavailable } = useRunStatusSync(message, onPatched);
+  const { unavailable } = useRunStatusSync(message, "/repo", onPatched);
   return <span data-testid="unavailable">{unavailable ? "yes" : "no"}</span>;
 }
 
@@ -106,10 +106,15 @@ describe("useRunStatusSync", () => {
       await vi.advanceTimersByTimeAsync(1500);
     });
     expect(api.fetchRunReport).toHaveBeenCalledTimes(2);
-    expect(api.patchChatMessage).toHaveBeenCalledWith("msg-1", {
-      workflowStatus: "completed",
-      shortResult: "Verification passed: 2 classifications.",
-    });
+    expect(api.patchChatMessage).toHaveBeenCalledWith(
+      "msg-1",
+      "chat-1",
+      "/repo",
+      {
+        workflowStatus: "completed",
+        shortResult: "Verification passed: 2 classifications.",
+      },
+    );
     expect(onPatched).toHaveBeenCalledTimes(1);
   });
 
@@ -128,10 +133,15 @@ describe("useRunStatusSync", () => {
       await Promise.resolve();
     });
     expect(api.fetchEvidenceManifest).toHaveBeenCalledTimes(1);
-    expect(api.patchChatMessage).toHaveBeenCalledWith("msg-1", {
-      workflowStatus: "completed",
-      shortResult: "Verification passed.",
-    });
+    expect(api.patchChatMessage).toHaveBeenCalledWith(
+      "msg-1",
+      "chat-1",
+      "/repo",
+      {
+        workflowStatus: "completed",
+        shortResult: "Verification passed.",
+      },
+    );
   });
 
   it("run 404 + evidence 404: surfaces unavailable, never PATCHes", async () => {
@@ -212,6 +222,8 @@ describe("useRunStatusSync", () => {
     expect(api.patchChatMessage).toHaveBeenCalledTimes(1);
     expect(api.patchChatMessage).toHaveBeenCalledWith(
       "msg-1",
+      "chat-1",
+      "/repo",
       expect.objectContaining({ workflowStatus: "completed" }),
     );
   });

@@ -73,6 +73,8 @@ function makeMessage(overrides: MessageOverrides = {}): ChatMessage {
   return result;
 }
 
+const PROJECT_PATH = "/repo";
+
 beforeEach(() => {
   vi.mocked(api.fetchRunReport).mockReset();
   vi.mocked(api.fetchEvidenceManifest).mockReset();
@@ -87,7 +89,7 @@ afterEach(() => {
 
 describe("RunSummaryCard — per-status rendering", () => {
   it("renders the running badge with the verify label", () => {
-    render(<RunSummaryCard message={makeMessage()} onPatched={vi.fn()} />);
+    render(<RunSummaryCard message={makeMessage()} projectPath={PROJECT_PATH} onPatched={vi.fn()} />);
     expect(screen.getByText("Running")).toBeInTheDocument();
     expect(screen.getByText("Verify")).toBeInTheDocument();
   });
@@ -101,6 +103,7 @@ describe("RunSummaryCard — per-status rendering", () => {
           taskType: undefined,
           shortResult: "Generated 3 test files; 9 tests proposed.",
         })}
+        projectPath={PROJECT_PATH}
         onPatched={vi.fn()}
       />,
     );
@@ -113,6 +116,7 @@ describe("RunSummaryCard — per-status rendering", () => {
     render(
       <RunSummaryCard
         message={makeMessage({ workflowStatus: "failed", shortResult: "Run failed: tsc errors." })}
+        projectPath={PROJECT_PATH}
         onPatched={vi.fn()}
       />,
     );
@@ -124,6 +128,7 @@ describe("RunSummaryCard — per-status rendering", () => {
     render(
       <RunSummaryCard
         message={makeMessage({ workflowStatus: "cancelled", shortResult: "Run cancelled." })}
+        projectPath={PROJECT_PATH}
         onPatched={vi.fn()}
       />,
     );
@@ -132,7 +137,11 @@ describe("RunSummaryCard — per-status rendering", () => {
 
   it("renders pending badge for never-started runs", () => {
     render(
-      <RunSummaryCard message={makeMessage({ workflowStatus: "pending" })} onPatched={vi.fn()} />,
+      <RunSummaryCard
+        message={makeMessage({ workflowStatus: "pending" })}
+        projectPath={PROJECT_PATH}
+        onPatched={vi.fn()}
+      />,
     );
     expect(screen.getByText("Pending")).toBeInTheDocument();
   });
@@ -145,6 +154,7 @@ describe("RunSummaryCard — per-status rendering", () => {
           taskType: undefined,
           workflowStatus: "completed",
         })}
+        projectPath={PROJECT_PATH}
         onPatched={vi.fn()}
       />,
     );
@@ -159,6 +169,7 @@ describe("RunSummaryCard — per-status rendering", () => {
           taskType: undefined,
           workflowStatus: "completed",
         })}
+        projectPath={PROJECT_PATH}
         onPatched={vi.fn()}
       />,
     );
@@ -168,7 +179,7 @@ describe("RunSummaryCard — per-status rendering", () => {
 
 describe("RunSummaryCard — link hrefs", () => {
   it("links to the canonical run + evidence pages with encoded runId", () => {
-    render(<RunSummaryCard message={makeMessage()} onPatched={vi.fn()} />);
+    render(<RunSummaryCard message={makeMessage()} projectPath={PROJECT_PATH} onPatched={vi.fn()} />);
     const runLink = screen.getByLabelText("View run details");
     const evidenceLink = screen.getByLabelText("View evidence manifest");
     expect(runLink.getAttribute("href")).toBe(
@@ -183,6 +194,7 @@ describe("RunSummaryCard — link hrefs", () => {
     render(
       <RunSummaryCard
         message={makeMessage({ runId: "run id/with spaces" })}
+        projectPath={PROJECT_PATH}
         onPatched={vi.fn()}
       />,
     );
@@ -195,7 +207,7 @@ describe("RunSummaryCard — unavailable state", () => {
   it("shows the unavailable hint and disables links when run + evidence are 404", async () => {
     vi.mocked(api.fetchRunReport).mockRejectedValue(new ApiError("NOT_FOUND", "x", 404));
     vi.mocked(api.fetchEvidenceManifest).mockRejectedValue(new ApiError("NOT_FOUND", "x", 404));
-    render(<RunSummaryCard message={makeMessage()} onPatched={vi.fn()} />);
+    render(<RunSummaryCard message={makeMessage()} projectPath={PROJECT_PATH} onPatched={vi.fn()} />);
     await waitFor(() => {
       expect(screen.getByText("Run details no longer available.")).toBeInTheDocument();
     });
@@ -221,6 +233,7 @@ describe("RunSummaryCard — a11y", () => {
           workflowStatus: status,
           shortResult: status === "running" ? undefined : "result text",
         })}
+        projectPath={PROJECT_PATH}
         onPatched={vi.fn()}
       />,
     );
@@ -230,7 +243,9 @@ describe("RunSummaryCard — a11y", () => {
   it("has no axe violations in the unavailable state", async () => {
     vi.mocked(api.fetchRunReport).mockRejectedValue(new ApiError("NOT_FOUND", "x", 404));
     vi.mocked(api.fetchEvidenceManifest).mockRejectedValue(new ApiError("NOT_FOUND", "x", 404));
-    const { container } = render(<RunSummaryCard message={makeMessage()} onPatched={vi.fn()} />);
+    const { container } = render(
+      <RunSummaryCard message={makeMessage()} projectPath={PROJECT_PATH} onPatched={vi.fn()} />,
+    );
     await waitFor(() => {
       expect(screen.getByText("Run details no longer available.")).toBeInTheDocument();
     });

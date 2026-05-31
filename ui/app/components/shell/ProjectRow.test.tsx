@@ -87,7 +87,11 @@ describe("ProjectRow", () => {
 
   it("renders unavailable indicator when project is unavailable", () => {
     renderRow({ available: false });
-    expect(screen.getByLabelText(/project path unavailable/i)).toBeInTheDocument();
+    const rowButton = screen.getAllByRole("button", { name: /foo project/i })[0]!;
+    expect(rowButton).toHaveAccessibleDescription(
+      /project path unavailable/i,
+    );
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
   });
 
   it("calls onSelect with project path when row clicked", async () => {

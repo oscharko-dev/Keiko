@@ -297,12 +297,19 @@ export async function deleteChat(id: string): Promise<void> {
   });
 }
 
-export async function fetchChatMessages(chatId: string): Promise<MessagesResponse> {
-  return fetchJson(`/api/chats/messages?chatId=${encodeURIComponent(chatId)}`);
+export async function fetchChatMessages(
+  chatId: string,
+  projectPath: string,
+): Promise<MessagesResponse> {
+  const params = new URLSearchParams();
+  params.set("chatId", chatId);
+  params.set("projectPath", projectPath);
+  return fetchJson(`/api/chats/messages?${params.toString()}`);
 }
 
 export interface CreateMessageInput {
   chatId: string;
+  projectPath: string;
   role: ChatMessageRole;
   content: string;
   timestamp: number;
@@ -318,14 +325,19 @@ export async function createChatMessage(input: CreateMessageInput): Promise<Mess
   return fetchJson("/api/chats/messages", { method: "POST", body: JSON.stringify(input) });
 }
 
-// Issue #66 — PATCH the run-summary message in place. The id query-param is encoded with
-// encodeURIComponent in the raw template (the established repo pattern in updateChat above);
-// we avoid URLSearchParams.set to dodge the double-encoding trap (memory #64 CP1).
+// Issue #66 — PATCH the run-summary message in place and keep the selected project's
+// normalized path on the request so the BFF can enforce chat ownership before patching.
 export async function patchChatMessage(
   id: string,
+  chatId: string,
+  projectPath: string,
   body: PatchChatMessageBody,
 ): Promise<PatchMessageResponse> {
-  return fetchJson(`/api/chats/messages?id=${encodeURIComponent(id)}`, {
+  const params = new URLSearchParams();
+  params.set("id", id);
+  params.set("chatId", chatId);
+  params.set("projectPath", projectPath);
+  return fetchJson(`/api/chats/messages?${params.toString()}`, {
     method: "PATCH",
     body: JSON.stringify(body),
   });
