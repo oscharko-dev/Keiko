@@ -814,8 +814,32 @@ select.dlg-input { appearance: none; cursor: pointer; }
 .tk-v { color: var(--fg-muted); }
 
 /* ---------- WIDGET: CHAT ---------- */
-.chatw { height: 100%; display: flex; flex-direction: column; }
-.chatw-scroll { flex: 1; overflow: auto; padding: 4px 16px 18px; }
+/* min-height:0 lets the flex scroll child actually shrink+scroll instead of
+   growing and ejecting the pinned composer (the large-chat clipping bug). */
+.chatw { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.chatw-scroll { flex: 1; min-height: 0; overflow: auto; padding: 4px 16px 18px; }
+.chatw-log { display: flex; flex-direction: column; }
+.chatw-foot { flex: none; padding: 0 16px 14px; }
+.chatw-foot .composer { max-width: none; margin: 0; }
+.chat-msg { display: flex; margin-bottom: 14px; }
+.chat-msg[data-role="user"] { justify-content: flex-end; }
+.chat-msg-bubble {
+  max-width: min(640px, 84%);
+  border: 1px solid var(--line-soft); border-radius: 14px;
+  padding: 10px 13px; background: var(--card); color: var(--fg);
+  font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+}
+.chat-msg[data-role="user"] .chat-msg-bubble { border-color: var(--accent-line); background: var(--accent-dim); }
+.chat-msg-role { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-faint); margin-bottom: 5px; }
+.chat-msg-time { font-size: 10px; color: var(--fg-faint); margin-top: 6px; font-family: var(--font-mono); }
+.chat-typing { display: inline-flex; gap: 4px; align-items: center; }
+.chat-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-faint); animation: pulse 1.2s infinite; }
+.chat-typing i:nth-child(2) { animation-delay: .2s; }
+.chat-typing i:nth-child(3) { animation-delay: .4s; }
+/* functional model picker, styled as the design's static .cmp-model chip */
+.cmp-model-select { appearance: none; -webkit-appearance: none; border: none; background: none; color: inherit; font: inherit; cursor: pointer; outline: none; padding: 0 2px; max-width: 168px; text-overflow: ellipsis; }
+.cmp-model-select option { color: #111; }
+.cmp-err { margin-top: 10px; border: 1px solid rgb(233 109 95 / 0.35); border-radius: 10px; padding: 9px 10px; color: var(--danger); background: color-mix(in oklch, var(--danger) 12%, transparent); font-size: 12.5px; }
 
 /* ---------- RIGHT RAIL ---------- */
 .rightbar { width: 280px; flex: none; background: var(--surface); border-left: 1px solid var(--line-soft); display: flex; flex-direction: column; padding: 14px 14px 12px; }

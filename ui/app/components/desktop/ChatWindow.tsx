@@ -1,256 +1,280 @@
 "use client";
 
-import type { KeyboardEvent, ReactNode } from "react";
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
 import { Icons } from "./Icons";
-import { DEFAULT_MODEL_ID } from "./hooks/useChatSession";
+import { DEFAULT_MODEL_ID, type ChatSessionApi } from "./hooks/useChatSession";
 import type { ChatMessage, ModelCapability } from "@/lib/types";
 
 interface ChatWindowProps {
   readonly mini?: boolean;
 }
 
+const SUGGESTIONS: readonly string[] = [
+  "Explain the architecture of this codebase",
+  "Find and fix a bug in the workspace store",
+  "Write tests for the window manager",
+];
+
 function timeLabel(timestamp: number): string {
-  return new Date(timestamp).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 function visibleOnly(messages: readonly ChatMessage[]): ChatMessage[] {
   return messages.filter((m) => m.role === "user" || m.role === "assistant");
 }
 
-interface MessageBubbleProps {
-  readonly message: ChatMessage;
+function modelList(models: readonly ModelCapability[]): readonly ModelCapability[] {
+  return models.length > 0 ? models : ([{ id: DEFAULT_MODEL_ID } as ModelCapability]);
 }
 
-function MessageBubble({ message }: MessageBubbleProps): ReactNode {
+function onComposerKeyDown(
+  send: () => Promise<void>,
+): (event: KeyboardEvent<HTMLTextAreaElement>) => void {
+  return (event) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      void send();
+    }
+  };
+}
+
+function ChatBubble({ message }: { readonly message: ChatMessage }): ReactNode {
   const isUser = message.role === "user";
   return (
-    <article
-      data-role={message.role}
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: isUser ? "flex-end" : "flex-start",
-        marginBottom: 12,
-      }}
-    >
-      <div
-        style={{
-          maxWidth: "82%",
-          padding: "10px 13px",
-          borderRadius: 12,
-          background: isUser ? "var(--accent-dim)" : "var(--card)",
-          border: "1px solid var(--line-soft)",
-          color: "var(--fg)",
-          fontSize: 14,
-          lineHeight: 1.55,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-word",
-        }}
-      >
-        <div
-          className="mono"
-          style={{ fontSize: 10.5, color: "var(--fg-faint)", marginBottom: 4 }}
-        >
-          {isUser ? "You" : "Keiko"}
-        </div>
+    <article className="chat-msg" data-role={message.role}>
+      <div className="chat-msg-bubble">
+        <div className="chat-msg-role">{isUser ? "You" : "Keiko"}</div>
         {message.content}
-        <div
-          className="mono"
-          style={{ fontSize: 10.5, color: "var(--fg-faint)", marginTop: 6 }}
-        >
-          {timeLabel(message.timestamp)}
-        </div>
+        <div className="chat-msg-time">{timeLabel(message.timestamp)}</div>
       </div>
     </article>
   );
 }
 
+function TypingBubble(): ReactNode {
+  return (
+    <article className="chat-msg" data-role="assistant">
+      <div className="chat-msg-bubble">
+        <div className="chat-msg-role">Keiko</div>
+        <span className="chat-typing" aria-label="Keiko is responding">
+          <i />
+          <i />
+          <i />
+        </span>
+      </div>
+    </article>
+  );
+}
+
+interface ComposerBarProps {
+  readonly session: ChatSessionApi;
+  readonly ready: boolean;
+}
+
+function ComposerBar({ session, ready }: ComposerBarProps): ReactNode {
+  const { models, selectedModel, setSelectedModel } = session;
+  return (
+    <div className="cmp-bar">
+      <button type="button" className="cmp-add" aria-label="Attach (coming soon)" title="Attach">
+        <Icons.plus size={16} />
+      </button>
+      <button type="button" className="cmp-mode" title="Mode">
+        <Icons.spark size={14} style={{ color: "var(--accent)" }} /> Build
+        <Icons.chevron size={12} />
+      </button>
+      <span className="spacer" />
+      <label className="cmp-model mono" title="Model">
+        <Icons.cube size={13} style={{ color: "var(--accent)" }} />
+        <select
+          className="cmp-model-select"
+          value={selectedModel}
+          aria-label="Model"
+          onChange={(event) => setSelectedModel(event.target.value)}
+        >
+          {modelList(models).map((model) => (
+            <option key={model.id} value={model.id}>
+              {model.id}
+            </option>
+          ))}
+        </select>
+        <Icons.chevron size={12} />
+      </label>
+      <button type="button" className="cmp-icon" aria-label="Voice (coming soon)" title="Voice">
+        <Icons.mic size={16} />
+      </button>
+      <button
+        type="submit"
+        className="cmp-send"
+        data-on={ready}
+        disabled={!ready}
+        aria-label="Send message"
+      >
+        <Icons.arrowUp size={16} />
+      </button>
+    </div>
+  );
+}
+
+interface ComposerCoreProps {
+  readonly session: ChatSessionApi;
+  readonly ready: boolean;
+  readonly placeholder: string;
+}
+
+function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): ReactNode {
+  const { draft, loading, sending, setDraft, sendMessage } = session;
+  return (
+    <div className="cmp-box">
+      <textarea
+        className="cmp-input"
+        rows={2}
+        value={draft}
+        aria-label="Chat message"
+        placeholder={placeholder}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={onComposerKeyDown(sendMessage)}
+        disabled={loading || sending}
+      />
+      <ComposerBar session={session} ready={ready} />
+    </div>
+  );
+}
+
+function ChatHero({ session, ready }: { readonly session: ChatSessionApi; readonly ready: boolean }): ReactNode {
+  const { loading, activeProject, setDraft, sendMessage } = session;
+  const folder = activeProject?.name ?? "orca-intelligence";
+  return (
+    <form
+      className="composer composer-compact"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void sendMessage();
+      }}
+    >
+      <h1 className="composer-title">What should we build?</h1>
+      <ComposerCore
+        session={session}
+        ready={ready}
+        placeholder={loading ? "Loading local workspace..." : "Describe a task, paste a link, or ask anything..."}
+      />
+      <div className="cmp-context">
+        <button type="button" className="chip">
+          <Icons.folder size={14} style={{ color: "var(--accent)" }} />
+          <span className="chip-label">{folder}</span>
+          <Icons.chevron size={12} style={{ color: "var(--fg-faint)" }} />
+        </button>
+        <button type="button" className="chip">
+          <Icons.cube size={14} style={{ color: "var(--fg-dim)" }} />
+          <span className="chip-label">Work locally</span>
+          <Icons.chevron size={12} style={{ color: "var(--fg-faint)" }} />
+        </button>
+      </div>
+      <div className="cmp-suggest">
+        {SUGGESTIONS.map((prompt) => (
+          <button type="button" key={prompt} className="suggest" onClick={() => setDraft(prompt)}>
+            <Icons.spark size={12} style={{ color: "var(--accent)" }} /> {prompt}
+          </button>
+        ))}
+      </div>
+    </form>
+  );
+}
+
+function MiniChat({ session, ready }: { readonly session: ChatSessionApi; readonly ready: boolean }): ReactNode {
+  const { draft, loading, sending, setDraft, sendMessage } = session;
+  return (
+    <form
+      className="composer composer-fill"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void sendMessage();
+      }}
+    >
+      <div className="cmp-box cmp-box-fill">
+        <textarea
+          className="cmp-input cmp-input-mini"
+          value={draft}
+          aria-label="Chat message"
+          placeholder={loading ? "Loading..." : "Ask Keiko..."}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={onComposerKeyDown(sendMessage)}
+          disabled={loading || sending}
+        />
+        <button
+          type="submit"
+          className="cmp-send cmp-send-float"
+          data-on={ready}
+          disabled={!ready}
+          aria-label="Send message"
+          title="Send"
+        >
+          <Icons.arrowUp size={16} />
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
-  const {
-    messages,
-    models,
-    selectedModel,
-    draft,
-    loading,
-    sending,
-    error,
-    setDraft,
-    setSelectedModel,
-    sendMessage,
-  } = session;
-
-  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      void sendMessage();
-    }
-  };
-
+  const { messages, draft, loading, sending, error, sendMessage } = session;
   const ready = draft.trim().length > 0 && !sending && !loading;
   const visible = visibleOnly(messages);
-  const modelOptions: readonly ModelCapability[] =
-    models.length > 0 ? models : ([{ id: DEFAULT_MODEL_ID } as ModelCapability]);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  if (mini) {
-    return (
-      <form
-        className="composer composer-compact"
-        style={{ height: "100%", padding: 10 }}
-        onSubmit={(event) => {
-          event.preventDefault();
-          void sendMessage();
-        }}
-      >
-        <div className="cmp-box" style={{ height: "100%" }}>
-          <textarea
-            className="cmp-input"
-            rows={2}
-            value={draft}
-            aria-label="Chat message"
-            placeholder={loading ? "Loading..." : "Ask GPT OSS 120B..."}
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={onKeyDown}
-            disabled={loading || sending}
-          />
-          <div className="cmp-bar">
-            <button type="button" className="cmp-add" aria-label="Attach">
-              <Icons.plus size={16} />
-            </button>
-            <select
-              className="cmp-model mono"
-              value={selectedModel}
-              aria-label="Model"
-              onChange={(event) => setSelectedModel(event.target.value)}
-            >
-              {modelOptions.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.id}
-                </option>
-              ))}
-            </select>
-            <span className="spacer" />
-            <button
-              type="submit"
-              className="cmp-send"
-              data-on={ready}
-              disabled={!ready}
-              aria-label="Send message"
-            >
-              <Icons.arrowUp size={16} />
-            </button>
-          </div>
-          {error !== undefined ? (
-            <div
-              role="alert"
-              style={{
-                marginTop: 8,
-                padding: "6px 10px",
-                borderRadius: 7,
-                background: "color-mix(in oklch, var(--danger) 12%, transparent)",
-                color: "var(--danger)",
-                fontSize: 12,
-              }}
-            >
-              {error}
-            </div>
-          ) : null}
-        </div>
-      </form>
-    );
-  }
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el !== null) el.scrollTop = el.scrollHeight;
+  }, [visible.length, sending]);
+
+  if (mini) return <MiniChat session={session} ready={ready} />;
 
   return (
-    <div
-      className="chatw"
-      style={{ height: "100%", display: "flex", flexDirection: "column" }}
-    >
-      <div
-        className="chatw-scroll"
-        aria-live="polite"
-        style={{ flex: 1, minHeight: 0, overflow: "auto" }}
-      >
+    <div className="chatw">
+      <div className="chatw-scroll" ref={scrollRef} aria-live="polite">
         {visible.length === 0 ? (
-          <div style={{ padding: "18px 8px", color: "var(--fg-faint)", fontSize: 13 }}>
-            <div style={{ color: "var(--fg)", fontSize: 16, marginBottom: 6 }}>
-              Chat with GPT OSS 120B
-            </div>
-            The model call stays behind the existing Keiko Model Gateway. No provider
-            details or Azure secrets are exposed to the browser.
-          </div>
+          <ChatHero session={session} ready={ready} />
         ) : (
-          visible.map((message) => <MessageBubble key={message.id} message={message} />)
+          <div className="chatw-log">
+            {visible.map((message) => (
+              <ChatBubble key={message.id} message={message} />
+            ))}
+            {sending ? <TypingBubble /> : null}
+          </div>
         )}
       </div>
 
-      <form
-        className="composer composer-compact"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void sendMessage();
-        }}
-      >
-        <div className="cmp-box">
-          <textarea
-            className="cmp-input"
-            rows={2}
-            value={draft}
-            aria-label="Chat message"
-            placeholder={
-              loading ? "Loading local workspace..." : "Ask GPT OSS 120B about your code..."
-            }
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={onKeyDown}
-            disabled={loading || sending}
-          />
-          <div className="cmp-bar">
-            <button type="button" className="cmp-add" aria-label="Attach">
-              <Icons.plus size={16} />
-            </button>
-            <select
-              className="cmp-model mono"
-              value={selectedModel}
-              aria-label="Model"
-              onChange={(event) => setSelectedModel(event.target.value)}
-            >
-              {modelOptions.map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.id}
-                </option>
-              ))}
-            </select>
-            <span className="spacer" />
-            <button
-              type="submit"
-              className="cmp-send"
-              data-on={ready}
-              disabled={!ready}
-              aria-label="Send message"
-            >
-              <Icons.arrowUp size={16} />
-            </button>
-          </div>
-          {error !== undefined ? (
-            <div
-              role="alert"
-              style={{
-                marginTop: 8,
-                padding: "6px 10px",
-                borderRadius: 7,
-                background: "color-mix(in oklch, var(--danger) 12%, transparent)",
-                color: "var(--danger)",
-                fontSize: 12,
-              }}
-            >
-              {error}
-            </div>
-          ) : null}
+      {visible.length > 0 ? (
+        <div className="chatw-foot">
+          <form
+            className="composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendMessage();
+            }}
+          >
+            <ComposerCore
+              session={session}
+              ready={ready}
+              placeholder="Ask Keiko about your code..."
+            />
+            {error !== undefined ? (
+              <div role="alert" className="cmp-err">
+                {error}
+              </div>
+            ) : null}
+          </form>
         </div>
-      </form>
+      ) : null}
+
+      {visible.length === 0 && error !== undefined ? (
+        <div className="chatw-foot">
+          <div role="alert" className="cmp-err">
+            {error}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
