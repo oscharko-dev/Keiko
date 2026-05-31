@@ -123,7 +123,8 @@ export function PlannedToolPanel({
           aria-label={`Close ${copy.label} panel`}
           onClick={onClose}
           className="flex h-10 w-10 items-center justify-center rounded text-ink-muted
-            hover:bg-elevated hover:text-ink"
+            hover:bg-elevated hover:text-ink
+            focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus"
         >
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true"
             stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
