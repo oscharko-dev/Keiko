@@ -132,6 +132,7 @@ function ToolButton({ def, pressed, disabled, disabledTip, onToggle }: ToolButto
         onClick={() => { onToggle(def.name); }}
         className={[
           "flex h-10 w-10 flex-col items-center justify-center rounded",
+          "focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus",
           disabled
             ? "text-ink-dim disabled:cursor-not-allowed disabled:opacity-40"
             : pressed

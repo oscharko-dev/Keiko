@@ -142,6 +142,20 @@ describe("PlannedToolPanel", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("close button has a visible focus ring (WCAG 2.4.7, issue #68)", () => {
+    render(
+      <PlannedToolPanel
+        tool="browser"
+        project={project}
+        onClose={() => { /* noop */ }}
+        followUpIssueUrl={FOLLOW_UP_URL}
+      />,
+    );
+    expect(screen.getByRole("button", { name: /close browser panel/i })).toHaveClass(
+      "focus-visible:ring-2",
+    );
+  });
+
   // ── Axe ──────────────────────────────────────────────────────────────────
 
   it("has no axe violations for browser variant", async () => {

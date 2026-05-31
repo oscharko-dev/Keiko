@@ -107,6 +107,14 @@ describe("ToolRail", () => {
     expect(screen.getAllByRole("button")).toHaveLength(4);
   });
 
+  it("tool buttons have a visible focus ring (WCAG 2.4.7, issue #68)", () => {
+    mockNoProject();
+    render(<ToolRail />);
+    for (const btn of screen.getAllByRole("button")) {
+      expect(btn).toHaveClass("focus-visible:ring-2");
+    }
+  });
+
   // ── No project: all disabled ─────────────────────────────────────────────
 
   it("disables all 4 buttons when no project is selected", () => {
