@@ -26,6 +26,7 @@ import {
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import { createTerminalWebSocketGateway } from "./terminal.js";
 
 export const DEFAULT_UI_PORT = 4319;
 export const UI_HOST = "127.0.0.1";
@@ -110,6 +111,7 @@ function rejectIfInvalidStateChange(req: IncomingMessage, res: ServerResponse): 
 
 async function dispatchApi(
   deps: UiServerDeps,
+  handlerDeps: UiHandlerDeps,
   req: IncomingMessage,
   res: ServerResponse,
   method: string,
@@ -128,7 +130,6 @@ async function dispatchApi(
     return;
   }
   const ctx: RouteContext = { req, res, params: match.params, url };
-  const handlerDeps = deps.handlerDeps ?? fallbackDeps();
   const outcome = await match.definition.handler(ctx, handlerDeps);
   if (outcome === STREAMING) {
     return;
@@ -165,7 +166,12 @@ function rejectForbiddenHost(res: ServerResponse): void {
   writeJson(res, 403, body);
 }
 
-function handle(deps: UiServerDeps, req: IncomingMessage, res: ServerResponse): void {
+function handle(
+  deps: UiServerDeps,
+  handlerDeps: UiHandlerDeps,
+  req: IncomingMessage,
+  res: ServerResponse,
+): void {
   const url = new URL(req.url ?? "/", `http://${UI_HOST}`);
   const apiPath = isApiPath(url.pathname);
   applySecurityHeaders(res, deps.csp, apiPath);
@@ -175,7 +181,7 @@ function handle(deps: UiServerDeps, req: IncomingMessage, res: ServerResponse): 
   }
   const method = (req.method ?? "GET").toUpperCase();
   const work = apiPath
-    ? dispatchApi(deps, req, res, method, url)
+    ? dispatchApi(deps, handlerDeps, req, res, method, url)
     : serveStatic(res, deps.staticRoot, url.pathname);
   void work.catch(() => {
     if (!res.headersSent) {
@@ -189,7 +195,18 @@ function handle(deps: UiServerDeps, req: IncomingMessage, res: ServerResponse): 
 // Creates the BFF server. The caller binds it with `server.listen(deps.port, UI_HOST)` so it never
 // listens on a non-loopback interface.
 export function createUiServer(deps: UiServerDeps): Server {
-  return createServer((req, res) => {
-    handle(deps, req, res);
+  const handlerDeps = deps.handlerDeps ?? fallbackDeps();
+  const terminalWs = createTerminalWebSocketGateway(handlerDeps, deps.port);
+  const server = createServer((req, res) => {
+    handle(deps, handlerDeps, req, res);
   });
+  server.on("upgrade", (req, socket, head) => {
+    if (terminalWs.handleUpgrade(req, socket, head)) return;
+    socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
+    socket.destroy();
+  });
+  server.on("close", () => {
+    terminalWs.close();
+  });
+  return server;
 }

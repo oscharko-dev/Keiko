@@ -4,6 +4,9 @@ import {
   clearProjectRequestForTests,
   deleteChat,
   deleteProject,
+  fetchFilesDirectories,
+  fetchFilesPreview,
+  fetchFilesTree,
   fetchModels,
   fetchProjects,
   fetchWorkspaceSummary,
@@ -50,6 +53,60 @@ describe("fetchWorkspaceSummary", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/api/workspace?dir=%2Frepo+space&task=src%2Findex.ts&budget=128",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+});
+
+describe("files API helpers", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("encodes directory picker, tree, and preview query parameters", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ path: "/repo space", parent: null, entries: [], roots: [] }))
+      .mockResolvedValueOnce(jsonResponse({ root: "/repo space", path: "src/app.ts", entries: [], truncated: false }))
+      .mockResolvedValueOnce(jsonResponse({
+        root: "/repo space",
+        path: "src/app.ts",
+        name: "app.ts",
+        sizeBytes: 10,
+        modifiedAt: 1,
+        extension: "ts",
+        mime: "text/plain",
+        symlink: false,
+        kind: "text",
+        content: "const x = 1;\n",
+        truncated: false,
+        maxBytes: 1_000_000,
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchFilesDirectories("/repo space");
+    await fetchFilesTree("/repo space", "src/app.ts");
+    await fetchFilesPreview("/repo space", "src/app.ts");
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/files/directories?path=%2Frepo+space",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/files/tree?root=%2Frepo+space&path=src%2Fapp.ts",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/files/preview?root=%2Frepo+space&path=src%2Fapp.ts",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),

@@ -75,6 +75,7 @@ const EXT_LANG: Readonly<Record<string, Lang>> = {
 
 export function langOf(name: string): Lang {
   const n = name.toLowerCase();
+  if (n === ".env" || n.startsWith(".env.")) return "props";
   if (n === "dockerfile" || n.startsWith("dockerfile")) return "docker";
   if (n.includes("docker-compose")) return "yaml";
   const parts = n.split(".");

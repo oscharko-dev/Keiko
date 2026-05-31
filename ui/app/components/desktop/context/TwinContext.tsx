@@ -149,23 +149,33 @@ function writeJson(key: string, value: unknown): void {
 }
 
 export function TwinProvider({ children }: { children: ReactNode }): ReactNode {
-  const [mode, setMode] = useState<TwinMode>(readMode);
-  const [persona, setPersona] = useState<Persona>(readPersona);
-  const [policy, setPolicy] = useState<readonly PolicyRow[]>(() =>
-    readJson<readonly PolicyRow[]>(KEY_POLICY, DEFAULT_POLICY),
-  );
-  const [memory, setMemory] = useState<readonly string[]>(() =>
-    readJson<readonly string[]>(KEY_MEMORY, DEFAULT_MEMORY),
-  );
-  const [bridges, setBridges] = useState<Bridges>(() =>
-    readJson<Bridges>(KEY_BRIDGES, DEFAULT_BRIDGES),
-  );
+  // Start from static defaults so the build-time prerender and the client's first
+  // render agree; adopt persisted values right after mount. Reading localStorage in
+  // the initializers would diverge from the static export and trip React #418
+  // (hydration mismatch) on the footer governance pill and the ModeSwitch.
+  const [mode, setMode] = useState<TwinMode>("manual");
+  const [persona, setPersona] = useState<Persona>("Developer");
+  const [policy, setPolicy] = useState<readonly PolicyRow[]>(DEFAULT_POLICY);
+  const [memory, setMemory] = useState<readonly string[]>(DEFAULT_MEMORY);
+  const [bridges, setBridges] = useState<Bridges>(DEFAULT_BRIDGES);
+  const [hydrated, setHydrated] = useState(false);
 
-  useEffect(() => { writeString(KEY_MODE, mode); }, [mode]);
-  useEffect(() => { writeString(KEY_PERSONA, persona); }, [persona]);
-  useEffect(() => { writeJson(KEY_POLICY, policy); }, [policy]);
-  useEffect(() => { writeJson(KEY_MEMORY, memory); }, [memory]);
-  useEffect(() => { writeJson(KEY_BRIDGES, bridges); }, [bridges]);
+  useEffect(() => {
+    setMode(readMode());
+    setPersona(readPersona());
+    setPolicy(readJson<readonly PolicyRow[]>(KEY_POLICY, DEFAULT_POLICY));
+    setMemory(readJson<readonly string[]>(KEY_MEMORY, DEFAULT_MEMORY));
+    setBridges(readJson<Bridges>(KEY_BRIDGES, DEFAULT_BRIDGES));
+    setHydrated(true);
+  }, []);
+
+  // Persist only after adoption so the mount pass can't clobber stored values
+  // with the transient defaults.
+  useEffect(() => { if (hydrated) writeString(KEY_MODE, mode); }, [mode, hydrated]);
+  useEffect(() => { if (hydrated) writeString(KEY_PERSONA, persona); }, [persona, hydrated]);
+  useEffect(() => { if (hydrated) writeJson(KEY_POLICY, policy); }, [policy, hydrated]);
+  useEffect(() => { if (hydrated) writeJson(KEY_MEMORY, memory); }, [memory, hydrated]);
+  useEffect(() => { if (hydrated) writeJson(KEY_BRIDGES, bridges); }, [bridges, hydrated]);
 
   const decide = useCallback(
     (kind: GateKind, risk: Risk): Decision => twinDecide(policy, kind, risk),

@@ -19,15 +19,27 @@ export function fileIconKey(name: string): string | null {
   if (n.endsWith(".json")) return "json";
   if (n.endsWith(".yml") || n.endsWith(".yaml")) return "yaml";
   if (n.endsWith(".md")) return "markdown";
-  if (n.endsWith(".properties") || n.endsWith(".env")) return "properties";
+  if (n.endsWith(".properties") || n.endsWith(".env") || n.startsWith(".env.")) return "properties";
   if (n.endsWith(".java")) return "java";
   if (n.endsWith(".tsx")) return "react";
   if (n.endsWith(".ts")) return "typescript";
+  if (n.endsWith(".jsx") || n.endsWith(".js") || n.endsWith(".mjs") || n.endsWith(".cjs")) return "javascript";
+  if (n.endsWith(".py")) return "python";
+  if (n.endsWith(".go")) return "go";
+  if (n.endsWith(".rs")) return "rust";
   if (n.endsWith(".gradle")) return "gradle";
   if (n.endsWith(".sql")) return "postgresql";
   if (n.endsWith(".html")) return "html5";
   if (n.endsWith(".css")) return "css3";
   if (n.endsWith(".graphql") || n.endsWith(".gql")) return "graphql";
+  if (
+    n.endsWith(".png") ||
+    n.endsWith(".jpg") ||
+    n.endsWith(".jpeg") ||
+    n.endsWith(".gif") ||
+    n.endsWith(".webp") ||
+    n.endsWith(".svg")
+  ) return "image";
   return null;
 }
 

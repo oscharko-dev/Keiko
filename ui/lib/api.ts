@@ -11,10 +11,14 @@ import type {
   ChatStatus,
   ChatMessageRole,
   ChatWorkflowStatus,
+  CreateTerminalSessionResponse,
   DesktopChatBootstrapResponse,
   DesktopChatSendResponse,
   EvidenceListEntry,
   EvidenceManifest,
+  FilesDirectoryListing,
+  FilesPreviewResponse,
+  FilesTreeResponse,
   MessageResponse,
   MessagesResponse,
   ModelCapability,
@@ -24,6 +28,8 @@ import type {
   ProjectsResponse,
   RunReport,
   SafeGatewayConfig,
+  TerminalConfig,
+  TerminalDirectoryListing,
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
@@ -448,4 +454,66 @@ export async function sendDesktopChat(
     method: "POST",
     body: JSON.stringify(input),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Desktop terminal — PTY control plane; byte stream uses native browser WebSocket
+// ---------------------------------------------------------------------------
+
+export async function fetchTerminalConfig(): Promise<TerminalConfig> {
+  return fetchJson("/api/terminal/shells");
+}
+
+export async function fetchTerminalDirectories(path?: string): Promise<TerminalDirectoryListing> {
+  const params = new URLSearchParams();
+  if (path !== undefined && path.length > 0) params.set("path", path);
+  const qs = params.toString();
+  return fetchJson(`/api/terminal/directories${qs ? `?${qs}` : ""}`);
+}
+
+export interface CreateTerminalSessionInput {
+  readonly cwd?: string;
+  readonly shellId?: string;
+  readonly cols?: number;
+  readonly rows?: number;
+}
+
+export async function createTerminalSession(
+  input: CreateTerminalSessionInput,
+): Promise<CreateTerminalSessionResponse> {
+  return fetchJson("/api/terminal/sessions", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteTerminalSession(sessionId: string): Promise<void> {
+  await fetchJson<void>(`/api/terminal/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Desktop files — read-only selected-root browser and preview control plane
+// ---------------------------------------------------------------------------
+
+export async function fetchFilesDirectories(path?: string): Promise<FilesDirectoryListing> {
+  const params = new URLSearchParams();
+  if (path !== undefined && path.length > 0) params.set("path", path);
+  const qs = params.toString();
+  return fetchJson(`/api/files/directories${qs ? `?${qs}` : ""}`);
+}
+
+export async function fetchFilesTree(root: string, path = ""): Promise<FilesTreeResponse> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  if (path.length > 0) params.set("path", path);
+  return fetchJson(`/api/files/tree?${params.toString()}`);
+}
+
+export async function fetchFilesPreview(root: string, path: string): Promise<FilesPreviewResponse> {
+  const params = new URLSearchParams();
+  params.set("root", root);
+  params.set("path", path);
+  return fetchJson(`/api/files/preview?${params.toString()}`);
 }

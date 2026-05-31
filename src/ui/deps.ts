@@ -27,6 +27,7 @@ import {
   resolveUiDbPath,
   type UiStore,
 } from "./store/index.js";
+import { createPtyTerminalSessionManager, type TerminalSessionManager } from "./terminal.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -61,6 +62,8 @@ export interface UiHandlerDeps {
   // Resolved UI database file path when known. Project onboarding uses this to prevent the UI DB
   // and selected repositories from overlapping on disk.
   readonly uiDbPath?: string | undefined;
+  // Local PTY terminal manager. Optional for legacy tests; production wiring creates one per BFF.
+  readonly terminal?: TerminalSessionManager | undefined;
 }
 
 export interface BuildHandlerDepsOptions {
@@ -191,6 +194,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     { additionalSecrets: secrets },
     options.env,
   );
+  const liveRedactor = buildRedactor(options.env, config);
   const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
   const uiStore =
     options.store ?? createNodeUiStore(resolvedUiDbPath, { redactString });
@@ -199,11 +203,15 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     configPresent,
     evidenceStore,
     env: options.env,
-    redactor: buildRedactor(options.env, config),
+    redactor: liveRedactor,
     registry: options.registry ?? createRunRegistry(),
     modelPortFactory: options.modelPortFactory ?? defaultModelPortFactory(config),
     redactionSecrets: secrets,
     store: uiStore,
     uiDbPath: resolvedUiDbPath,
+    terminal: createPtyTerminalSessionManager({
+      env: options.env,
+      redactor: liveRedactor,
+    }),
   };
 }

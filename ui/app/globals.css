@@ -1,7 +1,3 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
 /* ============================================================
    KEIKO DESKTOP — design tokens & base
    Brand: #4EBA87 (orca green) · #333333 · #ffffff
@@ -222,7 +218,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; border: none; ba
 
 /* ---------- WORKSPACE SURFACE (the framed canvas) ---------- */
 .stage { position: relative; flex: 1; min-width: 0; display: flex; gap: 6px; padding: 6px; }
-.ws-scene { position: absolute; left: 0; top: 0; width: 0; height: 0; will-change: transform; }
+.ws-scene { position: absolute; left: 0; top: 0; width: 0; height: 0; will-change: transform; z-index: 2; }
 .workspace { cursor: grab; }
 .workspace .window { cursor: default; }
 .ws-zoom { position: absolute; left: 14px; bottom: 14px; z-index: 8000; display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 11px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-card); }
@@ -233,9 +229,19 @@ button { font-family: inherit; color: inherit; cursor: pointer; border: none; ba
 .workspace {
   position: relative; flex: 1; min-width: 0; overflow: hidden;
   border-radius: 12px; border: 1px solid var(--line);
-  background:
-    radial-gradient(circle at 1px 1px, var(--line-soft) 1px, transparent 0) 0 0 / 22px 22px,
-    var(--bg);
+  background: var(--bg);
+}
+
+/* Liquid-Chrome-Wallpaper — bottom layer (z0), screen-fixed */
+.ws-shader {
+  position: absolute; inset: 0; z-index: 0;
+  display: block; pointer-events: none;
+  transition: opacity .35s ease;
+}
+/* Dot-grid — own layer (z1) above the wallpaper; pans/zooms with the view */
+.ws-grid {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background-image: radial-gradient(circle at 1px 1px, var(--line-soft) 1px, transparent 0);
 }
 
 /* ---------- TOOL RAILS ---------- */
@@ -512,6 +518,25 @@ select.set-input { appearance: none; cursor: pointer; }
 .set-btn:hover { background: var(--card-2); color: var(--fg); }
 .set-btn.primary { background: var(--accent); color: #06281b; border-color: var(--accent); }
 .set-placeholder { font-size: 12.5px; color: var(--fg-faint); padding: 20px 4px; text-align: center; }
+.gpref { padding: 4px 2px 8px; }
+.gpref-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.gpref-label { font-size: 12.5px; color: var(--fg); font-weight: 550; }
+.gpref-val { font-size: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.gpref-slider {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 6px;
+  border-radius: 999px; cursor: pointer; outline: none;
+  background: linear-gradient(to right, var(--accent) 0 var(--p, 100%), var(--card-2) var(--p, 100%) 100%);
+}
+.gpref-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--fg); border: 3px solid var(--accent);
+  box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: pointer;
+}
+.gpref-slider::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%; background: var(--fg);
+  border: 3px solid var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: pointer;
+}
+.gpref-scale { display: flex; justify-content: space-between; margin-top: 7px; font-size: 10.5px; color: var(--fg-faint); letter-spacing: .02em; }
 
 /* ---------- FILE PREVIEW + SYNTAX HIGHLIGHT ---------- */
 .fpv { display: flex; flex-direction: column; height: 100%; }
@@ -675,7 +700,7 @@ select.set-input { appearance: none; cursor: pointer; }
 /* FAB + empty state */
 .ws-fab { position: absolute; right: 18px; bottom: 18px; z-index: 8000; width: 46px; height: 46px; border-radius: 14px; background: var(--accent); color: #06281b; display: grid; place-items: center; box-shadow: 0 10px 30px -8px var(--accent-glow), 0 6px 16px rgba(0,0,0,.5); transition: transform .12s; }
 .ws-fab:hover { transform: translateY(-2px); }
-.ws-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; pointer-events: none; }
+.ws-empty { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; pointer-events: none; }
 .ws-empty-logo { width: 54px; height: 54px; opacity: .5; margin-bottom: 8px; }
 .ws-empty-title { font-size: 16px; font-weight: 600; }
 .ws-empty-sub { font-size: 13px; color: var(--fg-faint); }
@@ -789,8 +814,32 @@ select.dlg-input { appearance: none; cursor: pointer; }
 .tk-v { color: var(--fg-muted); }
 
 /* ---------- WIDGET: CHAT ---------- */
-.chatw { height: 100%; display: flex; flex-direction: column; }
-.chatw-scroll { flex: 1; overflow: auto; padding: 4px 16px 18px; }
+/* min-height:0 lets the flex scroll child actually shrink+scroll instead of
+   growing and ejecting the pinned composer (the large-chat clipping bug). */
+.chatw { height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.chatw-scroll { flex: 1; min-height: 0; overflow: auto; padding: 4px 16px 18px; }
+.chatw-log { display: flex; flex-direction: column; }
+.chatw-foot { flex: none; padding: 0 16px 14px; }
+.chatw-foot .composer { max-width: none; margin: 0; }
+.chat-msg { display: flex; margin-bottom: 14px; }
+.chat-msg[data-role="user"] { justify-content: flex-end; }
+.chat-msg-bubble {
+  max-width: min(640px, 84%);
+  border: 1px solid var(--line-soft); border-radius: 14px;
+  padding: 10px 13px; background: var(--card); color: var(--fg);
+  font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+}
+.chat-msg[data-role="user"] .chat-msg-bubble { border-color: var(--accent-line); background: var(--accent-dim); }
+.chat-msg-role { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--fg-faint); margin-bottom: 5px; }
+.chat-msg-time { font-size: 10px; color: var(--fg-faint); margin-top: 6px; font-family: var(--font-mono); }
+.chat-typing { display: inline-flex; gap: 4px; align-items: center; }
+.chat-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--fg-faint); animation: pulse 1.2s infinite; }
+.chat-typing i:nth-child(2) { animation-delay: .2s; }
+.chat-typing i:nth-child(3) { animation-delay: .4s; }
+/* functional model picker, styled as the design's static .cmp-model chip */
+.cmp-model-select { appearance: none; -webkit-appearance: none; border: none; background: none; color: inherit; font: inherit; cursor: pointer; outline: none; padding: 0 2px; max-width: 168px; text-overflow: ellipsis; }
+.cmp-model-select option { color: #111; }
+.cmp-err { margin-top: 10px; border: 1px solid rgb(233 109 95 / 0.35); border-radius: 10px; padding: 9px 10px; color: var(--danger); background: color-mix(in oklch, var(--danger) 12%, transparent); font-size: 12.5px; }
 
 /* ---------- RIGHT RAIL ---------- */
 .rightbar { width: 280px; flex: none; background: var(--surface); border-left: 1px solid var(--line-soft); display: flex; flex-direction: column; padding: 14px 14px 12px; }

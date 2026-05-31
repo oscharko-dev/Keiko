@@ -723,3 +723,130 @@ export interface DesktopChatSendResponse {
   readonly messages: readonly ChatMessage[];
   readonly usage?: UsageMetadata;
 }
+
+// ---------------------------------------------------------------------------
+// Desktop terminal — BFF PTY/WebSocket control contract
+// ---------------------------------------------------------------------------
+
+export interface TerminalShell {
+  readonly id: string;
+  readonly label: string;
+  readonly path: string;
+  readonly args: readonly string[];
+}
+
+export interface TerminalDirectoryRoot {
+  readonly label: string;
+  readonly path: string;
+}
+
+export interface TerminalConfig {
+  readonly platform: string;
+  readonly defaultCwd: string;
+  readonly defaultShell: string | null;
+  readonly shells: readonly TerminalShell[];
+  readonly roots: readonly TerminalDirectoryRoot[];
+  readonly maxSessions: number;
+}
+
+export interface TerminalDirectoryEntry {
+  readonly name: string;
+  readonly path: string;
+}
+
+export interface TerminalDirectoryListing {
+  readonly path: string;
+  readonly parent: string | null;
+  readonly entries: readonly TerminalDirectoryEntry[];
+  readonly roots: readonly TerminalDirectoryRoot[];
+}
+
+export type TerminalStatus = "running" | "exited";
+
+export interface TerminalSessionMeta {
+  readonly id: string;
+  readonly cwd: string;
+  readonly shellId: string;
+  readonly shellLabel: string;
+  readonly createdAt: number;
+  readonly status: TerminalStatus;
+  readonly cols: number;
+  readonly rows: number;
+  readonly exitCode?: number;
+  readonly signal?: number;
+}
+
+export interface CreateTerminalSessionResponse {
+  readonly session: TerminalSessionMeta;
+  readonly webSocketPath: string;
+}
+
+// ---------------------------------------------------------------------------
+// Desktop files — read-only selected-root filesystem browser contract
+// ---------------------------------------------------------------------------
+
+export interface FilesDirectoryRoot {
+  readonly label: string;
+  readonly path: string;
+}
+
+export interface FilesDirectoryEntry {
+  readonly name: string;
+  readonly path: string;
+}
+
+export interface FilesDirectoryListing {
+  readonly path: string;
+  readonly parent: string | null;
+  readonly entries: readonly FilesDirectoryEntry[];
+  readonly roots: readonly FilesDirectoryRoot[];
+}
+
+export type FilesEntryKind = "directory" | "file" | "symlink";
+
+export interface FilesTreeEntry {
+  readonly name: string;
+  readonly path: string;
+  readonly kind: FilesEntryKind;
+  readonly sizeBytes: number;
+  readonly modifiedAt: number;
+  readonly extension: string | null;
+  readonly symlink: boolean;
+  readonly readable: boolean;
+}
+
+export interface FilesTreeResponse {
+  readonly root: string;
+  readonly path: string;
+  readonly entries: readonly FilesTreeEntry[];
+  readonly truncated: boolean;
+}
+
+export interface FilesPreviewBase {
+  readonly root: string;
+  readonly path: string;
+  readonly name: string;
+  readonly sizeBytes: number;
+  readonly modifiedAt: number;
+  readonly extension: string | null;
+  readonly mime: string;
+  readonly symlink: boolean;
+}
+
+export type FilesPreviewResponse =
+  | (FilesPreviewBase & {
+      readonly kind: "text";
+      readonly content: string;
+      readonly truncated: boolean;
+      readonly maxBytes: number;
+    })
+  | (FilesPreviewBase & {
+      readonly kind: "image";
+      readonly dataUrl: string;
+      readonly maxBytes: number;
+    })
+  | (FilesPreviewBase & {
+      readonly kind: "binary";
+      readonly reason: "unsupported" | "too_large";
+      readonly maxBytes?: number;
+    });

@@ -39,6 +39,17 @@ import {
   handleUpdateMessage,
 } from "./store-handlers.js";
 import { handleCreateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
+import {
+  handleCreateTerminalSession,
+  handleDeleteTerminalSession,
+  handleTerminalDirectories,
+  handleTerminalShells,
+} from "./terminal.js";
+import {
+  handleFilesDirectories,
+  handleFilesPreview,
+  handleFilesTree,
+} from "./files.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -78,8 +89,10 @@ function health(): RouteResult {
   return { status: 200, body: { status: "ok", version: SDK_VERSION } };
 }
 
-// The full 27-route contract: the twelve original (ADR-0011 D5), the 10 additive UI-store
-// routes (ADR-0013 D7), three Issue #66 run-summary routes, and two desktop chat routes.
+// The full route contract: the twelve original (ADR-0011 D5), the 10 additive UI-store
+// routes (ADR-0013 D7), three Issue #66 run-summary routes, two desktop chat routes,
+// desktop terminal JSON routes, and read-only Files widget routes. Terminal byte I/O
+// uses a token-scoped WebSocket upgrade path.
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
   { method: "GET", pattern: "/api/config", handler: handleConfig },
@@ -113,6 +126,15 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
+  // Desktop terminal — JSON control plane; PTY byte stream is handled via WebSocket upgrade.
+  { method: "GET", pattern: "/api/terminal/shells", handler: handleTerminalShells },
+  { method: "GET", pattern: "/api/terminal/directories", handler: handleTerminalDirectories },
+  { method: "POST", pattern: "/api/terminal/sessions", handler: handleCreateTerminalSession },
+  { method: "DELETE", pattern: "/api/terminal/sessions/:sessionId", handler: handleDeleteTerminalSession },
+  // Desktop files — read-only selected-root browser and preview control plane.
+  { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
+  { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },
+  { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured

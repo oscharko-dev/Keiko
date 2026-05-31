@@ -27,7 +27,7 @@ export interface WindowSize {
   readonly h: number;
 }
 
-export type ConfigFieldType = "text" | "select" | "textarea" | "perm";
+export type ConfigFieldType = "text" | "select" | "textarea" | "perm" | "directory";
 
 export interface ConfigField {
   readonly key: string;
@@ -105,7 +105,7 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 290,
     h: 340,
     tiny: { w: 200, h: 150 },
-    config: [{ key: "root", label: "Folder", type: "select", options: ["src", "assets", "/"], def: "src" }],
+    config: [{ key: "root", label: "Folder", type: "directory", def: "" }],
   },
   editor: {
     title: "Editor",
@@ -132,8 +132,8 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 250,
     tiny: { w: 250, h: 140 },
     config: [
-      { key: "cwd", label: "Working directory", type: "text", def: "~/orca-intelligence" },
-      { key: "shell", label: "Shell", type: "select", options: ["zsh", "bash", "fish"], def: "zsh" },
+      { key: "cwd", label: "Working directory", type: "directory", def: "" },
+      { key: "shell", label: "Shell", type: "select", options: [], def: "" },
     ],
   },
   review: {

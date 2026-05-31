@@ -8,6 +8,7 @@ import type {
   RefObject,
 } from "react";
 import { Icons } from "./Icons";
+import { WorkspaceShader } from "./WorkspaceShader";
 import { ConnectionsLayer } from "./windows/ConnectionsLayer";
 import { WindowFrame } from "./windows/WindowFrame";
 import { canConnect } from "./windows/connectionUtils";
@@ -103,9 +104,10 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     <div
       className="workspace"
       ref={wsRef}
-      style={bgStyle}
       onPointerDown={onBgPointerDown}
     >
+      <WorkspaceShader />
+      <div className="ws-grid" style={bgStyle} aria-hidden="true" />
       {empty ? (
         <div className="ws-empty">
           {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG directly */}

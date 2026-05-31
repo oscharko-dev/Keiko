@@ -1,6 +1,5 @@
-// Wave 2 local UI BFF (ADR-0011). A hand-written node:http server with zero new runtime
-// dependencies that serves the static export and exposes the twelve-route JSON + SSE API contract;
-// the browser tier is presentation-only and holds no secret, harness handle, or filesystem authority.
+// Local UI BFF. The browser tier stays presentation-only: model, filesystem, PTY, and harness
+// authority remain in the loopback Node process behind JSON, SSE, and token-scoped WebSocket seams.
 
 export { createUiServer, DEFAULT_UI_PORT, UI_HOST, type UiServerDeps } from "./server.js";
 export { buildCspHeader, extractInlineScriptHashes } from "./csp.js";
@@ -91,3 +90,25 @@ export {
   handleListMessages,
   handleCreateMessage,
 } from "./store-handlers.js";
+export {
+  createPtyTerminalSessionManager,
+  PtyTerminalSessionManager,
+  TerminalError,
+  type TerminalConfig,
+  type TerminalDirectoryListing,
+  type TerminalSessionManager,
+  type TerminalSessionMeta,
+  type TerminalShell,
+} from "./terminal.js";
+export {
+  listFilesDirectories,
+  readFilesPreview,
+  readFilesTree,
+  type FilesDirectoryEntry,
+  type FilesDirectoryListing,
+  type FilesDirectoryRoot,
+  type FilesEntryKind,
+  type FilesPreviewResponse,
+  type FilesTreeEntry,
+  type FilesTreeResponse,
+} from "./files.js";
