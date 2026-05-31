@@ -36,16 +36,33 @@ function resolveConnections(
   return out;
 }
 
-function tempPath(connecting: ConnectingState, wins: readonly AppWindow[]): string | null {
+interface TempPath {
+  readonly d: string;
+  readonly ex: number;
+  readonly ey: number;
+}
+
+function tempPath(connecting: ConnectingState, wins: readonly AppWindow[]): TempPath | null {
   const a = wins.find((w) => w.id === connecting.from);
   if (a === undefined) return null;
   const ca = { x: a.x + a.w / 2, y: a.y + a.h / 2 };
   const dx = connecting.x - ca.x;
   const dy = connecting.y - ca.y;
-  const start = Math.abs(dx) >= Math.abs(dy)
+  const horiz = Math.abs(dx) >= Math.abs(dy);
+  const s = horiz
     ? { x: dx >= 0 ? a.x + a.w : a.x, y: ca.y }
     : { x: ca.x, y: dy >= 0 ? a.y + a.h : a.y };
-  return `M${String(start.x)},${String(start.y)} L${String(connecting.x)},${String(connecting.y)}`;
+  const k = Math.max(40, Math.abs(horiz ? dx : dy) / 2);
+  const c1 = horiz
+    ? { x: s.x + (dx >= 0 ? k : -k), y: s.y }
+    : { x: s.x, y: s.y + (dy >= 0 ? k : -k) };
+  const ex = connecting.x;
+  const ey = connecting.y;
+  return {
+    d: `M${String(s.x)},${String(s.y)} C${String(c1.x)},${String(c1.y)} ${String(ex)},${String(ey)} ${String(ex)},${String(ey)}`,
+    ex,
+    ey,
+  };
 }
 
 export function ConnectionsLayer({
@@ -58,35 +75,20 @@ export function ConnectionsLayer({
   const temp = connecting !== null ? tempPath(connecting, wins) : null;
   return (
     <div className="conn-layer">
-      <svg className="conn-svg" width="100%" height="100%">
-        <defs>
-          <marker
-            id="conn-arrow"
-            markerWidth="9"
-            markerHeight="9"
-            refX="6"
-            refY="4.5"
-            orient="auto"
-          >
-            <path
-              d="M1,1 L7,4.5 L1,8"
-              fill="none"
-              stroke="var(--accent)"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </marker>
-        </defs>
+      {/* viewBox + matching .conn-svg CSS gives a real ±10000 viewport with
+          1:1 world↔pixel mapping. No <marker>: links are symmetric, not flows. */}
+      <svg
+        className="conn-svg"
+        viewBox="-10000 -10000 20000 20000"
+        preserveAspectRatio="xMidYMid meet"
+      >
         {items.map((it) => (
-          <path
-            key={it.c.id}
-            className="conn-path"
-            markerEnd="url(#conn-arrow)"
-            d={it.d}
-          />
+          <path key={it.c.id} className="conn-path" d={it.d} />
         ))}
-        {temp !== null ? <path className="conn-path conn-temp" d={temp} /> : null}
+        {temp !== null ? <path className="conn-path conn-temp" d={temp.d} /> : null}
+        {temp !== null ? (
+          <circle className="conn-dot" cx={temp.ex} cy={temp.ey} r="5" />
+        ) : null}
       </svg>
       {items.map((it) => (
         <button

@@ -23,12 +23,6 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unable to read this folder.";
 }
 
-function basenameOf(path: string): string {
-  const normalized = path.replace(/[\\/]+$/u, "");
-  const parts = normalized.split(/[\\/]/u).filter((part) => part.length > 0);
-  return parts.at(-1) ?? path;
-}
-
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
@@ -197,28 +191,18 @@ export function FilesWidget({ root }: FilesWidgetProps): ReactNode {
     );
   }
 
-  const rootPath = resolvedRoot ?? apiRoot;
-
   return (
     <div className="files">
-      <div className="files-head">
-        <div className="files-root" title={rootPath}>
-          <span className="files-root-name">{basenameOf(rootPath)}</span>
-          <span className="files-root-path mono">{rootPath}</span>
-        </div>
-        <button
-          className="files-refresh"
-          type="button"
-          onClick={() => setRefreshKey((value) => value + 1)}
-          title="Refresh folder"
-          aria-label="Refresh folder"
-        >
-          <Icons.reset size={14} />
-        </button>
-      </div>
-      <div className="tr files-tree">
-        {renderDirectory("", 0)}
-      </div>
+      <button
+        className="files-refresh"
+        type="button"
+        onClick={() => setRefreshKey((value) => value + 1)}
+        title="Refresh folder"
+        aria-label="Refresh folder"
+      >
+        <Icons.reset size={13} />
+      </button>
+      <div className="tr files-tree">{renderDirectory("", 0)}</div>
     </div>
   );
 }
