@@ -122,25 +122,52 @@ export interface DefaultLayoutWindow {
   readonly w: number;
   readonly h: number;
   readonly z: number;
-  readonly cfg: Record<string, never>;
+  readonly cfg: Record<string, unknown>;
   readonly max: false;
   readonly zoom: 1;
 }
 
-// Welle 2: ship just the chat window. Welle 4 will reintroduce files-0 / term-0.
+// Welle 4: design's three-window default — chat (left ~54%), files (top-right),
+// terminal (bottom-right). Mirrors project/windows.jsx 134-143.
 export function defaultLayout(W: number, H: number): DefaultLayoutWindow[] {
-  const padding = 14;
-  const width = Math.max(320, Math.min(720, W - padding * 2));
-  const height = Math.max(260, H - padding * 2);
+  const p = 14;
+  const g = 14;
+  const leftW = Math.round((W - p * 2 - g) * 0.54);
+  const rightW = W - p * 2 - g - leftW;
+  const filesH = Math.round((H - p * 2 - g) * 0.52);
   return [
     {
       id: "chat-0",
       type: "chat",
-      x: padding,
-      y: padding,
-      w: width,
-      h: height,
+      x: p,
+      y: p,
+      w: leftW,
+      h: H - p * 2,
       z: 3,
+      cfg: {},
+      max: false,
+      zoom: 1,
+    },
+    {
+      id: "files-0",
+      type: "files",
+      x: p + leftW + g,
+      y: p,
+      w: rightW,
+      h: filesH,
+      z: 2,
+      cfg: { root: "src" },
+      max: false,
+      zoom: 1,
+    },
+    {
+      id: "term-0",
+      type: "terminal",
+      x: p + leftW + g,
+      y: p + filesH + g,
+      w: rightW,
+      h: H - p * 2 - filesH - g,
+      z: 1,
       cfg: {},
       max: false,
       zoom: 1,

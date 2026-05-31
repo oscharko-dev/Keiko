@@ -33,7 +33,7 @@ export type { AppWindow, Connection, ConnectingState, SnapPrev, View };
 export type { SnapZone } from "../windows/connectionUtils";
 export type { UseWorkspaceResult, ViewportWorld, WorkspaceApi };
 
-const WS_LS = "keiko.workspace.v3";
+const WS_LS = "keiko.workspace.v4";
 const CONN_LS = "keiko.conns.v1";
 const VIEW_LS = "keiko.view";
 const MIN_ZOOM = 0.3;
