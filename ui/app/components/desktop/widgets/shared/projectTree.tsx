@@ -31,9 +31,10 @@ export function fileIconKey(name: string): string | null {
   return null;
 }
 
-export function FileIcon({ name, icon }: { name: string; icon?: string }): ReactNode {
+export function FileIcon({ name, icon }: { name: string; icon?: string | undefined }): ReactNode {
   const key = icon ?? fileIconKey(name);
   if (key !== null) {
+    // eslint-disable-next-line @next/next/no-img-element -- design CSS sizes raw SVG via .fi-img; next/image breaks sizing
     return <img className="fi-img" src={`/assets/icons/${key}.svg`} width="15" height="15" alt="" />;
   }
   return (
@@ -190,6 +191,7 @@ export function TreeNodeComponent({ node, depth, path, active, onPick }: TreeNod
             <Icons.chevronR size={11} />
           </span>
           {node.icon !== undefined ? (
+            // eslint-disable-next-line @next/next/no-img-element -- design CSS sizes raw SVG via .fi-img; next/image breaks sizing
             <img
               className="fi-img"
               src={`/assets/icons/${node.icon}.svg`}

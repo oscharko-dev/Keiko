@@ -39,14 +39,15 @@ const CONNECTORS: ConnEntry[] = [
 ];
 
 interface PlugIconProps {
-  img?: string;
-  icon?: IconName;
-  glyph?: string;
+  img?: string | undefined;
+  icon?: IconName | undefined;
+  glyph?: string | undefined;
 }
 
 function PlugIcon({ img, icon, glyph }: PlugIconProps): ReactNode {
   if (img !== undefined) {
     return (
+      // eslint-disable-next-line @next/next/no-img-element -- design CSS sizes raw SVG via .pl-img; next/image breaks sizing
       <img className="pl-img" src={`/assets/icons/${img}.svg`} width="20" height="20" alt="" />
     );
   }

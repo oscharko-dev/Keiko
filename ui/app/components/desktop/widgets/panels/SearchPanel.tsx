@@ -11,7 +11,7 @@ export function SearchPanel(): ReactNode {
     <div className="srch">
       <div className="srch-box">
         <Icons.search size={15} />
-        <input placeholder="Search files & symbols…" autoFocus />
+        <input placeholder="Search files & symbols…" />
         <span className="kbd">⇧⇧</span>
       </div>
       <div className="tw-label srch-label">
