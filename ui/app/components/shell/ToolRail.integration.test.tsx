@@ -15,11 +15,13 @@ import { ToolRail } from "./ToolRail";
 
 const mockReplace = vi.fn();
 let mockParams = new URLSearchParams();
+let mockPathname = "/";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: mockReplace }),
   // Each render call picks up the current mockParams instance.
   useSearchParams: () => mockParams,
+  usePathname: () => mockPathname,
 }));
 
 vi.mock("@/lib/api", async () => {
@@ -74,6 +76,7 @@ describe("ToolRail integration", () => {
     vi.clearAllMocks();
     mockReplace.mockClear();
     mockParams = new URLSearchParams();
+    mockPathname = "/";
   });
 
   // ── Available project → click Files → FilesPanel renders with summary ────

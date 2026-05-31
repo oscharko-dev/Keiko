@@ -7,19 +7,36 @@ import { Sidebar } from "./Sidebar";
 import { ToolRail } from "./ToolRail";
 
 // ---------------------------------------------------------------------------
-// useMatchMedia hook — SSR-safe, DOM-only after mount
+// Persisted sidebar preference helpers
 // ---------------------------------------------------------------------------
 
-function useMatchMedia(query: string): boolean {
-  const [matches, setMatches] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia(query);
-    setMatches(mq.matches);
-    const handler = (e: MediaQueryListEvent): void => { setMatches(e.matches); };
-    mq.addEventListener("change", handler);
-    return () => { mq.removeEventListener("change", handler); };
-  }, [query]);
-  return matches;
+const STORAGE_KEY = "keiko.shell.sidebarCollapsed";
+
+function readStoredCollapsed(): boolean | null {
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (stored === "true") return true;
+    if (stored === "false") return false;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function readViewportDefaultCollapsed(): boolean {
+  try {
+    return window.innerWidth < 1024;
+  } catch {
+    return false;
+  }
+}
+
+function persistCollapsed(collapsed: boolean): void {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(collapsed));
+  } catch {
+    // Storage can be unavailable in restricted/private contexts. The shell remains usable.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -30,14 +47,12 @@ interface ShellChromeProps {
   children: ReactNode;
 }
 
-const STORAGE_KEY = "keiko.shell.sidebarCollapsed";
-
 /**
  * Top-level client shell wrapper. Owns sidebar collapsed state, reads/writes it to localStorage
  * in a mount-only effect to avoid hydration mismatch (ADR-0014 D3).
  *
- * Three-zone CSS Grid: header top bar, then [sidebar | main | tool-rail].
- * ToolRail is omitted from the DOM on mobile (< 640 px) per ADR-0014 D8.
+ * Three-zone shell: header top bar, then [sidebar | main | tool-rail].
+ * ToolRail is CSS-hidden below mobile breakpoints per ADR-0014 D8.
  */
 export function ShellChrome({ children }: ShellChromeProps): ReactNode {
   // SSR-safe: render default state on first paint; correct via mount effect.
@@ -46,23 +61,21 @@ export function ShellChrome({ children }: ShellChromeProps): ReactNode {
 
   // Read persisted state once on mount (client-only).
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored !== null) {
-      setCollapsed(stored === "true");
-    } else {
-      // Default: collapse sidebar on narrow screens.
-      setCollapsed(window.innerWidth < 1024);
-    }
+    setCollapsed(readStoredCollapsed() ?? readViewportDefaultCollapsed());
     setMounted(true);
   }, []);
 
   // Persist whenever collapsed changes, but only after initial mount.
   useEffect(() => {
     if (!mounted) return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(collapsed));
+    persistCollapsed(collapsed);
   }, [collapsed, mounted]);
 
-  const isAboveMobile = useMatchMedia("(min-width: 640px)");
+  const sidebarWidthClass = mounted
+    ? collapsed
+      ? "w-12"
+      : "w-60"
+    : "w-12 lg:w-60";
 
   function handleToggle(): void {
     setCollapsed((c) => !c);
@@ -88,7 +101,7 @@ export function ShellChrome({ children }: ShellChromeProps): ReactNode {
         </header>
 
         {/* Content row: [sidebar | main | tool-rail] */}
-        <div className="flex min-h-0 overflow-hidden">
+        <div className="flex min-h-0 min-w-0 overflow-hidden">
           {/*
            * Suspense boundary required because Sidebar calls useSearchParams().
            * In Next.js 15 App Router static export, useSearchParams() must be
@@ -98,25 +111,25 @@ export function ShellChrome({ children }: ShellChromeProps): ReactNode {
             fallback={
               <nav
                 aria-label="Project navigation"
-                className={`flex flex-col overflow-hidden bg-chrome ${collapsed ? "w-12" : "w-60"}`}
+                className={`flex flex-col overflow-hidden bg-chrome ${sidebarWidthClass}`}
               />
             }
           >
-            <Sidebar collapsed={collapsed} />
+            <Sidebar collapsed={collapsed} widthClass={sidebarWidthClass} />
           </Suspense>
 
           <main
             id="main-content"
             tabIndex={-1}
-            className="flex-1 overflow-y-auto bg-canvas px-gutter py-section
+            className="min-w-0 flex-1 overflow-y-auto bg-canvas px-gutter py-section
               focus:outline-none"
           >
             {children}
           </main>
 
-          {/* Tool rail — omitted from DOM on mobile (ADR-0014 D8).
+          {/* Tool rail — CSS-hidden below sm so desktop first paint keeps stable geometry.
            * Suspense required because ToolRail calls useSearchParams() and useRouter(). */}
-          {isAboveMobile && (
+          <div className="hidden sm:flex">
             <Suspense
               fallback={
                 <aside
@@ -127,7 +140,7 @@ export function ShellChrome({ children }: ShellChromeProps): ReactNode {
             >
               <ToolRail />
             </Suspense>
-          )}
+          </div>
         </div>
       </div>
     </>

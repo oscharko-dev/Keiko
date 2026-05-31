@@ -28,12 +28,11 @@ export interface ModelCapability {
 }
 
 // ---------------------------------------------------------------------------
-// Gateway — safe config (no apiKey)
+// Gateway — safe config (no apiKey or provider baseUrl)
 // ---------------------------------------------------------------------------
 
 export interface SafeProviderConfig {
   readonly modelId: string;
-  readonly baseUrl: string;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;

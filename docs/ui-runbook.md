@@ -111,7 +111,9 @@ keiko ui --port 8080 --config ~/keiko.json --evidence-dir /tmp/runs
 
 **Secrets and redaction:**
 
-- Config is presented through `toSafeObject`, which strips API keys. What you see in the config inspector is stripped; keys never reach the browser.
+- Config is presented through `toSafeObject`, which strips API keys and provider endpoint URLs.
+  What you see in the config inspector is limited to non-sensitive provider settings; keys and
+  endpoints never reach the browser.
 - Live payloads (run reports, workflow projections, error messages) are redacted using the same `redact()` function that scrubs configured secret patterns and environment variable values.
 - Evidence manifests are redacted at rest (when persisted to disk) and served as-is; no further redaction is applied.
 - Live events from the harness are redacted by the harness emitter before the BFF sees them. The BFF does not retain raw event content.

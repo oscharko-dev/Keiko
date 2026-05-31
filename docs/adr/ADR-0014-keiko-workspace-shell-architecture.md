@@ -2,15 +2,14 @@
 
 ## Status
 
-Accepted
+Accepted. Amended on 2026-05-31 after the issue #63 production audit to reflect the shipped
+post-#64/#65/#67 shell contract.
 
-Decided before implementation begins (issue #63 requires the ADR before implementation).
 This ADR defines the layout host, route-sharing contract, client-state persistence, brand-color
 token system, logo delivery, component decomposition, empty-state taxonomy, responsive contract,
 read-only mount discipline, and accessibility landmark structure for the Keiko workspace shell.
 Implementation lands under `ui/app/layout.tsx`, `ui/app/page.tsx`, `ui/app/launch/**`,
-`ui/app/home/**`, `ui/app/globals.css`, `ui/tailwind.config.ts`, and the new
-`ui/app/components/shell/**` tree; this ADR adds no code.
+`ui/app/globals.css`, `ui/tailwind.config.ts`, and `ui/app/components/shell/**`.
 
 ## Context
 
@@ -81,26 +80,30 @@ are demoted to secondary navigation inside `ShellHeader`.
 The current `<main id="main-content">` wrapper is moved inside `ShellChrome` as part of D6's
 component tree.
 
-### D2 — Route sharing: `/` and `/launch` render one shared component via re-export
+### D2 — Route sharing: `/` and `/launch` render one shared URL-aware route component
 
-We will represent the "no chat selected" workspace shell entry experience as a single React
-component, `WorkspaceShellEntry`, defined at
-`ui/app/components/shell/WorkspaceShellEntry.tsx`. Both `app/page.tsx` and `app/launch/page.tsx`
-will export it as their default export. The concrete implementation is:
+The no-project empty state remains a single React component, `WorkspaceShellEntry`, defined at
+`ui/app/components/shell/WorkspaceShellEntry.tsx`. The route-level component is `WorkspaceRoute`,
+defined at `ui/app/components/shell/WorkspaceRoute.tsx`; it owns the Suspense boundary required
+by `CentralArea`, and `CentralArea` dispatches URL state (`?project=`, `?chat=`) to the welcome,
+project, or chat views. Both `app/page.tsx` and `app/launch/page.tsx` export `WorkspaceRoute` as
+their default export. The concrete implementation is:
 
 ```
 // app/page.tsx
-export { default } from "@/app/components/shell/WorkspaceShellEntry";
+export { WorkspaceRoute as default } from "@/app/components/shell/WorkspaceRoute";
 
 // app/launch/page.tsx
-export { default } from "@/app/components/shell/WorkspaceShellEntry";
+export { WorkspaceRoute as default } from "@/app/components/shell/WorkspaceRoute";
 ```
 
-No copy-paste of JSX. No parallel state. One module, two route-file re-exports.
+No copy-paste of JSX. No parallel state. One route module, two route-file re-exports. This keeps
+`/` and `/launch` behavior identical for selected project, selected chat, and active tool query
+parameters.
 
 **Constraint.** Neither `app/page.tsx` nor `app/launch/page.tsx` may define per-route Next.js
-metadata (`export const metadata`) that differs between the two files, because `WorkspaceShellEntry`
-is a shared client component and cannot be a server component that emits static metadata. If
+metadata (`export const metadata`) that differs between the two files, because `WorkspaceRoute`
+is a shared route component and cannot be a server component that emits static metadata. If
 route-specific metadata is ever needed (e.g. distinct `<title>` values for `/` vs `/launch`),
 that is a scope change requiring a superseding note. For issue #63, both routes share the same
 shell identity and the metadata in `app/layout.tsx` covers both.
@@ -171,8 +174,8 @@ background only when paired with `ink.inverse (#1a1e23)` as the button label:
 - brand dark `#333333` on `accent #4EBA87` — 5.23:1 (AA pass)
 
 Interactive buttons with a green accent background must use `text-ink-inverse`, not `text-white`.
-The current `LaunchPage.tsx` already uses `text-ink-inverse` on the submit button; this usage
-is correct and must be preserved after the token rebrand.
+Interactive controls that use `accent` as a background must use `text-ink-inverse`; this usage
+must be preserved after the token rebrand.
 
 **Backward-compatible token aliases.** To minimize churn in existing component files the
 implementation retains `surface.DEFAULT`, `surface.subtle`, and existing token names as aliases
@@ -222,15 +225,17 @@ duplicate-file maintenance concern.
 ### D6 — Component decomposition: `ui/app/components/shell/`
 
 We will place all shell components under `ui/app/components/shell/`. Each file has one reason to
-change and must not exceed 200 LOC (hard limit per CLAUDE.md; the outer 400 LOC rule per
-ADR-0001 is the absolute ceiling). The decomposition:
+change and should stay small enough for direct review. The decomposition:
 
 | File | Kind | Responsibility |
 |---|---|---|
-| `ShellChrome.tsx` | Client | Top-level wrapper; owns `collapsed` state; renders the three-zone CSS grid; emits all ARIA landmarks |
+| `ShellChrome.tsx` | Client | Top-level wrapper; owns `collapsed` state; renders the three-zone shell layout; emits all ARIA landmarks |
 | `ShellHeader.tsx` | Client | Brand logo + secondary nav (Config, Evidence links); sidebar toggle button; skip link |
-| `Sidebar.tsx` | Client | Project navigation region; calls `fetchProjects()` on mount; inline loading / empty / error / list states |
-| `ToolRail.tsx` | Client | Right-side tool entry area; disabled Files / Browser / Review / Terminal buttons with tooltips |
+| `Sidebar.tsx` | Client | Project navigation region; calls `fetchProjects()` on mount; inline loading / empty / error / list states; hosts add-project and chat navigation affordances introduced by child issues |
+| `WorkspaceRoute.tsx` | Server-compatible route component | Shared `/` and `/launch` route component; owns the Suspense boundary around URL-aware central content |
+| `CentralArea.tsx` | Client | URL-aware central dispatcher for welcome, selected project, and selected chat states |
+| `ChatView.tsx` | Client | Selected-chat message history and composer host introduced by child issues |
+| `ToolRail.tsx` | Client | Right-side tool entry area; project-aware Files / Browser / Review / Terminal buttons and panel host |
 | `WorkspaceShellEntry.tsx` | Client | Shared `/` and `/launch` "no chat selected" content; empty-state variants (D7) |
 
 **Inline sub-states vs. separate files for Sidebar states.** The loading, empty, and error states
@@ -241,13 +246,11 @@ files would add three files with fewer than 20 LOC each, failing the three-usage
 criterion. If the sidebar grows to include project-list items with their own sub-states (as issue
 #64 introduces the add-project flow), extraction becomes warranted at that point.
 
-**File-ownership summary.** `ui/app/layout.tsx` is edited: the current `<header>` nav and
-`<main>` are removed; `<ShellChrome>` is imported and wraps `{children}`. `ui/app/page.tsx`
-becomes a one-line re-export. `ui/app/launch/page.tsx` becomes a one-line re-export (the
-existing `LaunchPage.tsx` is superseded by `WorkspaceShellEntry` for #63 but the file is not
-deleted — it remains referenced by the launch workflow form which is preserved on a deeper route
-or integrated into the shell in #65). `ui/tailwind.config.ts` and `ui/app/globals.css` are
-edited for D4.
+**File-ownership summary.** `ui/app/layout.tsx` imports `<ShellChrome>` and wraps `{children}`.
+`ui/app/page.tsx` and `ui/app/launch/page.tsx` are one-line re-exports of `WorkspaceRoute`.
+The previous form-oriented `LaunchPage.tsx` and `HomePage.tsx` artifacts are superseded by the
+shell route; workflow launch behavior is integrated through the central composer path in child
+issues. `ui/tailwind.config.ts` and `ui/app/globals.css` carry the D4 dark-token contract.
 
 ### D7 — Empty-state taxonomy: four states with defined visual rules and ARIA semantics
 
@@ -281,43 +284,47 @@ States 1, 3, and 4 are in scope for #63. State 2 is a #65 deliverable.
 We will define the shell's responsive behavior across three breakpoints aligned with Tailwind's
 default scale:
 
-**Mobile (< 640 px — below Tailwind `sm`).** The sidebar is hidden by default and revealed as a
-**slide-out drawer** (`position: fixed`, full-height, translate-x animation, `z-index` above the
-content columns) when the user activates the sidebar toggle. The tool rail is not rendered at
-mobile widths — its content is omitted from the DOM (not merely hidden via `visibility: hidden`)
-to keep the mobile viewport uncluttered. The header persists. The full viewport width is the
-central workspace area.
+**Mobile (< 640 px — below Tailwind `sm`).** The sidebar defaults to its collapsed width on first
+paint and can be expanded by the user after hydration. The tool rail is CSS-hidden below `sm`
+(`display: none` via Tailwind) so desktop first paint keeps stable geometry without exposing the
+right rail to the mobile accessibility tree. A native slide-out drawer and focus trap remain a
+future hardening item rather than part of the #63 MVP shell.
 
 **Tablet (640 px – 1023 px — Tailwind `sm` to just below `lg`).** The sidebar is visible
 icon-only when collapsed (project-initial-letter avatars or icons, no text labels) and shows
 labels when expanded. The tool rail is visible as an icon-only column. The three-zone CSS Grid
-is active with a narrow sidebar column, a wide center column, and a narrow tool-rail column.
+pattern is represented by a flex content row with a narrow sidebar column, a wide center column,
+and a narrow tool-rail column.
 
-**Desktop (≥ 1024 px — Tailwind `lg` and above).** All three zones are expanded by default.
-The sidebar can be collapsed by the user; the tool rail does not collapse. Sidebar column widths:
-collapsed `3rem` (icon-only), expanded `15rem` (240 px). Tool rail: `4rem` (64 px) at tablet,
-`12rem` (192 px) at desktop.
+**Desktop (≥ 1024 px — Tailwind `lg` and above).** All three zones are expanded by default unless
+the user has persisted a collapsed sidebar preference. The sidebar can be collapsed by the user;
+the tool rail does not collapse. Sidebar column widths: collapsed `3rem` (icon-only), expanded
+`15rem` (240 px). Tool rail: `3.5rem` icon column, plus an optional `18rem` active tool panel.
 
-**Implementation.** The three-zone layout is a CSS Grid with three named columns. Tailwind
-responsive prefixes (`sm:`, `lg:`) drive column-width transitions. JavaScript drives the
-`collapsed` boolean; CSS transitions animate the width change.
+**Implementation.** The shell uses a fixed header and a flex content row. Tailwind responsive
+prefixes (`sm:`, `lg:`) provide first-paint geometry for the sidebar and tool rail; JavaScript
+drives the persisted `collapsed` boolean after hydration. CSS transitions animate explicit
+sidebar width changes.
 
 ### D9 — Read-only mount discipline: no mutating call during shell initialization
 
 We will enforce that the shell issues **GET requests only** during mount:
 
 - `Sidebar.tsx` calls only `fetchProjects()` (`GET /api/projects`) in its mount `useEffect`.
+- `CentralArea.tsx` and `ToolRail.tsx` may read project metadata with `GET /api/projects` when
+  URL state references a selected project.
+- `FilesPanel.tsx` may read a selected registered project summary with `GET /api/workspace`;
+  the BFF rejects unregistered workspace paths.
 - No call to `createProject`, `updateProject`, `deleteProject`, `createChat`, or any `POST`,
   `PATCH`, or `DELETE` route may be triggered by rendering or mounting any shell component.
-- `WorkspaceShellEntry.tsx` issues no network calls at all for #63 (static content only).
-- `ToolRail.tsx` is purely presentational and issues no network calls.
+- `WorkspaceShellEntry.tsx` issues no network calls (static content only).
 
 This invariant extends ADR-0013 D9's read-only mount discipline from the BFF store layer to the
 frontend shell. A render the user did not explicitly initiate must not modify any state. Violations
 create ghost writes (e.g. creating a project record on every `/` visit) that are difficult to debug
 and violate the principle of least privilege for UI-initiated writes.
 
-The `fetchProjects()` call follows the active-flag pattern established in `LaunchPage.tsx`:
+The `fetchProjects()` calls follow an active-flag cleanup pattern:
 
 ```typescript
 useEffect(() => {
@@ -359,13 +366,13 @@ disclosure widget pattern:
 ```
 
 Focus must remain on the toggle button when state changes — the sidebar collapsing must not
-steal focus or displace it to the document body. On mobile (drawer overlay), focus traps inside
-the drawer while it is open and returns to the toggle on close.
+steal focus or displace it to the document body. A future mobile drawer overlay must trap focus
+while open and return focus to the toggle on close.
 
-**ToolRail button pattern.** Files / Browser / Review / Terminal are `<button disabled>` elements
-(not `<div>` or `<a>`). A `<span role="tooltip" id="tool-{name}-tip">Available in a later
-release</span>` accompanies each; each button carries `aria-describedby="tool-{name}-tip"`.
-Disabled buttons are removed from the tab sequence automatically via the `disabled` attribute.
+**ToolRail button pattern.** Files / Browser / Review / Terminal are `<button>` elements (not
+`<div>` or `<a>`). When no usable project is selected they are disabled and expose an
+`aria-describedby` tooltip explaining the project requirement. When an active panel closes, focus
+returns to the corresponding tool button.
 
 **Skip link target.** `<main id="main-content" tabIndex={-1}>` preserves the existing skip link
 target from the current `app/layout.tsx`. The `href="#main-content"` skip link must survive the
@@ -390,8 +397,8 @@ layout refactor unchanged.
   one-line change.
 - **Logo color decoupled from SVG source.** `currentColor` binding means the brand color change
   requires no SVG file edit and no `ui/public/` copy.
-- **Read-only mount is structurally enforced.** `Sidebar.tsx` is the only shell component that
-  calls the BFF; it calls only `GET /api/projects`.
+- **Read-only mount is structurally enforced.** Shell components may issue only same-origin GETs
+  during mount, and `/api/workspace` is bound to registered projects before filesystem reads.
 
 ### Negative
 
@@ -408,19 +415,19 @@ layout refactor unchanged.
 - **The re-export pattern breaks if per-route `generateMetadata` diverges.** A future requirement
   for distinct page `<title>` values forces a refactor from re-export to explicit import. This is
   low-risk for #63 but tracked as a known constraint.
-- **`ToolRail` buttons are permanently disabled in #63.** Disabled interactive elements with a
-  tooltip message are accessible but create a hollow affordance. The axe-core gate will catch
-  any missing `aria-describedby` associations. Full wiring is #67 scope.
-- **The `LaunchPage.tsx` form is displaced.** The existing launch form is mature and tested.
-  For #63, `WorkspaceShellEntry` replaces it at `/` and `/launch`. The form must be preserved
-  and integrated into the new shell in #65 (composer/workflow launch modes). It must not be
-  deleted during the #63 implementation.
+- **The mobile drawer is not a native overlay yet.** The current shell is usable and stable on
+  mobile through the collapsed sidebar and hidden tool rail, but a full slide-out drawer with
+  focus trap remains a follow-up.
+- **The form-oriented launch page is displaced.** The old standalone launch form is replaced by
+  the shell route; workflow launch behavior is integrated into the central composer path through
+  child issues.
 
 ### Known follow-ups
 
 - #64: Project sidebar, add-project flow (writes; outside #63 scope).
 - #65: Composer wiring, model dropdown, and integration of the existing launch form.
-- #67: Files / Browser / Review / Terminal ToolRail integration.
+- #67: Files panel and project-aware ToolRail entry integration.
+- Follow-up: Browser, Review, and Terminal runtime integrations.
 - #68: Full accessibility hardening, end-to-end visual verification, documentation.
 - Post-#63 audit: all existing page components for light-themed Tailwind utilities that conflict
   with the dark canvas.
@@ -514,8 +521,8 @@ rather than sharing a single component via re-export.
   zero-new-runtime-dependency invariant (D1); CSP `script-src 'self'` and `img-src 'self' data:`
   (logo decision D5); WCAG 2.2 AA baseline (D11); `UiHandlerDeps` injection pattern.
 - ADR-0013: UI-Local SQLite Persistence for Projects and Chats — `fetchProjects()` client call
-  consumed by `Sidebar.tsx` (D9); read-only mount discipline extended to the shell layer; nine BFF
-  routes that supply project and chat data.
+  consumed by shell components (D9); read-only mount discipline extended to the shell layer; ten
+  additive BFF routes that supply project and chat data.
 - Issue #63: Replace launch with the Keiko workspace shell.
 - Issue #61: Parent epic — Local workspace shell with project and chat persistence.
 - Issue #64: Add-project flow and project sidebar wiring (follow-up, writes to the store).

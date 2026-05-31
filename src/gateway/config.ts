@@ -19,7 +19,6 @@ export type EnvSource = Readonly<Record<string, string | undefined>>;
 
 export interface SafeProviderConfig {
   readonly modelId: string;
-  readonly baseUrl: string;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
@@ -186,12 +185,11 @@ export function loadConfigFromFile(path: string, env: EnvSource = {}): GatewayCo
   return parseGatewayConfig(parsed, env);
 }
 
-// Credential-free projection for logging, CLI output, and serialisation.
+// Credential- and endpoint-free projection for logging, CLI output, and serialisation.
 export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
   return {
     providers: config.providers.map((provider) => ({
       modelId: provider.modelId,
-      baseUrl: provider.baseUrl,
       timeoutMs: provider.timeoutMs,
       maxRetries: provider.maxRetries,
       retryBaseDelayMs: provider.retryBaseDelayMs,

@@ -11,6 +11,7 @@ import { ShellChrome } from "./ShellChrome";
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
+  usePathname: () => "/",
 }));
 
 vi.mock("next/link", () => ({
@@ -53,16 +54,21 @@ vi.mock("@/lib/api", () => ({
 
 let storage: Record<string, string> = {};
 
-beforeEach(() => {
-  storage = {};
-  vi.spyOn(window, "localStorage", "get").mockReturnValue({
+function makeStorage(overrides: Partial<Storage> = {}): Storage {
+  return {
     getItem: (k: string) => storage[k] ?? null,
     setItem: (k: string, v: string) => { storage[k] = v; },
     removeItem: (k: string) => { delete storage[k]; },
     clear: () => { storage = {}; },
     length: 0,
     key: () => null,
-  });
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  storage = {};
+  vi.spyOn(window, "localStorage", "get").mockReturnValue(makeStorage());
 });
 
 afterEach(() => {
@@ -133,6 +139,43 @@ describe("ShellChrome", () => {
   it("does not throw when localStorage is read during mount (SSR-safety)", () => {
     // Render without pre-existing key — should not throw
     expect(() => render(<ShellChrome><p>x</p></ShellChrome>)).not.toThrow();
+  });
+
+  it("renders when localStorage.getItem is blocked", async () => {
+    vi.spyOn(window, "localStorage", "get").mockReturnValue(
+      makeStorage({
+        getItem: () => {
+          throw new Error("storage blocked");
+        },
+      }),
+    );
+
+    render(<ShellChrome><p>x</p></ShellChrome>);
+
+    await waitFor(() => {
+      expect(screen.getByRole("main")).toBeInTheDocument();
+    });
+    expect(screen.getByText("x")).toBeInTheDocument();
+  });
+
+  it("keeps the sidebar toggle usable when localStorage.setItem is blocked", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, "localStorage", "get").mockReturnValue(
+      makeStorage({
+        setItem: () => {
+          throw new Error("storage blocked");
+        },
+      }),
+    );
+
+    render(<ShellChrome><p>x</p></ShellChrome>);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /collapse sidebar|expand sidebar/i })).toBeInTheDocument();
+    });
+
+    const toggleBtn = screen.getByRole("button", { name: /collapse sidebar|expand sidebar/i });
+    await user.click(toggleBtn);
+    expect(toggleBtn).toHaveFocus();
   });
 
   it("has no axe-detectable accessibility violations", async () => {

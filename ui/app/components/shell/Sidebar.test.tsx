@@ -11,10 +11,12 @@ import * as api from "@/lib/api";
 
 const mockReplace = vi.fn();
 const mockSearchParams = new URLSearchParams();
+let mockPathname = "/";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: mockReplace }),
   useSearchParams: () => mockSearchParams,
+  usePathname: () => mockPathname,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -68,6 +70,7 @@ describe("Sidebar", () => {
     // Reset search params to empty
     mockSearchParams.delete("project");
     mockSearchParams.delete("chat");
+    mockPathname = "/";
     // Default fetchChats mock
     vi.mocked(api.fetchChats).mockResolvedValue({ chats: [] });
   });
@@ -145,6 +148,52 @@ describe("Sidebar", () => {
     // The first match is the row select button (title attribute = path)
     await user.click(projectBtns[0]!);
     expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining("project="));
+  });
+
+  it("preserves /launch when selecting a project from the /launch route", async () => {
+    const user = userEvent.setup();
+    mockPathname = "/launch";
+    vi.mocked(api.fetchProjects).mockResolvedValueOnce({
+      projects: [mockProjects[0]!],
+    });
+    render(<Sidebar collapsed={false} />);
+    await waitFor(() => {
+      expect(screen.getByText("Foo Project")).toBeInTheDocument();
+    });
+
+    const projectBtns = screen.getAllByRole("button", { name: /foo project/i });
+    await user.click(projectBtns[0]!);
+
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringMatching(/^\/launch\?project=/));
+  });
+
+  it("preserves /launch when selecting a chat from the /launch route", async () => {
+    const user = userEvent.setup();
+    mockPathname = "/launch";
+    mockSearchParams.set("project", "/workspace/foo");
+    vi.mocked(api.fetchProjects).mockResolvedValueOnce({
+      projects: [mockProjects[0]!],
+    });
+    vi.mocked(api.fetchChats).mockResolvedValueOnce({
+      chats: [
+        {
+          id: "chat-123",
+          projectPath: "/workspace/foo",
+          title: "Investigate login",
+          selectedModel: "Mistral-Small-3.1-24B-Instruct-2503",
+          status: "open",
+          createdAt: 1000,
+          updatedAt: 2000,
+        },
+      ],
+    });
+    render(<Sidebar collapsed={false} />);
+    const chatButton = await screen.findByRole("button", { name: "Investigate login" });
+
+    await user.click(chatButton);
+
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringMatching(/^\/launch\?project=/));
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining("chat=chat-123"));
   });
 
   it("renders project nav landmark", async () => {

@@ -33,8 +33,9 @@ import {
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { validateProjectPath } from "./store/validation.js";
 
-// Route 2 — resolved config (SafeGatewayConfig, never apiKey) or null when no config was resolved.
+// Route 2 — resolved config (SafeGatewayConfig, never apiKey/baseUrl) or null when no config was resolved.
 export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const config = deps.config === undefined ? null : toSafeObject(deps.config);
   return { status: 200, body: { config, configPresent: deps.configPresent } };
@@ -115,6 +116,25 @@ function workspaceErrorResult(error: WorkspaceError): RouteResult {
   return { status, body: errorBody(error.code, error.message) };
 }
 
+function rejectUnregisteredWorkspace(rawDir: string, deps: UiHandlerDeps): RouteResult | null {
+  let normalized: string;
+  try {
+    normalized = validateProjectPath(rawDir, { mustExist: false });
+  } catch {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "The dir query parameter must be a valid local project path."),
+    };
+  }
+  const registered = deps.store.listProjects().some((project) => project.path === normalized);
+  return registered
+    ? null
+    : {
+        status: 403,
+        body: errorBody("WORKSPACE_NOT_REGISTERED", "The workspace directory is not a registered project."),
+      };
+}
+
 // Route 12 — workspace summary and optional context pack, built by the safe workspace layer.
 export function handleWorkspace(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const q = ctx.url.searchParams;
@@ -127,8 +147,18 @@ export function handleWorkspace(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
       body: errorBody("BAD_REQUEST", "The budget query parameter must be a positive integer."),
     };
   }
-  const dir = q.get("dir") ?? ".";
+  const dir = q.get("dir");
+  if (dir === null) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "The dir query parameter is required."),
+    };
+  }
   const task = q.get("task") ?? undefined;
+  const unregistered = rejectUnregisteredWorkspace(dir, deps);
+  if (unregistered !== null) {
+    return unregistered;
+  }
   try {
     const workspace = detectWorkspace(dir);
     const { files, stats } = discoverWithStats(workspace, DEFAULT_CONTEXT_REQUEST.discovery);

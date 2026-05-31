@@ -162,19 +162,21 @@ describe("parseGatewayConfig", () => {
 });
 
 describe("toSafeObject", () => {
-  it("omits the apiKey field entirely", () => {
+  it("omits credential and endpoint fields entirely", () => {
     const config = parseGatewayConfig(validRaw());
     const safe = toSafeObject(config);
     const serialised = JSON.stringify(safe);
     expect(serialised).not.toContain("sk-secret-key-value-1234567890");
     expect(serialised).not.toContain("apiKey");
+    expect(serialised).not.toContain("https://host.example/v1");
+    expect(serialised).not.toContain("baseUrl");
   });
 
   it("preserves non-secret fields", () => {
     const config = parseGatewayConfig(validRaw());
     const safe = toSafeObject(config);
     expect(safe.providers[0]?.modelId).toBe("gpt-oss-120b");
-    expect(safe.providers[0]?.baseUrl).toBe("https://host.example/v1");
+    expect(safe.providers[0]?.timeoutMs).toBe(30000);
   });
 });
 

@@ -10,6 +10,7 @@ import { ChatList } from "./ChatList";
 import { AddProjectDialog } from "./AddProjectDialog";
 import { ProjectRow } from "./ProjectRow";
 import { NewChatButton } from "./NewChatButton";
+import { useWorkspaceRouteHref } from "./navigation";
 
 // ---------------------------------------------------------------------------
 // Sidebar states
@@ -26,6 +27,7 @@ type SidebarState =
 
 export interface SidebarProps {
   collapsed: boolean;
+  widthClass?: string;
 }
 
 /**
@@ -33,9 +35,10 @@ export interface SidebarProps {
  * Selection state lives in URL search params: ?project=<encoded-path>&chat=<id>.
  * Wrap in <Suspense> at call site — useSearchParams() requires it in App Router static export.
  */
-export function Sidebar({ collapsed }: SidebarProps): ReactNode {
+export function Sidebar({ collapsed, widthClass }: SidebarProps): ReactNode {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const workspaceHref = useWorkspaceRouteHref();
 
   const selectedProject = searchParams.get("project");
   const selectedChat = searchParams.get("chat");
@@ -77,13 +80,13 @@ export function Sidebar({ collapsed }: SidebarProps): ReactNode {
     const params = new URLSearchParams(searchParams.toString());
     params.set("project", path);
     params.delete("chat");
-    router.replace(`/?${params.toString()}`);
+    router.replace(workspaceHref(params));
   }
 
   function selectChat(chatId: string): void {
     const params = new URLSearchParams(searchParams.toString());
     params.set("chat", chatId);
-    router.replace(`/?${params.toString()}`);
+    router.replace(workspaceHref(params));
   }
 
   function handleProjectAdded(): void {
@@ -104,11 +107,11 @@ export function Sidebar({ collapsed }: SidebarProps): ReactNode {
       const params = new URLSearchParams(searchParams.toString());
       params.delete("project");
       params.delete("chat");
-      router.replace(`/?${params.toString()}`);
+      router.replace(workspaceHref(params));
     }
   }
 
-  const width = collapsed ? "w-12" : "w-60";
+  const width = widthClass ?? (collapsed ? "w-12" : "w-60");
 
   return (
     <>

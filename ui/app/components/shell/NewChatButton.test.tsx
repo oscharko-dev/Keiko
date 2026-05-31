@@ -4,15 +4,19 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { NewChatButton } from "./NewChatButton";
 import * as api from "@/lib/api";
 
 const mockSearchParams = new URLSearchParams();
+const mockReplace = vi.fn();
+let mockPathname = "/";
 
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: vi.fn() }),
+  useRouter: () => ({ replace: mockReplace }),
   useSearchParams: () => mockSearchParams,
+  usePathname: () => mockPathname,
 }));
 
 vi.mock("@/lib/api", () => ({
@@ -32,6 +36,7 @@ describe("NewChatButton", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSearchParams.delete("project");
+    mockPathname = "/";
   });
 
   it("is disabled when no project is selected", () => {
@@ -49,6 +54,29 @@ describe("NewChatButton", () => {
     mockSearchParams.set("project", "/workspace/foo");
     render(<NewChatButton collapsed={false} />);
     expect(screen.getByRole("button")).toHaveClass("focus-visible:ring-2");
+  });
+
+  it("preserves /launch after creating a chat from the /launch route", async () => {
+    const user = userEvent.setup();
+    mockPathname = "/launch";
+    mockSearchParams.set("project", "/workspace/foo");
+    vi.mocked(api.createChat).mockResolvedValue({
+      chat: {
+        id: "chat-123",
+        projectPath: "/workspace/foo",
+        title: "New chat",
+        selectedModel: "Mistral-Small-3.1-24B-Instruct-2503",
+        status: "open",
+        createdAt: 1000,
+        updatedAt: 1000,
+      },
+    });
+
+    render(<NewChatButton collapsed={false} />);
+    await user.click(screen.getByRole("button", { name: /\+ new chat/i }));
+
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringMatching(/^\/launch\?project=/));
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining("chat=chat-123"));
   });
 
   it("collapsed layout exposes an accessible name", () => {

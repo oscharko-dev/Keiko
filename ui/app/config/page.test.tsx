@@ -31,7 +31,6 @@ const mockConfig = {
     providers: [
       {
         modelId: "claude-3-5-sonnet",
-        baseUrl: "https://api.anthropic.com",
         timeoutMs: 30000,
         maxRetries: 2,
         retryBaseDelayMs: 500,
@@ -123,7 +122,7 @@ describe("ConfigPage", () => {
   it("headings and tables are in the DOM and reachable by keyboard via tab", async () => {
     render(<ConfigPage />);
     await waitFor(() => {
-      expect(screen.getByText("https://api.anthropic.com")).toBeInTheDocument();
+      expect(screen.getAllByText("claude-3-5-sonnet").length).toBeGreaterThan(0);
     });
     // Verify both section headings are present (keyboard users reach them via headings navigation)
     expect(screen.getByRole("heading", { name: /gateway configuration/i })).toBeInTheDocument();
@@ -161,8 +160,7 @@ describe("ConfigPage", () => {
         providers: [
           {
             modelId: "claude-3-5-sonnet",
-            baseUrl: "https://api.anthropic.com",
-            // SafeProviderConfig has no apiKey field — these values do not appear
+            // SafeProviderConfig has no apiKey/baseUrl fields — these values do not appear
             timeoutMs: 30000,
             maxRetries: 2,
             retryBaseDelayMs: 500,
@@ -175,7 +173,7 @@ describe("ConfigPage", () => {
 
     const { container } = render(<ConfigPage />);
     await waitFor(() => {
-      expect(screen.getByText("https://api.anthropic.com")).toBeInTheDocument();
+      expect(screen.getAllByText("claude-3-5-sonnet").length).toBeGreaterThan(0);
     });
 
     const domText = container.textContent ?? "";
@@ -188,6 +186,7 @@ describe("ConfigPage", () => {
       /glpat-[A-Za-z0-9\-]{10,}/,
       /apiKey/i,
       /api_key/i,
+      /baseUrl/i,
       /authorization/i,
       /x-api-key/i,
     ];
