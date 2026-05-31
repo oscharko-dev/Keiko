@@ -7,6 +7,12 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createInMemoryUiStore, createNodeUiStore } from "../../../src/ui/store/index.js";
 
+// Narrows an array-index access (T | undefined) to T without a non-null assertion.
+function must<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("expected a defined value");
+  return value;
+}
+
 let tmpDir: string;
 
 beforeEach(() => {
@@ -107,16 +113,7 @@ describe("createNodeUiStore — on-disk file", () => {
     const projDir = mkdtempSync(join(tmpDir, "proj-"));
 
     // ── Session 1: write ────────────────────────────────────────────────────
-    const s1 = createNodeUiStore(dbPath, {
-      now: (() => {
-        let t = 1000;
-        return () => ++t;
-      })(),
-      newId: (() => {
-        let n = 0;
-        return () => `id-${++n}`;
-      })(),
-    });
+    const s1 = createNodeUiStore(dbPath);
 
     s1.createProject(projDir);
     const chat = s1.createChat(projDir, "Round-trip chat", "Mistral-Small-3.1-24B-Instruct-2503");
@@ -154,43 +151,44 @@ describe("createNodeUiStore — on-disk file", () => {
 
     const chats = s2.listChats(projDir);
     expect(chats).toHaveLength(1);
-    const reloadedChat = chats[0];
+    const reloadedChat = must(chats[0]);
 
     // Chat identity and model.
-    expect(reloadedChat?.id).toBe(chat.id);
-    expect(reloadedChat?.projectPath).toBe(projDir);
-    expect(reloadedChat?.title).toBe("Round-trip chat");
-    expect(reloadedChat?.selectedModel).toBe("Mistral-Small-3.1-24B-Instruct-2503");
+    expect(reloadedChat.id).toBe(chat.id);
+    expect(reloadedChat.projectPath).toBe(projDir);
+    expect(reloadedChat.title).toBe("Round-trip chat");
+    expect(reloadedChat.selectedModel).toBe("Mistral-Small-3.1-24B-Instruct-2503");
 
     const messages = s2.listMessages(chat.id);
     expect(messages).toHaveLength(2);
 
     // Ordered by timestamp ASC, so plain message comes first.
-    const [reloadedPlain, reloadedWorkflow] = messages;
+    const reloadedPlain = must(messages[0]);
+    const reloadedWorkflow = must(messages[1]);
 
     // Plain message — all optional fields must be undefined (not null).
-    expect(reloadedPlain?.id).toBe(plainMsg.id);
-    expect(reloadedPlain?.chatId).toBe(chat.id);
-    expect(reloadedPlain?.role).toBe("user");
-    expect(reloadedPlain?.content).toBe("Hello from round-trip");
-    expect(reloadedPlain?.timestamp).toBe(100);
-    expect(reloadedPlain?.runId).toBeUndefined();
-    expect(reloadedPlain?.workflowId).toBeUndefined();
-    expect(reloadedPlain?.workflowStatus).toBeUndefined();
-    expect(reloadedPlain?.shortResult).toBeUndefined();
-    expect(reloadedPlain?.taskType).toBeUndefined();
+    expect(reloadedPlain.id).toBe(plainMsg.id);
+    expect(reloadedPlain.chatId).toBe(chat.id);
+    expect(reloadedPlain.role).toBe("user");
+    expect(reloadedPlain.content).toBe("Hello from round-trip");
+    expect(reloadedPlain.timestamp).toBe(100);
+    expect(reloadedPlain.runId).toBeUndefined();
+    expect(reloadedPlain.workflowId).toBeUndefined();
+    expect(reloadedPlain.workflowStatus).toBeUndefined();
+    expect(reloadedPlain.shortResult).toBeUndefined();
+    expect(reloadedPlain.taskType).toBeUndefined();
 
     // Workflow message — all fields must survive the round-trip intact.
-    expect(reloadedWorkflow?.id).toBe(workflowMsg.id);
-    expect(reloadedWorkflow?.chatId).toBe(chat.id);
-    expect(reloadedWorkflow?.role).toBe("system");
-    expect(reloadedWorkflow?.content).toBe("Unit test generation started");
-    expect(reloadedWorkflow?.timestamp).toBe(200);
-    expect(reloadedWorkflow?.runId).toBe("run-abc123");
-    expect(reloadedWorkflow?.workflowId).toBe("unit-test-generation");
-    expect(reloadedWorkflow?.workflowStatus).toBe("completed");
-    expect(reloadedWorkflow?.shortResult).toBe("Generated 12 tests.");
-    expect(reloadedWorkflow?.taskType).toBe("unit-test-generation");
+    expect(reloadedWorkflow.id).toBe(workflowMsg.id);
+    expect(reloadedWorkflow.chatId).toBe(chat.id);
+    expect(reloadedWorkflow.role).toBe("system");
+    expect(reloadedWorkflow.content).toBe("Unit test generation started");
+    expect(reloadedWorkflow.timestamp).toBe(200);
+    expect(reloadedWorkflow.runId).toBe("run-abc123");
+    expect(reloadedWorkflow.workflowId).toBe("unit-test-generation");
+    expect(reloadedWorkflow.workflowStatus).toBe("completed");
+    expect(reloadedWorkflow.shortResult).toBe("Generated 12 tests.");
+    expect(reloadedWorkflow.taskType).toBe("unit-test-generation");
 
     s2.close();
   });

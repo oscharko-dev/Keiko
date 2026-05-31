@@ -18,7 +18,7 @@
 
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNodeUiStore } from "../../../src/ui/store/index.js";
@@ -88,7 +88,9 @@ interface PragmaRow {
 }
 
 function columnNames(db: DatabaseSync, table: string): string[] {
-  return (db.prepare(`PRAGMA table_info(${table})`).all() as PragmaRow[]).map((r) => r.name);
+  return (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as PragmaRow[]).map(
+    (r) => r.name,
+  );
 }
 
 let tmpDir: string;
