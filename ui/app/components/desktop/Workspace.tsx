@@ -1,56 +1,23 @@
 "use client";
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
+import { useMemo } from "react";
+import type {
+  CSSProperties,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+  RefObject,
 } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { Icons } from "./Icons";
-import { ChatWindow } from "./ChatWindow";
-import { ChatSessionProvider } from "./context/ChatSessionContext";
-import type { UseChatSessionResult } from "./hooks/useChatSession";
+import { ConnectionsLayer } from "./windows/ConnectionsLayer";
+import { WindowFrame } from "./windows/WindowFrame";
+import { canConnect } from "./windows/connectionUtils";
+import type { AppWindow, ConnState } from "./windows/types";
+import type { UseWorkspaceResult } from "./hooks/useWorkspace.types";
 
-interface View {
-  zoom: number;
-  x: number;
-  y: number;
-}
-
-const STORAGE_KEY = "keiko.view";
-const DEFAULT_VIEW: View = { zoom: 1, x: 0, y: 0 };
-const MIN_ZOOM = 0.3;
-const MAX_ZOOM = 2.5;
-
-function readStoredView(): View {
-  if (typeof window === "undefined") return DEFAULT_VIEW;
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw === null) return DEFAULT_VIEW;
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "zoom" in parsed &&
-      "x" in parsed &&
-      "y" in parsed
-    ) {
-      const candidate = parsed as Record<string, unknown>;
-      const zoom = typeof candidate.zoom === "number" ? candidate.zoom : DEFAULT_VIEW.zoom;
-      const x = typeof candidate.x === "number" ? candidate.x : DEFAULT_VIEW.x;
-      const y = typeof candidate.y === "number" ? candidate.y : DEFAULT_VIEW.y;
-      return { zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom)), x, y };
-    }
-    return DEFAULT_VIEW;
-  } catch {
-    return DEFAULT_VIEW;
-  }
-}
-
-function clampZoom(z: number): number {
-  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
+interface WorkspaceProps {
+  readonly ws: UseWorkspaceResult;
+  readonly wsRef: RefObject<HTMLDivElement>;
+  readonly openPalette: () => void;
 }
 
 function isInteractive(target: EventTarget | null): boolean {
@@ -58,89 +25,32 @@ function isInteractive(target: EventTarget | null): boolean {
   return (
     target.closest(".window") !== null ||
     target.closest(".ws-zoom") !== null ||
-    target.closest(".ws-fab") !== null
+    target.closest(".ws-fab") !== null ||
+    target.closest(".conn-badge") !== null
   );
 }
 
-interface WorkspaceProps {
-  session: UseChatSessionResult;
-  openPalette: () => void;
+function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
+  if (wins === null || wins.length === 0) return null;
+  let best = wins[0] as AppWindow;
+  for (let i = 1; i < wins.length; i++) {
+    const next = wins[i] as AppWindow;
+    if (next.z > best.z) best = next;
+  }
+  return best;
 }
 
-export function Workspace({ session, openPalette }: WorkspaceProps): ReactNode {
-  const wsRef = useRef<HTMLDivElement | null>(null);
-  const [view, setView] = useState<View>(readStoredView);
-  const viewRef = useRef<View>(view);
-  viewRef.current = view;
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(view));
-    } catch {
-      /* localStorage may be unavailable */
-    }
-  }, [view]);
-
-  useEffect(() => {
-    const element = wsRef.current;
-    if (element === null) return;
-    const onWheel = (event: WheelEvent): void => {
-      if (event.metaKey || event.ctrlKey) {
-        event.preventDefault();
-        const rect = element.getBoundingClientRect();
-        const current = viewRef.current;
-        const z2 = clampZoom(current.zoom * Math.exp(-event.deltaY * 0.0015));
-        const wx = (event.clientX - rect.left - current.x) / current.zoom;
-        const wy = (event.clientY - rect.top - current.y) / current.zoom;
-        setView({
-          zoom: z2,
-          x: event.clientX - rect.left - wx * z2,
-          y: event.clientY - rect.top - wy * z2,
-        });
-        return;
-      }
-      if (!(event.target instanceof Element) || event.target.closest(".window") === null) {
-        event.preventDefault();
-        setView((current) => ({
-          ...current,
-          x: current.x - event.deltaX,
-          y: current.y - event.deltaY,
-        }));
-      }
-    };
-    element.addEventListener("wheel", onWheel, { passive: false });
-    return () => {
-      element.removeEventListener("wheel", onWheel);
-    };
-  }, []);
-
-  const zoomBy = useCallback((delta: number) => {
-    const element = wsRef.current;
-    if (element === null) return;
-    const rect = element.getBoundingClientRect();
-    const current = viewRef.current;
-    const cx = rect.width / 2;
-    const cy = rect.height / 2;
-    const wx = (cx - current.x) / current.zoom;
-    const wy = (cy - current.y) / current.zoom;
-    const z2 = clampZoom(current.zoom + delta);
-    setView({ zoom: z2, x: cx - wx * z2, y: cy - wy * z2 });
-  }, []);
-
-  const resetView = useCallback(() => setView(DEFAULT_VIEW), []);
-
-  const onBgPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
+function bgPanHandler(
+  panBy: (dx: number, dy: number) => void,
+): (event: ReactPointerEvent<HTMLDivElement>) => void {
+  return (event) => {
     if (event.button !== 0) return;
     if (isInteractive(event.target)) return;
     let lastX = event.clientX;
     let lastY = event.clientY;
     document.body.style.cursor = "grabbing";
     const move = (moveEvent: PointerEvent): void => {
-      setView((current) => ({
-        ...current,
-        x: current.x + (moveEvent.clientX - lastX),
-        y: current.y + (moveEvent.clientY - lastY),
-      }));
+      panBy(moveEvent.clientX - lastX, moveEvent.clientY - lastY);
       lastX = moveEvent.clientX;
       lastY = moveEvent.clientY;
     };
@@ -152,6 +62,23 @@ export function Workspace({ session, openPalette }: WorkspaceProps): ReactNode {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
+}
+
+export function Workspace({ ws, wsRef, openPalette }: WorkspaceProps): ReactNode {
+  const { wins, view, snapPrev, conns, connecting, api } = ws;
+  const top = topWindow(wins);
+  const connFrom: AppWindow | null =
+    connecting !== null && wins !== null
+      ? (wins.find((w) => w.id === connecting.from) ?? null)
+      : null;
+
+  const connStateFor = (w: AppWindow): ConnState => {
+    if (connFrom === null) return null;
+    if (w.id === connFrom.id) return "source";
+    return canConnect(connFrom.type, w.type) ? "valid" : "invalid";
+  };
+
+  const onBgPointerDown = bgPanHandler(api.panBy);
 
   const bgStyle: CSSProperties = useMemo(
     () => ({
@@ -169,17 +96,7 @@ export function Workspace({ session, openPalette }: WorkspaceProps): ReactNode {
     [view],
   );
 
-  // Wave-1 shim coordinates: chat-window placeholder sits at fixed canvas-relative
-  // position until Welle 2 introduces WindowFrame + window-manager state.
-  const chatShimStyle: CSSProperties = {
-    position: "absolute",
-    left: 80,
-    top: 60,
-    width: 720,
-    height: 560,
-    display: "flex",
-    flexDirection: "column",
-  };
+  const empty = wins !== null && wins.length === 0;
 
   return (
     <div
@@ -188,25 +105,48 @@ export function Workspace({ session, openPalette }: WorkspaceProps): ReactNode {
       style={bgStyle}
       onPointerDown={onBgPointerDown}
     >
+      {empty ? (
+        <div className="ws-empty">
+          {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG directly */}
+          <img className="ws-empty-logo" src="/assets/keiko-logo.svg" alt="" />
+          <div className="ws-empty-title">Empty workspace</div>
+          <div className="ws-empty-sub">Open a window to start working</div>
+          <button type="button" className="ws-empty-btn" onClick={openPalette}>
+            <Icons.add size={15} /> New window
+          </button>
+        </div>
+      ) : null}
+
       <div className="ws-scene" style={sceneStyle}>
-        {/* Welle-2-TODO: wrap ChatWindow in WindowFrame so it becomes a real draggable window. */}
-        <section
-          className="window"
-          data-top="true"
-          style={chatShimStyle}
-          aria-label="GPT OSS chat window"
-        >
-          <ChatSessionProvider value={session}>
-            <ChatWindow />
-          </ChatSessionProvider>
-        </section>
+        {snapPrev !== null ? (
+          <div
+            className="snap-ghost"
+            style={{ left: snapPrev.x, top: snapPrev.y, width: snapPrev.w, height: snapPrev.h }}
+          />
+        ) : null}
+        {wins !== null ? (
+          <ConnectionsLayer wins={wins} conns={conns} connecting={connecting} api={api} />
+        ) : null}
+        {wins !== null
+          ? wins.map((w) => (
+              <WindowFrame
+                key={w.id}
+                win={w}
+                top={top !== null && w.id === top.id}
+                connState={connStateFor(w)}
+                view={view}
+                api={api}
+                wsRef={wsRef}
+              />
+            ))
+          : null}
       </div>
 
       <div className="ws-zoom">
         <button
           type="button"
           className="ws-zoom-btn"
-          onClick={() => zoomBy(-0.2)}
+          onClick={() => api.zoomTo(view.zoom - 0.2)}
           aria-label="Zoom out"
           title="Zoom out"
         >
@@ -215,7 +155,7 @@ export function Workspace({ session, openPalette }: WorkspaceProps): ReactNode {
         <button
           type="button"
           className="ws-zoom-pct mono"
-          onClick={resetView}
+          onClick={api.resetView}
           aria-label="Reset view"
           title="Reset view"
         >
@@ -224,7 +164,7 @@ export function Workspace({ session, openPalette }: WorkspaceProps): ReactNode {
         <button
           type="button"
           className="ws-zoom-btn"
-          onClick={() => zoomBy(0.2)}
+          onClick={() => api.zoomTo(view.zoom + 0.2)}
           aria-label="Zoom in"
           title="Zoom in"
         >
