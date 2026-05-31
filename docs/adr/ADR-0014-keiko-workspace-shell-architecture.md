@@ -418,7 +418,7 @@ layout refactor unchanged.
   for distinct page `<title>` values forces a refactor from re-export to explicit import. This is
   low-risk for #63 but tracked as a known constraint.
 - **The mobile drawer is not a native overlay yet.** The current shell is usable and stable on
-  mobile through the collapsed sidebar and hidden tool rail, but a full slide-out drawer with
+  mobile through the collapsed sidebar and fixed bottom tool rail, but a full slide-out drawer with
   focus trap remains a follow-up.
 - **The form-oriented launch page is displaced.** The old standalone launch form is replaced by
   the shell route; workflow launch behavior is integrated into the central composer path through
