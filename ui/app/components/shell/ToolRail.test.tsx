@@ -9,6 +9,7 @@ import { ToolRail } from "./ToolRail";
 import * as api from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import type { ProjectWithAvailability } from "@/lib/types";
+import { clearSelectedProjectCacheForTests } from "./useSelectedProject";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -102,6 +103,7 @@ describe("ToolRail", () => {
     mockSearchParams.delete("project");
     mockSearchParams.delete("tool");
     mockPathname = "/";
+    clearSelectedProjectCacheForTests();
     vi.mocked(api.fetchWorkspaceSummary).mockResolvedValue({ summary: workspaceSummary });
   });
 
@@ -139,7 +141,8 @@ describe("ToolRail", () => {
     render(<ToolRail />);
     const buttons = screen.getAllByRole("button");
     for (const btn of buttons) {
-      expect(btn).toBeDisabled();
+      expect(btn).not.toBeDisabled();
+      expect(btn).toHaveAttribute("aria-disabled", "true");
     }
   });
 
@@ -152,12 +155,19 @@ describe("ToolRail", () => {
     }
   });
 
-  it("does not fire router.replace when a disabled button is clicked (no project)", async () => {
+  it("keeps unavailable buttons focusable and blocks activation when no project is selected", async () => {
     const user = userEvent.setup();
     mockNoProject();
     render(<ToolRail />);
     const [filesBtn] = screen.getAllByRole("button");
+    expect(filesBtn).not.toBeDisabled();
+    expect(filesBtn).toHaveAttribute("aria-disabled", "true");
+
+    await user.tab();
+    expect(filesBtn).toHaveFocus();
+
     await user.click(filesBtn!);
+    await user.keyboard("{Enter}");
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
@@ -169,7 +179,8 @@ describe("ToolRail", () => {
     await waitFor(() => {
       const buttons = screen.getAllByRole("button");
       for (const btn of buttons) {
-        expect(btn).toBeDisabled();
+        expect(btn).not.toBeDisabled();
+        expect(btn).toHaveAttribute("aria-disabled", "true");
       }
     });
   });
@@ -185,15 +196,16 @@ describe("ToolRail", () => {
     });
   });
 
-  it("does not fire router.replace when a disabled button is clicked (unavailable project)", async () => {
+  it("does not fire router.replace when an aria-disabled button is activated (unavailable project)", async () => {
     const user = userEvent.setup();
     mockUnavailableProject();
     render(<ToolRail />);
     await waitFor(() => {
-      expect(screen.getAllByRole("button")[0]).toBeDisabled();
+      expect(screen.getAllByRole("button")[0]).toHaveAttribute("aria-disabled", "true");
     });
     const [filesBtn] = screen.getAllByRole("button");
     await user.click(filesBtn!);
+    await user.keyboard("{Enter}");
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
@@ -206,6 +218,7 @@ describe("ToolRail", () => {
       const buttons = screen.getAllByRole("button");
       for (const btn of buttons) {
         expect(btn).not.toBeDisabled();
+        expect(btn).not.toHaveAttribute("aria-disabled");
       }
     });
   });
@@ -354,7 +367,7 @@ describe("ToolRail", () => {
     mockUnavailableProject();
     const { container } = render(<ToolRail />);
     await waitFor(() => {
-      expect(screen.getAllByRole("button")[0]).toBeDisabled();
+      expect(screen.getAllByRole("button")[0]).toHaveAttribute("aria-disabled", "true");
     });
     const results = await axe(container);
     expect(results).toHaveNoViolations();
@@ -378,11 +391,11 @@ describe("ToolRail", () => {
       new ApiError("INTERNAL", "server error", 500),
     );
     render(<ToolRail />);
-    // Initially loading (disabled) - remains disabled after notfound
+    // Initially loading (aria-disabled) - remains unavailable after the error state.
     await waitFor(() => {
       const buttons = screen.getAllByRole("button");
       for (const btn of buttons) {
-        expect(btn).toBeDisabled();
+        expect(btn).toHaveAttribute("aria-disabled", "true");
       }
     });
   });

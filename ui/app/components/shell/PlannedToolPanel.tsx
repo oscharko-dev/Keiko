@@ -90,6 +90,7 @@ const PANEL_HEADING_ID = "planned-tool-panel-heading";
  */
 export function PlannedToolPanel({
   tool,
+  project,
   onClose,
   followUpIssueUrl,
 }: PlannedToolPanelProps): ReactNode {
@@ -106,14 +107,13 @@ export function PlannedToolPanel({
       ref={panelRef}
       tabIndex={-1}
       aria-labelledby={PANEL_HEADING_ID}
-      className="flex w-72 flex-col overflow-hidden bg-panel focus:outline-none
-        focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
-      style={{ borderLeft: "1px solid #3a4052" }}
+      className="flex w-full flex-col overflow-hidden border-b border-border bg-panel
+        focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent
+        sm:w-72 sm:border-b-0 sm:border-l"
     >
       {/* Panel header */}
       <header
-        className="flex items-center justify-between px-4 py-3"
-        style={{ borderBottom: "1px solid #3a4052" }}
+        className="flex items-center justify-between border-b border-border px-4 py-3"
       >
         <h2 id={PANEL_HEADING_ID} className="text-sm font-semibold text-ink">
           {copy.label}
@@ -136,6 +136,9 @@ export function PlannedToolPanel({
       {/* Panel body */}
       <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 text-xs">
         <p className="text-ink-muted leading-relaxed">{copy.description}</p>
+        <p className="rounded bg-elevated px-2 py-1 text-[11px] text-ink-muted">
+          Project context: <span className="text-ink">{project.name}</span>
+        </p>
 
         <section>
           <p className="mb-1.5 font-medium text-ink">Planned capabilities</p>

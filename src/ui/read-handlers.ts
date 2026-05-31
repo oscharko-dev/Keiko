@@ -28,6 +28,7 @@ import {
   discoverWithStats,
   WORKSPACE_CODES,
   WorkspaceError,
+  type WorkspaceCode,
   type WorkspaceSummary,
 } from "../workspace/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -113,31 +114,28 @@ function workspaceErrorResult(error: WorkspaceError): RouteResult {
       : error.code === WORKSPACE_CODES.FILE_TOO_LARGE || error.code === WORKSPACE_CODES.READ_FAILED
         ? 422
         : 400;
-  return { status, body: errorBody(error.code, error.message) };
+  return { status, body: errorBody(error.code, workspaceErrorMessage(error.code)) };
 }
 
-function rejectUnregisteredWorkspace(rawDir: string, deps: UiHandlerDeps): RouteResult | null {
-  let normalized: string;
-  try {
-    normalized = validateProjectPath(rawDir, { mustExist: false });
-  } catch {
-    return {
-      status: 400,
-      body: errorBody("BAD_REQUEST", "The dir query parameter must be a valid local project path."),
-    };
-  }
-  const registered = deps.store.listProjects().some((project) => project.path === normalized);
-  return registered
-    ? null
-    : {
-        status: 403,
-        body: errorBody("WORKSPACE_NOT_REGISTERED", "The workspace directory is not a registered project."),
-      };
+const WORKSPACE_ERROR_MESSAGES: Record<WorkspaceCode, string> = {
+  [WORKSPACE_CODES.PATH_ESCAPE]: "The workspace path is outside the registered project.",
+  [WORKSPACE_CODES.PATH_DENIED]: "The workspace path is denied by policy.",
+  [WORKSPACE_CODES.NOT_FOUND]: "The workspace could not be found.",
+  [WORKSPACE_CODES.FILE_TOO_LARGE]: "The workspace file is too large.",
+  [WORKSPACE_CODES.READ_FAILED]: "The workspace could not be read.",
+};
+
+function workspaceErrorMessage(code: WorkspaceCode): string {
+  return WORKSPACE_ERROR_MESSAGES[code];
 }
 
-// Route 12 — workspace summary and optional context pack, built by the safe workspace layer.
-export function handleWorkspace(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  const q = ctx.url.searchParams;
+interface WorkspaceRequest {
+  readonly dir: string;
+  readonly task: string | undefined;
+  readonly budget: number | undefined;
+}
+
+function readWorkspaceRequest(q: URLSearchParams): WorkspaceRequest | RouteResult {
   let budget: number | undefined;
   try {
     budget = parsePositiveBudget(q.get("budget"));
@@ -154,22 +152,55 @@ export function handleWorkspace(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
       body: errorBody("BAD_REQUEST", "The dir query parameter is required."),
     };
   }
-  const task = q.get("task") ?? undefined;
-  const unregistered = rejectUnregisteredWorkspace(dir, deps);
-  if (unregistered !== null) {
-    return unregistered;
-  }
+  return { dir, task: q.get("task") ?? undefined, budget };
+}
+
+function workspaceNotRegisteredResult(): RouteResult {
+  return {
+    status: 403,
+    body: errorBody("WORKSPACE_NOT_REGISTERED", "The workspace directory is not a registered project."),
+  };
+}
+
+function resolveRegisteredWorkspace(
+  rawDir: string,
+  deps: UiHandlerDeps,
+): { readonly normalized: string } | RouteResult {
+  let normalized: string;
   try {
-    const workspace = detectWorkspace(dir);
+    normalized = validateProjectPath(rawDir, { mustExist: false });
+  } catch {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "The dir query parameter must be a valid local project path."),
+    };
+  }
+  const registered = deps.store.listProjects().some((project) => project.path === normalized);
+  if (!registered) {
+    return workspaceNotRegisteredResult();
+  }
+  return { normalized };
+}
+
+function workspaceSummaryResult(
+  request: WorkspaceRequest,
+  registeredRoot: string,
+  deps: UiHandlerDeps,
+): RouteResult {
+  try {
+    const workspace = detectWorkspace(registeredRoot);
+    if (workspace.root !== registeredRoot) {
+      return workspaceNotRegisteredResult();
+    }
     const { files, stats } = discoverWithStats(workspace, DEFAULT_CONTEXT_REQUEST.discovery);
-    const wantsContext = task !== undefined || budget !== undefined;
+    const wantsContext = request.task !== undefined || request.budget !== undefined;
     const pack = wantsContext
       ? buildContextPackFromFiles(
           workspace,
           {
             ...DEFAULT_CONTEXT_REQUEST,
-            task,
-            budgetBytes: budget ?? DEFAULT_CONTEXT_REQUEST.budgetBytes,
+            task: request.task,
+            budgetBytes: request.budget ?? DEFAULT_CONTEXT_REQUEST.budgetBytes,
           },
           files,
         )
@@ -184,6 +215,19 @@ export function handleWorkspace(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
     }
     throw error;
   }
+}
+
+// Route 12 — workspace summary and optional context pack, built by the safe workspace layer.
+export function handleWorkspace(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const request = readWorkspaceRequest(ctx.url.searchParams);
+  if ("status" in request) {
+    return request;
+  }
+  const registered = resolveRegisteredWorkspace(request.dir, deps);
+  if ("status" in registered) {
+    return registered;
+  }
+  return workspaceSummaryResult(request, registered.normalized, deps);
 }
 
 interface EvidenceFilters {

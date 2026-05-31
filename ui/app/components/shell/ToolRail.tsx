@@ -131,20 +131,23 @@ function ToolButton({
   const tipId = `tool-${def.name}-tip`;
 
   return (
-    <li className="flex flex-col items-center">
+    <li className="flex flex-1 flex-col items-center sm:flex-none">
       <button
         ref={buttonRef}
         type="button"
-        disabled={disabled}
         aria-label={def.label}
+        aria-disabled={disabled ? "true" : undefined}
         aria-pressed={disabled ? undefined : pressed}
         aria-describedby={disabled && disabledTip ? tipId : undefined}
-        onClick={() => { onToggle(def.name); }}
+        onClick={() => {
+          if (disabled) return;
+          onToggle(def.name);
+        }}
         className={[
           "flex h-10 w-10 flex-col items-center justify-center rounded",
           "focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus",
           disabled
-            ? "text-ink-dim disabled:cursor-not-allowed disabled:opacity-40"
+            ? "cursor-not-allowed text-ink-dim opacity-40"
             : pressed
               ? "bg-elevated text-ink"
               : "bg-chrome text-ink-muted hover:bg-elevated hover:text-ink",
@@ -246,14 +249,17 @@ export function ToolRail(): ReactNode {
   const tip = disabled ? disabledTooltip(avail) : null;
 
   return (
-    <aside aria-label="Workspace tools" className="flex">
+    <aside
+      aria-label="Workspace tools"
+      className="fixed inset-x-0 bottom-0 z-30 flex w-full flex-col border-t border-ink/10 bg-chrome shadow-[0_-8px_24px_rgba(0,0,0,0.18)] sm:static sm:z-auto sm:w-auto sm:flex-row sm:border-t-0 sm:shadow-none"
+    >
       {/* Active panel — between main content and the icon column */}
       {activeTool && project && (
         <ActivePanel tool={activeTool} project={project} onClose={clearTool} />
       )}
 
       {/* Icon column — fixed 56 px wide */}
-      <ul className="flex w-14 flex-col gap-2 bg-chrome px-2 py-4">
+      <ul className="flex w-full flex-row justify-around gap-2 px-2 py-3 sm:w-14 sm:flex-col sm:justify-start sm:px-2 sm:py-4">
         {TOOLS.map((def) => (
           <ToolButton
             key={def.name}

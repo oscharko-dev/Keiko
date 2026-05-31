@@ -274,7 +274,36 @@ describe("GET /api/workspace", () => {
         deps,
       );
       expect(result.status).toBe(404);
-      expect(result.body).toMatchObject({ error: { code: "WORKSPACE_NOT_FOUND" } });
+      expect(result.body).toMatchObject({
+        error: {
+          code: "WORKSPACE_NOT_FOUND",
+          message: "The workspace could not be found.",
+        },
+      });
+      expect(JSON.stringify(result.body)).not.toContain(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a registered nested directory inside a parent workspace", () => {
+    const root = createWorkspaceFixture();
+    const nested = join(root, "nested");
+    mkdirSync(nested, { recursive: true });
+    try {
+      const result = handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(nested)}`),
+        depsWithRegisteredProject(nested),
+      );
+      expect(result.status).toBe(403);
+      expect(result.body).toMatchObject({
+        error: {
+          code: "WORKSPACE_NOT_REGISTERED",
+          message: "The workspace directory is not a registered project.",
+        },
+      });
+      expect(JSON.stringify(result.body)).not.toContain(root);
+      expect(JSON.stringify(result.body)).not.toContain("context");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

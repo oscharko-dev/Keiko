@@ -52,7 +52,6 @@ interface ShellChromeProps {
  * in a mount-only effect to avoid hydration mismatch (ADR-0014 D3).
  *
  * Three-zone shell: header top bar, then [sidebar | main | tool-rail].
- * ToolRail is CSS-hidden below mobile breakpoints per ADR-0014 D8.
  */
 export function ShellChrome({ children }: ShellChromeProps): ReactNode {
   // SSR-safe: render default state on first paint; correct via mount effect.
@@ -122,25 +121,22 @@ export function ShellChrome({ children }: ShellChromeProps): ReactNode {
             id="main-content"
             tabIndex={-1}
             className="min-w-0 flex-1 overflow-y-auto bg-canvas px-gutter py-section
-              focus:outline-none"
+              pb-24 focus:outline-none sm:pb-section"
           >
             {children}
           </main>
 
-          {/* Tool rail — CSS-hidden below sm so desktop first paint keeps stable geometry.
-           * Suspense required because ToolRail calls useSearchParams() and useRouter(). */}
-          <div className="hidden sm:flex">
-            <Suspense
-              fallback={
-                <aside
-                  aria-label="Workspace tools"
-                  className="w-14 bg-chrome"
-                />
-              }
-            >
-              <ToolRail />
-            </Suspense>
-          </div>
+          {/* Tool rail — Suspense required because ToolRail calls useSearchParams() and useRouter(). */}
+          <Suspense
+            fallback={
+              <aside
+                aria-label="Workspace tools"
+                className="fixed inset-x-0 bottom-0 z-30 w-full border-t border-ink/10 bg-chrome sm:static sm:z-auto sm:w-auto sm:border-t-0"
+              />
+            }
+          >
+            <ToolRail />
+          </Suspense>
         </div>
       </div>
     </>
