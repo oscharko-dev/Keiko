@@ -16,8 +16,13 @@ import type { SseWriter, StreamEvent } from "./sink.js";
 import type { RouteContext, RouteResult, HandlerOutcome } from "./routes.js";
 import { errorBody, STREAMING } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import type { ModelPort } from "../harness/index.js";
 
 const MAX_BODY_BYTES = 1_000_000;
+
+const VERIFY_NOOP_MODEL: ModelPort = {
+  call: () => Promise.reject(new Error("verify runs must not call the model")),
+};
 
 // Sentinel thrown (and caught in handleCreateRun) when the body exceeds MAX_BODY_BYTES. Using a
 // typed class avoids fragile string matching and clearly separates this case from I/O errors.
@@ -60,18 +65,19 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-// Verify runs operate on the host filesystem. Reject workspaceRoot paths not registered in the
-// local project store so a CSRF-equipped local client cannot trigger verification in arbitrary
+// Composer-launched runs operate on the host filesystem. Reject workspaceRoot paths not registered
+// in the local project store so a CSRF-equipped local client cannot trigger workflows in arbitrary
 // directories. Returns a RouteResult to return, or null when the check passes.
-function rejectUnregisteredVerify(parsed: RunRequest, deps: UiHandlerDeps): RouteResult | null {
-  if (parsed.kind !== "verify") {
-    return null;
-  }
+function rejectUnregisteredWorkspace(parsed: RunRequest, deps: UiHandlerDeps): RouteResult | null {
   const root = typeof parsed.input.workspaceRoot === "string" ? parsed.input.workspaceRoot : "";
   const registered = deps.store.listProjects().some((p) => p.path === root);
   return registered
     ? null
     : { status: 403, body: errorBody("WORKSPACE_NOT_REGISTERED", "The workspaceRoot is not a registered project.") };
+}
+
+function resolveRunModel(parsed: RunRequest, deps: UiHandlerDeps): ModelPort | undefined {
+  return parsed.kind === "verify" ? VERIFY_NOOP_MODEL : deps.modelPortFactory(parsed.modelId);
 }
 
 // Route 5 — POST /api/runs. Validates the body, resolves the ModelPort, starts the run, returns 202.
@@ -95,11 +101,11 @@ export async function handleCreateRun(
   if ("code" in parsed) {
     return { status: 400, body: errorBody(parsed.code, parsed.message) };
   }
-  const unregistered = rejectUnregisteredVerify(parsed, deps);
+  const unregistered = rejectUnregisteredWorkspace(parsed, deps);
   if (unregistered !== null) {
     return unregistered;
   }
-  const model = deps.modelPortFactory(parsed.modelId);
+  const model = resolveRunModel(parsed, deps);
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }

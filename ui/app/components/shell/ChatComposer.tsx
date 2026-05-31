@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ReactNode, KeyboardEvent, Ref } from "react";
 import {
   ApiError,
@@ -182,6 +182,11 @@ function modePlaceholder(mode: ComposerMode | null): string {
   return "Optional notes for the chat (not used by the workflow). Verification runs against the entire project.";
 }
 
+function userMessageContent(mode: ComposerMode, text: string): string {
+  const trimmed = text.trim();
+  return trimmed.length > 0 ? trimmed : `${modeLabel(mode)} requested.`;
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -208,11 +213,15 @@ export function ChatComposer({
   const [modelsState, setModelsState] = useState<ModelsState>({ kind: "loading" });
   const [selectedModelId, setSelectedModelId] = useState<string>("");
   const [mode, setMode] = useState<ComposerMode | null>(null);
+  const persistedModelIdRef = useRef(chat.selectedModel);
+  const pendingModelSaveRef = useRef<Promise<boolean> | null>(null);
+  const pendingModelIdRef = useRef<string | null>(null);
 
   const composerId = useId();
   const errorId = `${composerId}-error`;
   const noModelsId = `${composerId}-no-models`;
   const modelSelectId = `${composerId}-model`;
+  const modelStatusId = `${composerId}-model-status`;
 
   useEffect(() => {
     let active = true;
@@ -222,6 +231,7 @@ export function ChatComposer({
         const chatModels = filterChatModels(models);
         setModelsState({ kind: "ready", chatModels });
         setSelectedModelId(pickDefaultModelId(chatModels, chat.selectedModel));
+        persistedModelIdRef.current = chat.selectedModel;
       })
       .catch(() => {
         if (!active) return;
@@ -237,40 +247,75 @@ export function ChatComposer({
   const chatModels = modelsState.kind === "ready" ? modelsState.chatModels : [];
   const hasModels = chatModels.length > 0;
   const submitReady = isSubmitReady(mode, selectedModelId, text);
+  const modelDescriptionId = modelsState.kind === "loading"
+    ? modelStatusId
+    : hasModels ? undefined : noModelsId;
 
-  async function persistModelChange(): Promise<boolean> {
-    if (selectedModelId === chat.selectedModel) {
+  async function persistModelSelection(modelId: string): Promise<boolean> {
+    if (modelId.length === 0) {
+      return false;
+    }
+    if (modelId === persistedModelIdRef.current) {
       return true;
     }
+    if (pendingModelIdRef.current === modelId && pendingModelSaveRef.current !== null) {
+      return pendingModelSaveRef.current;
+    }
+    pendingModelIdRef.current = modelId;
+    pendingModelSaveRef.current = updateChat(chatId, { selectedModel: modelId })
+      .then(() => {
+        persistedModelIdRef.current = modelId;
+        return true;
+      })
+      .catch((err: unknown) => {
+        const msg = err instanceof ApiError ? err.message : "Failed to update chat model.";
+        setSendState({ kind: "error", message: msg });
+        // Re-run the same fallback logic used on mount so the dropdown never shows
+        // a value with no matching <option> when the persisted model is stale.
+        setSelectedModelId(pickDefaultModelId(chatModels, persistedModelIdRef.current));
+        return false;
+      })
+      .finally(() => {
+        if (pendingModelIdRef.current === modelId) {
+          pendingModelIdRef.current = null;
+          pendingModelSaveRef.current = null;
+        }
+      });
+    return pendingModelSaveRef.current;
+  }
+
+  function handleModelChange(modelId: string): void {
+    setSelectedModelId(modelId);
+    if (sendState.kind === "error") setSendState({ kind: "idle" });
+    void persistModelSelection(modelId);
+  }
+
+  async function persistModelChange(): Promise<boolean> {
     try {
-      await updateChat(chatId, { selectedModel: selectedModelId });
-      return true;
+      return await persistModelSelection(selectedModelId);
     } catch (err: unknown) {
       const msg = err instanceof ApiError ? err.message : "Failed to update chat model.";
       setSendState({ kind: "error", message: msg });
-      // Re-run the same fallback logic used on mount so the dropdown never shows
-      // a value with no matching <option> when chat.selectedModel is stale.
-      setSelectedModelId(pickDefaultModelId(chatModels, chat.selectedModel));
       return false;
     }
   }
 
   async function send(): Promise<void> {
     if (!submitReady || isSending || mode === null) return;
-    const content = text.trim();
-    const payload = buildRunPayload(mode, selectedModelId, project.path, content);
+    const workflowText = text.trim();
+    const payload = buildRunPayload(mode, selectedModelId, project.path, workflowText);
     if (payload === null) return;
     setSendState({ kind: "sending" });
     try {
+      const modelOk = await persistModelChange();
+      if (!modelOk) return;
       await createChatMessage({
         chatId,
         projectPath: project.path,
         role: "user",
-        content,
+        content: userMessageContent(mode, workflowText),
         timestamp: Date.now(),
       });
-      const modelOk = await persistModelChange();
-      if (!modelOk) return;
       const run = await startRun(payload);
       await createChatMessage({
         chatId,
@@ -313,6 +358,11 @@ export function ChatComposer({
           No chat models available
         </p>
       )}
+      {modelsState.kind === "loading" && (
+        <p id={modelStatusId} role="status" className="sr-only">
+          Loading chat models
+        </p>
+      )}
 
       <div className="mb-2 flex items-center gap-2">
         <label htmlFor={modelSelectId} className="text-xs text-ink-muted">
@@ -321,9 +371,9 @@ export function ChatComposer({
         <select
           id={modelSelectId}
           value={selectedModelId}
-          onChange={(e) => setSelectedModelId(e.target.value)}
+          onChange={(e) => handleModelChange(e.target.value)}
           disabled={!hasModels || isSending}
-          aria-describedby={hasModels ? undefined : noModelsId}
+          aria-describedby={modelDescriptionId}
           className="rounded bg-elevated px-2 py-1 text-xs text-ink
             focus:outline-none focus-visible:ring-2 focus-visible:ring-focus
             disabled:opacity-50"

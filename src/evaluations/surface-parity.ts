@@ -183,6 +183,7 @@ async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
 
 // The UI RunRequest carries the minimum fields the BFF needs to invoke either workflow. The compile-
 // time guarantee is enforced by the TypeScript check; this is the runtime shape assertion (D7 d).
+// Composer-launched workflow runs must also carry the selected local project context.
 async function checkRunRequestShapes(): Promise<readonly SurfaceParityCheckResult[]> {
   const { parseRunRequest } = await import("../ui/run-request.js");
   return RUN_REQUEST_EXPECTATIONS.map((expectation) => {
@@ -190,7 +191,7 @@ async function checkRunRequestShapes(): Promise<readonly SurfaceParityCheckResul
       JSON.stringify({
         workflowId: expectation.workflowId,
         modelId: "m",
-        input: {},
+        input: { workspaceRoot: "/tmp/keiko-surface-parity" },
         apply: true,
         limits: { maxPromptBytes: 1 },
       }),

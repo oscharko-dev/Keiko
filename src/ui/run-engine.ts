@@ -100,7 +100,10 @@ function explainTask(request: RunRequest): TaskInput {
 
 function workspaceRoot(request: RunRequest): string {
   const root = request.input.workspaceRoot;
-  return typeof root === "string" && root.length > 0 ? root : ".";
+  if (typeof root !== "string" || root.length === 0) {
+    throw new Error("validated RunRequest is missing workspaceRoot");
+  }
+  return root;
 }
 
 function workflowFingerprint(request: RunRequest): string {

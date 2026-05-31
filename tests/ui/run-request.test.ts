@@ -1,7 +1,6 @@
 // Unit tests for `parseRunRequest` (ADR-0011 D5 route 5). The parser is the shape-only validator
-// between the BFF and the workflow/harness entry points; these tests cover the verify variant added
-// for issue #65 (the existing workflow/explain-plan paths are exercised end-to-end via
-// `run-handlers.test.ts`, so this file scopes itself to the verify branch and shared invariants).
+// between the BFF and the workflow/harness entry points. Issue #65 composer runs must always carry
+// a selected local project workspaceRoot; verify adds targetFiles-specific validation on top.
 
 import { describe, expect, it } from "vitest";
 import { parseRunRequest } from "../../src/ui/run-request.js";
@@ -152,5 +151,26 @@ describe("parseRunRequest verify variant", () => {
     );
     bad(result);
     expect(result.message).toMatch(/modelId/);
+  });
+});
+
+describe("parseRunRequest selected-project workspaceRoot invariant", () => {
+  it.each([
+    {
+      label: "unit-test-generation",
+      body: { workflowId: "unit-test-generation", modelId: "m", input: { target: { kind: "moduleDir", moduleDir: "/repo" } } },
+    },
+    {
+      label: "bug-investigation",
+      body: { workflowId: "bug-investigation", modelId: "m", input: { report: { description: "bug" } } },
+    },
+    {
+      label: "explain-plan",
+      body: { taskType: "explain-plan", modelId: "m", input: { filePath: "src/a.ts" } },
+    },
+  ])("rejects $label when workspaceRoot is missing", ({ body }) => {
+    const result = parseRunRequest(JSON.stringify(body));
+    bad(result);
+    expect(result.message).toMatch(/workspaceRoot/);
   });
 });
