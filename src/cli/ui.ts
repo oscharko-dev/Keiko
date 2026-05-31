@@ -12,7 +12,7 @@
 // code. Injected-test invocations skip the guard entirely.
 
 import type { Server } from "node:http";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
@@ -30,6 +30,7 @@ import type { CliIo } from "./runner.js";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const SQLITE_FLAG = "--experimental-sqlite";
+const KEIKO_ENV_NAME_RE = /^KEIKO_[A-Z0-9_]+$/;
 
 const USAGE = `Usage:
   keiko ui [--port PORT] [--host 127.0.0.1|localhost] [--evidence-dir PATH] [--config PATH] [--ui-db PATH]
@@ -64,6 +65,8 @@ export interface UiCliDeps {
   // Test seam: returns the current execArgv. Defaults to process.execArgv. Tests override this
   // so the vitest worker's own --experimental-sqlite does not short-circuit the guard.
   readonly currentExecArgv?: () => readonly string[];
+  // Test seam for local .env discovery. Defaults to process.cwd().
+  readonly cwd?: string | undefined;
 }
 
 export type SpawnFn = (
@@ -118,6 +121,42 @@ export function parseUiArgs(args: readonly string[]): UiCliArgs | null {
 
 function defaultStaticRoot(): string {
   return resolve(dirname(fileURLToPath(import.meta.url)), "..", "ui", "static");
+}
+
+function parseEnvValue(raw: string): string {
+  const value = raw.trim();
+  if (value.length >= 2) {
+    const first = value[0];
+    const last = value[value.length - 1];
+    if ((first === `"` && last === `"`) || (first === "'" && last === "'")) {
+      return value.slice(1, -1);
+    }
+  }
+  return value;
+}
+
+function loadLocalKeikoEnv(cwd: string, env: EnvSource): EnvSource {
+  const file = join(cwd, ".env");
+  if (!existsSync(file)) {
+    return env;
+  }
+  const merged: Record<string, string | undefined> = { ...env };
+  const text = readFileSync(file, "utf8");
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith("#")) continue;
+    const equals = line.indexOf("=");
+    if (equals <= 0) continue;
+    const key = line.slice(0, equals).trim();
+    if (!KEIKO_ENV_NAME_RE.test(key)) continue;
+    if (merged[key] !== undefined) continue;
+    merged[key] = parseEnvValue(line.slice(equals + 1));
+  }
+  return merged;
+}
+
+function resolveUiConfigPath(parsed: UiCliArgs, env: EnvSource): string | undefined {
+  return parsed.config ?? env.KEIKO_CONFIG_FILE;
 }
 
 // Conservative request/header timeouts on the loopback BFF (defense in depth, L2/L3): even on
@@ -228,7 +267,8 @@ export async function runUiCli(
   env: EnvSource,
   deps: UiCliDeps = {},
 ): Promise<number> {
-  const reExec = await maybeReExecForSqlite(env, deps);
+  const effectiveEnv = loadLocalKeikoEnv(deps.cwd ?? process.cwd(), env);
+  const reExec = await maybeReExecForSqlite(effectiveEnv, deps);
   if (reExec !== undefined) return reExec;
   const parsed = parseUiArgs(args);
   if (parsed === null) {
@@ -242,10 +282,10 @@ export async function runUiCli(
   }
   const csp = await loadCspHeader(deps.hashesFile ?? join(staticRoot, "..", "csp-hashes.json"));
   const handlerDeps = buildUiHandlerDeps({
-    configPath: parsed.config,
+    configPath: resolveUiConfigPath(parsed, effectiveEnv),
     evidenceDir: parsed.evidenceDir,
     uiDbPath: parsed.uiDbPath,
-    env,
+    env: effectiveEnv,
   });
   const factory = deps.createServer ?? createUiServer;
   const server = await factory({ staticRoot, csp, port: parsed.port, handlerDeps });

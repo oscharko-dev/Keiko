@@ -6,6 +6,7 @@ import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseUiArgs, runUiCli, waitForShutdown, type UiCliDeps } from "../../src/cli/ui.js";
 import { DEFAULT_UI_PORT } from "../../src/ui/index.js";
+import type { UiHandlerDeps } from "../../src/ui/index.js";
 import type { CliIo } from "../../src/cli/runner.js";
 
 function captureIo(): { io: CliIo; out: string[]; err: string[] } {
@@ -127,6 +128,48 @@ describe("runUiCli", () => {
     expect(code).toBe(0);
     expect(record.port).toBe(4399);
     expect(out.join("")).toContain("http://127.0.0.1:4399");
+  });
+
+  it("loads KEIKO_* values from local .env and ignores unrelated keys", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-dotenv-"));
+    const configPath = join(cwd, "gateway.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        providers: [{ modelId: "gpt-oss-120b", baseUrl: "", apiKey: "" }],
+      }),
+      "utf8",
+    );
+    await writeFile(
+      join(cwd, ".env"),
+      [
+        `KEIKO_CONFIG_FILE=${configPath}`,
+        "KEIKO_MODEL_GPT_OSS_120B_BASE_URL=https://models.example.invalid/openai/v1",
+        "KEIKO_MODEL_GPT_OSS_120B_API_KEY=fake-test-key",
+        "NPM_TOKEN=must-not-be-loaded",
+      ].join("\n"),
+      "utf8",
+    );
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, {}, deps);
+      expect(code).toBe(0);
+      expect(captured[0]?.configPresent).toBe(true);
+      expect(captured[0]?.config?.providers[0]?.modelId).toBe("gpt-oss-120b");
+      expect(captured[0]?.env.NPM_TOKEN).toBeUndefined();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
   });
 });
 

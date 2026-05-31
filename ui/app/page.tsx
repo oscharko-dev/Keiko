@@ -1,1 +1,1 @@
-export { WorkspaceRoute as default } from "@/app/components/shell/WorkspaceRoute";
+export { KeikoDesktop as default } from "@/app/components/desktop/KeikoDesktop";

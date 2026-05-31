@@ -38,6 +38,7 @@ import {
   handleCreateRunSummaryPair,
   handleUpdateMessage,
 } from "./store-handlers.js";
+import { handleCreateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -77,8 +78,8 @@ function health(): RouteResult {
   return { status: 200, body: { status: "ok", version: SDK_VERSION } };
 }
 
-// The full 25-route contract: the twelve original (ADR-0011 D5), the 10 additive UI-store
-// routes (ADR-0013 D7), and three Issue #66 run-summary routes, in contract order.
+// The full 27-route contract: the twelve original (ADR-0011 D5), the 10 additive UI-store
+// routes (ADR-0013 D7), three Issue #66 run-summary routes, and two desktop chat routes.
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
   { method: "GET", pattern: "/api/config", handler: handleConfig },
@@ -109,6 +110,9 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/chats/messages/run-summary-pair", handler: handleCreateRunSummaryPair },
   // Issue #66 — PATCH a run-summary message (status/shortResult/taskType).
   { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
+  // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
+  { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
+  { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured
