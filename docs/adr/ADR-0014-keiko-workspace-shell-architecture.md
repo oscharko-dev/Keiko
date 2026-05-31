@@ -285,10 +285,12 @@ We will define the shell's responsive behavior across three breakpoints aligned 
 default scale:
 
 **Mobile (< 640 px — below Tailwind `sm`).** The sidebar defaults to its collapsed width on first
-paint and can be expanded by the user after hydration. The tool rail is CSS-hidden below `sm`
-(`display: none` via Tailwind) so desktop first paint keeps stable geometry without exposing the
-right rail to the mobile accessibility tree. A native slide-out drawer and focus trap remain a
-future hardening item rather than part of the #63 MVP shell.
+paint and can be expanded by the user after hydration. The tool rail remains reachable as a fixed
+bottom bar with the same four project-bound entries (`Files`, `Browser`, `Review`, `Terminal`) so
+the workspace tools stay keyboard-operable and present in the mobile accessibility tree. When a
+tool panel is open, it stacks above the bottom bar and remains scoped to the selected project. A
+native slide-out drawer and focus trap remain a future hardening item rather than part of the MVP
+shell.
 
 **Tablet (640 px – 1023 px — Tailwind `sm` to just below `lg`).** The sidebar is visible
 icon-only when collapsed (project-initial-letter avatars or icons, no text labels) and shows
@@ -302,9 +304,9 @@ the tool rail does not collapse. Sidebar column widths: collapsed `3rem` (icon-o
 `15rem` (240 px). Tool rail: `3.5rem` icon column, plus an optional `18rem` active tool panel.
 
 **Implementation.** The shell uses a fixed header and a flex content row. Tailwind responsive
-prefixes (`sm:`, `lg:`) provide first-paint geometry for the sidebar and tool rail; JavaScript
-drives the persisted `collapsed` boolean after hydration. CSS transitions animate explicit
-sidebar width changes.
+prefixes (`sm:`, `lg:`) provide first-paint geometry for the sidebar and switch the tool rail from
+mobile bottom bar to the static right column. JavaScript drives the persisted `collapsed` boolean
+after hydration. CSS transitions animate explicit sidebar width changes.
 
 ### D9 — Read-only mount discipline: no mutating call during shell initialization
 
