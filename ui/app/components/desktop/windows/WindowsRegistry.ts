@@ -27,6 +27,19 @@ export interface WindowSize {
   readonly h: number;
 }
 
+export type ConfigFieldType = "text" | "select" | "textarea" | "perm";
+
+export interface ConfigField {
+  readonly key: string;
+  readonly label: string;
+  readonly type: ConfigFieldType;
+  readonly def?: string;
+  readonly optional?: boolean;
+  readonly placeholder?: string;
+  readonly options?: readonly string[];
+  readonly prefix?: string;
+}
+
 export interface WindowRenderContext {
   readonly linkedRoot: string | null;
 }
@@ -42,6 +55,8 @@ export interface WindowTypeDef {
   readonly tiny: WindowSize;
   readonly tool?: boolean;
   readonly singleton?: boolean;
+  readonly config?: readonly ConfigField[];
+  readonly cta?: string;
   readonly render: (cfg: Record<string, unknown>, ctx: WindowRenderContext) => ReactNode;
 }
 
@@ -62,6 +77,8 @@ interface PartialDef {
   readonly tiny?: WindowSize;
   readonly tool?: boolean;
   readonly singleton?: boolean;
+  readonly config?: readonly ConfigField[];
+  readonly cta?: string;
 }
 
 // Render is deferred at module load — the real render functions are injected
@@ -75,6 +92,10 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 480,
     h: 480,
     min: { w: 300, h: 260 },
+    config: [
+      { key: "title", label: "Title", type: "text", def: "New chat", optional: true, placeholder: "Name this conversation" },
+      { key: "model", label: "Model", type: "select", options: ["orca-5.4", "orca-5.4-mini"], def: "orca-5.4" },
+    ],
   },
   files: {
     title: "Files",
@@ -84,9 +105,24 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 290,
     h: 340,
     tiny: { w: 200, h: 150 },
+    config: [{ key: "root", label: "Folder", type: "select", options: ["src", "assets", "/"], def: "src" }],
   },
-  editor: { title: "Editor", icon: "editor", desc: "Edit a file", w: 480, h: 360 },
-  browser: { title: "Browser", icon: "browser", desc: "Open a URL", w: 460, h: 340 },
+  editor: {
+    title: "Editor",
+    icon: "editor",
+    desc: "Edit a file",
+    w: 480,
+    h: 360,
+    config: [{ key: "file", label: "File path", type: "text", def: "windows.jsx", placeholder: "path/to/file.jsx" }],
+  },
+  browser: {
+    title: "Browser",
+    icon: "browser",
+    desc: "Open a URL",
+    w: 460,
+    h: 340,
+    config: [{ key: "url", label: "URL", type: "text", def: "localhost:5173", placeholder: "https://…" }],
+  },
   terminal: {
     title: "Terminal",
     icon: "terminal",
@@ -95,8 +131,22 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 460,
     h: 250,
     tiny: { w: 250, h: 140 },
+    config: [
+      { key: "cwd", label: "Working directory", type: "text", def: "~/orca-intelligence" },
+      { key: "shell", label: "Shell", type: "select", options: ["zsh", "bash", "fish"], def: "zsh" },
+    ],
   },
-  review: { title: "Review", icon: "review", desc: "View code diffs", w: 420, h: 320 },
+  review: {
+    title: "Review",
+    icon: "review",
+    desc: "View code diffs",
+    w: 420,
+    h: 320,
+    config: [
+      { key: "base", label: "Base branch", type: "text", def: "main" },
+      { key: "head", label: "Compare", type: "text", def: "keiko/issue-51" },
+    ],
+  },
   agents: {
     title: "Agents",
     icon: "agents",
@@ -104,8 +154,22 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 360,
     h: 230,
     tiny: { w: 250, h: 140 },
+    cta: "Start agent",
+    config: [
+      { key: "model", label: "Model", type: "select", options: ["orca-5.4", "orca-5.4-mini", "orca-4-turbo"], def: "orca-5.4" },
+      { key: "role", label: "Role", type: "select", options: ["Builder", "Reviewer", "Researcher", "Refactorer"], def: "Builder" },
+      { key: "task", label: "Task", type: "textarea", def: "", placeholder: "Describe what the agent should do…" },
+      { key: "perm", label: "Permissions", type: "perm" },
+    ],
   },
-  integ: { title: "Integrations", icon: "plugins", desc: "Connect apps", w: 320, h: 300 },
+  integ: {
+    title: "Integrations",
+    icon: "plugins",
+    desc: "Connect apps",
+    w: 320,
+    h: 300,
+    config: [{ key: "provider", label: "Provider", type: "select", options: ["GitHub", "Linear", "Slack", "Sentry"], def: "GitHub" }],
+  },
   keiko: {
     title: "Keiko",
     icon: "spark",
@@ -225,7 +289,7 @@ function buildDef(type: WindowType, partial: PartialDef): WindowTypeDef {
     if (fn !== undefined) return fn(cfg, ctx);
     return null;
   };
-  const base: Omit<WindowTypeDef, "accent" | "tool" | "singleton"> = {
+  const base: Omit<WindowTypeDef, "accent" | "tool" | "singleton" | "config" | "cta"> = {
     title: partial.title,
     icon: partial.icon,
     desc: partial.desc,
@@ -235,10 +299,18 @@ function buildDef(type: WindowType, partial: PartialDef): WindowTypeDef {
     tiny: partial.tiny ?? DEFAULT_TINY,
     render,
   };
-  const extra: { accent?: boolean; tool?: boolean; singleton?: boolean } = {};
+  const extra: {
+    accent?: boolean;
+    tool?: boolean;
+    singleton?: boolean;
+    config?: readonly ConfigField[];
+    cta?: string;
+  } = {};
   if (partial.accent === true) extra.accent = true;
   if (partial.tool === true) extra.tool = true;
   if (partial.singleton === true) extra.singleton = true;
+  if (partial.config !== undefined) extra.config = partial.config;
+  if (partial.cta !== undefined) extra.cta = partial.cta;
   return { ...base, ...extra };
 }
 
