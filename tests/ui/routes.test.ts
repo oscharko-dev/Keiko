@@ -29,8 +29,8 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 25 route contract (12 D5 + 10 D13 + 3 D15)", () => {
-    expect(API_ROUTES).toHaveLength(25);
+  it("declares the 27 route contract (12 D5 + 10 D13 + 3 D15 + 2 desktop chat)", () => {
+    expect(API_ROUTES).toHaveLength(27);
   });
 
   it("includes the run-summary message routes (#66)", () => {
@@ -47,6 +47,15 @@ describe("API route contract", () => {
   it("includes the composer chat-run route (#66)", () => {
     const route = API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/chats/runs");
     expect(route).toBeDefined();
+  });
+
+  it("includes the desktop GPT chat routes", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chats"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat"),
+    ).toBeDefined();
   });
 
   it("exposes every contract path exactly once per method", () => {

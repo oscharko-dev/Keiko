@@ -11,6 +11,8 @@ import type {
   ChatStatus,
   ChatMessageRole,
   ChatWorkflowStatus,
+  DesktopChatBootstrapResponse,
+  DesktopChatSendResponse,
   EvidenceListEntry,
   EvidenceManifest,
   MessageResponse,
@@ -410,5 +412,40 @@ export async function patchChatMessage(
   return fetchJson(`/api/chats/messages?${params.toString()}`, {
     method: "PATCH",
     body: JSON.stringify(body),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Desktop canvas V1 — real chat through the existing model gateway
+// ---------------------------------------------------------------------------
+
+export interface CreateDesktopChatInput {
+  projectPath?: string;
+  title?: string;
+  modelId?: string;
+}
+
+export async function createDesktopChat(
+  input: CreateDesktopChatInput = {},
+): Promise<DesktopChatBootstrapResponse> {
+  return fetchJson("/api/desktop/chats", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export interface SendDesktopChatInput {
+  chatId: string;
+  projectPath: string;
+  content: string;
+  modelId?: string;
+}
+
+export async function sendDesktopChat(
+  input: SendDesktopChatInput,
+): Promise<DesktopChatSendResponse> {
+  return fetchJson("/api/desktop/chat", {
+    method: "POST",
+    body: JSON.stringify(input),
   });
 }

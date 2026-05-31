@@ -70,6 +70,28 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
   });
 });
 
+describe("buildUiHandlerDeps — Gateway env fallback", () => {
+  it("builds a safe gateway config from KEIKO_MODEL_* env when the config file is missing", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-env-");
+    const deps = buildUiHandlerDeps({
+      configPath: join(evidenceDir, "missing-keiko.config.json"),
+      evidenceDir,
+      env: {
+        KEIKO_MODEL_GPT_OSS_120B_BASE_URL: "https://models.example.invalid/openai/v1",
+        KEIKO_MODEL_GPT_OSS_120B_API_KEY: "fake-test-key",
+      },
+      store,
+    });
+
+    expect(deps.configPresent).toBe(true);
+    expect(deps.config?.providers.map((provider) => provider.modelId)).toEqual(["gpt-oss-120b"]);
+    expect(deps.config?.providers[0]?.baseUrl).toBe("https://models.example.invalid/openai/v1");
+    expect(deps.config?.providers[0]?.apiKey).toBe("fake-test-key");
+    store.close();
+  });
+});
+
 describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () => {
   it("redacts API-key-shaped env value from persisted shortResult (H1)", () => {
     // Build deps with a real env containing a synthetic API-key-shaped secret.

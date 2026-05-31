@@ -6,7 +6,13 @@
 // pass unchanged; the handlers degrade gracefully (no config → 400 NO_MODEL on a run, null config on
 // the inspector; no store → an empty evidence list).
 
-import { loadConfigFromFile, type EnvSource, type GatewayConfig } from "../gateway/index.js";
+import {
+  listCapabilities,
+  loadConfigFromFile,
+  parseGatewayConfig,
+  type EnvSource,
+  type GatewayConfig,
+} from "../gateway/index.js";
 import { GatewayError, Gateway } from "../gateway/index.js";
 import { GatewayModelPort } from "../harness/index.js";
 import type { ModelPort } from "../harness/index.js";
@@ -74,20 +80,50 @@ export interface BuildHandlerDepsOptions {
   readonly store?: UiStore | undefined;
 }
 
+function envModelToken(modelId: string): string {
+  return modelId.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
+}
+
+function hasEnvProvider(modelId: string, env: EnvSource): boolean {
+  const token = envModelToken(modelId);
+  const baseUrl = env[`KEIKO_MODEL_${token}_BASE_URL`] ?? env.KEIKO_DEFAULT_BASE_URL;
+  const apiKey = env[`KEIKO_MODEL_${token}_API_KEY`] ?? env.KEIKO_DEFAULT_API_KEY;
+  return baseUrl !== undefined && baseUrl.length > 0 && apiKey !== undefined && apiKey.length > 0;
+}
+
+function resolveEnvOnlyConfig(env: EnvSource): GatewayConfig | undefined {
+  const providers = listCapabilities()
+    .filter((capability) => capability.kind === "chat" && hasEnvProvider(capability.id, env))
+    .map((capability) => ({ modelId: capability.id, baseUrl: "", apiKey: "" }));
+  if (providers.length === 0) {
+    return undefined;
+  }
+  try {
+    return parseGatewayConfig({ providers }, env);
+  } catch (error) {
+    if (error instanceof GatewayError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 // Loads the config without leaking the path or any secret on failure: a missing/invalid config file
-// is a normal "no config" state, not an error surfaced to the browser.
+// falls back to KEIKO_MODEL_* env wiring when present, otherwise it is a normal "no config" state.
 function resolveConfig(
   configPath: string | undefined,
   env: EnvSource,
 ): { config: GatewayConfig | undefined; configPresent: boolean } {
   if (configPath === undefined) {
-    return { config: undefined, configPresent: false };
+    const config = resolveEnvOnlyConfig(env);
+    return { config, configPresent: config !== undefined };
   }
   try {
     return { config: loadConfigFromFile(configPath, env), configPresent: true };
   } catch (error) {
     if (error instanceof GatewayError) {
-      return { config: undefined, configPresent: false };
+      const config = resolveEnvOnlyConfig(env);
+      return { config, configPresent: config !== undefined };
     }
     throw error;
   }

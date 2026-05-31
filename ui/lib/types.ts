@@ -709,3 +709,17 @@ export interface MessagesResponse {
 export interface MessageResponse {
   readonly message: ChatMessage;
 }
+
+export interface DesktopChatBootstrapResponse {
+  readonly project: ProjectWithAvailability;
+  readonly chat: Chat;
+  readonly messages: readonly ChatMessage[];
+  readonly projects: readonly ProjectWithAvailability[];
+  readonly chats: readonly Chat[];
+}
+
+export interface DesktopChatSendResponse {
+  readonly chat: Chat;
+  readonly messages: readonly ChatMessage[];
+  readonly usage?: UsageMetadata;
+}
