@@ -75,9 +75,36 @@ function validateTaskType(value: string): void {
   }
 }
 
+function hasRunSummaryFields(msg: NewChatMessage): boolean {
+  return (
+    msg.runId !== undefined ||
+    msg.workflowId !== undefined ||
+    msg.workflowStatus !== undefined ||
+    msg.shortResult !== undefined ||
+    msg.taskType !== undefined
+  );
+}
+
+function validateRunIdentifiers(msg: NewChatMessage): void {
+  if (msg.runId?.length === 0) {
+    throw invalidRequest("runId is required for run summaries.");
+  }
+  if (msg.workflowId?.length === 0) {
+    throw invalidRequest("workflowId must be non-empty.");
+  }
+}
+
+function validateRunSummaryScope(msg: NewChatMessage): void {
+  if (hasRunSummaryFields(msg) && (msg.role !== "system" || msg.runId === undefined)) {
+    throw invalidRequest("Run summary fields require a system message with runId.");
+  }
+}
+
 function validateMessage(msg: NewChatMessage): void {
   if (!ROLES.has(msg.role)) throw invalidRequest("Invalid role.");
   if (msg.content.length === 0) throw invalidRequest("Content is required.");
+  validateRunIdentifiers(msg);
+  validateRunSummaryScope(msg);
   if (msg.workflowStatus !== undefined && !STATUSES.has(msg.workflowStatus)) {
     throw invalidRequest("Invalid workflowStatus.");
   }
@@ -154,7 +181,12 @@ export function updateMessage(
   if (sets.length === 0) {
     throw invalidRequest("PATCH body must include at least one updatable field.");
   }
-  const sql = `UPDATE chat_messages SET ${sets.join(", ")} WHERE id = ? RETURNING ${COLUMNS}`;
+  const sql = `
+    UPDATE chat_messages
+    SET ${sets.join(", ")}
+    WHERE id = ? AND role = 'system' AND run_id IS NOT NULL AND length(run_id) > 0
+    RETURNING ${COLUMNS}
+  `;
   const row = db.prepare(sql).get(...args, id) as unknown as MessageRow | undefined;
   if (row === undefined) throw notFound("Message");
   return rowToMessage(row);

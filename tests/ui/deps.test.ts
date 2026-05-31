@@ -91,14 +91,14 @@ describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () 
     const chat = deps.store.createChat(proj.path, "t", "m");
     deps.store.createMessage({
       chatId: chat.id,
-      role: "user",
+      role: "system",
       content: "content",
       timestamp: Date.now(),
-      runId: undefined,
+      runId: "run-redacted",
       workflowId: undefined,
-      workflowStatus: undefined,
+      workflowStatus: "running",
       shortResult: `leak ${SECRET} tail`,
-      taskType: undefined,
+      taskType: "verify",
     });
 
     // shortResult returned by listMessages must not contain the literal secret.

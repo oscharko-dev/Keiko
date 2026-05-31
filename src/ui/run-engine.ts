@@ -57,6 +57,10 @@ export interface StartRunResult {
   readonly fingerprint: string;
 }
 
+export interface StartRunOptions {
+  readonly runId?: string;
+}
+
 const KIND_TO_TASK_TYPE: Readonly<Record<RunRequest["kind"], TaskType>> = {
   "unit-tests": "generate-unit-tests",
   "bug-investigation": "investigate-bug",
@@ -212,6 +216,7 @@ function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: strin
 function dispatchExplain(
   ctx: EngineContext,
   sink: QueueEventSink,
+  reservedRunId?: string,
 ): { dispatched: Dispatched; runId: string; fingerprint: string } {
   const config: AgentConfig = {
     model: ctx.request.modelId,
@@ -223,6 +228,9 @@ function dispatchExplain(
     model: ctx.model,
     tools: new DryRunToolPort(),
     sink,
+    ...(reservedRunId === undefined
+      ? {}
+      : { idSource: { newRunId: (): string => reservedRunId } }),
   });
   const result = session.result.then(
     (runResult): DispatchOutcome => ({
@@ -351,22 +359,23 @@ function readTargetFiles(value: unknown): readonly string[] | undefined {
 export function startRun(
   ctx: EngineContext,
   redactReport: (value: unknown) => unknown,
+  options: StartRunOptions = {},
 ): StartRunResult {
   const sink = new QueueEventSink();
   const startedAt = Date.now();
   if (ctx.request.kind === "explain-plan") {
-    const { dispatched, runId, fingerprint } = dispatchExplain(ctx, sink);
+    const { dispatched, runId, fingerprint } = dispatchExplain(ctx, sink, options.runId);
     registerAndCapture(ctx, { runId, fingerprint, sink, startedAt }, dispatched, redactReport);
     return { runId, fingerprint };
   }
   if (ctx.request.kind === "verify") {
-    const runId = randomUUID();
+    const runId = options.runId ?? randomUUID();
     const fingerprint = workflowFingerprint(ctx.request);
     const dispatched = dispatchVerify(ctx, sink, runId);
     registerAndCapture(ctx, { runId, fingerprint, sink, startedAt }, dispatched, redactReport);
     return { runId, fingerprint };
   }
-  const runId = randomUUID();
+  const runId = options.runId ?? randomUUID();
   const fingerprint = workflowFingerprint(ctx.request);
   const dispatched = dispatchWorkflow(ctx, sink, runId);
   registerAndCapture(ctx, { runId, fingerprint, sink, startedAt }, dispatched, redactReport);

@@ -13,10 +13,10 @@ import type { ProjectWithAvailability } from "@/lib/types";
 vi.mock("@/lib/api", () => ({
   fetchChatMessages: vi.fn(),
   createChatMessage: vi.fn(),
+  startChatRun: vi.fn(),
   fetchChats: vi.fn(),
   fetchModels: vi.fn(),
   updateChat: vi.fn(),
-  startRun: vi.fn(),
   // Issue #66 — RunSummaryCard reads these via useRunStatusSync. Keep them as resolving
   // no-ops so the cards never PATCH during ChatView tests.
   fetchRunReport: vi.fn(),
@@ -213,16 +213,28 @@ describe("ChatView", () => {
         },
       ],
     });
-    vi.mocked(api.createChatMessage).mockResolvedValue({
-      message: {
-        id: "m1",
-        chatId: "c1",
-        role: "user",
-        content: "Test",
-        timestamp: 1000,
-      },
+    vi.mocked(api.startChatRun).mockResolvedValue({
+      run: { runId: "r1", fingerprint: "f" },
+      messages: [
+        {
+          id: "m1",
+          chatId: "c1",
+          role: "user",
+          content: "Test",
+          timestamp: 1000,
+        },
+        {
+          id: "m2",
+          chatId: "c1",
+          role: "system",
+          content: "Verify started",
+          timestamp: 1001,
+          runId: "r1",
+          taskType: "verify",
+          workflowStatus: "running",
+        },
+      ],
     });
-    vi.mocked(api.startRun).mockResolvedValueOnce({ runId: "r1", fingerprint: "f" });
     render(<ChatView chatId="c1" project={availableProject} />);
     await waitFor(() => {
       expect(screen.getByRole("combobox", { name: /model/i })).toBeInTheDocument();

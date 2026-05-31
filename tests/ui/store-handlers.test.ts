@@ -650,6 +650,45 @@ describe("POST /api/chats/messages", () => {
     expect(body.message.taskType).toBe("verify");
   });
 
+  it("rejects run summary fields on non-system messages (#66)", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url("/api/chats/messages"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({
+        chatId: c.id,
+        projectPath: projDir,
+        role: "user",
+        content: "Verify requested.",
+        timestamp: 1,
+        runId: "r-x",
+        taskType: "verify",
+        workflowStatus: "running",
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects run summary fields without a runId (#66)", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url("/api/chats/messages"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({
+        chatId: c.id,
+        projectPath: projDir,
+        role: "system",
+        content: "Verify started",
+        timestamp: 1,
+        taskType: "verify",
+        workflowStatus: "running",
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("rejects an invalid taskType pattern (#66)", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
@@ -669,7 +708,168 @@ describe("POST /api/chats/messages", () => {
   });
 });
 
-// ─── Route 23: PATCH /api/chats/messages (issue #66) ────────────────────────
+// ─── Route 23: POST /api/chats/messages/run-summary-pair (issue #66) ────────
+describe("POST /api/chats/messages/run-summary-pair", () => {
+  it("atomically creates exactly one user message and one system run summary", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url("/api/chats/messages/run-summary-pair"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({
+        chatId: c.id,
+        projectPath: projDir,
+        user: { content: "Verify requested.", timestamp: 1 },
+        summary: {
+          content: "Verify started",
+          timestamp: 2,
+          runId: "run-pair",
+          taskType: "verify",
+          workflowStatus: "running",
+        },
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      messages: { role: string; runId?: string; taskType?: string }[];
+    };
+    expect(body.messages.map((m) => m.role)).toEqual(["user", "system"]);
+    expect(body.messages[1]?.runId).toBe("run-pair");
+    expect(body.messages[1]?.taskType).toBe("verify");
+    expect(store.listMessages(c.id)).toHaveLength(2);
+  });
+
+  it("rolls back the user message when the summary row is invalid", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url("/api/chats/messages/run-summary-pair"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({
+        chatId: c.id,
+        projectPath: projDir,
+        user: { content: "Verify requested.", timestamp: 1 },
+        summary: {
+          content: "Verify started",
+          timestamp: 2,
+          taskType: "verify",
+          workflowStatus: "running",
+        },
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(store.listMessages(c.id)).toHaveLength(0);
+  });
+
+  it("returns 400 when the summary has both workflowId and taskType", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url("/api/chats/messages/run-summary-pair"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({
+        chatId: c.id,
+        projectPath: projDir,
+        user: { content: "Tests requested.", timestamp: 1 },
+        summary: {
+          content: "Tests started",
+          timestamp: 2,
+          runId: "run-pair",
+          workflowId: "unit-test-generation",
+          taskType: "verify",
+          workflowStatus: "running",
+        },
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(store.listMessages(c.id)).toHaveLength(0);
+  });
+
+  it("returns 404 when the chat belongs to another project", async () => {
+    store.createProject(projDir);
+    const otherDir = join(tmp, "other-pair");
+    mkdirSync(otherDir);
+    store.createProject(otherDir);
+    const c = store.createChat(otherDir, "t", "m");
+    const res = await fetch(url("/api/chats/messages/run-summary-pair"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({
+        chatId: c.id,
+        projectPath: projDir,
+        user: { content: "Verify requested.", timestamp: 1 },
+        summary: {
+          content: "Verify started",
+          timestamp: 2,
+          runId: "run-pair",
+          taskType: "verify",
+          workflowStatus: "running",
+        },
+      }),
+    });
+    expect(res.status).toBe(404);
+    expect(store.listMessages(c.id)).toHaveLength(0);
+  });
+});
+
+// ─── Route 24: POST /api/chats/runs (issue #66) ─────────────────────────────
+describe("POST /api/chats/runs", () => {
+  it("starts a run and persists the user/system pair with the same reserved runId", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", CHAT_MODEL);
+    const res = await fetch(url("/api/chats/runs"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({
+        chatId: c.id,
+        projectPath: projDir,
+        run: {
+          taskType: "verify",
+          input: { workspaceRoot: projDir },
+          modelId: CHAT_MODEL,
+        },
+        user: { content: "Verify requested.", timestamp: 1 },
+        summary: { content: "Verify started", timestamp: 2 },
+      }),
+    });
+    expect(res.status).toBe(202);
+    const body = (await res.json()) as {
+      run: { runId: string; fingerprint: string };
+      messages: { role: string; runId?: string; taskType?: string; workflowStatus?: string }[];
+    };
+    expect(body.run.runId).toBeTruthy();
+    expect(body.run.fingerprint).toBeTruthy();
+    expect(body.messages.map((m) => m.role)).toEqual(["user", "system"]);
+    expect(body.messages[1]?.runId).toBe(body.run.runId);
+    expect(body.messages[1]?.taskType).toBe("verify");
+    expect(body.messages[1]?.workflowStatus).toBe("running");
+    expect(store.listMessages(c.id).map((m) => m.role)).toEqual(["user", "system"]);
+  });
+
+  it("rejects invalid chat-run message input before starting or persisting", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", CHAT_MODEL);
+    const res = await fetch(url("/api/chats/runs"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({
+        chatId: c.id,
+        projectPath: projDir,
+        run: {
+          taskType: "verify",
+          input: { workspaceRoot: projDir },
+          modelId: CHAT_MODEL,
+        },
+        user: { content: "", timestamp: 1 },
+        summary: { content: "Verify started", timestamp: 2 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(store.listMessages(c.id)).toHaveLength(0);
+  });
+});
+
+// ─── Route 25: PATCH /api/chats/messages (issue #66) ────────────────────────
 describe("PATCH /api/chats/messages", () => {
   function patchMessagesUrl(id: string, chatId: string): string {
     return url(
@@ -732,6 +932,28 @@ describe("PATCH /api/chats/messages", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({ workflowStatus: "failed" }),
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("returns 404 when patching a non-run-summary message", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    const message = store.createMessage({
+      chatId: chat.id,
+      role: "user",
+      content: "ordinary chat note",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const res = await fetch(patchMessagesUrl(message.id, chat.id), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ workflowStatus: "completed" }),
     });
     expect(res.status).toBe(404);
   });
