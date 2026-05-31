@@ -18,6 +18,8 @@ export const DEFAULT_MODEL = "Mistral-Small-3.1-24B-Instruct-2503";
 
 interface NewChatButtonProps {
   collapsed: boolean;
+  /** Validated selected project path. Omit to fall back to the URL param for isolated tests. */
+  projectPath?: string | null;
 }
 
 /**
@@ -26,21 +28,24 @@ interface NewChatButtonProps {
  * On click: creates a chat with the default model, navigates to ?chat=<id>,
  * focusing the composer (handled by ChatView on mount).
  */
-export function NewChatButton({ collapsed }: NewChatButtonProps): ReactNode {
+export function NewChatButton({ collapsed, projectPath }: NewChatButtonProps): ReactNode {
   const router = useRouter();
   const searchParams = useSearchParams();
   const workspaceHref = useWorkspaceRouteHref();
   const [loading, setLoading] = useState(false);
 
-  const projectPath = searchParams.get("project");
-  const disabled = !projectPath || loading;
+  const activeProjectPath = projectPath === undefined ? searchParams.get("project") : projectPath;
+  const disabled = !activeProjectPath || loading;
+  const disabledTitle = activeProjectPath
+    ? undefined
+    : "Select an available local project before starting a new chat.";
 
   async function handleClick(): Promise<void> {
-    if (!projectPath || loading) return;
+    if (!activeProjectPath || loading) return;
     setLoading(true);
     try {
       const { chat } = await createChat({
-        projectPath,
+        projectPath: activeProjectPath,
         title: "New chat",
         selectedModel: DEFAULT_MODEL,
       });
@@ -62,6 +67,7 @@ export function NewChatButton({ collapsed }: NewChatButtonProps): ReactNode {
       <button
         type="button"
         aria-label="New chat"
+        title={disabledTitle}
         disabled={disabled}
         onClick={() => { void handleClick(); }}
         className="flex w-full items-center justify-center rounded py-1.5 text-ink-muted
@@ -77,6 +83,7 @@ export function NewChatButton({ collapsed }: NewChatButtonProps): ReactNode {
   return (
     <button
       type="button"
+      title={disabledTitle}
       disabled={disabled}
       onClick={() => { void handleClick(); }}
       className="w-full rounded px-2 py-1.5 text-left text-xs text-ink-muted

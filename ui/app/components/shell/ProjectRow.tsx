@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError, deleteProject, updateProject } from "@/lib/api";
 import type { ProjectWithAvailability } from "@/lib/types";
@@ -37,8 +37,10 @@ export function ProjectRow({
   const [favoriteLoading, setFavoriteLoading] = useState(false);
   const [removeError, setRemoveError] = useState<string | null>(null);
   const removeButtonRef = useRef<HTMLButtonElement>(null);
+  const unavailableDescriptionId = useId();
 
   const displayName = project.name;
+  const unavailable = project.available === false;
   const label = project.available === false
     ? `${displayName} (unavailable)`
     : displayName;
@@ -91,7 +93,7 @@ export function ProjectRow({
           transition-colors
           focus:outline-none focus-visible:ring-2 focus-visible:ring-focus
           ${selected ? "bg-elevated text-ink" : "text-ink-muted hover:bg-elevated hover:text-ink"}
-          ${project.available === false ? "opacity-60" : ""}`}
+          ${unavailable ? "italic" : ""}`}
       >
         {displayName.charAt(0).toUpperCase()}
       </button>
@@ -104,21 +106,27 @@ export function ProjectRow({
         <button
           type="button"
           aria-current={selected ? "true" : undefined}
+          aria-describedby={unavailable ? unavailableDescriptionId : undefined}
           title={project.path}
           onClick={() => { onSelect(project.path); }}
           className={`flex flex-1 items-center gap-1.5 truncate rounded py-1.5 pl-2 pr-1 text-sm
             transition-colors
             focus:outline-none focus-visible:ring-2 focus-visible:ring-focus
             ${selected ? "bg-elevated text-ink" : "text-ink-muted hover:bg-elevated hover:text-ink"}
-            ${project.available === false ? "opacity-60" : ""}`}
+            ${unavailable ? "italic" : ""}`}
         >
           <span className="truncate">{displayName}</span>
-          {project.available === false && (
+          {unavailable && (
+            <span id={unavailableDescriptionId} className="sr-only">
+              Project path unavailable
+            </span>
+          )}
+          {unavailable && (
             <span
-              className="ml-auto shrink-0 text-xs text-ink-dim"
-              aria-label="Project path unavailable"
+              className="ml-auto shrink-0 rounded bg-panel px-1.5 py-0.5 text-[10px] font-medium not-italic text-ink-muted"
+              aria-hidden="true"
             >
-              ✕
+              Unavailable
             </span>
           )}
         </button>
@@ -153,7 +161,7 @@ export function ProjectRow({
             transition-opacity
             focus:outline-none focus-visible:ring-1 focus-visible:ring-focus
             hover:text-red-400
-            ${project.available === false ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
+            ${unavailable ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`}
         >
           ×
         </button>

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
-import { fetchProjects, ApiError } from "@/lib/api";
+import { fetchProjects, updateProject, ApiError } from "@/lib/api";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { sortProjects } from "@/lib/sidebar-sort";
 import { ChatList } from "./ChatList";
@@ -76,11 +76,29 @@ export function Sidebar({ collapsed, widthClass }: SidebarProps): ReactNode {
     setChatRefreshKey((k) => k + 1);
   }, [selectedChat, refreshKey]);
 
+  useEffect(() => {
+    function handleChatUpdated(event: Event): void {
+      const detail = (event as CustomEvent<{ projectPath?: string }>).detail;
+      if (detail?.projectPath === selectedProject) {
+        setChatRefreshKey((k) => k + 1);
+      }
+    }
+    window.addEventListener("keiko:chat-updated", handleChatUpdated);
+    return () => {
+      window.removeEventListener("keiko:chat-updated", handleChatUpdated);
+    };
+  }, [selectedProject]);
+
   function selectProject(path: string): void {
     const params = new URLSearchParams(searchParams.toString());
     params.set("project", path);
     params.delete("chat");
     router.replace(workspaceHref(params));
+    void Promise.resolve(updateProject(path, {}))
+      .then(() => { setRefreshKey((k) => k + 1); })
+      .catch(() => {
+        // Keep navigation non-blocking; the selected project surface will show API failures.
+      });
   }
 
   function selectChat(chatId: string): void {
@@ -112,6 +130,9 @@ export function Sidebar({ collapsed, widthClass }: SidebarProps): ReactNode {
   }
 
   const width = widthClass ?? (collapsed ? "w-12" : "w-60");
+  const selectedAvailableProjectPath = state.kind === "loaded"
+    ? state.projects.find((project) => project.path === selectedProject && project.available !== false)?.path ?? null
+    : null;
 
   return (
     <>
@@ -128,7 +149,7 @@ export function Sidebar({ collapsed, widthClass }: SidebarProps): ReactNode {
 
         {/* New chat button — top of sidebar */}
         <div className={`px-2 pt-2 ${collapsed ? "" : "pb-1"}`}>
-          <NewChatButton collapsed={collapsed} />
+          <NewChatButton collapsed={collapsed} projectPath={selectedAvailableProjectPath} />
         </div>
 
         <div className="flex-1 overflow-y-auto px-2 py-2">

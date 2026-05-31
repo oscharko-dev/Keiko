@@ -41,11 +41,13 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
   const [refreshKey, setRefreshKey] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const projectName = project.name;
+  const available = project.available !== false;
 
-  const load = useCallback(() => {
+  const loadMessages = useCallback(() => {
     setState({ kind: "loading" });
     let active = true;
-    void fetchChatMessages(chatId)
+    void fetchChatMessages(chatId, project.path)
       .then((r) => {
         if (active) setState({ kind: "loaded", messages: r.messages });
       })
@@ -57,11 +59,23 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
     return () => {
       active = false;
     };
-  }, [chatId]);
+  }, [chatId, project.path]);
 
   useEffect(() => {
-    return load();
-  }, [load, refreshKey]);
+    if (chatState.kind === "loaded") {
+      return loadMessages();
+    }
+    if (chatState.kind === "notfound") {
+      setState({ kind: "loaded", messages: [] });
+      return undefined;
+    }
+    if (chatState.kind === "error") {
+      setState({ kind: "error", message: chatState.message });
+      return undefined;
+    }
+    setState({ kind: "loading" });
+    return undefined;
+  }, [chatState, loadMessages, refreshKey]);
 
   useEffect(() => {
     let active = true;
@@ -89,11 +103,16 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
   }, [state]);
 
   useEffect(() => {
-    composerRef.current?.focus();
-  }, [chatId]);
+    if (available && chatState.kind === "loaded") {
+      composerRef.current?.focus();
+    }
+  }, [available, chatId, chatState.kind]);
 
   function handleMessageSent(): void {
     setRefreshKey((k) => k + 1);
+    window.dispatchEvent(new CustomEvent("keiko:chat-updated", {
+      detail: { projectPath: project.path },
+    }));
   }
 
   // Issue #66 — replace a message by id in-place so a PATCHed run summary updates the DOM
@@ -108,9 +127,6 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
       };
     });
   }, []);
-
-  const projectName = project.name;
-  const available = project.available !== false;
 
   return (
     <div className="flex h-full min-w-0 flex-col">
@@ -164,7 +180,7 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
                 className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 {msg.role === "system" && msg.runId !== undefined ? (
-                  <RunSummaryCard message={msg} onPatched={handlePatched} />
+                  <RunSummaryCard message={msg} projectPath={project.path} onPatched={handlePatched} />
                 ) : (
                   <div
                     className={`max-w-[80%] rounded-lg px-3 py-2 text-sm

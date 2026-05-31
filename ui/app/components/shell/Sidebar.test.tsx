@@ -129,7 +129,7 @@ describe("Sidebar", () => {
     vi.mocked(api.fetchProjects).mockResolvedValueOnce({ projects: mockProjects });
     render(<Sidebar collapsed={false} />);
     await waitFor(() => {
-      const unavailableIndicators = screen.getAllByLabelText(/project path unavailable/i);
+      const unavailableIndicators = screen.getAllByText("Unavailable");
       expect(unavailableIndicators).toHaveLength(1);
     });
   });
@@ -237,6 +237,32 @@ describe("Sidebar", () => {
     });
     const newChatBtn = screen.getByRole("button", { name: /\+ new chat/i });
     expect(newChatBtn).toBeDisabled();
+  });
+
+  it("New chat button is disabled when the selected project is unavailable", async () => {
+    mockSearchParams.set("project", "/workspace/bar");
+    vi.mocked(api.fetchProjects).mockResolvedValueOnce({ projects: mockProjects });
+    render(<Sidebar collapsed={false} />);
+    await waitFor(() => {
+      expect(screen.getByText("Bar Project")).toBeInTheDocument();
+    });
+    const newChatBtn = screen.getByRole("button", { name: /\+ new chat/i });
+    expect(newChatBtn).toBeDisabled();
+  });
+
+  it("touches project recency when selecting a project", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.fetchProjects).mockResolvedValue({ projects: mockProjects });
+    vi.mocked(api.updateProject).mockResolvedValueOnce({ project: mockProjects[0]! });
+    render(<Sidebar collapsed={false} />);
+    await waitFor(() => {
+      expect(screen.getByText("Foo Project")).toBeInTheDocument();
+    });
+
+    const projectBtns = screen.getAllByRole("button", { name: /foo project/i });
+    await user.click(projectBtns[0]!);
+
+    expect(api.updateProject).toHaveBeenCalledWith("/workspace/foo", {});
   });
 
   it("has no axe-detectable accessibility violations when loaded", async () => {

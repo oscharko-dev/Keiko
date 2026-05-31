@@ -51,6 +51,7 @@ function logSyncError(scope: string, error: unknown): void {
 
 export function useRunStatusSync(
   message: ChatMessage,
+  projectPath: string,
   onPatched: (m: ChatMessage) => void,
 ): RunStatusSyncResult {
   const [unavailable, setUnavailable] = useState(false);
@@ -99,7 +100,12 @@ export function useRunStatusSync(
       shortResult: string,
     ): Promise<void> {
       try {
-        const result = await patchChatMessage(messageId, { workflowStatus, shortResult });
+        const result = await patchChatMessage(
+          messageId,
+          message.chatId,
+          projectPath,
+          { workflowStatus, shortResult },
+        );
         if (!cancelled) onPatchedRef.current(result.message);
       } catch (error) {
         // A transient PATCH failure (5xx, network blip) must not strand the row in a
@@ -167,7 +173,7 @@ export function useRunStatusSync(
       cancelled = true;
       if (intervalId !== undefined) clearTimeout(intervalId);
     };
-  }, [runId, persistedStatus, messageId, workflowId, taskType]);
+  }, [runId, persistedStatus, messageId, workflowId, taskType, message.chatId, projectPath]);
 
   return { unavailable };
 }

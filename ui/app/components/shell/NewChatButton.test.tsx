@@ -50,6 +50,16 @@ describe("NewChatButton", () => {
     expect(screen.getByRole("button")).not.toBeDisabled();
   });
 
+  it("stays disabled when the parent has not validated an available selected project", () => {
+    mockSearchParams.set("project", "/workspace/missing");
+    render(<NewChatButton collapsed={false} projectPath={null} />);
+    expect(screen.getByRole("button")).toBeDisabled();
+    expect(screen.getByRole("button")).toHaveAttribute(
+      "title",
+      "Select an available local project before starting a new chat.",
+    );
+  });
+
   it("has a visible focus ring (expanded layout)", () => {
     mockSearchParams.set("project", "/workspace/foo");
     render(<NewChatButton collapsed={false} />);

@@ -238,6 +238,22 @@ function projectWithAvailability(p: Project): ProjectWithAvailability {
   return { ...p, available: isProjectAvailable(p) };
 }
 
+function chatBelongsToProject(
+  deps: UiHandlerDeps,
+  projectPath: string,
+  chatId: string,
+): boolean {
+  return deps.store.listChats(projectPath).some((chat) => chat.id === chatId);
+}
+
+function messageBelongsToChat(
+  deps: UiHandlerDeps,
+  chatId: string,
+  messageId: string,
+): boolean {
+  return deps.store.listMessages(chatId).some((message) => message.id === messageId);
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Route 13 — GET /api/projects
 // ──────────────────────────────────────────────────────────────────────────
@@ -407,6 +423,10 @@ export function handleDeleteChat(ctx: RouteContext, deps: UiHandlerDeps): RouteR
 export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   return runHandlerSync(() => {
     const chatId = requireQuery(ctx, "chatId");
+    const projectPath = requireQuery(ctx, "projectPath");
+    if (!chatBelongsToProject(deps, projectPath, chatId)) {
+      return notFoundResult("Chat not found.");
+    }
     const messages = deps.store.listMessages(chatId);
     return { status: 200, body: { messages } };
   });
@@ -423,6 +443,10 @@ export async function handleCreateMessage(
   return runHandler(async () => {
     const body = await readJsonObject(ctx.req);
     const chatId = requireString(body, "chatId");
+    const projectPath = requireString(body, "projectPath");
+    if (!chatBelongsToProject(deps, projectPath, chatId)) {
+      return notFoundResult("Chat not found.");
+    }
     const role = requireRole(body);
     const content = requireString(body, "content");
     const timestamp = requireNumber(body, "timestamp");
@@ -468,6 +492,11 @@ export async function handleUpdateMessage(
 ): Promise<RouteResult> {
   return runHandler(async () => {
     const id = requireQuery(ctx, "id");
+    const chatId = requireQuery(ctx, "chatId");
+    const projectPath = requireQuery(ctx, "projectPath");
+    if (!chatBelongsToProject(deps, projectPath, chatId) || !messageBelongsToChat(deps, chatId, id)) {
+      return notFoundResult("Message not found.");
+    }
     const body = await readJsonObject(ctx.req);
     const patch = buildMessagePatch(body);
     const message = deps.store.updateMessage(id, patch);

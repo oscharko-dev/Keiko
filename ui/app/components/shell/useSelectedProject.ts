@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { fetchProjects } from "@/lib/api";
+import { ApiError, fetchProjects } from "@/lib/api";
 import type { ProjectWithAvailability } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
@@ -13,7 +13,8 @@ export type ProjectLookupState =
   | { kind: "idle" }
   | { kind: "loading" }
   | { kind: "found"; project: ProjectWithAvailability }
-  | { kind: "notfound" };
+  | { kind: "notfound" }
+  | { kind: "error"; message: string; retry: () => void };
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -27,6 +28,10 @@ export type ProjectLookupState =
 export function useSelectedProject(): ProjectLookupState {
   const searchParams = useSearchParams();
   const projectPath = searchParams.get("project");
+  const [retryKey, setRetryKey] = useState(0);
+  const retry = useCallback(() => {
+    setRetryKey((k) => k + 1);
+  }, []);
 
   const [state, setState] = useState<ProjectLookupState>({ kind: "idle" });
 
@@ -43,14 +48,17 @@ export function useSelectedProject(): ProjectLookupState {
           setState({ kind: "notfound" });
         }
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (!active) return;
-        setState({ kind: "notfound" });
+        const message = error instanceof ApiError
+          ? error.message
+          : "Could not load the selected project. Please try again.";
+        setState({ kind: "error", message, retry });
       });
     return () => {
       active = false;
     };
-  }, []);
+  }, [retry]);
 
   useEffect(() => {
     if (!projectPath) {
@@ -58,7 +66,7 @@ export function useSelectedProject(): ProjectLookupState {
       return;
     }
     return lookup(projectPath);
-  }, [projectPath, lookup]);
+  }, [projectPath, lookup, retryKey]);
 
   return state;
 }

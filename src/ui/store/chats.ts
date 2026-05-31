@@ -65,6 +65,7 @@ RETURNING id, project_path, title, selected_model, branch_label, status, created
 `;
 const SQL_DELETE = "DELETE FROM chats WHERE id = ?";
 const SQL_PROJECT_EXISTS = "SELECT 1 FROM projects WHERE path = ?";
+const SQL_TOUCH = "UPDATE chats SET updated_at = ? WHERE id = ?";
 
 function validateSelectedModel(value: string): void {
   if (value.length === 0) throw invalidRequest("selectedModel is required.");
@@ -153,5 +154,10 @@ export function updateChat(
 
 export function deleteChat(db: DatabaseSync, id: string): void {
   const info = db.prepare(SQL_DELETE).run(id);
+  if (info.changes === 0) throw notFound("Chat");
+}
+
+export function touchChat(db: DatabaseSync, id: string, now: number): void {
+  const info = db.prepare(SQL_TOUCH).run(now, id);
   if (info.changes === 0) throw notFound("Chat");
 }

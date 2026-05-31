@@ -47,7 +47,17 @@ const mockProject: ProjectWithAvailability = {
 
 function Probe(): ReactNode {
   const state = useSelectedProject();
-  return <div data-testid="state" data-kind={state.kind} />;
+  return (
+    <div>
+      <div data-testid="state" data-kind={state.kind} />
+      {state.kind === "error" && (
+        <>
+          <p>{state.message}</p>
+          <button type="button" onClick={state.retry}>Retry</button>
+        </>
+      )}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -97,7 +107,7 @@ describe("useSelectedProject", () => {
     });
   });
 
-  it("returns notfound when fetchProjects throws ApiError", async () => {
+  it("returns error when fetchProjects throws ApiError", async () => {
     mockSearchParams.set("project", "/workspace/foo");
     vi.mocked(api.fetchProjects).mockRejectedValue(
       new ApiError("INTERNAL", "server error", 500),
@@ -106,19 +116,21 @@ describe("useSelectedProject", () => {
     render(<Probe />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("state")).toHaveAttribute("data-kind", "notfound");
+      expect(screen.getByTestId("state")).toHaveAttribute("data-kind", "error");
     });
+    expect(screen.getByText("server error")).toBeInTheDocument();
   });
 
-  it("returns notfound when fetchProjects throws unknown error", async () => {
+  it("returns error when fetchProjects throws unknown error", async () => {
     mockSearchParams.set("project", "/workspace/foo");
     vi.mocked(api.fetchProjects).mockRejectedValue(new Error("network failure"));
 
     render(<Probe />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("state")).toHaveAttribute("data-kind", "notfound");
+      expect(screen.getByTestId("state")).toHaveAttribute("data-kind", "error");
     });
+    expect(screen.getByText(/could not load the selected project/i)).toBeInTheDocument();
   });
 
   it("resets to idle when ?project= param is removed", async () => {
