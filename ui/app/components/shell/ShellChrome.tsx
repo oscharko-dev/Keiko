@@ -31,6 +31,14 @@ function readViewportDefaultCollapsed(): boolean {
   }
 }
 
+function readCompactViewport(): boolean {
+  try {
+    return window.innerWidth < 640;
+  } catch {
+    return false;
+  }
+}
+
 function persistCollapsed(collapsed: boolean): void {
   try {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(collapsed));
@@ -56,27 +64,52 @@ interface ShellChromeProps {
 export function ShellChrome({ children }: ShellChromeProps): ReactNode {
   // SSR-safe: render default state on first paint; correct via mount effect.
   const [collapsed, setCollapsed] = useState(false);
+  const [compactViewport, setCompactViewport] = useState(false);
+  const [compactOpen, setCompactOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
 
   // Read persisted state once on mount (client-only).
   useEffect(() => {
+    setCompactViewport(readCompactViewport());
     setCollapsed(readStoredCollapsed() ?? readViewportDefaultCollapsed());
     setMounted(true);
+
+    function handleResize(): void {
+      const nextCompact = readCompactViewport();
+      setCompactViewport(nextCompact);
+      if (nextCompact) {
+        setCompactOpen(false);
+      }
+    }
+
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
   }, []);
 
   // Persist whenever collapsed changes, but only after initial mount.
   useEffect(() => {
-    if (!mounted) return;
+    if (!mounted || compactViewport) return;
     persistCollapsed(collapsed);
-  }, [collapsed, mounted]);
+  }, [collapsed, compactViewport, mounted]);
 
+  const sidebarCollapsed = compactViewport ? !compactOpen : collapsed;
   const sidebarWidthClass = mounted
-    ? collapsed
-      ? "w-12"
-      : "w-60"
+    ? compactViewport
+      ? compactOpen
+        ? "fixed bottom-20 left-0 top-12 z-40 w-60 shadow-[12px_0_32px_rgba(0,0,0,0.35)]"
+        : "w-12"
+      : collapsed
+        ? "w-12"
+        : "w-60"
     : "w-12 lg:w-60";
 
   function handleToggle(): void {
+    if (compactViewport) {
+      setCompactOpen((open) => !open);
+      return;
+    }
     setCollapsed((c) => !c);
   }
 
@@ -96,7 +129,7 @@ export function ShellChrome({ children }: ShellChromeProps): ReactNode {
 
         {/* Header row — spans all columns */}
         <header role="banner">
-          <ShellHeader collapsed={collapsed} onToggle={handleToggle} />
+          <ShellHeader collapsed={sidebarCollapsed} onToggle={handleToggle} />
         </header>
 
         {/* Content row: [sidebar | main | tool-rail] */}
@@ -114,7 +147,7 @@ export function ShellChrome({ children }: ShellChromeProps): ReactNode {
               />
             }
           >
-            <Sidebar collapsed={collapsed} widthClass={sidebarWidthClass} />
+            <Sidebar collapsed={sidebarCollapsed} widthClass={sidebarWidthClass} />
           </Suspense>
 
           <main

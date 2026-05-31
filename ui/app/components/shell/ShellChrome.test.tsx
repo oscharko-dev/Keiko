@@ -115,6 +115,35 @@ describe("ShellChrome", () => {
     expect(tools.closest(".hidden")).toBeNull();
   });
 
+  it("keeps the project sidebar collapsed on compact viewports even when desktop storage is expanded", async () => {
+    storage["keiko.shell.sidebarCollapsed"] = "false";
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(390);
+
+    render(<ShellChrome><p>x</p></ShellChrome>);
+
+    await waitFor(() => {
+      expect(screen.getByRole("navigation", { name: /project navigation/i })).toHaveClass("w-12");
+    });
+    expect(screen.getByRole("navigation", { name: /project navigation/i })).not.toHaveClass("w-60");
+    expect(screen.getByRole("button", { name: /expand sidebar/i })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("opens the project sidebar as an overlay on compact viewports", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(390);
+
+    render(<ShellChrome><p>x</p></ShellChrome>);
+
+    const toggleBtn = await screen.findByRole("button", { name: /expand sidebar/i });
+    await user.click(toggleBtn);
+
+    await waitFor(() => {
+      expect(screen.getByRole("navigation", { name: /project navigation/i })).toHaveClass("fixed", "w-60");
+    });
+    expect(screen.getByRole("button", { name: /collapse sidebar/i })).toHaveAttribute("aria-expanded", "true");
+    expect(storage["keiko.shell.sidebarCollapsed"]).toBeUndefined();
+  });
+
   it("sidebar toggle flips aria-expanded and persists to localStorage", async () => {
     const user = userEvent.setup();
     render(<ShellChrome><p>x</p></ShellChrome>);

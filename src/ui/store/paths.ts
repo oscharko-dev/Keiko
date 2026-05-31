@@ -44,6 +44,12 @@ function resolveConfiguredPath(path: string, label: string): string {
   return resolved;
 }
 
+function containsPath(parent: string, child: string): boolean {
+  const resolvedParent = resolve(parent);
+  const resolvedChild = resolve(child);
+  return resolvedChild === resolvedParent || resolvedChild.startsWith(`${resolvedParent}${sep}`);
+}
+
 export function resolveUiDbPath(
   explicit: string | undefined,
   env: Readonly<Record<string, string | undefined>>,
@@ -56,4 +62,22 @@ export function resolveUiDbPath(
     return join(resolveConfiguredPath(dir, "KEIKO_UI_DATA_DIR"), UI_DB_FILENAME);
   }
   return join(homedir(), UI_DB_DIRNAME, UI_DB_FILENAME);
+}
+
+export function assertUiDbOutsideProject(
+  uiDbPath: string | undefined,
+  projectPath: string,
+): void {
+  if (uiDbPath === undefined || uiDbPath.length === 0) {
+    return;
+  }
+  const resolvedDbPath = resolve(uiDbPath);
+  const resolvedDbDir = dirname(resolvedDbPath);
+  const resolvedProject = resolve(projectPath);
+  if (containsPath(resolvedProject, resolvedDbPath)) {
+    throw invalidRequest("UI database path must not be inside a selected project.");
+  }
+  if (containsPath(resolvedDbDir, resolvedProject)) {
+    throw invalidRequest("Selected projects must not be inside the UI database directory.");
+  }
 }

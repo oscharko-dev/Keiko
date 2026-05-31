@@ -196,6 +196,19 @@ describe("AC1 — dropdown contains only kind === \"chat\" models from the fixtu
       screen.queryByRole("option", { name: EMBEDDING_MODEL_ID }),
     ).not.toBeInTheDocument();
   });
+
+  it("constrains the dropdown width inside the composer on narrow viewports", async () => {
+    renderComposer();
+    await waitForReady();
+    expect(screen.getByText("Model").parentElement).toHaveClass(
+      "flex-col",
+      "sm:flex-row",
+    );
+    expect(screen.getByRole("combobox", { name: /model/i })).toHaveClass(
+      "min-w-0",
+      "flex-1",
+    );
+  });
 });
 
 describe("AC2 — DOM order matches registry-fixture chat-slice order", () => {

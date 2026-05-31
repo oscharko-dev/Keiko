@@ -52,6 +52,9 @@ export interface UiHandlerDeps {
   // UI-local persistence (ADR-0013). Holds projects, chats, and chat messages. Tests inject the
   // in-memory store via createInMemoryUiStore; production wiring resolves a node:sqlite file path.
   readonly store: UiStore;
+  // Resolved UI database file path when known. Project onboarding uses this to prevent the UI DB
+  // and selected repositories from overlapping on disk.
+  readonly uiDbPath?: string | undefined;
 }
 
 export interface BuildHandlerDepsOptions {
@@ -152,9 +155,9 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     { additionalSecrets: secrets },
     options.env,
   );
+  const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
   const uiStore =
-    options.store ??
-    createNodeUiStore(resolveUiDbPath(options.uiDbPath, options.env), { redactString });
+    options.store ?? createNodeUiStore(resolvedUiDbPath, { redactString });
   return {
     config,
     configPresent,
@@ -165,5 +168,6 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     modelPortFactory: options.modelPortFactory ?? defaultModelPortFactory(config),
     redactionSecrets: secrets,
     store: uiStore,
+    uiDbPath: resolvedUiDbPath,
   };
 }

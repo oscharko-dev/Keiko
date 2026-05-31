@@ -356,7 +356,7 @@ export function ChatComposer({
         </p>
       )}
 
-      <div className="mb-2 flex items-center gap-2">
+      <div className="mb-2 flex min-w-0 flex-col gap-1 sm:flex-row sm:items-center sm:gap-2">
         <label htmlFor={modelSelectId} className="text-xs text-ink-muted">
           Model
         </label>
@@ -366,7 +366,7 @@ export function ChatComposer({
           onChange={(e) => handleModelChange(e.target.value)}
           disabled={!hasModels || isSending}
           aria-describedby={modelDescriptionId}
-          className="rounded bg-elevated px-2 py-1 text-xs text-ink
+          className="min-w-0 flex-1 rounded bg-elevated px-2 py-1 text-xs text-ink
             focus:outline-none focus-visible:ring-2 focus-visible:ring-focus
             disabled:opacity-50"
         >

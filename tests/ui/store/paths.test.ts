@@ -2,9 +2,13 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import { resolveUiDbPath, UiStoreError } from "../../../src/ui/store/index.js";
+import {
+  assertUiDbOutsideProject,
+  resolveUiDbPath,
+  UiStoreError,
+} from "../../../src/ui/store/index.js";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const cleanup: string[] = [];
 
@@ -79,5 +83,32 @@ describe("resolveUiDbPath", () => {
     const link = join(makeTempDir(), "data-link");
     symlinkSync(target, link, "dir");
     expectCode(() => resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: link }), "invalid_request");
+  });
+});
+
+describe("assertUiDbOutsideProject", () => {
+  it("rejects a UI DB path inside a selected project outside process.cwd()", () => {
+    const project = join(makeTempDir(), "repo");
+    const dbPath = join(project, ".keiko", "keiko-ui.db");
+    expect(project.startsWith(process.cwd())).toBe(false);
+    expectCode(() => {
+      assertUiDbOutsideProject(dbPath, project);
+    }, "invalid_request");
+  });
+
+  it("rejects a selected project inside the UI DB directory", () => {
+    const dbPath = join(makeTempDir(), "app-data", "keiko-ui.db");
+    const project = join(dirname(dbPath), "repo");
+    expectCode(() => {
+      assertUiDbOutsideProject(dbPath, project);
+    }, "invalid_request");
+  });
+
+  it("allows disjoint UI DB and project paths", () => {
+    const dbPath = join(makeTempDir(), "app-data", "keiko-ui.db");
+    const project = join(makeTempDir(), "repo");
+    expect(() => {
+      assertUiDbOutsideProject(dbPath, project);
+    }).not.toThrow();
   });
 });

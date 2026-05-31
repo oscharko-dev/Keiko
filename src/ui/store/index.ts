@@ -25,6 +25,11 @@ export {
   projectExists,
 } from "./errors.js";
 export { validateProjectPath, type ValidateProjectPathOptions } from "./validation.js";
-export { resolveUiDbPath, UI_DB_FILENAME, UI_DB_DIRNAME } from "./paths.js";
+export {
+  assertUiDbOutsideProject,
+  resolveUiDbPath,
+  UI_DB_FILENAME,
+  UI_DB_DIRNAME,
+} from "./paths.js";
 export { runMigrations, SCHEMA_VERSION } from "./schema.js";
 export { createInMemoryUiStore, createNodeUiStore, isProjectAvailable } from "./db.js";
