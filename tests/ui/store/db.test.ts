@@ -97,4 +97,101 @@ describe("createNodeUiStore — on-disk file", () => {
     const corruptFiles = siblings.filter((f) => f.startsWith("corrupt.db.corrupt."));
     expect(corruptFiles).toHaveLength(1);
   });
+
+  // B.1 — AC#3: chat + messages survive close/reopen (on-disk round-trip).
+  // This test complements the existing projects-only round-trip at line 64 by proving
+  // that chats AND messages — including all workflow-run fields and the v2 task_type column —
+  // are correctly persisted and rehydrated across two independent store sessions.
+  it("survives a reopen — chat + messages round-trip with workflow fields and task_type", () => {
+    const dbPath = join(tmpDir, "chat-roundtrip.db");
+    const projDir = mkdtempSync(join(tmpDir, "proj-"));
+
+    // ── Session 1: write ────────────────────────────────────────────────────
+    const s1 = createNodeUiStore(dbPath, {
+      now: (() => {
+        let t = 1000;
+        return () => ++t;
+      })(),
+      newId: (() => {
+        let n = 0;
+        return () => `id-${++n}`;
+      })(),
+    });
+
+    s1.createProject(projDir);
+    const chat = s1.createChat(projDir, "Round-trip chat", "Mistral-Small-3.1-24B-Instruct-2503");
+
+    // Plain user message — all optional fields undefined.
+    const plainMsg = s1.createMessage({
+      chatId: chat.id,
+      role: "user",
+      content: "Hello from round-trip",
+      timestamp: 100,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+
+    // Workflow run-summary message — every optional field populated, including v2 task_type.
+    const workflowMsg = s1.createMessage({
+      chatId: chat.id,
+      role: "system",
+      content: "Unit test generation started",
+      timestamp: 200,
+      runId: "run-abc123",
+      workflowId: "unit-test-generation",
+      workflowStatus: "completed",
+      shortResult: "Generated 12 tests.",
+      taskType: "unit-test-generation",
+    });
+
+    s1.close();
+
+    // ── Session 2: read ─────────────────────────────────────────────────────
+    const s2 = createNodeUiStore(dbPath);
+
+    const chats = s2.listChats(projDir);
+    expect(chats).toHaveLength(1);
+    const reloadedChat = chats[0];
+
+    // Chat identity and model.
+    expect(reloadedChat?.id).toBe(chat.id);
+    expect(reloadedChat?.projectPath).toBe(projDir);
+    expect(reloadedChat?.title).toBe("Round-trip chat");
+    expect(reloadedChat?.selectedModel).toBe("Mistral-Small-3.1-24B-Instruct-2503");
+
+    const messages = s2.listMessages(chat.id);
+    expect(messages).toHaveLength(2);
+
+    // Ordered by timestamp ASC, so plain message comes first.
+    const [reloadedPlain, reloadedWorkflow] = messages;
+
+    // Plain message — all optional fields must be undefined (not null).
+    expect(reloadedPlain?.id).toBe(plainMsg.id);
+    expect(reloadedPlain?.chatId).toBe(chat.id);
+    expect(reloadedPlain?.role).toBe("user");
+    expect(reloadedPlain?.content).toBe("Hello from round-trip");
+    expect(reloadedPlain?.timestamp).toBe(100);
+    expect(reloadedPlain?.runId).toBeUndefined();
+    expect(reloadedPlain?.workflowId).toBeUndefined();
+    expect(reloadedPlain?.workflowStatus).toBeUndefined();
+    expect(reloadedPlain?.shortResult).toBeUndefined();
+    expect(reloadedPlain?.taskType).toBeUndefined();
+
+    // Workflow message — all fields must survive the round-trip intact.
+    expect(reloadedWorkflow?.id).toBe(workflowMsg.id);
+    expect(reloadedWorkflow?.chatId).toBe(chat.id);
+    expect(reloadedWorkflow?.role).toBe("system");
+    expect(reloadedWorkflow?.content).toBe("Unit test generation started");
+    expect(reloadedWorkflow?.timestamp).toBe(200);
+    expect(reloadedWorkflow?.runId).toBe("run-abc123");
+    expect(reloadedWorkflow?.workflowId).toBe("unit-test-generation");
+    expect(reloadedWorkflow?.workflowStatus).toBe("completed");
+    expect(reloadedWorkflow?.shortResult).toBe("Generated 12 tests.");
+    expect(reloadedWorkflow?.taskType).toBe("unit-test-generation");
+
+    s2.close();
+  });
 });
