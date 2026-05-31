@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Dispatch, ReactNode, SetStateAction } from "react";
+import type { CSSProperties, Dispatch, ReactNode, SetStateAction } from "react";
 import { Icons, type IconName } from "../../Icons";
 
 type ModelType = "chat" | "coding" | "reasoning" | "embedding";
@@ -156,6 +156,63 @@ function ModelForm({
   );
 }
 
+const WALLPAPER_OPACITY_KEY = "keiko.wallpaper.opacity";
+
+function readWallpaperOpacity(): number {
+  if (typeof window === "undefined") return 100;
+  const raw = window.localStorage.getItem(WALLPAPER_OPACITY_KEY);
+  if (raw === null) return 100;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return 100;
+  return Math.max(0, Math.min(100, parsed));
+}
+
+function GeneralPrefs(): ReactNode {
+  const [wp, setWp] = useState<number>(readWallpaperOpacity);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(WALLPAPER_OPACITY_KEY, String(wp));
+    } catch {
+      /* ignore quota / private mode */
+    }
+    window.dispatchEvent(new CustomEvent("keiko:wallpaper-opacity", { detail: wp }));
+  }, [wp]);
+  // CSS uses --p to fill the track; React's CSSProperties doesn't know custom props.
+  const fill: CSSProperties = { ["--p"]: `${String(wp)}%` } as CSSProperties;
+  return (
+    <>
+      <div className="set-sec-h">
+        <div>
+          <div className="set-sec-t">Workspace wallpaper</div>
+          <div className="set-sec-d">
+            Liquid Chrome — a subtle metallic flow behind the grid that reacts to your cursor and clicks. Set to 0 % for the plain workspace background.
+          </div>
+        </div>
+      </div>
+      <div className="gpref">
+        <div className="gpref-row">
+          <label className="gpref-label" htmlFor="wp-op">Wallpaper opacity</label>
+          <span className="gpref-val mono">{wp}%</span>
+        </div>
+        <input
+          id="wp-op"
+          className="gpref-slider"
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={wp}
+          onChange={(e) => setWp(Number.parseInt(e.target.value, 10))}
+          style={fill}
+          aria-label="Wallpaper opacity"
+        />
+        <div className="gpref-scale"><span>Off</span><span>Full</span></div>
+      </div>
+    </>
+  );
+}
+
 type Tab = "models" | "general" | "security";
 
 export function SettingsPanel(): ReactNode {
@@ -271,9 +328,7 @@ export function SettingsPanel(): ReactNode {
             </div>
           </>
         )}
-        {tab === "general" && (
-          <div className="set-placeholder">General preferences — coming soon.</div>
-        )}
+        {tab === "general" && <GeneralPrefs />}
         {tab === "security" && (
           <div className="set-placeholder">SSO · audit log · data residency — coming soon.</div>
         )}

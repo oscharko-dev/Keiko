@@ -222,7 +222,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; border: none; ba
 
 /* ---------- WORKSPACE SURFACE (the framed canvas) ---------- */
 .stage { position: relative; flex: 1; min-width: 0; display: flex; gap: 6px; padding: 6px; }
-.ws-scene { position: absolute; left: 0; top: 0; width: 0; height: 0; will-change: transform; }
+.ws-scene { position: absolute; left: 0; top: 0; width: 0; height: 0; will-change: transform; z-index: 2; }
 .workspace { cursor: grab; }
 .workspace .window { cursor: default; }
 .ws-zoom { position: absolute; left: 14px; bottom: 14px; z-index: 8000; display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 11px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-card); }
@@ -233,9 +233,19 @@ button { font-family: inherit; color: inherit; cursor: pointer; border: none; ba
 .workspace {
   position: relative; flex: 1; min-width: 0; overflow: hidden;
   border-radius: 12px; border: 1px solid var(--line);
-  background:
-    radial-gradient(circle at 1px 1px, var(--line-soft) 1px, transparent 0) 0 0 / 22px 22px,
-    var(--bg);
+  background: var(--bg);
+}
+
+/* Liquid-Chrome-Wallpaper — bottom layer (z0), screen-fixed */
+.ws-shader {
+  position: absolute; inset: 0; z-index: 0;
+  display: block; pointer-events: none;
+  transition: opacity .35s ease;
+}
+/* Dot-grid — own layer (z1) above the wallpaper; pans/zooms with the view */
+.ws-grid {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background-image: radial-gradient(circle at 1px 1px, var(--line-soft) 1px, transparent 0);
 }
 
 /* ---------- TOOL RAILS ---------- */
@@ -512,6 +522,25 @@ select.set-input { appearance: none; cursor: pointer; }
 .set-btn:hover { background: var(--card-2); color: var(--fg); }
 .set-btn.primary { background: var(--accent); color: #06281b; border-color: var(--accent); }
 .set-placeholder { font-size: 12.5px; color: var(--fg-faint); padding: 20px 4px; text-align: center; }
+.gpref { padding: 4px 2px 8px; }
+.gpref-row { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+.gpref-label { font-size: 12.5px; color: var(--fg); font-weight: 550; }
+.gpref-val { font-size: 12px; color: var(--accent); font-variant-numeric: tabular-nums; }
+.gpref-slider {
+  -webkit-appearance: none; appearance: none; width: 100%; height: 6px;
+  border-radius: 999px; cursor: pointer; outline: none;
+  background: linear-gradient(to right, var(--accent) 0 var(--p, 100%), var(--card-2) var(--p, 100%) 100%);
+}
+.gpref-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--fg); border: 3px solid var(--accent);
+  box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: pointer;
+}
+.gpref-slider::-moz-range-thumb {
+  width: 16px; height: 16px; border-radius: 50%; background: var(--fg);
+  border: 3px solid var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,.35); cursor: pointer;
+}
+.gpref-scale { display: flex; justify-content: space-between; margin-top: 7px; font-size: 10.5px; color: var(--fg-faint); letter-spacing: .02em; }
 
 /* ---------- FILE PREVIEW + SYNTAX HIGHLIGHT ---------- */
 .fpv { display: flex; flex-direction: column; height: 100%; }
@@ -675,7 +704,7 @@ select.set-input { appearance: none; cursor: pointer; }
 /* FAB + empty state */
 .ws-fab { position: absolute; right: 18px; bottom: 18px; z-index: 8000; width: 46px; height: 46px; border-radius: 14px; background: var(--accent); color: #06281b; display: grid; place-items: center; box-shadow: 0 10px 30px -8px var(--accent-glow), 0 6px 16px rgba(0,0,0,.5); transition: transform .12s; }
 .ws-fab:hover { transform: translateY(-2px); }
-.ws-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; pointer-events: none; }
+.ws-empty { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px; pointer-events: none; }
 .ws-empty-logo { width: 54px; height: 54px; opacity: .5; margin-bottom: 8px; }
 .ws-empty-title { font-size: 16px; font-weight: 600; }
 .ws-empty-sub { font-size: 13px; color: var(--fg-faint); }
