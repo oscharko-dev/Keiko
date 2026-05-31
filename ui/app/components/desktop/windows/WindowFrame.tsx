@@ -10,12 +10,7 @@ import {
 import { ChatWindow } from "../ChatWindow";
 import { Icons, type IconName } from "../Icons";
 import { subText } from "./connectionUtils";
-import {
-  CHAT_MINI_W,
-  CHAT_MINI_H,
-  WIN_TYPES,
-  type WindowType,
-} from "./WindowsRegistry";
+import { CHAT_MINI_W, CHAT_MINI_H, WIN_TYPES, type WindowType } from "./WindowsRegistry";
 import type { AppWindow, ConnState, View } from "./types";
 import type { WorkspaceApi } from "../hooks/useWorkspace.types";
 
@@ -53,8 +48,22 @@ function TooSmall({ icon, label }: TooSmallProps): ReactNode {
       <div className="ts-ico">
         <Icon size={28} />
       </div>
-      <div className="ts-title">{label}</div>
-      <div className="ts-sub">Make me bigger</div>
+      <div className="ts-title">Too small to show {label}</div>
+      <div className="ts-sub">Enlarge the window or zoom out</div>
+      <div className="ts-arrow" aria-hidden="true">
+        <svg
+          width="22"
+          height="22"
+          viewBox="0 0 22 22"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M8 8l8 8M16 11v5h-5" />
+        </svg>
+      </div>
     </div>
   );
 }
@@ -77,7 +86,7 @@ function selectBody(
 ): BodySelection {
   if (type === "chat") {
     const mini = ew < CHAT_MINI_W || eh < CHAT_MINI_H;
-    return { mode: mini ? "mini" : "full", node: <ChatWindow mini={mini} /> };
+    return { mode: mini ? "mini" : "full", node: <ChatWindow mini={mini} linkedRoot={linkedRoot} /> };
   }
   const def = WIN_TYPES[type];
   if (ew < def.tiny.w || eh < def.tiny.h) {
@@ -138,11 +147,7 @@ interface DragSession {
   readonly W: number;
 }
 
-function attachDragListeners(
-  api: WorkspaceApi,
-  geo: DragGeometry,
-  session: DragSession,
-): void {
+function attachDragListeners(api: WorkspaceApi, geo: DragGeometry, session: DragSession): void {
   const threshold = SNAP / geo.z;
   const move = (ev: PointerEvent): void => {
     const px = geo.toWX(ev.clientX);
@@ -210,7 +215,14 @@ function applyResizeDelta(
   return { x, y, w, h };
 }
 
-export function WindowFrame({ win, top, connState, view, api, wsRef }: WindowFrameProps): ReactNode {
+export function WindowFrame({
+  win,
+  top,
+  connState,
+  view,
+  api,
+  wsRef,
+}: WindowFrameProps): ReactNode {
   const def = WIN_TYPES[win.type];
   const Icon = Icons[def.icon];
   const zoom = win.zoom ?? 1;
@@ -235,8 +247,8 @@ export function WindowFrame({ win, top, connState, view, api, wsRef }: WindowFra
       const rect = el.getBoundingClientRect();
       const geo = makeDragGeometry(rect, view);
       const wasMax = win.max;
-      const restoredW = wasMax ? win.prev?.w ?? 480 : win.w;
-      const restoredH = wasMax ? win.prev?.h ?? 360 : win.h;
+      const restoredW = wasMax ? (win.prev?.w ?? 480) : win.w;
+      const restoredH = wasMax ? (win.prev?.h ?? 360) : win.h;
       const offX = wasMax ? restoredW / 2 : geo.toWX(e.clientX) - win.x;
       const offY = wasMax ? 18 : geo.toWY(e.clientY) - win.y;
       if (wasMax) api.update(win.id, { max: false, w: restoredW, h: restoredH });
@@ -273,8 +285,14 @@ export function WindowFrame({ win, top, connState, view, api, wsRef }: WindowFra
     [api, win.id, win.x, win.y, win.w, win.h, win.type, view.zoom],
   );
 
+  // Stop propagation BEFORE delegating, so the parent .window's onPointerDown
+  // (focus + drag) cannot race with the port-initiated connect handshake.
   const onPortPointerDown = useCallback(
-    (e: ReactPointerEvent<HTMLDivElement>): void => api.startConnect(win.id, e),
+    (e: ReactPointerEvent<HTMLDivElement>): void => {
+      e.preventDefault();
+      e.stopPropagation();
+      api.startConnect(win.id, e);
+    },
     [api, win.id],
   );
 
@@ -380,6 +398,9 @@ export function WindowFrame({ win, top, connState, view, api, wsRef }: WindowFra
               key={`p${d}`}
               className={`win-port wp-${d}`}
               title="Drag to connect to another card"
+              aria-label={`Connect from ${d === "t" ? "top" : d === "r" ? "right" : d === "b" ? "bottom" : "left"} edge`}
+              role="button"
+              tabIndex={0}
               onPointerDown={onPortPointerDown}
             />
           ))

@@ -393,9 +393,14 @@ button { font-family: inherit; color: inherit; cursor: pointer; border: none; ba
 .conn-badge svg { display: block; }
 .conn-badge:hover { border-color: var(--danger); color: var(--danger); background: color-mix(in oklch, var(--danger) 14%, var(--card)); }
 
-.win-port { position: absolute; z-index: 20; width: 13px; height: 13px; border-radius: 50%; background: var(--card); border: 2px solid var(--accent); opacity: 0; transform: translate(-50%, -50%); cursor: crosshair; transition: opacity .12s, box-shadow .12s; }
-.window:hover .win-port { opacity: 1; }
-.win-port:hover { box-shadow: 0 0 0 4px var(--accent-glow); }
+/* Connection ports — invisible at rest, revealed on .window:hover.
+   pointer-events: auto is set explicitly so the user can grab a port
+   even mid-transition. The hover/focus rules also bump opacity so the
+   port stays visible while the user is actually interacting with it. */
+.win-port { position: absolute; z-index: 20; width: 13px; height: 13px; border-radius: 50%; background: var(--card); border: 2px solid var(--accent); opacity: 0; transform: translate(-50%, -50%); cursor: crosshair; transition: opacity .12s, box-shadow .12s; pointer-events: auto; }
+.window:hover .win-port, .window[data-conn] .win-port { opacity: 1; }
+.win-port:hover { box-shadow: 0 0 0 4px var(--accent-glow); opacity: 1; }
+.win-port:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; opacity: 1; }
 .wp-t { left: 50%; top: 0; }
 .wp-b { left: 50%; top: 100%; }
 .wp-l { left: 0; top: 50%; }
