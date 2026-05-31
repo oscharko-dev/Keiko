@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
-import { createChat, ApiError } from "@/lib/api";
+import { createChat, fetchModels, ApiError } from "@/lib/api";
 import { useWorkspaceRouteHref } from "./navigation";
 
 // ---------------------------------------------------------------------------
@@ -11,6 +11,7 @@ import { useWorkspaceRouteHref } from "./navigation";
 // ---------------------------------------------------------------------------
 
 export const DEFAULT_MODEL = "Mistral-Small-3.1-24B-Instruct-2503";
+const DEFAULT_UNAVAILABLE_MESSAGE = "Default chat model is not available. Check the model registry.";
 
 // ---------------------------------------------------------------------------
 // Props
@@ -33,6 +34,7 @@ export function NewChatButton({ collapsed, projectPath }: NewChatButtonProps): R
   const searchParams = useSearchParams();
   const workspaceHref = useWorkspaceRouteHref();
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const activeProjectPath = projectPath === undefined ? searchParams.get("project") : projectPath;
   const disabled = !activeProjectPath || loading;
@@ -43,7 +45,16 @@ export function NewChatButton({ collapsed, projectPath }: NewChatButtonProps): R
   async function handleClick(): Promise<void> {
     if (!activeProjectPath || loading) return;
     setLoading(true);
+    setError(null);
     try {
+      const { models } = await fetchModels();
+      const defaultAvailable = models.some((model) =>
+        model.kind === "chat" && model.id === DEFAULT_MODEL
+      );
+      if (!defaultAvailable) {
+        setError(DEFAULT_UNAVAILABLE_MESSAGE);
+        return;
+      }
       const { chat } = await createChat({
         projectPath: activeProjectPath,
         title: "New chat",
@@ -53,10 +64,8 @@ export function NewChatButton({ collapsed, projectPath }: NewChatButtonProps): R
       params.set("chat", chat.id);
       router.replace(workspaceHref(params));
     } catch (err: unknown) {
-      // Best-effort — log only in dev
-      if (process.env.NODE_ENV !== "production" && err instanceof ApiError) {
-        console.error("Failed to create chat:", err.message);
-      }
+      const message = err instanceof ApiError ? err.message : "Failed to create chat.";
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -64,35 +73,49 @@ export function NewChatButton({ collapsed, projectPath }: NewChatButtonProps): R
 
   if (collapsed) {
     return (
-      <button
-        type="button"
-        aria-label="New chat"
-        title={disabledTitle}
-        disabled={disabled}
-        onClick={() => { void handleClick(); }}
-        className="flex w-full items-center justify-center rounded py-1.5 text-ink-muted
-          hover:bg-elevated hover:text-ink
-          focus:outline-none focus-visible:ring-2 focus-visible:ring-focus
-          disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        ✎
-      </button>
+      <>
+        <button
+          type="button"
+          aria-label="New chat"
+          title={disabledTitle ?? error ?? undefined}
+          disabled={disabled}
+          onClick={() => { void handleClick(); }}
+          className="flex w-full items-center justify-center rounded py-1.5 text-ink-muted
+            hover:bg-elevated hover:text-ink
+            focus:outline-none focus-visible:ring-2 focus-visible:ring-focus
+            disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          ✎
+        </button>
+        {error !== null && (
+          <span role="alert" className="sr-only">
+            {error}
+          </span>
+        )}
+      </>
     );
   }
 
   return (
-    <button
-      type="button"
-      title={disabledTitle}
-      disabled={disabled}
-      onClick={() => { void handleClick(); }}
-      className="w-full rounded px-2 py-1.5 text-left text-xs text-ink-muted
-        hover:bg-elevated hover:text-ink
-        focus:outline-none focus-visible:ring-2 focus-visible:ring-focus
-        disabled:cursor-not-allowed disabled:opacity-40"
-    >
-      {loading ? "Creating…" : "+ New chat"}
-    </button>
+    <div>
+      <button
+        type="button"
+        title={disabledTitle}
+        disabled={disabled}
+        onClick={() => { void handleClick(); }}
+        className="w-full rounded px-2 py-1.5 text-left text-xs text-ink-muted
+          hover:bg-elevated hover:text-ink
+          focus:outline-none focus-visible:ring-2 focus-visible:ring-focus
+          disabled:cursor-not-allowed disabled:opacity-40"
+      >
+        {loading ? "Creating…" : "+ New chat"}
+      </button>
+      {error !== null && (
+        <p role="alert" className="mt-1 px-2 text-[11px] leading-snug text-red-300">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 

@@ -100,8 +100,18 @@ export async function fetchConfig(): Promise<{
 // Route 3 — models
 // ---------------------------------------------------------------------------
 
+let modelsRequest: Promise<{ models: ModelCapability[] }> | undefined;
+
+export function clearModelCacheForTests(): void {
+  modelsRequest = undefined;
+}
+
 export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
-  return fetchJson("/api/models");
+  modelsRequest ??= fetchJson<{ models: ModelCapability[] }>("/api/models").catch((error: unknown) => {
+    modelsRequest = undefined;
+    throw error;
+  });
+  return modelsRequest;
 }
 
 // ---------------------------------------------------------------------------

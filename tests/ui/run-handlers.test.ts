@@ -69,7 +69,16 @@ let workspace: string;
 let registry: ReturnType<typeof createRunRegistry>;
 let evidenceStore: EvidenceStore;
 
-function handlerDeps(model: ModelPort): UiHandlerDeps {
+interface HandlerDepsOptions {
+  readonly registerWorkspace?: boolean;
+  readonly modelPortFactory?: () => ModelPort | undefined;
+}
+
+function handlerDeps(model: ModelPort, options: HandlerDepsOptions = {}): UiHandlerDeps {
+  const store = createInMemoryUiStore();
+  if (options.registerWorkspace !== false) {
+    store.createProject(workspace);
+  }
   return {
     config: undefined,
     configPresent: false,
@@ -77,12 +86,12 @@ function handlerDeps(model: ModelPort): UiHandlerDeps {
     env: { KEY: SECRET },
     redactor: buildRedactor({ KEY: SECRET }),
     registry,
-    modelPortFactory: () => model,
-    store: createInMemoryUiStore(),
+    modelPortFactory: options.modelPortFactory ?? ((): ModelPort => model),
+    store,
   };
 }
 
-async function start(model: ModelPort): Promise<void> {
+async function start(model: ModelPort, options: HandlerDepsOptions = {}): Promise<void> {
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-ui-runs-"));
   registry = createRunRegistry();
   evidenceStore = createInMemoryEvidenceStore();
@@ -94,7 +103,7 @@ async function start(model: ModelPort): Promise<void> {
     staticRoot,
     csp: buildCspHeader([]),
     port,
-    handlerDeps: handlerDeps(model),
+    handlerDeps: handlerDeps(model, options),
   });
   await new Promise<void>((res) => server.listen(port, UI_HOST, res));
 }
@@ -171,7 +180,11 @@ describe("POST /api/runs", () => {
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
-      body: JSON.stringify({ taskType: "explain-plan", input: { filePath: "x" }, modelId: "m" }),
+      body: JSON.stringify({
+        taskType: "explain-plan",
+        input: { filePath: "x", workspaceRoot: workspace },
+        modelId: "m",
+      }),
     });
     expect(res.status).toBe(400);
     expect((await res.json()) as { error: { code: string } }).toMatchObject({
@@ -296,7 +309,7 @@ describe("POST /api/runs/:runId/apply (gated write path)", () => {
       headers: POST_JSON_HEADERS,
       body: JSON.stringify({
         taskType: "explain-plan",
-        input: { filePath: "src/add.ts" },
+        input: { filePath: "src/add.ts", workspaceRoot: workspace },
         modelId: "m",
       }),
     });
@@ -574,9 +587,9 @@ describe("FIX G/H — oversized request body returns 413 PAYLOAD_TOO_LARGE", () 
   });
 });
 
-describe("Security #1 — verify workspaceRoot project-allowlist check", () => {
+describe("Security #1 — workflow workspaceRoot project-allowlist check", () => {
   it("returns 403 WORKSPACE_NOT_REGISTERED for verify with an unregistered workspaceRoot", async () => {
-    await start(fakeModel("noop"));
+    await start(fakeModel("noop"), { registerWorkspace: false });
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
@@ -588,18 +601,7 @@ describe("Security #1 — verify workspaceRoot project-allowlist check", () => {
   });
 
   it("returns 202 for verify with a registered workspaceRoot", async () => {
-    // Wire a store that has the workspace pre-registered so the allowlist check passes.
     await start(fakeModel("noop"));
-    await new Promise<void>((res) => server.close(() => { res(); }));
-    const registeredStore = createInMemoryUiStore();
-    registeredStore.createProject(workspace);
-    server = createUiServer({
-      staticRoot,
-      csp: buildCspHeader([]),
-      port,
-      handlerDeps: { ...handlerDeps(fakeModel("noop")), store: registeredStore },
-    });
-    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
@@ -608,9 +610,20 @@ describe("Security #1 — verify workspaceRoot project-allowlist check", () => {
     expect(res.status).toBe(202);
   });
 
-  it("does not apply the allowlist to unit-test-generation (workflow) runs", async () => {
-    await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
-    // workspace is NOT registered in the store — workflow runs are unrestricted.
+  it("returns 202 for verify with a registered workspaceRoot even when no model provider is configured", async () => {
+    await start(fakeModel("noop"), { modelPortFactory: () => undefined });
+    const res = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ taskType: "verify", input: { workspaceRoot: workspace }, modelId: "m" }),
+    });
+    expect(res.status).toBe(202);
+  });
+
+  it("returns 403 WORKSPACE_NOT_REGISTERED for unit-test-generation with an unregistered workspaceRoot", async () => {
+    await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")), {
+      registerWorkspace: false,
+    });
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
@@ -620,17 +633,40 @@ describe("Security #1 — verify workspaceRoot project-allowlist check", () => {
         modelId: "test-model",
       }),
     });
-    expect(res.status).toBe(202);
+    expect(res.status).toBe(403);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json).toMatchObject({ error: { code: "WORKSPACE_NOT_REGISTERED" } });
   });
 
-  it("does not apply the allowlist to explain-plan runs", async () => {
-    await start(fakeModel("an explanation"));
-    // workspace is NOT registered in the store — explain-plan runs are unrestricted.
+  it("returns 403 WORKSPACE_NOT_REGISTERED for bug-investigation with an unregistered workspaceRoot", async () => {
+    await start(fakeModel("investigation"), { registerWorkspace: false });
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
-      body: JSON.stringify({ taskType: "explain-plan", input: { filePath: "src/add.ts" }, modelId: "m" }),
+      body: JSON.stringify({
+        workflowId: "bug-investigation",
+        input: { report: { description: "bug" }, workspaceRoot: workspace },
+        modelId: "m",
+      }),
     });
-    expect(res.status).toBe(202);
+    expect(res.status).toBe(403);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json).toMatchObject({ error: { code: "WORKSPACE_NOT_REGISTERED" } });
+  });
+
+  it("returns 403 WORKSPACE_NOT_REGISTERED for explain-plan with an unregistered workspaceRoot", async () => {
+    await start(fakeModel("an explanation"), { registerWorkspace: false });
+    const res = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        taskType: "explain-plan",
+        input: { filePath: "src/add.ts", workspaceRoot: workspace },
+        modelId: "m",
+      }),
+    });
+    expect(res.status).toBe(403);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json).toMatchObject({ error: { code: "WORKSPACE_NOT_REGISTERED" } });
   });
 });

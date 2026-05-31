@@ -173,7 +173,11 @@ describe("RunRequest shape (UI BFF contract)", () => {
   it("parseRunRequest accepts a valid unit-tests request and returns the required fields", async () => {
     const { parseRunRequest } = await import("../../src/ui/run-request.js");
     const result = parseRunRequest(
-      JSON.stringify({ workflowId: "unit-test-generation", modelId: "m", input: {} }),
+      JSON.stringify({
+        workflowId: "unit-test-generation",
+        modelId: "m",
+        input: { workspaceRoot: "/tmp/keiko-surface-parity" },
+      }),
     );
     if ("code" in result) throw new Error(`Unexpected error: ${result.message}`);
     expect(result.kind).toBe("unit-tests");
@@ -187,7 +191,11 @@ describe("RunRequest shape (UI BFF contract)", () => {
   it("parseRunRequest accepts a valid bug-investigation request", async () => {
     const { parseRunRequest } = await import("../../src/ui/run-request.js");
     const result = parseRunRequest(
-      JSON.stringify({ workflowId: "bug-investigation", modelId: "m", input: {} }),
+      JSON.stringify({
+        workflowId: "bug-investigation",
+        modelId: "m",
+        input: { workspaceRoot: "/tmp/keiko-surface-parity" },
+      }),
     );
     if ("code" in result) throw new Error(`Unexpected error: ${result.message}`);
     expect(result.kind).toBe("bug-investigation");
@@ -197,7 +205,12 @@ describe("RunRequest shape (UI BFF contract)", () => {
     const { parseRunRequest } = await import("../../src/ui/run-request.js");
     for (const workflowId of ["unit-test-generation", "bug-investigation"]) {
       const result = parseRunRequest(
-        JSON.stringify({ workflowId, modelId: "m", input: {}, limits: { maxPromptBytes: 1 } }),
+        JSON.stringify({
+          workflowId,
+          modelId: "m",
+          input: { workspaceRoot: "/tmp/keiko-surface-parity" },
+          limits: { maxPromptBytes: 1 },
+        }),
       );
       if ("code" in result) throw new Error(`Unexpected error: ${result.message}`);
       expect(result.limits).toEqual({ maxPromptBytes: 1 });

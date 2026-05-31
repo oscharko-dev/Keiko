@@ -225,6 +225,13 @@ describe("AC3 — default selection prefers chat.selectedModel when in registry"
 });
 
 describe("AC4 — no chat models: alert + submit disabled", () => {
+  it("announces model loading while the registry request is in flight", () => {
+    vi.mocked(api.fetchModels).mockReturnValue(new Promise(() => { /* keep loading */ }));
+    renderComposer();
+    const loading = screen.getByText("Loading chat models");
+    expect(loading).toHaveAttribute("role", "status");
+  });
+
   it("renders a role=alert with the no-models message and disables submit", async () => {
     vi.mocked(api.fetchModels).mockResolvedValueOnce({ models: [] });
     renderComposer();
@@ -245,6 +252,22 @@ describe("AC4 — no chat models: alert + submit disabled", () => {
 });
 
 describe("AC5 — picking a different model PATCHes the chat before startRun", () => {
+  it("persists the selected model id immediately without starting a run", async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await waitForReady();
+    const combo = screen.getByRole("combobox", { name: /model/i });
+
+    await user.selectOptions(combo, "Qwen2.5-Coder-7B-Instruct");
+
+    await waitFor(() => {
+      expect(api.updateChat).toHaveBeenCalledWith("chat-1", {
+        selectedModel: "Qwen2.5-Coder-7B-Instruct",
+      });
+    });
+    expect(api.startRun).not.toHaveBeenCalled();
+  });
+
   it("calls updateChat with the new model id BEFORE startRun", async () => {
     const user = userEvent.setup();
     const callOrder: string[] = [];
@@ -260,9 +283,11 @@ describe("AC5 — picking a different model PATCHes the chat before startRun", (
     await waitForReady();
     const combo = screen.getByRole("combobox", { name: /model/i });
     await user.selectOptions(combo, "Qwen2.5-Coder-7B-Instruct");
+    await waitFor(() => expect(api.updateChat).toHaveBeenCalledTimes(1));
     await selectMode("Verify");
     await user.click(screen.getByRole("button", { name: /send message/i }));
     await waitFor(() => expect(api.startRun).toHaveBeenCalledTimes(1));
+    expect(api.updateChat).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual([
       "updateChat:Qwen2.5-Coder-7B-Instruct",
       "startRun:Qwen2.5-Coder-7B-Instruct",
@@ -294,12 +319,11 @@ describe("AC5 — picking a different model PATCHes the chat before startRun", (
     expect(combo.value).toBe("Mistral-Small-3.1-24B-Instruct-2503");
     // Pick a different valid model so persistModelChange will call updateChat.
     await user.selectOptions(combo, "Qwen2.5-Coder-7B-Instruct");
-    await selectMode("Verify");
-    await user.click(screen.getByRole("button", { name: /send message/i }));
-    // Wait for the error to be shown (updateChat failed).
+    // Wait for the error to be shown (updateChat failed during selection).
     await waitFor(() => expect(screen.getByRole("alert")).toBeInTheDocument());
     // The dropdown must show a valid option, not a blank/unavailable ID.
     expect(combo.value).toBe("Mistral-Small-3.1-24B-Instruct-2503");
+    expect(api.startRun).not.toHaveBeenCalled();
   });
 });
 
@@ -321,6 +345,10 @@ describe("AC6 + AC7 — per-mode startRun payload", () => {
         workspaceRoot: "/repo",
       },
     });
+    const userMessage = vi.mocked(api.createChatMessage).mock.calls.find(
+      (call) => call[0].role === "user",
+    )?.[0];
+    expect(userMessage?.content).toBe("Generate Tests requested.");
   });
 
   it("Investigate Bug sends workflowId=bug-investigation with report.description", async () => {
@@ -373,6 +401,10 @@ describe("AC6 + AC7 — per-mode startRun payload", () => {
       modelId: "Mistral-Small-3.1-24B-Instruct-2503",
       input: { workspaceRoot: "/repo" },
     });
+    const userMessage = vi.mocked(api.createChatMessage).mock.calls.find(
+      (call) => call[0].role === "user",
+    )?.[0];
+    expect(userMessage?.content).toBe("Verify requested.");
   });
 });
 

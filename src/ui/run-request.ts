@@ -1,10 +1,11 @@
 // Parsing + validation of the `POST /api/runs` request body (ADR-0011 D5 route 5). The body arrives
 // as untyped JSON; this module narrows it (no `any`) into a typed `RunRequest` or a typed validation
 // error. It performs SHAPE validation only — exactly one of workflowId/taskType, a present input
-// object, a non-empty modelId. The create route is ALWAYS dry-run: `apply` is forced false here
-// regardless of the body, so applying is reachable only via the gated apply route (D8). The deeper guards
-// (`isSensitivePath`, patch limits, target validation) are enforced by the workflow/harness entry
-// points the engine calls; the BFF never reimplements them.
+// object, a non-empty modelId, and a selected project workspaceRoot. The create route is ALWAYS
+// dry-run: `apply` is forced false here regardless of the body, so applying is reachable only via
+// the gated apply route (D8). The deeper guards (`isSensitivePath`, patch limits, target validation)
+// are enforced by the workflow/harness entry points the engine calls; the BFF never reimplements
+// them.
 
 export type RunKind = "unit-tests" | "bug-investigation" | "explain-plan" | "verify";
 
@@ -53,14 +54,18 @@ function resolveKind(body: Record<string, unknown>): RunKind | RunRequestError {
   return { code: "BAD_REQUEST", message: "Unsupported taskType." };
 }
 
-// Verify shape: workspaceRoot is required, targetFiles (when present) must be a string[] of
-// non-empty entries. The deeper guards (path containment, script detection) run inside the
-// verification orchestrator; the BFF only validates shape here.
-function validateVerifyInput(input: Record<string, unknown>): RunRequestError | null {
+function validateWorkspaceRoot(input: Record<string, unknown>): RunRequestError | null {
   const workspaceRoot = input.workspaceRoot;
   if (typeof workspaceRoot !== "string" || workspaceRoot.length === 0) {
-    return { code: "BAD_REQUEST", message: "verify requires a non-empty workspaceRoot." };
+    return { code: "BAD_REQUEST", message: "A non-empty workspaceRoot is required." };
   }
+  return null;
+}
+
+// Verify shape: targetFiles (when present) must be a string[] of non-empty entries. The deeper
+// guards (path containment, script detection) run inside the verification orchestrator; the BFF
+// only validates shape here.
+function validateVerifyInput(input: Record<string, unknown>): RunRequestError | null {
   const targetFiles = input.targetFiles;
   if (targetFiles === undefined) {
     return null;
@@ -74,6 +79,14 @@ function validateVerifyInput(input: Record<string, unknown>): RunRequestError | 
     }
   }
   return null;
+}
+
+function validateRunInput(kind: RunKind, input: Record<string, unknown>): RunRequestError | null {
+  const workspaceRootError = validateWorkspaceRoot(input);
+  if (workspaceRootError !== null || kind !== "verify") {
+    return workspaceRootError;
+  }
+  return validateVerifyInput(input);
 }
 
 // Parses the raw JSON text into a validated RunRequest, or a typed BAD_REQUEST error.
@@ -99,11 +112,9 @@ export function parseRunRequest(raw: string): RunRequest | RunRequestError {
   if (!isRecord(input)) {
     return { code: "BAD_REQUEST", message: "An input object is required." };
   }
-  if (kind === "verify") {
-    const verifyError = validateVerifyInput(input);
-    if (verifyError !== null) {
-      return verifyError;
-    }
+  const inputError = validateRunInput(kind, input);
+  if (inputError !== null) {
+    return inputError;
   }
   const limits = parsed.limits;
   return {

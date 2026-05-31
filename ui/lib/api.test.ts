@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { deleteChat, deleteProject, fetchWorkspaceSummary } from "./api";
+import {
+  clearModelCacheForTests,
+  deleteChat,
+  deleteProject,
+  fetchModels,
+  fetchWorkspaceSummary,
+} from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -46,6 +52,41 @@ describe("fetchWorkspaceSummary", () => {
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
+  });
+});
+
+describe("fetchModels", () => {
+  afterEach(() => {
+    clearModelCacheForTests();
+    vi.unstubAllGlobals();
+  });
+
+  it("reuses the in-flight model registry request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ models: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await Promise.all([fetchModels(), fetchModels()]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/models",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("clears the model registry cache after a failed request", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValueOnce(jsonResponse({ models: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchModels()).rejects.toThrow("offline");
+    await expect(fetchModels()).resolves.toEqual({ models: [] });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
