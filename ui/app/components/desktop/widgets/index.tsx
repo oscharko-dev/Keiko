@@ -1,0 +1,20 @@
+import { registerWindowRender } from "../windows/WindowsRegistry";
+import { ProjectPanel } from "./panels/ProjectPanel";
+import { SearchPanel } from "./panels/SearchPanel";
+import { PluginsPanel } from "./panels/PluginsPanel";
+import { AutomationsPanel } from "./panels/AutomationsPanel";
+import { MobilePanel } from "./panels/MobilePanel";
+import { InspectorPanel } from "./panels/InspectorPanel";
+import { NotificationsPanel } from "./panels/NotificationsPanel";
+import { ResourcesPanel } from "./panels/ResourcesPanel";
+import { TimelinePanel } from "./panels/TimelinePanel";
+
+registerWindowRender("project", () => <ProjectPanel />);
+registerWindowRender("search", () => <SearchPanel />);
+registerWindowRender("plugins", () => <PluginsPanel />);
+registerWindowRender("automations", () => <AutomationsPanel />);
+registerWindowRender("mobile", () => <MobilePanel />);
+registerWindowRender("inspector", () => <InspectorPanel />);
+registerWindowRender("notifications", () => <NotificationsPanel />);
+registerWindowRender("resources", () => <ResourcesPanel />);
+registerWindowRender("activity", () => <TimelinePanel />);

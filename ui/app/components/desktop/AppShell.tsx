@@ -13,6 +13,7 @@ import { useChatSession } from "./hooks/useChatSession";
 import { useTheme } from "./hooks/useTheme";
 import { useTwinMode } from "./hooks/useTwinMode";
 import { useWorkspace } from "./hooks/useWorkspace";
+import "./widgets";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow } from "./windows/types";
 
