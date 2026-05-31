@@ -195,6 +195,14 @@ describe("FilesPanel", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  it("close button has a visible focus ring (WCAG 2.4.7, issue #68)", () => {
+    vi.mocked(api.fetchWorkspaceSummary).mockReturnValue(new Promise(() => { /* pending */ }));
+    render(<FilesPanel project={project} onClose={() => { /* noop */ }} />);
+    expect(screen.getByRole("button", { name: /close files panel/i })).toHaveClass(
+      "focus-visible:ring-2",
+    );
+  });
+
   // ── Axe ──────────────────────────────────────────────────────────────────
 
   it("has no axe violations in loading state", async () => {
