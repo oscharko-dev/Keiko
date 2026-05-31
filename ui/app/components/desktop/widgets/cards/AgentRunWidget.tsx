@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Icons, type IconName } from "../../Icons";
-import { useTwinMode, type TwinMode } from "../../hooks/useTwinMode";
+import { useTwin, type Decision, type TwinMode } from "../../context/TwinContext";
 import { logActivity } from "../shared/activityBus";
 import { AgentGateCard, type GateInfo, type GateKind, type Risk } from "./AgentGateCard";
 
@@ -103,17 +103,6 @@ function buildSteps(role: string, root: string | null | undefined): readonly Ste
   ];
 }
 
-type GateDecision = "allow" | "ask" | "deny";
-
-// Welle-5-TODO: replace twinDecideShim with twinContext.decide once TwinProvider ships
-// (full per-(kind, risk) policy table + bridges/memory). Welle 4 keeps a degraded
-// shim that allows safe ops in autonomous mode and escalates everything else.
-function twinDecideShim(mode: TwinMode, _kind: GateKind, risk: Risk): GateDecision {
-  if (mode !== "autonomous") return "ask";
-  if (risk === "high") return "ask";
-  return "allow";
-}
-
 function logIcon(tool: LogTool): ReactNode {
   const Ico = Icons[tool as IconName];
   if (typeof Ico === "function") return Ico({ size: 12 });
@@ -135,10 +124,11 @@ function evaluateGate(
   governed: boolean,
   twinMode: TwinMode,
   access: "ask" | "full" | undefined,
+  decide: (kind: GateKind, risk: Risk) => Decision,
 ): GateOutcome {
   const risk: Risk = gate.risk ?? "low";
   if (governed && twinMode === "autonomous") {
-    const d = twinDecideShim(twinMode, gate.kind, risk);
+    const d = decide(gate.kind, risk);
     if (d === "allow") return { kind: "auto-allow" };
     if (d === "deny") return { kind: "auto-deny" };
     return { kind: "escalated" };
@@ -163,8 +153,9 @@ export function AgentRunWidget({ cfg = {}, linkedRoot = null }: AgentRunWidgetPr
   const [log, setLog] = useState<readonly LogRow[]>([]);
   const [escalated, setEscalated] = useState(false);
 
-  const twin = useTwinMode();
+  const twin = useTwin();
   const twinMode = twin.mode;
+  const decide = twin.decide;
 
   const statusRef = useRef<Status>(status);
   statusRef.current = status;
@@ -196,7 +187,7 @@ export function AgentRunWidget({ cfg = {}, linkedRoot = null }: AgentRunWidgetPr
       return;
     }
     if (step.gate !== undefined) {
-      const outcome = evaluateGate(step.gate, governed, twinMode, access);
+      const outcome = evaluateGate(step.gate, governed, twinMode, access, decide);
       const gate = step.gate;
       if (outcome.kind === "auto-allow") {
         commit(step);
@@ -231,7 +222,7 @@ export function AgentRunWidget({ cfg = {}, linkedRoot = null }: AgentRunWidgetPr
       setIdx((i) => i + 1);
     }, dur);
     return () => { clearTimeout(id); };
-  }, [status, idx, STEPS, role, governed, twinMode, access, commit, prependRow]);
+  }, [status, idx, STEPS, role, governed, twinMode, access, commit, prependRow, decide]);
 
   const approve = (): void => {
     const step = STEPS[idx];

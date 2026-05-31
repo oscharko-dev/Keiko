@@ -1,18 +1,23 @@
 "use client";
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
+import { TwinProvider, useTwin } from "./context/TwinContext";
 import { WsContext, type WsContextValue } from "./context/WsContext";
 import { Footer } from "./Footer";
 import { Header } from "./Header";
 import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
+import { CommandPalette, type Command } from "./modals/CommandPalette";
+import { NewWindowDialog } from "./modals/NewWindowDialog";
+import { Palette } from "./modals/Palette";
+import { type Cfg } from "./modals/PermControl";
 import { useChatSession } from "./hooks/useChatSession";
 import { useTheme } from "./hooks/useTheme";
-import { useTwinMode } from "./hooks/useTwinMode";
 import { useWorkspace } from "./hooks/useWorkspace";
+import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import "./widgets";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow } from "./windows/types";
@@ -36,12 +41,64 @@ function deriveOpenTools(wins: readonly AppWindow[] | null): ReadonlySet<string>
   return out;
 }
 
-export function AppShell(): ReactNode {
+const CARD_TYPES: readonly WindowType[] = [
+  "chat", "files", "editor", "browser", "terminal", "review", "agents", "integ",
+];
+const TOOL_TYPES: readonly WindowType[] = [
+  "project", "search", "plugins", "automations", "mobile",
+  "inspector", "activity", "notifications", "resources",
+];
+
+function buildCommands(
+  api: WorkspaceApi,
+  openPalettePick: (type: WindowType) => void,
+  theme: "light" | "dark",
+  toggleTheme: () => void,
+): readonly Command[] {
+  const out: Command[] = [];
+  for (const tp of CARD_TYPES) {
+    const t = WIN_TYPES[tp];
+    out.push({
+      id: `new-${tp}`,
+      label: `New ${t.title}`,
+      group: "Create",
+      icon: t.icon,
+      run: () => openPalettePick(tp),
+    });
+  }
+  for (const tp of TOOL_TYPES) {
+    const t = WIN_TYPES[tp];
+    out.push({
+      id: `open-${tp}`,
+      label: `Open ${t.title}`,
+      group: "Tools",
+      icon: t.icon,
+      run: () => api.toggleTool(tp),
+    });
+  }
+  out.push({ id: "tile", label: "Tile all windows", group: "Layout", icon: "tile", run: api.tileAll });
+  out.push({ id: "split", label: "Split front windows", group: "Layout", icon: "split", run: api.splitFront });
+  out.push({ id: "cascade", label: "Cascade windows", group: "Layout", icon: "cascade", run: api.cascade });
+  out.push({
+    id: "theme",
+    label: "Toggle light / dark theme",
+    group: "View",
+    icon: theme === "light" ? "moon" : "sun",
+    run: toggleTheme,
+  });
+  return out;
+}
+
+function AppShellInner(): ReactNode {
   const { theme, toggle: toggleTheme } = useTheme();
-  const { mode, setMode } = useTwinMode();
+  const twin = useTwin();
   const session = useChatSession();
   const wsRef = useRef<HTMLDivElement>(null);
   const ws = useWorkspace(wsRef);
+
+  const [palOpen, setPalOpen] = useState(false);
+  const [pending, setPending] = useState<WindowType | null>(null);
+  const [cmdkOpen, setCmdkOpen] = useState(false);
 
   const winCount = ws.wins?.length ?? 0;
   const active = topWindow(ws.wins);
@@ -51,6 +108,21 @@ export function AppShell(): ReactNode {
     [ws.wins, active, winCount],
   );
 
+  const openPalette = useCallback((): void => setPalOpen(true), []);
+  const closePalette = useCallback((): void => setPalOpen(false), []);
+  const pick = useCallback((type: WindowType): void => {
+    setPalOpen(false);
+    setPending(type);
+  }, []);
+  const confirmNew = useCallback((cfg: Cfg): void => {
+    setPending((current) => {
+      if (current !== null) ws.api.add(current, cfg);
+      return null;
+    });
+  }, [ws.api]);
+  const closeDialog = useCallback((): void => setPending(null), []);
+  const closeCmdk = useCallback((): void => setCmdkOpen(false), []);
+
   const onTool = useCallback(
     (id: string): void => {
       if (id in WIN_TYPES) ws.api.toggleTool(id as WindowType);
@@ -58,23 +130,41 @@ export function AppShell(): ReactNode {
     [ws.api],
   );
 
-  const onNewChat = useCallback((): void => {
-    ws.api.add("chat", {});
-  }, [ws.api]);
+  const onNewChat = useCallback((): void => pick("chat"), [pick]);
 
-  // Welle-5-TODO: open the Command Palette / NewWindowDialog from this hook.
-  const noop = useCallback((): void => {
-    /* placeholder until later waves wire the palette */
+  useEffect(() => {
+    const h = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setCmdkOpen((o) => !o);
+      }
+    };
+    window.addEventListener("keydown", h);
+    return () => window.removeEventListener("keydown", h);
   }, []);
+
+  const commands = useMemo(
+    () => buildCommands(ws.api, pick, theme, toggleTheme),
+    [ws.api, pick, theme, toggleTheme],
+  );
+
+  const paletteNode = palOpen ? (
+    <Palette
+      types={WIN_TYPES}
+      order={CARD_TYPES}
+      onAdd={pick}
+      onClose={closePalette}
+    />
+  ) : null;
 
   return (
     <ChatSessionProvider value={session}>
       <WsContext.Provider value={wsContextValue}>
         <div className="app">
           <Header
-            mode={mode}
-            onModeChange={setMode}
-            openPalette={noop}
+            mode={twin.mode}
+            onModeChange={twin.setMode}
+            openPalette={openPalette}
             onTileAll={ws.api.tileAll}
             onSplitFront={ws.api.splitFront}
             onCascade={ws.api.cascade}
@@ -88,13 +178,31 @@ export function AppShell(): ReactNode {
               onToggleTheme={toggleTheme}
             />
             <div className="stage">
-              <Workspace ws={ws} wsRef={wsRef} openPalette={noop} />
+              <Workspace ws={ws} wsRef={wsRef} openPalette={openPalette} palette={paletteNode} />
             </div>
             <RightRail openTools={openTools} onTool={onTool} />
           </div>
-          <Footer winCount={winCount} mode={mode} />
+          <Footer winCount={winCount} mode={twin.mode} />
+
+          {pending !== null && (
+            <NewWindowDialog
+              type={pending}
+              types={WIN_TYPES}
+              onConfirm={confirmNew}
+              onClose={closeDialog}
+            />
+          )}
+          {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
         </div>
       </WsContext.Provider>
     </ChatSessionProvider>
+  );
+}
+
+export function AppShell(): ReactNode {
+  return (
+    <TwinProvider>
+      <AppShellInner />
+    </TwinProvider>
   );
 }

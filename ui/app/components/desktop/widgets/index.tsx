@@ -15,6 +15,8 @@ import { TerminalWidget } from "./cards/TerminalWidget";
 import { ReviewWidget } from "./cards/ReviewWidget";
 import { AgentRunWidget, type AgentRunCfg } from "./cards/AgentRunWidget";
 import { IntegrationsWidget } from "./cards/IntegrationsWidget";
+import { KeikoTwinPanel } from "./panels/KeikoTwinPanel";
+import { SettingsPanel } from "./panels/SettingsPanel";
 
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const v = cfg[key];
@@ -53,6 +55,8 @@ registerWindowRender("inspector", () => <InspectorPanel />);
 registerWindowRender("notifications", () => <NotificationsPanel />);
 registerWindowRender("resources", () => <ResourcesPanel />);
 registerWindowRender("activity", () => <TimelinePanel />);
+registerWindowRender("keiko", () => <KeikoTwinPanel />);
+registerWindowRender("settings", () => <SettingsPanel />);
 
 registerWindowRender("files", (cfg) => {
   const root = str(cfg, "root");

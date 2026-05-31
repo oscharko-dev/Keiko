@@ -18,6 +18,7 @@ interface WorkspaceProps {
   readonly ws: UseWorkspaceResult;
   readonly wsRef: RefObject<HTMLDivElement>;
   readonly openPalette: () => void;
+  readonly palette?: ReactNode;
 }
 
 function isInteractive(target: EventTarget | null): boolean {
@@ -64,7 +65,7 @@ function bgPanHandler(
   };
 }
 
-export function Workspace({ ws, wsRef, openPalette }: WorkspaceProps): ReactNode {
+export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
   const top = topWindow(wins);
   const connFrom: AppWindow | null =
@@ -182,6 +183,8 @@ export function Workspace({ ws, wsRef, openPalette }: WorkspaceProps): ReactNode
       >
         <Icons.add size={20} />
       </button>
+
+      {palette ?? null}
     </div>
   );
 }
