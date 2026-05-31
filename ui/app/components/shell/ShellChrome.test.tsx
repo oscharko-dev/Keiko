@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { ShellChrome } from "./ShellChrome";
+import { clearSelectedProjectCacheForTests } from "./useSelectedProject";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -69,6 +70,7 @@ function makeStorage(overrides: Partial<Storage> = {}): Storage {
 beforeEach(() => {
   storage = {};
   vi.spyOn(window, "localStorage", "get").mockReturnValue(makeStorage());
+  clearSelectedProjectCacheForTests();
 });
 
 afterEach(() => {
@@ -100,6 +102,17 @@ describe("ShellChrome", () => {
     render(<ShellChrome><p>x</p></ShellChrome>);
     const skip = screen.getByText(/skip to main content/i);
     expect(skip).toHaveAttribute("href", "#main-content");
+  });
+
+  it("keeps the workspace tools reachable in the mobile layout", async () => {
+    render(<ShellChrome><p>x</p></ShellChrome>);
+
+    await waitFor(() => {
+      expect(screen.getByRole("complementary", { name: /workspace tools/i })).toBeInTheDocument();
+    });
+
+    const tools = screen.getByRole("complementary", { name: /workspace tools/i });
+    expect(tools.closest(".hidden")).toBeNull();
   });
 
   it("sidebar toggle flips aria-expanded and persists to localStorage", async () => {

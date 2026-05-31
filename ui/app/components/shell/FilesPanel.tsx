@@ -119,9 +119,9 @@ export function FilesPanel({ project, onClose }: FilesPanelProps): ReactNode {
       ref={panelRef}
       tabIndex={-1}
       aria-labelledby={PANEL_HEADING_ID}
-      className="flex w-72 flex-col overflow-hidden bg-panel focus:outline-none
-        focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
-      style={{ borderLeft: "1px solid #3a4052" }}
+      className="flex w-full flex-col overflow-hidden bg-panel focus:outline-none
+        focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent
+        border-b border-border sm:w-72 sm:border-b-0 sm:border-l"
     >
       {/* Panel header */}
       <header className="flex items-center justify-between px-4 py-3"
@@ -234,7 +234,7 @@ function SummaryView({ summary }: SummaryViewProps): ReactNode {
 
       {ctx && ctx.entries.length > 0 && (
         <section aria-label="Context pack entries">
-          <p className="mb-1 text-ink-dim">Top entries</p>
+          <p className="mb-1 text-ink">Top entries</p>
           <EntryList entries={ctx.entries} />
         </section>
       )}

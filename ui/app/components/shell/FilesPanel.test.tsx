@@ -157,6 +157,17 @@ describe("FilesPanel", () => {
     });
   });
 
+  it("uses a higher-contrast token for the Top entries label", async () => {
+    vi.mocked(api.fetchWorkspaceSummary).mockResolvedValue({ summary: summaryWithContext });
+    render(<FilesPanel project={project} onClose={() => { /* noop */ }} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Top entries")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Top entries")).toHaveClass("text-ink");
+  });
+
   // ── Error state ───────────────────────────────────────────────────────────
 
   it("renders role=alert with friendly message when fetch fails with ApiError", async () => {

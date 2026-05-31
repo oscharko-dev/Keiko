@@ -70,6 +70,18 @@ describe("PlannedToolPanel", () => {
     expect(screen.getByRole("heading", { name: "Terminal" })).toBeInTheDocument();
   });
 
+  it("renders the selected project context", () => {
+    render(
+      <PlannedToolPanel
+        tool="browser"
+        project={project}
+        onClose={() => { /* noop */ }}
+        followUpIssueUrl={FOLLOW_UP_URL}
+      />,
+    );
+    expect(screen.getByText("Foo Project")).toBeInTheDocument();
+  });
+
   // ── Follow-up link ────────────────────────────────────────────────────────
 
   it("renders follow-up link with the provided URL", () => {

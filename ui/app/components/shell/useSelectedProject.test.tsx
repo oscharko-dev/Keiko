@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 import * as api from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import type { ProjectWithAvailability } from "@/lib/types";
-import { useSelectedProject } from "./useSelectedProject";
+import { clearSelectedProjectCacheForTests, useSelectedProject } from "./useSelectedProject";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -49,7 +49,11 @@ function Probe(): ReactNode {
   const state = useSelectedProject();
   return (
     <div>
-      <div data-testid="state" data-kind={state.kind} />
+      <div
+        data-testid="state"
+        data-kind={state.kind}
+        data-path={state.kind === "found" ? state.project.path : undefined}
+      />
       {state.kind === "error" && (
         <>
           <p>{state.message}</p>
@@ -68,6 +72,7 @@ describe("useSelectedProject", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSearchParams.delete("project");
+    clearSelectedProjectCacheForTests();
   });
 
   it("returns idle when no ?project= param", () => {
@@ -149,6 +154,53 @@ describe("useSelectedProject", () => {
 
     await waitFor(() => {
       expect(screen.getByTestId("state")).toHaveAttribute("data-kind", "idle");
+    });
+  });
+
+  it("dedupes shared project-list fetches across multiple hook consumers", async () => {
+    mockSearchParams.set("project", "/workspace/foo");
+    vi.mocked(api.fetchProjects).mockResolvedValue({ projects: [mockProject] });
+
+    render(
+      <>
+        <Probe />
+        <Probe />
+      </>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByTestId("state")).toHaveLength(2);
+      expect(screen.getAllByTestId("state")[0]).toHaveAttribute("data-kind", "found");
+      expect(screen.getAllByTestId("state")[1]).toHaveAttribute("data-kind", "found");
+    });
+
+    expect(api.fetchProjects).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes the project list when the selected project path changes after a resolved lookup", async () => {
+    const otherProject: ProjectWithAvailability = {
+      ...mockProject,
+      path: "/workspace/bar",
+      name: "Bar Project",
+    };
+    mockSearchParams.set("project", mockProject.path);
+    vi.mocked(api.fetchProjects)
+      .mockResolvedValueOnce({ projects: [mockProject] })
+      .mockResolvedValueOnce({ projects: [mockProject, otherProject] });
+
+    const { rerender } = render(<Probe />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("state")).toHaveAttribute("data-kind", "found");
+    });
+
+    mockSearchParams.set("project", otherProject.path);
+    rerender(<Probe />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("state")).toHaveAttribute("data-kind", "found");
+      expect(screen.getByTestId("state")).toHaveAttribute("data-path", otherProject.path);
+      expect(api.fetchProjects).toHaveBeenCalledTimes(2);
     });
   });
 });

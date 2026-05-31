@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearModelCacheForTests,
+  clearProjectRequestForTests,
   deleteChat,
   deleteProject,
   fetchModels,
+  fetchProjects,
   fetchWorkspaceSummary,
 } from "./api";
 
@@ -85,6 +87,41 @@ describe("fetchModels", () => {
 
     await expect(fetchModels()).rejects.toThrow("offline");
     await expect(fetchModels()).resolves.toEqual({ models: [] });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("fetchProjects", () => {
+  afterEach(() => {
+    clearProjectRequestForTests();
+    vi.unstubAllGlobals();
+  });
+
+  it("reuses the in-flight project list request", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ projects: [] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await Promise.all([fetchProjects(), fetchProjects(), fetchProjects()]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/projects",
+      expect.objectContaining({
+        headers: expect.objectContaining({ Accept: "application/json" }),
+      }),
+    );
+  });
+
+  it("does not cache a resolved project list response", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ projects: [{ path: "/repo/a" }] }))
+      .mockResolvedValueOnce(jsonResponse({ projects: [{ path: "/repo/b" }] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchProjects()).resolves.toEqual({ projects: [{ path: "/repo/a" }] });
+    await expect(fetchProjects()).resolves.toEqual({ projects: [{ path: "/repo/b" }] });
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });

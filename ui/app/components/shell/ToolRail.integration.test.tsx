@@ -8,6 +8,7 @@ import * as api from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import type { ProjectWithAvailability, WorkspaceSummary } from "@/lib/types";
 import { ToolRail } from "./ToolRail";
+import { clearSelectedProjectCacheForTests } from "./useSelectedProject";
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -77,6 +78,7 @@ describe("ToolRail integration", () => {
     mockReplace.mockClear();
     mockParams = new URLSearchParams();
     mockPathname = "/";
+    clearSelectedProjectCacheForTests();
   });
 
   // ── Available project → click Files → FilesPanel renders with summary ────
@@ -187,7 +189,7 @@ describe("ToolRail integration", () => {
 
     const buttons = screen.getAllByRole("button");
     for (const btn of buttons) {
-      expect(btn).toBeDisabled();
+      expect(btn).toHaveAttribute("aria-disabled", "true");
     }
 
     // No panel headings should appear

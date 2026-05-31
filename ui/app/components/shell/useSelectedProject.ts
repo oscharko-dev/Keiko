@@ -16,6 +16,43 @@ export type ProjectLookupState =
   | { kind: "notfound" }
   | { kind: "error"; message: string; retry: () => void };
 
+let selectedProjectsRequest: Promise<readonly ProjectWithAvailability[]> | null = null;
+let selectedProjectsGeneration = 0;
+
+export function clearSelectedProjectCacheForTests(): void {
+  selectedProjectsRequest = null;
+  selectedProjectsGeneration = 0;
+}
+
+function loadSelectedProjects(forceRefresh: boolean): Promise<readonly ProjectWithAvailability[]> {
+  if (!forceRefresh && selectedProjectsRequest !== null) {
+    return selectedProjectsRequest;
+  }
+
+  if (forceRefresh) {
+    selectedProjectsRequest = null;
+    selectedProjectsGeneration += 1;
+  }
+
+  const generation = selectedProjectsGeneration;
+  const request = fetchProjects()
+    .then((response) => {
+      if (generation === selectedProjectsGeneration) {
+        selectedProjectsRequest = null;
+      }
+      return response.projects;
+    })
+    .catch((error: unknown) => {
+      if (generation === selectedProjectsGeneration) {
+        selectedProjectsRequest = null;
+      }
+      throw error;
+    });
+
+  selectedProjectsRequest = request;
+  return request;
+}
+
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
@@ -35,13 +72,13 @@ export function useSelectedProject(): ProjectLookupState {
 
   const [state, setState] = useState<ProjectLookupState>({ kind: "idle" });
 
-  const lookup = useCallback((path: string) => {
+  const lookup = useCallback((path: string, forceRefresh: boolean) => {
     setState({ kind: "loading" });
     let active = true;
-    void fetchProjects()
+    void loadSelectedProjects(forceRefresh)
       .then((r) => {
         if (!active) return;
-        const found = r.projects.find((p) => p.path === path);
+        const found = r.find((p) => p.path === path);
         if (found) {
           setState({ kind: "found", project: found });
         } else {
@@ -65,7 +102,7 @@ export function useSelectedProject(): ProjectLookupState {
       setState({ kind: "idle" });
       return;
     }
-    return lookup(projectPath);
+    return lookup(projectPath, retryKey > 0);
   }, [projectPath, lookup, retryKey]);
 
   return state;

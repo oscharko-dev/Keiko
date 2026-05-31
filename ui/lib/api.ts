@@ -261,8 +261,17 @@ export async function fetchWorkspaceSummary(
 // ADR-0013 — UI-local persistence client (routes 13–22)
 // ---------------------------------------------------------------------------
 
+let projectsRequest: Promise<ProjectsResponse> | undefined;
+
+export function clearProjectRequestForTests(): void {
+  projectsRequest = undefined;
+}
+
 export async function fetchProjects(): Promise<ProjectsResponse> {
-  return fetchJson("/api/projects");
+  projectsRequest ??= fetchJson<ProjectsResponse>("/api/projects").finally(() => {
+    projectsRequest = undefined;
+  });
+  return projectsRequest;
 }
 
 export interface CreateProjectInput {
