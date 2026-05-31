@@ -10,6 +10,7 @@ import {
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { Icons } from "./Icons";
 import { ChatWindow } from "./ChatWindow";
+import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { UseChatSessionResult } from "./hooks/useChatSession";
 
 interface View {
@@ -195,7 +196,9 @@ export function Workspace({ session, openPalette }: WorkspaceProps): ReactNode {
           style={chatShimStyle}
           aria-label="GPT OSS chat window"
         >
-          <ChatWindow session={session} />
+          <ChatSessionProvider value={session}>
+            <ChatWindow />
+          </ChatSessionProvider>
         </section>
       </div>
 
