@@ -29,8 +29,8 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 27 route contract (12 D5 + 10 D13 + 3 D15 + 2 desktop chat)", () => {
-    expect(API_ROUTES).toHaveLength(27);
+  it("declares the 34 route contract (base UI, desktop chat, terminal, and files routes)", () => {
+    expect(API_ROUTES).toHaveLength(34);
   });
 
   it("includes the run-summary message routes (#66)", () => {
@@ -55,6 +55,33 @@ describe("API route contract", () => {
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat"),
+    ).toBeDefined();
+  });
+
+  it("includes the desktop terminal control routes", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/terminal/shells"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/terminal/directories"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/terminal/sessions"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "DELETE" && r.pattern === "/api/terminal/sessions/:sessionId"),
+    ).toBeDefined();
+  });
+
+  it("includes the desktop files read-only routes", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/directories"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/tree"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/files/preview"),
     ).toBeDefined();
   });
 
