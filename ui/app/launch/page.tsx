@@ -1,1 +1,1 @@
-export { WorkspaceShellEntry as default } from "@/app/components/shell/WorkspaceShellEntry";
+export { WorkspaceRoute as default } from "@/app/components/shell/WorkspaceRoute";

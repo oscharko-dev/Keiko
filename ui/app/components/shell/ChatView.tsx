@@ -113,11 +113,15 @@ export function ChatView({ chatId, project }: ChatViewProps): ReactNode {
   const available = project.available !== false;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-w-0 flex-col">
       {/* Project / chat header */}
-      <div className="border-b border-border bg-chrome px-4 py-2">
-        <p className="text-xs text-ink-dim">{project.path}</p>
-        <p className="text-sm font-medium text-ink">{projectName}</p>
+      <div className="min-w-0 border-b border-border bg-chrome px-4 py-2">
+        <p className="break-all font-mono text-xs text-ink-dim" title={project.path}>
+          {project.path}
+        </p>
+        <p className="truncate text-sm font-medium text-ink" title={projectName}>
+          {projectName}
+        </p>
       </div>
 
       {/* Unavailable banner */}

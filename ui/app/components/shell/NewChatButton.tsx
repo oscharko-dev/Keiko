@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { ReactNode } from "react";
 import { createChat, ApiError } from "@/lib/api";
+import { useWorkspaceRouteHref } from "./navigation";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -28,6 +29,7 @@ interface NewChatButtonProps {
 export function NewChatButton({ collapsed }: NewChatButtonProps): ReactNode {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const workspaceHref = useWorkspaceRouteHref();
   const [loading, setLoading] = useState(false);
 
   const projectPath = searchParams.get("project");
@@ -44,7 +46,7 @@ export function NewChatButton({ collapsed }: NewChatButtonProps): ReactNode {
       });
       const params = new URLSearchParams(searchParams.toString());
       params.set("chat", chat.id);
-      router.replace(`/?${params.toString()}`);
+      router.replace(workspaceHref(params));
     } catch (err: unknown) {
       // Best-effort — log only in dev
       if (process.env.NODE_ENV !== "production" && err instanceof ApiError) {

@@ -479,7 +479,8 @@ Precedence order (highest wins):
 **Secret sourcing policy:**
 - API keys are read only from environment variables or the config file. They are never accepted as
   CLI flags (flags appear in process listing output and shell history).
-- `apiKey` fields are excluded from any `toSafeObject()` or JSON serialisation paths.
+- `apiKey` and provider `baseUrl` fields are excluded from any `toSafeObject()` browser
+  serialisation path.
 - All error constructors that include provider-derived strings call `redact()` before constructing the
   message.
 - The `validate` CLI command reports config structure errors without printing config values.
@@ -559,7 +560,7 @@ deterministic `Clock` stub.
 | File | Required behaviours |
 |---|---|
 | `capabilities.test.ts` | Lookup by valid ID returns correct entry; lookup of unknown ID returns `undefined`; routing query finds cheapest chat model with tool-calling; routing an ocr-vision model via chat path returns kind-mismatch error |
-| `config.test.ts` | Valid config file parses without error; missing `apiKey` field throws `ConfigInvalidError` with descriptive message; `timeoutMs: -1` throws `ConfigInvalidError`; `KEIKO_DEFAULT_API_KEY` env var is applied; `toSafeObject()` output does not contain `apiKey` field |
+| `config.test.ts` | Valid config file parses without error; missing `apiKey` field throws `ConfigInvalidError` with descriptive message; `timeoutMs: -1` throws `ConfigInvalidError`; `KEIKO_DEFAULT_API_KEY` env var is applied; `toSafeObject()` output does not contain `apiKey` or provider `baseUrl` fields |
 | `redaction.test.ts` | Bearer token pattern (`Bearer sk-...`) fully redacted; `sk-` prefix pattern redacted; benign string unchanged; empty string unchanged; string with multiple secret patterns: all redacted |
 | `errors.test.ts` | Each error code is the expected stable string (snapshot or equality); all subclasses pass `instanceof GatewayError`; `RateLimitError.retryAfterMs` is null when not provided; error message constructed with a redacted input does not contain the literal string "apiKey" or the raw key value |
 | `normalize.test.ts` | Well-formed chat response normalises correctly with populated `usage`; tool-call response: `toolCalls` array populated, `content` is `''`, `finishReason` is `'tool_calls'`; structured output: `structuredOutput` is parsed object; malformed tool-call JSON argument string throws `MalformedToolCallError`; provider omits `usage` field: all usage counts normalised to zero; unrecognised `finish_reason` value maps to `'stop'` |

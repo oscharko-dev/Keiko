@@ -204,16 +204,16 @@ export async function fetchEvidenceManifest(
 // ---------------------------------------------------------------------------
 
 export interface WorkspaceSummaryFilters {
-  dir?: string;
+  dir: string;
   task?: string;
   budget?: number;
 }
 
 export async function fetchWorkspaceSummary(
-  filters: WorkspaceSummaryFilters = {},
+  filters: WorkspaceSummaryFilters,
 ): Promise<{ summary: WorkspaceSummary }> {
   const params = new URLSearchParams();
-  params.set("dir", filters.dir ?? ".");
+  params.set("dir", filters.dir);
   if (filters.task !== undefined) {
     params.set("task", filters.task);
   }

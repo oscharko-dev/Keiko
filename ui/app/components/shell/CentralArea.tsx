@@ -19,15 +19,17 @@ function ProjectHeader({ project }: ProjectHeaderProps): ReactNode {
   return (
     <section
       aria-labelledby="project-header-name"
-      className="flex h-full flex-col items-center justify-center text-center"
+      className="flex h-full min-w-0 flex-col items-center justify-center text-center"
     >
       <h1
         id="project-header-name"
-        className="text-heading text-ink"
+        className="max-w-full break-words text-heading text-ink"
       >
         {project.name}
       </h1>
-      <p className="mt-2 text-sm text-ink-muted">{project.path}</p>
+      <p className="mt-2 max-w-full break-all font-mono text-sm text-ink-muted" title={project.path}>
+        {project.path}
+      </p>
 
       {project.available === false && (
         <div

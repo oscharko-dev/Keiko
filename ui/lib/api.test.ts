@@ -13,7 +13,7 @@ describe("fetchWorkspaceSummary", () => {
     vi.unstubAllGlobals();
   });
 
-  it("requests the workspace summary route with default and optional filters", async () => {
+  it("requests the workspace summary route with required dir and optional filters", async () => {
     const fetchMock = vi.fn().mockImplementation(() =>
       Promise.resolve(
         jsonResponse({
@@ -29,12 +29,12 @@ describe("fetchWorkspaceSummary", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    await fetchWorkspaceSummary();
+    await fetchWorkspaceSummary({ dir: "/repo" });
     await fetchWorkspaceSummary({ dir: "/repo space", task: "src/index.ts", budget: 128 });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/workspace?dir=.",
+      "/api/workspace?dir=%2Frepo",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),

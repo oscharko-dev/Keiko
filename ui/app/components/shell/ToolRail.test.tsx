@@ -16,10 +16,12 @@ import type { ProjectWithAvailability } from "@/lib/types";
 
 const mockReplace = vi.fn();
 const mockSearchParams = new URLSearchParams();
+let mockPathname = "/";
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: mockReplace }),
   useSearchParams: () => mockSearchParams,
+  usePathname: () => mockPathname,
 }));
 
 vi.mock("@/lib/api", async () => {
@@ -27,6 +29,7 @@ vi.mock("@/lib/api", async () => {
   return {
     ...actual,
     fetchProjects: vi.fn(),
+    fetchWorkspaceSummary: vi.fn(),
     ApiError: class ApiError extends Error {
       code: string;
       status: number;
@@ -55,6 +58,18 @@ const availableProject: ProjectWithAvailability = {
 const unavailableProject: ProjectWithAvailability = {
   ...availableProject,
   available: false,
+};
+
+const workspaceSummary = {
+  root: availableProject.path,
+  name: "foo",
+  version: "1.0.0",
+  testFramework: "vitest" as const,
+  sourceDirs: ["src"],
+  testDirs: ["tests"],
+  languages: ["typescript" as const],
+  counts: { discovered: 3, denied: 0, ignored: 0 },
+  context: undefined,
 };
 
 // ---------------------------------------------------------------------------
@@ -86,6 +101,8 @@ describe("ToolRail", () => {
     mockReplace.mockClear();
     mockSearchParams.delete("project");
     mockSearchParams.delete("tool");
+    mockPathname = "/";
+    vi.mocked(api.fetchWorkspaceSummary).mockResolvedValue({ summary: workspaceSummary });
   });
 
   // ── DOM structure ────────────────────────────────────────────────────────
@@ -267,6 +284,46 @@ describe("ToolRail", () => {
     });
 
     expect(screen.getByRole("button", { name: "Files" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("returns focus to the active tool button when a panel closes", async () => {
+    const user = userEvent.setup();
+    mockAvailableProject();
+    mockSearchParams.set("tool", "files");
+    render(<ToolRail />);
+
+    const closeButton = await screen.findByRole("button", { name: /close files panel/i });
+    await user.click(closeButton);
+
+    const callArg = mockReplace.mock.calls[0]?.[0] as string;
+    expect(callArg).toMatch(/project=/);
+    expect(callArg).not.toMatch(/tool=/);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Files" })).toHaveFocus();
+    });
+  });
+
+  it("preserves /launch when opening and closing tools from the /launch route", async () => {
+    const user = userEvent.setup();
+    mockPathname = "/launch";
+    mockAvailableProject();
+    render(<ToolRail />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Files" })).not.toBeDisabled();
+    });
+    await user.click(screen.getByRole("button", { name: "Files" }));
+
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringMatching(/^\/launch\?project=/));
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringContaining("tool=files"));
+
+    mockReplace.mockClear();
+    mockSearchParams.set("tool", "files");
+    render(<ToolRail />);
+    await user.click(await screen.findByRole("button", { name: /close files panel/i }));
+
+    expect(mockReplace).toHaveBeenCalledWith(expect.stringMatching(/^\/launch\?project=/));
+    expect(mockReplace).not.toHaveBeenCalledWith(expect.stringContaining("tool=files"));
   });
 
   it("inactive enabled buttons have aria-pressed=false", async () => {

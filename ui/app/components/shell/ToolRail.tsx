@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import type { ProjectWithAvailability } from "@/lib/types";
 import { useSelectedProject } from "./useSelectedProject";
 import { FilesPanel } from "./FilesPanel";
 import { PlannedToolPanel } from "./PlannedToolPanel";
+import { useWorkspaceRouteHref } from "./navigation";
 
 // ---------------------------------------------------------------------------
 // Follow-up issue references — PlannedToolPanel surfaces these as the
@@ -116,14 +117,23 @@ interface ToolButtonProps {
   disabled: boolean;
   disabledTip: string | null;
   onToggle: (name: ToolName) => void;
+  buttonRef?: Ref<HTMLButtonElement>;
 }
 
-function ToolButton({ def, pressed, disabled, disabledTip, onToggle }: ToolButtonProps): ReactNode {
+function ToolButton({
+  def,
+  pressed,
+  disabled,
+  disabledTip,
+  onToggle,
+  buttonRef,
+}: ToolButtonProps): ReactNode {
   const tipId = `tool-${def.name}-tip`;
 
   return (
     <li className="flex flex-col items-center">
       <button
+        ref={buttonRef}
         type="button"
         disabled={disabled}
         aria-label={def.label}
@@ -192,8 +202,15 @@ function ActivePanel({ tool, project, onClose }: ActivePanelProps): ReactNode {
 export function ToolRail(): ReactNode {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const workspaceHref = useWorkspaceRouteHref();
   const rawTool = searchParams.get("tool");
   const projectState = useSelectedProject();
+  const buttonRefs = useRef<Record<ToolName, HTMLButtonElement | null>>({
+    files: null,
+    browser: null,
+    review: null,
+    terminal: null,
+  });
 
   const project = projectState.kind === "found" ? projectState.project : null;
   const avail = resolveAvailState(project);
@@ -207,16 +224,20 @@ export function ToolRail(): ReactNode {
       } else {
         next.set("tool", name);
       }
-      router.replace(`/?${next.toString()}`);
+      router.replace(workspaceHref(next));
     },
-    [avail, rawTool, searchParams, router],
+    [avail, rawTool, searchParams, router, workspaceHref],
   );
 
   const clearTool = useCallback(() => {
+    const toolToRefocus = isToolName(rawTool) ? rawTool : null;
     const next = new URLSearchParams(searchParams.toString());
     next.delete("tool");
-    router.replace(`?${next.toString()}`);
-  }, [searchParams, router]);
+    router.replace(workspaceHref(next));
+    if (toolToRefocus !== null) {
+      window.setTimeout(() => { buttonRefs.current[toolToRefocus]?.focus(); }, 0);
+    }
+  }, [rawTool, searchParams, router, workspaceHref]);
 
   const activeTool: ToolName | null =
     avail === "available" && isToolName(rawTool) ? rawTool : null;
@@ -241,6 +262,7 @@ export function ToolRail(): ReactNode {
             disabled={disabled}
             disabledTip={tip}
             onToggle={handleToggle}
+            buttonRef={(node) => { buttonRefs.current[def.name] = node; }}
           />
         ))}
       </ul>

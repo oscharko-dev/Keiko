@@ -1,11 +1,45 @@
-// Route-resolution test for /launch (issue #68, AC#1).
-// Proves the /launch route mounts the workspace shell entry surface.
+// Route-resolution tests for /launch.
+// Proves /launch uses the same URL-aware workspace route as /.
 
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
 import LaunchPage from "./page";
+import * as api from "@/lib/api";
+
+const mockSearchParams = new URLSearchParams();
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  useSearchParams: () => mockSearchParams,
+}));
+
+vi.mock("@/lib/api", async () => {
+  const actual = await vi.importActual<typeof api>("@/lib/api");
+  return {
+    ...actual,
+    fetchProjects: vi.fn(),
+    fetchChats: vi.fn(),
+  };
+});
+
+const project = {
+  path: "/workspace/keiko",
+  name: "Keiko",
+  available: true,
+  favorite: false,
+  createdAt: 1000,
+  lastOpenedAt: 2000,
+};
 
 describe("/launch route", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSearchParams.delete("project");
+    mockSearchParams.delete("chat");
+    vi.mocked(api.fetchProjects).mockResolvedValue({ projects: [project] });
+    vi.mocked(api.fetchChats).mockResolvedValue({ chats: [] });
+  });
+
   it("renders the workspace shell entry surface", () => {
     render(<LaunchPage />);
     expect(
@@ -13,12 +47,12 @@ describe("/launch route", () => {
     ).toBeInTheDocument();
   });
 
-  it("re-exports WorkspaceShellEntry as the default export", () => {
-    // The route file is `export { WorkspaceShellEntry as default }` — proving the
-    // shared entry surface backs both / and /launch (ADR-0014).
+  it("honors selected project search params like the root route", async () => {
+    mockSearchParams.set("project", project.path);
     render(<LaunchPage />);
-    expect(
-      screen.getByRole("region", { name: /welcome to keiko/i }),
-    ).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: project.name })).toBeInTheDocument();
+    });
+    expect(screen.getByText(project.path)).toBeInTheDocument();
   });
 });

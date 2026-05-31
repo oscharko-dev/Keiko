@@ -86,6 +86,15 @@ function depsWith(overrides: Partial<UiHandlerDeps>): UiHandlerDeps {
   };
 }
 
+function depsWithRegisteredProject(
+  root: string,
+  overrides: Partial<UiHandlerDeps> = {},
+): UiHandlerDeps {
+  const store = createInMemoryUiStore();
+  store.createProject(root);
+  return depsWith({ store, ...overrides });
+}
+
 const SAMPLE_CONFIG: GatewayConfig = {
   providers: [
     {
@@ -106,14 +115,16 @@ describe("GET /api/config", () => {
     expect(result.body).toEqual({ config: null, configPresent: false });
   });
 
-  it("returns a safe config that never contains the apiKey", () => {
+  it("returns a safe config that never contains the apiKey or provider endpoint", () => {
     const result = handleConfig(
       ctx("/api/config"),
       depsWith({ config: SAMPLE_CONFIG, configPresent: true }),
     );
     const json = JSON.stringify(result.body);
     expect(json).not.toContain("sk-super-secret-value-1234567890");
+    expect(json).not.toContain("https://api.example.com");
     expect(json).not.toContain("apiKey");
+    expect(json).not.toContain("baseUrl");
     expect(result.body).toMatchObject({ configPresent: true });
   });
 });
@@ -170,7 +181,7 @@ describe("GET /api/workspace", () => {
     try {
       const result = handleWorkspace(
         ctx(`/api/workspace?dir=${encodeURIComponent(root)}`),
-        depsWith({ redactor: redactTopSecret }),
+        depsWithRegisteredProject(root, { redactor: redactTopSecret }),
       );
       expect(result.status).toBe(200);
       const body = result.body as {
@@ -194,7 +205,7 @@ describe("GET /api/workspace", () => {
     try {
       const result = handleWorkspace(
         ctx(`/api/workspace?dir=${encodeURIComponent(root)}&task=src/index.ts&budget=128`),
-        depsWith({ redactor: redactTopSecret }),
+        depsWithRegisteredProject(root, { redactor: redactTopSecret }),
       );
       expect(result.status).toBe(200);
       const body = result.body as {
@@ -227,12 +238,40 @@ describe("GET /api/workspace", () => {
     expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
   });
 
+  it("requires an explicit workspace dir", () => {
+    const result = handleWorkspace(ctx("/api/workspace"), depsWith({}));
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+  });
+
+  it("rejects workspace reads for unregistered projects", () => {
+    const root = createWorkspaceFixture();
+    try {
+      const result = handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(root)}`),
+        depsWith({}),
+      );
+      expect(result.status).toBe(403);
+      expect(result.body).toMatchObject({ error: { code: "WORKSPACE_NOT_REGISTERED" } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects non-local workspace path forms with BAD_REQUEST", () => {
+    const result = handleWorkspace(ctx("/api/workspace?dir=https%3A%2F%2Fexample.test"), depsWith({}));
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+  });
+
   it("surfaces safe workspace errors for missing workspaces", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-ui-missing-"));
     try {
+      const deps = depsWithRegisteredProject(root);
+      rmSync(root, { recursive: true, force: true });
       const result = handleWorkspace(
-        ctx(`/api/workspace?dir=${encodeURIComponent(join(root, "missing"))}`),
-        depsWith({}),
+        ctx(`/api/workspace?dir=${encodeURIComponent(root)}`),
+        deps,
       );
       expect(result.status).toBe(404);
       expect(result.body).toMatchObject({ error: { code: "WORKSPACE_NOT_FOUND" } });

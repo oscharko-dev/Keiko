@@ -7,7 +7,7 @@ import type { ModelCapability, SafeGatewayConfig, SafeProviderConfig } from "@/l
 import { costClassClasses, costClassLabel } from "@/lib/format";
 
 // ---------------------------------------------------------------------------
-// Provider config table (no apiKey — SafeProviderConfig never carries it)
+// Provider config table (no apiKey/baseUrl — SafeProviderConfig never carries them)
 // ---------------------------------------------------------------------------
 
 function ProviderTable({ providers }: { providers: readonly SafeProviderConfig[] }): ReactNode {
@@ -25,9 +25,6 @@ function ProviderTable({ providers }: { providers: readonly SafeProviderConfig[]
               Model ID
             </th>
             <th scope="col" className="py-2 pr-4 font-medium">
-              Base URL
-            </th>
-            <th scope="col" className="py-2 pr-4 font-medium">
               Timeout
             </th>
             <th scope="col" className="py-2 pr-4 font-medium">
@@ -42,7 +39,6 @@ function ProviderTable({ providers }: { providers: readonly SafeProviderConfig[]
           {providers.map((p) => (
             <tr key={p.modelId} className="border-b border-ink/10 hover:bg-surface-subtle">
               <td className="py-2 pr-4 font-mono text-xs text-ink">{p.modelId}</td>
-              <td className="py-2 pr-4 font-mono text-xs text-ink-muted">{p.baseUrl}</td>
               <td className="py-2 pr-4 text-ink-muted">{p.timeoutMs.toString()} ms</td>
               <td className="py-2 pr-4 text-ink-muted">{p.maxRetries.toString()}</td>
               <td className="py-2 text-ink-muted">{p.retryBaseDelayMs.toString()} ms</td>
@@ -246,8 +242,8 @@ export default function ConfigPage(): ReactNode {
         Config &amp; model inspector
       </h1>
       <p className="mt-2 text-sm text-ink-muted">
-        Active gateway configuration and the full model capability registry. No credentials are
-        shown — API keys are stripped server-side before this page receives any data.
+        Active gateway configuration and the full model capability registry. Provider endpoints and
+        credentials are stripped server-side before this page receives any data.
       </p>
 
       {loadError !== null && (
@@ -274,7 +270,8 @@ export default function ConfigPage(): ReactNode {
               <div className="mt-4 rounded-lg border border-ink/10 bg-surface-subtle p-6 text-center">
                 <p className="text-sm font-medium text-ink">No configuration file found</p>
                 <p className="mt-1 text-sm text-ink-muted">
-                  Start Keiko with a valid gateway config file to see provider details here.
+                  Start Keiko with a valid gateway config file to see non-sensitive provider
+                  settings here.
                 </p>
               </div>
             ) : (
