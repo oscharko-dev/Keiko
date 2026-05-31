@@ -29,7 +29,7 @@ let tmp: string;
 let projDir: string;
 let store: UiStore;
 
-function deps(): UiHandlerDeps {
+function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
@@ -39,6 +39,7 @@ function deps(): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    ...overrides,
   };
 }
 
@@ -57,6 +58,17 @@ async function closeServer(): Promise<void> {
       res();
     });
   });
+}
+
+async function restartWithDeps(overrides: Partial<UiHandlerDeps>): Promise<void> {
+  await closeServer();
+  server = createUiServer({
+    staticRoot,
+    csp: buildCspHeader([]),
+    port,
+    handlerDeps: deps(overrides),
+  });
+  await new Promise<void>((res) => server.listen(port, UI_HOST, res));
 }
 
 beforeEach(async () => {
@@ -177,6 +189,41 @@ describe("POST /api/projects", () => {
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("path_not_found");
+  });
+
+  it("rejects a project when the configured UI DB is inside that project", async () => {
+    await restartWithDeps({ uiDbPath: join(projDir, ".keiko", "keiko-ui.db") });
+
+    const res = await fetch(url("/api/projects"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ path: projDir }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.message).toMatch(/UI database path/i);
+    expect(store.listProjects()).toHaveLength(0);
+  });
+
+  it("rejects a project inside the configured UI DB directory", async () => {
+    const dataDir = join(tmp, "app-data");
+    const nestedProject = join(dataDir, "repo");
+    mkdirSync(nestedProject, { recursive: true });
+    await restartWithDeps({ uiDbPath: join(dataDir, "keiko-ui.db") });
+
+    const res = await fetch(url("/api/projects"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ path: nestedProject }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.message).toMatch(/UI database directory/i);
+    expect(store.listProjects()).toHaveLength(0);
   });
 
   it("returns 400 invalid_request for missing path field", async () => {

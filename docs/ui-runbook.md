@@ -22,7 +22,7 @@ Opening `/` or `/launch` in the browser displays the dark, Keiko-branded workspa
   - **Explain Plan** — understanding and validation of a code area (read-only)
   - **Verify** — standalone verification without a workflow (BFF-only, no harness session)
 
-- **Right-side tool entry area** — The Files MVP displays a high-level summary of project structure (folder hierarchy, file metadata, never file excerpts). Placeholder entry points for Browser, Review, and Terminal tools appear with links to their respective follow-up issues (#76, #77, #78).
+- **Workspace tool entry area** — On tablet and desktop, the tools sit in the right-side rail. On mobile, the same project-bound entries remain reachable as a fixed bottom bar. The Files MVP displays a high-level summary of project structure (folder hierarchy, file metadata, never file excerpts). Placeholder entry points for Browser, Review, and Terminal tools appear with links to their respective follow-up issues (#76, #77, #78).
 
 **Secondary navigation** — `Config` (gateway configuration and model registry) and `Evidence` (run history and evidence manifests) are reachable from links in the shell header's secondary navigation bar, not as equal top-level surfaces.
 
@@ -141,9 +141,9 @@ Epic #61 (the workspace shell) is the foundation for multi-surface local interac
 - **Native OS folder picker** — Projects are added by entering a validated absolute local path. A native file-picker dialog is not in the MVP (epic #61 non-goal).
 - **Enterprise project-path allowlist and governance policy** — V1 validates project directories server-side (read-access checks, no write outside target). Governance policies that restrict which paths developers can open are deferred to a later governance issue.
 - **Deeper Files explorer integration** — The current Files MVP shows structural metadata only (hierarchy and file names). Deeper integration (file search, preview, diff views) is tracked in issue #75.
-- **Browser tool integration** — Placeholder entry point in the right-side tool area; full integration tracked in issue #76.
-- **Review tool integration** — Placeholder entry point in the right-side tool area; full integration tracked in issue #77.
-- **Terminal tool integration** — Placeholder entry point in the right-side tool area; full integration tracked in issue #78.
+- **Browser tool integration** — Placeholder entry point in the workspace tool area; full integration tracked in issue #76.
+- **Review tool integration** — Placeholder entry point in the workspace tool area; full integration tracked in issue #77.
+- **Terminal tool integration** — Placeholder entry point in the workspace tool area; full integration tracked in issue #78.
 - **Optional shared workspace history for CLI/SDK** — In V1, the CLI and SDK do not read the UI SQLite database. Unified history across surfaces is deferred; CLI/SDK-accessible chat state is a follow-up.
 
 ## Evidence and audit
@@ -173,11 +173,11 @@ The UI maintains a small SQLite database for **projects** (workspace entries the
 2. `KEIKO_UI_DATA_DIR` environment variable. The DB file is `<KEIKO_UI_DATA_DIR>/keiko-ui.db`.
 3. Default: `~/.keiko/keiko-ui.db` under the user's home directory.
 
-The database lives under the **Keiko application data directory** and **never inside a target repository**. This is a security boundary, not a convention: a target repo's `.git/`, `.gitignore`, and `node_modules/` rules must not interact with persistence. Explicit `--ui-db` values and `KEIKO_UI_DATA_DIR` must be absolute, outside the current workspace, and not symlinked. The directory is created with mode `0o700` on first run; the DB file (and its WAL/SHM sidecars) are chmodded to `0o600`. On Windows the OS-default ACL applies.
+The database lives under the **Keiko application data directory** and **never inside a target repository**. This is a security boundary, not a convention: a target repo's `.git/`, `.gitignore`, and `node_modules/` rules must not interact with persistence. Explicit `--ui-db` values and `KEIKO_UI_DATA_DIR` must be absolute, outside the current workspace, and not symlinked. During project onboarding, the BFF also rejects any selected project that overlaps the configured UI database path or its containing directory, even when `keiko ui` was launched outside that project. The directory is created with mode `0o700` on first run; the DB file (and its WAL/SHM sidecars) are chmodded to `0o600`. On Windows the OS-default ACL applies.
 
 **What the database holds.** Per project: the normalized absolute path (primary key), display name, favorite flag, `created_at`/`last_opened_at` timestamps. Per chat: a UUID id, project path (FK with `ON DELETE CASCADE`), title, the selected model's **registry id only** (e.g. `Mistral-Small-3.1-24B-Instruct-2503` — never an API key, never a provider URL), optional branch label and status, timestamps. The BFF accepts only model registry entries with `kind === "chat"` for chat creation and model updates. Per chat message: a UUID id, chat id (FK with `ON DELETE CASCADE`), role (`user|assistant|system`), content, timestamp, and optional `run_id`/`workflow_id`/`workflow_status`/`short_result`/`task_type` columns (the v2 `task_type` column labels non-workflow task runs such as verify and explain-plan). The `short_result` column is truncated to 200 characters and run through the BFF redactor **before** persistence.
 
-**What the database does NOT hold.** Provider credentials, API keys, base URLs, the full evidence manifest payloads, the full SSE event stream, reasoning traces, or any decrypted secret. Evidence manifests remain in `~/.keiko/evidence/` (or the path configured by `--evidence-dir`); the UI DB only stores ids and short summaries. SQLite persistence belongs exclusively to the local UI/BFF layer. The CLI and SDK do not read or write `keiko-ui.db` in V1 (epic #61 non-goal).
+**What the database does NOT hold.** Provider credentials, API keys, base URLs, the full evidence manifest payloads, the full SSE event stream, reasoning traces, or any decrypted secret. Evidence manifests remain outside the UI DB in the path configured by `--evidence-dir`, `$KEIKO_EVIDENCE_DIR`, or the default workspace-local `.keiko/evidence/` directory; the UI DB only stores ids and short summaries. SQLite persistence belongs exclusively to the local UI/BFF layer. The CLI and SDK do not read or write `keiko-ui.db` in V1 (epic #61 non-goal).
 
 **Schema and migrations.** The schema is versioned via SQLite's `PRAGMA user_version`. Migrations are forward-only and applied transactionally on first open by the migration runner in `src/ui/store/schema.ts`. A failed migration rolls back and surfaces a typed error; the database is left at the previous version. The current schema is v2: three `STRICT` tables (`projects`, `chats`, `chat_messages`) plus three indexes. V2 added an additive `task_type` column to `chat_messages` (issue #66) to label non-workflow task runs without overloading `workflow_id`. `PRAGMA foreign_keys = ON` and `PRAGMA journal_mode = WAL` are set on every open.
 
@@ -185,20 +185,17 @@ The database lives under the **Keiko application data directory** and **never in
 
 ## Accessibility status
 
-The Wave 1 UI meets **WCAG 2.2 AA** guidelines:
+The Wave 1 UI is designed and tested against **WCAG 2.2 AA** expectations:
 
-- **Keyboard operation:** All primary actions (launch, subscribe to run updates, cancel, review, apply, browse evidence) are reachable and operable via Tab, Enter, Space, and Escape.
+- **Keyboard operation:** All primary actions (sidebar collapse and expansion, project selection, model selection, workflow-mode selection, composer submission, workspace tool entries, run cancellation, patch review, apply confirmation, and evidence browsing) are reachable and operable via Tab, Enter, Space, and Escape.
 - **Semantic landmarks:** Pages use `<header>`, `<nav>`, `<main>`, and region landmarks with accessible names. A skip-to-main-content link is available on focus.
 - **Focus management:** Focus moves predictably on route changes and when opening modals or detail views.
 - **Contrast:** Text and meaningful UI elements meet AA contrast ratios. Design tokens ensure consistent sizing and spacing.
 - **Live regions:** Status updates (e.g., "Run started", "Patch applied") are announced to screen readers via ARIA live regions.
 
-The UI passed:
+The repository evidence currently includes automated `jest-axe` coverage, keyboard-behavior tests, focus-ring regression tests, and route-level shell integration tests. These checks cover the shell, sidebar, composer, workflow selector, model dropdown, dialogs, right-tool entry points, and secondary navigation. A real assistive-technology review is still required before making an externally certified WCAG conformance claim.
 
-- An **axe-core CI gate** (zero critical violations reported by automated scanning).
-- A **manual keyboard and screen-reader review** by an accessibility specialist.
-
-Axe-core covers automatable accessibility rules (roughly 30–50% of WCAG). The manual review covers keyboard navigation, focus order, screen-reader compatibility, and edge cases. Full details of the manual review and any recommendations are documented in the pilot report (issue #12, when shipped).
+Axe-core covers automatable accessibility rules (roughly 30–50% of WCAG). Keyboard tests and browser verification cover interaction risks that axe cannot prove, while a release-grade pilot report must record any manual screen-reader findings and recommendations.
 
 ## CI and verification
 

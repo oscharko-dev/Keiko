@@ -9,7 +9,9 @@ import type { UiHandlerDeps } from "./deps.js";
 import { findCapability } from "../gateway/index.js";
 import {
   UiStoreError,
+  assertUiDbOutsideProject,
   isProjectAvailable,
+  validateProjectPath,
   type ChatRole,
   type NewChatMessage,
   type Project,
@@ -287,7 +289,9 @@ export async function handleCreateProject(
     const body = await readJsonObject(ctx.req);
     const path = requireString(body, "path");
     const name = optionalString(body, "name");
-    const project = deps.store.createProject(path, name);
+    const normalizedPath = validateProjectPath(path, { mustExist: true });
+    assertUiDbOutsideProject(deps.uiDbPath, normalizedPath);
+    const project = deps.store.createProject(normalizedPath, name);
     return { status: 201, body: { project: projectWithAvailability(project) } };
   });
 }
