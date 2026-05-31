@@ -8,6 +8,7 @@ import type { ChatMessage, ModelCapability } from "@/lib/types";
 
 interface ChatWindowProps {
   readonly mini?: boolean;
+  readonly linkedRoot?: string | null;
 }
 
 const SUGGESTIONS: readonly string[] = [
@@ -216,7 +217,19 @@ function MiniChat({ session, ready }: { readonly session: ChatSessionApi; readon
   );
 }
 
-export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
+// Design pattern (widgets.jsx ChatWidget): when this card is connected to a
+// Files card via the workspace's connection graph, surface the linked folder
+// so the conversation context is visible to the user. Without this the
+// connect-card gesture has no perceptible effect inside the chat.
+function ChatContext({ root }: { readonly root: string }): ReactNode {
+  return (
+    <div className="chat-ctx">
+      <Icons.files size={12} /> Context <span className="mono">{root}/</span>
+    </div>
+  );
+}
+
+export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
   const { messages, draft, loading, sending, error, sendMessage } = session;
   const ready = draft.trim().length > 0 && !sending && !loading;
@@ -228,10 +241,18 @@ export function ChatWindow({ mini = false }: ChatWindowProps): ReactNode {
     if (el !== null) el.scrollTop = el.scrollHeight;
   }, [visible.length, sending]);
 
-  if (mini) return <MiniChat session={session} ready={ready} />;
+  if (mini) {
+    return (
+      <div className="chatw chatw-mini">
+        {linkedRoot !== null ? <ChatContext root={linkedRoot} /> : null}
+        <MiniChat session={session} ready={ready} />
+      </div>
+    );
+  }
 
   return (
     <div className="chatw">
+      {linkedRoot !== null ? <ChatContext root={linkedRoot} /> : null}
       <div className="chatw-scroll" ref={scrollRef} aria-live="polite">
         {visible.length === 0 ? (
           <ChatHero session={session} ready={ready} />
