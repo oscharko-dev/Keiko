@@ -10,6 +10,22 @@ The Keiko UI is a locally hosted Next.js application served by a Node backend (B
 
 The UI binds `127.0.0.1` only (never the public interface) and never contacts external services except the configured model endpoints (which only the harness reaches, never the browser). Secrets are redacted before reaching the browser, evidence is redacted on disk, and there is one gated write path for applying patches.
 
+## The workspace shell
+
+Opening `/` or `/launch` in the browser displays the dark, Keiko-branded workspace shell (ADR-0014). The shell is the primary surface for all local work:
+
+- **Left sidebar** — A collapsible project list with the user's recently opened local directories. An in-UI "Add project" flow lets you enter a validated absolute local path to begin a new chat session in that workspace. Project-scoped chat history appears below the project list.
+
+- **Central chat composer** — A text input with attached context. Above the text field is a registry-backed model dropdown showing only chat-capable models (vision and OCR models are excluded). The default model is `Mistral-Small-3.1-24B-Instruct-2503`. Below the text field, four explicit workflow-launch buttons let you start a specific task:
+  - **Generate Tests** — automated unit test generation
+  - **Investigate Bug** — root-cause analysis and patch proposal
+  - **Explain Plan** — understanding and validation of a code area (read-only)
+  - **Verify** — standalone verification without a workflow (BFF-only, no harness session)
+
+- **Right-side tool entry area** — The Files MVP displays a high-level summary of project structure (folder hierarchy, file metadata, never file excerpts). Placeholder entry points for Browser, Review, and Terminal tools appear with links to their respective follow-up issues (#76, #77, #78).
+
+**Secondary navigation** — `Config` (gateway configuration and model registry) and `Evidence` (run history and evidence manifests) are reachable from links in the shell header's secondary navigation bar, not as equal top-level surfaces.
+
 ## Prerequisites
 
 **Node.js:** version 22 or later (stated in `package.json#engines`).
@@ -106,19 +122,27 @@ keiko ui --port 8080 --config ~/keiko.json --evidence-dir /tmp/runs
 - To apply the patch, you must explicitly review the proposed diff and click the apply button. This is the only write path; it re-runs the workflow with `apply: true` through the existing gated pipeline.
 - The BFF does not reimplement, relax, or bypass workflow guards (path traversal checks, patch limits); it invokes the same audited workflows the CLI uses.
 
-## The six surfaces
+## Secondary surfaces reachable from the shell
 
-**Workflow launch** — Forms for starting a workflow. You select a workflow type (unit-test generation, bug investigation), pick a model from the registry, provide a target (file path or directory), set optional limits, and review the dry-run preview. Model selection uses the same registry the CLI consumes; cost class and latency estimates are available.
+**Live run view** — Real-time progress as a workflow executes. Shows model calls (with token usage and cost class), tool invocations (command, exit code, output), verification results (resource limits, pass/fail decisions), and reasoning traces. A cancel button is available to send a cancellation signal to the harness. The run stream closes asynchronously after the run reaches a terminal state.
 
-**Live run view** — Real-time progress as the run executes. Shows model calls (with token usage and cost class), tool invocations (command, exit code, output), verification results (resource limits, pass/fail decisions), and reasoning traces. You can cancel an in-flight run by clicking the cancel button. Cancellation is asynchronous; the stream closes after the run reaches a terminal state.
+**Patch review** — After a workflow dry-run that generates code changes, a unified diff viewer shows the proposed changes, affected file paths, and validation outcomes (linting errors, boundary violations, etc.). An explicit apply action (with confirmation) applies the patch and re-runs verification. The result is shown inline.
 
-**Patch review** — After a dry-run, a unified diff viewer shows the proposed changes, affected file paths, and validation outcomes (linting errors, boundary violations, etc.). An explicit apply action (with confirmation) applies the patch and re-runs verification. The result is shown inline; you can then review the evidence.
-
-**Evidence browser** — Filterable list of all past runs (by workflow, model, outcome, date). Clicking a run loads the full evidence manifest: usage totals, config fingerprint, verification status, optional reasoning trace, and the git-readable diff (if generated). Evidence is redacted on disk and served as-is to the UI.
+**Evidence browser** — Filterable list of all past runs persisted to disk (by workflow, model, outcome, date range). Clicking a run loads the full evidence manifest: usage totals, config fingerprint, verification status, optional reasoning trace, and the git-readable diff (if generated). Evidence is redacted on disk and served as-is to the UI.
 
 **Config and model inspector** — View the active gateway configuration (no API keys shown), the full model capability registry with cost class and latency bounds, and the configured limits for workflows. No secrets are displayed.
 
-**Run cancellation (integrated into live view)** — A cancel button appears while a run is in progress. Click it to send a cancellation signal to the harness. The UI updates when the run reaches a terminal state.
+## Known follow-ups and MVP limitations
+
+Epic #61 (the workspace shell) is the foundation for multi-surface local interaction. The following capabilities are deferred to future work:
+
+- **Native OS folder picker** — Projects are added by entering a validated absolute local path. A native file-picker dialog is not in the MVP (epic #61 non-goal).
+- **Enterprise project-path allowlist and governance policy** — V1 validates project directories server-side (read-access checks, no write outside target). Governance policies that restrict which paths developers can open are deferred to a later governance issue.
+- **Deeper Files explorer integration** — The current Files MVP shows structural metadata only (hierarchy and file names). Deeper integration (file search, preview, diff views) is tracked in issue #75.
+- **Browser tool integration** — Placeholder entry point in the right-side tool area; full integration tracked in issue #76.
+- **Review tool integration** — Placeholder entry point in the right-side tool area; full integration tracked in issue #77.
+- **Terminal tool integration** — Placeholder entry point in the right-side tool area; full integration tracked in issue #78.
+- **Optional shared workspace history for CLI/SDK** — In V1, the CLI and SDK do not read the UI SQLite database. Unified history across surfaces is deferred; CLI/SDK-accessible chat state is a follow-up.
 
 ## Evidence and audit
 
@@ -151,9 +175,9 @@ The database lives under the **Keiko application data directory** and **never in
 
 **What the database holds.** Per project: the normalized absolute path (primary key), display name, favorite flag, `created_at`/`last_opened_at` timestamps. Per chat: a UUID id, project path (FK with `ON DELETE CASCADE`), title, the selected model's **registry id only** (e.g. `claude-opus-4-5` — never an API key, never a provider URL), optional branch label and status, timestamps. Per chat message: a UUID id, chat id (FK with `ON DELETE CASCADE`), role (`user|assistant|system`), content, timestamp, and optional `run_id`/`workflow_id`/`workflow_status`/`short_result` columns. The `short_result` column is truncated to 200 characters and run through the BFF redactor **before** persistence.
 
-**What the database does NOT hold.** Provider credentials, API keys, base URLs, the full evidence manifest payloads, the full SSE event stream, reasoning traces, or any decrypted secret. Evidence manifests remain in `~/.keiko/evidence/` (or the path configured by `--evidence-dir`); the UI DB only stores ids and short summaries.
+**What the database does NOT hold.** Provider credentials, API keys, base URLs, the full evidence manifest payloads, the full SSE event stream, reasoning traces, or any decrypted secret. Evidence manifests remain in `~/.keiko/evidence/` (or the path configured by `--evidence-dir`); the UI DB only stores ids and short summaries. SQLite persistence belongs exclusively to the local UI/BFF layer. The CLI and SDK do not read or write `keiko-ui.db` in V1 (epic #61 non-goal).
 
-**Schema and migrations.** The schema is versioned via SQLite's `PRAGMA user_version`. Migrations are forward-only and applied transactionally on first open by the migration runner in `src/ui/store/schema.ts`. A failed migration rolls back and surfaces a typed error; the database is left at the previous version. The current schema is v1: three `STRICT` tables (`projects`, `chats`, `chat_messages`) plus three indexes. `PRAGMA foreign_keys = ON` and `PRAGMA journal_mode = WAL` are set on every open.
+**Schema and migrations.** The schema is versioned via SQLite's `PRAGMA user_version`. Migrations are forward-only and applied transactionally on first open by the migration runner in `src/ui/store/schema.ts`. A failed migration rolls back and surfaces a typed error; the database is left at the previous version. The current schema is v2: three `STRICT` tables (`projects`, `chats`, `chat_messages`) plus three indexes. V2 added an additive `task_type` column to `chat_messages` (issue #66) to label non-workflow task runs without overloading `workflow_id`. `PRAGMA foreign_keys = ON` and `PRAGMA journal_mode = WAL` are set on every open.
 
 **Project availability is derived, not stored.** When you delete a project's directory on disk, the row is **not** silently removed from the DB. `GET /api/projects` reports `available: false` for the missing entry so you can see and explicitly delete stale records. This avoids accidental data loss and surfaces what the UI knows.
 
