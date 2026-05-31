@@ -36,6 +36,8 @@ function pickChatModelId(models: readonly ModelCapability[]): string {
   return models[0]?.id ?? DEFAULT_MODEL_ID;
 }
 
+export type ChatSessionApi = UseChatSessionResult;
+
 export interface UseChatSessionResult {
   projects: ProjectWithAvailability[];
   chats: Chat[];
