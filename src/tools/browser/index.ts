@@ -22,3 +22,19 @@ export type {
   CdpReachability,
   NormalizedNavigateUrl,
 } from "./types.js";
+
+export {
+  CdpClient,
+  PERMITTED_CDP_METHODS,
+  type CdpClientOptions,
+  type CdpEventListener,
+} from "./cdp-client.js";
+
+export {
+  createBrowserSessionManager,
+  type BrowserEventEmitter,
+  type BrowserEventEnvelope,
+  type BrowserEventKind,
+  type BrowserSessionManager,
+  type BrowserSessionManagerOptions,
+} from "./session.js";
