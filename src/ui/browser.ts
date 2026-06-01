@@ -190,6 +190,9 @@ export async function handleBrowserScreenshot(
   const guard = requireBrowser(deps);
   if (isRouteResult(guard)) return guard;
   return runHandler(async () => {
+    // Drain the body through readJsonObject so the 64 KB cap (MAX_BROWSER_BODY_BYTES) is
+    // enforced even though this handler expects no fields. Raw node:http has no global cap.
+    await readJsonObject(ctx.req);
     const sessionId = ctx.params.sessionId ?? "";
     const result = await guard.screenshot(sessionId);
     return { status: 200, body: result };
@@ -218,6 +221,9 @@ export async function handleBrowserContent(
   const guard = requireBrowser(deps);
   if (isRouteResult(guard)) return guard;
   return runHandler(async () => {
+    // Drain the body through readJsonObject so the 64 KB cap (MAX_BROWSER_BODY_BYTES) is
+    // enforced even though this handler expects no fields. Raw node:http has no global cap.
+    await readJsonObject(ctx.req);
     const sessionId = ctx.params.sessionId ?? "";
     const result = await guard.content(sessionId);
     return { status: 200, body: result };

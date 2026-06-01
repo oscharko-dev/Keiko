@@ -102,9 +102,9 @@ export interface RunCounters {
   toolCalls: number;
   commandExecutions: number;
   failureAttempts: number;
-  // ADR-0017 D7 — incremented on every successful browser:navigated event. Additive, default 0,
-  // never decremented. The browser tool lives outside the harness state machine so this counter
-  // surfaces telemetry without coupling browser sessions to RunRecord lifecycle.
+  // ADR-0017 D7 — reserved for future harness-integrated browser sessions. The MVP browser tool
+  // runs as a BFF surface (ADR-0017 D8/D9) and does not flow through the harness loop, so this
+  // field stays at 0 in MVP. Additive, never decremented. See ADR-0017 D7 + D11.
   browserNavigations: number;
 }
 

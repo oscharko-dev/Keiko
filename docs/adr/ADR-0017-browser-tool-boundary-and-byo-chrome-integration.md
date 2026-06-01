@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Accepted (2026-06-01)
 
 ## Context
 
@@ -201,8 +201,10 @@ The `originOnly` field carries only the scheme + authority (e.g. `http://127.0.0
 the path, query, or fragment. This is the same origin-only redaction applied in security audit
 logs and prevents paths that might embed tokens or PII from appearing in the event stream.
 
-`RunCounters` gains a `browserNavigations: number` field (additive, default `0`). The counter
-increments on every successful `browser:navigated` event.
+`RunCounters` gains a `browserNavigations: number` field (additive, default `0`, never
+decremented). In MVP this field is reserved for future harness-integrated browser sessions; the
+BFF-driven browser tool (D8/D9) does not flow through the harness loop, so the counter stays at 0
+in MVP. See D11 for the follow-up scope where harness integration may be introduced.
 
 ### D8 — BFF route family: separate `/api/browser/*`
 
@@ -221,6 +223,7 @@ The route family is `/api/browser/*`:
 | POST | `/api/browser/sessions/:sessionId/navigate` | Yes | Navigate; body: `{ url: string }` |
 | POST | `/api/browser/sessions/:sessionId/screenshot` | Yes | Capture screenshot (dry-run by default) |
 | POST | `/api/browser/sessions/:sessionId/apply` | Yes | Persist pending screenshot side-file |
+| POST | `/api/browser/sessions/:sessionId/content` | Yes | Capture outer HTML (redacted) |
 | GET | `/api/browser/sessions/:sessionId/events` | No | SSE stream for the session |
 
 `GET /api/browser/status` is read-only and does not modify state; no CSRF token is required. All
@@ -228,7 +231,7 @@ five POST and one DELETE routes require the CSRF token, consistent with the exis
 state-changing routes. The SSE GET follows the same STREAMING sentinel return as
 `/api/runs/:runId/events`.
 
-`src/ui/routes.ts` registers the seven routes after the existing `/api/files/*` block.
+`src/ui/routes.ts` registers the eight routes after the existing `/api/files/*` block.
 
 ### D9 — Session lifecycle: in-memory, explicit termination
 

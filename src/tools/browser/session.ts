@@ -14,7 +14,12 @@
 import { randomUUID } from "node:crypto";
 import { CdpClient, type CdpClientOptions, type CdpEventListener } from "./cdp-client.js";
 import { BrowserToolError } from "./errors.js";
-import { isLoopbackHost, isLoopbackUrl, normalizeCdpPort, normalizeNavigateUrl } from "./validators.js";
+import {
+  isLoopbackHost,
+  isLoopbackUrl,
+  normalizeCdpPort,
+  normalizeNavigateUrl,
+} from "./validators.js";
 import type {
   BrowserContentResult,
   BrowserNavigateResult,
@@ -139,14 +144,22 @@ function assertWsUrlTrusted(ws: string, expectedPort: number): void {
   try {
     parsed = new URL(ws);
   } catch {
-    throw new BrowserToolError("CDP_TRANSPORT_REFUSED", "CDP endpoint returned an invalid WebSocket URL.");
+    throw new BrowserToolError(
+      "CDP_TRANSPORT_REFUSED",
+      "CDP endpoint returned an invalid WebSocket URL.",
+    );
   }
-  const host = parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")
-    ? parsed.hostname.slice(1, -1)
-    : parsed.hostname;
-  const port = parsed.port === "" ? (parsed.protocol === "wss:" ? 443 : 80) : Number.parseInt(parsed.port, 10);
+  const host =
+    parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")
+      ? parsed.hostname.slice(1, -1)
+      : parsed.hostname;
+  const port =
+    parsed.port === "" ? (parsed.protocol === "wss:" ? 443 : 80) : Number.parseInt(parsed.port, 10);
   if (!isLoopbackHost(host) || port !== expectedPort) {
-    throw new BrowserToolError("CDP_TRANSPORT_REFUSED", "CDP endpoint returned a WebSocket URL that is not on the expected loopback address.");
+    throw new BrowserToolError(
+      "CDP_TRANSPORT_REFUSED",
+      "CDP endpoint returned a WebSocket URL that is not on the expected loopback address.",
+    );
   }
 }
 
@@ -255,6 +268,38 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     }
   };
 
+  private buildPlaceholder(id: string, cdpPort: number): SessionRecord {
+    // A closed sentinel record that reserves the sessions slot without an active CdpClient.
+    // It is replaced by the live record inside attachAndRegister once the CDP handshake
+    // completes. Because closed=true, requireRecord and closeSession treat it as unavailable.
+    const noop = (): void => undefined;
+    const fakeClient = {
+      connect: (): Promise<void> => Promise.resolve(),
+      send: (): Promise<Record<string, unknown>> => Promise.resolve({}),
+      onEvent: (): (() => void) => noop,
+      close: noop,
+      isClosed: (): boolean => true,
+      closeCause: (): undefined => undefined,
+    } as unknown as CdpClient;
+    return {
+      id,
+      cdpPort,
+      targetId: "",
+      client: fakeClient,
+      cdpSessionId: "",
+      runId: id.replace(/-/g, ""),
+      lastUrl: null,
+      lastOriginOnly: null,
+      originAllowed: false,
+      captureSeq: 0,
+      pendingScreenshots: new Map(),
+      idleTimer: undefined,
+      lastTouchedMs: this.nowMs(),
+      closed: true,
+      removeCdpListener: noop,
+    };
+  }
+
   public readonly openSession = async (cdpPort: number): Promise<BrowserSessionMeta> => {
     normalizeCdpPort(cdpPort);
     // M2: reserve the slot synchronously before any await, closing the TOCTOU window where
@@ -263,13 +308,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       throw new BrowserToolError("SESSION_LIMIT_EXCEEDED", "Too many active browser sessions.");
     }
     const reservedId = randomUUID();
-    const placeholder = this.buildRecord(
-      { connect: (): Promise<void> => Promise.resolve(), send: (): Promise<unknown> => Promise.resolve({}), onEvent: (): (() => void) => (): void => undefined, close: (): void => undefined, isClosed: (): boolean => false, closeCause: (): undefined => undefined } as unknown as import("./cdp-client.js").CdpClient,
-      cdpPort,
-      "",
-      "",
-      reservedId,
-    );
+    const placeholder = this.buildPlaceholder(reservedId, cdpPort);
     this.sessions.set(reservedId, placeholder);
     try {
       const versionInfo = await this.checkStatus(cdpPort);
@@ -290,7 +329,11 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     }
   };
 
-  private async attachAndRegister(client: CdpClient, cdpPort: number, reservedId: string): Promise<BrowserSessionMeta> {
+  private async attachAndRegister(
+    client: CdpClient,
+    cdpPort: number,
+    reservedId: string,
+  ): Promise<BrowserSessionMeta> {
     await client.connect();
     const target = await client.send<CreateTargetResult>("Target.createTarget", {
       url: "about:blank",
@@ -342,38 +385,6 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       lastTouchedMs: this.nowMs(),
       closed: false,
       removeCdpListener: (): void => undefined,
-    };
-  }
-
-  private buildPlaceholder(id: string, cdpPort: number): SessionRecord {
-    // A closed sentinel record that reserves the sessions slot without an active CdpClient.
-    // It is replaced by the live record inside attachAndRegister once the CDP handshake
-    // completes. Because closed=true, requireRecord and closeSession treat it as unavailable.
-    const noop = (): void => undefined;
-    const fakeClient = {
-      connect: (): Promise<void> => Promise.resolve(),
-      send: (): Promise<Record<string, unknown>> => Promise.resolve({}),
-      onEvent: (): (() => void) => noop,
-      close: noop,
-      isClosed: (): boolean => true,
-      closeCause: (): undefined => undefined,
-    } as unknown as CdpClient;
-    return {
-      id,
-      cdpPort,
-      targetId: "",
-      client: fakeClient,
-      cdpSessionId: "",
-      runId: id.replace(/-/g, ""),
-      lastUrl: null,
-      lastOriginOnly: null,
-      originAllowed: false,
-      captureSeq: 0,
-      pendingScreenshots: new Map(),
-      idleTimer: undefined,
-      lastTouchedMs: this.nowMs(),
-      closed: true,
-      removeCdpListener: noop,
     };
   }
 
