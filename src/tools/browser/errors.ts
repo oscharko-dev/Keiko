@@ -59,7 +59,3 @@ export class BrowserToolError extends Error {
     this.status = STATUS_MAP[code];
   }
 }
-
-export function browserHttpStatus(code: BrowserErrorCode): number {
-  return STATUS_MAP[code];
-}

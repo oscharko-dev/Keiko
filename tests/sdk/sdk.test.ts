@@ -19,7 +19,7 @@ import type { NormalizedResponse } from "../../src/gateway/types.js";
 
 describe("SDK surface", () => {
   it("exposes a semver SDK_VERSION", () => {
-    expect(SDK_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(SDK_VERSION).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
   });
 
   it("re-exports the SDK from the package root", () => {

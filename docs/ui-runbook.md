@@ -316,6 +316,6 @@ This document provides the **UI operations content** the pilot runbook reference
 
 ## Further reading
 
-- [ADR-0011: Wave-1 User Interface and Packaging](./adr/ADR-0011-wave-1-user-interface-and-packaging.md) — Architecture, design decisions, and the BFF API contract.
+- [Architecture decisions](./adr/README.md#adr-0011) — UI packaging and BFF boundary.
 - [WCAG 2.2 AA](https://www.w3.org/TR/WCAG22/) — Accessibility standard.
 - [Main README](../README.md) — CLI commands, SDK usage, gateway configuration.

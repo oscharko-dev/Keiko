@@ -1,12 +1,6 @@
-// The Wave 2 BFF (ADR-0011 D1/D2/D5/D7/D8/D9). A hand-written node:http server with zero new runtime
-// dependencies: it binds 127.0.0.1 only, sets the security headers + hash-based CSP on EVERY response
-// (including the SSE and error paths), rejects non-loopback Host/Origin (DNS-rebinding defense), and
-// dispatches the twelve-route API contract through deps-bound handlers. A handler returns a
-// RouteResult (status + JSON body the server serializes) or the STREAMING sentinel, meaning it has
-// taken over the raw ServerResponse (the SSE events route). Static export is served from a
-// path-traversal-safe contained root with an index fallback. The handler dependencies (resolved
-// config, evidence store, run registry, redactor) are optional so the 3-arg
-// `createUiServer({ staticRoot, csp, port })` form still works (Wave 1 server tests, `keiko ui` smoke).
+// The local UI BFF binds 127.0.0.1 only, applies security headers and CSP to every response,
+// rejects non-loopback Host/Origin headers, dispatches API routes through injected handlers,
+// and serves the static export from a contained root.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join } from "node:path";
@@ -109,7 +103,6 @@ function rejectIfInvalidStateChange(req: IncomingMessage, res: ServerResponse): 
 }
 
 async function dispatchApi(
-  deps: UiServerDeps,
   handlerDeps: UiHandlerDeps,
   req: IncomingMessage,
   res: ServerResponse,
@@ -180,7 +173,7 @@ function handle(
   }
   const method = (req.method ?? "GET").toUpperCase();
   const work = apiPath
-    ? dispatchApi(deps, handlerDeps, req, res, method, url)
+    ? dispatchApi(handlerDeps, req, res, method, url)
     : serveStatic(res, deps.staticRoot, url.pathname);
   void work.catch(() => {
     if (!res.headersSent) {

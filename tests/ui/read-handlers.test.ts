@@ -363,7 +363,7 @@ describe("GET /api/evidence", () => {
       run: {
         runId,
         fingerprint: "fp",
-        harnessVersion: "0.1.0",
+        harnessVersion: "0.1.0-beta.0",
         taskType,
         outcome,
         startedAt,
@@ -528,7 +528,7 @@ describe("GET /api/evidence/:runId", () => {
       run: {
         runId: "run-x",
         fingerprint: "fp",
-        harnessVersion: "0.1.0",
+        harnessVersion: "0.1.0-beta.0",
         taskType: "explain-plan",
         outcome: "completed",
         startedAt: 1,

@@ -30,11 +30,11 @@ describe("Issue #12 docs drift", () => {
     expect(pkg.scripts.prepack).toBe(PACKAGE_SURFACE_CHAIN);
     expect(pkg.scripts.prepublishOnly).toBe(PACKAGE_SURFACE_CHAIN);
     expect(readme).toContain(
-      "A surface check (`npm run check:package-surface`) runs in the `prepack` and `prepublishOnly` chains",
+      "See [npm packaging](https://github.com/oscharko-dev/Keiko/blob/dev/docs/npm-packaging.md) for the exact prepack chain and surface check.",
     );
-    expect(readme).toContain(PACKAGE_SURFACE_CHAIN);
     expect(packaging).toContain("npm run ui:ci");
     expect(packaging).toContain("npm run prepack");
+    expect(packaging).toContain(PACKAGE_SURFACE_CHAIN);
     expect(packaging).not.toContain("prepack does not perform a hidden nested install");
   });
 

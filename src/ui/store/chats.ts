@@ -46,8 +46,6 @@ function rowToChat(row: ChatRow): Chat {
 
 const SQL_LIST =
   "SELECT id, project_path, title, selected_model, branch_label, status, created_at, updated_at FROM chats WHERE project_path = ? ORDER BY created_at ASC";
-const SQL_GET =
-  "SELECT id, project_path, title, selected_model, branch_label, status, created_at, updated_at FROM chats WHERE id = ?";
 const SQL_INSERT = `
 INSERT INTO chats (id, project_path, title, selected_model, branch_label, status, created_at, updated_at)
 VALUES (?, ?, ?, ?, ?, NULL, ?, ?)
@@ -84,11 +82,6 @@ function validateSelectedModel(value: string): void {
 
 export function listChats(db: DatabaseSync, projectPath: string): readonly Chat[] {
   return (db.prepare(SQL_LIST).all(projectPath) as unknown as ChatRow[]).map(rowToChat);
-}
-
-export function getChat(db: DatabaseSync, id: string): Chat | undefined {
-  const row = db.prepare(SQL_GET).get(id) as unknown as ChatRow | undefined;
-  return row === undefined ? undefined : rowToChat(row);
 }
 
 export function insertChat(

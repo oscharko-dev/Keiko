@@ -1,12 +1,7 @@
 // Browser tool barrel — re-exports the public surface that BFF handlers and tests compose.
 // ADR-0017. No runtime side effects.
 
-export {
-  BROWSER_ERROR_CODES,
-  BrowserToolError,
-  browserHttpStatus,
-  type BrowserErrorCode,
-} from "./errors.js";
+export { BROWSER_ERROR_CODES, BrowserToolError, type BrowserErrorCode } from "./errors.js";
 
 export {
   isLoopbackHost,
