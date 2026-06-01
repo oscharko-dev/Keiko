@@ -77,7 +77,7 @@ Two model kinds in the portfolio are registered but not yet callable: OCR-vision
 npm install keiko
 ```
 
-Keiko has zero runtime dependencies and ships ESM only. Use `import`, not `require`.
+Keiko ships ESM only with a minimal runtime dependency set. Use `import`, not `require`.
 
 ---
 
@@ -150,7 +150,7 @@ KEIKO_DEFAULT_API_KEY
 KEIKO_DEFAULT_BASE_URL
 ```
 
-Credentials are held in memory for the duration of a call and are never logged or serialized. See [`.env.example`](https://github.com/oscharko-dev/Keiko/blob/dev/.env.example) for a template and [ADR-0003](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0003-model-gateway-boundary.md) for the rationale.
+Credentials are held in memory for the duration of a call and are never logged or serialized. See [`.env.example`](https://github.com/oscharko-dev/Keiko/blob/dev/.env.example) for a template and [ADR-0003](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/README.md#adr-0003) for the rationale.
 
 ---
 
@@ -511,7 +511,7 @@ Manifests are written with an exclusive-create (`O_EXCL`) open into a directory 
 
 Retention keeps the newest runs up to a maximum (`DEFAULT_RETENTION`, 50 runs). Every manifest carries a stable `EVIDENCE_SCHEMA_VERSION`; readers reject unknown versions rather than guessing.
 
-Inspect manifests with `keiko evidence list` and `keiko evidence show <runId>`. See [ADR-0010](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0010-audit-ledger-and-evidence-manifests.md).
+Inspect manifests with `keiko evidence list` and `keiko evidence show <runId>`. See [ADR-0010](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/README.md#adr-0010).
 
 ---
 
@@ -552,15 +552,13 @@ See [Go/No-Go criteria](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pilo
 
 ## Packaging
 
-The published tarball ships `dist/`, `README.md`, `LICENSE`, `NOTICE`, and `TRADEMARKS.md` (the `files` allowlist). Repository docs stay in the repository. A surface check (`npm run check:package-surface`) runs in the `prepack` and `prepublishOnly` chains, which execute `npm run clean && npm run build && npm run ui:ci && npm run build:ui && npm run check:package-surface`. Those checks assert the built CLI, SDK, type declarations, UI assets, NOTICE file, and trademark policy ship while source, source maps, `.env` files, and docs do not.
-
-Keiko has zero runtime dependencies. Supply-chain review is covered by the CI dependency-review job, CodeQL, root/UI audit steps, and SBOM builds. Inspect the surface with:
+The published tarball ships `dist/`, `README.md`, `LICENSE`, `NOTICE`, and `TRADEMARKS.md`. A surface check enforces that package boundary and rejects source, docs, source maps, and secret files. Runtime dependencies are intentionally minimal; the root package currently uses `ws` for the browser CDP transport. Supply-chain review is covered by CI dependency review, CodeQL, audit steps, and SBOM builds. Inspect the surface with:
 
 ```bash
 npm pack --dry-run
 ```
 
-Publishing the package is out of scope for Wave 1. See [npm packaging](https://github.com/oscharko-dev/Keiko/blob/dev/docs/npm-packaging.md).
+Publishing the package is out of scope for Wave 1. See [npm packaging](https://github.com/oscharko-dev/Keiko/blob/dev/docs/npm-packaging.md) for the exact prepack chain and surface check.
 
 ---
 

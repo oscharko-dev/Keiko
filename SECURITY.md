@@ -4,13 +4,13 @@
 
 Keiko is currently a pre-1.0 project. Security fixes are prepared on the
 `dev` branch and, when package publishing is in scope, are released for the
-latest `0.x` package line only.
+latest published `0.x` package line only.
 
-| Version                                  | Supported |
-| ---------------------------------------- | --------- |
-| Current `dev` branch                     | Yes       |
-| Latest `0.x` release (`0.1.0` currently) | Yes       |
-| Earlier `0.x` releases                   | No        |
+| Version                        | Supported |
+| ------------------------------ | --------- |
+| Current `dev` branch           | Yes       |
+| Latest published `0.x` release | Yes       |
+| Earlier `0.x` releases         | No        |
 
 ## Reporting a Vulnerability
 

@@ -31,7 +31,7 @@ For the security model behind the controls referenced here, see [Security and au
 - A configured model gateway: at least one model endpoint the customer hosts or provides, with its credentials. See [Model configuration](#model-configuration).
 - For the local UI: a current Chromium, Firefox, or Safari. See the [local UI runbook](../ui-runbook.md).
 
-Keiko has zero runtime dependencies. Install it with `npm install keiko`.
+Keiko has a minimal runtime dependency set. Install it with `npm install keiko`.
 
 ---
 

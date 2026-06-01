@@ -1,6 +1,6 @@
 {
   "name": "keiko",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.0",
   "description": "Enterprise model-agnostic developer-assist coding agent for regulated engineering workflows.",
   "type": "module",
   "license": "Apache-2.0",
