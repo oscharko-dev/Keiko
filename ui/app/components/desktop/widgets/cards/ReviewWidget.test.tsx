@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, applyRun, fetchEvidenceManifest, fetchRunReport } from "../../../../../lib/api";
+import type { EvidenceManifest } from "../../../../../lib/types";
 import { ReviewWidget } from "./ReviewWidget";
 
 vi.mock("../../../../../lib/api", () => ({
@@ -38,6 +39,56 @@ const MINIMAL_REPORT = {
   ],
 };
 
+const MULTI_FILE_REPORT = {
+  status: "dry-run" as const,
+  proposedDiff: [
+    "diff --git a/src/alpha.ts b/src/alpha.ts",
+    "--- a/src/alpha.ts",
+    "+++ b/src/alpha.ts",
+    "@@ -1 +1 @@",
+    "-alphaOld",
+    "+alphaNew",
+    "diff --git a/src/beta.ts b/src/beta.ts",
+    "--- a/src/beta.ts",
+    "+++ b/src/beta.ts",
+    "@@ -1 +1 @@",
+    "-betaOld",
+    "+betaNew",
+    "",
+  ].join("\n"),
+  changedFiles: [
+    { path: "src/alpha.ts", kind: "modified", addedLines: 1, removedLines: 1, elevatedReview: false },
+    { path: "src/beta.ts", kind: "modified", addedLines: 1, removedLines: 1, elevatedReview: false },
+  ],
+};
+
+function evidenceManifest(runId: string): EvidenceManifest {
+  return {
+    evidenceSchemaVersion: "1",
+    run: {
+      runId,
+      fingerprint: "fp",
+      harnessVersion: "1",
+      taskType: "unit-test-generation",
+      startedAt: 0,
+      finishedAt: 100,
+      outcome: "completed",
+      durationMs: 100,
+    },
+    model: { modelId: "m1", costClass: "medium" },
+    usageTotals: { promptTokens: 1, completionTokens: 1, requestCount: 1, totalLatencyMs: 1 },
+    stateTransitions: [],
+    toolCalls: [],
+    commandExecutions: [],
+  };
+}
+
+function mockEvidenceNotFound(): void {
+  vi.mocked(fetchEvidenceManifest).mockRejectedValue(
+    new ApiError("NOT_FOUND", "No evidence for that run id.", 404),
+  );
+}
+
 afterEach(() => {
   vi.clearAllMocks();
 });
@@ -69,7 +120,7 @@ describe("ReviewWidget", () => {
 
   it("renders file headers, line counts, +N/−M badges; Apply enabled when status:dry-run", async () => {
     vi.mocked(fetchRunReport).mockResolvedValue({ report: MINIMAL_REPORT });
-    vi.mocked(fetchEvidenceManifest).mockRejectedValue(new Error("404"));
+    mockEvidenceNotFound();
 
     render(<ReviewWidget runId="r-123" />);
 
@@ -86,13 +137,16 @@ describe("ReviewWidget", () => {
 
     const applyBtn = screen.getByRole("button", { name: /apply/i });
     expect(applyBtn).toBeEnabled();
+    expect(screen.getAllByText("Added line").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Deleted line").length).toBeGreaterThan(0);
+    expect(screen.getByLabelText(/hunk header/i)).toBeInTheDocument();
   });
 
   it("Apply button is disabled and replaced with Applied text once appliedAt is set", async () => {
     vi.mocked(fetchRunReport).mockResolvedValue({
       report: { ...MINIMAL_REPORT, appliedAt: Date.now() },
     });
-    vi.mocked(fetchEvidenceManifest).mockRejectedValue(new Error("404"));
+    mockEvidenceNotFound();
 
     render(<ReviewWidget runId="r-123" />);
 
@@ -105,7 +159,7 @@ describe("ReviewWidget", () => {
 
   it("shows error message on 409 NOT_APPLIABLE and re-enables the Apply button", async () => {
     vi.mocked(fetchRunReport).mockResolvedValue({ report: MINIMAL_REPORT });
-    vi.mocked(fetchEvidenceManifest).mockRejectedValue(new Error("404"));
+    mockEvidenceNotFound();
     vi.mocked(applyRun).mockRejectedValue(
       new ApiError("NOT_APPLIABLE", "Run is not in an appliable state.", 409),
     );
@@ -118,14 +172,34 @@ describe("ReviewWidget", () => {
     await waitFor(() => {
       expect(screen.getByText(/not in an appliable state/i)).toBeInTheDocument();
     });
+    expect(screen.getByRole("alert")).toHaveTextContent(/not in an appliable state/i);
     expect(screen.getByRole("button", { name: /apply/i })).toBeEnabled();
+  });
+
+  it("calls the existing apply route helper and transitions to Applied on success", async () => {
+    vi.mocked(fetchRunReport).mockResolvedValue({ report: MINIMAL_REPORT });
+    mockEvidenceNotFound();
+    vi.mocked(applyRun).mockResolvedValue({
+      report: { ...MINIMAL_REPORT, appliedAt: Date.now() },
+    });
+
+    render(<ReviewWidget runId="r-123" />);
+    await screen.findByRole("button", { name: /apply/i });
+
+    await userEvent.click(screen.getByRole("button", { name: /apply/i }));
+
+    await waitFor(() => {
+      expect(applyRun).toHaveBeenCalledWith("r-123");
+      expect(screen.queryByRole("button", { name: /^apply$/i })).not.toBeInTheDocument();
+    });
+    expect(screen.getAllByText("Applied").length).toBeGreaterThan(0);
   });
 
   it("shows 404 message when report fetch returns NOT_FOUND", async () => {
     vi.mocked(fetchRunReport).mockRejectedValue(
       new ApiError("NOT_FOUND", "Run not found.", 404),
     );
-    vi.mocked(fetchEvidenceManifest).mockRejectedValue(new Error("404"));
+    mockEvidenceNotFound();
 
     render(<ReviewWidget runId="r-missing" />);
 
@@ -136,11 +210,44 @@ describe("ReviewWidget", () => {
     });
   });
 
+  it("keeps evidence navigation when the live run record has expired", async () => {
+    vi.mocked(fetchRunReport).mockRejectedValue(
+      new ApiError("NOT_FOUND", "Run not found.", 404),
+    );
+    vi.mocked(fetchEvidenceManifest).mockResolvedValue({
+      manifest: evidenceManifest("r-expired"),
+    });
+
+    render(<ReviewWidget runId="r-expired" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("No run with that ID was found.");
+      expect(screen.getByRole("link", { name: /evidence/i })).toHaveAttribute(
+        "href",
+        "/api/evidence/r-expired",
+      );
+    });
+  });
+
+  it("shows a running state instead of claiming there is no diff yet", async () => {
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: { status: "running" as const },
+    });
+    mockEvidenceNotFound();
+
+    render(<ReviewWidget runId="r-running" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent(/run is still running/i);
+      expect(screen.queryByText(/this run has no proposed diff to review/i)).not.toBeInTheDocument();
+    });
+  });
+
   it("shows no-diff message when report has no proposedDiff", async () => {
     vi.mocked(fetchRunReport).mockResolvedValue({
       report: { status: "completed" as const },
     });
-    vi.mocked(fetchEvidenceManifest).mockRejectedValue(new Error("404"));
+    mockEvidenceNotFound();
 
     render(<ReviewWidget runId="r-nodiff" />);
 
@@ -160,7 +267,7 @@ describe("ReviewWidget", () => {
         ],
       },
     });
-    vi.mocked(fetchEvidenceManifest).mockRejectedValue(new Error("404"));
+    mockEvidenceNotFound();
 
     render(<ReviewWidget runId="r-cfonly" />);
 
@@ -171,45 +278,27 @@ describe("ReviewWidget", () => {
     });
   });
 
-  it("file list click scrolls the matching section into view", async () => {
-    vi.mocked(fetchRunReport).mockResolvedValue({ report: MINIMAL_REPORT });
-    vi.mocked(fetchEvidenceManifest).mockRejectedValue(new Error("404"));
-
-    const scrollSpy = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+  it("renders only the selected file body and switches files from the file list", async () => {
+    vi.mocked(fetchRunReport).mockResolvedValue({ report: MULTI_FILE_REPORT });
+    mockEvidenceNotFound();
 
     render(<ReviewWidget runId="r-123" />);
-    // Wait for the file-list button to appear (multiple text nodes with the path are expected)
-    await screen.findAllByText("src/foo.ts");
 
-    // The file-list button for src/foo.ts (only one file-row button exists)
-    const [fileBtn] = screen.getAllByRole("button", { name: /src\/foo\.ts/i });
-    await userEvent.click(fileBtn!);
+    await screen.findByText("alphaNew");
+    expect(screen.queryByText("betaNew")).not.toBeInTheDocument();
 
-    expect(scrollSpy).toHaveBeenCalledWith({ block: "start" });
-    scrollSpy.mockRestore();
+    await userEvent.click(screen.getByRole("button", { name: /src\/beta\.ts/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText("betaNew")).toBeInTheDocument();
+      expect(screen.queryByText("alphaNew")).not.toBeInTheDocument();
+    });
   });
 
   it("Evidence link is present when manifest fetch succeeds", async () => {
     vi.mocked(fetchRunReport).mockResolvedValue({ report: MINIMAL_REPORT });
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({
-      manifest: {
-        evidenceSchemaVersion: "1",
-        run: {
-          runId: "r-123",
-          fingerprint: "fp",
-          harnessVersion: "1",
-          taskType: "unit-test-generation",
-          startedAt: 0,
-          finishedAt: 100,
-          outcome: "completed",
-          durationMs: 100,
-        },
-        model: { modelId: "m1", costClass: "medium" },
-        usageTotals: { promptTokens: 1, completionTokens: 1, requestCount: 1, totalLatencyMs: 1 },
-        stateTransitions: [],
-        toolCalls: [],
-        commandExecutions: [],
-      },
+      manifest: evidenceManifest("r-123"),
     });
 
     render(<ReviewWidget runId="r-123" />);
@@ -224,13 +313,28 @@ describe("ReviewWidget", () => {
 
   it("Evidence is aria-disabled when manifest 404s", async () => {
     vi.mocked(fetchRunReport).mockResolvedValue({ report: MINIMAL_REPORT });
-    vi.mocked(fetchEvidenceManifest).mockRejectedValue(new Error("404"));
+    mockEvidenceNotFound();
 
     render(<ReviewWidget runId="r-123" />);
 
     await waitFor(() => {
       const span = screen.getByText("Evidence");
       expect(span).toHaveAttribute("aria-disabled", "true");
+    });
+  });
+
+  it("surfaces non-404 evidence read failures instead of treating them as absence", async () => {
+    vi.mocked(fetchRunReport).mockResolvedValue({ report: MINIMAL_REPORT });
+    vi.mocked(fetchEvidenceManifest).mockRejectedValue(
+      new ApiError("EVIDENCE_READ", "manifest could not be read", 422),
+    );
+
+    render(<ReviewWidget runId="r-corrupt" />);
+
+    await waitFor(() => {
+      const status = screen.getByRole("status", { name: /evidence unavailable/i });
+      expect(status).toHaveTextContent("Evidence error");
+      expect(status).toHaveAttribute("title", "manifest could not be read");
     });
   });
 
@@ -242,7 +346,7 @@ describe("ReviewWidget", () => {
 
   it("jest-axe: loaded state has no violations", async () => {
     vi.mocked(fetchRunReport).mockResolvedValue({ report: MINIMAL_REPORT });
-    vi.mocked(fetchEvidenceManifest).mockRejectedValue(new Error("404"));
+    mockEvidenceNotFound();
 
     const { container } = render(<ReviewWidget runId="r-axe" />);
 

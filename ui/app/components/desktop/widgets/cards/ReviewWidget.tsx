@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError, applyRun, fetchEvidenceManifest, fetchRunReport } from "../../../../../lib/api";
 import type { ChangedFile, RunReport, RunStatus } from "../../../../../lib/types";
@@ -17,6 +17,12 @@ export interface ReviewWidgetProps {
 interface ErrorState {
   readonly code: string;
   readonly message: string;
+}
+
+interface EvidenceControlProps {
+  readonly href: string;
+  readonly hasManifest: boolean;
+  readonly error: ErrorState | null;
 }
 
 function errorFromUnknown(value: unknown): ErrorState {
@@ -62,6 +68,50 @@ function hasDiff(report: RunReport): boolean {
   return report.proposedDiff !== undefined && report.proposedDiff !== "";
 }
 
+function lineKindLabel(kind: DiffLine["kind"]): string {
+  const map: Record<DiffLine["kind"], string> = {
+    add: "Added line",
+    del: "Deleted line",
+    ctx: "Context line",
+    meta: "Diff metadata",
+  };
+  return map[kind];
+}
+
+function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): ReactNode {
+  if (hasManifest) {
+    return (
+      <a
+        className="rv-evidence-link"
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        Evidence
+      </a>
+    );
+  }
+
+  if (error !== null) {
+    return (
+      <span
+        className="rv-evidence-link rv-evidence-error"
+        role="status"
+        aria-label={`Evidence unavailable: ${error.message}`}
+        title={error.message}
+      >
+        Evidence error
+      </span>
+    );
+  }
+
+  return (
+    <span className="rv-evidence-link rv-evidence-disabled" aria-disabled="true">
+      Evidence
+    </span>
+  );
+}
+
 // --- diff rendering helpers -------------------------------------------------
 
 interface TokensProps {
@@ -101,6 +151,7 @@ function DiffLineView({ line, lang }: DiffLineViewProps): ReactNode {
 
   return (
     <div className={`rv-line${cls}`}>
+      <span className="rv-sr-only">{lineKindLabel(line.kind)}</span>
       <span className="rv-num-old rv-num">{line.oldLine ?? ""}</span>
       <span className="rv-num-new rv-num">{line.newLine ?? ""}</span>
       <span className="rv-gutter" aria-hidden="true">{sign}</span>
@@ -117,7 +168,10 @@ interface DiffHunkViewProps {
 function DiffHunkView({ hunk, lang }: DiffHunkViewProps): ReactNode {
   return (
     <>
-      <div className="rv-hunk mono" role="presentation">{hunk.header}</div>
+      <div className="rv-hunk mono" aria-label={`Hunk header ${hunk.header}`}>
+        <span className="rv-sr-only">Hunk header</span>
+        {hunk.header}
+      </div>
       {hunk.lines.map((line, idx) => (
         <DiffLineView key={idx} line={line} lang={lang} />
       ))}
@@ -168,12 +222,12 @@ function DiffFileSection({ file, index, changedFiles, sectionRef }: DiffFileSect
 export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
   const [report, setReport] = useState<RunReport | null>(null);
   const [hasManifest, setHasManifest] = useState(false);
+  const [evidenceError, setEvidenceError] = useState<ErrorState | null>(null);
   const [loading, setLoading] = useState(false);
   const [fetchError, setFetchError] = useState<ErrorState | null>(null);
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<ErrorState | null>(null);
   const [activeFile, setActiveFile] = useState<number | null>(null);
-  const sectionRefs = useRef<(HTMLElement | null)[]>([]);
 
   useEffect(() => {
     if (runId === undefined || runId === "") return;
@@ -182,18 +236,31 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
     setFetchError(null);
     setReport(null);
     setHasManifest(false);
+    setEvidenceError(null);
+    setActiveFile(null);
 
-    void Promise.all([
+    void Promise.allSettled([
       fetchRunReport(runId),
-      fetchEvidenceManifest(runId).catch(() => null),
+      fetchEvidenceManifest(runId),
     ]).then(([runRes, manifRes]) => {
       if (cancelled) return;
-      setReport(runRes.report);
-      setHasManifest(manifRes !== null);
-      setLoading(false);
-    }).catch((err: unknown) => {
-      if (cancelled) return;
-      setFetchError(errorFromUnknown(err));
+
+      if (manifRes.status === "fulfilled") {
+        setHasManifest(true);
+        setEvidenceError(null);
+      } else {
+        const manifestError = errorFromUnknown(manifRes.reason);
+        setHasManifest(false);
+        setEvidenceError(manifestError.code === "NOT_FOUND" ? null : manifestError);
+      }
+
+      if (runRes.status === "fulfilled") {
+        setReport(runRes.value.report);
+        setLoading(false);
+        return;
+      }
+
+      setFetchError(errorFromUnknown(runRes.reason));
       setLoading(false);
     });
 
@@ -215,10 +282,26 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
       });
   };
 
-  const scrollToFile = (index: number): void => {
+  const selectFile = (index: number): void => {
     setActiveFile(index);
-    sectionRefs.current[index]?.scrollIntoView({ block: "start" });
   };
+
+  const evidenceHref = `/api/evidence/${encodeURIComponent(runId ?? "")}`;
+  const diff = useMemo(
+    () => report?.proposedDiff !== undefined ? parseUnifiedDiff(report.proposedDiff) : null,
+    [report?.proposedDiff],
+  );
+  const changedFiles: readonly ChangedFile[] = report?.changedFiles ?? [];
+  const totals = useMemo(() => ({
+    added: diff?.files.reduce((s, f) => s + f.addedLines, 0) ?? 0,
+    removed: diff?.files.reduce((s, f) => s + f.removedLines, 0) ?? 0,
+  }), [diff]);
+  const selectedFileIndex =
+    diff !== null && diff.files.length > 0
+      ? Math.min(activeFile ?? 0, diff.files.length - 1)
+      : null;
+  const selectedFile = selectedFileIndex !== null ? diff?.files[selectedFileIndex] : undefined;
+  const isRunning = report?.status === "running";
 
   // State 1: no runId
   if (runId === undefined || runId === "") {
@@ -229,12 +312,6 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
       </section>
     );
   }
-
-  const evidenceHref = `/api/evidence/${encodeURIComponent(runId)}`;
-  const diff = report?.proposedDiff !== undefined ? parseUnifiedDiff(report.proposedDiff) : null;
-  const changedFiles: readonly ChangedFile[] = report?.changedFiles ?? [];
-  const totalAdded = diff?.files.reduce((s, f) => s + f.addedLines, 0) ?? 0;
-  const totalRemoved = diff?.files.reduce((s, f) => s + f.removedLines, 0) ?? 0;
 
   return (
     <section className="review" aria-label="Diff review">
@@ -252,11 +329,23 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
           {fetchError.code === "NOT_FOUND"
             ? "No run with that ID was found."
             : `${fetchError.code}: ${fetchError.message}`}
+          {(hasManifest || evidenceError !== null) && (
+            <span className="rv-error-evidence">
+              <EvidenceControl href={evidenceHref} hasManifest={hasManifest} error={evidenceError} />
+            </span>
+          )}
         </div>
       )}
 
+      {/* State 4: running */}
+      {!loading && fetchError === null && report !== null && isRunning && (
+        <p role="status" aria-live="polite" className="rv-no-diff">
+          Run is still running. The proposed diff will appear when the run completes.
+        </p>
+      )}
+
       {/* State 4: no diff */}
-      {!loading && fetchError === null && report !== null && !hasDiff(report) && (
+      {!loading && fetchError === null && report !== null && !isRunning && !hasDiff(report) && (
         <p className="rv-no-diff">This run has no proposed diff to review.</p>
       )}
 
@@ -273,42 +362,30 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
                 `${diff.files.length} file${diff.files.length !== 1 ? "s" : ""}`
               )}
               {" "}
-              <span className="rv-stat add">+{totalAdded}</span>
+              <span className="rv-stat add">+{totals.added}</span>
               {" "}
-              <span className="rv-stat del">−{totalRemoved}</span>
+              <span className="rv-stat del">−{totals.removed}</span>
             </span>
             <span className="spacer" />
-            {hasManifest ? (
-              <a
-                className="rv-evidence-link"
-                href={evidenceHref}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Evidence
-              </a>
-            ) : (
-              <span className="rv-evidence-link rv-evidence-disabled" aria-disabled="true">
-                Evidence
-              </span>
-            )}
+            <EvidenceControl href={evidenceHref} hasManifest={hasManifest} error={evidenceError} />
           </div>
 
-          {diff !== null && diff.files.length > 0 && (
+          {diff !== null && diff.files.length > 0 && selectedFileIndex !== null && selectedFile !== undefined && (
             <div className="rv-layout">
               {/* File list */}
               <nav className="rv-filelist" aria-label="Changed files">
                 <ul>
                   {diff.files.map((file, idx) => {
                     const cf = changedFiles.find((c) => c.path === file.path);
+                    const selected = selectedFileIndex === idx;
                     return (
                       <li key={file.path}>
                         <button
                           type="button"
                           className="rv-filerow"
-                          aria-pressed={activeFile === idx}
-                          aria-controls={`rv-file-${idx}`}
-                          onClick={() => scrollToFile(idx)}
+                          aria-pressed={selected}
+                          aria-controls={selected ? `rv-file-${idx}` : undefined}
+                          onClick={() => selectFile(idx)}
                         >
                           <span className="rv-filerow-path mono">{shortPath(file.path)}</span>
                           <span className="rv-stat add">+{file.addedLines}</span>
@@ -325,15 +402,13 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
 
               {/* Diff body */}
               <div className="rv-body">
-                {diff.files.map((file, idx) => (
-                  <DiffFileSection
-                    key={file.path}
-                    file={file}
-                    index={idx}
-                    changedFiles={changedFiles}
-                    sectionRef={(el) => { sectionRefs.current[idx] = el; }}
-                  />
-                ))}
+                <DiffFileSection
+                  key={selectedFile.path}
+                  file={selectedFile}
+                  index={selectedFileIndex}
+                  changedFiles={changedFiles}
+                  sectionRef={() => undefined}
+                />
                 {diff.truncated && (
                   <p role="note" className="rv-truncated">
                     Diff truncated at 512 KB. Open the{" "}
@@ -357,7 +432,7 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
               {applying ? "Applying…" : report.appliedAt !== undefined ? "Applied" : ""}
             </span>
             {applyError !== null && (
-              <span className="rv-apply-error">{applyError.message}</span>
+              <span role="alert" className="rv-apply-error">{applyError.message}</span>
             )}
             {report.appliedAt !== undefined ? (
               <span className="rv-final mono">Applied</span>
