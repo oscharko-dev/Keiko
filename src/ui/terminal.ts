@@ -16,7 +16,6 @@
 //   • Directory picker preserved from the previous PTY module, anchored at the project root.
 
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { readdir, realpath, stat } from "node:fs/promises";
 import {
   dirname,
@@ -37,6 +36,9 @@ import {
 } from "../tools/terminal-policy.js";
 import { isWithinWorkspace, resolveWithinWorkspace } from "../workspace/paths.js";
 import { PathDeniedError } from "../workspace/errors.js";
+import { isDenied } from "../workspace/ignore.js";
+import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
+import { containedRealPathInfo } from "../workspace/realpath.js";
 import type { WorkspaceInfo } from "../workspace/types.js";
 import { DEFAULT_SANDBOX_POLICY, type SandboxPolicy } from "../tools/types.js";
 import {
@@ -59,6 +61,7 @@ export interface TerminalExecutionInput {
   readonly args: readonly string[];
   readonly cwd?: string | undefined;
   readonly timeoutMs?: number | undefined;
+  readonly requestId?: string | undefined;
 }
 
 export interface TerminalExecutionResult {
@@ -125,6 +128,26 @@ interface InFlightExecution {
   cancelledByUser: boolean;
 }
 
+interface OperandValidationContext {
+  readonly fs: WorkspaceFs;
+  readonly projectRoot: string;
+  readonly cwd: string;
+}
+
+interface GrepValidationState {
+  afterTerminator: boolean;
+  expectPattern: boolean;
+  nextPattern: boolean;
+  nextPath: boolean;
+  nextPathProvidesPattern: boolean;
+  nextScalar: boolean;
+}
+
+interface OperandValueState {
+  afterTerminator: boolean;
+  pending: "path" | "scalar" | undefined;
+}
+
 export interface TerminalExecutionManagerOptions {
   readonly store: UiStore;
   readonly evidenceStore?: EvidenceStore | undefined;
@@ -169,6 +192,440 @@ function assertCwdInsideProject(projectRoot: string, requested: string | undefin
     );
   }
   return lexical;
+}
+
+function projectRootOrThrow(project: Project): string {
+  try {
+    return realpathSyncCompat(project.path);
+  } catch {
+    throw new TerminalToolError("PROJECT_NOT_FOUND", "Project root path could not be resolved.");
+  }
+}
+
+function realpathSyncCompat(pathValue: string): string {
+  return nodeWorkspaceFs.realPath(pathValue);
+}
+
+function requestIdPayload(input: TerminalExecutionInput): Record<string, string> {
+  return input.requestId === undefined ? {} : { requestId: input.requestId };
+}
+
+function assertOperandInsideProject(ctx: OperandValidationContext, operand: string): void {
+  if (operand.length === 0 || operand === "-") {
+    throw new TerminalToolError("COMMAND_DENIED", "Command operands must stay inside the selected project.");
+  }
+  let lexical: string;
+  try {
+    const candidate = isAbsolute(operand) ? resolvePath(operand) : resolvePath(ctx.cwd, operand);
+    lexical = resolveWithinWorkspace(ctx.projectRoot, candidate);
+  } catch {
+    throw new TerminalToolError(
+      "CWD_OUTSIDE_PROJECT",
+      "Command operand is outside the selected project.",
+    );
+  }
+  const lexicalRelative = lexical.slice(ctx.projectRoot.length).replace(/^[/\\]/, "");
+  if (isDenied(lexicalRelative)) {
+    throw new TerminalToolError("CWD_DENIED", "Command operand is denied by policy.");
+  }
+  try {
+    const info = containedRealPathInfo(ctx.fs, ctx.projectRoot, lexical);
+    if (isDenied(info.realRelative)) {
+      throw new TerminalToolError("CWD_DENIED", "Command operand is denied by policy.");
+    }
+  } catch (error) {
+    if (error instanceof TerminalToolError) throw error;
+    throw new TerminalToolError(
+      "CWD_OUTSIDE_PROJECT",
+      "Command operand is outside the selected project.",
+    );
+  }
+}
+
+function isOptionTerminator(arg: string): boolean {
+  return arg === "--";
+}
+
+function isFlag(arg: string, afterTerminator: boolean): boolean {
+  return !afterTerminator && arg.startsWith("-") && arg !== "-";
+}
+
+function flagName(arg: string): string {
+  const equalsIndex = arg.indexOf("=");
+  return equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
+}
+
+function equalsValueFor(arg: string, flags: ReadonlySet<string>): string | undefined {
+  const equalsIndex = arg.indexOf("=");
+  if (equalsIndex === -1) return undefined;
+  const flag = arg.slice(0, equalsIndex);
+  return flags.has(flag) ? arg.slice(equalsIndex + 1) : undefined;
+}
+
+function shortInlineValueFor(arg: string, flags: ReadonlySet<string>): string | undefined {
+  for (const flag of flags) {
+    if (flag.startsWith("--") || flag.length !== 2) continue;
+    if (arg.startsWith(flag) && arg.length > flag.length) return arg.slice(flag.length);
+  }
+  return undefined;
+}
+
+function inlineValueFor(arg: string, flags: ReadonlySet<string>): string | undefined {
+  return equalsValueFor(arg, flags) ?? shortInlineValueFor(arg, flags);
+}
+
+function isSeparatedValueFlag(arg: string, flags: ReadonlySet<string>): boolean {
+  return !arg.includes("=") && flags.has(arg);
+}
+
+function consumePendingOperandValue(
+  ctx: OperandValidationContext,
+  state: OperandValueState,
+  arg: string,
+): boolean {
+  if (state.pending === undefined) return false;
+  const pending = state.pending;
+  state.pending = undefined;
+  if (pending === "path") assertOperandInsideProject(ctx, arg);
+  return true;
+}
+
+function consumeValueFlag(
+  ctx: OperandValidationContext,
+  state: OperandValueState,
+  arg: string,
+  pathFlags: ReadonlySet<string>,
+  scalarFlags: ReadonlySet<string>,
+): boolean {
+  const pathValue = inlineValueFor(arg, pathFlags);
+  if (pathValue !== undefined) {
+    assertOperandInsideProject(ctx, pathValue);
+    return true;
+  }
+  if (isSeparatedValueFlag(arg, pathFlags)) {
+    state.pending = "path";
+    return true;
+  }
+  if (inlineValueFor(arg, scalarFlags) !== undefined) return true;
+  if (isSeparatedValueFlag(arg, scalarFlags)) {
+    state.pending = "scalar";
+    return true;
+  }
+  return false;
+}
+
+function validatePathOperands(
+  ctx: OperandValidationContext,
+  args: readonly string[],
+  scalarFlags: ReadonlySet<string>,
+  pathFlags: ReadonlySet<string> = FROZEN_EMPTY_SET,
+): void {
+  const state: OperandValueState = { afterTerminator: false, pending: undefined };
+  for (const arg of args) {
+    if (consumePendingOperandValue(ctx, state, arg)) continue;
+    if (!state.afterTerminator && isOptionTerminator(arg)) {
+      state.afterTerminator = true;
+      continue;
+    }
+    if (!state.afterTerminator && consumeValueFlag(ctx, state, arg, pathFlags, scalarFlags)) {
+      continue;
+    }
+    if (isFlag(arg, state.afterTerminator)) continue;
+    assertOperandInsideProject(ctx, arg);
+  }
+}
+
+const FROZEN_EMPTY_SET: ReadonlySet<string> = new Set();
+const HEAD_TAIL_SCALAR_FLAGS: ReadonlySet<string> = new Set(["-n", "-c", "--lines", "--bytes"]);
+const LS_SCALAR_FLAGS: ReadonlySet<string> = new Set([
+  "-w",
+  "--width",
+  "--block-size",
+  "--color",
+  "--format",
+  "--time",
+  "--sort",
+  "--ignore",
+  "--hide",
+  "--indicator-style",
+  "--quoting-style",
+  "--tabsize",
+]);
+const TREE_SCALAR_FLAGS: ReadonlySet<string> = new Set([
+  "-L",
+  "-I",
+  "-P",
+  "--charset",
+  "--filelimit",
+  "--timefmt",
+  "--sort",
+]);
+const GREP_PATTERN_FILE_FLAGS: ReadonlySet<string> = new Set(["-f", "--file"]);
+const GREP_PATH_VALUE_FLAGS: ReadonlySet<string> = new Set(["--exclude-from"]);
+const GREP_SCALAR_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-A",
+  "-B",
+  "-C",
+  "-D",
+  "-d",
+  "-m",
+  "--after-context",
+  "--before-context",
+  "--binary-files",
+  "--color",
+  "--context",
+  "--devices",
+  "--directories",
+  "--label",
+  "--max-count",
+]);
+
+function shortClusterEndsWithFlag(arg: string, flag: string): boolean {
+  return arg.startsWith("-") && !arg.startsWith("--") && arg.length > 2 && arg.endsWith(flag.slice(1));
+}
+
+function consumePendingGrepOperand(
+  ctx: OperandValidationContext,
+  state: GrepValidationState,
+  arg: string,
+): boolean {
+  if (state.nextPattern) {
+    state.nextPattern = false;
+    state.expectPattern = false;
+    return true;
+  }
+  if (state.nextPath) {
+    state.nextPath = false;
+    assertOperandInsideProject(ctx, arg);
+    if (state.nextPathProvidesPattern) state.expectPattern = false;
+    state.nextPathProvidesPattern = false;
+    return true;
+  }
+  if (state.nextScalar) {
+    state.nextScalar = false;
+    return true;
+  }
+  return false;
+}
+
+function consumeGrepPatternFlag(state: GrepValidationState, arg: string): boolean {
+  if (arg === "-e" || arg === "--regexp") {
+    state.nextPattern = true;
+    return true;
+  }
+  if (arg.startsWith("--regexp=") || (arg.startsWith("-e") && arg.length > 2)) {
+    state.expectPattern = false;
+    return true;
+  }
+  return false;
+}
+
+function consumeGrepFileFlag(
+  ctx: OperandValidationContext,
+  state: GrepValidationState,
+  arg: string,
+): boolean {
+  if (arg === "-f" || arg === "--file") {
+    state.nextPath = true;
+    state.nextPathProvidesPattern = true;
+    return true;
+  }
+  if (isSeparatedValueFlag(arg, GREP_PATTERN_FILE_FLAGS) || shortClusterEndsWithFlag(arg, "-f")) {
+    state.nextPath = true;
+    state.nextPathProvidesPattern = true;
+    return true;
+  }
+  const patternFile = inlineValueFor(arg, GREP_PATTERN_FILE_FLAGS);
+  if (patternFile !== undefined) {
+    assertOperandInsideProject(ctx, patternFile);
+    state.expectPattern = false;
+    return true;
+  }
+  if (isSeparatedValueFlag(arg, GREP_PATH_VALUE_FLAGS)) {
+    state.nextPath = true;
+    state.nextPathProvidesPattern = false;
+    return true;
+  }
+  const value = inlineValueFor(arg, GREP_PATH_VALUE_FLAGS);
+  if (value !== undefined) {
+    assertOperandInsideProject(ctx, value);
+    return true;
+  }
+  return false;
+}
+
+function consumeGrepScalarFlag(state: GrepValidationState, arg: string): boolean {
+  if (inlineValueFor(arg, GREP_SCALAR_VALUE_FLAGS) !== undefined) return true;
+  if (isSeparatedValueFlag(arg, GREP_SCALAR_VALUE_FLAGS)) {
+    state.nextScalar = true;
+    return true;
+  }
+  return false;
+}
+
+function consumeGrepFlag(
+  ctx: OperandValidationContext,
+  state: GrepValidationState,
+  arg: string,
+): boolean {
+  if (state.afterTerminator) return false;
+  if (isOptionTerminator(arg)) {
+    state.afterTerminator = true;
+    return true;
+  }
+  if (consumeGrepPatternFlag(state, arg)) return true;
+  if (consumeGrepFileFlag(ctx, state, arg)) return true;
+  if (consumeGrepScalarFlag(state, arg)) return true;
+  return isFlag(arg, false);
+}
+
+function consumeGrepPositional(
+  ctx: OperandValidationContext,
+  state: GrepValidationState,
+  arg: string,
+): void {
+  if (state.expectPattern) {
+    state.expectPattern = false;
+    return;
+  }
+  assertOperandInsideProject(ctx, arg);
+}
+
+function validateGrepOperands(ctx: OperandValidationContext, args: readonly string[]): void {
+  const state: GrepValidationState = {
+    afterTerminator: false,
+    expectPattern: true,
+    nextPattern: false,
+    nextPath: false,
+    nextPathProvidesPattern: false,
+    nextScalar: false,
+  };
+  for (const arg of args) {
+    if (consumePendingGrepOperand(ctx, state, arg)) continue;
+    if (consumeGrepFlag(ctx, state, arg)) continue;
+    consumeGrepPositional(ctx, state, arg);
+  }
+}
+
+const FIND_ROOT_OPTIONS: ReadonlySet<string> = new Set(["-H", "-L", "-P", "-E", "-X", "-d", "-s", "-x"]);
+const FIND_PATH_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-anewer",
+  "-cnewer",
+  "-f",
+  "-newer",
+  "-samefile",
+]);
+const FIND_SCALAR_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-amin",
+  "-atime",
+  "-cmin",
+  "-context",
+  "-ctime",
+  "-flags",
+  "-fstype",
+  "-gid",
+  "-group",
+  "-ilname",
+  "-iname",
+  "-inum",
+  "-ipath",
+  "-iregex",
+  "-links",
+  "-lname",
+  "-maxdepth",
+  "-mindepth",
+  "-mmin",
+  "-mtime",
+  "-name",
+  "-path",
+  "-perm",
+  "-printf",
+  "-regex",
+  "-regextype",
+  "-size",
+  "-type",
+  "-uid",
+  "-used",
+  "-user",
+  "-xtype",
+]);
+const FIND_EXPRESSION_OPERATORS: ReadonlySet<string> = new Set(["!", "(", ")", ",", "-and", "-or"]);
+
+function newerFlagValueKind(flag: string): "path" | "scalar" | undefined {
+  if (!flag.startsWith("-newer")) return undefined;
+  if (flag === "-newer") return "path";
+  if (flag.length !== "-newerXY".length) return undefined;
+  return flag.endsWith("t") ? "scalar" : "path";
+}
+
+function findValueKind(arg: string): "path" | "scalar" | undefined {
+  const flag = flagName(arg);
+  if (FIND_PATH_VALUE_FLAGS.has(flag)) return "path";
+  if (FIND_SCALAR_VALUE_FLAGS.has(flag)) return "scalar";
+  return newerFlagValueKind(flag);
+}
+
+function consumeFindValueFlag(state: OperandValueState, arg: string): boolean {
+  const kind = findValueKind(arg);
+  if (kind === undefined) return false;
+  state.pending = kind;
+  return true;
+}
+
+function startsFindExpression(arg: string): boolean {
+  return arg.startsWith("-") || FIND_EXPRESSION_OPERATORS.has(arg);
+}
+
+function validateFindOperands(ctx: OperandValidationContext, args: readonly string[]): void {
+  const state: OperandValueState = { afterTerminator: false, pending: undefined };
+  let expressionStarted = false;
+  for (const arg of args) {
+    if (consumePendingOperandValue(ctx, state, arg)) continue;
+    if (!expressionStarted && arg === "-f") {
+      state.pending = "path";
+      continue;
+    }
+    if (!expressionStarted && !startsFindExpression(arg)) {
+      assertOperandInsideProject(ctx, arg);
+      continue;
+    }
+    if (!expressionStarted && FIND_ROOT_OPTIONS.has(arg)) continue;
+    expressionStarted = true;
+    if (consumeFindValueFlag(state, arg)) continue;
+  }
+}
+
+function validateCommandOperands(
+  projectRoot: string,
+  cwd: string,
+  input: TerminalExecutionInput,
+  fs: WorkspaceFs,
+): void {
+  const ctx: OperandValidationContext = { fs, projectRoot, cwd };
+  switch (input.command) {
+    case "cat":
+    case "wc":
+      validatePathOperands(ctx, input.args, FROZEN_EMPTY_SET);
+      break;
+    case "head":
+    case "tail":
+      validatePathOperands(ctx, input.args, HEAD_TAIL_SCALAR_FLAGS);
+      break;
+    case "ls":
+      validatePathOperands(ctx, input.args, LS_SCALAR_FLAGS);
+      break;
+    case "tree":
+      validatePathOperands(ctx, input.args, TREE_SCALAR_FLAGS);
+      break;
+    case "grep":
+      validateGrepOperands(ctx, input.args);
+      break;
+    case "find":
+      validateFindOperands(ctx, input.args);
+      break;
+    default:
+      break;
+  }
 }
 
 function clampTimeout(requested: number | undefined, ceiling: number): number {
@@ -247,8 +704,10 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
         "Too many in-flight terminal executions.",
       );
     }
-    const cwd = assertCwdInsideProject(project.path, input.cwd);
-    return this.runExecution(project.path, cwd, input);
+    const projectRoot = projectRootOrThrow(project);
+    const cwd = assertCwdInsideProject(projectRoot, input.cwd);
+    validateCommandOperands(projectRoot, cwd, input, this.runDeps.fs ?? nodeWorkspaceFs);
+    return this.runExecution(projectRoot, cwd, input);
   };
 
   private async runExecution(
@@ -273,12 +732,10 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     }
   }
 
-  // The Layer-1 rule inside runCommand is the *bare-executable* check. We've already proved (via
-  // BFF gate + TERMINAL_COMMAND_RULES + Layer-2 isTerminalCommandAllowed) that this invocation is
-  // allowed; pass a single-entry rule list with just the bare name so runCommand allows this exact
-  // executable. A different command spawn here would be denied by runCommand's own allowlist —
-  // the bare-name check stays in force.
-  private buildRunDepsFor(projectRoot: string, command: string): RunCommandDeps {
+  // Keep runCommand on the same terminal policy table used by the BFF pre-check. Layer 2 above
+  // covers operand containment, while runCommand still owns the spawn boundary, cwd realpath check,
+  // executable resolution, sandbox env, timeout, and output cap.
+  private buildRunDepsFor(projectRoot: string): RunCommandDeps {
     const workspace: WorkspaceInfo = {
       root: projectRoot,
       name: undefined,
@@ -289,11 +746,10 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
       languages: [],
       ignoreLines: [],
     };
-    const acceptingRule = { executable: command };
     return {
       workspace,
       policy: this.policy,
-      commandRules: this.runDeps.commandRules ?? [acceptingRule],
+      commandRules: this.runDeps.commandRules ?? TERMINAL_COMMAND_RULES,
       spawn: this.runDeps.spawn ?? nodeSpawnFn,
       processEnv: this.processEnv,
       now: this.runDeps.now ?? this.now,
@@ -313,10 +769,11 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     entry: InFlightExecution,
     startedAt: number,
   ): Promise<TerminalExecutionResult> {
-    const deps = this.buildRunDepsFor(projectRoot, input.command);
+    const deps = this.buildRunDepsFor(projectRoot);
     const timeoutMs = clampTimeout(input.timeoutMs, this.policy.defaultTimeoutMs);
+    let result: import("../tools/types.js").CommandResult;
     try {
-      const result = await runCommand(
+      result = await runCommand(
         {
           command: input.command,
           args: input.args,
@@ -326,11 +783,11 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
         },
         deps,
       );
-      return this.handleSuccess(executionId, input, result, startedAt);
     } catch (error) {
       this.recordFailure(executionId, input, entry, error, startedAt);
       throw this.mapError(error, entry);
     }
+    return this.handleSuccess(executionId, input, result, startedAt);
   }
 
   private handleSuccess(
@@ -362,6 +819,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
         timedOut: result.timedOut,
         stdoutByteLength: stdoutBytes,
         stderrByteLength: stderrBytes,
+        ...requestIdPayload(input),
       },
     });
     return {
@@ -395,7 +853,11 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     };
     this.persistEntry(executionId, input, counts);
     if (cancelled) {
-      this.emit({ kind: "execution-cancelled", executionId, payload: {} });
+      this.emit({
+        kind: "execution-cancelled",
+        executionId,
+        payload: requestIdPayload(input),
+      });
       return;
     }
     // ADR-0018 D7: timeout is a "completed with timedOut=true" outcome, not a failure.
@@ -410,6 +872,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
           timedOut: true,
           stdoutByteLength: 0,
           stderrByteLength: 0,
+          ...requestIdPayload(input),
         },
       });
       return;
@@ -418,7 +881,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     this.emit({
       kind: "execution-failed",
       executionId,
-      payload: { code: mapped.code, message: mapped.message },
+      payload: { code: mapped.code, message: mapped.message, ...requestIdPayload(input) },
     });
   }
 
@@ -427,7 +890,9 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     input: TerminalExecutionInput,
     counts: CompletionCounts,
   ): void {
-    if (this.evidenceStore === undefined) return;
+    if (this.evidenceStore === undefined) {
+      throw new TerminalToolError("EVIDENCE_WRITE_FAILED", "Terminal evidence store is unavailable.");
+    }
     const entry: TerminalEvidenceEntry = buildTerminalEvidenceEntry({
       executionId,
       projectId: input.projectId,
@@ -445,7 +910,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     try {
       appendTerminalEvidence(this.evidenceStore, entry, this.redactor);
     } catch {
-      // Evidence is observability: a write failure must not break the user-visible execution.
+      throw new TerminalToolError("EVIDENCE_WRITE_FAILED", "Terminal evidence could not be written.");
     }
   }
 
@@ -486,6 +951,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
         command: input.command,
         argCount: input.args.length,
         startedAt,
+        ...requestIdPayload(input),
       },
     });
   }
@@ -529,11 +995,6 @@ export function buildTerminalPolicySummary(
 }
 
 // ─── Directory picker (anchored at the project root — A3 containment) ────────────
-
-function defaultCwdFromProject(project: Project): string {
-  if (existsSync(project.path)) return project.path;
-  return process.cwd();
-}
 
 function parentPath(pathValue: string, projectRoot: string): string | null {
   // Do not let parent navigation escape the project root.
@@ -583,7 +1044,7 @@ export async function listDirectories(
   if (project === undefined) {
     throw new TerminalToolError("PROJECT_NOT_FOUND", "Project not found.");
   }
-  const projectRootRaw = defaultCwdFromProject(project);
+  const projectRootRaw = project.path;
   // Resolve the project root to its real path first so that comparisons on macOS (where /tmp
   // is a symlink to /private/tmp) don't false-positive as escapes.
   let projectRoot: string;

@@ -53,7 +53,8 @@ class FakeEventSource {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource;
+  vi.stubGlobal("EventSource", FakeEventSource);
+  vi.stubGlobal("crypto", { randomUUID: vi.fn(() => "req-own") });
   FakeEventSource.last = null;
   vi.mocked(fetchTerminalPolicy).mockResolvedValue({
     commands: ["ls", "git", "grep"],
@@ -68,7 +69,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  delete (globalThis as { EventSource?: unknown }).EventSource;
+  vi.unstubAllGlobals();
 });
 
 describe("TerminalWidget", () => {
@@ -111,6 +112,7 @@ describe("TerminalWidget", () => {
       projectId: "/proj",
       command: "ls",
       args: ["-la"],
+      requestId: "req-own",
     });
   });
 
@@ -137,23 +139,40 @@ describe("TerminalWidget", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("appends SSE events to the recent events list", async () => {
+  it("appends SSE events to the recent events list in live order", async () => {
     render(<TerminalWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /command/i });
     await waitFor(() => {
       expect(FakeEventSource.last).not.toBeNull();
     });
     FakeEventSource.last?.dispatch(
+      "terminal:execution-started",
+      JSON.stringify({
+        kind: "execution-started",
+        executionId: "e8",
+        payload: {
+          projectId: "/proj",
+          command: "ls",
+          argCount: 0,
+          startedAt: 1700000000000,
+          requestId: "req-1",
+        },
+      }),
+    );
+    FakeEventSource.last?.dispatch(
       "terminal:execution-completed",
       JSON.stringify({
         kind: "execution-completed",
-        executionId: "e9",
-        payload: { exitCode: 0, durationMs: 7 },
+        executionId: "e8",
+        payload: { exitCode: 0, durationMs: 7, requestId: "req-1" },
       }),
     );
     await waitFor(() => {
-      expect(screen.getByText(/completed/)).toBeInTheDocument();
+      expect(screen.getAllByRole("listitem")).toHaveLength(2);
     });
+    const items = screen.getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent(/completed/);
+    expect(items[1]).toHaveTextContent(/started/);
   });
 
   it("closes the EventSource when unmounted", async () => {
@@ -185,13 +204,48 @@ describe("TerminalWidget", () => {
       JSON.stringify({
         kind: "execution-started",
         executionId: "exec-abc",
-        payload: { projectId: "/proj", command: "ls", argCount: 0, startedAt: Date.now() },
+        payload: {
+          projectId: "/proj",
+          command: "ls",
+          argCount: 0,
+          startedAt: Date.now(),
+          requestId: "req-own",
+        },
       }),
     );
     await waitFor(() => expect(screen.getByRole("button", { name: /cancel/i })).not.toBeDisabled());
     // Click Cancel — should call abortTerminalExecution with the captured executionId.
     await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(abortTerminalExecution).toHaveBeenCalledWith("exec-abc");
+  });
+
+  it("ignores foreign SSE execution-started events when deciding whether Cancel should enable", async () => {
+    vi.mocked(createTerminalExecution).mockImplementation(
+      () => new Promise<never>(() => undefined), // never resolves — simulates in-flight
+    );
+    vi.mocked(abortTerminalExecution).mockResolvedValue(undefined);
+    render(<TerminalWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /command/i });
+    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    await userEvent.click(screen.getByRole("button", { name: /run/i }));
+    const cancel = await screen.findByRole("button", { name: /cancel/i });
+    expect(cancel).toBeDisabled();
+    FakeEventSource.last?.dispatch(
+      "terminal:execution-started",
+      JSON.stringify({
+        kind: "execution-started",
+        executionId: "exec-foreign",
+        payload: {
+          projectId: "/other-project",
+          command: "ls",
+          argCount: 0,
+          startedAt: Date.now(),
+          requestId: "req-foreign",
+        },
+      }),
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: /cancel/i })).toBeDisabled());
+    expect(abortTerminalExecution).not.toHaveBeenCalled();
   });
 
   it("Finding 2 — cwd datalist is populated from fetchTerminalDirectories", async () => {

@@ -1066,11 +1066,11 @@ select.dlg-input { appearance: none; cursor: pointer; }
 .tm-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .tm-action[data-primary="true"] { background: var(--accent); color: #1a1e23; border-color: var(--accent); }
 .tm-action[data-primary="true"]:hover:not(:disabled) { filter: brightness(1.06); }
-.tm-limits { font-size: 11px; color: var(--fg-faint); margin: 0; }
+.tm-limits { font-size: 11px; color: var(--fg-dim); margin: 0; }
 /* B1 — tm-error: accessible alert with border using --line-strong (≥ 3:1), danger color */
 .tm-error { display: flex; align-items: flex-start; gap: 8px; padding: 9px 11px; border-radius: var(--radius-sm); background: color-mix(in oklch, var(--danger) 12%, var(--card)); border: 1px solid var(--line-strong); color: var(--fg); font-size: 12.5px; }
 .tm-error-text { flex: 1; }
-.tm-error-dismiss { flex: none; min-height: 24px; min-width: 24px; display: grid; place-items: center; border-radius: 6px; color: var(--fg-faint); }
+.tm-error-dismiss { flex: none; min-height: 24px; min-width: 24px; display: grid; place-items: center; border-radius: 6px; color: var(--fg-dim); }
 .tm-error-dismiss:hover { color: var(--fg); background: var(--card-2); }
 .tm-error-dismiss:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* B1 — tm-result: live region container */
@@ -1091,7 +1091,7 @@ select.dlg-input { appearance: none; cursor: pointer; }
 .tm-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .tm-event { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; font-size: 11.5px; }
 .tm-event:hover { background: var(--card); }
-.tm-event-kind { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-faint); min-width: 72px; }
+.tm-event-kind { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-dim); min-width: 72px; }
 .tm-event-detail { color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* B4 — wrap transitions in prefers-reduced-motion so they don't run for users who opt out */
 @media (prefers-reduced-motion: no-preference) {
