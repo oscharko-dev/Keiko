@@ -141,12 +141,12 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   review: {
     title: "Review",
     icon: "review",
-    desc: "View code diffs",
-    w: 420,
-    h: 320,
+    desc: "Review a proposed diff",
+    w: 520,
+    h: 420,
     config: [
-      { key: "base", label: "Base branch", type: "text", def: "main" },
-      { key: "head", label: "Compare", type: "text", def: "keiko/issue-51" },
+      { key: "runId", label: "Run ID", type: "text", def: "", optional: true,
+        placeholder: "e.g. r-2026-06-01-…" },
     ],
   },
   agents: {
