@@ -398,6 +398,22 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
       this.emit({ kind: "execution-cancelled", executionId, payload: {} });
       return;
     }
+    // ADR-0018 D7: timeout is a "completed with timedOut=true" outcome, not a failure.
+    if (error instanceof CommandTimeoutError) {
+      this.emit({
+        kind: "execution-completed",
+        executionId,
+        payload: {
+          exitCode: null,
+          durationMs: counts.durationMs,
+          truncated: false,
+          timedOut: true,
+          stdoutByteLength: 0,
+          stderrByteLength: 0,
+        },
+      });
+      return;
+    }
     const mapped = this.mapError(error, entry);
     this.emit({
       kind: "execution-failed",

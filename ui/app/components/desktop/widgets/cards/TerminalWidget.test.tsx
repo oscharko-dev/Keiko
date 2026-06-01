@@ -9,6 +9,7 @@ import { ApiError } from "../../../../../lib/api";
 import {
   abortTerminalExecution,
   createTerminalExecution,
+  fetchTerminalDirectories,
   fetchTerminalPolicy,
 } from "../../../../../lib/terminal-api";
 import { TerminalWidget } from "./TerminalWidget";
@@ -57,6 +58,12 @@ beforeEach(() => {
   vi.mocked(fetchTerminalPolicy).mockResolvedValue({
     commands: ["ls", "git", "grep"],
     limits: { maxOutputBytes: 262144, defaultTimeoutMs: 30000 },
+  });
+  vi.mocked(fetchTerminalDirectories).mockResolvedValue({
+    path: "",
+    parent: null,
+    entries: [],
+    roots: [],
   });
 });
 
@@ -158,8 +165,65 @@ describe("TerminalWidget", () => {
     unmount();
     expect(FakeEventSource.last?.closed).toBe(true);
   });
+
+  it("Finding 1 — Cancel becomes enabled after SSE execution-started arrives, triggers abort on click", async () => {
+    vi.mocked(createTerminalExecution).mockImplementation(
+      () => new Promise<never>(() => undefined), // never resolves — simulates in-flight
+    );
+    vi.mocked(abortTerminalExecution).mockResolvedValue(undefined);
+    render(<TerminalWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /command/i });
+    await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
+    // Submit — running becomes true, Cancel appears (disabled until started event).
+    await userEvent.click(screen.getByRole("button", { name: /run/i }));
+    // Cancel is rendered but disabled while waiting for the started event.
+    const cancel = await screen.findByRole("button", { name: /cancel/i });
+    expect(cancel).toBeDisabled();
+    // Dispatch the SSE execution-started event — Cancel should become enabled.
+    FakeEventSource.last?.dispatch(
+      "terminal:execution-started",
+      JSON.stringify({
+        kind: "execution-started",
+        executionId: "exec-abc",
+        payload: { projectId: "/proj", command: "ls", argCount: 0, startedAt: Date.now() },
+      }),
+    );
+    await waitFor(() => expect(screen.getByRole("button", { name: /cancel/i })).not.toBeDisabled());
+    // Click Cancel — should call abortTerminalExecution with the captured executionId.
+    await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(abortTerminalExecution).toHaveBeenCalledWith("exec-abc");
+  });
+
+  it("Finding 2 — cwd datalist is populated from fetchTerminalDirectories", async () => {
+    vi.mocked(fetchTerminalDirectories).mockResolvedValue({
+      path: "/proj",
+      parent: null,
+      entries: [
+        { name: "src", path: "/proj/src" },
+        { name: "tests", path: "/proj/tests" },
+      ],
+      roots: [{ label: "Project root", path: "/proj" }],
+    });
+    render(<TerminalWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /command/i });
+    // Wait for the datalist to be populated.
+    await waitFor(() => {
+      const datalist = document.getElementById("tm-cwd-suggestions");
+      expect(datalist).not.toBeNull();
+      expect(datalist?.querySelectorAll("option")).toHaveLength(2);
+    });
+    const options = document.getElementById("tm-cwd-suggestions")?.querySelectorAll("option");
+    expect(options?.[0]?.value).toBe("/proj/src");
+    expect(options?.[1]?.value).toBe("/proj/tests");
+    // Select an option by updating the cwd input state.
+    const cwdInput = screen.getByLabelText(/working directory/i);
+    await userEvent.clear(cwdInput);
+    await userEvent.type(cwdInput, "/proj/src");
+    expect(cwdInput).toHaveValue("/proj/src");
+  });
 });
 
-// Silence: abortTerminalExecution is exported for future cancel-button coverage; importing it
-// at the top ensures vi.mock receives a stable shape across the module surface.
+// Silence: abortTerminalExecution and fetchTerminalDirectories are imported at the top to ensure
+// vi.mock receives a stable shape across the full module surface.
 void abortTerminalExecution;
+void fetchTerminalDirectories;

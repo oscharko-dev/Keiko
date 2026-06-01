@@ -119,6 +119,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  processKillPatched = false;
   store.close();
   rmSync(workspaceRoot, { recursive: true, force: true });
 });
@@ -230,7 +232,7 @@ describe("TerminalExecutionManager — cancel/timeout/concurrency", () => {
     expect(events.some((e) => e.kind === "execution-cancelled")).toBe(true);
   });
 
-  it("times out per the policy ceiling", async () => {
+  it("times out per the policy ceiling — HTTP throws TIMEOUT, SSE emits execution-completed{timedOut:true} (D7)", async () => {
     const manager = createTerminalExecutionManager({
       store,
       evidenceStore,
@@ -247,9 +249,17 @@ describe("TerminalExecutionManager — cancel/timeout/concurrency", () => {
         resolveExecutable: (command) => command,
       },
     });
+    const events = collect(manager);
     await expect(
       manager.execute({ projectId: workspaceRoot, command: "ls", args: [] }),
     ).rejects.toMatchObject({ code: "TIMEOUT" });
+    // ADR-0018 D7: timeout is "completed with timedOut=true", never "execution-failed".
+    expect(events.map((e) => e.kind)).toEqual(["execution-started", "execution-completed"]);
+    const completed = events.find((e) => e.kind === "execution-completed");
+    const payload = completed?.payload as Record<string, unknown>;
+    expect(payload.timedOut).toBe(true);
+    expect(payload.exitCode).toBeNull();
+    expect(events.some((e) => e.kind === "execution-failed")).toBe(false);
   });
 
   it("rejects when MAX_CONCURRENT_EXECUTIONS is reached (D9 cap of 8)", async () => {

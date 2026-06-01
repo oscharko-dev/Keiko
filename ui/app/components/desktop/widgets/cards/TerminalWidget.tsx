@@ -18,10 +18,12 @@ import { ApiError } from "../../../../../lib/api";
 import {
   abortTerminalExecution,
   createTerminalExecution,
+  fetchTerminalDirectories,
   fetchTerminalPolicy,
   terminalEventsUrl,
 } from "../../../../../lib/terminal-api";
 import type {
+  TerminalDirectoryEntry,
   TerminalEventEnvelope,
   TerminalExecutionResult,
   TerminalPolicySummary,
@@ -91,10 +93,16 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
   const [cwdInput, setCwdInput] = useState<string>(props.cwd ?? "");
   const [projectInput, setProjectInput] = useState<string>(props.projectPath ?? "");
   const [running, setRunning] = useState(false);
+  // inFlightExecutionId is captured from the SSE execution-started event after submit. It is
+  // null until the BFF emits the event (typically <50ms after POST), so Cancel is shown-but-
+  // disabled during that brief window. Cleared on any terminal event that ends the run.
+  const [inFlightExecutionId, setInFlightExecutionId] = useState<string | null>(null);
   const [result, setResult] = useState<TerminalExecutionResult | null>(null);
   const [error, setError] = useState<ErrorState | null>(null);
   const [events, setEvents] = useState<readonly TerminalEventEnvelope[]>([]);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const runningRef = useRef(false);
+  const [cwdSuggestions, setCwdSuggestions] = useState<readonly TerminalDirectoryEntry[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,12 +120,50 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
     };
   }, []);
 
+  // Populate the cwd datalist suggestions from the BFF directory picker. Refetches whenever
+  // the project path or the typed cwd changes. Errors are silently swallowed — suggestions
+  // are a UX aid, not a required control.
+  useEffect(() => {
+    if (projectInput.length === 0) {
+      setCwdSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchTerminalDirectories(projectInput, cwdInput.length > 0 ? cwdInput : undefined)
+      .then((listing) => {
+        if (!cancelled) setCwdSuggestions(listing.entries);
+      })
+      .catch(() => {
+        if (!cancelled) setCwdSuggestions([]);
+      });
+    return (): void => {
+      cancelled = true;
+    };
+  }, [projectInput, cwdInput]);
+
   useEffect(() => {
     const es = new EventSource(terminalEventsUrl());
     eventSourceRef.current = es;
     const onMessage = (ev: MessageEvent<string>): void => {
       try {
         const parsed = JSON.parse(ev.data) as TerminalEventEnvelope;
+        // Capture the executionId for the cancel button from the first execution-started event
+        // after submit. Single-capture is correct because submit is guarded by `if (running) return`
+        // — only one execution can be in flight at a time from this widget instance.
+        if (parsed.kind === "execution-started" && runningRef.current) {
+          setInFlightExecutionId((current) => (current !== null ? current : parsed.executionId));
+        }
+        // Clear the captured id when the run ends so the next submit starts clean.
+        if (
+          parsed.kind === "execution-completed" ||
+          parsed.kind === "execution-failed" ||
+          parsed.kind === "execution-cancelled"
+        ) {
+          setInFlightExecutionId((current) => {
+            if (current === null || current !== parsed.executionId) return current;
+            return null;
+          });
+        }
         setEvents((current) => {
           const next = [parsed, ...current];
           return next.length > MAX_EVENT_LOG ? next.slice(0, MAX_EVENT_LOG) : next;
@@ -146,6 +192,8 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
       if (running) return;
       setError(null);
       setResult(null);
+      setInFlightExecutionId(null);
+      runningRef.current = true;
       setRunning(true);
       try {
         const next = await createTerminalExecution({
@@ -158,21 +206,22 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
       } catch (err: unknown) {
         setError(errorFromUnknown(err));
       } finally {
+        runningRef.current = false;
         setRunning(false);
+        setInFlightExecutionId(null);
       }
     },
     [argsInput, command, cwdInput, projectInput, running],
   );
 
   const onAbort = useCallback(async (): Promise<void> => {
-    const id = result?.executionId;
-    if (id === undefined) return;
+    if (inFlightExecutionId === null) return;
     try {
-      await abortTerminalExecution(id);
+      await abortTerminalExecution(inFlightExecutionId);
     } catch (err: unknown) {
       setError(errorFromUnknown(err));
     }
-  }, [result]);
+  }, [inFlightExecutionId]);
 
   const limits = useMemo(() => policy?.limits ?? null, [policy]);
 
@@ -220,14 +269,25 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
             value={cwdInput}
             onChange={(e) => setCwdInput(e.target.value)}
             placeholder="(project root)"
+            list="tm-cwd-suggestions"
           />
+          <datalist id="tm-cwd-suggestions">
+            {cwdSuggestions.map((entry) => (
+              <option key={entry.path} value={entry.path} />
+            ))}
+          </datalist>
         </label>
         <div className="tm-actions">
           <button type="submit" className="tm-action" disabled={running || policy === null}>
             {running ? "Running…" : "Run"}
           </button>
-          {result !== null && running ? (
-            <button type="button" className="tm-action" onClick={() => void onAbort()}>
+          {running ? (
+            <button
+              type="button"
+              className="tm-action"
+              disabled={inFlightExecutionId === null}
+              onClick={() => void onAbort()}
+            >
               Cancel
             </button>
           ) : null}
