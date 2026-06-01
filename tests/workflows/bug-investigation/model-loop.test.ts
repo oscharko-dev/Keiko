@@ -137,6 +137,80 @@ describe("runBugModelLoop (D6/D10)", () => {
     expect(result.modelCallCount).toBe(2);
   });
 
+  it("does not accept non-diff prose as a proposed fix", async () => {
+    const { fs, workspace } = ws();
+    const model = scriptedModel([
+      response({
+        content: [
+          "```diff",
+          "// `detail` is SENSITIVE and must be redacted before persistence.",
+          "```",
+          "## Root cause",
+          "Sensitive details may leak into persisted evidence.",
+        ].join("\n"),
+      }),
+    ]);
+    const result = await runBugModelLoop(
+      state(model.port, fs, { maxModelCalls: 1, maxRetries: 0 }),
+      workspace,
+      { description: "bug" },
+      evidence,
+      makePack([]),
+    );
+    expect(result.accepted).toBeUndefined();
+    expect(result.investigationOnly).toBeUndefined();
+    expect(result.lastRejectionCode).toBe("malformed");
+  });
+
+  it("accepts a later valid diff candidate from the same model response", async () => {
+    const { fs, workspace } = ws();
+    const invalid = [
+      "```diff",
+      "--- a/src/buggy.ts",
+      "+++ b/src/buggy.ts",
+      "@@ -1 +1 @@",
+      "-export const missing = true;",
+      "+export const missing = false;",
+      "```",
+    ].join("\n");
+    const model = scriptedModel([response({ content: `${invalid}\n\n${FIX}` })]);
+    const result = await runBugModelLoop(
+      state(model.port, fs),
+      workspace,
+      { description: "bug" },
+      evidence,
+      makePack([]),
+    );
+    expect(result.accepted?.diff).toContain("n / 2");
+    expect(result.modelCallCount).toBe(1);
+    expect(result.patchRetryCount).toBe(0);
+  });
+
+  it("rejects a test-only patch for a source-file bug", async () => {
+    const { fs, workspace } = ws();
+    const testOnly = [
+      "```diff",
+      "--- /dev/null",
+      "+++ b/tests/buggy-extra.test.ts",
+      "@@ -0,0 +1,2 @@",
+      "+import { test } from 'vitest';",
+      "+test('documents the bug', () => {});",
+      "```",
+      "## Root cause",
+      "source bug",
+    ].join("\n");
+    const model = scriptedModel([response({ content: testOnly })]);
+    const result = await runBugModelLoop(
+      state(model.port, fs, { maxModelCalls: 1, maxRetries: 0 }),
+      workspace,
+      { description: "bug", targetFiles: ["src/buggy.ts"] },
+      evidence,
+      makePack([]),
+    );
+    expect(result.accepted).toBeUndefined();
+    expect(result.lastRejectionCode).toBe("test-only");
+  });
+
   it("rejects an oversized patch via the tighter change budget", async () => {
     const { fs, workspace } = ws();
     const bigBody = Array.from({ length: 400 }, (_, i) => `+line${String(i)}`).join("\n");
