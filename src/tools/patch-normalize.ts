@@ -1,6 +1,7 @@
-// Best-effort normalization for common LLM unified-diff shorthand. This module only rewrites hunk
-// headers from the hunk body markers (" ", "+", "-"). It does not invent paths or body lines; the
-// normal validate/apply path still performs path containment, deny-list checks, and conflict checks.
+// Best-effort normalization for common LLM unified-diff shorthand. This module rewrites hunk headers
+// from the hunk body markers (" ", "+", "-") and repairs blank context lines that models often emit
+// as an empty line instead of a single-space diff line. It does not invent paths; the normal
+// validate/apply path still performs path containment, deny-list checks, and conflict checks.
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@(.*)$/;
 
@@ -66,6 +67,20 @@ function normalizeHunkHeader(header: string, body: readonly string[]): string {
   )} @@${suffix}`;
 }
 
+function hasBodyLineBefore(lines: readonly string[], index: number): boolean {
+  return lines.slice(0, index).some(isBodyLine);
+}
+
+function hasBodyLineAfter(lines: readonly string[], index: number): boolean {
+  return lines.slice(index + 1).some(isBodyLine);
+}
+
+function normalizeBlankContextLines(lines: readonly string[]): readonly string[] {
+  return lines.map((line, index) =>
+    line === "" && hasBodyLineBefore(lines, index) && hasBodyLineAfter(lines, index) ? " " : line,
+  );
+}
+
 export function normalizeUnifiedDiffHunks(diff: string): string {
   const lines = diff.split("\n");
   const out: string[] = [];
@@ -78,8 +93,9 @@ export function normalizeUnifiedDiffHunks(diff: string): string {
       continue;
     }
     const end = hunkEnd(lines, index + 1);
-    const body = lines.slice(index + 1, end).filter(isBodyLine);
-    out.push(normalizeHunkHeader(line, body), ...lines.slice(index + 1, end));
+    const normalizedLines = normalizeBlankContextLines(lines.slice(index + 1, end));
+    const body = normalizedLines.filter(isBodyLine);
+    out.push(normalizeHunkHeader(line, body), ...normalizedLines);
     index = end;
   }
   return out.join("\n");

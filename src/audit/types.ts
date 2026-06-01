@@ -127,7 +127,7 @@ export interface EvidenceFailure {
   readonly message: string;
 }
 
-export type EvidenceTaskType = TaskType | "browser-capture";
+export type EvidenceTaskType = TaskType | "browser-capture" | "terminal-execution";
 
 export interface EvidenceBrowserViewportPx {
   readonly width: number;

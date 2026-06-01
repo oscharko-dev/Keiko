@@ -47,6 +47,7 @@ class FakeTerminalExecutionManager implements TerminalExecutionManager {
       return Promise.reject(this.opts.executeShouldThrow);
     }
     const executionId = `exec-${String(this.nextId++)}`;
+    const requestId = (input as TerminalExecutionInput & { readonly requestId?: string }).requestId;
     this.emit({
       kind: "execution-started",
       executionId,
@@ -55,6 +56,7 @@ class FakeTerminalExecutionManager implements TerminalExecutionManager {
         command: input.command,
         argCount: input.args.length,
         startedAt: 1700000000000,
+        ...(requestId === undefined ? {} : { requestId }),
       },
     });
     const result: TerminalExecutionResult = this.opts.executeResult ?? {
@@ -76,6 +78,7 @@ class FakeTerminalExecutionManager implements TerminalExecutionManager {
         timedOut: result.timedOut,
         stdoutByteLength: Buffer.byteLength(result.stdout, "utf8"),
         stderrByteLength: Buffer.byteLength(result.stderr, "utf8"),
+        ...(requestId === undefined ? {} : { requestId }),
       },
     });
     return Promise.resolve(result);
@@ -238,6 +241,16 @@ describe("GET /api/terminal/directories", () => {
     expect(body.roots.some((r) => r.label === "Project root")).toBe(true);
   });
 
+  it("fails closed when the registered project root has been deleted instead of falling back to process.cwd()", async () => {
+    await rm(workspaceRoot, { recursive: true, force: true });
+    const res = await fetch(
+      `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}`,
+    );
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("PROJECT_NOT_FOUND");
+  });
+
   it("A3 — returns 403 CWD_OUTSIDE_PROJECT for an absolute path outside the project", async () => {
     const res = await fetch(
       `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent("/etc")}`,
@@ -301,6 +314,21 @@ describe("POST /api/terminal/executions", () => {
     expect(body.exitCode).toBe(0);
     expect(body.stdout).toBe("ok");
     expect(terminal.executed[0]).toMatchObject({ projectId: workspaceRoot, command: "ls" });
+  });
+
+  it("forwards an optional requestId to execute()", async () => {
+    const res = await fetch(`${baseUrl()}/api/terminal/executions`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({
+        projectId: workspaceRoot,
+        command: "ls",
+        args: [],
+        requestId: "req-123",
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(terminal.executed[0]).toMatchObject({ requestId: "req-123" });
   });
 
   it("maps a TerminalToolError thrown by execute() to the right status", async () => {

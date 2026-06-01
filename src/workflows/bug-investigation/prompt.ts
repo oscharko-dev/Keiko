@@ -18,14 +18,17 @@ const REDACTION_LOOKAHEAD_BYTES = 512;
 const OUTPUT_CONTRACT =
   "Respond with an OPTIONAL minimal fix as a unified diff inside a single fenced code block opened " +
   "with ```diff and closed with ```. Touch only what is necessary; you MAY add a regression test " +
-  "in the same diff. After the block, add these prose sections: `## Root cause`, " +
+  "in the same diff. For a source-file bug, the diff MUST include at least one non-test source " +
+  "change; a regression test alone is NOT a fix and will be rejected. After the block, add these prose sections: `## Root cause`, " +
   "`## Regression test`, `## Uncertainty`, `## Confidence` (one of low/medium/high). If the " +
   "evidence is INSUFFICIENT to propose a safe fix, OMIT the diff entirely and explain in " +
   "`## Uncertainty` what additional information is needed — do NOT invent a fix. When you include " +
   "a diff, the first non-empty line inside the fence MUST be `--- a/<path>` or `--- /dev/null`, " +
   "followed by `+++ b/<path>` and at least one `@@` hunk. Do not output `*** Begin Patch`, file " +
   "trees, prose, or escaped newline markers like `\\n+`/`\\n-` inside the diff fence; every diff " +
-  "line must be separated by a real newline.";
+  "line must be separated by a real newline. If you include a diff, it must be the FIRST fenced " +
+  "code block in the response. Do not include code examples, TypeScript snippets, or alternative " +
+  "patches in any other fence; output exactly one diff fence followed by the required prose sections.";
 
 const SCOPE_RULE =
   "The fix must be minimal and must NOT modify CI configuration (.github/), git hooks (.husky/), " +

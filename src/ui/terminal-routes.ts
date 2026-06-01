@@ -183,12 +183,14 @@ export async function handleCreateTerminalExecution(
     const args = requireStringArray(body, "args");
     const cwd = optionalString(body, "cwd");
     const timeoutMs = optionalNumber(body, "timeoutMs");
+    const requestId = optionalString(body, "requestId");
     const input: TerminalExecutionInput = {
       projectId,
       command,
       args,
       ...(cwd === undefined ? {} : { cwd }),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
+      ...(requestId === undefined ? {} : { requestId }),
     };
     const raw = await guard.execute(input);
     // A4 (M3) — Layer-2 redaction on the synchronous POST response body. runCommand already

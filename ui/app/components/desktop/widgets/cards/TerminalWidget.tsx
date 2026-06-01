@@ -56,6 +56,11 @@ function parseArgs(input: string): readonly string[] {
   return trimmed.split(/\s+/);
 }
 
+function createRequestId(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `terminal-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 function eventLabel(kind: TerminalEventEnvelope["kind"]): string {
   switch (kind) {
     case "execution-started":
@@ -94,14 +99,15 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
   const [projectInput, setProjectInput] = useState<string>(props.projectPath ?? "");
   const [running, setRunning] = useState(false);
   // inFlightExecutionId is captured from the SSE execution-started event after submit. It is
-  // null until the BFF emits the event (typically <50ms after POST), so Cancel is shown-but-
-  // disabled during that brief window. Cleared on any terminal event that ends the run.
+  // only armed when the event matches the active submission snapshot. A foreign SSE event is
+  // ignored, which keeps Cancel unavailable unless this widget can prove ownership.
   const [inFlightExecutionId, setInFlightExecutionId] = useState<string | null>(null);
   const [result, setResult] = useState<TerminalExecutionResult | null>(null);
   const [error, setError] = useState<ErrorState | null>(null);
   const [events, setEvents] = useState<readonly TerminalEventEnvelope[]>([]);
   const eventSourceRef = useRef<EventSource | null>(null);
   const runningRef = useRef(false);
+  const pendingRequestIdRef = useRef<string | null>(null);
   const [cwdSuggestions, setCwdSuggestions] = useState<readonly TerminalDirectoryEntry[]>([]);
 
   useEffect(() => {
@@ -147,11 +153,16 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
     const onMessage = (ev: MessageEvent<string>): void => {
       try {
         const parsed = JSON.parse(ev.data) as TerminalEventEnvelope;
-        // Capture the executionId for the cancel button from the first execution-started event
-        // after submit. Single-capture is correct because submit is guarded by `if (running) return`
-        // — only one execution can be in flight at a time from this widget instance.
+        // Only arm Cancel for the execution that echoes the current requestId.
+        // The SSE channel is global, so an unrelated execution-started event must be ignored.
         if (parsed.kind === "execution-started" && runningRef.current) {
-          setInFlightExecutionId((current) => (current !== null ? current : parsed.executionId));
+          const payload = parsed.payload;
+          const requestMatches =
+            typeof payload.requestId === "string" &&
+            payload.requestId === pendingRequestIdRef.current;
+          if (requestMatches) {
+            setInFlightExecutionId((current) => (current !== null ? current : parsed.executionId));
+          }
         }
         // Clear the captured id when the run ends so the next submit starts clean.
         if (
@@ -159,10 +170,16 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
           parsed.kind === "execution-failed" ||
           parsed.kind === "execution-cancelled"
         ) {
-          setInFlightExecutionId((current) => {
-            if (current === null || current !== parsed.executionId) return current;
-            return null;
-          });
+          const payload = parsed.payload;
+          const requestMatches =
+            typeof payload.requestId === "string" &&
+            payload.requestId === pendingRequestIdRef.current;
+          if (requestMatches) {
+            setInFlightExecutionId((current) => {
+              if (current === null || current !== parsed.executionId) return current;
+              return null;
+            });
+          }
         }
         setEvents((current) => {
           const next = [parsed, ...current];
@@ -193,21 +210,27 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
       setError(null);
       setResult(null);
       setInFlightExecutionId(null);
+      const requestId = createRequestId();
+      pendingRequestIdRef.current = requestId;
+      const parsedArgs = parseArgs(argsInput);
       runningRef.current = true;
       setRunning(true);
       try {
-        const next = await createTerminalExecution({
+        const executionInput: Parameters<typeof createTerminalExecution>[0] = {
           projectId: projectInput,
           command,
-          args: parseArgs(argsInput),
+          args: parsedArgs,
           ...(cwdInput.length > 0 ? { cwd: cwdInput } : {}),
-        });
+          requestId,
+        };
+        const next = await createTerminalExecution(executionInput);
         setResult(next);
       } catch (err: unknown) {
         setError(errorFromUnknown(err));
       } finally {
         runningRef.current = false;
         setRunning(false);
+        pendingRequestIdRef.current = null;
         setInFlightExecutionId(null);
       }
     },
@@ -336,7 +359,14 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
         </div>
       ) : null}
 
-      <ul className="tm-events" aria-label="Recent terminal events">
+      <ul
+        className="tm-events"
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions text"
+        aria-atomic="false"
+        aria-label="Recent terminal events"
+      >
         {events.map((event, idx) => (
           <li key={`${event.executionId}-${String(idx)}-${event.kind}`} className="tm-event">
             <span className="tm-event-kind">{eventLabel(event.kind)}</span>

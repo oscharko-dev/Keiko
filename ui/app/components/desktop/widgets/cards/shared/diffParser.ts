@@ -138,6 +138,48 @@ export function parseUnifiedDiff(raw: string): DiffParseResult {
       continue;
     }
 
+    // Hunk content lines must be recognized before ---/+++ file headers: valid
+    // added or deleted source text can begin with those header-like prefixes.
+    if (currentHunk !== null) {
+      if (line.startsWith("+")) {
+        const dl: DiffLine = { kind: "add", oldLine: null, newLine: newLine, text: line.slice(1) };
+        currentHunk.lines.push(dl);
+        if (current !== null) current.addedLines++;
+        newLine++;
+        i++;
+        continue;
+      }
+      if (line.startsWith("-")) {
+        const dl: DiffLine = { kind: "del", oldLine: oldLine, newLine: null, text: line.slice(1) };
+        currentHunk.lines.push(dl);
+        if (current !== null) current.removedLines++;
+        oldLine++;
+        i++;
+        continue;
+      }
+      if (line.startsWith("\\ ")) {
+        // "\ No newline at end of file"
+        const dl: DiffLine = { kind: "meta", oldLine: null, newLine: null, text: line };
+        currentHunk.lines.push(dl);
+        i++;
+        continue;
+      }
+      // Context line (space prefix) or empty line within hunk
+      if (line.startsWith(" ") || line === "") {
+        const dl: DiffLine = {
+          kind: "ctx",
+          oldLine: oldLine,
+          newLine: newLine,
+          text: line.startsWith(" ") ? line.slice(1) : line,
+        };
+        currentHunk.lines.push(dl);
+        oldLine++;
+        newLine++;
+        i++;
+        continue;
+      }
+    }
+
     // --- a/path line (may start a file when no diff --git header)
     if (line.startsWith("--- ")) {
       const rest = line.slice(4);
@@ -182,47 +224,6 @@ export function parseUnifiedDiff(raw: string): DiffParseResult {
       currentHunk = { header: line, lines: [] };
       i++;
       continue;
-    }
-
-    // Hunk content lines
-    if (currentHunk !== null) {
-      if (line.startsWith("+")) {
-        const dl: DiffLine = { kind: "add", oldLine: null, newLine: newLine, text: line.slice(1) };
-        currentHunk.lines.push(dl);
-        if (current !== null) current.addedLines++;
-        newLine++;
-        i++;
-        continue;
-      }
-      if (line.startsWith("-")) {
-        const dl: DiffLine = { kind: "del", oldLine: oldLine, newLine: null, text: line.slice(1) };
-        currentHunk.lines.push(dl);
-        if (current !== null) current.removedLines++;
-        oldLine++;
-        i++;
-        continue;
-      }
-      if (line.startsWith("\\ ")) {
-        // "\ No newline at end of file"
-        const dl: DiffLine = { kind: "meta", oldLine: null, newLine: null, text: line };
-        currentHunk.lines.push(dl);
-        i++;
-        continue;
-      }
-      // Context line (space prefix) or empty line within hunk
-      if (line.startsWith(" ") || line === "") {
-        const dl: DiffLine = {
-          kind: "ctx",
-          oldLine: oldLine,
-          newLine: newLine,
-          text: line.startsWith(" ") ? line.slice(1) : line,
-        };
-        currentHunk.lines.push(dl);
-        oldLine++;
-        newLine++;
-        i++;
-        continue;
-      }
     }
 
     i++;
