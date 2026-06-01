@@ -4,8 +4,13 @@
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtemp, readFile, rm, realpath } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { loadEvidence } from "../../../src/audit/index-api.js";
+import { createInMemoryEvidenceStore } from "../../../src/audit/store.js";
+import type { EvidenceBrowserCapture, EvidenceManifest } from "../../../src/audit/types.js";
 import {
   createBrowserSessionManager,
   type BrowserEventEnvelope,
@@ -26,6 +31,7 @@ class FakeCdpClient {
   public readonly calls: RecordedCall[] = [];
   public closed = false;
   private listeners = new Set<CdpEventListener>();
+  private closeListeners = new Set<(reason: string) => void>();
   private responder: Responder;
   public readonly url: string;
 
@@ -55,18 +61,34 @@ class FakeCdpClient {
     };
   }
 
+  public onClose(listener: (reason: string) => void): () => void {
+    this.closeListeners.add(listener);
+    return (): void => {
+      this.closeListeners.delete(listener);
+    };
+  }
+
   public close(): void {
-    this.closed = true;
+    this.emitClosed("explicit");
   }
 
   public isClosed(): boolean {
     return this.closed;
   }
 
-  public emitFrameNavigated(url: string): void {
+  public emitFrameNavigated(url: string, parentId?: string): void {
     for (const listener of [...this.listeners]) {
-      listener({ method: "Page.frameNavigated", params: { frame: { url } } });
+      listener({
+        method: "Page.frameNavigated",
+        params: { frame: { url, ...(parentId === undefined ? {} : { parentId }) } },
+      });
     }
+  }
+
+  public emitClosed(reason = "chrome-disconnected"): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const listener of [...this.closeListeners]) listener(reason);
   }
 }
 
@@ -74,6 +96,7 @@ interface ManagerFixture {
   readonly manager: BrowserSessionManager;
   readonly client: FakeCdpClient;
   readonly evidenceDir: string;
+  readonly evidenceStore: ReturnType<typeof createInMemoryEvidenceStore>;
   readonly events: BrowserEventEnvelope[];
   readonly subscribe: (sessionId: string) => () => void;
 }
@@ -106,24 +129,30 @@ async function makeFixture(overrides?: {
   readonly responder?: Responder;
   readonly redactor?: (v: unknown) => unknown;
   readonly fetchVersion?: (url: string) => Promise<unknown>;
+  readonly useRealFetchVersion?: boolean;
 }): Promise<ManagerFixture> {
   const evidenceDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-browser-")));
+  const evidenceStore = createInMemoryEvidenceStore();
   let captured: FakeCdpClient | undefined;
   const events: BrowserEventEnvelope[] = [];
+  const stubFetchVersion = (): Promise<unknown> =>
+    Promise.resolve({
+      webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/xyz",
+      "User-Agent": "Chrome/130.0",
+      Browser: "Chrome/130.0",
+    });
+  const fetchVersion =
+    overrides?.useRealFetchVersion === true
+      ? undefined
+      : (overrides?.fetchVersion ?? stubFetchVersion);
   const manager = createBrowserSessionManager({
     evidenceDir,
+    evidenceStore,
     redactor:
       overrides?.redactor ??
       ((value: unknown): unknown =>
         typeof value === "string" ? value.replace(/secret=[^<]+/g, "secret=***") : value),
-    fetchVersion:
-      overrides?.fetchVersion ??
-      ((): Promise<unknown> =>
-        Promise.resolve({
-          webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/xyz",
-          "User-Agent": "Chrome/130.0",
-          Browser: "Chrome/130.0",
-        })),
+    ...(fetchVersion === undefined ? {} : { fetchVersion }),
     cdpClientFactory: (
       url: string,
       _opts: CdpClientOptions,
@@ -143,6 +172,7 @@ async function makeFixture(overrides?: {
       return captured;
     },
     evidenceDir,
+    evidenceStore,
     events,
     subscribe: (sessionId: string): (() => void) =>
       manager.subscribe(sessionId, (event) => {
@@ -171,6 +201,35 @@ async function withFixture(overrides?: Parameters<typeof makeFixture>[0]): Promi
   return fixture;
 }
 
+async function listenHttp(server: Server): Promise<number> {
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  return (server.address() as AddressInfo).port;
+}
+
+async function closeHttp(server: Server): Promise<void> {
+  await new Promise<void>((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+  });
+}
+
+function runIdFromSession(sessionId: string): string {
+  return sessionId.replace(/-/g, "");
+}
+
+function requireBrowserManifest(
+  fixture: ManagerFixture,
+  sessionId: string,
+): { manifest: EvidenceManifest; browser: EvidenceBrowserCapture } {
+  const manifest = loadEvidence(fixture.evidenceStore, runIdFromSession(sessionId));
+  if (manifest === undefined) throw new Error("expected browser evidence manifest");
+  if (manifest.browser === undefined) throw new Error("expected browser manifest section");
+  return { manifest, browser: manifest.browser };
+}
+
 describe("openSession", () => {
   it("opens, creates a fresh target, attaches, and emits session-opened", async () => {
     const fixture = await withFixture();
@@ -185,6 +244,19 @@ describe("openSession", () => {
     // about:blank only — never an existing target
     const created = fixture.client.calls.find((c) => c.method === "Target.createTarget");
     expect(created?.params).toMatchObject({ url: "about:blank" });
+  });
+
+  it("records a trust warning when Chrome profile metadata is unavailable", async () => {
+    const fixture = await withFixture();
+    const meta = await fixture.manager.openSession(9222);
+    const manifest = loadEvidence(fixture.evidenceStore, runIdFromSession(meta.sessionId));
+    expect(
+      manifest?.browser?.events.some(
+        (event) =>
+          event.type === "browser:trust-warning" &&
+          event.warning?.includes("--user-data-dir") === true,
+      ),
+    ).toBe(true);
   });
 
   it("rejects opening more than 4 concurrent sessions", async () => {
@@ -235,6 +307,33 @@ describe("navigate origin re-check", () => {
     expect(fixture.manager.counterAccessor().navigations).toBe(0);
     // an error event must have been emitted before the rejection
     expect(fixture.events.some((e) => e.kind === "error")).toBe(true);
+  });
+
+  it("rejects loopback redirects to a different port than the requested origin", async () => {
+    const fixture = await withFixture();
+    const meta = await fixture.manager.openSession(9222);
+    fixture.subscribe(meta.sessionId);
+    setTimeout(() => {
+      fixture.client.emitFrameNavigated("http://127.0.0.1:8501/");
+    }, 5);
+    await expect(
+      fixture.manager.navigate(meta.sessionId, "http://127.0.0.1:5173/"),
+    ).rejects.toMatchObject({ code: "ORIGIN_NOT_ALLOWED" });
+    expect(fixture.client.calls.some((c) => c.method === "Page.stopLoading")).toBe(true);
+    expect(fixture.manager.counterAccessor().navigations).toBe(0);
+  });
+
+  it("ignores subframe drift and accepts the main frame on the requested origin", async () => {
+    const fixture = await withFixture();
+    const meta = await fixture.manager.openSession(9222);
+    fixture.subscribe(meta.sessionId);
+    setTimeout(() => {
+      fixture.client.emitFrameNavigated("http://evil.example/frame", "SUBFRAME-1");
+      fixture.client.emitFrameNavigated("http://127.0.0.1:5173/");
+    }, 5);
+    const result = await fixture.manager.navigate(meta.sessionId, "http://127.0.0.1:5173/");
+    expect(result.originOnly).toBe("http://127.0.0.1:5173");
+    expect(fixture.client.calls.some((c) => c.method === "Page.stopLoading")).toBe(false);
   });
 
   it("rejects screenshot when no allowed origin is established", async () => {
@@ -387,6 +486,104 @@ describe("content redaction", () => {
     expect(result.redactedHtml).not.toContain("hunter2");
     expect(result.byteLength).toBeGreaterThan(0);
   });
+
+  it("enforces the content size cap after redaction", async () => {
+    const fixture = await withFixture({
+      responder: (call): unknown => {
+        if (call.method === "DOM.getOuterHTML") return { outerHTML: "<html>x</html>" };
+        return defaultResponder(call);
+      },
+      redactor: (value: unknown): unknown =>
+        typeof value === "string" ? "x".repeat(2 * 1024 * 1024 + 1) : value,
+    });
+    const meta = await fixture.manager.openSession(9222);
+    fixture.subscribe(meta.sessionId);
+    setTimeout(() => {
+      fixture.client.emitFrameNavigated("http://127.0.0.1:5173/");
+    }, 5);
+    await fixture.manager.navigate(meta.sessionId, "http://127.0.0.1:5173/");
+    await expect(fixture.manager.content(meta.sessionId)).rejects.toMatchObject({
+      code: "CONTENT_TOO_LARGE",
+    });
+  });
+});
+
+describe("browser evidence manifest", () => {
+  async function navigated(): Promise<{ fixture: ManagerFixture; sessionId: string }> {
+    const fixture = await withFixture();
+    const meta = await fixture.manager.openSession(9222);
+    fixture.subscribe(meta.sessionId);
+    setTimeout(() => {
+      fixture.client.emitFrameNavigated("http://127.0.0.1:5173/");
+    }, 5);
+    await fixture.manager.navigate(meta.sessionId, "http://127.0.0.1:5173/");
+    return { fixture, sessionId: meta.sessionId };
+  }
+
+  function expectPersistedScreenshotEvidence(
+    browser: EvidenceBrowserCapture,
+    captureSeq: number,
+  ): void {
+    const screenshot = browser.screenshots?.[0];
+    if (screenshot === undefined) throw new Error("expected screenshot evidence");
+    expect(screenshot).toMatchObject({
+      seq: captureSeq,
+      path: "browser-1.png",
+      bytes: SCREENSHOT_BYTES.length,
+    });
+    const dryRunEvent = browser.events.find(
+      (event) =>
+        event.type === "browser:screenshot-captured" &&
+        event.captureSeq === captureSeq &&
+        event.persisted === false,
+    );
+    expect(screenshot.capturedAt).toBe(dryRunEvent?.ts);
+    expect(screenshot.sha256).toHaveLength(64);
+  }
+
+  function expectCapturedContentEvidence(browser: EvidenceBrowserCapture): void {
+    const content = browser.contentCaptures?.[0];
+    if (content === undefined) throw new Error("expected content capture evidence");
+    expect(content.redactedHtml).toContain("secret=***");
+    expect(content.redactedHtml).not.toContain("hunter2");
+  }
+
+  function expectBrowserEventTypes(browser: EvidenceBrowserCapture): void {
+    expect(browser.events.map((event) => event.type)).toEqual(
+      expect.arrayContaining([
+        "browser:session-opened",
+        "browser:navigated",
+        "browser:screenshot-captured",
+        "browser:page-content-captured",
+      ]),
+    );
+  }
+
+  it("persists screenshots, content captures, and audit-shaped browser events", async () => {
+    const { fixture, sessionId } = await navigated();
+    const dry = await fixture.manager.screenshot(sessionId);
+    await fixture.manager.applyScreenshot(sessionId, dry.seq);
+    await fixture.manager.content(sessionId);
+    const { manifest, browser } = requireBrowserManifest(fixture, sessionId);
+    expect(manifest.run.taskType).toBe("browser-capture");
+    expect(browser.sessionId).toBe(sessionId);
+    expectPersistedScreenshotEvidence(browser, dry.seq);
+    expectCapturedContentEvidence(browser);
+    expectBrowserEventTypes(browser);
+  });
+
+  it("persists browser:error events for failed session actions", async () => {
+    const { fixture, sessionId } = await navigated();
+    await expect(fixture.manager.applyScreenshot(sessionId, 999)).rejects.toMatchObject({
+      code: "NO_PENDING_SCREENSHOT",
+    });
+    const manifest = loadEvidence(fixture.evidenceStore, runIdFromSession(sessionId));
+    expect(
+      manifest?.browser?.events.some(
+        (event) => event.type === "browser:error" && event.code === "NO_PENDING_SCREENSHOT",
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("closeSession + dispose", () => {
@@ -411,6 +608,16 @@ describe("closeSession + dispose", () => {
     await fixture.manager.openSession(9222);
     await fixture.manager.dispose();
     expect(fixture.manager.listSessionIds()).toHaveLength(0);
+  });
+
+  it("cleans up the session and emits session-closed when Chrome disconnects", async () => {
+    const fixture = await withFixture();
+    const meta = await fixture.manager.openSession(9222);
+    fixture.subscribe(meta.sessionId);
+    fixture.client.emitClosed("chrome-disconnected");
+    expect(fixture.manager.listSessionIds()).toHaveLength(0);
+    const closeEvent = fixture.events.find((event) => event.kind === "session-closed");
+    expect(closeEvent?.payload.reason).toBe("chrome-disconnected");
   });
 });
 
@@ -463,6 +670,35 @@ describe("webSocketDebuggerUrl host validation (H1)", () => {
       code: "CDP_TRANSPORT_REFUSED",
     });
   });
+
+  it("does not follow redirects from the CDP /json/version endpoint", async () => {
+    let targetHits = 0;
+    const target = createServer((_req, res) => {
+      targetHits += 1;
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        JSON.stringify({
+          webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/redirected",
+        }),
+      );
+    });
+    const targetPort = await listenHttp(target);
+    const redirect = createServer((_req, res) => {
+      res.writeHead(302, { location: `http://127.0.0.1:${String(targetPort)}/json/version` });
+      res.end();
+    });
+    const redirectPort = await listenHttp(redirect);
+    try {
+      const fixture = await withFixture({ useRealFetchVersion: true });
+      await expect(fixture.manager.openSession(redirectPort)).rejects.toMatchObject({
+        code: "CDP_TRANSPORT_REFUSED",
+      });
+      expect(targetHits).toBe(0);
+    } finally {
+      await closeHttp(redirect);
+      await closeHttp(target);
+    }
+  });
 });
 
 describe("pending screenshot cap (M1)", () => {
@@ -477,18 +713,16 @@ describe("pending screenshot cap (M1)", () => {
     return { fixture, sessionId: meta.sessionId };
   }
 
-  it("caps pendingScreenshots at 4 and evicts the oldest entry on the 5th", async () => {
+  it("caps pendingScreenshots at 1 and evicts the oldest entry on the 2nd", async () => {
     const { fixture, sessionId } = await navigatedForCap();
-    // Take 5 screenshots — the 5th triggers eviction of seq=1.
-    for (let i = 0; i < 5; i += 1) {
-      await fixture.manager.screenshot(sessionId);
-    }
+    await fixture.manager.screenshot(sessionId);
+    await fixture.manager.screenshot(sessionId);
     // seq=1 must have been evicted.
     await expect(fixture.manager.applyScreenshot(sessionId, 1)).rejects.toMatchObject({
       code: "NO_PENDING_SCREENSHOT",
     });
-    // seq=5 (most recent, still in map) must still be present.
-    const applied = await fixture.manager.applyScreenshot(sessionId, 5);
+    // seq=2 (most recent, still in map) must still be present.
+    const applied = await fixture.manager.applyScreenshot(sessionId, 2);
     expect(applied.persisted).toBe(true);
   });
 });

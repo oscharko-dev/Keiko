@@ -49,6 +49,50 @@ describe("listEvidence", () => {
   it("returns an empty list for an empty store", () => {
     expect(listEvidence(createInMemoryEvidenceStore())).toEqual([]);
   });
+
+  it("lists additive browser capture manifests", () => {
+    const store = createInMemoryEvidenceStore();
+    store.put(
+      "browser-run",
+      JSON.stringify({
+        ...manifestFixture("browser-run", 300),
+        run: {
+          ...manifestFixture("browser-run", 300).run,
+          taskType: "browser-capture",
+        },
+        model: { modelId: "browser-tool", costClass: "unknown" },
+        usageTotals: {
+          promptTokens: 0,
+          completionTokens: 0,
+          requestCount: 0,
+          totalLatencyMs: 0,
+        },
+        browser: {
+          sessionId: "session-1",
+          cdpPort: 9222,
+          targetId: "TARGET-1",
+          status: "closed",
+          startedAt: 300,
+          closedAt: 310,
+          closeReason: "explicit",
+          events: [
+            {
+              schemaVersion: "1",
+              type: "browser:session-opened",
+              sessionId: "session-1",
+              seq: 1,
+              ts: 300,
+            },
+          ],
+        },
+      } satisfies EvidenceManifest),
+    );
+    expect(listEvidence(store)[0]).toMatchObject({
+      runId: "browser-run",
+      taskType: "browser-capture",
+      modelId: "browser-tool",
+    });
+  });
 });
 
 describe("loadEvidence", () => {

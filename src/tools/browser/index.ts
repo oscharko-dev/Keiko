@@ -8,7 +8,12 @@ export {
   type BrowserErrorCode,
 } from "./errors.js";
 
-export { isLoopbackHost, isLoopbackUrl, normalizeCdpPort, normalizeNavigateUrl } from "./validators.js";
+export {
+  isLoopbackHost,
+  isLoopbackUrl,
+  normalizeCdpPort,
+  normalizeNavigateUrl,
+} from "./validators.js";
 
 export type {
   BrowserContentResult,
@@ -26,6 +31,7 @@ export type {
 export {
   CdpClient,
   PERMITTED_CDP_METHODS,
+  type CdpCloseListener,
   type CdpClientOptions,
   type CdpEventListener,
 } from "./cdp-client.js";

@@ -325,7 +325,11 @@ export interface RunFailedEvent extends BaseEvent {
 // (never path/query/fragment) so a URL with a token in its querystring never appears in the event
 // stream.
 
-export type BrowserSessionCloseReason = "explicit" | "process-exit" | "chrome-disconnected";
+export type BrowserSessionCloseReason =
+  | "explicit"
+  | "process-exit"
+  | "chrome-disconnected"
+  | "idle-timeout";
 
 export interface BrowserSessionOpenedEvent extends BaseEvent {
   readonly type: "browser:session-opened";

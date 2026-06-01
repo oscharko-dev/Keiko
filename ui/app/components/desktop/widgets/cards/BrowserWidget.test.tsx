@@ -78,9 +78,17 @@ const sessionMeta = {
 describe("BrowserWidget", () => {
   it("renders the URL and port inputs with accessible labels", () => {
     render(<BrowserWidget />);
-    expect(screen.getByLabelText(/CDP port/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Loopback URL to navigate/i)).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Port" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "URL" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Apply$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Open session/i })).toBeEnabled();
+  });
+
+  it("keeps the visible labels in the accessible names for label-in-name compliance", () => {
+    render(<BrowserWidget />);
+    expect(screen.getByRole("textbox", { name: "Port" })).toHaveAccessibleName("Port");
+    expect(screen.getByRole("textbox", { name: "URL" })).toHaveAccessibleName("URL");
+    expect(screen.getByRole("button", { name: /^Apply$/i })).toHaveAccessibleName("Apply");
   });
 
   it("opens a session, then enables Navigate / Screenshot / Close buttons", async () => {
@@ -164,7 +172,7 @@ describe("BrowserWidget", () => {
       expect(screen.getByRole("button", { name: /^Screenshot$/i })).toBeEnabled();
     });
     await userEvent.click(screen.getByRole("button", { name: /^Screenshot$/i }));
-    const applyButton = await screen.findByRole("button", { name: /Persist pending screenshot/i });
+    const applyButton = await screen.findByRole("button", { name: /^Apply$/i });
     await waitFor(() => {
       expect(applyButton).toBeEnabled();
     });
@@ -208,6 +216,52 @@ describe("BrowserWidget", () => {
     const log = document.querySelector(".bw-log");
     expect(log).toHaveAttribute("aria-live", "polite");
     expect(log).toHaveAttribute("aria-atomic", "false");
+  });
+
+  it("keeps the contrast-sensitive widget class hooks in the rendered markup", async () => {
+    vi.mocked(fetchBrowserStatus).mockResolvedValueOnce({
+      reachable: true,
+      userAgent: "Chrome/130",
+      browserVersion: "Chrome/130",
+      webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/xyz",
+    });
+    vi.mocked(createBrowserSession).mockResolvedValueOnce(sessionMeta);
+    render(<BrowserWidget />);
+    expect(document.querySelector(".bw-field-label")).toBeInTheDocument();
+    expect(document.querySelector(".bw-overlay")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Close$/i })).toHaveClass("bw-btn-danger");
+
+    await userEvent.click(screen.getByRole("button", { name: /^Check$/i }));
+    await waitFor(() => {
+      expect(screen.getByText(/Reachable: yes/)).toBeInTheDocument();
+    });
+    const status = screen.getByText(/Reachable: yes/).closest(".bw-status");
+    expect(status).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /Open session/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^Navigate$/i })).toBeEnabled();
+    });
+    expect(FakeEventSource.last).not.toBeNull();
+    act(() => {
+      FakeEventSource.last?.dispatch(
+        "browser:navigated",
+        JSON.stringify({
+          kind: "navigated",
+          sessionId: "session-1",
+          payload: { originOnly: "http://127.0.0.1:5173", httpStatus: 200 },
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(document.querySelector(".bw-status")).toHaveTextContent(
+        /http:\/\/127\.0\.0\.1:5173/,
+      );
+    });
+    const logItem = document.querySelector(".bw-log-item");
+    const logKind = document.querySelector(".bw-log-kind");
+    expect(logItem).toBeInTheDocument();
+    expect(logKind).toBeInTheDocument();
   });
 
   it("invokes content capture", async () => {
