@@ -11,16 +11,19 @@ const REQUIRED_IDS = [
   "Qwen/Qwen3-Coder-Next-FP8",
   "Devstral-2-123B-Instruct-2512",
   "gpt-oss-120b",
+  "mistral-large-3",
+  "llama-4-maverick-vision",
   "Mistral-Small-3.1-24B-Instruct-2503",
   "Qwen2.5-Coder-7B-Instruct",
   "gemma-4-31b-it",
   "dotsocr",
   "multilingual-e5-large Embedding",
+  "text-embedding-3-large",
 ] as const;
 
 describe("capability registry", () => {
-  it("registers exactly the nine required models", () => {
-    expect(CAPABILITY_REGISTRY).toHaveLength(9);
+  it("registers exactly the required models", () => {
+    expect(CAPABILITY_REGISTRY).toHaveLength(REQUIRED_IDS.length);
     for (const id of REQUIRED_IDS) {
       expect(CAPABILITY_REGISTRY.some((c) => c.id === id)).toBe(true);
     }
@@ -40,6 +43,7 @@ describe("capability registry", () => {
   it("declares the documented modality for the non-chat models", () => {
     expect(findCapability("dotsocr")?.kind).toBe("ocr-vision");
     expect(findCapability("multilingual-e5-large Embedding")?.kind).toBe("embedding");
+    expect(findCapability("text-embedding-3-large")?.kind).toBe("embedding");
   });
 });
 

@@ -1,7 +1,7 @@
-// Raw capability registry data for the nine Wave 1 models. All numeric and class
-// values are documented assumptions based on public model cards and provider
-// documentation as of 2026-05-28; [assumption] marks figures the customer may
-// override via config when authoritative deployment numbers are available.
+// Raw capability registry data for the Wave 1 model portfolio plus locally deployed Azure models.
+// All numeric and class values are documented assumptions based on public model cards and provider
+// documentation as of 2026-05-28 unless the entry names a live Azure deployment; [assumption] marks
+// figures the customer may override via config when authoritative deployment numbers are available.
 
 import type { ModelCapability } from "./types.js";
 
@@ -66,6 +66,39 @@ export const CAPABILITY_DATA: readonly ModelCapability[] = [
     preferredUseCases: ["General-purpose coding", "Code review", "Explanation"],
     knownLimitations: [
       "Customer-hosted OSS model; endpoint reliability depends on customer infrastructure",
+    ],
+  },
+  {
+    id: "mistral-large-3",
+    kind: "chat",
+    contextWindow: 128_000, // Azure deployment Mistral-Large-3, Swedish Central.
+    maxOutputTokens: 8_192, // [assumption]
+    toolCalling: true,
+    structuredOutput: true, // [assumption]
+    streaming: true,
+    costClass: "high",
+    latencyClass: "standard",
+    throughputHint: "20 RPM / 20k TPM on current Visual Studio subscription quota",
+    preferredUseCases: ["Alternative coding agent", "Large-context explanation", "Review"],
+    knownLimitations: [
+      "Current subscription quota caps this deployment at 20 capacity units without quota increase",
+    ],
+  },
+  {
+    id: "llama-4-maverick-vision",
+    kind: "chat",
+    contextWindow: 128_000, // Azure deployment Llama-4-Maverick-17B-128E-Instruct-FP8.
+    maxOutputTokens: 8_192, // [assumption]
+    toolCalling: true,
+    structuredOutput: false, // [assumption]
+    streaming: true,
+    costClass: "high",
+    latencyClass: "standard",
+    throughputHint: "20 RPM / 20k TPM on current Visual Studio subscription quota",
+    preferredUseCases: ["Alternative agent model", "Vision-capable review path", "Explanation"],
+    knownLimitations: [
+      "Current subscription quota caps this deployment at 20 capacity units without quota increase",
+      "Structured output reliability must be verified before routing patch-producing workflows",
     ],
   },
   {
@@ -155,5 +188,19 @@ export const CAPABILITY_DATA: readonly ModelCapability[] = [
       "Similarity ranking across multilingual content",
     ],
     knownLimitations: ["Max 512 tokens per input; callEmbedding method is Wave 2"],
+  },
+  {
+    id: "text-embedding-3-large",
+    kind: "embedding",
+    contextWindow: 8_191, // Azure OpenAI embedding deployment.
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "120 requests / 10s and 120k TPM on current deployment",
+    preferredUseCases: ["Semantic search", "RAG retrieval", "Similarity ranking"],
+    knownLimitations: ["Embedding-only model; chat-completions adapter does not apply"],
   },
 ];

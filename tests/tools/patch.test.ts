@@ -109,6 +109,13 @@ describe("validatePatch — rejections", () => {
     expect(v.reasons.map((r) => r.code)).toContain("malformed");
   });
 
+  it("rejects non-diff text that does not change any file", () => {
+    const v = validatePatch(info, "// no unified diff here");
+    expect(v.ok).toBe(false);
+    expect(v.files).toHaveLength(0);
+    expect(v.reasons.map((r) => r.code)).toContain("malformed");
+  });
+
   it("rejects escaped newline artifacts inside diff body lines", () => {
     const diff = "--- /dev/null\n+++ b/tests/x.test.js\n@@\n+it('x', () => {\\n+  expect(1).toBe(1);\\n+});\n";
     const v = validatePatch(info, diff);
@@ -134,6 +141,14 @@ describe("validatePatch — rejections", () => {
     expect(v.files[0]?.addedLines).toBe(2);
   });
 
+  it("normalizes a create-only modify diff for a missing file", () => {
+    const diff = "--- a/tests/generated.test.js\n+++ b/tests/generated.test.js\n@@ -0,0 +1,1 @@\n+it(\"runs\", () => {});\n";
+    const v = validatePatch(info, diff);
+    expect(v.ok).toBe(true);
+    expect(v.files[0]?.kind).toBe("create");
+    expect(v.normalizedDiff).toContain("--- /dev/null");
+  });
+
   it("normalizes stale hunk counts but still requires matching context", () => {
     write("src/x.txt", "one\ntwo\n");
     const diff = "--- a/src/x.txt\n+++ b/src/x.txt\n@@ -1,99 +1,99 @@\n one\n-two\n+TWO\n";
@@ -142,9 +157,27 @@ describe("validatePatch — rejections", () => {
     expect(v.normalizedDiff).toContain("@@ -1,2 +1,2 @@");
   });
 
+  it("normalizes LLM blank context lines inside hunks", () => {
+    write("src/x.txt", "one\n\ntwo\n");
+    const diff = "--- a/src/x.txt\n+++ b/src/x.txt\n@@ -1,3 +1,4 @@ context\n one\n\n two\n+three\n";
+    const v = validatePatch(info, diff);
+    expect(v.ok).toBe(true);
+    expect(v.normalizedDiff).toContain(" one\n \n two");
+    expect(v.normalizedDiff).toContain("@@ -1,3 +1,4 @@");
+  });
+
   it("anchors an LLM shorthand modify hunk by exact unique preimage", () => {
     write("src/x.txt", "header\none\ntwo\nfooter\n");
     const diff = "--- a/src/x.txt\n+++ b/src/x.txt\n@@\n one\n-two\n+TWO\n";
+    const v = validatePatch(info, diff);
+    expect(v.ok).toBe(true);
+    expect(v.normalizedDiff).toContain("@@ -2,2 +2,2 @@");
+    expect(v.conflicts).toHaveLength(0);
+  });
+
+  it("re-anchors a stale modify hunk by exact unique preimage", () => {
+    write("src/x.txt", "header\none\ntwo\nfooter\n");
+    const diff = "--- a/src/x.txt\n+++ b/src/x.txt\n@@ -50,2 +50,2 @@ stale\n one\n-two\n+TWO\n";
     const v = validatePatch(info, diff);
     expect(v.ok).toBe(true);
     expect(v.normalizedDiff).toContain("@@ -2,2 +2,2 @@");
