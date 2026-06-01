@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { fetchFilesPreview } from "../../../../../lib/api";
+import { ApiError, fetchFilesPreview } from "../../../../../lib/api";
 import type { FilesPreviewResponse } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
@@ -14,8 +14,25 @@ interface FilePreviewProps {
   readonly onClose: () => void;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "Unable to read this file.";
+// Server-defined deny is a safety invariant the user must not be able to probe.
+// The UI renders a generic message that names common deny patterns by class but
+// never reveals the requested path or the specific matched pattern.
+const DENIED_PREVIEW_MESSAGE =
+  "This file is excluded from the read surface for safety (matches a deny pattern such as .env, *.pem, node_modules, .git, …).";
+
+interface PreviewError {
+  readonly message: string;
+  readonly denied: boolean;
+}
+
+function classifyError(error: unknown): PreviewError {
+  if (error instanceof ApiError && error.code === "DENIED") {
+    return { message: DENIED_PREVIEW_MESSAGE, denied: true };
+  }
+  if (error instanceof Error) {
+    return { message: error.message, denied: false };
+  }
+  return { message: "Unable to read this file.", denied: false };
 }
 
 function formatBytes(bytes: number): string {
@@ -56,7 +73,7 @@ function MetadataRow({ label, value }: { readonly label: string; readonly value:
 export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNode {
   const [preview, setPreview] = useState<FilesPreviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<PreviewError | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,7 +85,7 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
         if (!cancelled) setPreview(response);
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(errorMessage(err));
+        if (!cancelled) setError(classifyError(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -109,7 +126,9 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
       </div>
 
       {loading ? <div className="fpv-state">Loading preview...</div> : null}
-      {error !== null ? <div className="fpv-state fpv-error">{error}</div> : null}
+      {error !== null ? (
+        <div className="fpv-state fpv-error" role="alert">{error.message}</div>
+      ) : null}
 
       {preview?.kind === "text" ? (
         <>
