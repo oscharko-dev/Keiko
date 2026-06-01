@@ -461,11 +461,11 @@ export async function sendDesktopChat(
 // Desktop files — read-only selected-root browser and preview control plane
 // ---------------------------------------------------------------------------
 
-export async function fetchFilesDirectories(path?: string): Promise<FilesDirectoryListing> {
+export async function fetchFilesDirectories(root: string, path?: string): Promise<FilesDirectoryListing> {
   const params = new URLSearchParams();
+  params.set("root", root);
   if (path !== undefined && path.length > 0) params.set("path", path);
-  const qs = params.toString();
-  return fetchJson(`/api/files/directories${qs ? `?${qs}` : ""}`);
+  return fetchJson(`/api/files/directories?${params.toString()}`);
 }
 
 export async function fetchFilesTree(root: string, path = ""): Promise<FilesTreeResponse> {

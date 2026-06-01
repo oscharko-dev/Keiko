@@ -156,7 +156,7 @@ export function defaultLayout(W: number, H: number): DefaultLayoutWindow[] {
       w: rightW,
       h: filesH,
       z: 2,
-      cfg: { root: "src" },
+      cfg: {},
       max: false,
       zoom: 1,
     },
