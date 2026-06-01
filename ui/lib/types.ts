@@ -864,6 +864,7 @@ export interface TerminalExecutionInput {
   readonly args: readonly string[];
   readonly cwd?: string;
   readonly timeoutMs?: number;
+  readonly requestId?: string;
 }
 
 export interface TerminalExecutionResult {

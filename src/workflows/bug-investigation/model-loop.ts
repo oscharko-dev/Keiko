@@ -10,8 +10,9 @@ import type { ChatMessage } from "../../gateway/types.js";
 import { nodeWorkspaceFs } from "../../workspace/fs.js";
 import type { ContextPack, WorkspaceInfo } from "../../workspace/index.js";
 import { validatePatch, type PatchValidation } from "../../tools/index.js";
+import { isTestPath } from "../unit-tests/conventions.js";
 import { isSensitivePath } from "./guard.js";
-import { parseBugModelOutput } from "./parse.js";
+import { parseBugModelOutputCandidates } from "./parse.js";
 import { buildBugPrompt } from "./prompt.js";
 import {
   patchLimitsFrom,
@@ -92,6 +93,7 @@ interface AttemptResult {
   readonly accepted: AcceptedBugPatch | undefined;
   readonly investigationOnly: Hypothesis | undefined;
   readonly rejectionCode: string | undefined;
+  readonly rejectionReason: string | undefined;
 }
 
 function classifyEmptyDiff(parsed: ParsedBugOutput): AttemptResult {
@@ -101,26 +103,153 @@ function classifyEmptyDiff(parsed: ParsedBugOutput): AttemptResult {
       accepted: undefined,
       investigationOnly: hypothesisOf(parsed),
       rejectionCode: undefined,
+      rejectionReason: undefined,
     };
   }
-  return { accepted: undefined, investigationOnly: undefined, rejectionCode: "empty" };
+  return {
+    accepted: undefined,
+    investigationOnly: undefined,
+    rejectionCode: "empty",
+    rejectionReason: "empty: no diff or root-cause hypothesis was provided",
+  };
 }
 
-function classifyValidated(parsed: ParsedBugOutput, validation: PatchValidation): AttemptResult {
-  const guardCode = validation.ok ? scopeGuard(validation) : validation.reasons[0]?.code;
+function validationRejectionReason(
+  validation: PatchValidation,
+  code: string | undefined,
+): string | undefined {
+  if (code === undefined) {
+    return undefined;
+  }
+  const message = validation.reasons[0]?.message;
+  if (message !== undefined) {
+    return `${code}: ${message}`;
+  }
+  if (code === "test-only") {
+    return "test-only: a source bug fix must include a minimal non-test source change; tests may be added in the same diff";
+  }
+  const conflict = validation.conflicts[0];
+  if (conflict !== undefined) {
+    return `${code}: ${conflict.path} hunk#${String(conflict.hunkIndex)} ${conflict.reason}`;
+  }
+  return code;
+}
+
+function sourceBugRequiresSourcePatch(
+  workspace: WorkspaceInfo,
+  report: BugReportInput,
+  evidence: FailureEvidence,
+): boolean {
+  const paths = [
+    ...(report.targetFiles ?? []),
+    ...evidence.frames.map((frame) => frame.file),
+  ];
+  return paths.some((path) => !isTestPath(workspace, path));
+}
+
+function semanticGuard(
+  workspace: WorkspaceInfo,
+  validation: PatchValidation,
+  requiresSourcePatch: boolean,
+): string | undefined {
+  if (validation.files.length === 0) {
+    return "malformed";
+  }
+  const scopeCode = scopeGuard(validation);
+  if (scopeCode !== undefined) {
+    return scopeCode;
+  }
+  return requiresSourcePatch && validation.files.every((file) => isTestPath(workspace, file.path))
+    ? "test-only"
+    : undefined;
+}
+
+function emptyParsedOutput(): ParsedBugOutput {
+  return {
+    diff: "",
+    rootCause: undefined,
+    regressionTestStrategy: undefined,
+    uncertainty: undefined,
+    confidence: undefined,
+  };
+}
+
+function classifyValidated(
+  workspace: WorkspaceInfo,
+  parsed: ParsedBugOutput,
+  validation: PatchValidation,
+  requiresSourcePatch: boolean,
+): AttemptResult {
+  const guardCode = validation.ok
+    ? semanticGuard(workspace, validation, requiresSourcePatch)
+    : validation.reasons[0]?.code;
   if (validation.ok && guardCode === undefined) {
     const accepted: AcceptedBugPatch = {
       diff: parsed.diff,
       validation,
       hypothesis: hypothesisOf(parsed),
     };
-    return { accepted, investigationOnly: undefined, rejectionCode: undefined };
+    return {
+      accepted,
+      investigationOnly: undefined,
+      rejectionCode: undefined,
+      rejectionReason: undefined,
+    };
   }
+  const rejectionCode = guardCode ?? "malformed";
   return {
     accepted: undefined,
     investigationOnly: undefined,
-    rejectionCode: guardCode ?? "malformed",
+    rejectionCode,
+    rejectionReason: validationRejectionReason(validation, rejectionCode),
   };
+}
+
+function validateCandidate(
+  state: BugRunState,
+  workspace: WorkspaceInfo,
+  parsed: ParsedBugOutput,
+  requiresSourcePatch: boolean,
+): { readonly result: AttemptResult; readonly validation: PatchValidation } {
+  const validation = validatePatch(workspace, parsed.diff, {
+    fs: state.deps.fs ?? nodeWorkspaceFs,
+    limits: patchLimitsFrom(state.limits),
+  });
+  const result = classifyValidated(
+    workspace,
+    { ...parsed, diff: validation.normalizedDiff ?? parsed.diff },
+    validation,
+    requiresSourcePatch,
+  );
+  return { result, validation };
+}
+
+function classifyPatchCandidates(
+  state: BugRunState,
+  workspace: WorkspaceInfo,
+  report: BugReportInput,
+  evidence: FailureEvidence,
+  candidates: readonly ParsedBugOutput[],
+): AttemptResult {
+  const patchCandidates = candidates.filter((candidate) => candidate.diff.length > 0);
+  if (patchCandidates.length === 0) {
+    return classifyEmptyDiff(candidates[0] ?? emptyParsedOutput());
+  }
+  const requiresSourcePatch = sourceBugRequiresSourcePatch(workspace, report, evidence);
+  let last: { result: AttemptResult; validation: PatchValidation } | undefined;
+  for (const parsed of patchCandidates) {
+    const next = validateCandidate(state, workspace, parsed, requiresSourcePatch);
+    if (next.result.accepted !== undefined) {
+      emitValidation(state, next.validation, next.result.rejectionCode);
+      return next.result;
+    }
+    last = next;
+  }
+  if (last === undefined) {
+    return classifyEmptyDiff(emptyParsedOutput());
+  }
+  emitValidation(state, last.validation, last.result.rejectionCode);
+  return last.result;
 }
 
 async function attemptOnce(
@@ -134,25 +263,13 @@ async function attemptOnce(
 ): Promise<AttemptResult> {
   const messages = buildBugPrompt(report, evidence, pack, workspace.testFramework, rejectionReason);
   const content = await callModel(state, messages, attempt, pack.usedBytes);
-  const parsed = parseBugModelOutput(content);
+  const candidates = parseBugModelOutputCandidates(content);
   state.emitter.emit({
     type: "bug:rootcause:proposed",
-    hasPatch: parsed.diff.length > 0,
-    ...(parsed.confidence === undefined ? {} : { confidence: parsed.confidence }),
+    hasPatch: candidates.some((candidate) => candidate.diff.length > 0),
+    ...(candidates[0]?.confidence === undefined ? {} : { confidence: candidates[0].confidence }),
   });
-  if (parsed.diff.length === 0) {
-    return classifyEmptyDiff(parsed);
-  }
-  const validation = validatePatch(workspace, parsed.diff, {
-    fs: state.deps.fs ?? nodeWorkspaceFs,
-    limits: patchLimitsFrom(state.limits),
-  });
-  const result = classifyValidated(
-    { ...parsed, diff: validation.normalizedDiff ?? parsed.diff },
-    validation,
-  );
-  emitValidation(state, validation, result.rejectionCode);
-  return result;
+  return classifyPatchCandidates(state, workspace, report, evidence, candidates);
 }
 
 // True when the attempt produced a terminal outcome (accepted patch or investigation-only); a
@@ -171,6 +288,7 @@ export async function runBugModelLoop(
   let modelCallCount = 0;
   let patchRetryCount = 0;
   let rejectionReason: string | undefined;
+  let lastRejectionCode: string | undefined;
   while (
     modelCallCount < state.limits.maxModelCalls &&
     patchRetryCount <= state.limits.maxRetries
@@ -196,13 +314,14 @@ export async function runBugModelLoop(
     }
     patchRetryCount += 1;
     state.progress.patchRetryCount = patchRetryCount;
-    rejectionReason = r.rejectionCode;
+    lastRejectionCode = r.rejectionCode;
+    rejectionReason = r.rejectionReason ?? r.rejectionCode;
   }
   return {
     accepted: undefined,
     investigationOnly: undefined,
     modelCallCount,
     patchRetryCount,
-    lastRejectionCode: rejectionReason,
+    lastRejectionCode,
   };
 }

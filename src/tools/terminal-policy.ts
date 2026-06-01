@@ -2,7 +2,7 @@
 // than the harness DEFAULT_COMMAND_RULES so the human-facing terminal cannot widen the agent surface.
 // The CommandRule schema (allowedSubcommands / denyFlags / valueFlags) handles the structural
 // shape; `isTerminalCommandAllowed` adds a thin Layer-2 pass for flag policies that `CommandRule`
-// cannot express (find's exec/delete flags, node's positional-arg ban, git branch/remote mutation).
+// cannot express (node's positional-arg ban, git branch/remote mutation).
 // Pure module: no IO, no spawn, no fs.
 
 import { isCommandAllowed } from "./sandbox.js";
@@ -17,26 +17,43 @@ export const TERMINAL_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   { executable: "cat" },
   { executable: "head" },
   { executable: "tail" },
-  { executable: "wc" },
+  { executable: "wc", denyFlags: Object.freeze(["--files0-from"]) },
   { executable: "grep" },
-  { executable: "tree" },
   { executable: "pwd" },
   { executable: "echo" },
-  // find has no subcommand structure; the per-flag deny lives in `isTerminalCommandAllowed` (Layer 2)
-  // because CommandRule.denyFlags compares full tokens (`-exec`), which is exactly what we need —
-  // but keeping the policy co-located with the other find rules below avoids spreading the rationale
-  // across two files.
-  { executable: "find" },
+  {
+    executable: "find",
+    denyFlags: Object.freeze([
+      "-exec",
+      "-execdir",
+      "-ok",
+      "-okdir",
+      "-delete",
+      "-fprint",
+      "-fprint0",
+      "-fprintf",
+      "-fls",
+      "-files0-from",
+    ]),
+  },
+  {
+    executable: "tree",
+    denyFlags: Object.freeze(["-o", "--output"]),
+  },
   // node: only --version/-v allowed. Enforced positionally in Layer 2 (a per-arg policy is not
   // expressible in CommandRule).
   { executable: "node" },
   {
     executable: "npm",
-    // `--version` / `-v` are LEADING flags (not subcommands) — the version-only invocation is
-    // accepted by Layer 2 (`checkNpm`) because CommandRule's allowedSubcommands resolver skips
-    // leading flags. Subcommand allowlist below still gates `npm <verb>` invocations.
-    allowedSubcommands: Object.freeze(["ls", "list", "outdated", "view", "info", "help", "ping"]),
-    denyFlags: Object.freeze(["-c", "--call"]),
+    allowedSubcommands: Object.freeze(["ls", "list", "help"]),
+    denyFlags: Object.freeze([
+      "-c",
+      "--call",
+      "--prefix",
+      "--global",
+      "-g",
+      "--location",
+    ]),
   },
   {
     executable: "git",
@@ -61,6 +78,19 @@ export const TERMINAL_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
       "--namespace",
       "--exec-path",
     ]),
+    denyFlags: Object.freeze([
+      "-C",
+      "-c",
+      "--git-dir",
+      "--work-tree",
+      "--namespace",
+      "--exec-path",
+      "--ext-diff",
+      "--textconv",
+      "--output",
+      "--no-index",
+      "--contents",
+    ]),
   },
 ]);
 
@@ -72,8 +102,13 @@ const FIND_DENY_FLAGS: ReadonlySet<string> = new Set([
   "-okdir",
   "-delete",
   "-fprint",
+  "-fprint0",
   "-fprintf",
+  "-fls",
+  "-files0-from",
 ]);
+
+const TREE_DENY_FLAGS: ReadonlySet<string> = new Set(["-o", "--output"]);
 
 // Only --version and -v are accepted for node. Every other positional or flag is denied.
 const NODE_ALLOWED_ARGS: ReadonlySet<string> = new Set(["--version", "-v"]);
@@ -92,18 +127,29 @@ const GIT_BRANCH_DENY_FLAGS: ReadonlySet<string> = new Set([
   "-f",
   "--copy",
   "--force",
+  "--set-upstream-to",
+  "--unset-upstream",
+  "--edit-description",
 ]);
 
-// Global git flags that modify git's own config, working-tree, or execution path (A5 / ADR-0018
-// S-H2). `-C` (chdir) is intentionally omitted — `git -C subdir status` is a legitimate read-only
-// use. These are checked BEFORE subcommand resolution so they cannot be smuggled via a value-flag
-// value that happens to look like a subcommand.
+// Global git flags that modify git's own config, working-tree, cwd, or execution path (A5 /
+// ADR-0018 S-H2). These are checked BEFORE subcommand resolution so they cannot be smuggled via a
+// value-flag value that happens to look like a subcommand.
 const GIT_GLOBAL_DENY_FLAGS: ReadonlySet<string> = new Set([
+  "-C",
   "-c",
   "--git-dir",
   "--work-tree",
   "--namespace",
   "--exec-path",
+]);
+
+const GIT_UNSAFE_FLAGS: ReadonlySet<string> = new Set([
+  "--ext-diff",
+  "--textconv",
+  "--output",
+  "--no-index",
+  "--contents",
 ]);
 
 export interface TerminalCommandDecision {
@@ -119,6 +165,16 @@ function checkFind(args: readonly string[]): TerminalCommandDecision {
   for (const arg of args) {
     if (FIND_DENY_FLAGS.has(arg)) {
       return denied(`find: denied flag ${arg}`);
+    }
+  }
+  return { allowed: true };
+}
+
+function checkTree(args: readonly string[]): TerminalCommandDecision {
+  for (const arg of args) {
+    const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    if (TREE_DENY_FLAGS.has(flag) || arg.startsWith("-o")) {
+      return denied(`tree: denied write flag ${flag}`);
     }
   }
   return { allowed: true };
@@ -204,10 +260,9 @@ function checkGitBranch(argsAfterBranch: readonly string[]): TerminalCommandDeci
   return { allowed: true };
 }
 
-// A1 — After resolving the `remote` subcommand, walk the remaining args. The only allowed
-// non-flag positional is `show` (optionally followed by a remote name for `git remote show <name>`).
-// All other positionals (add, rm, rename, set-url, set-head, set-branches, prune, update…) are
-// mutation subcommands and are denied.
+// A1 — After resolving the `remote` subcommand, walk the remaining args. No non-flag positional is
+// allowed: `show`, `update`, and `prune` can contact remotes, while add/rm/rename/set-url mutate
+// config. `git remote` and `git remote -v` remain local read-only inspection.
 function checkGitRemote(argsAfterRemote: readonly string[]): TerminalCommandDecision {
   for (const arg of argsAfterRemote) {
     if (arg.startsWith("-")) {
@@ -215,27 +270,36 @@ function checkGitRemote(argsAfterRemote: readonly string[]): TerminalCommandDeci
       // at Layer 1, but we allow flags through here to avoid double-denying them.
       continue;
     }
-    // First non-flag positional: must be "show" or it is a mutation subcommand.
-    if (arg !== "show") {
-      return denied(
-        `git remote: subcommand "${arg}" is denied (read-only: use flags or "show" only)`,
-      );
-    }
-    // "show" is safe; subsequent positionals are remote names — safe to accept.
-    return { allowed: true };
+    return denied(`git remote: subcommand "${arg}" is denied (read-only: use flags only)`);
   }
   return { allowed: true };
 }
 
-function checkGit(args: readonly string[]): TerminalCommandDecision {
-  // A5 — Deny global config/env-injection flags before resolving the subcommand. `-C` (chdir)
-  // is intentionally omitted so `git -C subdir status` keeps working for project-internal nav.
-  for (const arg of args) {
-    const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
-    if (GIT_GLOBAL_DENY_FLAGS.has(flag)) {
-      return denied(`git: denied global flag ${flag}`);
-    }
+function deniedGitFlag(arg: string): string | undefined {
+  const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+  // A5 — Deny global config/env-injection and cwd-shifting flags before resolving the subcommand.
+  if (
+    GIT_GLOBAL_DENY_FLAGS.has(flag) ||
+    arg.startsWith("-C") ||
+    (arg.startsWith("-c") && !arg.startsWith("--"))
+  ) {
+    return `git: denied global flag ${flag}`;
   }
+  if (GIT_UNSAFE_FLAGS.has(flag)) {
+    return `git: denied unsafe flag ${flag}`;
+  }
+  return undefined;
+}
+
+function checkGitFlags(args: readonly string[]): TerminalCommandDecision {
+  for (const arg of args) {
+    const reason = deniedGitFlag(arg);
+    if (reason !== undefined) return denied(reason);
+  }
+  return { allowed: true };
+}
+
+function checkGitSubcommand(args: readonly string[]): TerminalCommandDecision {
   const sub = gitSubcommand(args);
   if (sub === "branch") {
     const rest = argsAfterSubcommand(args, "branch") ?? [];
@@ -248,36 +312,29 @@ function checkGit(args: readonly string[]): TerminalCommandDecision {
   return { allowed: true };
 }
 
-// `npm --version` / `npm -v` is a leading-flag-only invocation; Layer-1's allowedSubcommands
-// resolver skips leading flags and reports no subcommand. Accept it explicitly here so the
-// version-only invocation does not fall through to Layer-1's "subcommand not allowed" path.
-function isNpmVersionOnly(args: readonly string[]): boolean {
-  if (args.length === 0) {
-    return false;
-  }
-  return args.every((arg) => arg === "--version" || arg === "-v");
+function checkGit(args: readonly string[]): TerminalCommandDecision {
+  const flags = checkGitFlags(args);
+  if (!flags.allowed) return flags;
+  return checkGitSubcommand(args);
 }
 
 // Pure deny-by-default decision for a terminal command. Layer 1 is the shared `isCommandAllowed`
 // (validates the executable and applies CommandRule's subcommand allowlist/denyFlags/valueFlags).
-// Layer 2 here adds the per-command flag policies that CommandRule cannot express (find / node /
-// git branch and remote mutation flags) and the leading-flag-only npm version invocation.
+// Layer 2 here adds the per-command flag policies that CommandRule cannot express (find / tree /
+// node / git branch and remote mutation flags).
 export function isTerminalCommandAllowed(
   command: string,
   args: readonly string[],
 ): TerminalCommandDecision {
-  // npm --version / npm -v is the only invocation Layer 1's allowedSubcommands cannot accept,
-  // because the resolver skips leading flags. Short-circuit before Layer 1 to keep the rest of
-  // npm's surface (`install`, `run`, `exec`, …) deny-by-default.
-  if (command === "npm" && isNpmVersionOnly(args)) {
-    return { allowed: true };
-  }
   const layer1 = isCommandAllowed(TERMINAL_COMMAND_RULES, command, args);
   if (!layer1.allowed) {
     return { allowed: false, reason: layer1.reason };
   }
   if (command === "find") {
     return checkFind(args);
+  }
+  if (command === "tree") {
+    return checkTree(args);
   }
   if (command === "node") {
     return checkNode(args);

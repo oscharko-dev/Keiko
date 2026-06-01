@@ -63,6 +63,10 @@ describe("isTerminalCommandAllowed — read-only inspection commands", () => {
     expect(isTerminalCommandAllowed("wc", ["-l", "file"]).allowed).toBe(true);
   });
 
+  it("denies wc --files0-from because it can read an unbounded path list", () => {
+    expect(isTerminalCommandAllowed("wc", ["--files0-from", "/tmp/list"]).allowed).toBe(false);
+  });
+
   it("allows grep with flags and pattern", () => {
     expect(isTerminalCommandAllowed("grep", ["-rn", "foo", "src"]).allowed).toBe(true);
   });
@@ -150,12 +154,12 @@ describe("isTerminalCommandAllowed — npm (subcommand allowlist)", () => {
     expect(isTerminalCommandAllowed("npm", ["ls", "--depth=0"]).allowed).toBe(true);
   });
 
-  it("allows npm outdated", () => {
-    expect(isTerminalCommandAllowed("npm", ["outdated"]).allowed).toBe(true);
+  it("denies npm outdated", () => {
+    expect(isTerminalCommandAllowed("npm", ["outdated"]).allowed).toBe(false);
   });
 
-  it("allows npm --version", () => {
-    expect(isTerminalCommandAllowed("npm", ["--version"]).allowed).toBe(true);
+  it("denies npm --version", () => {
+    expect(isTerminalCommandAllowed("npm", ["--version"]).allowed).toBe(false);
   });
 
   it("denies npm install", () => {
@@ -253,8 +257,12 @@ describe("isTerminalCommandAllowed — git (subcommand allowlist + value-flag sa
     expect(isTerminalCommandAllowed("git", ["-C", "/tmp", "push"]).allowed).toBe(false);
   });
 
-  it("allows git -C dir status (value-flag with an allowed subcommand)", () => {
-    expect(isTerminalCommandAllowed("git", ["-C", "/tmp", "status"]).allowed).toBe(true);
+  it("denies git -C dir status (value-flag with an allowed subcommand)", () => {
+    expect(isTerminalCommandAllowed("git", ["-C", "/tmp", "status"]).allowed).toBe(false);
+  });
+
+  it("denies git -C / status because terminal policy forbids cwd-shifting", () => {
+    expect(isTerminalCommandAllowed("git", ["-C", "/", "status"]).allowed).toBe(false);
   });
 
   // A2 — git branch positional gate
@@ -323,12 +331,12 @@ describe("isTerminalCommandAllowed — git (subcommand allowlist + value-flag sa
     expect(isTerminalCommandAllowed("git", ["remote", "-v"]).allowed).toBe(true);
   });
 
-  it("allows git remote show origin", () => {
-    expect(isTerminalCommandAllowed("git", ["remote", "show", "origin"]).allowed).toBe(true);
+  it("denies git remote show origin", () => {
+    expect(isTerminalCommandAllowed("git", ["remote", "show", "origin"]).allowed).toBe(false);
   });
 
-  it("allows git remote show (no remote name)", () => {
-    expect(isTerminalCommandAllowed("git", ["remote", "show"]).allowed).toBe(true);
+  it("denies git remote show (no remote name)", () => {
+    expect(isTerminalCommandAllowed("git", ["remote", "show"]).allowed).toBe(false);
   });
 
   // A5 — git global flag denial
@@ -354,6 +362,30 @@ describe("isTerminalCommandAllowed — git (subcommand allowlist + value-flag sa
 
   it("allows git log --all (non-denied flag, no global flags)", () => {
     expect(isTerminalCommandAllowed("git", ["log", "--all"]).allowed).toBe(true);
+  });
+});
+
+describe("isTerminalCommandAllowed — path-bearing write flags and unsafe diff output", () => {
+  it("denies tree -o", () => {
+    expect(isTerminalCommandAllowed("tree", ["-o", "/tmp/tree.txt"]).allowed).toBe(false);
+  });
+
+  it("denies find -fprint0", () => {
+    expect(isTerminalCommandAllowed("find", [".", "-fprint0", "/tmp/out"]).allowed).toBe(false);
+  });
+
+  it("denies find -fls", () => {
+    expect(isTerminalCommandAllowed("find", [".", "-fls", "/tmp/out"]).allowed).toBe(false);
+  });
+
+  it("denies git diff --ext-diff", () => {
+    expect(isTerminalCommandAllowed("git", ["diff", "--ext-diff"]).allowed).toBe(false);
+  });
+
+  it("denies git diff --output", () => {
+    expect(isTerminalCommandAllowed("git", ["diff", "--output", "/tmp/diff.patch"]).allowed).toBe(
+      false,
+    );
   });
 });
 

@@ -36,9 +36,9 @@ compliance reviewer. A PTY allows arbitrary commands and produces no structured 
 bounded exec surface produces one `terminal-execution` evidence entry per invocation, redacted by
 construction, with counts but never raw args.
 
-The existing BFF infrastructure (`createAuditRedactor`, `deepRedactStrings`, `buildEvidenceManifest`,
-`persistEvidence`, the CSRF-guarded POST + SSE pattern) is composed unchanged. The terminal tool
-adds a thin policy layer on top of `runCommand`; it does not invent new safety mechanisms.
+The existing BFF and audit infrastructure (`deepRedactStrings`, `EvidenceStore`, the
+CSRF-guarded POST + SSE pattern) is composed unchanged. The terminal tool adds a thin policy layer
+on top of `runCommand`; it does not invent new safety mechanisms.
 
 ## Decision
 
@@ -76,19 +76,25 @@ workspace root) followed by `containedRealPathInfo` (symlink realpath containmen
 `isDenied` (always-on deny list covering `.env*`, `.git/**`, `node_modules/**`, etc.).
 `src/tools/exec.ts:239–251` is the definitive implementation. This tier is not modified.
 
-**Tier 2 — project-scoped pre-check (new, in the BFF route handler).** The request body carries
-a `projectId`. The BFF handler resolves `projectId → workspaceRoot` via `deps.store.getProject(projectId)`
-(the `ProjectStore` established in ADR-0013, `src/ui/store/**`). If the project is not found, the
-handler returns `PROJECT_NOT_FOUND` (D10) before any spawn. The handler then asserts that the
+**Tier 2 — project-scoped pre-checks (new, in the BFF manager).** The request body carries a
+`projectId`. The BFF manager resolves `projectId → workspaceRoot` via the ADR-0013 `ProjectStore`
+(`src/ui/store/**`). If the project is not found, or if the stored root no longer resolves on disk,
+the handler returns `PROJECT_NOT_FOUND` (D10) before any spawn. The manager then asserts that the
 requested `cwd` (after `resolveWithinWorkspace` against the project root) is contained within that
 project's `workspaceRoot` — i.e., not a sibling project's directory. This is an additive check
 above Tier 1: it prevents a request with a valid `cwd` in one project from being executed in the
 context of a different project, closing an inter-project path confusion class that `runCommand`'s
 workspace root check does not address (because `runCommand`'s workspace root is caller-supplied).
 
-The workspace root that is passed to `runCommand`'s `deps.workspace` is always the
-project's `workspaceRoot` from `ProjectStore`, never the request body. The request body `cwd`
-is validated lexically against the project root before being passed as `runCommand`'s `cwd`.
+The same Tier 2 boundary is applied to path-bearing command operands for `cat`, `head`, `tail`,
+`wc`, `ls`, `tree`, `grep`, and the starting path operands of `find`. Operands are lexically
+resolved against the validated `cwd`, then realpath-checked via `containedRealPathInfo` to reject
+symlink escapes and always-denied paths. Tool-local root shifters such as `git -C` and `npm
+--prefix` are denied rather than re-rooted.
+
+The workspace root that is passed to `runCommand`'s `deps.workspace` is always the project's
+resolved root from `ProjectStore`, never the request body. The request body `cwd` is validated
+lexically against the project root before being passed as `runCommand`'s `cwd`.
 
 ### D3 — Permitted-command allowlist policy
 
@@ -99,7 +105,7 @@ model-facing harness default).
 
 `TERMINAL_COMMAND_RULES` extends the logic from `CommandRule` in `src/tools/types.ts`. For commands
 that `CommandRule` cannot express as subcommand allowlists (e.g. `find`'s flag-based denial), the
-terminal policy module exports a separate `isTerminalCommandAllowed(command, args): boolean`
+terminal policy module exports a separate `isTerminalCommandAllowed(command, args)` decision
 function that runs the `CommandRule` check first, then applies command-specific arg inspection for
 commands where flag-level policy is required. The function is pure and has no side effects.
 
@@ -107,17 +113,17 @@ The allowlist is minimal and conservative. Each entry below is independently jus
 
 | Command | Arg policy | Security rationale |
 |---------|------------|--------------------|
-| `ls` | All flags and paths accepted. | Read-only directory listing. No write, network, or exec capability. |
-| `cat` | All paths accepted. | File content view. Write impossible without shell redirection; `shell: false` prevents redirection. |
-| `head` | `-n` and paths accepted. | First-N-lines view. Same isolation as `cat`. |
-| `tail` | `-n` and paths accepted. | Last-N-lines view. Same isolation as `cat`. |
-| `wc` | All flags accepted. | Count-only output; no content exfiltration risk beyond byte/line counts. |
-| `find` | No `allowedSubcommands`. `denyFlags`: `-exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint`, `-fprintf`. Presence of any denied flag anywhere in args denies the invocation. | `-exec`/`-execdir`/`-ok`/`-okdir` execute arbitrary commands. `-delete` mutates the filesystem. `-fprint`/`-fprintf` write to a file path — a workspace write that bypasses `WorkspaceWriter`. |
-| `grep` | All flags accepted. | Read-only pattern search. `shell: false` prevents shell-expansion side-effects. `grep -r` bounded by the workspace cwd. |
-| `tree` | All flags and paths accepted. | Directory structure visualization. Read-only. |
-| `git` | `allowedSubcommands`: `status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`, `describe`, `blame`, `cat-file`, `branch`, `remote`. `denyFlags`: `-D`, `-d`, `-m`, `-M`, `-c`, `-C` (branch mutation), `--delete` (remote mutation). `valueFlags`: `-C`, `-c`, `--git-dir`, `--work-tree`, `--namespace`, `--exec-path` (S-H2). | Extends the harness `DEFAULT_COMMAND_RULES` git allowlist with `branch` (read-only enumeration) and `remote` (read-only with `-v`). `branch -D`/`-d`/`-m` delete or rename branches; `remote --delete`/`set-url` mutate the remote config. Denied via `denyFlags`. |
+| `ls` | Flags accepted; non-flag path operands must resolve inside the selected project root. | Read-only directory listing. No write, network, or exec capability. Operand containment prevents outside-project inspection. |
+| `cat` | Path operands must resolve inside the selected project root. | File content view. Write impossible without shell redirection; `shell: false` prevents redirection. Operand containment prevents outside-project reads. |
+| `head` | Flags such as `-n` accepted; path operands must resolve inside the selected project root. | First-N-lines view. Same isolation as `cat`. |
+| `tail` | Flags such as `-n` accepted; path operands must resolve inside the selected project root. | Last-N-lines view. Same isolation as `cat`. |
+| `wc` | Flags accepted except `--files0-from`; path operands must resolve inside the selected project root. | Count-only output; operand containment prevents outside-project filesystem inspection. `--files0-from` can read an unbounded path list and is denied. |
+| `find` | No `allowedSubcommands`. `denyFlags`: `-exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint`, `-fprint0`, `-fprintf`, `-fls`, `-files0-from`. Starting path operands before the expression must resolve inside the selected project root. | `-exec`/`-execdir`/`-ok`/`-okdir` execute arbitrary commands. `-delete` mutates the filesystem. `-fprint*`/`-fprintf`/`-fls` write to a file path, and `-files0-from` reads traversal roots from a file. |
+| `grep` | Flags accepted. Pattern-file operands supplied via `-f`/`--file`, `--exclude-from` files, and search path operands must resolve inside the selected project root. | Read-only pattern search. `shell: false` prevents shell-expansion side-effects. Operand containment prevents `grep -r` from traversing outside the project. |
+| `tree` | Path operands must resolve inside the selected project root. `-o`/`--output` denied. | Directory structure visualization. `-o` writes output to a file and bypasses reviewed write paths, so it is denied. |
+| `git` | `allowedSubcommands`: `status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`, `describe`, `blame`, `cat-file`, `branch`, `remote`. Global/root-shifting flags denied: `-C`, `-c`, `--git-dir`, `--work-tree`, `--namespace`, `--exec-path`. Unsafe flags denied: `--ext-diff`, `--textconv`, `--output`, `--no-index`, `--contents`. `branch` allows listing flags only and denies mutation flags/positionals. `remote` allows flags only, such as `-v`; `remote show` is denied. | Extends the harness `DEFAULT_COMMAND_RULES` git allowlist with tightly gated `branch` and `remote`. Root-shifting, config injection, external diff helpers, output-file writes, network-capable remote subcommands, and branch mutations are denied. |
 | `node` | Only `--version` and `-v` accepted. All other args denied. Enforced in `isTerminalCommandAllowed` via positional check. | `node -e`/`node <file>` executes arbitrary JavaScript — arbitrary code execution equivalent to a shell. Only the version flag is safe. |
-| `npm` | `allowedSubcommands`: `--version`, `ls`, `list`, `outdated`, `view`, `info`, `help`, `ping`. Inherits `denyFlags`: `-c`, `--call`. | Extends the harness npm allowlist to include `--version`. `install`, `run`, `exec`, `ci`, `publish` and all mutation subcommands are excluded by omission. |
+| `npm` | `allowedSubcommands`: `ls`, `list`, `help`. Denied flags: `-c`, `--call`, `--prefix`, `--global`, `-g`, `--location`. | `install`, `run`, `exec`, `ci`, `publish` and all mutation subcommands are excluded by omission. Registry/network-capable inspection commands (`view`, `info`, `outdated`, `ping`) are excluded for the MVP no-egress posture. Root-shifting flags are denied. |
 | `pwd` | No subcommand or flag gating. | Outputs only the current directory path. |
 | `echo` | All args accepted. | Echoes its arguments. `shell: false` prevents `echo $SECRET` from expanding env vars; output is still Layer-1 redacted by `runCommand`. |
 
@@ -146,9 +152,8 @@ and excluded, and the concrete harm each could cause if allowed.
 
 ### D5 — Limits passthrough: `SandboxPolicy` applied unchanged via `runCommand`
 
-Every `SandboxPolicy` field is passed to `runCommand` unmodified. The terminal tool does not
-define its own policy object; it receives one via `UiHandlerDeps.terminalPolicy` (a `SandboxPolicy`
-field added to `UiHandlerDeps`). The production default for the terminal surface matches
+Every `SandboxPolicy` field is passed to `runCommand` unmodified. The terminal manager accepts an
+optional injected `SandboxPolicy` for tests, but production construction uses
 `DEFAULT_SANDBOX_POLICY` from `src/tools/types.ts:52–58`:
 
 | Field | Default value | Source |
@@ -182,11 +187,11 @@ when `maxOutputBytes` is exceeded — there is no partial prefix that could cont
 Layer 1 is in `src/tools/exec.ts` and is not modified.
 
 **Layer 2 — audit redaction at evidence-persist time (ADR-0010 pattern).** Before calling
-`persistEvidence`, the BFF handler constructs an `AuditRedactor` via `createAuditRedactor` and
-applies `deepRedactStrings` to any string fields destined for the evidence entry. This second pass
-catches structural patterns (Bearer tokens, `sk-` keys, GitHub/AWS/Slack/Google tokens, PEM
-markers — the `redact()` built-in patterns) plus configured literals and env values. Layer 2 is in
-`src/audit/redaction.ts` and is not modified.
+`EvidenceStore.put`, the terminal evidence appender applies `deepRedactStrings` to any string
+fields destined for the evidence manifest. This second pass catches structural patterns (Bearer
+tokens, `sk-` keys, GitHub/AWS/Slack/Google tokens, PEM markers — the `redact()` built-in
+patterns) plus configured literals and env values. Layer 2 is in `src/audit/redaction.ts` and is
+reused unchanged.
 
 The two layers are complementary: Layer 1 covers env-value secrets in live command output; Layer 2
 covers structural patterns in persisted evidence. Both run unconditionally on every execution.
@@ -204,10 +209,10 @@ synchronous POST response.
 
 | Event type | Fields |
 |------------|--------|
-| `terminal:execution-started` | `executionId: string`, `projectId: string`, `command: string` (bare name only — never args), `argCount: number`, `startedAt: number` (epoch-ms) |
-| `terminal:execution-completed` | `executionId: string`, `exitCode: number \| null`, `durationMs: number`, `truncated: boolean`, `timedOut: boolean`, `stdoutByteLength: number`, `stderrByteLength: number` |
-| `terminal:execution-failed` | `executionId: string`, `code: TerminalErrorCode` (D10), `message: string` (static string only — never a raw OS or Node.js error message) |
-| `terminal:execution-cancelled` | `executionId: string` |
+| `terminal:execution-started` | `executionId: string`, `projectId: string`, `command: string` (bare name only — never args), `argCount: number`, `startedAt: number` (epoch-ms), optional `requestId: string` echoed from the POST body |
+| `terminal:execution-completed` | `executionId: string`, `exitCode: number \| null`, `durationMs: number`, `truncated: boolean`, `timedOut: boolean`, `stdoutByteLength: number`, `stderrByteLength: number`, optional `requestId: string` |
+| `terminal:execution-failed` | `executionId: string`, `code: TerminalErrorCode` (D10), `message: string` (static string only — never a raw OS or Node.js error message), optional `requestId: string` |
+| `terminal:execution-cancelled` | `executionId: string`, optional `requestId: string` |
 
 The `command` field in `terminal:execution-started` is the allowlist-validated bare name (e.g.
 `"git"`, `"grep"`). Args are not emitted in any event: they may contain workspace-relative paths
@@ -215,6 +220,8 @@ that reveal project structure. `argCount` is sufficient for the audit trail.
 
 The SSE channel is session-less and multiplexed: all in-flight executions across all browser tabs
 share one channel per BFF process. This mirrors the `browser:*` event channel design in ADR-0017 D7.
+The optional `requestId` lets a widget correlate a POST it initiated with the global event stream
+before enabling cancellation controls.
 
 Events are not `HarnessEvent` objects. They do not carry `schemaVersion`, `runId`, `fingerprint`,
 or `seq`. The terminal tool does not flow through the harness state machine (ADR-0004 confirms why;
@@ -232,7 +239,7 @@ is removed at the same time.
 |--------|---------|------|---------|
 | GET | `/api/terminal/policy` | No | Return the permitted-command summary for UI display: `{ commands: string[], limits: { maxOutputBytes, defaultTimeoutMs } }`. No secrets. Read-only. |
 | GET | `/api/terminal/directories` | No | Query: `?projectId=<id>`. List subdirectories of the project root for the cwd picker. Reuses the `listDirectories` helper preserved from `terminal.ts`. |
-| POST | `/api/terminal/executions` | Yes | Body: `{ projectId, command, args: string[], cwd?: string, timeoutMs?: number }`. Runs the command via `runCommand`, persists evidence, emits SSE events, returns `{ executionId, exitCode, stdout, stderr, durationMs, truncated, timedOut }`. All output is Layer-1 redacted by `runCommand`. |
+| POST | `/api/terminal/executions` | Yes | Body: `{ projectId, command, args: string[], cwd?: string, timeoutMs?: number, requestId?: string }`. Runs the command via `runCommand`, persists evidence, emits SSE events, returns `{ executionId, exitCode, stdout, stderr, durationMs, truncated, timedOut }`. All output is Layer-1 redacted by `runCommand`. |
 | DELETE | `/api/terminal/executions/:executionId` | Yes | Aborts an in-flight execution via its `AbortController`. Returns `{ ok: true }` if found; `EXECUTION_NOT_FOUND` (D10) if not. |
 | GET | `/api/terminal/events` | No | SSE channel for `terminal:*` events. Multiplexed across all executions. Follows the same STREAMING sentinel return pattern as `/api/runs/:runId/events` (ADR-0011 D5). |
 
@@ -251,8 +258,10 @@ reconnection. The lifecycle is:
    keyed by a fresh `randomUUID()` executionId, emits `terminal:execution-started`, and awaits
    `runCommand`.
 2. `runCommand` resolves (completes, times out, or is cancelled by abort).
-3. The handler removes the executionId from the map, emits the completion/failure/cancel event,
-   persists the evidence entry, and returns the HTTP response.
+3. The manager persists the evidence entry, emits the completion/failure/cancel event, returns the
+   HTTP response, and removes the executionId from the map. Evidence persistence is fail-closed:
+   if the ledger write fails, the execution is surfaced as `EVIDENCE_WRITE_FAILED` instead of a
+   normal success.
 
 The map holds only executions that are currently running. An executionId is valid only while its
 `runCommand` call is in flight. Once the command settles (any path), the entry is deleted and a
@@ -278,6 +287,7 @@ level. A request arriving when the limit is reached is rejected with `EXECUTION_
 | `TIMEOUT` | `runCommand` rejects with `CommandTimeoutError` (`src/tools/errors.ts`) | 408 |
 | `CANCELLED` | `runCommand` rejects with `CommandCancelledError` (abort signalled via DELETE) | 499 |
 | `EXECUTABLE_NOT_FOUND` | `runCommand` denies because the bare name is not on `PATH` | 404 |
+| `EVIDENCE_WRITE_FAILED` | Evidence ledger write failed or the evidence store is unavailable | 500 |
 | `INTERNAL` | Any other spawn failure or unmapped error from `runCommand` | 500 |
 
 All `INTERNAL` error responses use a static, generic message. The raw Node.js or OS error is
@@ -313,8 +323,9 @@ string, consistent with ADR-0017 D10's `browser:error` pattern of never surfacin
   `runCommand`; AC2 forbids weakening.
 - Per-project policy overrides (different allowed commands per project): global allowlist for MVP.
 - Output side-files for large output (> `maxOutputBytes`): truncation marker is sufficient for MVP.
-- Per-arg path containment for read-path commands (`cat`, `grep`, `head`, `tail`): see Open
-  Questions for the known limitation.
+- Shell-like quoted-argument parsing in the UI: the backend accepts `args: string[]`; the MVP
+  widget intentionally uses a simple whitespace split and keeps complex argument construction out
+  of scope.
 
 ## Consequences
 
@@ -341,14 +352,14 @@ string, consistent with ADR-0017 D10's `browser:error` pattern of never surfacin
 - **No cd persistence.** Every execution must specify its cwd explicitly.
 - **No streaming output.** Large commands produce no visible output until they complete or hit the
   output cap.
-- **Individual file arguments are not path-contained.** `cat /etc/passwd` passes the allowlist
-  because `cat` has no subcommand structure to gate. `runCommand`'s cwd containment checks the
-  working directory, not each file argument. See Open Questions for detail.
+- **Shell quoting is not interpreted by the widget.** Arguments containing spaces must be supplied
+  through a future richer UI affordance; the backend contract remains explicit `args: string[]`.
 
 ### Neutral
 
-- **`evidenceSchemaVersion` stays `"1"`.** The `terminal-execution` kind field is additive;
-  existing manifests without it are valid.
+- **`evidenceSchemaVersion` stays `"1"`.** Terminal executions are stored as standard
+  `EvidenceManifest` records with `run.taskType: "terminal-execution"`. Existing manifests without
+  that task type remain valid.
 - **`TerminalExecutionManager` is injectable.** Optional `terminal?: TerminalExecutionManager`
   in `UiHandlerDeps` — tests that do not exercise terminal routes compile unaffected.
 - **`node-pty` removal is the only `package.json` change for MVP.** It reduces installed size and
@@ -483,22 +494,32 @@ ui/package.json           — Remove @xterm/xterm + @xterm/addon-fit (only impor
                             TerminalWidget.tsx, confirmed by grep).
 ```
 
-The evidence entry shape (additive to `EvidenceManifest`, `evidenceSchemaVersion` stays `"1"`):
+The evidence entry is a standard `EvidenceManifest` with `evidenceSchemaVersion: "1"` and
+`run.taskType: "terminal-execution"`. Terminal-specific command data is represented by one
+`commandExecutions` record; args and output are deliberately excluded:
 
 ```
 {
-  kind: "terminal-execution",
-  executionId: string,
-  command: string,        // bare name only ("git", "grep")
-  argCount: number,       // never the args themselves
-  exitCode: number | null,
-  signal: string | null,
-  durationMs: number,
-  timedOut: boolean,
-  truncated: boolean,
-  stdoutBytes: number,
-  stderrBytes: number,
-  startedAt: number       // epoch-ms
+  evidenceSchemaVersion: "1",
+  run: {
+    runId: executionId,
+    fingerprint: executionId,
+    taskType: "terminal-execution",
+    outcome: "completed" | "failed" | "cancelled" | "limit-exceeded",
+    ...
+  },
+  model: { modelId: "terminal-tool", costClass: "unknown" },
+  usageTotals: { promptTokens: 0, completionTokens: 0, requestCount: 0, totalLatencyMs: 0 },
+  context: { workspaceRoot: projectId, entries: [], ... },
+  commandExecutions: [
+    {
+      executable: command,   // bare name only ("git", "grep")
+      argCount: number,      // never the args themselves
+      exitCode: number | null,
+      timedOut: boolean,
+      durationMs: number
+    }
+  ]
 }
 ```
 
@@ -517,12 +538,12 @@ evidence appender (D6) plus SSE emitter (D7) that calls `runCommand` with the fu
 constant that does not replace or modify `DEFAULT_COMMAND_RULES`. The deny-by-default invariant is
 preserved: any command not in `TERMINAL_COMMAND_RULES` is denied before any spawn is attempted.
 
-**ADR-0010 (Audit Ledger and Evidence Manifests):** Each execution appends a `terminal-execution`
-entry to the `EvidenceManifest` via `buildTerminalEvidenceEntry` + `appendTerminalEvidence`.
-Output bytes are not embedded (keeps manifests small; removes redaction-at-rest surface). The
-second redaction pass via `createAuditRedactor` + `deepRedactStrings` applies to all string fields
-before persist (D6 Layer 2). `evidenceSchemaVersion` stays `"1"`; the new kind is additive. No
-file under `src/audit/**` is modified.
+**ADR-0010 (Audit Ledger and Evidence Manifests):** Each execution appends a standard
+`EvidenceManifest` with `run.taskType: "terminal-execution"` via `buildTerminalEvidenceEntry` +
+`appendTerminalEvidence`. Output bytes are not embedded (keeps manifests small; removes
+redaction-at-rest surface). The second redaction pass via `deepRedactStrings` applies to all string
+fields before persist (D6 Layer 2). `evidenceSchemaVersion` stays `"1"`; `src/audit/types.ts` is
+extended only to recognize the terminal task type.
 
 **ADR-0011 (Wave-1 User Interface and Packaging):** Zero new runtime dependencies are added. The
 removal of `node-pty`, `@xterm/xterm`, and `@xterm/addon-fit` is subtractive, which ADR-0011
@@ -530,8 +551,8 @@ explicitly permits. The BFF route shape, CSRF token pattern, and SSE STREAMING s
 reused unchanged. `UiHandlerDeps` gains an optional `terminal?: TerminalExecutionManager` field;
 existing tests that do not supply it continue to compile.
 
-**ADR-0013 (UI-Local Persistence):** No schema changes. Executions are ephemeral (D9). `ProjectStore.getProject(projectId)`
-is read (not modified) to resolve the workspace root for D2 Tier 2.
+**ADR-0013 (UI-Local Persistence):** No schema changes. Executions are ephemeral (D9). The
+`ProjectStore` is read (not modified) to resolve the workspace root for D2 Tier 2.
 
 **ADR-0014 (Workspace Shell Architecture):** `TerminalWidget`'s mount point in
 `ui/app/components/desktop/widgets/index.tsx` is unchanged. Only the widget's internals are
@@ -539,22 +560,15 @@ rewritten.
 
 ## Open Questions / Out of Scope
 
-**Individual file argument path containment.** `runCommand`'s cwd containment validates the
-working directory, not each individual file-path argument. A user who passes `../../etc/passwd`
-as an argument to `cat`, `grep`, `head`, or `tail` would not be blocked by the cwd check. These
-commands are read-only, so the risk is information disclosure (reading files outside the project),
-not mutation. Mitigation: output is bounded by `maxOutputBytes` and Layer-1 redacted. A follow-up
-issue could add per-arg path containment to `isTerminalCommandAllowed` for these read-path commands.
-This is the most significant residual limitation of the MVP design.
+**Quoted argument parsing.** The backend contract is explicit `args: string[]`, but the MVP widget
+uses whitespace splitting for user input. That means paths or patterns containing spaces require a
+future richer UI affordance rather than shell-style quoting. This is a usability limitation, not a
+sandbox relaxation, because the backend revalidates the final array.
 
 **`echo` and literal secrets.** With `shell: false`, `echo $SECRET` does not expand the variable.
 Layer-1 redaction scrubs known env-value patterns. A user who deliberately types a literal secret
 as an arg will see it in output; the redaction layer catches known patterns but not novel ones.
 This inherits the same honest bound as ADR-0006 D5 and is not a new limitation introduced here.
-
-**`grep -r` path escaping.** With `shell: false` and cwd inside the project root, a user who
-passes an absolute path or traversal as a grep path argument would traverse outside the project.
-The same documented limitation as file arguments above applies.
 
 **Per-project policy overrides.** The global `TERMINAL_COMMAND_RULES` applies to all projects. A
 follow-up issue could introduce per-project `TerminalPolicyOverride` stored in the SQLite database.
@@ -572,8 +586,8 @@ follow-up issue could introduce per-project `TerminalPolicyOverride` stored in t
   `createAuditRedactor`/`deepRedactStrings` redaction pipeline (D6 Layer 2).
 - ADR-0011: Wave-1 User Interface and Packaging — zero-dep invariant, BFF route shape, CSRF guard,
   SSE pattern, DNS-rebinding defense.
-- ADR-0013: UI-Local SQLite Persistence — `ProjectStore.getProject` used for D2 Tier 2 project
-  root resolution. No schema change.
+- ADR-0013: UI-Local SQLite Persistence — `ProjectStore` used for D2 Tier 2 project root
+  resolution. No schema change.
 - ADR-0014: Keiko Workspace Shell Architecture — `TerminalWidget` mount point unchanged.
 - ADR-0017: Browser Tool Boundary and BYO-Chrome Integration — sibling surface; D7 SSE event
   metadata-only pattern, D9 in-memory map lifecycle, D10 typed failure mode table all mirror
