@@ -140,6 +140,32 @@ describe("parseUnifiedDiff", () => {
     expect(metaLine?.text).toBe("\\ No newline at end of file");
   });
 
+  it("preserves hunk body text that resembles file headers", () => {
+    const raw = [
+      "diff --git a/src/headerish.txt b/src/headerish.txt",
+      "--- a/src/headerish.txt",
+      "+++ b/src/headerish.txt",
+      "@@ -1,3 +1,3 @@",
+      "--- literal removed text",
+      "+++ literal added text",
+      " unchanged",
+      "",
+    ].join("\n");
+
+    const result = parseUnifiedDiff(raw);
+    expect(result.files).toHaveLength(1);
+
+    const file = assertDefined(result.files[0], "file");
+    expect(file.path).toBe("src/headerish.txt");
+    expect(file.addedLines).toBe(1);
+    expect(file.removedLines).toBe(1);
+
+    const hunk = assertDefined(file.hunks[0], "hunk");
+    expect(hunk.lines[0]).toMatchObject({ kind: "del", text: "-- literal removed text" });
+    expect(hunk.lines[1]).toMatchObject({ kind: "add", text: "++ literal added text" });
+    expect(hunk.lines[2]).toMatchObject({ kind: "ctx", text: "unchanged" });
+  });
+
   it("parses hunk header without count (default 1)", () => {
     const raw = [
       "diff --git a/x.ts b/x.ts",
