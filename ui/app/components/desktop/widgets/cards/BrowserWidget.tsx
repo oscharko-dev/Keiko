@@ -297,7 +297,6 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
             className="bw-input"
             value={portInput}
             onChange={(e): void => setPortInput(e.target.value)}
-            aria-label="CDP port"
             disabled={session !== null || working}
           />
         </label>
@@ -308,7 +307,6 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
             className="bw-input bw-input-url"
             value={urlInput}
             onChange={(e): void => setUrlInput(e.target.value)}
-            aria-label="Loopback URL to navigate"
             disabled={working}
           />
         </label>
@@ -362,7 +360,6 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
             void handleApply();
           }}
           disabled={working || pendingShot === null}
-          aria-label="Persist pending screenshot"
         >
           Apply
         </button>

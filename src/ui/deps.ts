@@ -231,6 +231,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     }),
     browser: createBrowserSessionManager({
       evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),
+      evidenceStore,
       redactor: liveRedactor,
     }),
   };

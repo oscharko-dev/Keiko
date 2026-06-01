@@ -5,15 +5,20 @@
 // honest trust boundary alongside the evidence.
 
 import type { CostClass } from "../gateway/types.js";
-import type { RunOutcome, TaskType } from "../harness/types.js";
+import type { RunOutcome } from "../harness/types.js";
 import type { VerificationStatus } from "../verification/types.js";
-import type { EvidenceManifest, EvidenceUsageTotals, EvidenceVerificationResult } from "./types.js";
+import type {
+  EvidenceManifest,
+  EvidenceTaskType,
+  EvidenceUsageTotals,
+  EvidenceVerificationResult,
+} from "./types.js";
 
 export interface EvidenceReport {
   readonly evidenceLocation: string;
   readonly runId: string;
   readonly fingerprint: string;
-  readonly taskType: TaskType;
+  readonly taskType: EvidenceTaskType;
   readonly outcome: RunOutcome;
   readonly changedFiles: number;
   readonly usageTotals: EvidenceUsageTotals;

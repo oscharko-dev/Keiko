@@ -160,7 +160,10 @@ class FakeBrowserSessionManager implements BrowserSessionManager {
     });
   };
 
-  public readonly listSessionIds = (): readonly string[] => [...this.opened];
+  public readonly listSessionIds = (): readonly string[] =>
+    this.opened.filter((sessionId) => !this.closed.includes(sessionId));
+  public readonly hasSession = (sessionId: string): boolean =>
+    this.opened.includes(sessionId) && !this.closed.includes(sessionId);
   public readonly dispose = (): Promise<void> => Promise.resolve();
   public readonly subscribe = (
     sessionId: string,
@@ -486,6 +489,18 @@ describe("POST /api/browser/sessions/:id/screenshot + apply", () => {
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("NO_PENDING_SCREENSHOT");
   });
+
+  it("returns 413 PAYLOAD_TOO_LARGE when screenshot body exceeds 64KB", async () => {
+    const fx = await fixture();
+    const res = await fetch(url(fx, "/api/browser/sessions/s-1/screenshot"), {
+      method: "POST",
+      headers: CSRF_HEADERS,
+      body: JSON.stringify({ unused: "x".repeat(70_000) }),
+    });
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("PAYLOAD_TOO_LARGE");
+  });
 });
 
 describe("POST /api/browser/sessions/:id/content", () => {
@@ -500,13 +515,31 @@ describe("POST /api/browser/sessions/:id/content", () => {
     const body = (await res.json()) as { redactedHtml: string };
     expect(body.redactedHtml).toContain("secret=***");
   });
+
+  it("returns 413 PAYLOAD_TOO_LARGE when content body exceeds 64KB", async () => {
+    const fx = await fixture();
+    const res = await fetch(url(fx, "/api/browser/sessions/s-1/content"), {
+      method: "POST",
+      headers: CSRF_HEADERS,
+      body: JSON.stringify({ unused: "x".repeat(70_000) }),
+    });
+    expect(res.status).toBe(413);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("PAYLOAD_TOO_LARGE");
+  });
 });
 
 describe("GET /api/browser/sessions/:id/events (SSE)", () => {
   it("returns text/event-stream with the ready frame, then a browser:navigated frame", async () => {
     const fx = await fixture();
+    const create = await fetch(url(fx, "/api/browser/sessions"), {
+      method: "POST",
+      headers: CSRF_HEADERS,
+      body: JSON.stringify({ port: 9222 }),
+    });
+    const { sessionId } = (await create.json()) as { sessionId: string };
     const controller = new AbortController();
-    const responsePromise = fetch(url(fx, "/api/browser/sessions/s-1/events"), {
+    const responsePromise = fetch(url(fx, `/api/browser/sessions/${sessionId}/events`), {
       signal: controller.signal,
     });
     const response = await responsePromise;
@@ -514,9 +547,15 @@ describe("GET /api/browser/sessions/:id/events (SSE)", () => {
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     // Fire one event on the fake then close the stream.
     setTimeout(() => {
-      fx.fakeBrowser.emit("s-1", {
+      fx.fakeBrowser.emit(sessionId, {
+        schemaVersion: "1",
+        type: "browser:navigated",
+        runId: "run-1",
+        fingerprint: "fp-1",
+        seq: 1,
+        ts: Date.now(),
         kind: "navigated",
-        sessionId: "s-1",
+        sessionId,
         payload: { originOnly: "http://127.0.0.1:5173", httpStatus: 200 },
       });
       setTimeout(() => {
@@ -538,5 +577,59 @@ describe("GET /api/browser/sessions/:id/events (SSE)", () => {
     }
     expect(received).toContain("event: ready");
     expect(received).toContain("event: browser:navigated");
+  });
+
+  it("returns 404 SESSION_NOT_FOUND for unknown session event streams", async () => {
+    const fx = await fixture();
+    const res = await fetch(url(fx, "/api/browser/sessions/missing/events"));
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("SESSION_NOT_FOUND");
+  });
+
+  it("ends the event stream after browser:session-closed", async () => {
+    const fx = await fixture();
+    const create = await fetch(url(fx, "/api/browser/sessions"), {
+      method: "POST",
+      headers: CSRF_HEADERS,
+      body: JSON.stringify({ port: 9222 }),
+    });
+    const { sessionId } = (await create.json()) as { sessionId: string };
+    const controller = new AbortController();
+    const response = await fetch(url(fx, `/api/browser/sessions/${sessionId}/events`), {
+      signal: controller.signal,
+    });
+    expect(response.status).toBe(200);
+    setTimeout(() => {
+      fx.fakeBrowser.emit(sessionId, {
+        schemaVersion: "1",
+        type: "browser:session-closed",
+        runId: "run-1",
+        fingerprint: "fp-1",
+        seq: 1,
+        ts: Date.now(),
+        kind: "session-closed",
+        sessionId,
+        payload: { reason: "chrome-disconnected" },
+      });
+    }, 25);
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new Error("no body reader");
+    let received = "";
+    const timeout = setTimeout(() => {
+      controller.abort();
+    }, 1000);
+    try {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          break;
+        }
+        received += new TextDecoder().decode(chunk.value);
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
+    expect(received).toContain("event: browser:session-closed");
   });
 });

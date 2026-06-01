@@ -42,10 +42,10 @@ not invent new safety mechanisms.
 ### D1 — Runtime selection: BYO Chrome over CDP, using `ws` only
 
 The user supplies a running Chrome (or Chromium) instance launched with
-`--remote-debugging-port=<port> --user-data-dir=<ephemeral>`. Keiko's BFF opens a WebSocket
-connection to `ws://127.0.0.1:<port>/json/version` to discover the CDP endpoint, then connects to
-the browser-level CDP target. No binary is spawned by Keiko, no binary path is hard-coded, and no
-new runtime dependency is introduced.
+`--remote-debugging-port=<port> --user-data-dir=<ephemeral>`. Keiko's BFF fetches
+`http://127.0.0.1:<port>/json/version` without following redirects to discover the CDP WebSocket,
+then connects to the browser-level CDP target. No binary is spawned by Keiko, no binary path is
+hard-coded, and no new runtime dependency is introduced.
 
 The CDP client lives in `src/tools/browser/cdp-client.ts`. It is a thin wrapper around `ws`
 (`WebSocket` from the `ws` package) that sends JSON-RPC frames, awaits responses by `id`, and
@@ -62,8 +62,8 @@ an attacker with root access edits `/etc/hosts` to redirect `localhost` to an ex
 never sends that name to the OS resolver — it uses `127.0.0.1` directly.
 
 The port must be an integer in the range 1024–65535, supplied explicitly by the user. There is no
-default port and no port scanning. Keiko constructs the CDP WebSocket URL as
-`ws://127.0.0.1:<port>/json/version` (or `ws://[::1]:<port>/json/version` for IPv6).
+default port and no port scanning. Keiko constructs the CDP version endpoint as
+`http://127.0.0.1:<port>/json/version` (or `http://[::1]:<port>/json/version` for IPv6).
 
 **DNS-rebinding defence (two layers):**
 
@@ -71,12 +71,13 @@ default port and no port scanning. Keiko constructs the CDP WebSocket URL as
    BFF requests. A browser tab from a non-loopback origin cannot drive the browser API because the
    Keiko BFF rejects any request whose `Host` or `Origin` header is not a loopback authority on
    the bound BFF port. This is the same guard that protects every other BFF route.
-2. After a successful `Page.navigate`, the BFF validates the effective URL from the
-   `Page.frameNavigated` CDP event: the host component must still be a loopback literal. If a page
-   triggered a server-side redirect to a non-loopback host, the BFF immediately sends a CDP
-   `Page.stopLoading` command and returns a typed `ORIGIN_NOT_ALLOWED` error. Navigation to any
-   URL whose scheme is not `http:` or `https:` (including `javascript:`, `data:`, `vbscript:`,
-   `file:`) is rejected before the CDP `Page.navigate` command is issued.
+2. After a successful `Page.navigate`, the BFF validates the effective main-frame URL from the
+   `Page.frameNavigated` CDP event: the origin must exactly match the requested loopback origin
+   (scheme + host + port). Subframe navigations are ignored for this top-frame gate. If a page
+   redirects to a non-loopback host or another loopback port, the BFF immediately sends a CDP
+   `Page.stopLoading` command and returns a typed `ORIGIN_NOT_ALLOWED` error. Navigation to any URL
+   whose scheme is not `http:` or `https:` (including `javascript:`, `data:`, `vbscript:`, `file:`)
+   is rejected before the CDP `Page.navigate` command is issued.
 
 ### D3 — Trust model for BYO Chrome: isolated profile + fresh target only
 
@@ -85,10 +86,9 @@ Two requirements are imposed on the Chrome instance the user connects to Keiko:
 1. **Ephemeral user data directory**: the documented launch command is
    `chrome --remote-debugging-port=<port> --user-data-dir=$(mktemp -d) --no-first-run --no-default-browser-check`.
    Using a fresh directory ensures no pre-existing authenticated sessions, no stored passwords, and
-   no saved cookies. Keiko cannot enforce this at runtime, but it validates the presence of the
-   `--user-data-dir` flag via the CDP `Browser.getVersion` response metadata where available;
-   when metadata is absent it emits a `browser:trust-warning` event and continues, since some
-   Chromium builds omit this field.
+   no saved cookies. Keiko cannot enforce this at runtime without broadening the CDP allowlist, so
+   it emits a `browser:trust-warning` event when command-line metadata is unavailable or does not
+   show `--user-data-dir`.
 2. **Fresh target via `Target.createTarget`, never `Target.attachToTarget` on existing targets**:
    when a session is opened Keiko calls `Target.createTarget({ url: "about:blank" })` to create a
    new blank tab, attaches only to that target via `Target.attachToTarget`, and never enumerates or
@@ -114,7 +114,7 @@ client raises a `CDP_METHOD_FORBIDDEN` error if the caller attempts to invoke an
 | Target | closeTarget | Close the tab on session delete |
 | Page | enable | Enable Page domain events |
 | Page | navigate | Navigate to a loopback URL |
-| Page | stopLoading | Abort a redirect to a non-loopback origin |
+| Page | stopLoading | Abort a redirect away from the requested loopback origin |
 | Page | captureScreenshot | PNG capture (gated, see D5/D6) |
 | DOM | getDocument | Fetch the document root node |
 | DOM | getOuterHTML | Fetch serialised HTML for a node |
@@ -148,9 +148,10 @@ Screenshots are written as side-files:
 - Written via a new `writeSideFile(dir, name, data: Buffer)` helper in `src/audit/side-file.ts`
   that reuses the same `O_EXCL + rename` atomic write pattern as `EvidenceStore.put`, with
   `assertContainedRealPath` to keep the write inside the evidence directory.
-- The manifest field for a captured screenshot is:
+- The additive manifest field for captured browser evidence is `browser`. A captured screenshot is
+  represented in `browser.screenshots[]` as:
   ```
-  { kind: "screenshot", path: "browser-<seq>.png", sha256: "<hex>", capturedAt: <epoch-ms>, viewportPx: { width, height } }
+  { seq: <n>, path: "browser-<seq>.png", sha256: "<hex>", bytes: <n>, capturedAt: <epoch-ms>, viewportPx: { width, height } }
   ```
   The `path` value is relative to the run's evidence subdirectory, not an absolute filesystem path,
   so manifests remain portable if the evidence directory is moved.
@@ -158,7 +159,7 @@ Screenshots are written as side-files:
 The SHA-256 is computed over the raw PNG bytes before writing, providing tamper-evidence. The PNG
 bytes are never included in the `EvidenceManifest` JSON itself.
 
-`evidenceSchemaVersion` stays `"1"`. The new screenshot field is additive to the manifest
+`evidenceSchemaVersion` stays `"1"`. The new `browser` section is additive to the manifest
 structure, which ADR-0010 designed to be open for extension.
 
 ### D6 — Redaction of page content and screenshot gating
@@ -175,8 +176,8 @@ compensate:
    automatically on navigation.
 2. **Persist-on-apply only**: screenshots are written to the side-file location only when the
    user has confirmed capture via a gated apply step, mirroring the dry-run/apply gate in
-   workflows. In dry-run mode the PNG is held in memory and included in the SSE preview event but
-   not persisted to disk.
+   workflows. In dry-run mode the PNG is returned to the caller and held in a one-entry pending
+   cache; browser events carry metadata only, never base64 image bytes.
 
 A `browser:screenshot-captured` event carries `{ persisted: false }` in dry-run mode and
 `{ persisted: true, path: "browser-<seq>.png" }` after apply. The UI renders a visual warning
@@ -193,7 +194,7 @@ New `HarnessEvent` union members (each extends `BaseEvent` with `schemaVersion: 
 | `browser:navigated` | `sessionId`, `originOnly: string` (scheme + authority, never path), `httpStatus` |
 | `browser:screenshot-captured` | `sessionId`, `seq`, `persisted: boolean`, `viewportPx` |
 | `browser:page-content-captured` | `sessionId`, `seq`, `byteLength` (redacted HTML byte count) |
-| `browser:session-closed` | `sessionId`, `reason: "explicit" \| "process-exit" \| "chrome-disconnected"` |
+| `browser:session-closed` | `sessionId`, `reason: "explicit" \| "process-exit" \| "chrome-disconnected" \| "idle-timeout"` |
 | `browser:trust-warning` | `sessionId`, `warning: string` |
 | `browser:error` | `sessionId`, `code: BrowserErrorCode`, `message: string` |
 
@@ -227,7 +228,7 @@ The route family is `/api/browser/*`:
 | GET | `/api/browser/sessions/:sessionId/events` | No | SSE stream for the session |
 
 `GET /api/browser/status` is read-only and does not modify state; no CSRF token is required. All
-five POST and one DELETE routes require the CSRF token, consistent with the existing pattern for
+six POST and one DELETE routes require the CSRF token, consistent with the existing pattern for
 state-changing routes. The SSE GET follows the same STREAMING sentinel return as
 `/api/runs/:runId/events`.
 
@@ -246,9 +247,10 @@ Browser sessions are held in a `BrowserSessionManager` (parallel to `TerminalSes
 4. Idle timeout: a session with no activity for 30 minutes is closed automatically (consistent
    with `SESSION_IDLE_TTL_MS` in `terminal.ts`).
 
-No browser session state is written to the SQLite database (ADR-0013) or the evidence ledger
-(ADR-0010) outside the screenshot side-file path described in D5. The evidence ledger records
-what was captured, not the session's existence or its full navigation history.
+No browser session state is written to the SQLite database (ADR-0013). The evidence ledger
+(ADR-0010) records the additive `browser` manifest section: session metadata, audit-shaped
+`browser:*` events, redacted HTML captures, and screenshot side-file references. It does not store
+PNG bytes in JSON or persist any browser state outside the evidence directory.
 
 ### D10 — Typed failure modes
 
@@ -267,6 +269,10 @@ The following typed error codes are defined in `src/tools/browser/errors.ts`:
 | `SCREENSHOT_TOO_LARGE` | PNG byte count exceeds 10 MB | 413 |
 | `CONTENT_TOO_LARGE` | `getOuterHTML` byte count exceeds 2 MB | 413 |
 | `CDP_METHOD_FORBIDDEN` | Internal — a bug in the BFF attempted a forbidden CDP method | 500 |
+| `CDP_TRANSPORT_REFUSED` | CDP metadata points away from the requested loopback endpoint | 503 |
+| `BAD_PORT`, `BAD_URL`, `BAD_REQUEST` | Invalid user input | 400 |
+| `NO_PENDING_SCREENSHOT` | Apply requested a missing dry-run screenshot sequence | 409 |
+| `PAYLOAD_TOO_LARGE` | Browser route request body or CDP version body exceeds the size cap | 413 |
 
 All errors produce a `browser:error` SSE event before the route returns the HTTP error response.
 The `message` field in `browser:error` is a static string, never a raw Chrome error message
@@ -335,9 +341,9 @@ The `message` field in `browser:error` is a static string, never a raw Chrome er
 
 ### Neutral
 
-- **`evidenceSchemaVersion` stays `"1"`.** The new screenshot field is additive. Existing
-  manifests that pre-date Issue #76 have no screenshot field; the manifest reader must tolerate
-  its absence.
+- **`evidenceSchemaVersion` stays `"1"`.** The new `browser` section is additive. Existing
+  manifests that pre-date Issue #76 have no browser field; the manifest reader must tolerate its
+  absence.
 - **`BrowserSessionManager` is a new in-memory stateful singleton** per BFF process, consistent
   with `TerminalSessionManager`. `UiHandlerDeps` gains an optional `browser?` field so tests
   that do not exercise the browser routes are unaffected.
@@ -443,9 +449,9 @@ src/audit/
                           Uses O_EXCL + rename + assertContainedRealPath.
 
 src/ui/
-  browser-handlers.ts   — Seven BFF route handlers (D8). Imports BrowserSessionManager.
+  browser.ts            — Eight BFF route handlers (D8). Imports BrowserSessionManager.
   deps.ts               — Add optional `browser?: BrowserSessionManager` field.
-  routes.ts             — Register seven /api/browser/* routes after /api/files/*.
+  routes.ts             — Register eight /api/browser/* routes after /api/files/*.
 
 ui/app/components/desktop/widgets/cards/
   BrowserWidget.tsx     — Replace stub. Accepts { sessionId?, cdpPort?, url? }.
@@ -472,10 +478,10 @@ interface. The `writeSideFile` helper uses `assertContainedRealPath`, the same c
 primitive ADR-0006 mandates for all writes.
 
 **ADR-0010 (Audit Ledger and Evidence Manifests):** Screenshot side-files are stored inside the
-realpath-contained evidence directory. The manifest field references them by relative path and
-SHA-256. HTML captures flow through `createAuditRedactor` + `deepRedactStrings` before any
-persist or SSE emission. `evidenceSchemaVersion` stays `"1"` with additive new fields. The
-`O_EXCL + rename` atomic write pattern from `src/audit/store.ts` is reused for side-file writes.
+realpath-contained evidence directory. The additive `browser` manifest section references them by
+relative path and SHA-256. HTML captures flow through `createAuditRedactor` + `deepRedactStrings`
+before any persist or SSE emission. `evidenceSchemaVersion` stays `"1"` with additive new fields.
+The `O_EXCL + rename` atomic write pattern from `src/audit/store.ts` is reused for side-file writes.
 
 **ADR-0011 (Wave-1 User Interface and Packaging):** Zero new runtime dependencies are added.
 The `ws` package is an existing runtime dep. The BFF route shape (method + pattern + handler +
