@@ -832,7 +832,7 @@ export interface TerminalEventEnvelope {
 }
 
 // ---------------------------------------------------------------------------
-// Desktop files — read-only selected-root filesystem browser contract
+// Desktop files — read-only registered-project filesystem browser contract
 // ---------------------------------------------------------------------------
 
 export interface FilesDirectoryRoot {

@@ -592,12 +592,12 @@ select.set-input { appearance: none; cursor: pointer; }
 .fpv-back { width: 26px; height: 26px; flex: none; display: grid; place-items: center; border-radius: 7px; color: var(--fg-dim); }
 .fpv-back:hover { background: var(--card-2); color: var(--fg); }
 .fpv-name { font-size: 12.5px; color: var(--fg); }
-.fpv-lang { font-size: 10px; color: var(--fg-faint); background: var(--inset); border: 1px solid var(--line-soft); border-radius: 5px; padding: 1px 6px; text-transform: uppercase; letter-spacing: .04em; }
+.fpv-lang { font-size: 10px; color: var(--fg-muted); background: var(--inset); border: 1px solid var(--line-strong); border-radius: 5px; padding: 1px 6px; text-transform: uppercase; letter-spacing: .04em; }
 .fpv-code { flex: 1; overflow: auto; background: oklch(0.155 0.004 160); padding: 8px 0; font-size: 12px; line-height: 1.7; }
 .fpv-line { display: flex; }
 .fpv-num { width: 44px; flex: none; text-align: right; padding-right: 16px; color: var(--fg-faint); opacity: .6; user-select: none; }
 .fpv-src { white-space: pre; color: #c5cdd9; padding-right: 14px; }
-.fpv-state { padding: 14px 16px; margin: 12px; font-size: 12.5px; line-height: 1.5; color: var(--fg-dim); background: var(--inset); border: 1px solid var(--line-soft); border-radius: 8px; }
+.fpv-state { padding: 14px 16px; margin: 12px; font-size: 12.5px; line-height: 1.5; color: var(--fg-muted); background: var(--inset); border: 1px solid var(--line-soft); border-radius: 8px; }
 .fpv-error { color: var(--fg); background: color-mix(in oklch, var(--danger) 14%, var(--inset)); border-color: color-mix(in oklch, var(--danger) 55%, var(--line-soft)); }
 .hl-com { color: #6b7787; font-style: italic; }
 .hl-str { color: #c3e88d; }
@@ -914,7 +914,7 @@ select.dlg-input { appearance: none; cursor: pointer; }
 
 /* ---------- WIDGET: FILES ---------- */
 .files { position: relative; padding: 6px 6px; }
-.files-refresh { position: absolute; top: 4px; right: 6px; z-index: 1; width: 22px; height: 22px; display: grid; place-items: center; border-radius: 6px; color: var(--fg-faint); opacity: 0; transition: opacity .12s, color .12s, background .12s; }
+.files-refresh { position: absolute; top: 4px; right: 6px; z-index: 1; width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px; color: var(--fg-faint); opacity: 0; transition: opacity .12s, color .12s, background .12s; }
 .window:hover .files-refresh, .files-refresh:focus-visible { opacity: 1; }
 .files-refresh:hover { background: var(--card-2); color: var(--fg); }
 .file-row { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 7px; font-size: 13px; color: var(--fg-muted); cursor: default; }

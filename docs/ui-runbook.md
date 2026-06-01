@@ -22,7 +22,7 @@ Opening `/` or `/launch` in the browser displays the dark, Keiko-branded workspa
   - **Explain Plan** — understanding and validation of a code area (read-only)
   - **Verify** — standalone verification without a workflow (BFF-only, no harness session)
 
-- **Workspace tool entry area** — On tablet and desktop, the tools sit in the right-side rail. On mobile, the same project-bound entries remain reachable as a fixed bottom bar. The Files MVP displays a high-level summary of project structure (folder hierarchy, file metadata, never file excerpts). Placeholder entry points for Browser, Review, and Terminal tools appear with links to their respective follow-up issues (#76, #77, #78).
+- **Workspace tool entry area** — On tablet and desktop, the tools sit in the right-side rail. On mobile, the same project-bound entries remain reachable as a fixed bottom bar. The Files tool displays a bounded project tree and read-only previews through registered-project BFF routes that preserve deny-list, `.gitignore`, symlink-containment, and redaction semantics. Browser, Review, and Terminal tools are also available from this area.
 
 **Secondary navigation** — `Config` (gateway configuration and model registry) and `Evidence` (run history and evidence manifests) are reachable from links in the shell header's secondary navigation bar, not as equal top-level surfaces.
 
@@ -140,7 +140,7 @@ Epic #61 (the workspace shell) is the foundation for multi-surface local interac
 
 - **Native OS folder picker** — Projects are added by entering a validated absolute local path. A native file-picker dialog is not in the MVP (epic #61 non-goal).
 - **Enterprise project-path allowlist and governance policy** — V1 validates project directories server-side (read-access checks, no write outside target). Governance policies that restrict which paths developers can open are deferred to a later governance issue.
-- **Deeper Files explorer integration** — The current Files MVP shows structural metadata only (hierarchy and file names). Deeper integration (file search, preview, diff views) is tracked in issue #75.
+- **Files explorer limits** — The Files tool is read-only and project-bound. It does not edit files, execute commands, expose arbitrary host paths, or preview deny-listed paths such as `.env`, `.git`, private keys, dependency folders, build output, caches, or logs.
 - **Browser tool integration** — Placeholder entry point in the workspace tool area; full integration tracked in issue #76.
 - **Review tool integration** — Placeholder entry point in the workspace tool area; full integration tracked in issue #77.
 - **Terminal tool integration** — Placeholder entry point in the workspace tool area; full integration tracked in issue #78.

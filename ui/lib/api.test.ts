@@ -92,7 +92,7 @@ describe("files API helpers", () => {
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/files/directories?path=%2Frepo+space",
+      "/api/files/directories?root=%2Frepo+space",
       expect.objectContaining({
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),

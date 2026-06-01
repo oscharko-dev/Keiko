@@ -14,6 +14,7 @@ import type {
   AgentWorkflowId,
   FilesDirectoryListing,
   ModelCapability,
+  ProjectWithAvailability,
 } from "../../../../lib/types";
 import { Icons } from "../Icons";
 import type { FilesWindowContext } from "../hooks/useWorkspace.types";
@@ -53,6 +54,8 @@ function focusableInside(root: HTMLElement): readonly HTMLElement[] {
 
 interface DirectoryPickerProps {
   readonly value: string;
+  readonly projectId?: string | undefined;
+  readonly selectProjectRoot?: boolean | undefined;
   readonly onSelect: (path: string) => void;
   readonly onClose: () => void;
 }
@@ -61,17 +64,30 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Unable to read directories.";
 }
 
-function DirectoryPicker({ value, onSelect, onClose }: DirectoryPickerProps): ReactNode {
+function DirectoryPicker({
+  value,
+  projectId,
+  selectProjectRoot = false,
+  onSelect,
+  onClose,
+}: DirectoryPickerProps): ReactNode {
   const [listing, setListing] = useState<FilesDirectoryListing | null>(null);
   const [draft, setDraft] = useState(value);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestRoot = projectId ?? value.trim();
 
   const load = useCallback(async (path?: string): Promise<void> => {
+    if (requestRoot.length === 0) {
+      setListing(null);
+      setDraft("");
+      setError("Select a registered project first.");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
-      const next = await fetchFilesDirectories(path);
+      const next = await fetchFilesDirectories(requestRoot, path);
       setListing(next);
       setDraft(next.path);
     } catch (err) {
@@ -79,7 +95,7 @@ function DirectoryPicker({ value, onSelect, onClose }: DirectoryPickerProps): Re
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [requestRoot]);
 
   useEffect(() => {
     void load(value.length > 0 ? value : undefined);
@@ -87,7 +103,7 @@ function DirectoryPicker({ value, onSelect, onClose }: DirectoryPickerProps): Re
 
   const choose = (): void => {
     if (listing !== null) {
-      onSelect(listing.path);
+      onSelect(selectProjectRoot ? listing.roots[0]?.path ?? listing.path : listing.path);
       onClose();
     }
   };
@@ -164,6 +180,10 @@ const AGENT_WORKFLOWS: readonly { id: AgentWorkflowId; label: string }[] = [
   { id: "unit-test-generation", label: "Generate unit tests" },
   { id: "bug-investigation", label: "Investigate bug" },
 ];
+
+function availableProjectPaths(projects: readonly ProjectWithAvailability[]): readonly string[] {
+  return projects.filter((project) => project.available).map((project) => project.path);
+}
 
 function splitPaths(value: string): string[] {
   return value
@@ -424,7 +444,7 @@ function AgentLauncher({
         if (cancelled) return;
         setModels(modelPayload.models);
         setModelId((current) => current || chooseDefaultModel(modelPayload.models));
-        setProjects(projectPayload.projects.filter((project) => project.available).map((project) => project.path));
+        setProjects(availableProjectPaths(projectPayload.projects));
       })
       .catch((error: unknown) => {
         if (!cancelled) setDialogError(errorMessage(error));
@@ -455,7 +475,7 @@ function AgentLauncher({
 
   const refreshProjects = async (): Promise<void> => {
     const projectPayload = await fetchProjects();
-    setProjects(projectPayload.projects.filter((project) => project.available).map((project) => project.path));
+    setProjects(availableProjectPaths(projectPayload.projects));
   };
 
   const registerWorkspace = async (): Promise<void> => {
@@ -677,6 +697,7 @@ function AgentLauncher({
         {directoryField === "agentWorkspace" ? (
           <DirectoryPicker
             value={workspaceRoot}
+            projectId={registered ? workspace : undefined}
             onSelect={setWorkspaceRoot}
             onClose={() => setDirectoryField(null)}
           />
@@ -775,9 +796,12 @@ export function NewWindowDialog({
     const currentRoot = cfg.root;
     if (typeof currentRoot === "string" && currentRoot.length > 0) return;
     setDialogError(null);
-    void fetchFilesDirectories()
-      .then((listing) => {
-        if (!cancelled) setCfg((current) => ({ ...current, root: listing.path }));
+    void fetchProjects()
+      .then((payload) => {
+        const firstProject = availableProjectPaths(payload.projects)[0];
+        if (!cancelled && firstProject !== undefined) {
+          setCfg((current) => ({ ...current, root: firstProject }));
+        }
       })
       .catch((error: unknown) => {
         if (!cancelled) setDialogError(errorMessage(error));
@@ -869,6 +893,7 @@ export function NewWindowDialog({
               {f.type === "directory" && directoryField === f.key ? (
                 <DirectoryPicker
                   value={typeof cfg[f.key] === "string" ? cfg[f.key] as string : ""}
+                  selectProjectRoot={f.key === "root"}
                   onSelect={(path) => set(f.key, path)}
                   onClose={() => setDirectoryField(null)}
                 />

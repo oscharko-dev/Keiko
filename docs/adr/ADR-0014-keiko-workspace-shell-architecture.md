@@ -315,8 +315,9 @@ We will enforce that the shell issues **GET requests only** during mount:
 - `Sidebar.tsx` calls only `fetchProjects()` (`GET /api/projects`) in its mount `useEffect`.
 - `CentralArea.tsx` and `ToolRail.tsx` may read project metadata with `GET /api/projects` when
   URL state references a selected project.
-- `FilesPanel.tsx` may read a selected registered project summary with `GET /api/workspace`;
-  the BFF rejects unregistered workspace paths.
+- The Files tool may read a selected registered project through `GET /api/files/*` for tree and
+  preview data, and `GET /api/workspace` remains the registered-project summary route. Both BFF
+  surfaces reject unregistered workspace paths.
 - No call to `createProject`, `updateProject`, `deleteProject`, `createChat`, or any `POST`,
   `PATCH`, or `DELETE` route may be triggered by rendering or mounting any shell component.
 - `WorkspaceShellEntry.tsx` issues no network calls (static content only).
@@ -400,7 +401,8 @@ layout refactor unchanged.
 - **Logo color decoupled from SVG source.** `currentColor` binding means the brand color change
   requires no SVG file edit and no `ui/public/` copy.
 - **Read-only mount is structurally enforced.** Shell components may issue only same-origin GETs
-  during mount, and `/api/workspace` is bound to registered projects before filesystem reads.
+  during mount, and both `/api/workspace` and `/api/files/*` are bound to registered projects before
+  filesystem reads.
 
 ### Negative
 

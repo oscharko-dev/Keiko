@@ -6,7 +6,7 @@ import { ApiError, fetchFilesPreview } from "../../../../../lib/api";
 import type { FilesPreviewResponse } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
-import { highlightLines, langOf } from "./shared/syntaxHighlight";
+import { highlightLines, langOf, type Token } from "./shared/syntaxHighlight";
 
 interface FilePreviewProps {
   readonly root: string;
@@ -19,6 +19,7 @@ interface FilePreviewProps {
 // never reveals the requested path or the specific matched pattern.
 const DENIED_PREVIEW_MESSAGE =
   "This file is excluded from the read surface for safety (matches a deny pattern such as .env, *.pem, node_modules, .git, …).";
+const MAX_HIGHLIGHT_BYTES = 200_000;
 
 interface PreviewError {
   readonly message: string;
@@ -96,10 +97,15 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
   }, [path, root]);
 
   const denied = error?.denied === true;
-  const lang = preview !== null ? previewKindLabel(preview) : denied ? "denied" : "loading";
-  const headerName = denied ? "Hidden file" : preview?.name ?? path;
-  const headerTitle = denied ? "Hidden file" : path;
-  const lines = preview?.kind === "text" ? highlightLines(preview.content, langOf(preview.name)) : [];
+  const lang = preview !== null ? previewKindLabel(preview) : denied ? "denied" : error !== null ? "error" : "loading";
+  const headerName = denied ? "Hidden file" : preview?.name ?? (error !== null ? "Preview unavailable" : "Loading preview");
+  const headerTitle = headerName;
+  const shouldHighlight = preview?.kind === "text" && preview.content.length <= MAX_HIGHLIGHT_BYTES;
+  const lines: readonly (readonly Token[])[] = preview?.kind === "text"
+    ? shouldHighlight
+      ? highlightLines(preview.content, langOf(preview.name))
+      : preview.content.split("\n").map((line): readonly Token[] => [["id", line]])
+    : [];
 
   return (
     <div className="fpv">
@@ -113,7 +119,7 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
         >
           <Icons.back size={15} />
         </button>
-        <FileIcon name={denied ? "" : preview?.name ?? path} />
+        <FileIcon name={denied || preview === null ? "" : preview.name} />
         <span className="fpv-name" title={headerTitle}>{headerName}</span>
         <span className="fpv-lang mono">{lang}</span>
         <span className="spacer" />
@@ -138,6 +144,11 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
           {preview.truncated ? (
             <div className="fpv-banner">
               Preview truncated at {formatBytes(preview.maxBytes)}. Open the file in the editor for full content.
+            </div>
+          ) : null}
+          {!shouldHighlight ? (
+            <div className="fpv-banner">
+              Syntax highlighting disabled for large previews.
             </div>
           ) : null}
           <div className="fpv-code mono">

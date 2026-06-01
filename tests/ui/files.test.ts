@@ -1,13 +1,15 @@
 import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   buildRedactor,
+  createInMemoryUiStore,
   listFilesDirectories,
   readFilesPreview,
   readFilesTree,
 } from "../../src/ui/index.js";
+import type { UiStore } from "../../src/ui/store/index.js";
 
 const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ax6XK0AAAAASUVORK5CYII=",
@@ -17,6 +19,7 @@ const PNG_1X1 = Buffer.from(
 describe("desktop files browser", () => {
   let root: string;
   let extraRoot: string | null = null;
+  let store: UiStore;
 
   beforeEach(async () => {
     root = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-")));
@@ -26,9 +29,12 @@ describe("desktop files browser", () => {
     await writeFile(join(root, "src", "app.ts"), "const value: string = \"ok\";\n");
     await writeFile(join(root, "assets", "pixel.png"), PNG_1X1);
     await writeFile(join(root, "archive.bin"), Buffer.from([0, 1, 2, 3, 4, 5]));
+    store = createInMemoryUiStore();
+    store.createProject(root, "fixture");
   });
 
   afterEach(async () => {
+    store.close();
     await rm(root, { recursive: true, force: true });
     if (extraRoot !== null) {
       await rm(extraRoot, { recursive: true, force: true });
@@ -37,15 +43,66 @@ describe("desktop files browser", () => {
   });
 
   it("lists directories for the local folder picker", async () => {
-    const listing = await listFilesDirectories(root);
+    const listing = await listFilesDirectories(store, root);
 
     expect(listing.path).toBe(root);
     expect(listing.entries.map((entry) => entry.name)).toEqual(["assets", "src"]);
-    expect(listing.roots.some((entry) => entry.label === "Current workspace")).toBe(true);
+    expect(listing.roots).toEqual([{ label: "Project root", path: root }]);
+  });
+
+  it("keeps the local folder picker inside the registered project and deny list", async () => {
+    await mkdir(join(root, ".git"));
+    await mkdir(join(root, "node_modules"));
+    await mkdir(join(root, "src", "nested"));
+
+    const listing = await listFilesDirectories(store, root, root);
+    expect(listing.entries.map((entry) => entry.name)).toEqual(["assets", "src"]);
+
+    const nested = await listFilesDirectories(store, root, join(root, "src"));
+    expect(nested.parent).toBe(root);
+    expect(nested.entries.map((entry) => entry.name)).toEqual(["nested"]);
+
+    await expect(listFilesDirectories(store, root, join(root, ".git"))).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+    store.createProject(join(root, ".git"), "git-dir");
+    await expect(listFilesDirectories(store, join(root, ".git"))).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+    await expect(listFilesDirectories(store, root, dirname(root))).rejects.toMatchObject({
+      status: 403,
+      code: "PATH_ESCAPE",
+    });
+    await expect(
+      listFilesDirectories(store, root, join(dirname(root), "missing-outside-project")),
+    ).rejects.toMatchObject({
+      status: 403,
+      code: "PATH_ESCAPE",
+    });
+  });
+
+  it("rejects files requests for unregistered roots", async () => {
+    const unregistered = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-unregistered-")));
+    extraRoot = unregistered;
+
+    await expect(listFilesDirectories(store, unregistered)).rejects.toMatchObject({
+      status: 403,
+      code: "WORKSPACE_NOT_REGISTERED",
+    });
+    await expect(readFilesTree(store, unregistered, "")).rejects.toMatchObject({
+      status: 403,
+      code: "WORKSPACE_NOT_REGISTERED",
+    });
+    await expect(readFilesPreview(store, unregistered, "x.txt", buildRedactor({}))).rejects.toMatchObject({
+      status: 403,
+      code: "WORKSPACE_NOT_REGISTERED",
+    });
   });
 
   it("lazy-loads directories with directories first and files second", async () => {
-    const listing = await readFilesTree(root, "");
+    const listing = await readFilesTree(store, root, "");
 
     expect(listing.root).toBe(root);
     expect(listing.path).toBe("");
@@ -62,7 +119,7 @@ describe("desktop files browser", () => {
   });
 
   it("rejects path traversal outside the selected root", async () => {
-    await expect(readFilesTree(root, "../")).rejects.toMatchObject({
+    await expect(readFilesTree(store, root, "../")).rejects.toMatchObject({
       status: 400,
       code: "PATH_ESCAPE",
     });
@@ -78,15 +135,48 @@ describe("desktop files browser", () => {
       throw error;
     }
 
-    const listing = await readFilesTree(root, "");
+    const listing = await readFilesTree(store, root, "");
     expect(listing.entries.find((entry) => entry.name === "escape")).toMatchObject({
       kind: "directory",
       symlink: true,
       readable: false,
     });
-    await expect(readFilesTree(root, "escape")).rejects.toMatchObject({
+    await expect(readFilesTree(store, root, "escape")).rejects.toMatchObject({
       status: 403,
       code: "PATH_ESCAPE",
+    });
+  });
+
+  it("marks symlink aliases to deny-listed targets unreadable and denies access through them", async () => {
+    await writeFile(join(root, ".env"), "SECRET=1\n");
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+    try {
+      await symlink(".env", join(root, "config.txt"));
+      await symlink(".git", join(root, "git-cache"), "dir");
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return;
+      throw error;
+    }
+
+    const listing = await readFilesTree(store, root, "");
+    expect(listing.entries.find((entry) => entry.name === "config.txt")).toMatchObject({
+      symlink: true,
+      readable: false,
+    });
+    expect(listing.entries.find((entry) => entry.name === "git-cache")).toMatchObject({
+      kind: "directory",
+      symlink: true,
+      readable: false,
+    });
+
+    await expect(readFilesPreview(store, root, "config.txt", buildRedactor({}))).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+    await expect(readFilesTree(store, root, "git-cache")).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
     });
   });
 
@@ -95,6 +185,7 @@ describe("desktop files browser", () => {
     await writeFile(join(root, "src", "secret.ts"), `export const token = "${secret}";\n`);
 
     const preview = await readFilesPreview(
+      store,
       root,
       "src/secret.ts",
       buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }),
@@ -110,14 +201,14 @@ describe("desktop files browser", () => {
   it("refuses to preview .env.local (matches the .env.* deny pattern)", async () => {
     await writeFile(join(root, ".env.local"), "API_KEY=value\n");
 
-    await expect(readFilesPreview(root, ".env.local", buildRedactor({}))).rejects.toMatchObject({
+    await expect(readFilesPreview(store, root, ".env.local", buildRedactor({}))).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
   });
 
   it("returns image previews below the image cap", async () => {
-    const preview = await readFilesPreview(root, "assets/pixel.png", buildRedactor({}));
+    const preview = await readFilesPreview(store, root, "assets/pixel.png", buildRedactor({}));
 
     expect(preview.kind).toBe("image");
     if (preview.kind === "image") {
@@ -127,7 +218,7 @@ describe("desktop files browser", () => {
   });
 
   it("returns metadata for unsupported binary files", async () => {
-    const preview = await readFilesPreview(root, "archive.bin", buildRedactor({}));
+    const preview = await readFilesPreview(store, root, "archive.bin", buildRedactor({}));
 
     expect(preview).toMatchObject({
       kind: "binary",
@@ -140,7 +231,7 @@ describe("desktop files browser", () => {
     const content = `${"a".repeat(1_000_050)}tail`;
     await writeFile(join(root, "large.txt"), content);
 
-    const preview = await readFilesPreview(root, "large.txt", buildRedactor({}));
+    const preview = await readFilesPreview(store, root, "large.txt", buildRedactor({}));
 
     expect(preview.kind).toBe("text");
     if (preview.kind === "text") {
@@ -153,7 +244,7 @@ describe("desktop files browser", () => {
   it("caps large image previews to metadata", async () => {
     await writeFile(join(root, "huge.png"), Buffer.alloc(3_000_001, 1));
 
-    const preview = await readFilesPreview(root, "huge.png", buildRedactor({}));
+    const preview = await readFilesPreview(store, root, "huge.png", buildRedactor({}));
 
     expect(preview).toMatchObject({
       kind: "binary",
@@ -171,7 +262,7 @@ describe("desktop files browser", () => {
       ),
     );
 
-    const listing = await readFilesTree(root, "many");
+    const listing = await readFilesTree(store, root, "many");
 
     expect(listing.entries).toHaveLength(1_000);
     expect(listing.truncated).toBe(true);
@@ -187,7 +278,7 @@ describe("desktop files browser", () => {
     await mkdir(join(root, ".git"));
     await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
 
-    const listing = await readFilesTree(root, "");
+    const listing = await readFilesTree(store, root, "");
     const names = listing.entries.map((entry) => entry.name);
 
     expect(names).toContain(".env.example");
@@ -202,7 +293,7 @@ describe("desktop files browser", () => {
     await mkdir(join(root, ".git"));
     await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
 
-    await expect(readFilesTree(root, ".git")).rejects.toMatchObject({
+    await expect(readFilesTree(store, root, ".git")).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -213,11 +304,11 @@ describe("desktop files browser", () => {
     await mkdir(join(root, "node_modules"));
     await writeFile(join(root, "node_modules", "foo.js"), "module.exports = 1;\n");
 
-    await expect(readFilesPreview(root, ".env", buildRedactor({}))).rejects.toMatchObject({
+    await expect(readFilesPreview(store, root, ".env", buildRedactor({}))).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
-    await expect(readFilesPreview(root, "node_modules/foo.js", buildRedactor({}))).rejects.toMatchObject({
+    await expect(readFilesPreview(store, root, "node_modules/foo.js", buildRedactor({}))).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -227,15 +318,15 @@ describe("desktop files browser", () => {
     // No file is created. A denied path that does not exist must still return
     // 403 DENIED — never 404 — so callers cannot tell whether a deny-listed
     // file exists under the selected root.
-    await expect(readFilesPreview(root, ".env", buildRedactor({}))).rejects.toMatchObject({
+    await expect(readFilesPreview(store, root, ".env", buildRedactor({}))).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
-    await expect(readFilesTree(root, ".git")).rejects.toMatchObject({
+    await expect(readFilesTree(store, root, ".git")).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
-    await expect(readFilesPreview(root, "node_modules/missing.js", buildRedactor({}))).rejects.toMatchObject({
+    await expect(readFilesPreview(store, root, "node_modules/missing.js", buildRedactor({}))).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -244,7 +335,7 @@ describe("desktop files browser", () => {
   it("allows previewing .env.example as text", async () => {
     await writeFile(join(root, ".env.example"), "# example env template\n");
 
-    const preview = await readFilesPreview(root, ".env.example", buildRedactor({}));
+    const preview = await readFilesPreview(store, root, ".env.example", buildRedactor({}));
 
     expect(preview.kind).toBe("text");
     if (preview.kind === "text") {
@@ -268,7 +359,7 @@ describe("desktop files browser", () => {
     await writeFile(join(many, "real-b.txt"), "b\n");
     await writeFile(join(many, "real-c.txt"), "c\n");
 
-    const listing = await readFilesTree(root, "many");
+    const listing = await readFilesTree(store, root, "many");
     const names = listing.entries.map((entry) => entry.name);
 
     expect(listing.truncated).toBe(false);
@@ -282,7 +373,7 @@ describe("desktop files browser", () => {
     await writeFile(join(root, "artifact.txt"), "artifact\n");
     await writeFile(join(root, "keep.txt"), "keep\n");
 
-    const listing = await readFilesTree(root, "");
+    const listing = await readFilesTree(store, root, "");
     const names = listing.entries.map((entry) => entry.name);
 
     expect(names).toContain("keep.txt");
@@ -297,7 +388,7 @@ describe("desktop files browser", () => {
     await writeFile(join(root, ".gitignore"), "artifact.txt\n");
     await writeFile(join(root, "artifact.txt"), "artifact content\n");
 
-    const preview = await readFilesPreview(root, "artifact.txt", buildRedactor({}));
+    const preview = await readFilesPreview(store, root, "artifact.txt", buildRedactor({}));
 
     expect(preview.kind).toBe("text");
     if (preview.kind === "text") {
@@ -309,7 +400,7 @@ describe("desktop files browser", () => {
     // Verifies loadRootGitignore's silent fallback. No .gitignore in fixture.
     await writeFile(join(root, "ordinary.txt"), "kept\n");
 
-    const listing = await readFilesTree(root, "");
+    const listing = await readFilesTree(store, root, "");
     const names = listing.entries.map((entry) => entry.name);
 
     expect(names).toContain("ordinary.txt");

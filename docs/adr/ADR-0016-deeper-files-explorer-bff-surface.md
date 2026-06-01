@@ -7,8 +7,8 @@ Accepted
 ## Context
 
 Issue #75 (parent epic #61, follow-up to #67) requires the desktop Files widget to read directory
-trees and file previews from any developer-selected root with the same safety invariants the
-workspace layer (ADR-0005) enforces: containment, the always-on deny list, redacted previews, and
+trees and file previews from the selected registered project root with the same safety invariants
+the workspace layer (ADR-0005) enforces: containment, the always-on deny list, redacted previews, and
 bounded reads. The current BFF, `src/ui/files.ts`, already implements path containment, symlink
 escape rejection, a 1000-entry directory cap, 1 MB text preview cap, 3 MB image preview cap, and
 redaction over text previews. What it did not enforce until #75 was the deny list and `.gitignore`
@@ -17,13 +17,12 @@ safety boundary.
 
 Three forces shape the decision.
 
-**The Files BFF reads from arbitrary user-selected roots, the workspace layer does not.** The Files
-widget allows the developer to browse Home, Current workspace, or Filesystem root. `src/workspace/`
-is keyed to a single registered workspace at the harness level via `resolveWithinWorkspace`. The
-two surfaces do similar work (lexical normalisation, realpath, containment) but operate on
-different inputs and have different lifecycles. Sharing `src/workspace/discovery.ts` directly would
-either force the Files widget to register every browse target as a workspace (UX-breaking) or
-require widening `src/workspace/` to a multi-root model (a larger refactor outside #75's scope).
+**The Files BFF is project-root scoped, but its browsing path is dynamic.** The browser supplies a
+registered project path as `root`; the BFF rejects unregistered roots before touching the filesystem.
+Directory navigation and preview paths are then resolved inside that project root with lexical and
+realpath containment checks. `src/workspace/` is keyed to a single registered workspace at the
+harness level via `resolveWithinWorkspace`; the Files BFF keeps its own route-local path helpers so
+it can return tree/preview metadata without changing the workspace context-pack API.
 
 **The deny list is a server-side safety invariant the client must not be able to probe.** If the
 UI exposed the matched deny pattern or the requested path in an error message, a developer (or any
@@ -43,10 +42,10 @@ Folding both into a single filter would either weaken the deny list or block leg
 ### D1 — Route family: `/api/files/*` is separate from `/api/workspace/*`
 
 We keep `/api/files/*` (three GET handlers: `/api/files/directories`, `/api/files/tree`,
-`/api/files/preview`) as a distinct route family from `/api/workspace/*` (ADR-0013). The Files
-routes read from any user-selected root on the developer's host; the workspace routes read only
-from a registered workspace. No write or execute routes are added by #75 — the surface remains
-read-only.
+`/api/files/preview`) as a distinct route family from `/api/workspace/*` (ADR-0013). Both route
+families read only from registered project roots. `/api/files/*` adds lazy tree/preview shapes for
+the desktop Files widget, while `/api/workspace` keeps the context-pack summary shape. No write or
+execute routes are added by #75 — the surface remains read-only.
 
 ### D2 — Deny enforcement: always-on, applied to both tree and preview
 
@@ -57,15 +56,17 @@ enforcement points:
 1. `listTreeEntries`: filter denied entries out of the response before the truncation counter
    advances. A directory packed with deny-listed entries (e.g. `node_modules/**`) cannot exhaust
    the 1000-entry budget and hide real files behind `truncated: true`.
-2. `readFilesTree`: if the resolved relative path itself is denied (e.g. navigating directly to
+2. `listFilesDirectories`: reject denied directory selections and omit denied child directories from
+   the folder-picker response.
+3. `readFilesTree`: if the resolved relative path itself is denied (e.g. navigating directly to
    `?path=.git`), throw `403 DENIED`.
-3. `readFilesPreview`: if the resolved relative path is denied (e.g. `?path=.env`,
+4. `readFilesPreview`: if the resolved relative path is denied (e.g. `?path=.env`,
    `?path=node_modules/foo.js`), throw `403 DENIED` before opening the file.
 
-Deny is applied to the link name (the user only sees that name), so a symlink whose own name
-matches a deny pattern is denied even if its target does not. This matches the workspace-layer
-semantics in `src/workspace/ignore.ts` and prevents an attacker from sneaking a deny-listed name
-past the filter by symlinking it elsewhere.
+Deny is applied before realpath and again after realpath. A symlink whose own name matches a deny
+pattern is denied, and a safe-looking symlink alias whose real target is deny-listed is also denied.
+This matches the workspace-layer read semantics and prevents both name-based and target-based
+aliases from bypassing the filter.
 
 The `.env.example` exception in `isDenied` is preserved automatically — no Files-specific carve-out
 is added or needed.
@@ -75,10 +76,10 @@ is added or needed.
 `compileIgnore`/`isIgnored` from `src/workspace/ignore.ts` apply only to `listTreeEntries`.
 `readFilesPreview` is unaffected: a user explicitly clicking a file URL still previews it.
 
-The matcher is loaded per request from the resolved root's `.gitignore` (no recursion into nested
+The matcher is loaded per request from the resolved project root's `.gitignore` (no recursion into nested
 `.gitignore` files; the workspace layer documents this bounded subset). A missing or unreadable
 `.gitignore` produces `null`, which the call site treats as "no filter". There is no long-lived,
-module-level cache: the BFF must stay stateless across user-selected roots so that switching roots
+module-level cache: the BFF must stay stateless across registered projects so switching projects
 within a single Files session never reuses a stale matcher.
 
 ### D4 — Generic safety message on the client; never leak the matched pattern or the path
@@ -96,12 +97,9 @@ denied entries server-side, so no client-side denied-row rendering is needed.
 
 The Files BFF implements its own `normalizeRelativePath`, `isContained`, and `resolveInsideRoot`.
 Functionally these are equivalent to `src/workspace/paths.ts` + `src/workspace/realpath.ts` but
-they are not shared. Unifying them would require either:
-
-- Generalising `src/workspace/` to accept arbitrary user-selected roots (multi-root refactor), or
-- Refactoring the Files BFF to register every browse target as a transient workspace (UX change).
-
-Both are larger than #75. The duplication is deliberate but tracked as a follow-up; future
+they are not shared. Unifying them would require refactoring the workspace layer to expose reusable
+tree/preview primitives in addition to context-pack discovery, which is larger than #75. The
+duplication is deliberate but tracked as a follow-up; future
 maintenance must keep `isDenied` and the symlink-containment check in lockstep with the workspace
 layer.
 
@@ -116,7 +114,7 @@ layer.
 - **`.gitignore` reduces visual noise without changing safety.** Build outputs and other ignored
   paths drop out of tree listings. Direct previews are unaffected.
 - **No new write or execute surface.** ADR-0005 D1's "no arbitrary read of arbitrary paths"
-  invariant is reinforced; ADR-0006 (sandbox boundary) is untouched.
+  invariant is reinforced by binding reads to registered projects; ADR-0006 (sandbox boundary) is untouched.
 - **Server-side filtering preserves the truncation budget.** A directory full of denied entries no
   longer hides real files behind `truncated: true`.
 - **Single source of truth for deny rules.** Both `src/workspace/` and `src/ui/files.ts` read from
@@ -135,12 +133,14 @@ layer.
 - **The denied-preview UI does not name the matched pattern.** A developer who genuinely needs to
   know why a file is blocked must consult `DEFAULT_DENY_PATTERNS` directly. This is intentional —
   the deny list must not be probable via error text.
+- **Arbitrary folder browsing is not a Files BFF responsibility.** A developer can register a new
+  project through the project flow, but `/api/files/*` does not accept raw host paths outside that
+  registry.
 
 ### Known follow-ups
 
 - Unify path-containment between `src/ui/files.ts` and `src/workspace/paths.ts` /
-  `src/workspace/realpath.ts` if a third caller emerges or if the workspace layer adopts a
-  multi-root model.
+  `src/workspace/realpath.ts` if a third caller emerges.
 - Per-request memoisation of the compiled `.gitignore` matcher across multiple `readFilesTree`
   calls in a single request lifecycle, if profiling shows it matters.
 - Optional support for nested `.gitignore` files (currently only the project root's is read,
@@ -155,14 +155,10 @@ Have the Files BFF call into `src/workspace/discovery.ts` to enumerate entries, 
 
 - **Pros**: one set of containment + deny + `.gitignore` rules; no duplication; bug fixes apply
   once.
-- **Cons**: the workspace layer is keyed to a single registered workspace, not an arbitrary
-  user-selected root; the Files widget allows browsing Home, Current workspace, and Filesystem
-  root, none of which are registered workspaces; making the Files widget register every browse
-  target would break the UX of folder-pickers; widening the workspace layer to accept arbitrary
-  roots is a multi-root refactor that touches every caller of `resolveWithinWorkspace`.
-- **Why rejected**: the refactor is larger than #75 and would couple two surfaces with different
-  lifecycles. The duplication of containment is tracked as a follow-up (D5) so the cost is
-  bounded and explicit.
+- **Cons**: the workspace layer returns context-pack entries, not the tree/preview shapes the Files
+  widget needs; refactoring it for UI tree navigation is larger than #75.
+- **Why rejected**: the route still shares the registered-project boundary and deny/ignore
+  primitives, but keeps the UI response shape local to `src/ui/files.ts`.
 
 ### Alternative 2: Apply `.gitignore` to previews as well as listings
 
