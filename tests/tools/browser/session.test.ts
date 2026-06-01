@@ -249,6 +249,73 @@ describe("navigate origin re-check", () => {
       code: "ORIGIN_NOT_ALLOWED",
     });
   });
+
+  // Regression: a frameNavigated to a non-loopback origin that arrives DURING the
+  // Page.captureScreenshot RPC must invalidate the in-flight capture, not leak bytes.
+  it("invalidates in-flight screenshot when origin drifts during the RPC", async () => {
+    let driftPending: (() => void) | undefined;
+    const responder: Responder = (call): unknown => {
+      if (call.method === "Page.captureScreenshot") {
+        // Defer the response until the test triggers a frame redirect, then resolve.
+        return new Promise((resolve) => {
+          driftPending = (): void => {
+            resolve({ data: "AAAA" });
+          };
+        });
+      }
+      const response = DEFAULT_RESPONSES[call.method];
+      if (response === undefined) throw new Error(`unexpected: ${call.method}`);
+      return response;
+    };
+    const fixture = await withFixture({ responder });
+    const meta = await fixture.manager.openSession(9222);
+    fixture.subscribe(meta.sessionId);
+    setTimeout(() => {
+      fixture.client.emitFrameNavigated("http://127.0.0.1:5173/");
+    }, 5);
+    await fixture.manager.navigate(meta.sessionId, "http://127.0.0.1:5173/");
+    // Begin a screenshot; the responder hangs on the captureScreenshot RPC.
+    const shotPromise = fixture.manager.screenshot(meta.sessionId);
+    // Wait a tick so the captureScreenshot frame is actually in flight (responder ran).
+    await new Promise<void>((r) => {
+      setTimeout(r, 10);
+    });
+    // Now simulate a redirect mid-RPC.
+    fixture.client.emitFrameNavigated("http://evil.example/leak");
+    // Then let the captureScreenshot RPC resolve with bytes.
+    driftPending?.();
+    await expect(shotPromise).rejects.toMatchObject({ code: "ORIGIN_NOT_ALLOWED" });
+  });
+
+  it("invalidates in-flight content capture when origin drifts during the RPC", async () => {
+    let driftPending: (() => void) | undefined;
+    const responder: Responder = (call): unknown => {
+      if (call.method === "DOM.getOuterHTML") {
+        return new Promise((resolve) => {
+          driftPending = (): void => {
+            resolve({ outerHTML: "<html>x</html>" });
+          };
+        });
+      }
+      const response = DEFAULT_RESPONSES[call.method];
+      if (response === undefined) throw new Error(`unexpected: ${call.method}`);
+      return response;
+    };
+    const fixture = await withFixture({ responder });
+    const meta = await fixture.manager.openSession(9222);
+    fixture.subscribe(meta.sessionId);
+    setTimeout(() => {
+      fixture.client.emitFrameNavigated("http://127.0.0.1:5173/");
+    }, 5);
+    await fixture.manager.navigate(meta.sessionId, "http://127.0.0.1:5173/");
+    const contentPromise = fixture.manager.content(meta.sessionId);
+    await new Promise<void>((r) => {
+      setTimeout(r, 10);
+    });
+    fixture.client.emitFrameNavigated("http://evil.example/leak");
+    driftPending?.();
+    await expect(contentPromise).rejects.toMatchObject({ code: "ORIGIN_NOT_ALLOWED" });
+  });
 });
 
 describe("screenshot dry-run vs apply", () => {

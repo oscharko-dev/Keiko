@@ -404,6 +404,15 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       { format: "png" },
       record.cdpSessionId,
     );
+    // Defence in depth against the frameNavigated race: if a redirect arrived while
+    // captureScreenshot was in flight, the listener has now run and flipped originAllowed.
+    // Discard the bytes rather than hand evidence from a non-loopback origin to the caller.
+    if (!record.originAllowed) {
+      throw new BrowserToolError(
+        "ORIGIN_NOT_ALLOWED",
+        "Screenshot blocked: origin drifted off-loopback during capture.",
+      );
+    }
     const bytes = Buffer.from(result.data, "base64");
     if (bytes.length > MAX_SCREENSHOT_BYTES) {
       throw new BrowserToolError("SCREENSHOT_TOO_LARGE", "Screenshot exceeds the size limit.");
@@ -471,6 +480,13 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       { nodeId: doc.root.nodeId },
       record.cdpSessionId,
     );
+    // Defence in depth against the frameNavigated race during the DOM.getOuterHTML RPC.
+    if (!record.originAllowed) {
+      throw new BrowserToolError(
+        "ORIGIN_NOT_ALLOWED",
+        "Content capture blocked: origin drifted off-loopback during capture.",
+      );
+    }
     const raw = html.outerHTML;
     if (Buffer.byteLength(raw, "utf8") > MAX_CONTENT_BYTES) {
       throw new BrowserToolError("CONTENT_TOO_LARGE", "Page content exceeds the size limit.");
