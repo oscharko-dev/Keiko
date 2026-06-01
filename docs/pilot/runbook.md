@@ -31,7 +31,7 @@ For the security model behind the controls referenced here, see [Security and au
 - A configured model gateway: at least one model endpoint the customer hosts or provides, with its credentials. See [Model configuration](#model-configuration).
 - For the local UI: a current Chromium, Firefox, or Safari. See the [local UI runbook](../ui-runbook.md).
 
-Keiko has a minimal runtime dependency set. Install it with `npm install keiko`.
+Keiko has a minimal runtime dependency set. Install it with `npm install @oscharko-dev/keiko`.
 
 ---
 
@@ -162,7 +162,7 @@ import {
   loadConfigFromFile,
   createNodeEvidenceStore,
   listEvidence,
-} from "keiko";
+} from "@oscharko-dev/keiko";
 
 const config = loadConfigFromFile("./keiko.config.json", process.env);
 const model = new GatewayModelPort(new Gateway(config));

@@ -74,7 +74,7 @@ Two model kinds in the portfolio are registered but not yet callable: OCR-vision
 ## Install
 
 ```bash
-npm install keiko
+npm install @oscharko-dev/keiko
 ```
 
 Keiko ships ESM only with a minimal runtime dependency set. Use `import`, not `require`.
@@ -361,7 +361,7 @@ Keiko ships ESM-only with full type definitions. The package entry point re-expo
 ### Workspace summary
 
 ```typescript
-import { detectWorkspace, buildWorkspaceSummary } from "keiko";
+import { detectWorkspace, buildWorkspaceSummary } from "@oscharko-dev/keiko";
 
 const workspace = detectWorkspace(process.cwd());
 const summary = buildWorkspaceSummary(workspace);
@@ -377,7 +377,7 @@ import {
   Gateway,
   GatewayModelPort,
   loadConfigFromFile,
-} from "keiko";
+} from "@oscharko-dev/keiko";
 
 const config = loadConfigFromFile("./keiko.config.json", process.env);
 const model = new GatewayModelPort(new Gateway(config));
@@ -405,7 +405,7 @@ import {
   Gateway,
   GatewayModelPort,
   loadConfigFromFile,
-} from "keiko";
+} from "@oscharko-dev/keiko";
 
 const config = loadConfigFromFile("./keiko.config.json", process.env);
 const model = new GatewayModelPort(new Gateway(config));
@@ -436,7 +436,7 @@ import {
   buildVerificationPlan,
   runVerification,
   buildVerificationSummary,
-} from "keiko";
+} from "@oscharko-dev/keiko";
 
 const workspace = detectWorkspace(process.cwd());
 const catalog = detectScripts(workspace);
@@ -452,7 +452,7 @@ console.log(report.overallStatus); // "passed" when every gate passed
 `listEvidence` and `loadEvidence` are synchronous. The loaded data is redacted by construction.
 
 ```typescript
-import { createNodeEvidenceStore, listEvidence, loadEvidence } from "keiko";
+import { createNodeEvidenceStore, listEvidence, loadEvidence } from "@oscharko-dev/keiko";
 
 const store = createNodeEvidenceStore("./.keiko/evidence");
 
@@ -471,7 +471,11 @@ if (manifest !== undefined) {
 `createScriptedModelPort` builds a `ModelPort` that replays a fixed transcript, so you can exercise a workflow deterministically with no live model or credentials. It satisfies the same `deps.model` seam the workflows use.
 
 ```typescript
-import { createScriptedModelPort, generateUnitTests, type NormalizedResponse } from "keiko";
+import {
+  createScriptedModelPort,
+  generateUnitTests,
+  type NormalizedResponse,
+} from "@oscharko-dev/keiko";
 
 const response: NormalizedResponse = {
   modelId: "scripted",
