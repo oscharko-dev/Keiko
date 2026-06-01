@@ -773,28 +773,20 @@ export interface DesktopChatSendResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Desktop terminal — BFF PTY/WebSocket control contract
+// Desktop terminal — ADR-0018 bounded permitted-command execution contract
 // ---------------------------------------------------------------------------
 
-export interface TerminalShell {
-  readonly id: string;
-  readonly label: string;
-  readonly path: string;
-  readonly args: readonly string[];
+export interface TerminalPolicySummary {
+  readonly commands: readonly string[];
+  readonly limits: {
+    readonly maxOutputBytes: number;
+    readonly defaultTimeoutMs: number;
+  };
 }
 
 export interface TerminalDirectoryRoot {
   readonly label: string;
   readonly path: string;
-}
-
-export interface TerminalConfig {
-  readonly platform: string;
-  readonly defaultCwd: string;
-  readonly defaultShell: string | null;
-  readonly shells: readonly TerminalShell[];
-  readonly roots: readonly TerminalDirectoryRoot[];
-  readonly maxSessions: number;
 }
 
 export interface TerminalDirectoryEntry {
@@ -809,24 +801,34 @@ export interface TerminalDirectoryListing {
   readonly roots: readonly TerminalDirectoryRoot[];
 }
 
-export type TerminalStatus = "running" | "exited";
-
-export interface TerminalSessionMeta {
-  readonly id: string;
-  readonly cwd: string;
-  readonly shellId: string;
-  readonly shellLabel: string;
-  readonly createdAt: number;
-  readonly status: TerminalStatus;
-  readonly cols: number;
-  readonly rows: number;
-  readonly exitCode?: number;
-  readonly signal?: number;
+export interface TerminalExecutionInput {
+  readonly projectId: string;
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly cwd?: string;
+  readonly timeoutMs?: number;
 }
 
-export interface CreateTerminalSessionResponse {
-  readonly session: TerminalSessionMeta;
-  readonly webSocketPath: string;
+export interface TerminalExecutionResult {
+  readonly executionId: string;
+  readonly exitCode: number | null;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly durationMs: number;
+  readonly truncated: boolean;
+  readonly timedOut: boolean;
+}
+
+export type TerminalEventKind =
+  | "execution-started"
+  | "execution-completed"
+  | "execution-failed"
+  | "execution-cancelled";
+
+export interface TerminalEventEnvelope {
+  readonly kind: TerminalEventKind;
+  readonly executionId: string;
+  readonly payload: Readonly<Record<string, unknown>>;
 }
 
 // ---------------------------------------------------------------------------

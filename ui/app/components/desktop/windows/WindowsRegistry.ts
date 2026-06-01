@@ -134,8 +134,10 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 250,
     tiny: { w: 250, h: 140 },
     config: [
+      // ADR-0018 — terminal is a permitted-command tool. The user picks the command per run; the
+      // window only needs a project path (acts as projectId) and an optional starting cwd.
+      { key: "projectPath", label: "Project path", type: "text", def: "" },
       { key: "cwd", label: "Working directory", type: "directory", def: "" },
-      { key: "shell", label: "Shell", type: "select", options: [], def: "" },
     ],
   },
   review: {

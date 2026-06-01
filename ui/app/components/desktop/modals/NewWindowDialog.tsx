@@ -8,15 +8,12 @@ import {
   fetchFilesDirectories,
   fetchModels,
   fetchProjects,
-  fetchTerminalConfig,
   startRun,
 } from "../../../../lib/api";
 import type {
   AgentWorkflowId,
   FilesDirectoryListing,
   ModelCapability,
-  TerminalConfig,
-  TerminalShell,
 } from "../../../../lib/types";
 import { Icons } from "../Icons";
 import type { FilesWindowContext } from "../hooks/useWorkspace.types";
@@ -311,28 +308,18 @@ function validationMessage(
   return null;
 }
 
-function shellOptions(
-  field: ConfigField,
-  terminalConfig: TerminalConfig | null,
-): readonly TerminalShell[] | null {
-  if (field.key !== "shell" || terminalConfig === null) return null;
-  return terminalConfig.shells;
-}
-
 function renderField(
   f: ConfigField,
   cfg: Cfg,
   set: (k: string, v: CfgValue) => void,
   firstRef: ((node: HTMLElement | null) => void) | null,
-  terminalConfig: TerminalConfig | null,
   openDirectoryPicker: (key: string) => void,
 ): ReactNode {
   if (f.type === "perm") return <PermControl cfg={cfg} set={set} />;
   const raw = cfg[f.key];
   const value = typeof raw === "string" ? raw : raw === undefined ? "" : String(raw);
   if (f.type === "select") {
-    const dynamicShells = shellOptions(f, terminalConfig);
-    const options = dynamicShells !== null ? dynamicShells.map((shell) => shell.id) : (f.options ?? []);
+    const options = f.options ?? [];
     return (
       <span className="dlg-selwrap">
         <select
@@ -342,9 +329,7 @@ function renderField(
           onChange={(e) => set(f.key, e.target.value)}
           disabled={options.length === 0}
         >
-          {dynamicShells !== null ? dynamicShells.map((shell) => (
-            <option key={shell.id} value={shell.id}>{shell.label}</option>
-          )) : options.map((o) => (
+          {options.map((o) => (
             <option key={o} value={o}>{(f.prefix ?? "") + o}</option>
           ))}
         </select>
@@ -760,7 +745,6 @@ export function NewWindowDialog({
   const fields = t.config ?? [];
   const [cfg, setCfg] = useState<Cfg>(() => initialCfg(fields));
   const [shown, setShown] = useState(false);
-  const [terminalConfig, setTerminalConfig] = useState<TerminalConfig | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [directoryField, setDirectoryField] = useState<string | null>(null);
   const firstFieldRef = useRef<HTMLElement | null>(null);
@@ -782,34 +766,8 @@ export function NewWindowDialog({
     return () => cancelAnimationFrame(r);
   }, []);
 
-  useEffect(() => {
-    if (type !== "terminal") return;
-    let cancelled = false;
-    setDialogError(null);
-    void fetchTerminalConfig()
-      .then((config) => {
-        if (cancelled) return;
-        setTerminalConfig(config);
-        setCfg((current) => {
-          const next = { ...current };
-          if (typeof next.cwd !== "string" || next.cwd.length === 0) {
-            next.cwd = config.defaultCwd;
-          }
-          const currentShell = typeof next.shell === "string" ? next.shell : "";
-          const available = config.shells.some((shell) => shell.id === currentShell);
-          if (!available && config.defaultShell !== null) {
-            next.shell = config.defaultShell;
-          }
-          return next;
-        });
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setDialogError(errorMessage(error));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [type]);
+  // ADR-0018 — no shell prefetch: the terminal tool is a permitted-command picker now. The
+  // window only needs a projectPath and an optional cwd, both supplied via the form below.
 
   useEffect(() => {
     if (type !== "files") return;
@@ -906,7 +864,6 @@ export function NewWindowDialog({
                 cfg,
                 set,
                 i === 0 ? (node) => { firstFieldRef.current = node; } : null,
-                terminalConfig,
                 setDirectoryField,
               )}
               {f.type === "directory" && directoryField === f.key ? (

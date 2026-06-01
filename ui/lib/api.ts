@@ -11,7 +11,6 @@ import type {
   ChatStatus,
   ChatMessageRole,
   ChatWorkflowStatus,
-  CreateTerminalSessionResponse,
   DesktopChatBootstrapResponse,
   DesktopChatSendResponse,
   EvidenceListEntry,
@@ -28,8 +27,6 @@ import type {
   ProjectsResponse,
   RunReport,
   SafeGatewayConfig,
-  TerminalConfig,
-  TerminalDirectoryListing,
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
@@ -457,41 +454,8 @@ export async function sendDesktopChat(
 }
 
 // ---------------------------------------------------------------------------
-// Desktop terminal — PTY control plane; byte stream uses native browser WebSocket
-// ---------------------------------------------------------------------------
-
-export async function fetchTerminalConfig(): Promise<TerminalConfig> {
-  return fetchJson("/api/terminal/shells");
-}
-
-export async function fetchTerminalDirectories(path?: string): Promise<TerminalDirectoryListing> {
-  const params = new URLSearchParams();
-  if (path !== undefined && path.length > 0) params.set("path", path);
-  const qs = params.toString();
-  return fetchJson(`/api/terminal/directories${qs ? `?${qs}` : ""}`);
-}
-
-export interface CreateTerminalSessionInput {
-  readonly cwd?: string;
-  readonly shellId?: string;
-  readonly cols?: number;
-  readonly rows?: number;
-}
-
-export async function createTerminalSession(
-  input: CreateTerminalSessionInput,
-): Promise<CreateTerminalSessionResponse> {
-  return fetchJson("/api/terminal/sessions", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function deleteTerminalSession(sessionId: string): Promise<void> {
-  await fetchJson<void>(`/api/terminal/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "DELETE",
-  });
-}
+// Desktop terminal — ADR-0018 bounded permitted-command execution; client moved to
+// ./terminal-api.ts. The PTY routes (/api/terminal/shells, /sessions, WS upgrade) are removed.
 
 // ---------------------------------------------------------------------------
 // Desktop files — read-only selected-root browser and preview control plane
