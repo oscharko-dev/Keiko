@@ -166,11 +166,16 @@ beforeEach(async () => {
   deps = {
     config: undefined,
     configPresent: false,
-    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    evidenceStore: {
+      put: (): string => "",
+      list: (): readonly string[] => [],
+      get: (): string | undefined => undefined,
+      delete: (): void => undefined,
+    },
     env: {},
     redactor: buildRedactor({}),
     registry: createRunRegistry(),
-    modelPortFactory: () => undefined,
+    modelPortFactory: (): undefined => undefined,
     store,
     terminal,
   };
