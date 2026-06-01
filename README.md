@@ -4,7 +4,7 @@ Keiko is an enterprise, model-agnostic developer-assist coding agent for regulat
 
 It runs bounded, reviewable coding workflows against a configurable gateway of language models, across three surfaces: a command-line tool (`keiko`), a programmatic SDK, and a local web UI. Dry-run workflows are the default, and the manifest-producing surfaces emit redacted evidence for audit. Keiko assists a developer; it does not merge code on its own.
 
-This README is the package's only shipped document. It contains the package-facing essentials and links to the repository [`docs/`](https://github.com/oscharko-dev/Keiko/tree/dev/docs) for deeper operational guidance.
+This README is the package's primary shipped guide. It contains the package-facing essentials and links to the repository [`docs/`](https://github.com/oscharko-dev/Keiko/tree/dev/docs) for deeper operational guidance.
 
 ---
 
@@ -27,7 +27,7 @@ This README is the package's only shipped document. It contains the package-faci
 - [Future architecture path](#future-architecture-path)
 - [Documentation index](#documentation-index)
 - [Development](#development)
-- [License](#license)
+- [License and attribution](#license-and-attribution)
 
 ---
 
@@ -552,7 +552,7 @@ See [Go/No-Go criteria](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pilo
 
 ## Packaging
 
-The published tarball ships only `dist/`, `README.md`, and `LICENSE` (the `files` allowlist). Repository docs stay in the repository. A surface check (`npm run check:package-surface`) runs in the `prepack` and `prepublishOnly` chains, which execute `npm run clean && npm run build && npm run ui:ci && npm run build:ui && npm run check:package-surface`. Those checks assert the built CLI, SDK, type declarations, and UI assets ship while source, source maps, `.env` files, and docs do not.
+The published tarball ships `dist/`, `README.md`, `LICENSE`, `NOTICE`, and `TRADEMARKS.md` (the `files` allowlist). Repository docs stay in the repository. A surface check (`npm run check:package-surface`) runs in the `prepack` and `prepublishOnly` chains, which execute `npm run clean && npm run build && npm run ui:ci && npm run build:ui && npm run check:package-surface`. Those checks assert the built CLI, SDK, type declarations, UI assets, NOTICE file, and trademark policy ship while source, source maps, `.env` files, and docs do not.
 
 Keiko has zero runtime dependencies. Supply-chain review is covered by the CI dependency-review job, CodeQL, root/UI audit steps, and SBOM builds. Inspect the surface with:
 
@@ -604,6 +604,16 @@ Contributions follow the delivery standard in [`CONTRIBUTING.md`](CONTRIBUTING.m
 
 ---
 
-## License
+## License and attribution
 
-Apache-2.0. See [`LICENSE`](LICENSE).
+Keiko is licensed under Apache-2.0. See [`LICENSE`](LICENSE).
+
+The `NOTICE` file carries the package attribution for Keiko and oscharko-dev and
+ships with the npm package. Redistributors must preserve applicable copyright,
+license, and NOTICE attribution as required by Apache-2.0.
+
+The Keiko name, logo, visual identity, and oscharko-dev origin identifiers are
+covered by the repository's trademark and brand policy. Truthful attribution and
+compatibility references are permitted, but forks and derivative distributions
+must not imply that they are the official Keiko project or endorsed by
+oscharko-dev. See [`TRADEMARKS.md`](TRADEMARKS.md).

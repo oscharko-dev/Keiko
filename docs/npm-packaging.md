@@ -9,14 +9,16 @@ Audience: release engineers who inspect and verify the Keiko package before a pu
 `package.json` declares a `files` allowlist:
 
 ```json
-"files": ["dist", "README.md", "LICENSE"]
+"files": ["dist", "README.md", "LICENSE", "NOTICE", "TRADEMARKS.md"]
 ```
 
 So the published tarball contains only:
 
 - `dist/` — the compiled CLI, SDK, type declarations, and the built UI assets.
-- `README.md` — the package's single shipped document.
+- `README.md` — the package's primary shipped guide.
 - `LICENSE` — the Apache-2.0 license text.
+- `NOTICE` — the repository attribution notice shipped alongside the license.
+- `TRADEMARKS.md` — the trademark and brand policy for the Keiko name, logo, and oscharko-dev attribution.
 
 Repository documentation under `docs/` does **not** ship. This is why the README carries the package-facing essentials and only links to `docs/` for repository users who need deeper operational guidance.
 
@@ -31,7 +33,7 @@ npm pack --dry-run
 npm pack --dry-run --json   # machine-readable file list
 ```
 
-Read the output before any release. Confirm that `dist/` is present, that `README.md` and `LICENSE` are present, and that no source, `.env`, or `docs/` path appears.
+Read the output before any release. Confirm that `dist/` is present, that `README.md`, `LICENSE`, `NOTICE`, and `TRADEMARKS.md` are present, and that no source, `.env`, or `docs/` path appears.
 
 ---
 
@@ -43,6 +45,8 @@ It **requires**:
 
 - `dist/ui/static/` — the built UI export.
 - `dist/ui/csp-hashes.json` — the precomputed Content-Security-Policy hashes.
+- `NOTICE` — the attribution notice that must ship with the published tarball.
+- `TRADEMARKS.md` — the brand policy that must ship with the published tarball.
 
 It **forbids**:
 
@@ -79,7 +83,7 @@ npm run prepack
 
 ## License
 
-The package is licensed under Apache-2.0. The `LICENSE` file ships in the tarball, and `package.json` declares `"license": "Apache-2.0"`.
+The package is licensed under Apache-2.0. The `LICENSE`, `NOTICE`, and `TRADEMARKS.md` files ship in the tarball, and `package.json` declares `"license": "Apache-2.0"`. The trademark policy does not modify the Apache-2.0 code license.
 
 ---
 

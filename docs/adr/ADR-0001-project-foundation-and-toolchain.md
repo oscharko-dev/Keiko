@@ -101,7 +101,7 @@ implement it. No speculative abstractions are introduced.
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md", "LICENSE"],
+  "files": ["dist", "README.md", "LICENSE", "NOTICE", "TRADEMARKS.md"],
   "sideEffects": false
 }
 ```
