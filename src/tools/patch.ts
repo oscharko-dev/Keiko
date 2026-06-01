@@ -173,15 +173,19 @@ function uniqueSequenceIndex(lines: readonly string[], needle: readonly string[]
 }
 
 function alignFileHunks(file: PatchFileChange, current: string | undefined): PatchFileChange {
-  if (file.kind !== "modify" || current === undefined) {
+  if (file.kind !== "modify") {
     return file;
+  }
+  if (current === undefined) {
+    return isCreateOnlyModify(file) ? { ...file, kind: "create" } : file;
   }
   const currentLines = toLines(current);
   const hunks = file.hunks.map((hunk, index) => {
-    if (hunk.oldStart > 0) {
+    const preimage = hunkPreimageLines(file, index);
+    if (hunk.oldStart > 0 && startsWithSequence(currentLines, hunk.oldStart - 1, preimage)) {
       return hunk;
     }
-    const anchor = uniqueSequenceIndex(currentLines, hunkPreimageLines(file, index));
+    const anchor = uniqueSequenceIndex(currentLines, preimage);
     if (anchor === undefined) {
       return hunk;
     }
@@ -192,6 +196,15 @@ function alignFileHunks(file: PatchFileChange, current: string | undefined): Pat
     return file;
   }
   return { ...file, hunks };
+}
+
+function isCreateOnlyModify(file: PatchFileChange): boolean {
+  return (
+    file.hunks.length > 0 &&
+    file.hunks.every(
+      (hunk) => hunk.oldLines === 0 && hunk.lines.every((line) => line.startsWith("+")),
+    )
+  );
 }
 
 function alignHunksToCurrentContent(
@@ -236,6 +249,9 @@ function sizeAndCountReasons(
   totalBytes: number,
 ): PatchRejection[] {
   const reasons: PatchRejection[] = [];
+  if (diff.trim().length > 0 && files.length === 0) {
+    reasons.push({ code: "malformed", message: "diff does not contain any file changes" });
+  }
   if (totalBytes > limits.maxPatchBytes) {
     reasons.push({
       code: "size-limit",

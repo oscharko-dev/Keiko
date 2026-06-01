@@ -54,6 +54,29 @@ describe("parseBugModelOutput (AC #9 / D9 model-output contract)", () => {
     expect(out.diff).toContain("+b");
   });
 
+  it("skips non-diff code fences before the actual patch", () => {
+    const content = [
+      "Evidence:",
+      "```ts",
+      "const detail = 'sensitive';",
+      "```",
+      "```diff",
+      "--- a/x.ts",
+      "+++ b/x.ts",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+      "```",
+      "## Root cause",
+      "The value was stale.",
+    ].join("\n");
+    const out = parseBugModelOutput(content);
+    expect(out.diff).toContain("--- a/x.ts");
+    expect(out.diff).toContain("+b");
+    expect(out.diff).not.toContain("const detail");
+    expect(out.rootCause).toContain("stale");
+  });
+
   it("picks the first recognised confidence level when the body is verbose", () => {
     const out = parseBugModelOutput("## Confidence\nI would say medium, leaning low.");
     expect(out.confidence).toBe("medium");

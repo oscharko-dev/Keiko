@@ -442,8 +442,9 @@ function AgentLauncher({
     void Promise.all([fetchModels(), fetchProjects()])
       .then(([modelPayload, projectPayload]) => {
         if (cancelled) return;
-        setModels(modelPayload.models);
-        setModelId((current) => current || chooseDefaultModel(modelPayload.models));
+        const chatModels = modelPayload.models.filter((model) => model.kind === "chat");
+        setModels(chatModels);
+        setModelId((current) => current || chooseDefaultModel(chatModels));
         setProjects(availableProjectPaths(projectPayload.projects));
       })
       .catch((error: unknown) => {
