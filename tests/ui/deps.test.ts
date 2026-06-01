@@ -90,6 +90,24 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
     expect(deps.config?.providers[0]?.apiKey).toBe("fake-test-key");
     store.close();
   });
+
+  it("does not publish every registry model from KEIKO_DEFAULT_* alone", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-env-default-only-");
+    const deps = buildUiHandlerDeps({
+      configPath: join(evidenceDir, "missing-keiko.config.json"),
+      evidenceDir,
+      env: {
+        KEIKO_DEFAULT_BASE_URL: "https://models.example.invalid/openai/v1",
+        KEIKO_DEFAULT_API_KEY: "fake-default-key",
+      },
+      store,
+    });
+
+    expect(deps.configPresent).toBe(false);
+    expect(deps.config).toBeUndefined();
+    store.close();
+  });
 });
 
 describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () => {

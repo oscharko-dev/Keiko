@@ -130,10 +130,34 @@ describe("GET /api/config", () => {
 });
 
 describe("GET /api/models", () => {
-  it("returns the full capability registry", () => {
-    const result = handleModels();
+  it("returns only configured models", () => {
+    const result = handleModels(
+      ctx("/api/models"),
+      depsWith({
+        config: {
+          ...SAMPLE_CONFIG,
+          providers: [
+            {
+              modelId: "gpt-oss-120b",
+              baseUrl: "https://api.example.com",
+              apiKey: "sk-super-secret-value-1234567890",
+              timeoutMs: 1000,
+              maxRetries: 2,
+              retryBaseDelayMs: 10,
+            },
+          ],
+        },
+        configPresent: true,
+      }),
+    );
+    const body = result.body as { models: { id: string }[] };
+    expect(body.models.map((model) => model.id)).toEqual(["gpt-oss-120b"]);
+  });
+
+  it("returns no models when no config is resolved", () => {
+    const result = handleModels(ctx("/api/models"), depsWith({}));
     const body = result.body as { models: unknown[] };
-    expect(body.models.length).toBeGreaterThan(0);
+    expect(body.models).toEqual([]);
   });
 });
 

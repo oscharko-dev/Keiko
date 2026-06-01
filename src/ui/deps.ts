@@ -100,8 +100,8 @@ function envModelToken(modelId: string): string {
 
 function hasEnvProvider(modelId: string, env: EnvSource): boolean {
   const token = envModelToken(modelId);
-  const baseUrl = env[`KEIKO_MODEL_${token}_BASE_URL`] ?? env.KEIKO_DEFAULT_BASE_URL;
-  const apiKey = env[`KEIKO_MODEL_${token}_API_KEY`] ?? env.KEIKO_DEFAULT_API_KEY;
+  const baseUrl = env[`KEIKO_MODEL_${token}_BASE_URL`];
+  const apiKey = env[`KEIKO_MODEL_${token}_API_KEY`];
   return baseUrl !== undefined && baseUrl.length > 0 && apiKey !== undefined && apiKey.length > 0;
 }
 
