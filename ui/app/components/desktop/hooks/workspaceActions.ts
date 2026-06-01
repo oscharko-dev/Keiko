@@ -11,7 +11,7 @@ import type {
   SnapPrev,
   View,
 } from "../windows/types";
-import type { ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
+import type { FilesWindowContext, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
 
 function addPosition(
   vp: ViewportWorld,
@@ -86,6 +86,7 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
   const { setWins, zc, worldVP } = args;
   return (type, cfg) => {
     const t = WIN_TYPES[type];
+    let createdId: string | null = null;
     setWins((ws) => {
       const vp = worldVP();
       if (vp === null) return ws;
@@ -93,16 +94,19 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
       if (t.singleton === true) {
         const existing = list.find((w) => w.type === type);
         if (existing !== undefined) {
+          createdId = existing.id;
           return list.map((w) => (w.id === existing.id ? { ...w, z: ++zc.current } : w));
         }
       }
       const { x, y } = addPosition(vp, t.w, t.h, list.length, 40);
       const id = t.singleton === true ? type : `${type}-${Date.now().toString(36)}`;
+      createdId = id;
       return [
         ...list,
         { id, type, x, y, w: t.w, h: t.h, z: ++zc.current, cfg: cfg ?? {}, max: false, zoom: 1 },
       ];
     });
+    return createdId;
   };
 }
 
@@ -283,7 +287,14 @@ function isDuplicate(cs: readonly Connection[], a: string, b: string): boolean {
 
 type ConnectApi = Pick<
   WorkspaceApi,
-  "startConnect" | "confirmConnect" | "cancelConnect" | "removeConn" | "linkedFilesRoot"
+  | "startConnect"
+  | "confirmConnect"
+  | "cancelConnect"
+  | "removeConn"
+  | "connect"
+  | "linkedFilesRoot"
+  | "linkedFilesContext"
+  | "currentFilesContext"
 >;
 
 // Click-to-Connect flow (replaces the old pointerdown→drag→pointerup gesture):
@@ -363,20 +374,67 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const removeConn: WorkspaceApi["removeConn"] = (id) =>
     setConns((cs) => cs.filter((c) => c.id !== id));
 
-  const linkedFilesRoot: WorkspaceApi["linkedFilesRoot"] = (id) => {
+  const connect: WorkspaceApi["connect"] = (a, b) => {
+    const list = winsRef.current;
+    const left = list.find((w) => w.id === a);
+    const right = list.find((w) => w.id === b);
+    if (left === undefined || right === undefined || !canConnect(left.type, right.type)) return;
+    setConns((cs) => (isDuplicate(cs, a, b) ? cs : [...cs, { id: `${a}~${b}`, a, b }]));
+  };
+
+  const filesContextFor = (w: AppWindow): FilesWindowContext | null => {
+    if (w.type !== "files") return null;
+    const resolvedRoot = w.cfg["resolvedRoot"];
+    const configuredRoot = w.cfg["root"];
+    const root =
+      typeof resolvedRoot === "string" && resolvedRoot.length > 0
+        ? resolvedRoot
+        : typeof configuredRoot === "string" && configuredRoot.length > 0
+          ? configuredRoot
+          : "src";
+    const active = w.cfg["activeFilePath"];
+    return {
+      id: w.id,
+      root,
+      ...(typeof active === "string" && active.length > 0 ? { activeFilePath: active } : {}),
+    };
+  };
+
+  const linkedFilesContext: WorkspaceApi["linkedFilesContext"] = (id) => {
     for (const c of connsRef.current) {
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
       const w = winsRef.current.find((x) => x.id === otherId);
-      if (w !== undefined && w.type === "files") {
-        const root = w.cfg["root"];
-        return typeof root === "string" && root.length > 0 ? root : "src";
-      }
+      if (w !== undefined) return filesContextFor(w);
     }
     return null;
   };
 
-  return { startConnect, confirmConnect, cancelConnect, removeConn, linkedFilesRoot };
+  const linkedFilesRoot: WorkspaceApi["linkedFilesRoot"] = (id) =>
+    linkedFilesContext(id)?.root ?? null;
+
+  const currentFilesContext: WorkspaceApi["currentFilesContext"] = () => {
+    const files = winsRef.current
+      .map((w) => filesContextFor(w))
+      .filter((ctx): ctx is FilesWindowContext => ctx !== null);
+    if (files.length === 1) return files[0] ?? null;
+    const activeFiles = [...winsRef.current]
+      .filter((w) => w.type === "files")
+      .sort((a, b) => b.z - a.z);
+    const active = activeFiles[0];
+    return active === undefined ? null : filesContextFor(active);
+  };
+
+  return {
+    startConnect,
+    confirmConnect,
+    cancelConnect,
+    removeConn,
+    connect,
+    linkedFilesRoot,
+    linkedFilesContext,
+    currentFilesContext,
+  };
 }
 
 // Re-exports for callers that need the lower-level type

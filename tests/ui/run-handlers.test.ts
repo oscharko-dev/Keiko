@@ -19,6 +19,7 @@ import {
   buildRedactor,
   createRunRegistry,
   handleApplyRun,
+  handleGetRun,
   QueueEventSink,
   type UiHandlerDeps,
 } from "../../src/ui/index.js";
@@ -568,6 +569,21 @@ describe("FIX B — apply snapshot retains the original limits from the dry-run"
     const result = await handleApplyRun(ctx, deps);
     // 200 = applyRun was invoked (workflow failure yields a report, not an HTTP error).
     expect(result.status).toBe(200);
+    const appliedRecord = localRegistry.get("fixb-run");
+    expect(appliedRecord?.appliable).toBeUndefined();
+    expect(appliedRecord?.applyReport).toBeDefined();
+
+    const getResult = handleGetRun(ctx, deps);
+    expect(getResult.status).toBe(200);
+    expect(getResult.body).toMatchObject({
+      report: {
+        status: "dry-run",
+        applyReport: { status: "failed" },
+      },
+    });
+
+    const second = await handleApplyRun(ctx, deps);
+    expect(second.status).toBe(409);
   });
 });
 

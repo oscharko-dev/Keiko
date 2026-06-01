@@ -42,6 +42,8 @@ export interface ConfigField {
 
 export interface WindowRenderContext {
   readonly linkedRoot: string | null;
+  readonly linkedFilePath: string | undefined;
+  readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
 }
 
 export interface WindowTypeDef {
@@ -150,17 +152,12 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   agents: {
     title: "Agents",
     icon: "agents",
-    desc: "Spin up a working agent",
-    w: 360,
-    h: 230,
+    desc: "Run a BFF workflow",
+    w: 520,
+    h: 560,
     tiny: { w: 250, h: 140 },
     cta: "Start agent",
-    config: [
-      { key: "model", label: "Model", type: "select", options: ["orca-5.4", "orca-5.4-mini", "orca-4-turbo"], def: "orca-5.4" },
-      { key: "role", label: "Role", type: "select", options: ["Builder", "Reviewer", "Researcher", "Refactorer"], def: "Builder" },
-      { key: "task", label: "Task", type: "textarea", def: "", placeholder: "Describe what the agent should do…" },
-      { key: "perm", label: "Permissions", type: "perm" },
-    ],
+    config: [],
   },
   integ: {
     title: "Integrations",

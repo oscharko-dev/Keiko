@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { fetchFilesTree } from "../../../../../lib/api";
 import type { FilesTreeEntry } from "../../../../../lib/types";
@@ -10,6 +10,7 @@ import { FilePreview } from "./FilePreview";
 
 interface FilesWidgetProps {
   root?: string;
+  onActiveFileChange?: (path: string | null, root: string | null) => void;
 }
 
 interface DirectoryState {
@@ -36,7 +37,7 @@ function formatBytes(bytes: number): string {
   return `${value} ${units[idx]}`;
 }
 
-export function FilesWidget({ root }: FilesWidgetProps): ReactNode {
+export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): ReactNode {
   const trimmedRoot = root?.trim();
   const apiRoot = trimmedRoot !== undefined && trimmedRoot.length > 0 ? trimmedRoot : ".";
   const [resolvedRoot, setResolvedRoot] = useState<string | null>(null);
@@ -44,6 +45,8 @@ export function FilesWidget({ root }: FilesWidgetProps): ReactNode {
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([""]));
   const [refreshKey, setRefreshKey] = useState(0);
+  const activeFileChangeRef = useRef(onActiveFileChange);
+  activeFileChangeRef.current = onActiveFileChange;
 
   const loadDirectory = useCallback(async (path: string): Promise<void> => {
     setDirectories((current) => ({
@@ -57,7 +60,10 @@ export function FilesWidget({ root }: FilesWidgetProps): ReactNode {
     }));
     try {
       const response = await fetchFilesTree(apiRoot, path);
-      if (path === "") setResolvedRoot(response.root);
+      if (path === "") {
+        setResolvedRoot(response.root);
+        activeFileChangeRef.current?.(null, response.root);
+      }
       setDirectories((current) => ({
         ...current,
         [path]: {
@@ -82,6 +88,7 @@ export function FilesWidget({ root }: FilesWidgetProps): ReactNode {
 
   useEffect(() => {
     setSelectedPath(null);
+    activeFileChangeRef.current?.(null, null);
     setResolvedRoot(null);
     setExpanded(new Set([""]));
     setDirectories({});
@@ -145,7 +152,10 @@ export function FilesWidget({ root }: FilesWidgetProps): ReactNode {
         style={{ paddingLeft: pad + 14 }}
         type="button"
         disabled={!entry.readable}
-        onClick={() => setSelectedPath(entry.path)}
+        onClick={() => {
+          setSelectedPath(entry.path);
+          activeFileChangeRef.current?.(entry.path, resolvedRoot ?? apiRoot);
+        }}
         title={entry.readable ? entry.path : "Symlink target is outside the selected root"}
       >
         <FileIcon name={entry.name} />
@@ -186,7 +196,10 @@ export function FilesWidget({ root }: FilesWidgetProps): ReactNode {
       <FilePreview
         root={resolvedRoot ?? apiRoot}
         path={selectedPath}
-        onClose={() => setSelectedPath(null)}
+        onClose={() => {
+          setSelectedPath(null);
+          activeFileChangeRef.current?.(null, resolvedRoot ?? apiRoot);
+        }}
       />
     );
   }

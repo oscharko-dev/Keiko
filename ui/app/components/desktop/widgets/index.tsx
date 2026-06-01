@@ -35,10 +35,18 @@ function agentAccess(cfg: Record<string, unknown>): "ask" | "full" | undefined {
 
 function toAgentCfg(cfg: Record<string, unknown>): AgentRunCfg {
   const out: AgentRunCfg = {};
-  const role = str(cfg, "role");
-  if (role !== undefined) out.role = role;
+  const workflow = str(cfg, "workflow");
+  if (workflow !== undefined) out.workflow = workflow;
   const model = str(cfg, "model");
   if (model !== undefined) out.model = model;
+  const runId = str(cfg, "runId");
+  if (runId !== undefined) out.runId = runId;
+  const fingerprint = str(cfg, "fingerprint");
+  if (fingerprint !== undefined) out.fingerprint = fingerprint;
+  const workspaceRoot = str(cfg, "workspaceRoot");
+  if (workspaceRoot !== undefined) out.workspaceRoot = workspaceRoot;
+  const inputJson = str(cfg, "inputJson");
+  if (inputJson !== undefined) out.inputJson = inputJson;
   const keikoMode = bool(cfg, "keikoMode");
   if (keikoMode !== undefined) out.keikoMode = keikoMode;
   const access = agentAccess(cfg);
@@ -58,9 +66,17 @@ registerWindowRender("activity", () => <TimelinePanel />);
 registerWindowRender("keiko", () => <KeikoTwinPanel />);
 registerWindowRender("settings", () => <SettingsPanel />);
 
-registerWindowRender("files", (cfg) => {
+registerWindowRender("files", (cfg, ctx) => {
   const root = str(cfg, "root");
-  return root !== undefined ? <FilesWidget root={root} /> : <FilesWidget />;
+  const onActiveFileChange = (path: string | null, resolvedRoot: string | null): void => {
+    ctx.updateCfg({
+      activeFilePath: path ?? undefined,
+      resolvedRoot: resolvedRoot ?? undefined,
+    });
+  };
+  return root !== undefined
+    ? <FilesWidget root={root} onActiveFileChange={onActiveFileChange} />
+    : <FilesWidget onActiveFileChange={onActiveFileChange} />;
 });
 registerWindowRender("editor", (cfg) => {
   const file = str(cfg, "file");
@@ -87,7 +103,7 @@ registerWindowRender("review", (cfg) => {
   return <ReviewWidget {...props} />;
 });
 registerWindowRender("agents", (cfg, ctx) => (
-  <AgentRunWidget cfg={toAgentCfg(cfg)} linkedRoot={ctx.linkedRoot} />
+  <AgentRunWidget cfg={toAgentCfg(cfg)} linkedRoot={ctx.linkedRoot} linkedFilePath={ctx.linkedFilePath} />
 ));
 registerWindowRender("integ", (cfg) => {
   const provider = str(cfg, "provider");

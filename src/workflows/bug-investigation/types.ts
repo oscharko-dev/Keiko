@@ -167,6 +167,8 @@ export interface BugInvestigationReport {
   readonly verificationSkipReason?: string | undefined;
   // UI-renderable next actions, each a plain redacted string.
   readonly nextActions: readonly string[];
+  // Redacted failure detail for terminal failed reports. Omitted on normal workflow outcomes.
+  readonly failureReason?: string | undefined;
 
   // Number of model calls made (including retries).
   readonly modelCallCount: number;

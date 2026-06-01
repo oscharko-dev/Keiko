@@ -36,6 +36,7 @@ export function rejectedReport(state: RunState, loop: ModelLoopResult): UnitTest
     nextActions: [
       `The model did not produce an in-scope test patch (${loop.lastRejectionCode ?? "unknown"})`,
     ],
+    failureReason: undefined,
     verificationSummary: undefined,
     verificationSkipReason: undefined,
     modelCallCount: loop.modelCallCount,
@@ -59,6 +60,7 @@ export function dryRunReport(
     coveredBehavior: accepted.coveredBehavior,
     knownGaps: accepted.knownGaps,
     nextActions: nextActionsFor(false, files),
+    failureReason: undefined,
     verificationSummary: undefined,
     verificationSkipReason: "verification skipped: dry-run, no files written",
     modelCallCount: loop.modelCallCount,
@@ -81,6 +83,7 @@ export function cancelledReport(
     coveredBehavior: undefined,
     knownGaps: undefined,
     nextActions: ["The workflow was cancelled before completion"],
+    failureReason: undefined,
     verificationSummary: undefined,
     verificationSkipReason: "verification skipped: cancelled",
     modelCallCount: loop.modelCallCount,
@@ -101,11 +104,12 @@ export function failedReport(state: RunState, error: unknown): UnitTestWorkflowR
     proposedDiff: undefined,
     coveredBehavior: undefined,
     knownGaps: undefined,
-    nextActions: ["Inspect the error and retry"],
+    nextActions: [`Inspect the error and retry: ${message}`],
+    failureReason: message,
     verificationSummary: undefined,
     verificationSkipReason: undefined,
-    modelCallCount: 0,
-    patchRetryCount: 0,
+    modelCallCount: state.progress.modelCallCount,
+    patchRetryCount: state.progress.patchRetryCount,
   });
 }
 
@@ -150,6 +154,7 @@ async function applyAndVerify(
     coveredBehavior: accepted.coveredBehavior,
     knownGaps: accepted.knownGaps,
     nextActions: nextActionsFor(true, applyResult.changedFiles),
+    failureReason: undefined,
     verificationSummary: verification.summary,
     verificationSkipReason: verification.skipReason,
     modelCallCount: loop.modelCallCount,

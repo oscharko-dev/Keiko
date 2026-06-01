@@ -17,6 +17,9 @@ describe("buildBugPrompt (AC #9 prompt construction)", () => {
     const system = messages.find((m) => m.role === "system")?.content ?? "";
     expect(system).toContain("root-cause");
     expect(system).toContain("```diff");
+    expect(system).toContain("--- a/<path>");
+    expect(system).toContain("*** Begin Patch");
+    expect(system).toContain("\\n+");
     expect(system).toContain("## Regression test");
     expect(system).toContain("## Uncertainty");
     expect(system).toContain("vitest");

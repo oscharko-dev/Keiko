@@ -86,6 +86,7 @@ export interface BugReportParts {
   readonly dryRunPreview: string | undefined;
   readonly verificationSkipReason: string | undefined;
   readonly nextActions: readonly string[];
+  readonly failureReason?: string | undefined;
   readonly modelCallCount: number;
   readonly patchRetryCount: number;
 }
@@ -109,6 +110,7 @@ export function assembleBugReport(parts: BugReportParts): BugInvestigationReport
     regressionCoverage: estimateRegressionCount(parts.patchFiles),
     verificationSkipReason: redactOptional(parts.verificationSkipReason),
     nextActions: parts.nextActions.map((action) => redact(action)),
+    failureReason: redactOptional(parts.failureReason),
     modelCallCount: parts.modelCallCount,
     patchRetryCount: parts.patchRetryCount,
   };
@@ -189,6 +191,7 @@ export function renderBugMarkdownReport(report: BugInvestigationReport): string 
     ...changedFileLines(report),
     ...verificationLines(report),
     ...hypothesisLines(report),
+    ...sectionIf("Failure", report.failureReason),
     ...(report.nextActions.length > 0
       ? ["## Next actions", ...report.nextActions.map((a) => `- ${a}`), ""]
       : []),

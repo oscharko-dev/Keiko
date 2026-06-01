@@ -109,12 +109,69 @@ describe("validatePatch — rejections", () => {
     expect(v.reasons.map((r) => r.code)).toContain("malformed");
   });
 
+  it("rejects escaped newline artifacts inside diff body lines", () => {
+    const diff = "--- /dev/null\n+++ b/tests/x.test.js\n@@\n+it('x', () => {\\n+  expect(1).toBe(1);\\n+});\n";
+    const v = validatePatch(info, diff);
+    expect(v.ok).toBe(false);
+    expect(v.reasons.map((r) => r.code)).toContain("malformed");
+    expect(v.reasons[0]?.message).toContain("escaped newline");
+  });
+
   it("accepts a valid modify against matching content", () => {
     write("src/x.txt", "one\ntwo\n");
     const v = validatePatch(info, MODIFY_DIFF);
     expect(v.ok).toBe(true);
     expect(v.reasons).toHaveLength(0);
     expect(v.conflicts).toHaveLength(0);
+  });
+
+  it("normalizes an LLM shorthand create hunk before validation", () => {
+    const diff = "--- /dev/null\n+++ b/tests/generated.test.js\n@@\n+import { it } from \"vitest\";\n+it(\"runs\", () => {});\n";
+    const v = validatePatch(info, diff);
+    expect(v.ok).toBe(true);
+    expect(v.normalizedDiff).toContain("@@ -0,0 +1,2 @@");
+    expect(v.files[0]?.path).toBe("tests/generated.test.js");
+    expect(v.files[0]?.addedLines).toBe(2);
+  });
+
+  it("normalizes stale hunk counts but still requires matching context", () => {
+    write("src/x.txt", "one\ntwo\n");
+    const diff = "--- a/src/x.txt\n+++ b/src/x.txt\n@@ -1,99 +1,99 @@\n one\n-two\n+TWO\n";
+    const v = validatePatch(info, diff);
+    expect(v.ok).toBe(true);
+    expect(v.normalizedDiff).toContain("@@ -1,2 +1,2 @@");
+  });
+
+  it("anchors an LLM shorthand modify hunk by exact unique preimage", () => {
+    write("src/x.txt", "header\none\ntwo\nfooter\n");
+    const diff = "--- a/src/x.txt\n+++ b/src/x.txt\n@@\n one\n-two\n+TWO\n";
+    const v = validatePatch(info, diff);
+    expect(v.ok).toBe(true);
+    expect(v.normalizedDiff).toContain("@@ -2,2 +2,2 @@");
+    expect(v.conflicts).toHaveLength(0);
+  });
+
+  it("keeps an ambiguous shorthand modify hunk rejected", () => {
+    write("src/x.txt", "one\ntwo\none\ntwo\n");
+    const diff = "--- a/src/x.txt\n+++ b/src/x.txt\n@@\n one\n-two\n+TWO\n";
+    const v = validatePatch(info, diff);
+    expect(v.ok).toBe(false);
+    expect(v.reasons[0]?.code).toBe("malformed");
+    expect(v.reasons[0]?.message).toContain("no unique anchor");
+  });
+
+  it("does not normalize already valid hunks that contain header-like body lines", () => {
+    write("doc.md", "context\n-- removed dashes\n");
+    const diff =
+      "--- a/doc.md\n" +
+      "+++ b/doc.md\n" +
+      "@@ -1,2 +1,2 @@\n" +
+      " context\n" +
+      "--- removed dashes\n" +
+      "+++ added dashes\n";
+    const v = validatePatch(info, diff);
+    expect(v.ok).toBe(true);
+    expect(v.normalizedDiff).toBeUndefined();
   });
 
   it("rejects an in-workspace symlink alias before it can rewrite the real target", () => {

@@ -35,6 +35,7 @@ interface SdkExportExpectation {
 interface RunRequestExpectation {
   readonly kind: WorkflowKind;
   readonly workflowId: string;
+  readonly input: Record<string, unknown>;
 }
 
 const DESCRIPTOR_EXPECTATIONS: readonly DescriptorExpectation[] = [
@@ -64,8 +65,22 @@ const SDK_EXPORT_EXPECTATIONS: readonly SdkExportExpectation[] = [
 ];
 
 const RUN_REQUEST_EXPECTATIONS: readonly RunRequestExpectation[] = [
-  { kind: "unit-tests", workflowId: "unit-test-generation" },
-  { kind: "bug-investigation", workflowId: "bug-investigation" },
+  {
+    kind: "unit-tests",
+    workflowId: "unit-test-generation",
+    input: {
+      workspaceRoot: "/tmp/keiko-surface-parity",
+      target: { kind: "file", filePath: "src/example.ts" },
+    },
+  },
+  {
+    kind: "bug-investigation",
+    workflowId: "bug-investigation",
+    input: {
+      workspaceRoot: "/tmp/keiko-surface-parity",
+      report: { description: "example failure" },
+    },
+  },
 ];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -191,7 +206,7 @@ async function checkRunRequestShapes(): Promise<readonly SurfaceParityCheckResul
       JSON.stringify({
         workflowId: expectation.workflowId,
         modelId: "m",
-        input: { workspaceRoot: "/tmp/keiko-surface-parity" },
+        input: expectation.input,
         apply: true,
         limits: { maxPromptBytes: 1 },
       }),

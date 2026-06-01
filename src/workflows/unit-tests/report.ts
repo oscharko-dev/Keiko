@@ -47,6 +47,7 @@ export interface ReportParts {
   readonly coveredBehavior: string | undefined;
   readonly knownGaps: string | undefined;
   readonly nextActions: readonly string[];
+  readonly failureReason?: string | undefined;
   readonly verificationSummary: VerificationAuditSummary | undefined;
   readonly verificationSkipReason: string | undefined;
   readonly modelCallCount: number;
@@ -69,6 +70,7 @@ export function assembleReport(parts: ReportParts): UnitTestWorkflowReport {
     coveredBehavior: redactOptional(parts.coveredBehavior),
     knownGaps: redactOptional(parts.knownGaps),
     nextActions: parts.nextActions.map((action) => redact(action)),
+    failureReason: redactOptional(parts.failureReason),
     verificationSummary: parts.verificationSummary,
     verificationSkipReason: redactOptional(parts.verificationSkipReason),
     modelCallCount: parts.modelCallCount,
@@ -111,6 +113,7 @@ export function renderMarkdownReport(report: UnitTestWorkflowReport): string {
     ...fileLines(report),
     ...sectionIf("Covered behavior", report.coveredBehavior),
     ...sectionIf("Known gaps", report.knownGaps),
+    ...sectionIf("Failure", report.failureReason),
     ...verificationLine(report),
     ...(report.nextActions.length > 0
       ? ["## Next actions", ...report.nextActions.map((a) => `- ${a}`), ""]

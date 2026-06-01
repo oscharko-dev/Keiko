@@ -55,14 +55,17 @@ describe("FilesWidget", () => {
       maxBytes: 1_000_000,
     });
 
-    render(<FilesWidget root="/repo space" />);
+    const onActiveFileChange = vi.fn();
+    render(<FilesWidget root="/repo space" onActiveFileChange={onActiveFileChange} />);
 
     expect(await screen.findByText("package.json")).toBeInTheDocument();
     expect(fetchFilesTree).toHaveBeenCalledWith("/repo space", "");
+    expect(onActiveFileChange).toHaveBeenCalledWith(null, "/repo space");
 
     await userEvent.click(screen.getByRole("button", { name: /package\.json/i }));
 
     await waitFor(() => expect(fetchFilesPreview).toHaveBeenCalledWith("/repo space", "package.json"));
+    expect(onActiveFileChange).toHaveBeenCalledWith("package.json", "/repo space");
     expect(await screen.findByText("\"keiko\"")).toBeInTheDocument();
   });
 

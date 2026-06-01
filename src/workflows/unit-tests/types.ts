@@ -134,6 +134,8 @@ export interface UnitTestWorkflowReport {
 
   // UI-renderable next actions, each a plain redacted string.
   readonly nextActions: readonly string[];
+  // Redacted failure detail for terminal failed reports. Omitted on normal workflow outcomes.
+  readonly failureReason?: string | undefined;
 
   // Verification run summary. Present only in apply mode when verification ran.
   readonly verificationSummary?: VerificationAuditSummary | undefined;

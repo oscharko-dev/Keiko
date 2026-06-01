@@ -87,4 +87,17 @@ describe("buildBugContext (AC #9 context selection)", () => {
     expect(pack.budgetBytes).toBe(4_096);
     expect(pack.usedBytes).toBeLessThanOrEqual(4_096);
   });
+
+  it("omits unrelated source files when evidence-targeted context exists", () => {
+    const fs = memFs(ROOT, {
+      "package.json": "{}",
+      "src/buggy.ts": "export const buggy = () => 1;",
+      "src/unrelated.ts": "export const unrelated = () => 1;",
+      "tests/buggy.test.ts": "test('buggy', () => {});",
+    });
+    const ws = makeWorkspaceInfo({ root: ROOT, testDirs: ["tests"] });
+    const evidence = parseFailureEvidence({ targetFiles: ["src/buggy.ts"] });
+    const pack = buildBugContext(ws, "buggy fails", evidence, DEFAULT_BUG_WORKFLOW_LIMITS, { fs });
+    expect(pack.selected.map((entry) => entry.path)).not.toContain("src/unrelated.ts");
+  });
 });

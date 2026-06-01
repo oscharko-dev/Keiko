@@ -41,6 +41,10 @@ describe("buildPrompt (AC #9)", () => {
     const system = buildPrompt(fileInput(), conventions(), makePack([]))[0]?.content ?? "";
     expect(system).toContain("```diff");
     expect(system).toContain("never modify");
+    expect(system).toContain("--- /dev/null");
+    expect(system).toContain("@@");
+    expect(system).toContain("*** Begin Patch");
+    expect(system).toContain("\\n+");
   });
 
   it("includes assertion-style samples when present", () => {

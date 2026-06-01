@@ -125,13 +125,28 @@ function issue8Priority(
   return 2;
 }
 
+function isSupportContext(ranked: RankedFile): boolean {
+  return ranked.selectionReason === "manifest" || ranked.selectionReason === "config";
+}
+
+function focusedContext(
+  ranked: readonly RankedFile[],
+  workspace: WorkspaceInfo,
+  input: UnitTestWorkflowInput,
+): readonly RankedFile[] {
+  const focused = ranked.filter(
+    (item) => issue8Priority(item, workspace, input) < 2 || isSupportContext(item),
+  );
+  return focused.length === 0 ? ranked : focused;
+}
+
 function createUnitTestRetrievalStrategy(
   workspace: WorkspaceInfo,
   input: UnitTestWorkflowInput,
 ): RetrievalStrategy {
   return {
     rank: (files: readonly DiscoveredFile[], task: string | undefined): readonly RankedFile[] => {
-      const ranked = lexicalRetrievalStrategy.rank(files, task);
+      const ranked = focusedContext(lexicalRetrievalStrategy.rank(files, task), workspace, input);
       return [...ranked].sort((a, b) => {
         const byIssue8 = issue8Priority(a, workspace, input) - issue8Priority(b, workspace, input);
         if (byIssue8 !== 0) {

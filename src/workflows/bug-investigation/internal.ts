@@ -17,6 +17,11 @@ import type { BugWorkflowEventSink } from "./events.js";
 // A no-op sink used when the caller injects none. emit is synchronous (ADR-0004 EventSink contract).
 export const NO_OP_SINK: BugWorkflowEventSink = { emit: (): void => undefined };
 
+export interface BugWorkflowProgress {
+  modelCallCount: number;
+  patchRetryCount: number;
+}
+
 // The resolved, defaulted view of input + deps the pipeline stages share.
 export interface BugRunState {
   readonly input: BugInvestigationInput;
@@ -26,6 +31,7 @@ export interface BugRunState {
   readonly now: () => number;
   readonly emitter: BugEventEmitter;
   readonly startedAt: number;
+  readonly progress: BugWorkflowProgress;
 }
 
 // A successful model+validate+guard outcome ready for dry-run or apply.
@@ -83,6 +89,7 @@ export function buildBugRunState(
     now,
     emitter: createBugEventEmitter(deps.sink ?? NO_OP_SINK, idSource(), fingerprint, now),
     startedAt: now(),
+    progress: { modelCallCount: 0, patchRetryCount: 0 },
   };
 }
 

@@ -176,7 +176,10 @@ describe("RunRequest shape (UI BFF contract)", () => {
       JSON.stringify({
         workflowId: "unit-test-generation",
         modelId: "m",
-        input: { workspaceRoot: "/tmp/keiko-surface-parity" },
+        input: {
+          workspaceRoot: "/tmp/keiko-surface-parity",
+          target: { kind: "file", filePath: "src/example.ts" },
+        },
       }),
     );
     if ("code" in result) throw new Error(`Unexpected error: ${result.message}`);
@@ -194,7 +197,10 @@ describe("RunRequest shape (UI BFF contract)", () => {
       JSON.stringify({
         workflowId: "bug-investigation",
         modelId: "m",
-        input: { workspaceRoot: "/tmp/keiko-surface-parity" },
+        input: {
+          workspaceRoot: "/tmp/keiko-surface-parity",
+          report: { description: "example failure" },
+        },
       }),
     );
     if ("code" in result) throw new Error(`Unexpected error: ${result.message}`);
@@ -203,12 +209,27 @@ describe("RunRequest shape (UI BFF contract)", () => {
 
   it("parseRunRequest carries limits for both workflow request shapes", async () => {
     const { parseRunRequest } = await import("../../src/ui/run-request.js");
-    for (const workflowId of ["unit-test-generation", "bug-investigation"]) {
+    for (const body of [
+      {
+        workflowId: "unit-test-generation",
+        input: {
+          workspaceRoot: "/tmp/keiko-surface-parity",
+          target: { kind: "file", filePath: "src/example.ts" },
+        },
+      },
+      {
+        workflowId: "bug-investigation",
+        input: {
+          workspaceRoot: "/tmp/keiko-surface-parity",
+          report: { description: "example failure" },
+        },
+      },
+    ]) {
       const result = parseRunRequest(
         JSON.stringify({
-          workflowId,
+          workflowId: body.workflowId,
           modelId: "m",
-          input: { workspaceRoot: "/tmp/keiko-surface-parity" },
+          input: body.input,
           limits: { maxPromptBytes: 1 },
         }),
       );

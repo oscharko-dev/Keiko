@@ -18,6 +18,7 @@ import {
   PatchValidationError,
 } from "./errors.js";
 import { computeFileContent } from "./patch-content.js";
+import { normalizeUnifiedDiffHunks } from "./patch-normalize.js";
 import { parseUnifiedDiff, PatchParseError } from "./patch-parse.js";
 import { nodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
 import {
@@ -38,6 +39,10 @@ function isBinaryDiff(diff: string): boolean {
   return (
     diff.includes("GIT binary patch") || /^Binary files .* differ$/m.test(diff) || containsNul(diff)
   );
+}
+
+function hasEscapedDiffLineBreak(diff: string): boolean {
+  return diff.includes("\\n+") || diff.includes("\\n-") || diff.includes("\\n ");
 }
 
 function enforcePath(workspace: WorkspaceInfo, fs: WorkspaceFs, path: string): string {
@@ -121,6 +126,92 @@ function readCurrent(workspace: WorkspaceInfo, fs: WorkspaceFs, path: string): s
   return fs.readFileUtf8(absolute);
 }
 
+function toLines(content: string): string[] {
+  if (content.length === 0) {
+    return [];
+  }
+  const lines = content.split("\n");
+  if (lines.at(-1) === "") {
+    lines.pop();
+  }
+  return lines;
+}
+
+function hunkPreimageLines(file: PatchFileChange, hunkIndex: number): readonly string[] {
+  const hunk = file.hunks[hunkIndex];
+  if (hunk === undefined) {
+    return [];
+  }
+  return hunk.lines
+    .filter((line) => line.startsWith(" ") || line.startsWith("-"))
+    .map((line) => line.slice(1));
+}
+
+function startsWithSequence(
+  lines: readonly string[],
+  index: number,
+  needle: readonly string[],
+): boolean {
+  return needle.every((line, offset) => lines[index + offset] === line);
+}
+
+function uniqueSequenceIndex(lines: readonly string[], needle: readonly string[]): number | undefined {
+  if (needle.length === 0 || needle.length > lines.length) {
+    return undefined;
+  }
+  let found: number | undefined;
+  for (let index = 0; index <= lines.length - needle.length; index += 1) {
+    if (!startsWithSequence(lines, index, needle)) {
+      continue;
+    }
+    if (found !== undefined) {
+      return undefined;
+    }
+    found = index;
+  }
+  return found;
+}
+
+function alignFileHunks(file: PatchFileChange, current: string | undefined): PatchFileChange {
+  if (file.kind !== "modify" || current === undefined) {
+    return file;
+  }
+  const currentLines = toLines(current);
+  const hunks = file.hunks.map((hunk, index) => {
+    if (hunk.oldStart > 0) {
+      return hunk;
+    }
+    const anchor = uniqueSequenceIndex(currentLines, hunkPreimageLines(file, index));
+    if (anchor === undefined) {
+      return hunk;
+    }
+    const start = anchor + 1;
+    return { ...hunk, oldStart: start, newStart: start };
+  });
+  if (hunks.every((hunk, index) => hunk === file.hunks[index])) {
+    return file;
+  }
+  return { ...file, hunks };
+}
+
+function alignHunksToCurrentContent(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  files: readonly PatchFileChange[],
+): readonly PatchFileChange[] {
+  return files.map((file) => alignFileHunks(file, readCurrent(workspace, fs, file.path)));
+}
+
+function unanchoredModifyReasons(files: readonly PatchFileChange[]): PatchRejection[] {
+  return files
+    .filter((file) => file.kind === "modify" && file.hunks.some((hunk) => hunk.oldStart <= 0))
+    .map((file) => ({
+      code: "malformed" as const,
+      message: "modify hunk has no unique anchor",
+      path: file.path,
+    }));
+}
+
 function collectConflicts(
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
@@ -154,6 +245,12 @@ function sizeAndCountReasons(
   if (isBinaryDiff(diff)) {
     reasons.push({ code: "binary", message: "binary patches are not supported" });
   }
+  if (hasEscapedDiffLineBreak(diff)) {
+    reasons.push({
+      code: "malformed",
+      message: "diff contains escaped newline markers; use real line breaks",
+    });
+  }
   if (totalChangedLines > limits.maxChangedLines) {
     reasons.push({
       code: "line-limit",
@@ -169,9 +266,103 @@ function sizeAndCountReasons(
   return reasons;
 }
 
+function renderHeader(file: PatchFileChange): readonly string[] {
+  if (file.kind === "create") {
+    return ["--- /dev/null", `+++ b/${file.path}`];
+  }
+  if (file.kind === "delete") {
+    return [`--- a/${file.path}`, "+++ /dev/null"];
+  }
+  return [`--- a/${file.path}`, `+++ b/${file.path}`];
+}
+
+function renderParsedPatch(files: readonly PatchFileChange[]): string {
+  const lines: string[] = [];
+  for (const file of files) {
+    lines.push(...renderHeader(file));
+    for (const hunk of file.hunks) {
+      lines.push(
+        `@@ -${String(hunk.oldStart)},${String(hunk.oldLines)} +${String(
+          hunk.newStart,
+        )},${String(hunk.newLines)} @@`,
+        ...hunk.lines,
+      );
+    }
+  }
+  return lines.join("\n");
+}
+
 export interface ValidateDeps {
   readonly fs?: WorkspaceFs | undefined;
   readonly limits?: PatchLimits | undefined;
+}
+
+interface ParsedDiff {
+  readonly files: readonly PatchFileChange[];
+  readonly effectiveDiff: string;
+  readonly normalized: boolean;
+}
+
+function parseDiffForValidation(diff: string): ParsedDiff {
+  try {
+    return { files: parseUnifiedDiff(diff).files, effectiveDiff: diff, normalized: false };
+  } catch (error) {
+    if (!(error instanceof PatchParseError)) {
+      throw error;
+    }
+    const normalizedDiff = normalizeUnifiedDiffHunks(diff);
+    if (normalizedDiff === diff) {
+      throw error;
+    }
+    return {
+      files: parseUnifiedDiff(normalizedDiff).files,
+      effectiveDiff: normalizedDiff,
+      normalized: true,
+    };
+  }
+}
+
+function malformedValidation(diff: string, error: unknown): PatchValidation {
+  const message = error instanceof PatchParseError ? error.message : "unparseable diff";
+  return {
+    ok: false,
+    files: [],
+    totalChangedLines: 0,
+    totalBytes: Buffer.byteLength(diff, "utf8"),
+    reasons: [{ code: "malformed", message }],
+    conflicts: [],
+  };
+}
+
+function completeValidation(
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  limits: PatchLimits,
+  diff: string,
+  parsed: ParsedDiff,
+): PatchValidation {
+  const files = parsed.files;
+  const totalBytes = Buffer.byteLength(parsed.effectiveDiff, "utf8");
+  const totalChangedLines = files.reduce((sum, f) => sum + f.addedLines + f.removedLines, 0);
+  const pathAndSizeReasons = [
+    ...sizeAndCountReasons(parsed.effectiveDiff, files, totalChangedLines, limits, totalBytes),
+    ...collectPathReasons(workspace, fs, files),
+  ];
+  const alignedFiles =
+    pathAndSizeReasons.length === 0 ? alignHunksToCurrentContent(workspace, fs, files) : files;
+  const aligned = alignedFiles.some((file, index) => file !== files[index]);
+  const effectiveDiff = parsed.normalized || aligned ? renderParsedPatch(alignedFiles) : diff;
+  const reasons = [...pathAndSizeReasons, ...unanchoredModifyReasons(alignedFiles)];
+  const conflicts = reasons.length === 0 ? collectConflicts(workspace, fs, alignedFiles) : [];
+  return {
+    ok: reasons.length === 0 && conflicts.length === 0,
+    files: alignedFiles,
+    totalChangedLines,
+    totalBytes: Buffer.byteLength(effectiveDiff, "utf8"),
+    ...(effectiveDiff === diff ? {} : { normalizedDiff: effectiveDiff }),
+    reasons,
+    conflicts,
+  };
 }
 
 export function validatePatch(
@@ -181,37 +372,11 @@ export function validatePatch(
 ): PatchValidation {
   const fs = deps.fs ?? nodeWorkspaceFs;
   const limits = deps.limits ?? DEFAULT_PATCH_LIMITS;
-  const totalBytes = Buffer.byteLength(diff, "utf8");
-  let files: readonly PatchFileChange[];
   try {
-    files = parseUnifiedDiff(diff).files;
+    return completeValidation(workspace, fs, limits, diff, parseDiffForValidation(diff));
   } catch (error) {
-    const message = error instanceof PatchParseError ? error.message : "unparseable diff";
-    return {
-      ok: false,
-      files: [],
-      totalChangedLines: 0,
-      totalBytes,
-      reasons: [{ code: "malformed", message }],
-      conflicts: [],
-    };
+    return malformedValidation(diff, error);
   }
-  const totalChangedLines = files.reduce((sum, f) => sum + f.addedLines + f.removedLines, 0);
-  const reasons = [
-    ...sizeAndCountReasons(diff, files, totalChangedLines, limits, totalBytes),
-    ...collectPathReasons(workspace, fs, files),
-  ];
-  // Conflict detection touches the filesystem; only run it when the path checks passed, so a
-  // denied/oversized patch never reads target files.
-  const conflicts = reasons.length === 0 ? collectConflicts(workspace, fs, files) : [];
-  return {
-    ok: reasons.length === 0 && conflicts.length === 0,
-    files,
-    totalChangedLines,
-    totalBytes,
-    reasons,
-    conflicts,
-  };
 }
 
 function renderFileLine(file: PatchFileChange): string {
