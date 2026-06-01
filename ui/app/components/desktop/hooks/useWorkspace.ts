@@ -429,7 +429,16 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
   const { update, focus, close, maximize, add, toggleTool } = makeMutations({ setWins, zc, worldVP });
   const { tileAll, splitFront, cascade } = makeLayoutActions({ setWins, worldVP });
   const { setSnap, commitSnap } = makeSnapActions({ setSnapPrev, snapZone, worldVP, update });
-  const { startConnect, confirmConnect, cancelConnect, removeConn, linkedFilesRoot } =
+  const {
+    startConnect,
+    confirmConnect,
+    cancelConnect,
+    removeConn,
+    connect,
+    linkedFilesRoot,
+    linkedFilesContext,
+    currentFilesContext,
+  } =
     makeConnectActions({
       wsRef,
       viewRef,
@@ -469,7 +478,10 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
     confirmConnect,
     cancelConnect,
     removeConn,
+    connect,
     linkedFilesRoot,
+    linkedFilesContext,
+    currentFilesContext,
     zoomTo,
     resetView,
     panBy,

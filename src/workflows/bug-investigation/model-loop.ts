@@ -69,6 +69,7 @@ async function callModel(
   attempt: number,
   contextBytes: number,
 ): Promise<string> {
+  state.progress.modelCallCount = Math.max(state.progress.modelCallCount, attempt);
   state.emitter.emit({ type: "bug:model:call:started", attempt, contextBytes });
   const response = await state.deps.model.call(
     { modelId: state.input.modelId, messages },
@@ -146,7 +147,10 @@ async function attemptOnce(
     fs: state.deps.fs ?? nodeWorkspaceFs,
     limits: patchLimitsFrom(state.limits),
   });
-  const result = classifyValidated(parsed, validation);
+  const result = classifyValidated(
+    { ...parsed, diff: validation.normalizedDiff ?? parsed.diff },
+    validation,
+  );
   emitValidation(state, validation, result.rejectionCode);
   return result;
 }
@@ -191,6 +195,7 @@ export async function runBugModelLoop(
       };
     }
     patchRetryCount += 1;
+    state.progress.patchRetryCount = patchRetryCount;
     rejectionReason = r.rejectionCode;
   }
   return {

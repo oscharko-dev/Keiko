@@ -7,9 +7,16 @@ import type { ExplainPlanInput } from "../types.js";
 import type { TaskPlan } from "./policy.js";
 
 const SYSTEM_PROMPT =
-  "You are a senior engineer. Read the referenced file and explain how it works and " +
-  "what an implementation plan for the user's question would look like. Do not propose " +
-  "code edits; this is a read-only explanation task.";
+  "You are a senior engineer. Explain only the provided file excerpt and the user's question. " +
+  "Do not infer APIs, constants, or behavior that are not present in the excerpt. If the excerpt " +
+  "is missing or insufficient, say that explicitly. Do not propose code edits; this is a " +
+  "read-only explanation task.";
+
+function contextBlock(input: ExplainPlanInput): string {
+  return input.context === undefined
+    ? "\n\nFile excerpt: not available. State that limitation before answering."
+    : `\n\nFile excerpt:\n${input.context}`;
+}
 
 export function buildExplainPlan(input: ExplainPlanInput): TaskPlan {
   const question =
@@ -18,7 +25,7 @@ export function buildExplainPlan(input: ExplainPlanInput): TaskPlan {
       : `Regarding ${input.filePath}: ${input.question}`;
   const messages: readonly ChatMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
-    { role: "user", content: question },
+    { role: "user", content: `${question}${contextBlock(input)}` },
   ];
   return {
     allowsTools: false,

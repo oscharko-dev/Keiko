@@ -20,4 +20,13 @@ describe("buildExplainPlan", () => {
     const plan = buildExplainPlan({ filePath: "src/baz.ts" });
     expect(plan.messages[1]?.content).toContain("src/baz.ts");
   });
+
+  it("grounds the prompt with provided file context", () => {
+    const plan = buildExplainPlan({
+      filePath: "src/baz.ts",
+      context: "--- src/baz.ts ---\nexport const value = 1;",
+    });
+    expect(plan.messages[0]?.content).toContain("Do not infer");
+    expect(plan.messages[1]?.content).toContain("export const value = 1;");
+  });
 });

@@ -2,13 +2,24 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
-import { fetchFilesDirectories, fetchTerminalConfig } from "../../../../lib/api";
+import {
+  ApiError,
+  createProject,
+  fetchFilesDirectories,
+  fetchModels,
+  fetchProjects,
+  fetchTerminalConfig,
+  startRun,
+} from "../../../../lib/api";
 import type {
+  AgentWorkflowId,
   FilesDirectoryListing,
+  ModelCapability,
   TerminalConfig,
   TerminalShell,
 } from "../../../../lib/types";
 import { Icons } from "../Icons";
+import type { FilesWindowContext } from "../hooks/useWorkspace.types";
 import {
   type ConfigField,
   type WIN_TYPES as WinTypes,
@@ -19,6 +30,7 @@ import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 interface NewWindowDialogProps {
   readonly type: WindowType;
   readonly types: typeof WinTypes;
+  readonly filesContext?: FilesWindowContext | null;
   readonly onConfirm: (cfg: Cfg) => void;
   readonly onClose: () => void;
 }
@@ -149,6 +161,156 @@ function DirectoryPicker({ value, onSelect, onClose }: DirectoryPickerProps): Re
   );
 }
 
+const AGENT_WORKFLOWS: readonly { id: AgentWorkflowId; label: string }[] = [
+  { id: "verify", label: "Verify" },
+  { id: "explain-plan", label: "Explain plan" },
+  { id: "unit-test-generation", label: "Generate unit tests" },
+  { id: "bug-investigation", label: "Investigate bug" },
+];
+
+function splitPaths(value: string): string[] {
+  return value
+    .split(/[\n,]/u)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function chooseDefaultModel(models: readonly ModelCapability[]): string {
+  return (
+    models.find((model) => model.id === "gpt-oss-120b") ??
+    models.find((model) => model.kind === "chat") ??
+    models[0]
+  )?.id ?? "";
+}
+
+function workflowRunBody(
+  workflow: AgentWorkflowId,
+  workspaceRoot: string,
+  modelId: string,
+  fields: AgentLauncherFields,
+): { workflowId?: string; taskType?: string; input: Record<string, unknown>; modelId: string } {
+  if (workflow === "verify") {
+    const targetFiles = splitPaths(fields.verifyTargetFiles);
+    return {
+      taskType: "verify",
+      modelId,
+      input: {
+        workspaceRoot,
+        ...(targetFiles.length > 0 ? { targetFiles } : {}),
+      },
+    };
+  }
+  if (workflow === "explain-plan") {
+    return {
+      taskType: "explain-plan",
+      modelId,
+      input: {
+        workspaceRoot,
+        filePath: fields.explainFilePath.trim(),
+        ...(fields.explainQuestion.trim().length > 0
+          ? { question: fields.explainQuestion.trim() }
+          : {}),
+      },
+    };
+  }
+  if (workflow === "unit-test-generation") {
+    const filePaths = splitPaths(fields.unitFilePaths);
+    const target =
+      fields.unitTargetKind === "module"
+        ? { kind: "module", moduleDir: fields.unitModuleDir.trim() }
+        : fields.unitTargetKind === "changedFiles"
+          ? { kind: "changedFiles", filePaths }
+          : { kind: "file", filePath: fields.unitFilePath.trim() };
+    return {
+      workflowId: "unit-test-generation",
+      modelId,
+      input: { workspaceRoot, target },
+    };
+  }
+  return {
+    workflowId: "bug-investigation",
+    modelId,
+    input: {
+      workspaceRoot,
+      report: {
+        ...(fields.bugDescription.trim().length > 0
+          ? { description: fields.bugDescription.trim() }
+          : {}),
+        ...(fields.bugFailingOutput.trim().length > 0
+          ? { failingOutput: fields.bugFailingOutput.trim() }
+          : {}),
+        ...(fields.bugStackTrace.trim().length > 0
+          ? { stackTrace: fields.bugStackTrace.trim() }
+          : {}),
+        ...(splitPaths(fields.bugTargetFiles).length > 0
+          ? { targetFiles: splitPaths(fields.bugTargetFiles) }
+          : {}),
+      },
+    },
+  };
+}
+
+interface AgentLauncherFields {
+  readonly verifyTargetFiles: string;
+  readonly explainFilePath: string;
+  readonly explainQuestion: string;
+  readonly unitTargetKind: "file" | "module" | "changedFiles";
+  readonly unitFilePath: string;
+  readonly unitModuleDir: string;
+  readonly unitFilePaths: string;
+  readonly bugDescription: string;
+  readonly bugFailingOutput: string;
+  readonly bugStackTrace: string;
+  readonly bugTargetFiles: string;
+}
+
+const INITIAL_AGENT_FIELDS: AgentLauncherFields = {
+  verifyTargetFiles: "",
+  explainFilePath: "",
+  explainQuestion: "",
+  unitTargetKind: "file",
+  unitFilePath: "",
+  unitModuleDir: "",
+  unitFilePaths: "",
+  bugDescription: "",
+  bugFailingOutput: "",
+  bugStackTrace: "",
+  bugTargetFiles: "",
+};
+
+function validationMessage(
+  workflow: AgentWorkflowId,
+  workspaceRoot: string,
+  modelId: string,
+  fields: AgentLauncherFields,
+): string | null {
+  if (workspaceRoot.length === 0) return "Workspace is required.";
+  if (modelId.length === 0) return "No model is available.";
+  if (workflow === "explain-plan" && fields.explainFilePath.trim().length === 0) {
+    return "Explain plan requires a filePath.";
+  }
+  if (workflow === "unit-test-generation") {
+    if (fields.unitTargetKind === "file" && fields.unitFilePath.trim().length === 0) {
+      return "Unit test generation requires a filePath.";
+    }
+    if (fields.unitTargetKind === "module" && fields.unitModuleDir.trim().length === 0) {
+      return "Unit test generation requires a moduleDir.";
+    }
+    if (fields.unitTargetKind === "changedFiles" && splitPaths(fields.unitFilePaths).length === 0) {
+      return "Unit test generation requires at least one filePath.";
+    }
+  }
+  if (workflow === "bug-investigation") {
+    const hasEvidence =
+      fields.bugDescription.trim().length > 0 ||
+      fields.bugFailingOutput.trim().length > 0 ||
+      fields.bugStackTrace.trim().length > 0 ||
+      splitPaths(fields.bugTargetFiles).length > 0;
+    if (!hasEvidence) return "Bug investigation requires description, output, stack trace, or target files.";
+  }
+  return null;
+}
+
 function shellOptions(
   field: ConfigField,
   terminalConfig: TerminalConfig | null,
@@ -230,9 +392,367 @@ function renderField(
   );
 }
 
+interface AgentLauncherProps {
+  readonly filesContext: FilesWindowContext | null;
+  readonly firstRef: (node: HTMLElement | null) => void;
+  readonly directoryField: string | null;
+  readonly setDirectoryField: (key: string | null) => void;
+  readonly setDialogError: (message: string | null) => void;
+  readonly onConfirm: (cfg: Cfg) => void;
+}
+
+function AgentLauncher({
+  filesContext,
+  firstRef,
+  directoryField,
+  setDirectoryField,
+  setDialogError,
+  onConfirm,
+}: AgentLauncherProps): ReactNode {
+  const [workflow, setWorkflow] = useState<AgentWorkflowId>("verify");
+  const [workspaceRoot, setWorkspaceRoot] = useState(filesContext?.root ?? "");
+  const [modelId, setModelId] = useState("");
+  const [models, setModels] = useState<readonly ModelCapability[]>([]);
+  const [projects, setProjects] = useState<readonly string[]>([]);
+  const [fields, setFields] = useState<AgentLauncherFields>(INITIAL_AGENT_FIELDS);
+  const [loading, setLoading] = useState(true);
+  const [registering, setRegistering] = useState(false);
+  const [starting, setStarting] = useState(false);
+
+  const workspace = workspaceRoot.trim();
+  const currentFile =
+    filesContext !== null &&
+    filesContext.root === workspace &&
+    filesContext.activeFilePath !== undefined
+      ? filesContext.activeFilePath
+      : null;
+  const registered = workspace.length > 0 && projects.includes(workspace);
+  const validation = validationMessage(workflow, workspace, modelId, fields);
+  const canStart = validation === null && registered && !starting && !loading;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setDialogError(null);
+    void Promise.all([fetchModels(), fetchProjects()])
+      .then(([modelPayload, projectPayload]) => {
+        if (cancelled) return;
+        setModels(modelPayload.models);
+        setModelId((current) => current || chooseDefaultModel(modelPayload.models));
+        setProjects(projectPayload.projects.filter((project) => project.available).map((project) => project.path));
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setDialogError(errorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [setDialogError]);
+
+  const updateField = (patch: Partial<AgentLauncherFields>): void => {
+    setFields((current) => ({ ...current, ...patch }));
+  };
+
+  const useCurrentFile = (): void => {
+    if (currentFile === null) return;
+    if (workflow === "verify") updateField({ verifyTargetFiles: currentFile });
+    else if (workflow === "explain-plan") updateField({ explainFilePath: currentFile });
+    else if (workflow === "unit-test-generation") {
+      if (fields.unitTargetKind === "changedFiles") updateField({ unitFilePaths: currentFile });
+      else updateField({ unitTargetKind: "file", unitFilePath: currentFile });
+    } else {
+      updateField({ bugTargetFiles: currentFile });
+    }
+  };
+
+  const refreshProjects = async (): Promise<void> => {
+    const projectPayload = await fetchProjects();
+    setProjects(projectPayload.projects.filter((project) => project.available).map((project) => project.path));
+  };
+
+  const registerWorkspace = async (): Promise<void> => {
+    if (workspace.length === 0) return;
+    setRegistering(true);
+    setDialogError(null);
+    try {
+      await createProject({ path: workspace });
+      await refreshProjects();
+    } catch (error: unknown) {
+      setDialogError(errorMessage(error));
+    } finally {
+      setRegistering(false);
+    }
+  };
+
+  const startAgent = async (): Promise<void> => {
+    if (!canStart) {
+      setDialogError(validation ?? "Workspace is not registered.");
+      return;
+    }
+    setStarting(true);
+    setDialogError(null);
+    const body = workflowRunBody(workflow, workspace, modelId, fields);
+    try {
+      const started = await startRun(body);
+      onConfirm({
+        workflow,
+        model: modelId,
+        runId: started.runId,
+        fingerprint: started.fingerprint,
+        workspaceRoot: workspace,
+        inputJson: JSON.stringify(body.input),
+        ...(filesContext !== null && filesContext.root === workspace
+          ? { __connectFilesId: filesContext.id }
+          : {}),
+      });
+    } catch (error: unknown) {
+      if (error instanceof ApiError && error.code === "WORKSPACE_NOT_REGISTERED") {
+        await refreshProjects().catch(() => undefined);
+        setDialogError("Workspace is not registered.");
+      } else {
+        setDialogError(errorMessage(error));
+      }
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  const renderWorkflowFields = (): ReactNode => {
+    if (workflow === "verify") {
+      return (
+        <label className="dlg-field">
+          <span className="dlg-label">Target files <span className="dlg-opt">optional</span></span>
+          <textarea
+            className="dlg-input dlg-textarea mono"
+            rows={2}
+            placeholder="src/file.ts, src/other.ts"
+            value={fields.verifyTargetFiles}
+            onChange={(event) => updateField({ verifyTargetFiles: event.target.value })}
+          />
+        </label>
+      );
+    }
+    if (workflow === "explain-plan") {
+      return (
+        <>
+          <label className="dlg-field">
+            <span className="dlg-label">filePath</span>
+            <input
+              className="dlg-input mono"
+              placeholder="src/file.ts"
+              value={fields.explainFilePath}
+              onChange={(event) => updateField({ explainFilePath: event.target.value })}
+            />
+          </label>
+          <label className="dlg-field">
+            <span className="dlg-label">Question <span className="dlg-opt">optional</span></span>
+            <textarea
+              className="dlg-input dlg-textarea"
+              rows={2}
+              placeholder="What should the plan focus on?"
+              value={fields.explainQuestion}
+              onChange={(event) => updateField({ explainQuestion: event.target.value })}
+            />
+          </label>
+        </>
+      );
+    }
+    if (workflow === "unit-test-generation") {
+      return (
+        <>
+          <label className="dlg-field">
+            <span className="dlg-label">targetKind</span>
+            <span className="dlg-selwrap">
+              <select
+                className="dlg-input mono"
+                value={fields.unitTargetKind}
+                onChange={(event) => updateField({ unitTargetKind: event.target.value as AgentLauncherFields["unitTargetKind"] })}
+              >
+                <option value="file">file</option>
+                <option value="module">module</option>
+                <option value="changedFiles">changedFiles</option>
+              </select>
+              <span className="dlg-selchev"><Icons.chevron size={15} /></span>
+            </span>
+          </label>
+          {fields.unitTargetKind === "module" ? (
+            <label className="dlg-field">
+              <span className="dlg-label">moduleDir</span>
+              <input
+                className="dlg-input mono"
+                placeholder="src/module"
+                value={fields.unitModuleDir}
+                onChange={(event) => updateField({ unitModuleDir: event.target.value })}
+              />
+            </label>
+          ) : fields.unitTargetKind === "changedFiles" ? (
+            <label className="dlg-field">
+              <span className="dlg-label">filePaths</span>
+              <textarea
+                className="dlg-input dlg-textarea mono"
+                rows={2}
+                placeholder="src/file.ts, src/other.ts"
+                value={fields.unitFilePaths}
+                onChange={(event) => updateField({ unitFilePaths: event.target.value })}
+              />
+            </label>
+          ) : (
+            <label className="dlg-field">
+              <span className="dlg-label">filePath</span>
+              <input
+                className="dlg-input mono"
+                placeholder="src/file.ts"
+                value={fields.unitFilePath}
+                onChange={(event) => updateField({ unitFilePath: event.target.value })}
+              />
+            </label>
+          )}
+        </>
+      );
+    }
+    return (
+      <>
+        <label className="dlg-field">
+          <span className="dlg-label">Description <span className="dlg-opt">optional</span></span>
+          <textarea
+            className="dlg-input dlg-textarea"
+            rows={2}
+            placeholder="Describe the observed bug."
+            value={fields.bugDescription}
+            onChange={(event) => updateField({ bugDescription: event.target.value })}
+          />
+        </label>
+        <label className="dlg-field">
+          <span className="dlg-label">Failing output <span className="dlg-opt">optional</span></span>
+          <textarea
+            className="dlg-input dlg-textarea mono"
+            rows={2}
+            value={fields.bugFailingOutput}
+            onChange={(event) => updateField({ bugFailingOutput: event.target.value })}
+          />
+        </label>
+        <label className="dlg-field">
+          <span className="dlg-label">Stack trace <span className="dlg-opt">optional</span></span>
+          <textarea
+            className="dlg-input dlg-textarea mono"
+            rows={2}
+            value={fields.bugStackTrace}
+            onChange={(event) => updateField({ bugStackTrace: event.target.value })}
+          />
+        </label>
+        <label className="dlg-field">
+          <span className="dlg-label">Target files <span className="dlg-opt">optional</span></span>
+          <textarea
+            className="dlg-input dlg-textarea mono"
+            rows={2}
+            placeholder="src/file.ts, src/other.ts"
+            value={fields.bugTargetFiles}
+            onChange={(event) => updateField({ bugTargetFiles: event.target.value })}
+          />
+        </label>
+      </>
+    );
+  };
+
+  return (
+    <>
+      <label className="dlg-field">
+        <span className="dlg-label">Workflow</span>
+        <span className="dlg-selwrap">
+          <select
+            ref={firstRef}
+            className="dlg-input mono"
+            value={workflow}
+            onChange={(event) => setWorkflow(event.target.value as AgentWorkflowId)}
+          >
+            {AGENT_WORKFLOWS.map((item) => (
+              <option key={item.id} value={item.id}>{item.label}</option>
+            ))}
+          </select>
+          <span className="dlg-selchev"><Icons.chevron size={15} /></span>
+        </span>
+      </label>
+      <label className="dlg-field">
+        <span className="dlg-label">Workspace</span>
+        <span className="dlg-dirwrap">
+          <input
+            className="dlg-input mono"
+            value={workspaceRoot}
+            placeholder="/absolute/project/path"
+            onClick={() => setDirectoryField("agentWorkspace")}
+            onChange={(event) => setWorkspaceRoot(event.target.value)}
+          />
+          <button type="button" className="dlg-dirbtn" onClick={() => setDirectoryField("agentWorkspace")}>
+            Browse
+          </button>
+        </span>
+        {directoryField === "agentWorkspace" ? (
+          <DirectoryPicker
+            value={workspaceRoot}
+            onSelect={setWorkspaceRoot}
+            onClose={() => setDirectoryField(null)}
+          />
+        ) : null}
+      </label>
+      {workspace.length > 0 && !registered ? (
+        <div className="dlg-agent-warning">
+          <span>Workspace is not registered.</span>
+          <button type="button" className="dlg-btn" disabled={registering} onClick={() => void registerWorkspace()}>
+            {registering ? "Registering..." : "Register workspace"}
+          </button>
+        </div>
+      ) : null}
+      <label className="dlg-field">
+        <span className="dlg-label">Model</span>
+        <span className="dlg-selwrap">
+          <select
+            className="dlg-input mono"
+            value={modelId}
+            onChange={(event) => setModelId(event.target.value)}
+            disabled={models.length === 0}
+          >
+            {models.map((model) => (
+              <option key={model.id} value={model.id}>{model.id}</option>
+            ))}
+          </select>
+          <span className="dlg-selchev"><Icons.chevron size={15} /></span>
+        </span>
+      </label>
+      {currentFile !== null ? (
+        <button type="button" className="dlg-current-file" onClick={useCurrentFile}>
+          <Icons.files size={13} /> Use current file <span className="mono">{currentFile}</span>
+        </button>
+      ) : null}
+      {renderWorkflowFields()}
+      <div className="permctl agent-disabled-perm" aria-disabled="true">
+        <div className="perm-toggle" data-on={true}>
+          {/* eslint-disable-next-line @next/next/no-img-element -- raw SVG sized by .perm-orca */}
+          <img className="perm-orca" src="/assets/keiko-logo.svg" alt="" />
+          <span className="perm-tt">
+            <span className="perm-name">Keiko-Mode</span>
+            <span className="perm-desc">coming soon</span>
+          </span>
+          <span className="perm-sw on"><span /></span>
+        </div>
+        <div className="perm-note">Runs are dry-run only. Apply requires explicit review and Apply.</div>
+      </div>
+      <div className="dlg-agent-actions">
+        <button type="button" className="dlg-btn dlg-primary" disabled={!canStart} onClick={() => void startAgent()}>
+          {starting ? "Starting..." : "Start agent"}
+        </button>
+        {loading ? <span className="dlg-note">Loading models and projects...</span> : null}
+      </div>
+    </>
+  );
+}
+
 export function NewWindowDialog({
   type,
   types,
+  filesContext = null,
   onConfirm,
   onClose,
 }: NewWindowDialogProps): ReactNode {
@@ -310,7 +830,9 @@ export function NewWindowDialog({
   }, [cfg.root, type]);
 
   const set = (k: string, v: CfgValue): void => setCfg((s) => ({ ...s, [k]: v }));
-  const submit = (): void => onConfirm(cfg);
+  const submit = (): void => {
+    if (type !== "agents") onConfirm(cfg);
+  };
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (e.key === "Escape") { onClose(); return; }
@@ -361,10 +883,19 @@ export function NewWindowDialog({
           </button>
         </div>
         <div className="dlg-body">
-          {fields.length === 0 && (
+          {type === "agents" ? (
+            <AgentLauncher
+              filesContext={filesContext}
+              firstRef={(node) => { firstFieldRef.current = node; }}
+              directoryField={directoryField}
+              setDirectoryField={setDirectoryField}
+              setDialogError={setDialogError}
+              onConfirm={onConfirm}
+            />
+          ) : fields.length === 0 && (
             <div className="dlg-empty">Add a new {t.title} window to your workspace.</div>
           )}
-          {fields.map((f, i) => (
+          {type !== "agents" && fields.map((f, i) => (
             <label className="dlg-field" key={f.key}>
               <span className="dlg-label">
                 {f.label}
@@ -391,7 +922,9 @@ export function NewWindowDialog({
         </div>
         <div className="dlg-foot">
           <button type="button" className="dlg-btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="dlg-btn dlg-primary" onClick={submit}>{cta}</button>
+          {type !== "agents" ? (
+            <button type="button" className="dlg-btn dlg-primary" onClick={submit}>{cta}</button>
+          ) : null}
         </div>
       </div>
     </div>

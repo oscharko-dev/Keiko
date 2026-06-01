@@ -116,7 +116,18 @@ function AppShellInner(): ReactNode {
   }, []);
   const confirmNew = useCallback((cfg: Cfg): void => {
     setPending((current) => {
-      if (current !== null) ws.api.add(current, cfg);
+      if (current !== null) {
+        const { __connectFilesId, ...windowCfg } = cfg;
+        const createdId = ws.api.add(current, windowCfg);
+        if (
+          current === "agents" &&
+          createdId !== null &&
+          typeof __connectFilesId === "string" &&
+          __connectFilesId.length > 0
+        ) {
+          ws.api.connect(createdId, __connectFilesId);
+        }
+      }
       return null;
     });
   }, [ws.api]);
@@ -188,6 +199,7 @@ function AppShellInner(): ReactNode {
             <NewWindowDialog
               type={pending}
               types={WIN_TYPES}
+              filesContext={ws.api.currentFilesContext()}
               onConfirm={confirmNew}
               onClose={closeDialog}
             />

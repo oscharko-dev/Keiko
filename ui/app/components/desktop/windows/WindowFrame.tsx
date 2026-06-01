@@ -83,6 +83,8 @@ function selectBody(
   eh: number,
   cfg: Record<string, unknown>,
   linkedRoot: string | null,
+  linkedFilePath: string | undefined,
+  updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void,
 ): BodySelection {
   if (type === "chat") {
     const mini = ew < CHAT_MINI_W || eh < CHAT_MINI_H;
@@ -92,7 +94,7 @@ function selectBody(
   if (ew < def.tiny.w || eh < def.tiny.h) {
     return { mode: "tiny", node: <TooSmall icon={def.icon} label={def.title} /> };
   }
-  return { mode: "full", node: def.render(cfg, { linkedRoot }) };
+  return { mode: "full", node: def.render(cfg, { linkedRoot, linkedFilePath, updateCfg }) };
 }
 
 interface DragGeometry {
@@ -228,9 +230,25 @@ export function WindowFrame({
   const zoom = win.zoom ?? 1;
   const linkedRoot =
     win.type === "chat" || win.type === "agents" ? api.linkedFilesRoot(win.id) : null;
+  const linkedFilePath =
+    win.type === "agents" ? api.linkedFilesContext(win.id)?.activeFilePath : undefined;
   const ew = win.w / zoom;
   const eh = win.h / zoom;
-  const { mode: bodyMode, node: body } = selectBody(win.type, ew, eh, win.cfg, linkedRoot);
+  const updateCfg = useCallback(
+    (patch: Record<string, string | number | boolean | undefined>): void => {
+      api.update(win.id, { cfg: { ...win.cfg, ...patch } });
+    },
+    [api, win.cfg, win.id],
+  );
+  const { mode: bodyMode, node: body } = selectBody(
+    win.type,
+    ew,
+    eh,
+    win.cfg,
+    linkedRoot,
+    linkedFilePath,
+    updateCfg,
+  );
 
   const setZoom = useCallback(
     (z: number): void => api.update(win.id, { zoom: clampContentZoom(z) }),

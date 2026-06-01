@@ -16,8 +16,14 @@ export interface ViewportWorld {
   readonly h: number;
 }
 
+export interface FilesWindowContext {
+  readonly id: string;
+  readonly root: string;
+  readonly activeFilePath?: string;
+}
+
 export interface WorkspaceApi {
-  readonly add: (type: WindowType, cfg?: AppWindow["cfg"]) => void;
+  readonly add: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly toggleTool: (type: WindowType) => void;
   readonly focus: (id: string) => void;
   readonly close: (id: string) => void;
@@ -32,7 +38,10 @@ export interface WorkspaceApi {
   readonly confirmConnect: (toId: string, e: ReactPointerEvent<Element>) => void;
   readonly cancelConnect: () => void;
   readonly removeConn: (connId: string) => void;
+  readonly connect: (a: string, b: string) => void;
   readonly linkedFilesRoot: (id: string) => string | null;
+  readonly linkedFilesContext: (id: string) => FilesWindowContext | null;
+  readonly currentFilesContext: () => FilesWindowContext | null;
   readonly zoomTo: (z: number) => void;
   readonly resetView: () => void;
   readonly panBy: (dx: number, dy: number) => void;

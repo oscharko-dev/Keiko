@@ -79,4 +79,16 @@ describe("buildTestGenContext (AC #9)", () => {
     );
     expect(pack.selected.map((entry) => entry.path)).toEqual(["src/z.ts", "tests/z.test.ts"]);
   });
+
+  it("omits unrelated source files when focused context exists", () => {
+    const fs = memFs(ROOT, {
+      "package.json": "{}",
+      "src/add.ts": "export const add = () => 1;",
+      "src/unrelated.ts": "export const unrelated = () => 1;",
+      "tests/add.test.ts": "test('add', () => {});",
+    });
+    const ws = makeWorkspaceInfo({ root: ROOT, testDirs: ["tests"] });
+    const pack = buildTestGenContext(ws, input(), DEFAULT_WORKFLOW_LIMITS, { fs });
+    expect(pack.selected.map((entry) => entry.path)).not.toContain("src/unrelated.ts");
+  });
 });

@@ -12,7 +12,11 @@ const OUTPUT_CONTRACT =
   "Respond with the unified diff that adds the tests inside a single fenced code block opened " +
   "with ```diff and closed with ```. After the block you MAY add `## Covered behavior` and " +
   "`## Known gaps` sections in prose. Output ONLY a unified diff for test files — never modify " +
-  "source files.";
+  "source files. The first non-empty line inside the fence MUST be `--- /dev/null` for a new " +
+  "test file or `--- a/<existing-test-path>` for an existing test file, followed by " +
+  "`+++ b/<test-path>` and at least one `@@` hunk. Do not output `*** Begin Patch`, file trees, " +
+  "plain prose, markdown bullets, or escaped newline markers like `\\n+`/`\\n-` inside the diff " +
+  "fence; every diff line must be separated by a real newline.";
 
 function systemContent(conventions: TestConventions): string {
   const lines = [

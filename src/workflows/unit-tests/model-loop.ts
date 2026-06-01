@@ -40,12 +40,17 @@ function emitValidation(
   });
 }
 
+function emptyPatchRejection(parsedDiff: string, validation: PatchValidation): string | undefined {
+  return parsedDiff.trim().length === 0 || validation.files.length === 0 ? "empty" : undefined;
+}
+
 async function callModel(
   state: RunState,
   messages: readonly ChatMessage[],
   attempt: number,
   contextBytes: number,
 ): Promise<string> {
+  state.progress.modelCallCount = Math.max(state.progress.modelCallCount, attempt);
   state.emitter.emit({ type: "workflow:model:call:started", attempt, contextBytes });
   const response = await state.deps.model.call(
     { modelId: state.input.modelId, messages },
@@ -82,13 +87,14 @@ async function attemptOnce(
   const validation = validatePatch(workspace, parsed.diff, {
     fs: state.deps.fs ?? nodeWorkspaceFs,
   });
+  const effectiveDiff = validation.normalizedDiff ?? parsed.diff;
   const guardCode = validation.ok
-    ? productionGuard(workspace, validation)
+    ? emptyPatchRejection(effectiveDiff, validation) ?? productionGuard(workspace, validation)
     : validation.reasons[0]?.code;
   emitValidation(state, validation, guardCode);
   if (validation.ok && guardCode === undefined) {
     const accepted: AcceptedPatch = {
-      diff: parsed.diff,
+      diff: effectiveDiff,
       validation,
       coveredBehavior: parsed.coveredBehavior,
       knownGaps: parsed.knownGaps,
@@ -129,6 +135,7 @@ export async function runModelLoop(
       };
     }
     patchRetryCount += 1;
+    state.progress.patchRetryCount = patchRetryCount;
     rejectionReason = result.rejectionCode;
   }
   return {

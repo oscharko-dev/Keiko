@@ -22,7 +22,7 @@ import {
   runVerification,
   type VerificationReport,
 } from "../verification/index.js";
-import { detectWorkspace } from "../workspace/index.js";
+import { detectWorkspace, readWorkspaceFile } from "../workspace/index.js";
 import type {
   UnitTestWorkflowInput,
   UnitTestWorkflowReport,
@@ -99,7 +99,18 @@ function bugInput(request: RunRequest): BugInvestigationInput {
 }
 
 function explainTask(request: RunRequest): TaskInput {
-  return { taskType: "explain-plan", input: request.input } as unknown as TaskInput;
+  const root = workspaceRoot(request);
+  const filePath = request.input.filePath;
+  if (typeof filePath !== "string" || filePath.length === 0) {
+    return { taskType: "explain-plan", input: request.input } as unknown as TaskInput;
+  }
+  const workspace = detectWorkspace(root);
+  const file = readWorkspaceFile(workspace, filePath, { maxBytes: 32_768 });
+  const context = [
+    `--- ${file.relativePath}${file.truncated ? " (truncated)" : ""} ---`,
+    file.text,
+  ].join("\n");
+  return { taskType: "explain-plan", input: { ...request.input, context } } as unknown as TaskInput;
 }
 
 function workspaceRoot(request: RunRequest): string {

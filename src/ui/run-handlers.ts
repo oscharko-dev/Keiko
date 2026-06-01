@@ -459,7 +459,21 @@ export function handleGetRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResul
   if (record.status === "running") {
     return { status: 200, body: { report: { status: "running" } } };
   }
-  return { status: 200, body: { report: record.report } };
+  return { status: 200, body: { report: reportWithApply(record.report, record.applyReport, record.appliedAt) } };
+}
+
+function reportWithApply(
+  report: unknown,
+  applyReport: unknown,
+  appliedAt: number | undefined,
+): unknown {
+  if (applyReport === undefined || appliedAt === undefined) {
+    return report;
+  }
+  if (!isRecord(report)) {
+    return { report, applyReport, appliedAt };
+  }
+  return { ...report, applyReport, appliedAt };
 }
 
 // Route 9 — POST /api/runs/:runId/apply. The ONLY write path. 404 unknown; 409 when not in an
@@ -483,5 +497,8 @@ export async function handleApplyRun(
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   const report = await applyRun(record.appliable, model, record.modelId, deps.redactor);
-  return { status: 200, body: { report } };
+  record.appliable = undefined;
+  record.applyReport = report;
+  record.appliedAt = Date.now();
+  return { status: 200, body: { report: reportWithApply(record.report, record.applyReport, record.appliedAt) } };
 }

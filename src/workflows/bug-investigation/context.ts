@@ -130,6 +130,21 @@ function evidencePriority(
   return 2;
 }
 
+function isSupportContext(ranked: RankedFile): boolean {
+  return ranked.selectionReason === "manifest" || ranked.selectionReason === "config";
+}
+
+function focusedContext(
+  ranked: readonly RankedFile[],
+  workspace: WorkspaceInfo,
+  evidence: EvidenceIndex,
+): readonly RankedFile[] {
+  const focused = ranked.filter(
+    (item) => evidencePriority(item, workspace, evidence) < 2 || isSupportContext(item),
+  );
+  return focused.length === 0 ? ranked : focused;
+}
+
 function createBugRetrievalStrategy(
   workspace: WorkspaceInfo,
   evidence: FailureEvidence,
@@ -137,7 +152,7 @@ function createBugRetrievalStrategy(
   const index = buildEvidenceIndex(evidence, workspace);
   return {
     rank: (files: readonly DiscoveredFile[], task: string | undefined): readonly RankedFile[] => {
-      const ranked = lexicalRetrievalStrategy.rank(files, task);
+      const ranked = focusedContext(lexicalRetrievalStrategy.rank(files, task), workspace, index);
       return [...ranked].sort((a, b) => {
         const byEvidence =
           evidencePriority(a, workspace, index) - evidencePriority(b, workspace, index);

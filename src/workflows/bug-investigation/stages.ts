@@ -59,6 +59,7 @@ export function rejectedReport(
     nextActions: [
       `The model did not produce an in-scope fix (${loop.lastRejectionCode ?? "insufficient evidence"})`,
     ],
+    failureReason: undefined,
     modelCallCount: loop.modelCallCount,
     patchRetryCount: loop.patchRetryCount,
   });
@@ -82,6 +83,7 @@ export function insufficientInputReport(state: BugRunState): BugInvestigationRep
     nextActions: [
       "Provide at least one of: a description, failing output, a stack trace, or suspected target files",
     ],
+    failureReason: undefined,
     modelCallCount: 0,
     patchRetryCount: 0,
   });
@@ -107,6 +109,7 @@ export function investigationOnlyReport(
     dryRunPreview: undefined,
     verificationSkipReason: "verification skipped: no patch produced (investigation-only)",
     nextActions: investigationNextActions(),
+    failureReason: undefined,
     modelCallCount: loop.modelCallCount,
     patchRetryCount: loop.patchRetryCount,
   });
@@ -133,6 +136,7 @@ export function dryRunReport(
     dryRunPreview: renderDryRun(accepted.validation),
     verificationSkipReason: "verification skipped: dry-run, no files written",
     nextActions: nextActionsFor(false, files, elevatedPaths(accepted)),
+    failureReason: undefined,
     modelCallCount: loop.modelCallCount,
     patchRetryCount: loop.patchRetryCount,
   });
@@ -169,6 +173,7 @@ export function cancelledReport(
     dryRunPreview: accepted === undefined ? undefined : renderDryRun(accepted.validation),
     verificationSkipReason: "verification skipped: cancelled",
     nextActions,
+    failureReason: undefined,
     modelCallCount: loop.modelCallCount,
     patchRetryCount: loop.patchRetryCount,
   });
@@ -191,9 +196,10 @@ export function failedReport(state: BugRunState, error: unknown): BugInvestigati
     proposedDiff: undefined,
     dryRunPreview: undefined,
     verificationSkipReason: undefined,
-    nextActions: ["Inspect the error and retry"],
-    modelCallCount: 0,
-    patchRetryCount: 0,
+    nextActions: [`Inspect the error and retry: ${message}`],
+    failureReason: message,
+    modelCallCount: state.progress.modelCallCount,
+    patchRetryCount: state.progress.patchRetryCount,
   });
 }
 
@@ -258,6 +264,7 @@ async function applyAndVerify(
     dryRunPreview: renderDryRun(accepted.validation),
     verificationSkipReason: verification.skipReason,
     nextActions: nextActionsFor(true, applyResult.changedFiles, elevatedPaths(accepted)),
+    failureReason: undefined,
     modelCallCount: loop.modelCallCount,
     patchRetryCount: loop.patchRetryCount,
   });

@@ -88,6 +88,8 @@ describe("run registry completion capture", () => {
     expect(record?.status).toBe("completed");
     expect(record?.report).toEqual({ status: "dry-run" });
     expect(record?.appliable).toMatchObject({ kind: "unit-tests" });
+    expect(record?.applyReport).toBeUndefined();
+    expect(record?.appliedAt).toBeUndefined();
   });
 
   it("ignores completion of an unknown run", () => {

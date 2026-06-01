@@ -1,34 +1,33 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { Icons, type IconName } from "../../Icons";
-import { useTwin, type Decision, type TwinMode } from "../../context/TwinContext";
-import { logActivity } from "../shared/activityBus";
-import { AgentGateCard, type GateInfo, type GateKind, type Risk } from "./AgentGateCard";
-
-type LogTool = IconName | "spark" | "check" | "close";
-type Status = "running" | "paused" | "gate" | "done" | "stopped";
-
-interface Step {
-  readonly text: string;
-  readonly tool: LogTool;
-  readonly tokens: number;
-  readonly dur?: number;
-  readonly gate?: GateInfo;
-  readonly final?: boolean;
-}
-
-interface LogRow {
-  readonly id: string;
-  readonly tool: LogTool;
-  readonly text: string;
-  readonly t: string;
-}
+import {
+  ApiError,
+  applyRun,
+  cancelRun,
+  fetchEvidenceManifest,
+  fetchModels,
+  fetchRunReport,
+} from "../../../../../lib/api";
+import { formatMs, formatTokens } from "../../../../../lib/format";
+import { useSSE } from "../../../../../lib/useSSE";
+import type {
+  AgentWorkflowId,
+  CostClass,
+  EvidenceManifest,
+  HarnessEvent,
+  RunReport,
+} from "../../../../../lib/types";
+import { Icons } from "../../Icons";
 
 interface AgentRunCfg {
-  role?: string;
+  workflow?: string;
   model?: string;
+  runId?: string;
+  fingerprint?: string;
+  workspaceRoot?: string;
+  inputJson?: string;
   keikoMode?: boolean;
   access?: "ask" | "full";
 }
@@ -36,341 +35,535 @@ interface AgentRunCfg {
 interface AgentRunWidgetProps {
   cfg?: AgentRunCfg;
   linkedRoot?: string | null;
+  linkedFilePath: string | undefined;
 }
 
-const MAX_LOG = 40;
-const TICK_MS = 1000;
+interface UsageTotals {
+  readonly promptTokens: number;
+  readonly completionTokens: number;
+  readonly latencyMs: number;
+  readonly requestCount: number;
+}
 
-const STATUS_META: Readonly<Record<Status, readonly [string, string]>> = {
-  running: ["Running", "var(--accent)"],
-  paused: ["Paused", "var(--warn)"],
-  gate: ["Needs approval", "var(--warn)"],
-  done: ["Completed", "var(--info)"],
-  stopped: ["Stopped", "var(--danger)"],
+const TERMINAL_REPORT_STATUSES = new Set<RunReport["status"]>([
+  "completed",
+  "dry-run",
+  "rejected",
+  "cancelled",
+  "failed",
+  "fix-applied",
+  "fix-proposed",
+  "investigation-only",
+]);
+
+const WORKFLOW_LABELS: Readonly<Record<AgentWorkflowId, string>> = {
+  verify: "Verify",
+  "explain-plan": "Explain plan",
+  "unit-test-generation": "Generate unit tests",
+  "bug-investigation": "Investigate bug",
 };
 
-function fmtClock(s: number): string {
-  const m = Math.floor(s / 60);
-  const ss = s % 60;
-  return `${String(m)}:${String(ss).padStart(2, "0")}`;
+function normalizeWorkflow(value: string | undefined): AgentWorkflowId | null {
+  if (
+    value === "verify" ||
+    value === "explain-plan" ||
+    value === "unit-test-generation" ||
+    value === "bug-investigation"
+  ) {
+    return value;
+  }
+  return null;
 }
 
-function stamp(): string {
-  return new Date().toLocaleTimeString([], {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readUsage(event: HarnessEvent): UsageTotals | null {
+  if (event.type === "model:call:completed") {
+    return {
+      promptTokens: event.usage.promptTokens,
+      completionTokens: event.usage.completionTokens,
+      latencyMs: event.usage.latencyMs,
+      requestCount: 1,
+    };
+  }
+  const record = event as unknown as Record<string, unknown>;
+  const promptTokens = record.promptTokens;
+  const completionTokens = record.completionTokens;
+  const latencyMs = record.latencyMs;
+  if (
+    typeof promptTokens === "number" &&
+    typeof completionTokens === "number" &&
+    typeof latencyMs === "number"
+  ) {
+    return { promptTokens, completionTokens, latencyMs, requestCount: 1 };
+  }
+  return null;
+}
+
+function aggregateUsage(events: readonly HarnessEvent[], report: RunReport | null): UsageTotals {
+  let promptTokens = report?.usage?.promptTokens ?? 0;
+  let completionTokens = report?.usage?.completionTokens ?? 0;
+  let latencyMs = report?.usage?.latencyMs ?? 0;
+  let requestCount = report?.usage === undefined ? 0 : 1;
+  if (requestCount > 0) {
+    return { promptTokens, completionTokens, latencyMs, requestCount };
+  }
+  for (const event of events) {
+    const usage = readUsage(event);
+    if (usage === null) continue;
+    promptTokens += usage.promptTokens;
+    completionTokens += usage.completionTokens;
+    latencyMs += usage.latencyMs;
+    requestCount += usage.requestCount;
+  }
+  return { promptTokens, completionTokens, latencyMs, requestCount };
+}
+
+function eventLabel(event: HarnessEvent): string {
+  switch (event.type) {
+    case "ready":
+      return "SSE stream ready";
+    case "run:started":
+      return `Started ${event.taskType}`;
+    case "run:completed":
+      return "Run completed";
+    case "run:failed":
+      return `Run failed: ${event.failure.message}`;
+    case "run:cancelled":
+      return "Run cancelled";
+    case "state:transition":
+      return `${event.from} -> ${event.to}${event.reason === undefined ? "" : `: ${event.reason}`}`;
+    case "model:call:started":
+      return `Model call started (${event.contextBytes.toString()} bytes)`;
+    case "model:call:completed":
+      return `Model call completed (${formatTokens(event.usage.promptTokens + event.usage.completionTokens)} tokens)`;
+    case "model:call:failed":
+      return `Model call failed: ${event.message}`;
+    case "patch:proposed":
+      return `Patch proposed (${event.patchBytes.toString()} bytes)`;
+    case "verification:result":
+      return `Verification ${event.passed ? "passed" : "failed"}: ${event.detail}`;
+    case "workflow:started":
+      return "Unit-test workflow started";
+    case "workflow:model:call:completed":
+      return `Unit-test model call completed (${formatTokens(event.promptTokens + event.completionTokens)} tokens)`;
+    case "workflow:verification:result":
+      return `Unit-test verification ${event.overallStatus}`;
+    case "workflow:completed":
+      return `Unit-test workflow ${event.status}`;
+    case "workflow:failed":
+      return `Unit-test workflow failed: ${event.message}`;
+    case "bug:started":
+      return "Bug investigation started";
+    case "bug:model:call:completed":
+      return `Bug model call completed (${formatTokens(event.promptTokens + event.completionTokens)} tokens)`;
+    case "bug:rootcause:proposed":
+      return `Root cause proposed${event.hasPatch ? " with patch" : ""}`;
+    case "bug:verification:result":
+      return `Bug verification ${event.overallStatus}`;
+    case "bug:completed":
+      return `Bug investigation ${event.status}`;
+    case "bug:failed":
+      return `Bug investigation failed: ${event.message}`;
+    default:
+      return event.type;
+  }
+}
+
+function eventTime(event: HarnessEvent): string {
+  const ts = typeof event.ts === "number" ? event.ts : Date.parse(event.ts);
+  if (!Number.isFinite(ts)) return "";
+  return new Date(ts).toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
   });
 }
 
-function buildSteps(role: string, root: string | null | undefined): readonly Step[] {
-  const f = `${root ?? "src"}/`;
-  const lower = role.toLowerCase();
-  return [
-    { text: `Scanning ${f}`, tool: "files", tokens: 420, dur: 1500 },
-    { text: "Reading windows.jsx · app.jsx", tool: "editor", tokens: 1280, dur: 1700 },
-    { text: `Planning ${lower} changes`, tool: "spark", tokens: 900, dur: 1600 },
-    {
-      text: "Applied edits to 3 files",
-      tool: "editor",
-      tokens: 1640,
-      dur: 1700,
-      gate: { title: "Write 3 files", detail: `${f}windows.jsx · app.jsx · components.css`, kind: "write" },
-    },
-    {
-      text: "Ran test suite",
-      tool: "terminal",
-      tokens: 540,
-      dur: 1700,
-      gate: { title: "Run command", detail: "npm test", kind: "command" },
-    },
-    { text: "All 42 tests passed", tool: "check", tokens: 120, dur: 1400 },
-    {
-      text: "Opened pull request #142",
-      tool: "git",
-      tokens: 300,
-      dur: 1500,
-      gate: { title: "Open pull request", detail: "keiko/issue-51 → main", kind: "git", risk: "low" },
-    },
-    {
-      text: "Deployed to staging",
-      tool: "terminal",
-      tokens: 480,
-      dur: 1600,
-      gate: { title: "Deploy to production", detail: "kubectl apply -f deploy/k8s", kind: "command", risk: "high" },
-    },
-    { text: "Agent finished", tool: "check", tokens: 60, dur: 1000, final: true },
-  ];
+function reportStatus(report: RunReport | null, evidence: EvidenceManifest | null): string {
+  if (report !== null) return report.status;
+  if (evidence !== null) return evidence.run.outcome;
+  return "loading";
 }
 
-function logIcon(tool: LogTool): ReactNode {
-  const Ico = Icons[tool as IconName];
-  if (typeof Ico === "function") return Ico({ size: 12 });
-  return Icons.spark({ size: 12 });
+function shortSummary(
+  workflow: AgentWorkflowId | null,
+  report: RunReport | null,
+  evidence: EvidenceManifest | null,
+): string {
+  if (report === null && evidence === null) return "Loading run state...";
+  const label = workflow === null ? "Agent run" : WORKFLOW_LABELS[workflow];
+  if (report?.status === "running") return `${label} is running.`;
+  if (report?.status === "dry-run") return `${label} produced a reviewable dry-run.`;
+  if (report?.status === "fix-proposed") return `${label} proposed a fix.`;
+  if (report?.status === "fix-applied") return `${label} applied changes.`;
+  if (report?.status === "investigation-only") return `${label} completed without a patch.`;
+  if (report?.status === "failed" || report?.status === "rejected") return `${label} failed.`;
+  if (report?.status === "cancelled") return `${label} was cancelled.`;
+  if (report !== null) return `${label} completed.`;
+  return `${label} evidence loaded: ${evidence?.run.outcome ?? "unknown"}.`;
 }
 
-let LOG_SEQ = 0;
-function newRowId(): string {
-  LOG_SEQ += 1;
-  return `r-${String(Date.now())}-${String(LOG_SEQ)}`;
-}
-
-interface GateOutcome {
-  readonly kind: "auto-allow" | "auto-deny" | "escalated" | "approve-manual";
-}
-
-function evaluateGate(
-  gate: GateInfo,
-  governed: boolean,
-  twinMode: TwinMode,
-  access: "ask" | "full" | undefined,
-  decide: (kind: GateKind, risk: Risk) => Decision,
-): GateOutcome {
-  const risk: Risk = gate.risk ?? "low";
-  if (governed && twinMode === "autonomous") {
-    const d = decide(gate.kind, risk);
-    if (d === "allow") return { kind: "auto-allow" };
-    if (d === "deny") return { kind: "auto-deny" };
-    return { kind: "escalated" };
+function parseInput(inputJson: string | undefined): Record<string, unknown> | null {
+  if (inputJson === undefined || inputJson.length === 0) return null;
+  try {
+    const parsed: unknown = JSON.parse(inputJson);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
   }
-  if (!governed && access === "full") return { kind: "auto-allow" };
-  return { kind: "approve-manual" };
 }
 
-export function AgentRunWidget({ cfg = {}, linkedRoot = null }: AgentRunWidgetProps): ReactNode {
-  const role = cfg.role ?? "Builder";
-  const model = cfg.model ?? "orca-5.4";
-  const governed = cfg.keikoMode !== false;
-  const access = cfg.access;
+function canApply(workflow: AgentWorkflowId | null, report: RunReport | null): boolean {
+  if (report === null || report.proposedDiff === undefined || report.appliedAt !== undefined) return false;
+  return (
+    (workflow === "unit-test-generation" && report.status === "dry-run") ||
+    (workflow === "bug-investigation" && report.status === "fix-proposed")
+  );
+}
 
-  const stepsRef = useRef<readonly Step[]>(buildSteps(role, linkedRoot));
-  const STEPS = stepsRef.current;
+function renderVerification(report: RunReport): ReactNode {
+  const summary = report.verificationSummary;
+  if (summary === undefined) return null;
+  return (
+    <div className="arun-result-card">
+      <div className="arun-result-title">Verification</div>
+      <div className="arun-kv">
+        <span>Status</span>
+        <strong>{summary.overallStatus}</strong>
+      </div>
+      <div className="arun-kv">
+        <span>Duration</span>
+        <strong>{formatMs(summary.durationMs)}</strong>
+      </div>
+      {summary.results.slice(0, 5).map((result) => (
+        <div className="arun-check-row" key={`${result.kind}:${result.command}`}>
+          <span>{result.kind}</span>
+          <span className="mono">{result.status}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
-  const [status, setStatus] = useState<Status>("running");
-  const [idx, setIdx] = useState(0);
-  const [tokens, setTokens] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
-  const [log, setLog] = useState<readonly LogRow[]>([]);
-  const [escalated, setEscalated] = useState(false);
+function renderExplainReport(report: RunReport): ReactNode {
+  if (report.report === undefined) return null;
+  return (
+    <div className="arun-result-card">
+      <div className="arun-result-title">Report</div>
+      <pre>{report.report}</pre>
+    </div>
+  );
+}
 
-  const twin = useTwin();
-  const twinMode = twin.mode;
-  const decide = twin.decide;
+function renderVerifyReport(report: RunReport): ReactNode {
+  if (report.overallStatus === undefined || report.results === undefined) return null;
+  return (
+    <div className="arun-result-card">
+      <div className="arun-result-title">Verification</div>
+      <div className="arun-kv"><span>Status</span><strong>{report.overallStatus}</strong></div>
+      {report.results.slice(0, 8).map((result) => (
+        <div className="arun-check-row" key={`${result.kind}:${result.command}`}>
+          <span>{result.kind}</span>
+          <span className="mono">{result.status}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
-  const statusRef = useRef<Status>(status);
-  statusRef.current = status;
+function renderTextCard(title: string, value: string | undefined): ReactNode {
+  if (value === undefined || value.length === 0) return null;
+  return (
+    <div className="arun-result-card">
+      <div className="arun-result-title">{title}</div>
+      <pre>{value}</pre>
+    </div>
+  );
+}
 
-  useEffect(() => {
-    const id = setInterval(() => {
-      const s = statusRef.current;
-      if (s === "running" || s === "gate") setElapsed((e) => e + 1);
-    }, TICK_MS);
-    return () => { clearInterval(id); };
-  }, []);
+function renderListCard(title: string, values: readonly string[] | undefined): ReactNode {
+  if (values === undefined || values.length === 0) return null;
+  return (
+    <div className="arun-result-card">
+      <div className="arun-result-title">{title}</div>
+      {values.map((value) => (
+        <div className="arun-check-row" key={value}>
+          <span>{value}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
 
-  const prependRow = useCallback((row: Omit<LogRow, "id">): void => {
-    setLog((l) => [{ id: newRowId(), ...row }, ...l].slice(0, MAX_LOG));
-  }, []);
+function renderHypothesis(report: RunReport): ReactNode {
+  const hypothesis = report.hypothesis;
+  if (hypothesis === undefined) return null;
+  const rows = [
+    ["Root cause", hypothesis.rootCause],
+    ["Regression test", hypothesis.regressionTestStrategy],
+    ["Uncertainty", hypothesis.uncertainty],
+    ["Confidence", hypothesis.confidence],
+  ].filter((row): row is [string, string] => typeof row[1] === "string" && row[1].length > 0);
+  if (rows.length === 0) return null;
+  return (
+    <div className="arun-result-card">
+      <div className="arun-result-title">Hypothesis</div>
+      {rows.map(([label, value]) => (
+        <div className="arun-kv" key={label}><span>{label}</span><strong>{value}</strong></div>
+      ))}
+    </div>
+  );
+}
 
-  const commit = useCallback((step: Step): void => {
-    setTokens((t) => t + step.tokens);
-    prependRow({ tool: step.tool, text: step.text, t: stamp() });
-    logActivity({ type: "step", agent: role, tool: step.tool, text: step.text });
-    if (step.final === true) setStatus("done");
-  }, [prependRow, role]);
+export function AgentRunWidget({
+  cfg = {},
+  linkedRoot = null,
+  linkedFilePath,
+}: AgentRunWidgetProps): ReactNode {
+  const runId = cfg.runId ?? null;
+  const workflow = normalizeWorkflow(cfg.workflow);
+  const modelId = cfg.model ?? "";
+  const input = parseInput(cfg.inputJson);
+  const sse = useSSE(runId);
+  const [report, setReport] = useState<RunReport | null>(null);
+  const [evidence, setEvidence] = useState<EvidenceManifest | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [costClass, setCostClass] = useState<CostClass | null>(null);
 
-  useEffect(() => {
-    if (status !== "running") return;
-    const step = STEPS[idx];
-    if (step === undefined) {
-      setStatus("done");
-      return;
-    }
-    if (step.gate !== undefined) {
-      const outcome = evaluateGate(step.gate, governed, twinMode, access, decide);
-      const gate = step.gate;
-      if (outcome.kind === "auto-allow") {
-        commit(step);
-        const isTwin = governed && twinMode === "autonomous";
-        if (isTwin) {
-          prependRow({ tool: "check", text: `Keiko approved · ${gate.title}`, t: stamp() });
-          logActivity({ type: "twin-approved", agent: role, text: `Keiko approved · ${gate.title}` });
-        } else {
-          logActivity({ type: "approved", agent: role, text: `Full access · ${gate.title}` });
+  const loadReport = useCallback(async (): Promise<void> => {
+    if (runId === null) return;
+    setError(null);
+    try {
+      const response = await fetchRunReport(runId);
+      setReport(response.report);
+      setEvidence(null);
+    } catch (loadError: unknown) {
+      if (loadError instanceof ApiError && loadError.status === 404) {
+        try {
+          const response = await fetchEvidenceManifest(runId);
+          setEvidence(response.manifest);
+          setReport(null);
+        } catch (evidenceError: unknown) {
+          setError(evidenceError instanceof Error ? evidenceError.message : "Unable to load evidence.");
         }
-        setIdx((i) => i + 1);
         return;
       }
-      if (outcome.kind === "auto-deny") {
-        prependRow({ tool: "close", text: `Keiko denied · ${gate.title}`, t: stamp() });
-        logActivity({ type: "twin-denied", agent: role, text: `Keiko denied · ${gate.title}` });
-        setStatus("stopped");
-        return;
-      }
-      setEscalated(outcome.kind === "escalated");
-      setStatus("gate");
-      logActivity({
-        type: "approval",
-        agent: role,
-        text: `${outcome.kind === "escalated" ? "Keiko escalated · " : "Approval requested · "}${gate.title}`,
-      });
-      return;
+      setError(loadError instanceof Error ? loadError.message : "Unable to load run report.");
     }
-    const dur = step.dur ?? 1500;
-    const id = setTimeout(() => {
-      commit(step);
-      setIdx((i) => i + 1);
-    }, dur);
-    return () => { clearTimeout(id); };
-  }, [status, idx, STEPS, role, governed, twinMode, access, commit, prependRow, decide]);
+  }, [runId]);
 
-  const approve = (): void => {
-    const step = STEPS[idx];
-    if (step === undefined || step.gate === undefined) return;
-    commit(step);
-    logActivity({ type: "approved", agent: role, text: step.gate.title });
-    setEscalated(false);
-    setIdx((i) => i + 1);
-    setStatus("running");
-  };
-  const reject = (): void => {
-    const step = STEPS[idx];
-    if (step === undefined || step.gate === undefined) return;
-    logActivity({ type: "rejected", agent: role, text: step.gate.title });
-    prependRow({ tool: "close", text: `Rejected · ${step.gate.title}`, t: "" });
-    setEscalated(false);
-    setStatus("stopped");
-  };
-  const pauseResume = (): void => {
-    setStatus((s) => (s === "running" ? "paused" : "running"));
-  };
-  const stop = (): void => {
-    setStatus("stopped");
-    logActivity({ type: "stopped", agent: role, text: "Agent stopped" });
+  useEffect(() => {
+    void loadReport();
+  }, [loadReport]);
+
+  useEffect(() => {
+    if (sse.status === "terminal") void loadReport();
+  }, [loadReport, sse.status]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (modelId.length === 0) return;
+    void fetchModels()
+      .then((payload) => {
+        if (cancelled) return;
+        setCostClass(payload.models.find((model) => model.id === modelId)?.costClass ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setCostClass(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [modelId]);
+
+  const usage = useMemo(() => aggregateUsage(sse.events, report), [sse.events, report]);
+  const elapsedMs =
+    report?.durationMs ??
+    evidence?.run.durationMs ??
+    (sse.events.length > 0
+      ? Math.max(0, Date.now() - Number(new Date(sse.events[0]?.ts ?? Date.now())))
+      : 0);
+  const status = reportStatus(report, evidence);
+  const terminal = report !== null && TERMINAL_REPORT_STATUSES.has(report.status);
+  const showApply = canApply(workflow, report);
+
+  const doCancel = async (): Promise<void> => {
+    if (runId === null) return;
+    setError(null);
+    try {
+      await cancelRun(runId);
+      await loadReport();
+    } catch (cancelError: unknown) {
+      setError(cancelError instanceof Error ? cancelError.message : "Unable to cancel run.");
+    }
   };
 
-  const cost = ((tokens / 1000) * 0.9).toFixed(2);
-  const pct = Math.round((Math.min(idx, STEPS.length) / STEPS.length) * 100);
-  const current = STEPS[idx];
-  const meta = STATUS_META[status];
-  const isTwinAuto = governed && twinMode === "autonomous";
-  const gov = governed
-    ? (isTwinAuto ? "Keiko · auto" : "Keiko")
-    : (access === "full" ? "Full access" : "You");
-  const govColor = governed
-    ? (isTwinAuto ? "var(--accent)" : "var(--fg-muted)")
-    : (access === "full" ? "var(--warn)" : "var(--info)");
+  const doApply = async (): Promise<void> => {
+    if (runId === null || !showApply) return;
+    setApplying(true);
+    setApplyError(null);
+    try {
+      const response = await applyRun(runId);
+      setReport(response.report);
+    } catch (applyRunError: unknown) {
+      setApplyError(applyRunError instanceof Error ? applyRunError.message : "Unable to apply run.");
+    } finally {
+      setApplying(false);
+    }
+  };
 
-  const showCurrent =
-    status !== "done" && status !== "stopped" && status !== "gate" && current !== undefined;
-  const showControlsRow = status === "running" || status === "paused";
-  const isFinal = status === "done" || status === "stopped";
+  if (runId === null || workflow === null) {
+    return (
+      <div className="arun arun-empty">
+        <div className="arun-result-title">Agent run is not configured.</div>
+        <p>Open a new Agent window from the launcher to start a BFF workflow.</p>
+      </div>
+    );
+  }
 
   return (
-    <div className="arun">
+    <div className="arun arun-real">
       <div className="arun-head">
-        <span className="arun-role">{role}</span>
-        <span className="ag-model mono">{model}</span>
-        <span
-          className="arun-gov"
-          style={{ color: govColor, borderColor: govColor }}
-          title="Governance"
-        >
-          {gov}
-        </span>
+        <span className="arun-role">{WORKFLOW_LABELS[workflow]}</span>
+        <span className="ag-model mono">{modelId}</span>
+        {costClass !== null ? <span className="arun-gov">{costClass}</span> : null}
         <span className="spacer" />
-        <span className="arun-status" style={{ color: meta[1] }}>
-          <span
-            className="dot"
-            style={{
-              background: meta[1],
-              animation: status === "running" ? "pulse 1.3s infinite" : "none",
-            }}
-          />
-          {meta[0]}
+        <span className="arun-status">
+          <span className="dot" data-live={report?.status === "running"} />
+          {status}
         </span>
+      </div>
+
+      <div className="arun-summary">
+        <strong>{shortSummary(workflow, report, evidence)}</strong>
+        <span className="mono">run {runId.slice(0, 8)}</span>
       </div>
 
       <div className="arun-meters">
         <div className="arun-meter">
           <span className="arun-mk">Elapsed</span>
-          <span className="arun-mv mono">{fmtClock(elapsed)}</span>
+          <span className="arun-mv mono">{formatMs(elapsedMs)}</span>
         </div>
         <div className="arun-meter">
-          <span className="arun-mk">Tokens</span>
+          <span className="arun-mk">Usage</span>
           <span className="arun-mv mono">
-            {tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : String(tokens)}
+            {usage.requestCount === 0
+              ? "No model usage"
+              : `${formatTokens(usage.promptTokens + usage.completionTokens)} tok`}
           </span>
         </div>
         <div className="arun-meter">
-          <span className="arun-mk">Cost</span>
-          <span className="arun-mv mono">${cost}</span>
+          <span className="arun-mk">Latency</span>
+          <span className="arun-mv mono">
+            {usage.requestCount === 0 ? "-" : formatMs(usage.latencyMs)}
+          </span>
         </div>
-      </div>
-      <div className="arun-prog">
-        <i style={{ width: `${String(pct)}%`, background: meta[1] }} />
       </div>
 
       <div className="arun-perms">
         <span className="arun-perm" data-on={linkedRoot !== null}>
           <Icons.files size={11} />
-          {linkedRoot !== null ? `${linkedRoot}/` : "no folder"}
+          {linkedRoot !== null ? linkedRoot : cfg.workspaceRoot ?? "no workspace"}
         </span>
-        <span className="arun-perm">
-          <Icons.plugins size={11} />3 MCP
-        </span>
-        <span className="arun-perm">
-          <Icons.terminal size={11} />shell
-        </span>
-        <span className="arun-perm">
-          <Icons.git size={11} />git
+        {linkedFilePath !== undefined ? (
+          <span className="arun-perm" data-on={true}>
+            <Icons.files size={11} />{linkedFilePath}
+          </span>
+        ) : null}
+        <span className="arun-perm" aria-disabled="true">
+          <Icons.plugins size={11} />permissions coming soon
         </span>
       </div>
 
-      {status === "gate" && current !== undefined && current.gate !== undefined && (
-        <AgentGateCard
-          gate={current.gate}
-          escalated={escalated}
-          onApprove={approve}
-          onReject={reject}
-        />
-      )}
-
-      {showCurrent && current !== undefined && (
-        <div className="arun-current">
-          <span className="arun-spin" data-paused={status === "paused"}>
-            <Icons.reset size={13} />
-          </span>
-          <span className="arun-cur-text">
-            {status === "paused" ? "Paused — " : ""}
-            {current.text}
-          </span>
-        </div>
-      )}
+      {input !== null ? (
+        <details className="arun-input">
+          <summary>Run input</summary>
+          <pre>{JSON.stringify(input, null, 2)}</pre>
+        </details>
+      ) : null}
 
       <div className="arun-log">
-        {log.map((l) => (
-          <div className="arun-log-row" key={l.id}>
-            <span className="arun-log-ico">{logIcon(l.tool)}</span>
-            <span className="arun-log-text">{l.text}</span>
-            <span className="arun-log-t mono">{l.t}</span>
+        {sse.events.length === 0 ? (
+          <div className="arun-log-row">
+            <span className="arun-log-ico"><Icons.reset size={12} /></span>
+            <span className="arun-log-text">Waiting for run events...</span>
+          </div>
+        ) : sse.events.slice().reverse().slice(0, 50).map((event) => (
+          <div className="arun-log-row" key={`${event.runId}:${event.seq}:${event.type}`}>
+            <span className="arun-log-ico"><Icons.spark size={12} /></span>
+            <span className="arun-log-text">{eventLabel(event)}</span>
+            <span className="arun-log-t mono">{eventTime(event)}</span>
           </div>
         ))}
       </div>
 
+      {report !== null ? (
+        <div className="arun-results">
+          {renderExplainReport(report)}
+          {renderVerifyReport(report)}
+          {renderTextCard("Failure", report.failureReason)}
+          {renderTextCard("Covered behavior", report.coveredBehavior)}
+          {renderTextCard("Known gaps", report.knownGaps)}
+          {renderTextCard("Verification note", report.verificationSkipReason)}
+          {renderHypothesis(report)}
+          {renderListCard("Next actions", report.nextActions)}
+          {report.dryRunPreview !== undefined ? (
+            <div className="arun-result-card">
+              <div className="arun-result-title">Dry-run preview</div>
+              <pre>{report.dryRunPreview}</pre>
+            </div>
+          ) : null}
+          {report.proposedDiff !== undefined ? (
+            <div className="arun-result-card">
+              <div className="arun-result-title">Proposed diff</div>
+              <pre>{report.proposedDiff}</pre>
+            </div>
+          ) : null}
+          {renderVerification(report)}
+          {report.applyReport !== undefined ? (
+            <div className="arun-result-card arun-applied">
+              <div className="arun-result-title">Applied</div>
+              <pre>{JSON.stringify(report.applyReport, null, 2)}</pre>
+            </div>
+          ) : null}
+        </div>
+      ) : evidence !== null ? (
+        <div className="arun-result-card">
+          <div className="arun-result-title">Evidence</div>
+          <div className="arun-kv"><span>Outcome</span><strong>{evidence.run.outcome}</strong></div>
+          <div className="arun-kv"><span>Duration</span><strong>{formatMs(evidence.run.durationMs)}</strong></div>
+        </div>
+      ) : null}
+
+      {error !== null ? <div className="arun-error">{error}</div> : null}
+      {applyError !== null ? <div className="arun-error">{applyError}</div> : null}
+
       <div className="arun-controls">
-        {showControlsRow && (
-          <button type="button" className="arun-btn ghost" onClick={pauseResume}>
-            {status === "paused" ? "Resume" : "Pause"}
+        <a
+          className="arun-btn ghost"
+          href={`/api/evidence/${encodeURIComponent(runId)}`}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Evidence
+        </a>
+        {showApply ? (
+          <button type="button" className="arun-btn" disabled={applying} onClick={() => void doApply()}>
+            {applying ? "Applying..." : "Apply"}
           </button>
-        )}
-        {!isFinal ? (
-          <button type="button" className="arun-btn danger" onClick={stop}>
-            Stop
+        ) : report?.appliedAt !== undefined ? (
+          <span className="arun-final mono">Applied</span>
+        ) : null}
+        {!terminal && report?.status === "running" ? (
+          <button type="button" className="arun-btn danger" onClick={() => void doCancel()}>
+            Cancel
           </button>
-        ) : (
-          <span className="arun-final mono">{status === "done" ? "✓ finished" : "■ stopped"}</span>
-        )}
+        ) : null}
       </div>
     </div>
   );

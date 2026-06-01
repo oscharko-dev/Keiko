@@ -572,6 +572,7 @@ export interface EvidenceManifest {
 // ---------------------------------------------------------------------------
 
 export type RunStatus =
+  | "running"
   | "completed"
   | "dry-run"
   | "rejected"
@@ -593,12 +594,59 @@ export interface RunReport {
   status: RunStatus;
   modelId?: string;
   durationMs?: number;
+  report?: string;
+  overallStatus?: string;
+  results?: Array<{ kind: string; status: string; command: string; durationMs?: number }>;
   proposedDiff?: string;
   dryRunPreview?: string;
   changedFiles?: ChangedFile[];
   addedTestFiles?: Array<{ path: string; estimatedTestCount?: number }>;
+  coveredBehavior?: string;
+  knownGaps?: string;
+  verificationSkipReason?: string;
+  nextActions?: string[];
+  failureReason?: string;
+  hypothesis?: {
+    rootCause?: string;
+    regressionTestStrategy?: string;
+    uncertainty?: string;
+    confidence?: string;
+  };
   verificationSummary?: VerificationAuditSummary;
   usage?: UsageMetadata;
+  applyReport?: RunReport;
+  appliedAt?: number;
+}
+
+export type AgentWorkflowId =
+  | "verify"
+  | "explain-plan"
+  | "unit-test-generation"
+  | "bug-investigation";
+
+export type UnitTestTargetKind = "file" | "module" | "changedFiles";
+
+export interface AgentVerifyInput {
+  readonly targetFiles?: readonly string[];
+}
+
+export interface AgentExplainPlanInput {
+  readonly filePath: string;
+  readonly question?: string;
+}
+
+export interface AgentUnitTestInput {
+  readonly targetKind: UnitTestTargetKind;
+  readonly filePath?: string;
+  readonly moduleDir?: string;
+  readonly filePaths?: readonly string[];
+}
+
+export interface AgentBugInvestigationInput {
+  readonly description?: string;
+  readonly failingOutput?: string;
+  readonly stackTrace?: string;
+  readonly targetFiles?: readonly string[];
 }
 
 // ---------------------------------------------------------------------------

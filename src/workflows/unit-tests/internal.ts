@@ -16,6 +16,11 @@ import type { WorkflowEventSink } from "./events.js";
 // A no-op sink used when the caller injects none. emit is synchronous (ADR-0004 EventSink contract).
 export const NO_OP_SINK: WorkflowEventSink = { emit: (): void => undefined };
 
+export interface WorkflowProgress {
+  modelCallCount: number;
+  patchRetryCount: number;
+}
+
 // The resolved, defaulted view of input + deps the pipeline stages share.
 export interface RunState {
   readonly input: UnitTestWorkflowInput;
@@ -25,6 +30,7 @@ export interface RunState {
   readonly now: () => number;
   readonly emitter: EventEmitter;
   readonly startedAt: number;
+  readonly progress: WorkflowProgress;
 }
 
 // A successful model+validate+guard outcome ready for dry-run or apply.
@@ -69,6 +75,7 @@ export function buildRunState(
     now,
     emitter: createEventEmitter(deps.sink ?? NO_OP_SINK, idSource(), fingerprint, now),
     startedAt: now(),
+    progress: { modelCallCount: 0, patchRetryCount: 0 },
   };
 }
 

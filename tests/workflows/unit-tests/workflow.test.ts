@@ -96,6 +96,18 @@ describe("generateUnitTests — dry-run (AC #2/#4/#6/#8)", () => {
     expect(report.proposedDiff).toContain("tests/add.test.ts");
   });
 
+  it("rejects an empty diff instead of accepting a no-op dry-run", async () => {
+    const model = scriptedModel([response({ content: "```diff\n\n```" })]);
+    const report = await generateUnitTests(
+      input({ limits: { maxModelCalls: 1, maxRetries: 0 } }),
+      deps(model.port),
+    );
+    expect(report.status).toBe("rejected");
+    expect(report.nextActions[0]).toContain("empty");
+    expect(report.proposedDiff).toBeUndefined();
+    expect(report.addedTestFiles).toHaveLength(0);
+  });
+
   it("emits a redacted progress event stream with the shared envelope", async () => {
     const model = scriptedModel([response({ content: FENCED_VALID })]);
     const sink = recordingSink();

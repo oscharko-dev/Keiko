@@ -192,6 +192,8 @@ export interface PatchValidation {
   readonly files: readonly PatchFileChange[];
   readonly totalChangedLines: number;
   readonly totalBytes: number;
+  // Present when validation had to repair common LLM unified-diff shorthand before parsing.
+  readonly normalizedDiff?: string | undefined;
   readonly reasons: readonly PatchRejection[];
   readonly conflicts: readonly PatchConflict[];
 }

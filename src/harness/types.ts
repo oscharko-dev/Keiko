@@ -76,6 +76,9 @@ export interface InvestigateBugInput {
 export interface ExplainPlanInput {
   readonly filePath: string;
   readonly question?: string | undefined;
+  // Optional redacted file excerpt supplied by the BFF. The task remains read-only; this only
+  // grounds the model so it does not infer file contents from the path alone.
+  readonly context?: string | undefined;
 }
 
 // Verify task is deterministic: the run engine invokes the verification orchestrator directly

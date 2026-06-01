@@ -174,3 +174,98 @@ describe("parseRunRequest selected-project workspaceRoot invariant", () => {
     expect(result.message).toMatch(/workspaceRoot/);
   });
 });
+
+describe("parseRunRequest Agent V1 workflow shapes", () => {
+  it("accepts the explicit explain-plan payload shape", () => {
+    const result = parseRunRequest(
+      JSON.stringify({
+        taskType: "explain-plan",
+        modelId: "m",
+        input: { workspaceRoot: "/repo", filePath: "src/a.ts", question: "why?" },
+      }),
+    );
+    ok(result);
+    expect(result.kind).toBe("explain-plan");
+  });
+
+  it("rejects explain-plan without filePath", () => {
+    const result = parseRunRequest(
+      JSON.stringify({
+        taskType: "explain-plan",
+        modelId: "m",
+        input: { workspaceRoot: "/repo" },
+      }),
+    );
+    bad(result);
+    expect(result.message).toMatch(/filePath/);
+  });
+
+  it("accepts all unit-test target variants", () => {
+    for (const target of [
+      { kind: "file", filePath: "src/a.ts" },
+      { kind: "module", moduleDir: "src" },
+      { kind: "changedFiles", filePaths: ["src/a.ts"] },
+    ]) {
+      const result = parseRunRequest(
+        JSON.stringify({
+          workflowId: "unit-test-generation",
+          modelId: "m",
+          input: { workspaceRoot: "/repo", target },
+        }),
+      );
+      ok(result);
+      expect(result.kind).toBe("unit-tests");
+    }
+  });
+
+  it("rejects a unit-test target with an unknown kind", () => {
+    const result = parseRunRequest(
+      JSON.stringify({
+        workflowId: "unit-test-generation",
+        modelId: "m",
+        input: { workspaceRoot: "/repo", target: { kind: "moduleDir", moduleDir: "src" } },
+      }),
+    );
+    bad(result);
+    expect(result.message).toMatch(/target.kind/);
+  });
+
+  it("rejects changedFiles with an empty filePaths array", () => {
+    const result = parseRunRequest(
+      JSON.stringify({
+        workflowId: "unit-test-generation",
+        modelId: "m",
+        input: { workspaceRoot: "/repo", target: { kind: "changedFiles", filePaths: [] } },
+      }),
+    );
+    bad(result);
+    expect(result.message).toMatch(/at least one/);
+  });
+
+  it("accepts a bug-investigation report with explicit evidence", () => {
+    const result = parseRunRequest(
+      JSON.stringify({
+        workflowId: "bug-investigation",
+        modelId: "m",
+        input: {
+          workspaceRoot: "/repo",
+          report: { description: "fails at boundary", targetFiles: ["src/a.ts"] },
+        },
+      }),
+    );
+    ok(result);
+    expect(result.kind).toBe("bug-investigation");
+  });
+
+  it("rejects a bug-investigation report without evidence", () => {
+    const result = parseRunRequest(
+      JSON.stringify({
+        workflowId: "bug-investigation",
+        modelId: "m",
+        input: { workspaceRoot: "/repo", report: {} },
+      }),
+    );
+    bad(result);
+    expect(result.message).toMatch(/requires at least one/);
+  });
+});

@@ -21,7 +21,11 @@ const OUTPUT_CONTRACT =
   "in the same diff. After the block, add these prose sections: `## Root cause`, " +
   "`## Regression test`, `## Uncertainty`, `## Confidence` (one of low/medium/high). If the " +
   "evidence is INSUFFICIENT to propose a safe fix, OMIT the diff entirely and explain in " +
-  "`## Uncertainty` what additional information is needed — do NOT invent a fix.";
+  "`## Uncertainty` what additional information is needed — do NOT invent a fix. When you include " +
+  "a diff, the first non-empty line inside the fence MUST be `--- a/<path>` or `--- /dev/null`, " +
+  "followed by `+++ b/<path>` and at least one `@@` hunk. Do not output `*** Begin Patch`, file " +
+  "trees, prose, or escaped newline markers like `\\n+`/`\\n-` inside the diff fence; every diff " +
+  "line must be separated by a real newline.";
 
 const SCOPE_RULE =
   "The fix must be minimal and must NOT modify CI configuration (.github/), git hooks (.husky/), " +

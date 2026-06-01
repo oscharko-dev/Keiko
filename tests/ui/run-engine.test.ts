@@ -4,7 +4,7 @@
 // passed). No model port is exercised (verify never calls a model); the rejected model port
 // asserts that property.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -138,5 +138,45 @@ describe("startRun verify dispatch", () => {
     const result = startRun({ request, model: REJECT_MODEL, registry }, (v) => v);
     await waitForTerminal(result.runId);
     expect(registry.get(result.runId)?.appliable).toBeUndefined();
+  });
+});
+
+describe("startRun explain-plan dispatch", () => {
+  it("injects the redacted target file context into the model prompt", async () => {
+    mkdirSync(join(workspaceRoot, "src"));
+    writeFileSync(join(workspaceRoot, "src", "discounts.ts"), "export const discount = 100;\n");
+    let prompt = "";
+    const model: ModelPort = {
+      call: (request): Promise<NormalizedResponse> => {
+        prompt = request.messages.map((message) => message.content).join("\n");
+        return Promise.resolve({
+          modelId: request.modelId,
+          content: "grounded explanation",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "req",
+            promptTokens: 1,
+            completionTokens: 1,
+            latencyMs: 1,
+            costClass: "low",
+          },
+        });
+      },
+    };
+    const request = ok(
+      parseRunRequest(
+        JSON.stringify({
+          taskType: "explain-plan",
+          modelId: "m",
+          input: { workspaceRoot, filePath: "src/discounts.ts" },
+        }),
+      ),
+    );
+    const result = startRun({ request, model, registry }, (v) => v);
+    await waitForTerminal(result.runId);
+    expect(prompt).toContain("--- src/discounts.ts ---");
+    expect(prompt).toContain("export const discount = 100;");
   });
 });
