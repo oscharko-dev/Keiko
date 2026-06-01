@@ -27,4 +27,4 @@ All seven required CI status checks must pass before a change can merge into `de
 7. `Review dependency diff (dev/main)`
 
 The rationale for the CI and supply-chain security baseline is recorded in
-[ADR-0002](docs/adr/ADR-0002-ci-and-supply-chain-security-baseline.md).
+[ADR-0002](docs/adr/README.md#adr-0002).

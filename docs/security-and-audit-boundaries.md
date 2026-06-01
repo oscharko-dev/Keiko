@@ -10,16 +10,16 @@ The single hard invariant across every surface: **no change reaches a branch wit
 
 ## Boundary summary
 
-| Boundary          | Control                                                            | Source                                                                     |
-| ----------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| Workspace access  | Always-on deny list; lexical + realpath containment                | [ADR-0005](adr/ADR-0005-repository-context-and-workspace-access.md)        |
-| Command execution | Allowlist, no shell, ephemeral HOME, resource bounds, symlink gate | [ADR-0006](adr/ADR-0006-safe-tool-execution-and-sandbox-boundary.md)       |
-| Verification      | Per-command timeout and memory ceiling; abort handling             | [ADR-0007](adr/ADR-0007-verification-orchestrator-and-resource-limits.md)  |
-| Patch (tests)     | Production-code guard; dry-run default; gated apply                | [ADR-0008](adr/ADR-0008-unit-test-generation-workflow.md)                  |
-| Patch (fixes)     | Source-edit scope guard; sensitive-path rejection; gated apply     | [ADR-0009](adr/ADR-0009-bug-investigation-and-regression-test-workflow.md) |
-| Evidence storage  | Redaction at construction; atomic, contained writes; retention     | [ADR-0010](adr/ADR-0010-audit-ledger-and-evidence-manifests.md)            |
-| Local UI          | Loopback bind; DNS-rebinding defence; strict CSP; gated apply      | [ADR-0011](adr/ADR-0011-wave-1-user-interface-and-packaging.md)            |
-| Credentials       | Env/config only, never flags; never logged                         | [ADR-0003](adr/ADR-0003-model-gateway-boundary.md)                         |
+| Boundary          | Control                                                            | Source                             |
+| ----------------- | ------------------------------------------------------------------ | ---------------------------------- |
+| Workspace access  | Always-on deny list; lexical + realpath containment                | [ADR-0005](adr/README.md#adr-0005) |
+| Command execution | Allowlist, no shell, ephemeral HOME, resource bounds, symlink gate | [ADR-0006](adr/README.md#adr-0006) |
+| Verification      | Per-command timeout and memory ceiling; abort handling             | [ADR-0007](adr/README.md#adr-0007) |
+| Patch (tests)     | Production-code guard; dry-run default; gated apply                | [ADR-0008](adr/README.md#adr-0008) |
+| Patch (fixes)     | Source-edit scope guard; sensitive-path rejection; gated apply     | [ADR-0009](adr/README.md#adr-0009) |
+| Evidence storage  | Redaction at construction; atomic, contained writes; retention     | [ADR-0010](adr/README.md#adr-0010) |
+| Local UI          | Loopback bind; DNS-rebinding defence; strict CSP; gated apply      | [ADR-0011](adr/README.md#adr-0011) |
+| Credentials       | Env/config only, never flags; never logged                         | [ADR-0003](adr/README.md#adr-0003) |
 
 ---
 
@@ -39,7 +39,7 @@ Keiko reads files only inside the detected workspace, and only through a boundar
 
 The context surface (`keiko context`) is dry-run by construction: it calls no model and creates no agent session.
 
-See [ADR-0005](adr/ADR-0005-repository-context-and-workspace-access.md).
+See [ADR-0005](adr/README.md#adr-0005).
 
 ---
 
@@ -58,11 +58,11 @@ The tool layer exposes two capabilities: a command runner and a patch applier. T
 - **Resource bounds.** A wall-clock timeout, an output cap, and a per-run command-execution ceiling.
 - **Workspace-rooted working directory.** Commands run with their working directory set to the workspace root unless a workspace-relative cwd is requested. Cwd realpaths that escape the workspace or resolve into always-denied paths are rejected before spawn.
 
-See [ADR-0006](adr/ADR-0006-safe-tool-execution-and-sandbox-boundary.md).
+See [ADR-0006](adr/README.md#adr-0006).
 
 ### What command execution does NOT do
 
-The honest limits, stated in [ADR-0006](adr/ADR-0006-safe-tool-execution-and-sandbox-boundary.md):
+The honest limits, stated in [ADR-0006](adr/README.md#adr-0006):
 
 - **Repository script execution is remote-code-execution by design.** `npm test` and `npm run` in the verification workflow run repository-authored code. The sandbox bounds the _process environment_, not the _semantics_ of those scripts. A reviewer must trust the repository's own scripts to the same degree they would when running them by hand.
 - **No network isolation.** Wave 1 adds no OS-level network namespace or firewall. A command can reach the network if the host can.
@@ -81,7 +81,7 @@ The boundary protects the host outside the workspace. It does not protect the wo
 
 The memory ceiling is best-effort and depends on `/proc` availability; treat it as a guardrail, not a hard cgroup limit.
 
-See [ADR-0007](adr/ADR-0007-verification-orchestrator-and-resource-limits.md).
+See [ADR-0007](adr/README.md#adr-0007).
 
 ---
 
@@ -90,8 +90,8 @@ See [ADR-0007](adr/ADR-0007-verification-orchestrator-and-resource-limits.md).
 Both workflows produce a diff. Neither writes by default.
 
 - **Dry-run by default.** Each workflow stops at a reviewable diff. Writing requires an explicit `--apply`, after which verification runs.
-- **Unit-test generation: production-code guard.** The generated patch may only create or modify test files. A patch touching a non-test path is rejected, fail-closed. A prompt-injected diff cannot reach source files. See [ADR-0008](adr/ADR-0008-unit-test-generation-workflow.md).
-- **Bug investigation: source-edit scope guard.** A fix may edit source, but a patch touching a sensitive path (`.git/`, `.github/`, `.husky/`, lockfiles) is rejected. The guarded path is normalised to the resolved write form before the sensitive-path check, so prefix tricks cannot slip past it. See [ADR-0009](adr/ADR-0009-bug-investigation-and-regression-test-workflow.md).
+- **Unit-test generation: production-code guard.** The generated patch may only create or modify test files. A patch touching a non-test path is rejected, fail-closed. A prompt-injected diff cannot reach source files. See [ADR-0008](adr/README.md#adr-0008).
+- **Bug investigation: source-edit scope guard.** A fix may edit source, but a patch touching a sensitive path (`.git/`, `.github/`, `.husky/`, lockfiles) is rejected. The guarded path is normalised to the resolved write form before the sensitive-path check, so prefix tricks cannot slip past it. See [ADR-0009](adr/README.md#adr-0009).
 - **Verified vs hypothesis.** The investigation report separates facts the workflow established (parsed failure frames, whether the patch validates and applied) from the model's unverified hypothesis. A reviewer can see which claims are checked and which are not.
 
 Applying a patch is an explicit, opt-in action. The default output is a diff for a human to read.
@@ -106,7 +106,7 @@ Credentials never enter logs, events, or persisted evidence.
 - **Never logged.** Keys never appear in logs, errors, or serialised output.
 - **Redaction at construction.** Evidence manifests are redacted as they are built; there is no code path that writes an unredacted manifest. Secret-shaped strings, environment values, and known literal credentials are removed before anything is written.
 
-See [ADR-0003](adr/ADR-0003-model-gateway-boundary.md) and [ADR-0010](adr/ADR-0010-audit-ledger-and-evidence-manifests.md).
+See [ADR-0003](adr/README.md#adr-0003) and [ADR-0010](adr/README.md#adr-0010).
 
 ---
 
@@ -118,11 +118,11 @@ See [ADR-0003](adr/ADR-0003-model-gateway-boundary.md) and [ADR-0010](adr/ADR-00
 - **Atomic, contained writes.** Each manifest is written with an exclusive-create (`O_EXCL`) open into a directory whose real path is verified to be inside the evidence root.
 - **Retention.** The newest runs are kept up to a maximum; older runs are rotated out. Rotation deletes only ledger-created manifest files inside the contained directory, ordered by the manifest's recorded finish time, never by filesystem mtime.
 - **Schema versioning.** Every manifest carries a stable schema version; readers reject an unknown version rather than guessing at the shape.
-- **Not tamper-evident, not encrypted at rest.** Manifests are ordinary developer-writable JSON files; a local actor with filesystem access can edit or delete them. Wave 1 provides confinement, redaction, and `.gitignore` exclusion — not cryptographic integrity or encryption at rest. Immutable-ledger infrastructure is out of scope (see [ADR-0010](adr/ADR-0010-audit-ledger-and-evidence-manifests.md)).
+- **Not tamper-evident, not encrypted at rest.** Manifests are ordinary developer-writable JSON files; a local actor with filesystem access can edit or delete them. Wave 1 provides confinement, redaction, and `.gitignore` exclusion — not cryptographic integrity or encryption at rest. Immutable-ledger infrastructure is out of scope (see [ADR-0010](adr/README.md#adr-0010)).
 
 Inspect manifests with `keiko evidence list` and `keiko evidence show <runId>`. The default location is `$KEIKO_EVIDENCE_DIR` or `.keiko/evidence` under the workspace.
 
-See [ADR-0010](adr/ADR-0010-audit-ledger-and-evidence-manifests.md).
+See [ADR-0010](adr/README.md#adr-0010).
 
 ---
 
@@ -136,7 +136,7 @@ The UI is a single-user, local-only surface. It consumes the same audited layer 
 - **Secret redaction.** The backend redacts secrets before any response reaches the browser; evidence is redacted on disk.
 - **Gated apply.** The browser cannot apply a patch without the same explicit, dry-run-default gate the CLI uses.
 
-Multi-user access, authentication, and remote hosting are out of scope for Wave 1. See [ADR-0011](adr/ADR-0011-wave-1-user-interface-and-packaging.md) and the [local UI runbook](ui-runbook.md).
+Multi-user access, authentication, and remote hosting are out of scope for Wave 1. See [ADR-0011](adr/README.md#adr-0011) and the [local UI runbook](ui-runbook.md).
 
 ---
 
@@ -182,4 +182,4 @@ Treat Keiko as bounded developer assistance with a strong audit trail, run insid
 - [README — Security and audit boundaries](../README.md#security-and-audit-boundaries) — the short summary
 - [Customer pilot runbook](pilot/runbook.md) — review expectations and evidence handling
 - [Go/No-Go criteria](pilot/go-no-go.md) — what evaluation does and does not establish
-- Architecture Decision Records: [ADR-0003](adr/ADR-0003-model-gateway-boundary.md), [ADR-0005](adr/ADR-0005-repository-context-and-workspace-access.md), [ADR-0006](adr/ADR-0006-safe-tool-execution-and-sandbox-boundary.md), [ADR-0007](adr/ADR-0007-verification-orchestrator-and-resource-limits.md), [ADR-0008](adr/ADR-0008-unit-test-generation-workflow.md), [ADR-0009](adr/ADR-0009-bug-investigation-and-regression-test-workflow.md), [ADR-0010](adr/ADR-0010-audit-ledger-and-evidence-manifests.md), [ADR-0011](adr/ADR-0011-wave-1-user-interface-and-packaging.md)
+- [Architecture decisions](adr/README.md) — compact decision log

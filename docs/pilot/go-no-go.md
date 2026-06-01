@@ -177,5 +177,5 @@ Offline fixtures score these dimensions as "not-applicable" unless configured ot
 
 ## References
 
-- **ADR-0012: Wave 1 Evaluation Harness and Model Benchmarks** — full design, decision rationale, and implementation contract. See especially decisions D6 (dimensions), D7 (surface-parity), D8 (output schema), D10 (CLI), and D13 (Go/No-Go criteria). [../adr/ADR-0012-wave-1-evaluation-harness-and-model-benchmarks.md](../adr/ADR-0012-wave-1-evaluation-harness-and-model-benchmarks.md)
+- **ADR-0012: Evaluation harness and model benchmarks** — compact architecture decision for the scorecard and Go/No-Go review. [../adr/README.md#adr-0012](../adr/README.md#adr-0012)
 - **Issue #11: Create Wave 1 evaluation harness and model benchmark fixtures** — acceptance criteria and delivery evidence.

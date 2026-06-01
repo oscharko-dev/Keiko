@@ -49,7 +49,3 @@ export class TerminalToolError extends Error {
     this.status = STATUS_MAP[code];
   }
 }
-
-export function terminalHttpStatus(code: TerminalErrorCode): number {
-  return STATUS_MAP[code];
-}

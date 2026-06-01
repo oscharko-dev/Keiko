@@ -18,7 +18,7 @@ For how credentials resolve and how the gateway config is structured, see [Confi
 
 ## What to route to Wave 1 workflows
 
-The two Wave 1 chat workflows — [unit-test generation](../adr/ADR-0008-unit-test-generation-workflow.md) and [bug investigation](../adr/ADR-0009-bug-investigation-and-regression-test-workflow.md) — produce structured diffs. Route those workflows to models that declare:
+The two Wave 1 chat workflows — [unit-test generation](../adr/README.md#adr-0008) and [bug investigation](../adr/README.md#adr-0009) — produce structured diffs. Route those workflows to models that declare:
 
 - `toolCalling` — the workflow drives the model through tool steps.
 - `structuredOutput` — the workflow expects a reliably structured patch.
@@ -137,6 +137,6 @@ Note: `multilingual-e5-large Embedding` is the exact identifier in the capabilit
 
 - [Configuration and secrets](../../README.md#configuration-and-secrets) — gateway config and credential precedence
 - [Go/No-Go criteria](./go-no-go.md) — the pilot decision, including model fit
-- [Gateway model boundary (ADR-0003)](../adr/ADR-0003-model-gateway-boundary.md)
-- [Unit-test generation workflow (ADR-0008)](../adr/ADR-0008-unit-test-generation-workflow.md)
-- [Bug investigation workflow (ADR-0009)](../adr/ADR-0009-bug-investigation-and-regression-test-workflow.md)
+- [Gateway model boundary (ADR-0003)](../adr/README.md#adr-0003)
+- [Unit-test generation workflow (ADR-0008)](../adr/README.md#adr-0008)
+- [Bug investigation workflow (ADR-0009)](../adr/README.md#adr-0009)

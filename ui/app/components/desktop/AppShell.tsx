@@ -211,20 +211,6 @@ function AppShellInner(): ReactNode {
   );
 }
 
-// Tool windows reachable from ⌘K (design app.jsx command list). keiko + settings
-// open from the rails only, matching the prototype.
-const TOOL_ORDER: readonly WindowType[] = [
-  "project",
-  "search",
-  "plugins",
-  "automations",
-  "mobile",
-  "inspector",
-  "activity",
-  "notifications",
-  "resources",
-];
-
 export function AppShell(): ReactNode {
   // Mount gate: the entire shell depends on client-only state (localStorage-backed
   // theme/twin/editor, the WebGL canvas, window dimensions). Under static export the

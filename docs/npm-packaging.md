@@ -63,6 +63,8 @@ A missing UI build is the most common failure: the check tells you to run `npm r
 
 Both `prepack` and `prepublishOnly` run the same sequence:
 
+`npm run clean && npm run build && npm run ui:ci && npm run build:ui && npm run check:package-surface`
+
 ```
 npm run clean
 npm run build          # tsc -> dist/
@@ -89,7 +91,7 @@ The package is licensed under Apache-2.0. The `LICENSE`, `NOTICE`, and `TRADEMAR
 
 ## Dependency and supply-chain review
 
-Keiko has **zero runtime dependencies**. Everything in `package.json` `devDependencies` is build- and test-time only and is excluded from the published surface by the `files` allowlist.
+Keiko keeps runtime dependencies intentionally small. The root package currently depends on `ws` for the browser CDP transport; everything in `devDependencies` is build- and test-time only and is excluded from the published surface by the `files` allowlist.
 
 Supply-chain assurance is covered in CI, not by a manual step in this document:
 
@@ -97,7 +99,7 @@ Supply-chain assurance is covered in CI, not by a manual step in this document:
 - CodeQL scans the source.
 - An SBOM build records the component inventory.
 
-A zero-runtime-dependency package keeps the dependency-review surface empty for runtime code; the value of the review is in catching a dependency that should not be added.
+The release bar is to keep runtime dependencies rare, justified, and visible in the root manifest. The dependency-review job should catch any accidental expansion of that surface.
 
 ---
 
@@ -110,4 +112,4 @@ Wave 1 does not publish the package. The packaging surface, the surface check, a
 ## Related documents
 
 - [README — Packaging](../README.md#packaging) — the short summary
-- [ADR-0011: Wave 1 user interface and packaging](adr/ADR-0011-wave-1-user-interface-and-packaging.md) — the packaging decisions, including the surface check
+- [Architecture decisions](adr/README.md#adr-0011) — UI packaging and package-surface decisions

@@ -51,7 +51,7 @@ describe("runCli", () => {
     const c = makeIo();
     const code = runCli([flag], c.io);
     expect(code).toBe(0);
-    expect(c.out()).toMatch(/^keiko \d+\.\d+\.\d+\n$/);
+    expect(c.out()).toMatch(/^keiko \d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\n$/);
     expect(c.err()).toBe("");
   });
 

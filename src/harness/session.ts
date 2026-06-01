@@ -20,7 +20,7 @@ import {
   type TaskInput,
 } from "./types.js";
 
-export const HARNESS_VERSION = "0.1.0";
+export const HARNESS_VERSION = "0.1.0-beta.0";
 
 export interface AgentConfig {
   readonly model: string;
