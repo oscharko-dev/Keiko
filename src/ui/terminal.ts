@@ -526,33 +526,15 @@ function parentPath(pathValue: string, projectRoot: string): string | null {
   return pathValue === parsed.root ? null : dirname(pathValue);
 }
 
-// A3 — Normalise the client-supplied path to an absolute path that is lexically inside
-// `projectRoot`. Absolute paths are allowed but must still be contained. Throws
-// CWD_OUTSIDE_PROJECT (403) on containment failure — same error code as D10 / ADR-0018.
+// A3 — Normalise the client-supplied path to an absolute path. Relative paths are resolved
+// against `projectRoot`. Absolute paths are kept as-is; realpath containment is enforced
+// in `resolveDirectory` after both sides are realpath'd (handles macOS /tmp → /private/tmp).
 function normalizeClientPath(pathInput: string | undefined, projectRoot: string): string {
   const raw = pathInput?.trim();
   if (raw === undefined || raw.length === 0) {
     return projectRoot;
   }
-  // Resolve relative paths against the project root; absolute paths are kept as-is but will
-  // be range-checked by isWithinWorkspace below.
-  const candidate = isAbsolute(raw) ? raw : resolvePath(projectRoot, raw);
-  try {
-    const lexical = resolveWithinWorkspace(projectRoot, candidate);
-    if (!isWithinWorkspace(projectRoot, lexical)) {
-      throw new TerminalToolError(
-        "CWD_OUTSIDE_PROJECT",
-        "Working directory is outside the selected project.",
-      );
-    }
-    return lexical;
-  } catch (err) {
-    if (err instanceof TerminalToolError) throw err;
-    throw new TerminalToolError(
-      "CWD_OUTSIDE_PROJECT",
-      "Working directory is outside the selected project.",
-    );
-  }
+  return isAbsolute(raw) ? raw : resolvePath(projectRoot, raw);
 }
 
 async function resolveDirectory(candidate: string, projectRoot: string): Promise<string> {
@@ -585,7 +567,15 @@ export async function listDirectories(
   if (project === undefined) {
     throw new TerminalToolError("PROJECT_NOT_FOUND", "Project not found.");
   }
-  const projectRoot = defaultCwdFromProject(project);
+  const projectRootRaw = defaultCwdFromProject(project);
+  // Resolve the project root to its real path first so that comparisons on macOS (where /tmp
+  // is a symlink to /private/tmp) don't false-positive as escapes.
+  let projectRoot: string;
+  try {
+    projectRoot = await realpath(projectRootRaw);
+  } catch {
+    throw new TerminalToolError("PROJECT_NOT_FOUND", "Project root path could not be resolved.");
+  }
   const lexical = normalizeClientPath(pathInput, projectRoot);
   const pathValue = await resolveDirectory(lexical, projectRoot);
   const entries = await readdir(pathValue, { withFileTypes: true });
