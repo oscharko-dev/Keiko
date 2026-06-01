@@ -23,6 +23,8 @@ import {
   relative,
   resolve,
 } from "node:path";
+import { compileIgnore, isIgnored, type IgnoreMatcher } from "../workspace/ignore.js";
+import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 
@@ -211,6 +213,12 @@ function isContained(root: string, target: string): boolean {
 async function resolveInsideRoot(rootInput: string | null, pathInput: string | null): Promise<ResolvedTarget> {
   const root = await resolveRoot(rootInput);
   const relativePath = normalizeRelativePath(pathInput);
+  // Deny check runs BEFORE realpath so existence of a denied path is not
+  // observable via the 403/404 status-code difference. A non-existent denied
+  // path returns 403, identical to an existing denied path.
+  if (pathIsDenied(relativePath)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
   const candidate = nativePath(root, relativePath);
   let target: string;
   try {
@@ -309,7 +317,40 @@ function entryRank(entry: FilesTreeEntry): number {
   return 2;
 }
 
-async function listTreeEntries(root: string, relativePath: string, pathValue: string): Promise<{
+function childRelative(parentRelativePath: string, name: string): string {
+  return parentRelativePath.length === 0 ? name : `${parentRelativePath}/${name}`;
+}
+
+// Best-effort: read the project root's `.gitignore` if present. Silent failure
+// is intentional — `.gitignore` is tier-2 noise reduction, not a safety
+// boundary (deny-list is tier 1). A missing/unreadable `.gitignore` is "no
+// filter". No long-lived cache: the BFF is stateless across user-selected roots.
+async function loadRootGitignore(rootPath: string): Promise<IgnoreMatcher | null> {
+  let raw: string;
+  try {
+    raw = await readFile(join(rootPath, ".gitignore"), "utf8");
+  } catch {
+    return null;
+  }
+  const withoutBom = raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+  return compileIgnore(withoutBom.split("\n"));
+}
+
+function skipEntry(
+  matcher: IgnoreMatcher | null,
+  rel: string,
+  isDir: boolean,
+): boolean {
+  if (pathIsDenied(rel)) return true;
+  return matcher !== null && isIgnored(matcher, rel, isDir);
+}
+
+async function listTreeEntries(
+  root: string,
+  relativePath: string,
+  pathValue: string,
+  matcher: IgnoreMatcher | null,
+): Promise<{
   readonly entries: readonly FilesTreeEntry[];
   readonly truncated: boolean;
 }> {
@@ -318,6 +359,15 @@ async function listTreeEntries(root: string, relativePath: string, pathValue: st
   let truncated = false;
   try {
     for await (const entry of dir) {
+      // Deny and .gitignore filtering happen BEFORE the truncation counter so
+      // a directory packed with denied entries (e.g. node_modules/**) cannot
+      // exhaust the 1000-entry budget and hide real files behind
+      // `truncated: true`. Deny is applied by the link name (the user only
+      // sees that name) so a symlink whose own name matches a deny pattern is
+      // denied even if its target does not — matches the workspace-layer
+      // semantics.
+      const rel = childRelative(relativePath, entry.name);
+      if (skipEntry(matcher, rel, entry.isDirectory())) continue;
       if (entries.length >= MAX_DIRECTORY_ENTRIES) {
         truncated = true;
         break;
@@ -336,7 +386,11 @@ export async function readFilesTree(rootInput: string | null, pathInput: string 
   if (!target.stats.isDirectory()) {
     throw new FilesError(400, "NOT_DIRECTORY", "The requested path is not a directory.");
   }
-  const listed = await listTreeEntries(target.root, target.relativePath, target.path);
+  // Per-request: read the project root's `.gitignore` once. Best-effort noise
+  // reduction only; the matcher never relaxes the deny list. No long-lived
+  // cache — the BFF must stay stateless across user-selected roots.
+  const ignoreMatcher = await loadRootGitignore(target.root);
+  const listed = await listTreeEntries(target.root, target.relativePath, target.path, ignoreMatcher);
   return {
     root: target.root,
     path: target.relativePath,

@@ -597,6 +597,8 @@ select.set-input { appearance: none; cursor: pointer; }
 .fpv-line { display: flex; }
 .fpv-num { width: 44px; flex: none; text-align: right; padding-right: 16px; color: var(--fg-faint); opacity: .6; user-select: none; }
 .fpv-src { white-space: pre; color: #c5cdd9; padding-right: 14px; }
+.fpv-state { padding: 14px 16px; margin: 12px; font-size: 12.5px; line-height: 1.5; color: var(--fg-dim); background: var(--inset); border: 1px solid var(--line-soft); border-radius: 8px; }
+.fpv-error { color: var(--fg); background: color-mix(in oklch, var(--danger) 14%, var(--inset)); border-color: color-mix(in oklch, var(--danger) 55%, var(--line-soft)); }
 .hl-com { color: #6b7787; font-style: italic; }
 .hl-str { color: #c3e88d; }
 .hl-num, .hl-lit { color: #f78c6c; }

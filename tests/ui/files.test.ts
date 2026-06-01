@@ -93,7 +93,6 @@ describe("desktop files browser", () => {
   it("returns redacted text previews", async () => {
     const secret = "super-secret-value-1234567890";
     await writeFile(join(root, "src", "secret.ts"), `export const token = "${secret}";\n`);
-    await writeFile(join(root, ".env.local"), `API_KEY=${secret}\n`);
 
     const preview = await readFilesPreview(
       root,
@@ -106,14 +105,15 @@ describe("desktop files browser", () => {
       expect(preview.content).not.toContain(secret);
       expect(preview.content).toContain("[REDACTED]");
     }
+  });
 
-    const envPreview = await readFilesPreview(
-      root,
-      ".env.local",
-      buildRedactor({ KEIKO_DEFAULT_API_KEY: secret }),
-    );
-    expect(envPreview).toMatchObject({ kind: "text", extension: "env" });
-    if (envPreview.kind === "text") expect(envPreview.content).not.toContain(secret);
+  it("refuses to preview .env.local (matches the .env.* deny pattern)", async () => {
+    await writeFile(join(root, ".env.local"), "API_KEY=value\n");
+
+    await expect(readFilesPreview(root, ".env.local", buildRedactor({}))).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
   });
 
   it("returns image previews below the image cap", async () => {
@@ -175,5 +175,143 @@ describe("desktop files browser", () => {
 
     expect(listing.entries).toHaveLength(1_000);
     expect(listing.truncated).toBe(true);
+  });
+
+  it("filters deny-listed entries from the tree (including the .env.example exception)", async () => {
+    await writeFile(join(root, ".env"), "SECRET=1\n");
+    await writeFile(join(root, ".env.example"), "SECRET=example\n");
+    await writeFile(join(root, "id_rsa"), "-----BEGIN PRIVATE KEY-----\n");
+    await writeFile(join(root, "server.pem"), "-----BEGIN CERTIFICATE-----\n");
+    await mkdir(join(root, "node_modules"));
+    await writeFile(join(root, "node_modules", "foo.js"), "module.exports = 1;\n");
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    const listing = await readFilesTree(root, "");
+    const names = listing.entries.map((entry) => entry.name);
+
+    expect(names).toContain(".env.example");
+    expect(names).not.toContain(".env");
+    expect(names).not.toContain("id_rsa");
+    expect(names).not.toContain("server.pem");
+    expect(names).not.toContain("node_modules");
+    expect(names).not.toContain(".git");
+  });
+
+  it("rejects navigation into a denied subtree with 403 DENIED", async () => {
+    await mkdir(join(root, ".git"));
+    await writeFile(join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    await expect(readFilesTree(root, ".git")).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+  });
+
+  it("returns 403 DENIED when previewing deny-listed files", async () => {
+    await writeFile(join(root, ".env"), "SECRET=1\n");
+    await mkdir(join(root, "node_modules"));
+    await writeFile(join(root, "node_modules", "foo.js"), "module.exports = 1;\n");
+
+    await expect(readFilesPreview(root, ".env", buildRedactor({}))).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+    await expect(readFilesPreview(root, "node_modules/foo.js", buildRedactor({}))).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+  });
+
+  it("returns 403 DENIED for non-existent denied paths (no existence probing)", async () => {
+    // No file is created. A denied path that does not exist must still return
+    // 403 DENIED — never 404 — so callers cannot tell whether a deny-listed
+    // file exists under the selected root.
+    await expect(readFilesPreview(root, ".env", buildRedactor({}))).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+    await expect(readFilesTree(root, ".git")).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+    await expect(readFilesPreview(root, "node_modules/missing.js", buildRedactor({}))).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+  });
+
+  it("allows previewing .env.example as text", async () => {
+    await writeFile(join(root, ".env.example"), "# example env template\n");
+
+    const preview = await readFilesPreview(root, ".env.example", buildRedactor({}));
+
+    expect(preview.kind).toBe("text");
+    if (preview.kind === "text") {
+      expect(preview.content).toContain("example env template");
+      expect(preview.extension).toBe("env");
+    }
+  });
+
+  it("excludes denied entries from the truncation budget", async () => {
+    const many = join(root, "many");
+    await mkdir(many);
+    // 1_005 deny-listed *.pem files plus a handful of real files. The truncation
+    // counter must skip the *.pem entries entirely; otherwise the real files
+    // would be hidden behind `truncated: true`.
+    await Promise.all(
+      Array.from({ length: 1_005 }, (_, index) =>
+        writeFile(join(many, `cert-${String(index).padStart(4, "0")}.pem`), "\n"),
+      ),
+    );
+    await writeFile(join(many, "real-a.txt"), "a\n");
+    await writeFile(join(many, "real-b.txt"), "b\n");
+    await writeFile(join(many, "real-c.txt"), "c\n");
+
+    const listing = await readFilesTree(root, "many");
+    const names = listing.entries.map((entry) => entry.name);
+
+    expect(listing.truncated).toBe(false);
+    expect(names).toEqual(["real-a.txt", "real-b.txt", "real-c.txt"]);
+  });
+
+  it("honors the project root's .gitignore in tree listings", async () => {
+    await writeFile(join(root, ".gitignore"), "generated/\nartifact.txt\n");
+    await mkdir(join(root, "generated"));
+    await writeFile(join(root, "generated", "bundle.js"), "// bundle\n");
+    await writeFile(join(root, "artifact.txt"), "artifact\n");
+    await writeFile(join(root, "keep.txt"), "keep\n");
+
+    const listing = await readFilesTree(root, "");
+    const names = listing.entries.map((entry) => entry.name);
+
+    expect(names).toContain("keep.txt");
+    expect(names).not.toContain("generated");
+    expect(names).not.toContain("artifact.txt");
+  });
+
+  it("still previews .gitignore-matched files (preview is not best-effort)", async () => {
+    // .gitignore is tier-2 noise reduction for listings only. A user clicking
+    // through a direct URL to an ignored (but not denied) file must still
+    // receive a preview. The chosen name does NOT match any deny pattern.
+    await writeFile(join(root, ".gitignore"), "artifact.txt\n");
+    await writeFile(join(root, "artifact.txt"), "artifact content\n");
+
+    const preview = await readFilesPreview(root, "artifact.txt", buildRedactor({}));
+
+    expect(preview.kind).toBe("text");
+    if (preview.kind === "text") {
+      expect(preview.content).toContain("artifact content");
+    }
+  });
+
+  it("treats a missing .gitignore as no filter (best-effort, no error)", async () => {
+    // Verifies loadRootGitignore's silent fallback. No .gitignore in fixture.
+    await writeFile(join(root, "ordinary.txt"), "kept\n");
+
+    const listing = await readFilesTree(root, "");
+    const names = listing.entries.map((entry) => entry.name);
+
+    expect(names).toContain("ordinary.txt");
   });
 });

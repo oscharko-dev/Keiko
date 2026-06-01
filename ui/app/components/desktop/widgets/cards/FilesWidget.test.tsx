@@ -1,14 +1,20 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { fetchFilesPreview, fetchFilesTree } from "../../../../../lib/api";
+import { ApiError, fetchFilesPreview, fetchFilesTree } from "../../../../../lib/api";
 import { FilePreview } from "./FilePreview";
 import { FilesWidget } from "./FilesWidget";
 
-vi.mock("../../../../../lib/api", () => ({
-  fetchFilesPreview: vi.fn(),
-  fetchFilesTree: vi.fn(),
-}));
+vi.mock("../../../../../lib/api", async () => {
+  const actual = await vi.importActual<typeof import("../../../../../lib/api")>(
+    "../../../../../lib/api",
+  );
+  return {
+    ...actual,
+    fetchFilesPreview: vi.fn(),
+    fetchFilesTree: vi.fn(),
+  };
+});
 
 const treeEntryBase = {
   sizeBytes: 0,
@@ -103,5 +109,40 @@ describe("FilePreview", () => {
     expect(await screen.findByText("No safe text or image preview is available for this file type."))
       .toBeInTheDocument();
     expect(screen.getAllByText("archive.bin").length).toBeGreaterThan(0);
+  });
+
+  it("renders a generic safety alert when the BFF returns 403 DENIED", async () => {
+    // The BFF message must NOT be rendered verbatim — it is replaced by a
+    // generic, non-probing safety message. The matched server-side pattern is
+    // never disclosed; the message lists common deny categories as examples
+    // only.
+    const bffMessage = "secret bff diagnostic that should never reach the user";
+    vi.mocked(fetchFilesPreview).mockRejectedValueOnce(
+      new ApiError("DENIED", bffMessage, 403),
+    );
+
+    const { container } = render(
+      <FilePreview root="/repo" path="some/secret.pem" onClose={() => undefined} />,
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/excluded from the read surface for safety/i);
+    expect(alert.textContent ?? "").not.toContain(bffMessage);
+    expect(alert.textContent ?? "").not.toContain("some/secret.pem");
+    // The requested path must not be visible anywhere in the rendered tree
+    // (the header still renders, but with a generic "Hidden file" label so the
+    // path is not leaked via the document or any title attribute).
+    expect(container.textContent ?? "").not.toContain("some/secret.pem");
+    expect(container.innerHTML).not.toContain("some/secret.pem");
+  });
+
+  it("renders the raw error message for non-denied errors", async () => {
+    vi.mocked(fetchFilesPreview).mockRejectedValueOnce(new Error("boom"));
+
+    render(<FilePreview root="/repo" path="hello.txt" onClose={() => undefined} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("boom");
+    expect(alert.textContent ?? "").not.toMatch(/excluded from the read surface for safety/i);
   });
 });
