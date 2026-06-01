@@ -43,8 +43,13 @@ export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
 }
 
 // Route 3 — the full capability registry. The UI filters `kind === "chat"` for model pickers.
-export function handleModels(): RouteResult {
-  return { status: 200, body: { models: listCapabilities() } };
+export function handleModels(_ctx?: RouteContext, deps?: UiHandlerDeps): RouteResult {
+  const configured = new Set(deps?.config?.providers.map((provider) => provider.modelId) ?? []);
+  const models =
+    deps === undefined
+      ? listCapabilities()
+      : listCapabilities().filter((model) => configured.has(model.id));
+  return { status: 200, body: { models } };
 }
 
 // Route 4 — launch-form metadata: the workflow descriptors plus the synthesized explain-plan and

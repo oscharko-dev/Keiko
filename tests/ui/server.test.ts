@@ -177,8 +177,7 @@ describe("unknown API routes", () => {
     const res = await fetchRaw("/api/models");
     expect(res.status).toBe(200);
     const body = JSON.parse(res.text) as { models: unknown[] };
-    expect(Array.isArray(body.models)).toBe(true);
-    expect(body.models.length).toBeGreaterThan(0);
+    expect(body.models).toEqual([]);
   });
 
   it("rejects state-changing API requests without JSON content type", async () => {

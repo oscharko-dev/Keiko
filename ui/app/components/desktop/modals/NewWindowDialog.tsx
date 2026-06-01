@@ -200,6 +200,43 @@ function chooseDefaultModel(models: readonly ModelCapability[]): string {
   )?.id ?? "";
 }
 
+function toPosix(value: string): string {
+  return value.replaceAll("\\", "/");
+}
+
+export function normalizeAgentPathForWorkspace(workspaceRoot: string, value: string): string {
+  const candidate = toPosix(value.trim());
+  if (candidate.length === 0) return "";
+  const workspace = toPosix(workspaceRoot.trim()).replace(/\/+$/u, "");
+  if (workspace.length === 0) return candidate;
+  if (candidate === workspace) return ".";
+  const prefix = `${workspace}/`;
+  return candidate.startsWith(prefix) ? candidate.slice(prefix.length) : candidate;
+}
+
+function normalizePathList(workspaceRoot: string, value: string): string {
+  return splitPaths(value)
+    .map((entry) => normalizeAgentPathForWorkspace(workspaceRoot, entry))
+    .join(", ");
+}
+
+function buildInitialAgentFields(currentFile: string | null): AgentLauncherFields {
+  const file = currentFile ?? "";
+  return {
+    verifyTargetFiles: file,
+    explainFilePath: file,
+    explainQuestion: "",
+    unitTargetKind: "file",
+    unitFilePath: file,
+    unitModuleDir: "",
+    unitFilePaths: file,
+    bugDescription: "",
+    bugFailingOutput: "",
+    bugStackTrace: "",
+    bugTargetFiles: file,
+  };
+}
+
 function workflowRunBody(
   workflow: AgentWorkflowId,
   workspaceRoot: string,
@@ -207,7 +244,9 @@ function workflowRunBody(
   fields: AgentLauncherFields,
 ): { workflowId?: string; taskType?: string; input: Record<string, unknown>; modelId: string } {
   if (workflow === "verify") {
-    const targetFiles = splitPaths(fields.verifyTargetFiles);
+    const targetFiles = splitPaths(fields.verifyTargetFiles).map((entry) =>
+      normalizeAgentPathForWorkspace(workspaceRoot, entry),
+    );
     return {
       taskType: "verify",
       modelId,
@@ -223,7 +262,7 @@ function workflowRunBody(
       modelId,
       input: {
         workspaceRoot,
-        filePath: fields.explainFilePath.trim(),
+        filePath: normalizeAgentPathForWorkspace(workspaceRoot, fields.explainFilePath),
         ...(fields.explainQuestion.trim().length > 0
           ? { question: fields.explainQuestion.trim() }
           : {}),
@@ -231,13 +270,15 @@ function workflowRunBody(
     };
   }
   if (workflow === "unit-test-generation") {
-    const filePaths = splitPaths(fields.unitFilePaths);
+    const filePaths = splitPaths(fields.unitFilePaths).map((entry) =>
+      normalizeAgentPathForWorkspace(workspaceRoot, entry),
+    );
     const target =
       fields.unitTargetKind === "module"
-        ? { kind: "module", moduleDir: fields.unitModuleDir.trim() }
+        ? { kind: "module", moduleDir: normalizeAgentPathForWorkspace(workspaceRoot, fields.unitModuleDir) }
         : fields.unitTargetKind === "changedFiles"
           ? { kind: "changedFiles", filePaths }
-          : { kind: "file", filePath: fields.unitFilePath.trim() };
+          : { kind: "file", filePath: normalizeAgentPathForWorkspace(workspaceRoot, fields.unitFilePath) };
     return {
       workflowId: "unit-test-generation",
       modelId,
@@ -260,7 +301,11 @@ function workflowRunBody(
           ? { stackTrace: fields.bugStackTrace.trim() }
           : {}),
         ...(splitPaths(fields.bugTargetFiles).length > 0
-          ? { targetFiles: splitPaths(fields.bugTargetFiles) }
+          ? {
+              targetFiles: splitPaths(fields.bugTargetFiles).map((entry) =>
+                normalizeAgentPathForWorkspace(workspaceRoot, entry),
+              ),
+            }
           : {}),
       },
     },
@@ -280,20 +325,6 @@ interface AgentLauncherFields {
   readonly bugStackTrace: string;
   readonly bugTargetFiles: string;
 }
-
-const INITIAL_AGENT_FIELDS: AgentLauncherFields = {
-  verifyTargetFiles: "",
-  explainFilePath: "",
-  explainQuestion: "",
-  unitTargetKind: "file",
-  unitFilePath: "",
-  unitModuleDir: "",
-  unitFilePaths: "",
-  bugDescription: "",
-  bugFailingOutput: "",
-  bugStackTrace: "",
-  bugTargetFiles: "",
-};
 
 function validationMessage(
   workflow: AgentWorkflowId,
@@ -419,7 +450,9 @@ function AgentLauncher({
   const [modelId, setModelId] = useState("");
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
   const [projects, setProjects] = useState<readonly string[]>([]);
-  const [fields, setFields] = useState<AgentLauncherFields>(INITIAL_AGENT_FIELDS);
+  const [fields, setFields] = useState<AgentLauncherFields>(() =>
+    buildInitialAgentFields(filesContext?.activeFilePath ?? null),
+  );
   const [loading, setLoading] = useState(true);
   const [registering, setRegistering] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -460,6 +493,19 @@ function AgentLauncher({
   const updateField = (patch: Partial<AgentLauncherFields>): void => {
     setFields((current) => ({ ...current, ...patch }));
   };
+
+  useEffect(() => {
+    if (currentFile === null) return;
+    setFields((current) => {
+      const patch: Record<string, string> = {};
+      if (current.verifyTargetFiles.trim().length === 0) patch.verifyTargetFiles = currentFile;
+      if (current.explainFilePath.trim().length === 0) patch.explainFilePath = currentFile;
+      if (current.unitFilePath.trim().length === 0) patch.unitFilePath = currentFile;
+      if (current.unitFilePaths.trim().length === 0) patch.unitFilePaths = currentFile;
+      if (current.bugTargetFiles.trim().length === 0) patch.bugTargetFiles = currentFile;
+      return Object.keys(patch).length === 0 ? current : { ...current, ...patch };
+    });
+  }, [currentFile]);
 
   const useCurrentFile = (): void => {
     if (currentFile === null) return;
@@ -536,6 +582,8 @@ function AgentLauncher({
             placeholder="src/file.ts, src/other.ts"
             value={fields.verifyTargetFiles}
             onChange={(event) => updateField({ verifyTargetFiles: event.target.value })}
+            onBlur={(event) =>
+              updateField({ verifyTargetFiles: normalizePathList(workspace, event.target.value) })}
           />
         </label>
       );
@@ -550,6 +598,10 @@ function AgentLauncher({
               placeholder="src/file.ts"
               value={fields.explainFilePath}
               onChange={(event) => updateField({ explainFilePath: event.target.value })}
+              onBlur={(event) =>
+                updateField({
+                  explainFilePath: normalizeAgentPathForWorkspace(workspace, event.target.value),
+                })}
             />
           </label>
           <label className="dlg-field">
@@ -591,6 +643,10 @@ function AgentLauncher({
                 placeholder="src/module"
                 value={fields.unitModuleDir}
                 onChange={(event) => updateField({ unitModuleDir: event.target.value })}
+                onBlur={(event) =>
+                  updateField({
+                    unitModuleDir: normalizeAgentPathForWorkspace(workspace, event.target.value),
+                  })}
               />
             </label>
           ) : fields.unitTargetKind === "changedFiles" ? (
@@ -602,6 +658,8 @@ function AgentLauncher({
                 placeholder="src/file.ts, src/other.ts"
                 value={fields.unitFilePaths}
                 onChange={(event) => updateField({ unitFilePaths: event.target.value })}
+                onBlur={(event) =>
+                  updateField({ unitFilePaths: normalizePathList(workspace, event.target.value) })}
               />
             </label>
           ) : (
@@ -612,6 +670,10 @@ function AgentLauncher({
                 placeholder="src/file.ts"
                 value={fields.unitFilePath}
                 onChange={(event) => updateField({ unitFilePath: event.target.value })}
+                onBlur={(event) =>
+                  updateField({
+                    unitFilePath: normalizeAgentPathForWorkspace(workspace, event.target.value),
+                  })}
               />
             </label>
           )}
@@ -656,6 +718,8 @@ function AgentLauncher({
             placeholder="src/file.ts, src/other.ts"
             value={fields.bugTargetFiles}
             onChange={(event) => updateField({ bugTargetFiles: event.target.value })}
+            onBlur={(event) =>
+              updateField({ bugTargetFiles: normalizePathList(workspace, event.target.value) })}
           />
         </label>
       </>
