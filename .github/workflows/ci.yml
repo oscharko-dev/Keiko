@@ -9,6 +9,19 @@ on:
 permissions: {}
 
 jobs:
+  main-dev-gate:
+    name: Only dev may merge to main
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Confirm dev branch gate
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/dev" ] && [ "${{ github.base_ref }}" != "dev" ]; then
+            echo "This gate is only valid for the protected dev branch."
+            exit 1
+          fi
+          echo "Protected dev branch gate satisfied."
+
   ci:
     runs-on: ubuntu-latest
     permissions:
