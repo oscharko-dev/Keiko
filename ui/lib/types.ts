@@ -898,3 +898,69 @@ export type FilesPreviewResponse =
       readonly reason: "unsupported" | "too_large";
       readonly maxBytes?: number;
     });
+
+// ---------------------------------------------------------------------------
+// Browser tool (ADR-0017)
+// ---------------------------------------------------------------------------
+
+export interface BrowserViewportPx {
+  readonly width: number;
+  readonly height: number;
+}
+
+export interface CdpReachability {
+  readonly reachable: boolean;
+  readonly userAgent: string | null;
+  readonly browserVersion: string | null;
+  readonly webSocketDebuggerUrl: string | null;
+}
+
+export interface BrowserSessionMeta {
+  readonly sessionId: string;
+  readonly cdpPort: number;
+  readonly targetId: string;
+  readonly status: "open" | "closed";
+  readonly createdAt: number;
+}
+
+export interface BrowserNavigateResult {
+  readonly originOnly: string;
+  readonly httpStatus: number | null;
+}
+
+export type BrowserScreenshotResult =
+  | {
+      readonly seq: number;
+      readonly viewportPx: BrowserViewportPx;
+      readonly dataBase64: string;
+      readonly persisted: false;
+    }
+  | {
+      readonly seq: number;
+      readonly viewportPx: BrowserViewportPx;
+      readonly persisted: true;
+      readonly path: string;
+      readonly sha256: string;
+      readonly bytes: number;
+    };
+
+export interface BrowserContentResult {
+  readonly seq: number;
+  readonly byteLength: number;
+  readonly redactedHtml: string;
+}
+
+export type BrowserEventKind =
+  | "session-opened"
+  | "navigated"
+  | "screenshot-captured"
+  | "page-content-captured"
+  | "session-closed"
+  | "trust-warning"
+  | "error";
+
+export interface BrowserEventEnvelope {
+  readonly kind: BrowserEventKind;
+  readonly sessionId: string;
+  readonly payload: Readonly<Record<string, unknown>>;
+}
