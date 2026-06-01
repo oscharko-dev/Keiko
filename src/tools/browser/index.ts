@@ -1,0 +1,24 @@
+// Browser tool barrel — re-exports the public surface that BFF handlers and tests compose.
+// ADR-0017. No runtime side effects.
+
+export {
+  BROWSER_ERROR_CODES,
+  BrowserToolError,
+  browserHttpStatus,
+  type BrowserErrorCode,
+} from "./errors.js";
+
+export { isLoopbackUrl, normalizeCdpPort, normalizeNavigateUrl } from "./validators.js";
+
+export type {
+  BrowserContentResult,
+  BrowserNavigateResult,
+  BrowserScreenshotPersisted,
+  BrowserScreenshotPreview,
+  BrowserScreenshotResult,
+  BrowserSessionMeta,
+  BrowserSessionStatus,
+  BrowserViewportPx,
+  CdpReachability,
+  NormalizedNavigateUrl,
+} from "./types.js";
