@@ -808,7 +808,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
       stderrBytes,
       startedAt,
     };
-    this.persistEntry(executionId, input, counts);
+    this.persistEntryOrEmitFailure(executionId, input, counts);
     this.emit({
       kind: "execution-completed",
       executionId,
@@ -851,7 +851,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
       stderrBytes: 0,
       startedAt,
     };
-    this.persistEntry(executionId, input, counts);
+    this.persistEntryOrEmitFailure(executionId, input, counts);
     if (cancelled) {
       this.emit({
         kind: "execution-cancelled",
@@ -911,6 +911,27 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
       appendTerminalEvidence(this.evidenceStore, entry, this.redactor);
     } catch {
       throw new TerminalToolError("EVIDENCE_WRITE_FAILED", "Terminal evidence could not be written.");
+    }
+  }
+
+  private persistEntryOrEmitFailure(
+    executionId: string,
+    input: TerminalExecutionInput,
+    counts: CompletionCounts,
+  ): void {
+    try {
+      this.persistEntry(executionId, input, counts);
+    } catch (error) {
+      const mapped =
+        error instanceof TerminalToolError
+          ? error
+          : new TerminalToolError("EVIDENCE_WRITE_FAILED", "Terminal evidence could not be written.");
+      this.emit({
+        kind: "execution-failed",
+        executionId,
+        payload: { code: mapped.code, message: mapped.message, ...requestIdPayload(input) },
+      });
+      throw mapped;
     }
   }
 

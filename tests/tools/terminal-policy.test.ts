@@ -261,7 +261,7 @@ describe("isTerminalCommandAllowed — git (subcommand allowlist + value-flag sa
     expect(isTerminalCommandAllowed("git", ["-C", "/tmp", "status"]).allowed).toBe(false);
   });
 
-  it("denies git -C / status when the shifted root is outside the selected project", () => {
+  it("denies git -C / status because terminal policy forbids cwd-shifting", () => {
     expect(isTerminalCommandAllowed("git", ["-C", "/", "status"]).allowed).toBe(false);
   });
 

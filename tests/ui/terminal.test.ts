@@ -414,6 +414,7 @@ describe("TerminalExecutionManager — evidence persistence", () => {
   it("fails closed when evidence persistence throws", async () => {
     evidenceStore = makeFailingEvidenceStore();
     const manager = makeManager(makeSpawn({ stdout: "ok\n" }));
+    const events = collect(manager);
     await expect(
       manager.execute({
         projectId: workspaceRoot,
@@ -421,6 +422,34 @@ describe("TerminalExecutionManager — evidence persistence", () => {
         args: [],
       }),
     ).rejects.toMatchObject({ code: "EVIDENCE_WRITE_FAILED" });
+    expect(events.map((event) => event.kind)).toEqual(["execution-started", "execution-failed"]);
+    expect(events[1]?.payload).toMatchObject({ code: "EVIDENCE_WRITE_FAILED" });
+  });
+
+  it("emits a terminal SSE failure when evidence persistence fails after command timeout", async () => {
+    evidenceStore = makeFailingEvidenceStore();
+    const manager = createTerminalExecutionManager({
+      store,
+      evidenceStore,
+      policy: {
+        envAllowlist: ["PATH"],
+        network: "inherit",
+        maxOutputBytes: 1024,
+        defaultTimeoutMs: 50,
+        terminationGraceMs: 10,
+      },
+      processEnv: { PATH: "/usr/bin" },
+      runDeps: {
+        spawn: makeSpawn({ hangs: true }),
+        resolveExecutable: (command) => command,
+      },
+    });
+    const events = collect(manager);
+    await expect(
+      manager.execute({ projectId: workspaceRoot, command: "ls", args: [] }),
+    ).rejects.toMatchObject({ code: "EVIDENCE_WRITE_FAILED" });
+    expect(events.map((event) => event.kind)).toEqual(["execution-started", "execution-failed"]);
+    expect(events[1]?.payload).toMatchObject({ code: "EVIDENCE_WRITE_FAILED" });
   });
 
   it("writes terminal evidence as a standard manifest parseable by listEvidence/loadEvidence", async () => {
