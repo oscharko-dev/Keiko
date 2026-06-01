@@ -49,7 +49,14 @@ export interface StateStep {
 }
 
 export function newCounters(): RunCounters {
-  return { iterations: 0, modelCalls: 0, toolCalls: 0, commandExecutions: 0, failureAttempts: 0 };
+  return {
+    iterations: 0,
+    modelCalls: 0,
+    toolCalls: 0,
+    commandExecutions: 0,
+    failureAttempts: 0,
+    browserNavigations: 0,
+  };
 }
 
 // UTF-8 byte length of the serialised message array — the zero-dependency context-size
