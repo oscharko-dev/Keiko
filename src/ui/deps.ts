@@ -28,6 +28,10 @@ import {
   type UiStore,
 } from "./store/index.js";
 import { createPtyTerminalSessionManager, type TerminalSessionManager } from "./terminal.js";
+import {
+  createBrowserSessionManager,
+  type BrowserSessionManager,
+} from "../tools/browser/index.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -64,6 +68,9 @@ export interface UiHandlerDeps {
   readonly uiDbPath?: string | undefined;
   // Local PTY terminal manager. Optional for legacy tests; production wiring creates one per BFF.
   readonly terminal?: TerminalSessionManager | undefined;
+  // ADR-0017 — browser tool session manager (BYO Chrome over CDP). Optional so existing tests
+  // that do not exercise /api/browser/* keep their fixtures unchanged.
+  readonly browser?: BrowserSessionManager | undefined;
 }
 
 export interface BuildHandlerDepsOptions {
@@ -211,6 +218,10 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     uiDbPath: resolvedUiDbPath,
     terminal: createPtyTerminalSessionManager({
       env: options.env,
+      redactor: liveRedactor,
+    }),
+    browser: createBrowserSessionManager({
+      evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),
       redactor: liveRedactor,
     }),
   };
