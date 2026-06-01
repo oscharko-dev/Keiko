@@ -56,11 +56,10 @@ function canApplyReport(report: RunReport): boolean {
 }
 
 function hasDiff(report: RunReport): boolean {
-  return (
-    report.proposedDiff !== undefined ||
-    report.dryRunPreview !== undefined ||
-    (report.changedFiles !== undefined && report.changedFiles.length > 0)
-  );
+  // Scoped to unified diffs only — `dryRunPreview` and `changedFiles` are
+  // adjacent surfaces the widget does not render, so they do not satisfy
+  // "has a diff to review".
+  return report.proposedDiff !== undefined && report.proposedDiff !== "";
 }
 
 // --- diff rendering helpers -------------------------------------------------
@@ -89,7 +88,7 @@ interface DiffLineViewProps {
 function DiffLineView({ line, lang }: DiffLineViewProps): ReactNode {
   // gutter sign provides a non-color channel for add/del/ctx (WCAG 1.4.1)
   const sign = line.kind === "add" ? "+" : line.kind === "del" ? "−" : line.kind === "ctx" ? "·" : "";
-  const cls = line.kind !== "ctx" && line.kind !== "meta" ? ` rv-${line.kind}` : "";
+  const cls = line.kind === "ctx" ? "" : ` rv-${line.kind}`;
 
   let content: ReactNode;
   if (line.kind !== "meta" && lang !== "code") {

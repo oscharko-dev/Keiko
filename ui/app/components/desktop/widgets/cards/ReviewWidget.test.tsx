@@ -136,13 +136,33 @@ describe("ReviewWidget", () => {
     });
   });
 
-  it("shows no-diff message when report has no proposedDiff, dryRunPreview, or changedFiles", async () => {
+  it("shows no-diff message when report has no proposedDiff", async () => {
     vi.mocked(fetchRunReport).mockResolvedValue({
       report: { status: "completed" as const },
     });
     vi.mocked(fetchEvidenceManifest).mockRejectedValue(new Error("404"));
 
     render(<ReviewWidget runId="r-nodiff" />);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(/this run has no proposed diff to review/i),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("shows no-diff message when report has only changedFiles but no proposedDiff", async () => {
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: {
+        status: "completed" as const,
+        changedFiles: [
+          { path: "src/foo.ts", kind: "modified", addedLines: 1, removedLines: 0, elevatedReview: false },
+        ],
+      },
+    });
+    vi.mocked(fetchEvidenceManifest).mockRejectedValue(new Error("404"));
+
+    render(<ReviewWidget runId="r-cfonly" />);
 
     await waitFor(() => {
       expect(
