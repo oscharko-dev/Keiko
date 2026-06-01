@@ -220,8 +220,8 @@ function normalizePathList(workspaceRoot: string, value: string): string {
     .join(", ");
 }
 
-function buildInitialAgentFields(currentFile: string | null): AgentLauncherFields {
-  const file = currentFile ?? "";
+function buildInitialAgentFields(workspaceRoot: string, currentFile: string | null): AgentLauncherFields {
+  const file = currentFile === null ? "" : normalizeAgentPathForWorkspace(workspaceRoot, currentFile);
   return {
     verifyTargetFiles: file,
     explainFilePath: file,
@@ -451,7 +451,7 @@ function AgentLauncher({
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
   const [projects, setProjects] = useState<readonly string[]>([]);
   const [fields, setFields] = useState<AgentLauncherFields>(() =>
-    buildInitialAgentFields(filesContext?.activeFilePath ?? null),
+    buildInitialAgentFields(filesContext?.root ?? "", filesContext?.activeFilePath ?? null),
   );
   const [loading, setLoading] = useState(true);
   const [registering, setRegistering] = useState(false);
@@ -496,26 +496,28 @@ function AgentLauncher({
 
   useEffect(() => {
     if (currentFile === null) return;
+    const normalizedCurrentFile = normalizeAgentPathForWorkspace(workspace, currentFile);
     setFields((current) => {
       const patch: Record<string, string> = {};
-      if (current.verifyTargetFiles.trim().length === 0) patch.verifyTargetFiles = currentFile;
-      if (current.explainFilePath.trim().length === 0) patch.explainFilePath = currentFile;
-      if (current.unitFilePath.trim().length === 0) patch.unitFilePath = currentFile;
-      if (current.unitFilePaths.trim().length === 0) patch.unitFilePaths = currentFile;
-      if (current.bugTargetFiles.trim().length === 0) patch.bugTargetFiles = currentFile;
+      if (current.verifyTargetFiles.trim().length === 0) patch.verifyTargetFiles = normalizedCurrentFile;
+      if (current.explainFilePath.trim().length === 0) patch.explainFilePath = normalizedCurrentFile;
+      if (current.unitFilePath.trim().length === 0) patch.unitFilePath = normalizedCurrentFile;
+      if (current.unitFilePaths.trim().length === 0) patch.unitFilePaths = normalizedCurrentFile;
+      if (current.bugTargetFiles.trim().length === 0) patch.bugTargetFiles = normalizedCurrentFile;
       return Object.keys(patch).length === 0 ? current : { ...current, ...patch };
     });
-  }, [currentFile]);
+  }, [currentFile, workspace]);
 
   const useCurrentFile = (): void => {
     if (currentFile === null) return;
-    if (workflow === "verify") updateField({ verifyTargetFiles: currentFile });
-    else if (workflow === "explain-plan") updateField({ explainFilePath: currentFile });
+    const normalizedCurrentFile = normalizeAgentPathForWorkspace(workspace, currentFile);
+    if (workflow === "verify") updateField({ verifyTargetFiles: normalizedCurrentFile });
+    else if (workflow === "explain-plan") updateField({ explainFilePath: normalizedCurrentFile });
     else if (workflow === "unit-test-generation") {
-      if (fields.unitTargetKind === "changedFiles") updateField({ unitFilePaths: currentFile });
-      else updateField({ unitTargetKind: "file", unitFilePath: currentFile });
+      if (fields.unitTargetKind === "changedFiles") updateField({ unitFilePaths: normalizedCurrentFile });
+      else updateField({ unitTargetKind: "file", unitFilePath: normalizedCurrentFile });
     } else {
-      updateField({ bugTargetFiles: currentFile });
+      updateField({ bugTargetFiles: normalizedCurrentFile });
     }
   };
 

@@ -42,13 +42,11 @@ export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
   return { status: 200, body: { config, configPresent: deps.configPresent } };
 }
 
-// Route 3 — the full capability registry. The UI filters `kind === "chat"` for model pickers.
-export function handleModels(_ctx?: RouteContext, deps?: UiHandlerDeps): RouteResult {
-  const configured = new Set(deps?.config?.providers.map((provider) => provider.modelId) ?? []);
-  const models =
-    deps === undefined
-      ? listCapabilities()
-      : listCapabilities().filter((model) => configured.has(model.id));
+// Route 3 — models published by the resolved UI gateway config. If no config is resolved, no
+// model-backed run can start, so the endpoint returns an empty list.
+export function handleModels(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const configured = new Set(deps.config?.providers.map((provider) => provider.modelId) ?? []);
+  const models = listCapabilities().filter((model) => configured.has(model.id));
   return { status: 200, body: { models } };
 }
 
