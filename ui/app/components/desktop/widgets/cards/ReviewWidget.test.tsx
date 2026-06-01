@@ -319,6 +319,7 @@ describe("ReviewWidget", () => {
 
     await waitFor(() => {
       const span = screen.getByText("Evidence");
+      expect(span).toHaveAttribute("role", "link");
       expect(span).toHaveAttribute("aria-disabled", "true");
     });
   });

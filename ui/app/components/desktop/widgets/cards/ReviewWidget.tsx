@@ -106,7 +106,7 @@ function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): Re
   }
 
   return (
-    <span className="rv-evidence-link rv-evidence-disabled" aria-disabled="true">
+    <span className="rv-evidence-link rv-evidence-disabled" role="link" aria-disabled="true">
       Evidence
     </span>
   );

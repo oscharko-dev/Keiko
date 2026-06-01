@@ -991,7 +991,7 @@ select.dlg-input { appearance: none; cursor: pointer; }
 .rv-counts { display: flex; align-items: center; gap: 4px; color: var(--fg-muted); }
 /* evidence link — enabled */
 .rv-evidence-link { font-size: 11.5px; color: var(--accent); text-decoration: none; padding: 3px 8px; border-radius: 6px; border: 1px solid var(--accent-line); }
-.rv-evidence-link:hover { background: var(--accent-dim); }
+.rv-evidence-link[href]:hover { background: var(--accent-dim); }
 .rv-evidence-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* evidence link — disabled look */
 .rv-evidence-disabled { font-size: 11.5px; color: var(--fg-faint); padding: 3px 8px; border-radius: 6px; border: 1px solid var(--line-soft); cursor: default; }
