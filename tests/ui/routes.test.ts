@@ -29,8 +29,19 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 34 route contract (base UI, desktop chat, terminal, and files routes)", () => {
-    expect(API_ROUTES).toHaveLength(34);
+  it("declares the 42 route contract (adds 8 /api/browser/* routes for ADR-0017)", () => {
+    expect(API_ROUTES).toHaveLength(42);
+  });
+
+  it("includes the 8 browser-tool routes (#76)", () => {
+    const browserRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/browser"));
+    expect(browserRoutes).toHaveLength(8);
+    expect(browserRoutes.find((r) => r.method === "GET" && r.pattern === "/api/browser/status")).toBeDefined();
+    expect(
+      browserRoutes.find(
+        (r) => r.method === "GET" && r.pattern === "/api/browser/sessions/:sessionId/events",
+      ),
+    ).toBeDefined();
   });
 
   it("includes the run-summary message routes (#66)", () => {

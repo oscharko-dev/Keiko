@@ -102,6 +102,10 @@ export interface RunCounters {
   toolCalls: number;
   commandExecutions: number;
   failureAttempts: number;
+  // ADR-0017 D7 — reserved for future harness-integrated browser sessions. The MVP browser tool
+  // runs as a BFF surface (ADR-0017 D8/D9) and does not flow through the harness loop, so this
+  // field stays at 0 in MVP. Additive, never decremented. See ADR-0017 D7 + D11.
+  browserNavigations: number;
 }
 
 // ─── Run result ───────────────────────────────────────────────────────────────
@@ -313,6 +317,75 @@ export interface RunFailedEvent extends BaseEvent {
   readonly atState: HarnessStateName;
 }
 
+// ─── Browser tool events (ADR-0017 D7) ───────────────────────────────────────
+//
+// These events live outside the harness state machine: the browser tool is a BFF-level surface,
+// not a workflow. The events share BaseEvent's schemaVersion+seq+ts shape so the existing SSE
+// framer and redactor can carry them without change. `originOnly` carries scheme + authority only
+// (never path/query/fragment) so a URL with a token in its querystring never appears in the event
+// stream.
+
+export type BrowserSessionCloseReason = "explicit" | "process-exit" | "chrome-disconnected";
+
+export interface BrowserSessionOpenedEvent extends BaseEvent {
+  readonly type: "browser:session-opened";
+  readonly sessionId: string;
+  readonly cdpPort: number;
+  readonly targetId: string;
+}
+
+export interface BrowserNavigatedEvent extends BaseEvent {
+  readonly type: "browser:navigated";
+  readonly sessionId: string;
+  readonly originOnly: string;
+  readonly httpStatus: number | null;
+}
+
+export interface BrowserScreenshotCapturedEvent extends BaseEvent {
+  readonly type: "browser:screenshot-captured";
+  readonly sessionId: string;
+  readonly captureSeq: number;
+  readonly persisted: boolean;
+  readonly viewportPx: { readonly width: number; readonly height: number };
+  // Present only on persisted=true. Relative to the per-run side-file directory.
+  readonly path?: string | undefined;
+}
+
+export interface BrowserPageContentCapturedEvent extends BaseEvent {
+  readonly type: "browser:page-content-captured";
+  readonly sessionId: string;
+  readonly captureSeq: number;
+  readonly byteLength: number;
+}
+
+export interface BrowserSessionClosedEvent extends BaseEvent {
+  readonly type: "browser:session-closed";
+  readonly sessionId: string;
+  readonly reason: BrowserSessionCloseReason;
+}
+
+export interface BrowserTrustWarningEvent extends BaseEvent {
+  readonly type: "browser:trust-warning";
+  readonly sessionId: string;
+  readonly warning: string;
+}
+
+export interface BrowserErrorEvent extends BaseEvent {
+  readonly type: "browser:error";
+  readonly sessionId: string;
+  readonly code: string;
+  readonly message: string;
+}
+
+export type BrowserEvent =
+  | BrowserSessionOpenedEvent
+  | BrowserNavigatedEvent
+  | BrowserScreenshotCapturedEvent
+  | BrowserPageContentCapturedEvent
+  | BrowserSessionClosedEvent
+  | BrowserTrustWarningEvent
+  | BrowserErrorEvent;
+
 export type HarnessEvent =
   | RunStartedEvent
   | StateTransitionEvent
@@ -330,4 +403,5 @@ export type HarnessEvent =
   | VerificationResultEvent
   | RunCompletedEvent
   | RunCancelledEvent
-  | RunFailedEvent;
+  | RunFailedEvent
+  | BrowserEvent;

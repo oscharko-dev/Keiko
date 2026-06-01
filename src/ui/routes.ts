@@ -50,6 +50,16 @@ import {
   handleFilesPreview,
   handleFilesTree,
 } from "./files.js";
+import {
+  handleBrowserApplyScreenshot,
+  handleBrowserContent,
+  handleBrowserEvents,
+  handleBrowserNavigate,
+  handleBrowserScreenshot,
+  handleBrowserStatus,
+  handleCreateBrowserSession,
+  handleDeleteBrowserSession,
+} from "./browser.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -135,6 +145,15 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
+  // ADR-0017 — browser tool (BYO Chrome over CDP).
+  { method: "GET", pattern: "/api/browser/status", handler: handleBrowserStatus },
+  { method: "POST", pattern: "/api/browser/sessions", handler: handleCreateBrowserSession },
+  { method: "DELETE", pattern: "/api/browser/sessions/:sessionId", handler: handleDeleteBrowserSession },
+  { method: "POST", pattern: "/api/browser/sessions/:sessionId/navigate", handler: handleBrowserNavigate },
+  { method: "POST", pattern: "/api/browser/sessions/:sessionId/screenshot", handler: handleBrowserScreenshot },
+  { method: "POST", pattern: "/api/browser/sessions/:sessionId/apply", handler: handleBrowserApplyScreenshot },
+  { method: "POST", pattern: "/api/browser/sessions/:sessionId/content", handler: handleBrowserContent },
+  { method: "GET", pattern: "/api/browser/sessions/:sessionId/events", handler: handleBrowserEvents },
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured
