@@ -98,6 +98,7 @@ export {
   type TerminalExecutionInput,
   type TerminalExecutionManager,
   type TerminalExecutionResult,
+  type TerminalEventEmitter,
   type TerminalEventEnvelope,
   type TerminalEventKind,
   type TerminalPolicySummary,

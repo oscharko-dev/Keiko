@@ -40,11 +40,12 @@ import {
 } from "./store-handlers.js";
 import { handleCreateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
 import {
-  handleCreateTerminalSession,
-  handleDeleteTerminalSession,
+  handleCreateTerminalExecution,
+  handleDeleteTerminalExecution,
   handleTerminalDirectories,
-  handleTerminalShells,
-} from "./terminal.js";
+  handleTerminalEvents,
+  handleTerminalPolicy,
+} from "./terminal-routes.js";
 import {
   handleFilesDirectories,
   handleFilesPreview,
@@ -136,11 +137,13 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
-  // Desktop terminal — JSON control plane; PTY byte stream is handled via WebSocket upgrade.
-  { method: "GET", pattern: "/api/terminal/shells", handler: handleTerminalShells },
+  // ADR-0018 — bounded permitted-command execution. PTY routes (shells/sessions/WS upgrade) and
+  // the WebSocket upgrade handler in server.ts are removed; commands run via synchronous POST.
+  { method: "GET", pattern: "/api/terminal/policy", handler: handleTerminalPolicy },
   { method: "GET", pattern: "/api/terminal/directories", handler: handleTerminalDirectories },
-  { method: "POST", pattern: "/api/terminal/sessions", handler: handleCreateTerminalSession },
-  { method: "DELETE", pattern: "/api/terminal/sessions/:sessionId", handler: handleDeleteTerminalSession },
+  { method: "POST", pattern: "/api/terminal/executions", handler: handleCreateTerminalExecution },
+  { method: "DELETE", pattern: "/api/terminal/executions/:executionId", handler: handleDeleteTerminalExecution },
+  { method: "GET", pattern: "/api/terminal/events", handler: handleTerminalEvents },
   // Desktop files — read-only selected-root browser and preview control plane.
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },

@@ -324,44 +324,53 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
         },
         deps,
       );
-      const stdoutBytes = Buffer.byteLength(result.stdout, "utf8");
-      const stderrBytes = Buffer.byteLength(result.stderr, "utf8");
-      const counts: CompletionCounts = {
-        exitCode: result.exitCode,
-        signal: null,
-        durationMs: result.durationMs,
-        timedOut: result.timedOut,
-        truncated: result.truncated,
-        stdoutBytes,
-        stderrBytes,
-        startedAt,
-      };
-      this.persistEntry(executionId, input, counts);
-      this.emit({
-        kind: "execution-completed",
-        executionId,
-        payload: {
-          exitCode: result.exitCode,
-          durationMs: result.durationMs,
-          truncated: result.truncated,
-          timedOut: result.timedOut,
-          stdoutByteLength: stdoutBytes,
-          stderrByteLength: stderrBytes,
-        },
-      });
-      return {
-        executionId,
-        exitCode: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        durationMs: result.durationMs,
-        truncated: result.truncated,
-        timedOut: result.timedOut,
-      };
+      return this.handleSuccess(executionId, input, result, startedAt);
     } catch (error) {
       this.recordFailure(executionId, input, entry, error, startedAt);
       throw this.mapError(error, entry);
     }
+  }
+
+  private handleSuccess(
+    executionId: string,
+    input: TerminalExecutionInput,
+    result: import("../tools/types.js").CommandResult,
+    startedAt: number,
+  ): TerminalExecutionResult {
+    const stdoutBytes = Buffer.byteLength(result.stdout, "utf8");
+    const stderrBytes = Buffer.byteLength(result.stderr, "utf8");
+    const counts: CompletionCounts = {
+      exitCode: result.exitCode,
+      signal: null,
+      durationMs: result.durationMs,
+      timedOut: result.timedOut,
+      truncated: result.truncated,
+      stdoutBytes,
+      stderrBytes,
+      startedAt,
+    };
+    this.persistEntry(executionId, input, counts);
+    this.emit({
+      kind: "execution-completed",
+      executionId,
+      payload: {
+        exitCode: result.exitCode,
+        durationMs: result.durationMs,
+        truncated: result.truncated,
+        timedOut: result.timedOut,
+        stdoutByteLength: stdoutBytes,
+        stderrByteLength: stderrBytes,
+      },
+    });
+    return {
+      executionId,
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      durationMs: result.durationMs,
+      truncated: result.truncated,
+      timedOut: result.timedOut,
+    };
   }
 
   private recordFailure(
