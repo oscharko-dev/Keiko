@@ -1,34 +1,18 @@
-// ADR-0018 D6/D11 — terminal-execution evidence entry. Each execution writes one redacted JSON
-// payload via the existing EvidenceStore.put port (atomic O_EXCL + realpath-contained, same
-// guarantees as the run-evidence path). The shape is additive (`kind: "terminal-execution"`) and
-// carries counts only — never command args, never output bytes. The OUTPUT text of an execution
-// is returned in the synchronous POST response (already Layer-1 redacted by `runCommand`) and is
-// never written to disk; this removes a redaction-at-rest surface entirely.
+// ADR-0018 D6/D11 — terminal-execution evidence. Each execution writes a normal
+// EvidenceManifest via the existing EvidenceStore.put port, so the shared evidence list/detail
+// APIs can parse it. The terminal-specific data lives in the standard run/task identity plus one
+// commandExecutions record. It carries counts only — never command args, never output bytes.
 
 import { deepRedactStrings } from "../audit/redaction.js";
 import type { EvidenceStore } from "../audit/store.js";
+import type { EvidenceManifest } from "../audit/types.js";
+import { EVIDENCE_SCHEMA_VERSION } from "../audit/types.js";
+import { HARNESS_VERSION } from "../harness/session.js";
+import type { RunOutcome } from "../harness/types.js";
 
 export const TERMINAL_EVIDENCE_KIND = "terminal-execution" as const;
 
-export interface TerminalEvidenceEntry {
-  readonly kind: typeof TERMINAL_EVIDENCE_KIND;
-  readonly evidenceSchemaVersion: "1";
-  readonly executionId: string;
-  // The bare allowlist-validated executable name (e.g. "git", "grep"). Never includes args.
-  readonly command: string;
-  // The number of args supplied — used for the audit trail; args themselves may carry paths.
-  readonly argCount: number;
-  readonly projectId: string;
-  readonly exitCode: number | null;
-  readonly signal: string | null;
-  readonly durationMs: number;
-  readonly timedOut: boolean;
-  readonly truncated: boolean;
-  readonly stdoutBytes: number;
-  readonly stderrBytes: number;
-  // Epoch-ms timestamp captured at the spawn boundary.
-  readonly startedAt: number;
-}
+export type TerminalEvidenceEntry = EvidenceManifest;
 
 export interface TerminalEvidenceInput {
   readonly executionId: string;
@@ -45,24 +29,52 @@ export interface TerminalEvidenceInput {
   readonly startedAt: number;
 }
 
-// PURE. Builds the on-disk entry from a finished execution. The executionId and projectId carry
-// only opaque identifiers; numeric fields cannot leak secrets.
+function terminalOutcome(input: TerminalEvidenceInput): RunOutcome {
+  if (input.signal !== null) return "cancelled";
+  if (input.timedOut) return "limit-exceeded";
+  if (input.exitCode === null) return "failed";
+  return "completed";
+}
+
+// PURE. Builds the on-disk manifest from a finished execution. The executionId and projectId carry
+// only identifiers; args and output are deliberately excluded.
 export function buildTerminalEvidenceEntry(input: TerminalEvidenceInput): TerminalEvidenceEntry {
+  const runId = input.executionId;
   return {
-    kind: TERMINAL_EVIDENCE_KIND,
-    evidenceSchemaVersion: "1",
-    executionId: input.executionId,
-    command: input.command,
-    argCount: input.argCount,
-    projectId: input.projectId,
-    exitCode: input.exitCode,
-    signal: input.signal,
-    durationMs: input.durationMs,
-    timedOut: input.timedOut,
-    truncated: input.truncated,
-    stdoutBytes: input.stdoutBytes,
-    stderrBytes: input.stderrBytes,
-    startedAt: input.startedAt,
+    evidenceSchemaVersion: EVIDENCE_SCHEMA_VERSION,
+    run: {
+      runId,
+      fingerprint: runId,
+      harnessVersion: HARNESS_VERSION,
+      taskType: TERMINAL_EVIDENCE_KIND,
+      outcome: terminalOutcome(input),
+      startedAt: input.startedAt,
+      finishedAt: input.startedAt + input.durationMs,
+      durationMs: input.durationMs,
+    },
+    model: { modelId: "terminal-tool", costClass: "unknown" },
+    usageTotals: { promptTokens: 0, completionTokens: 0, requestCount: 0, totalLatencyMs: 0 },
+    context: {
+      workspaceRoot: input.projectId,
+      totalCandidates: 0,
+      usedBytes: 0,
+      budgetBytes: 0,
+      droppedForBudget: 0,
+      entries: [],
+    },
+    stateTransitions: [],
+    toolCalls: [],
+    commandExecutions: [
+      {
+        seq: 1,
+        ts: input.startedAt,
+        executable: input.command,
+        argCount: input.argCount,
+        exitCode: input.exitCode,
+        timedOut: input.timedOut,
+        durationMs: input.durationMs,
+      },
+    ],
   };
 }
 
@@ -75,5 +87,5 @@ export function appendTerminalEvidence(
   redact: (input: string) => string,
 ): string {
   const safe = deepRedactStrings(entry, redact) as TerminalEvidenceEntry;
-  return store.put(safe.executionId, JSON.stringify(safe, null, 2));
+  return store.put(safe.run.runId, JSON.stringify(safe, null, 2));
 }

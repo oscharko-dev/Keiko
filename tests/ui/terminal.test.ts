@@ -2,12 +2,13 @@
 // manager exercises the real allowlist + cwd containment + redaction passthrough without a real
 // child process. Route-level coverage lives in terminal-routes.test.ts.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listEvidence, loadEvidence } from "../../src/audit/index-api.js";
 import {
   createTerminalExecutionManager,
   type TerminalEventEnvelope,
@@ -103,11 +104,21 @@ function makeSpawn(opts: FakeChildOptions = {}): SpawnFn {
   return (_command, _args, _options) => fakeChild(opts);
 }
 
+function makeFailingEvidenceStore(): EvidenceStore {
+  return {
+    ...createInMemoryEvidenceStore(),
+    put: (): string => {
+      throw new Error("evidence write failed");
+    },
+  };
+}
+
 // ── Test fixture ───────────────────────────────────────────────────────────────
 
 let workspaceRoot: string;
 let store: UiStore;
 let evidenceStore: EvidenceStore;
+let outsideRoots: string[];
 
 beforeEach(() => {
   ensureProcessKillPatched();
@@ -116,6 +127,7 @@ beforeEach(() => {
   store = createInMemoryUiStore();
   store.createProject(workspaceRoot, "test-project");
   evidenceStore = createInMemoryEvidenceStore();
+  outsideRoots = [];
 });
 
 afterEach(() => {
@@ -123,6 +135,9 @@ afterEach(() => {
   processKillPatched = false;
   store.close();
   rmSync(workspaceRoot, { recursive: true, force: true });
+  for (const root of outsideRoots) {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 function makeManager(
@@ -174,6 +189,31 @@ describe("TerminalExecutionManager — happy path", () => {
     expect(events[0]?.kind).toBe("execution-started");
     expect(events[1]?.kind).toBe("execution-completed");
   });
+
+  it("allows scalar option values for permitted read-only commands", async () => {
+    const manager = makeManager(makeSpawn({ stdout: "ok" }));
+    await expect(
+      manager.execute({ projectId: workspaceRoot, command: "head", args: ["-n", "10", "file.txt"] }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+    await expect(
+      manager.execute({ projectId: workspaceRoot, command: "tail", args: ["-n", "5", "file.txt"] }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+    await expect(
+      manager.execute({ projectId: workspaceRoot, command: "tree", args: ["-L", "2"] }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+  });
+
+  it("allows grep exclusion files inside the selected project without consuming the pattern", async () => {
+    writeFileSync(join(workspaceRoot, "patterns.txt"), "node_modules\n", "utf8");
+    const manager = makeManager(makeSpawn({ stdout: "ok" }));
+    await expect(
+      manager.execute({
+        projectId: workspaceRoot,
+        command: "grep",
+        args: ["--exclude-from", "patterns.txt", "needle", "."],
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+  });
 });
 
 describe("TerminalExecutionManager — denials and validation", () => {
@@ -216,6 +256,90 @@ describe("TerminalExecutionManager — denials and validation", () => {
         args: [".", "-exec", "rm", "{}", ";"],
       }),
     ).rejects.toMatchObject({ code: "COMMAND_DENIED" });
+  });
+
+  it("rejects an absolute file path operand outside the selected project before spawn", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-term-outside-"));
+    outsideRoots.push(outside);
+    const outsideFile = join(outside, "secret.txt");
+    writeFileSync(outsideFile, "secret\n", "utf8");
+    const manager = makeManager();
+    await expect(
+      manager.execute({
+        projectId: workspaceRoot,
+        command: "cat",
+        args: [outsideFile],
+      }),
+    ).rejects.toMatchObject({ code: "CWD_OUTSIDE_PROJECT" });
+  });
+
+  it("rejects a symlink operand whose real target escapes the selected project before spawn", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-term-outside-"));
+    outsideRoots.push(outside);
+    const outsideFile = join(outside, "secret.txt");
+    const symlinkPath = join(workspaceRoot, "leak.txt");
+    writeFileSync(outsideFile, "secret\n", "utf8");
+    symlinkSync(outsideFile, symlinkPath);
+    const manager = makeManager();
+    await expect(
+      manager.execute({
+        projectId: workspaceRoot,
+        command: "cat",
+        args: [symlinkPath],
+      }),
+    ).rejects.toMatchObject({ code: "CWD_OUTSIDE_PROJECT" });
+  });
+
+  it("rejects git -C / status even though the subcommand is otherwise read-only", async () => {
+    const manager = makeManager();
+    await expect(
+      manager.execute({
+        projectId: workspaceRoot,
+        command: "git",
+        args: ["-C", "/", "status"],
+      }),
+    ).rejects.toMatchObject({ code: "COMMAND_DENIED" });
+  });
+
+  it("rejects npm --prefix outside the selected project before spawn", async () => {
+    const manager = makeManager();
+    await expect(
+      manager.execute({
+        projectId: workspaceRoot,
+        command: "npm",
+        args: ["--prefix", "/tmp", "ls"],
+      }),
+    ).rejects.toMatchObject({ code: "COMMAND_DENIED" });
+  });
+
+  it("rejects find path-bearing predicates outside the selected project before spawn", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-term-outside-"));
+    outsideRoots.push(outside);
+    const outsideFile = join(outside, "reference.txt");
+    writeFileSync(outsideFile, "secret\n", "utf8");
+    const manager = makeManager();
+    await expect(
+      manager.execute({
+        projectId: workspaceRoot,
+        command: "find",
+        args: [".", "-newer", outsideFile],
+      }),
+    ).rejects.toMatchObject({ code: "CWD_OUTSIDE_PROJECT" });
+  });
+
+  it("rejects grep file-bearing flags outside the selected project before spawn", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-term-outside-"));
+    outsideRoots.push(outside);
+    const outsideFile = join(outside, "patterns.txt");
+    writeFileSync(outsideFile, "secret\n", "utf8");
+    const manager = makeManager();
+    await expect(
+      manager.execute({
+        projectId: workspaceRoot,
+        command: "grep",
+        args: [`--exclude-from=${outsideFile}`, "secret", "."],
+      }),
+    ).rejects.toMatchObject({ code: "CWD_OUTSIDE_PROJECT" });
   });
 });
 
@@ -283,6 +407,66 @@ describe("TerminalExecutionManager — cancel/timeout/concurrency", () => {
       }
     }
     await Promise.all(pendings);
+  });
+});
+
+describe("TerminalExecutionManager — evidence persistence", () => {
+  it("fails closed when evidence persistence throws", async () => {
+    evidenceStore = makeFailingEvidenceStore();
+    const manager = makeManager(makeSpawn({ stdout: "ok\n" }));
+    const events = collect(manager);
+    await expect(
+      manager.execute({
+        projectId: workspaceRoot,
+        command: "pwd",
+        args: [],
+      }),
+    ).rejects.toMatchObject({ code: "EVIDENCE_WRITE_FAILED" });
+    expect(events.map((event) => event.kind)).toEqual(["execution-started", "execution-failed"]);
+    expect(events[1]?.payload).toMatchObject({ code: "EVIDENCE_WRITE_FAILED" });
+  });
+
+  it("emits a terminal SSE failure when evidence persistence fails after command timeout", async () => {
+    evidenceStore = makeFailingEvidenceStore();
+    const manager = createTerminalExecutionManager({
+      store,
+      evidenceStore,
+      policy: {
+        envAllowlist: ["PATH"],
+        network: "inherit",
+        maxOutputBytes: 1024,
+        defaultTimeoutMs: 50,
+        terminationGraceMs: 10,
+      },
+      processEnv: { PATH: "/usr/bin" },
+      runDeps: {
+        spawn: makeSpawn({ hangs: true }),
+        resolveExecutable: (command) => command,
+      },
+    });
+    const events = collect(manager);
+    await expect(
+      manager.execute({ projectId: workspaceRoot, command: "ls", args: [] }),
+    ).rejects.toMatchObject({ code: "EVIDENCE_WRITE_FAILED" });
+    expect(events.map((event) => event.kind)).toEqual(["execution-started", "execution-failed"]);
+    expect(events[1]?.payload).toMatchObject({ code: "EVIDENCE_WRITE_FAILED" });
+  });
+
+  it("writes terminal evidence as a standard manifest parseable by listEvidence/loadEvidence", async () => {
+    const manager = makeManager(makeSpawn({ stdout: "ok\n" }));
+    const result = await manager.execute({
+      projectId: workspaceRoot,
+      command: "pwd",
+      args: [],
+    });
+    const entries = listEvidence(evidenceStore);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.runId).toBe(result.executionId);
+    expect(entries[0]?.taskType).toBe("terminal-execution");
+    const manifest = loadEvidence(evidenceStore, result.executionId);
+    expect(manifest?.run.runId).toBe(result.executionId);
+    expect(manifest?.run.taskType).toBe("terminal-execution");
+    expect(manifest?.commandExecutions[0]?.executable).toBe("pwd");
   });
 });
 
