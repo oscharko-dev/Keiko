@@ -91,15 +91,24 @@ export {
   handleCreateMessage,
 } from "./store-handlers.js";
 export {
-  createPtyTerminalSessionManager,
-  PtyTerminalSessionManager,
-  TerminalError,
-  type TerminalConfig,
+  createTerminalExecutionManager,
+  buildTerminalPolicySummary,
+  listDirectories,
   type TerminalDirectoryListing,
-  type TerminalSessionManager,
-  type TerminalSessionMeta,
-  type TerminalShell,
+  type TerminalExecutionInput,
+  type TerminalExecutionManager,
+  type TerminalExecutionResult,
+  type TerminalEventEmitter,
+  type TerminalEventEnvelope,
+  type TerminalEventKind,
+  type TerminalPolicySummary,
 } from "./terminal.js";
+export { TerminalToolError, type TerminalErrorCode } from "./terminal-errors.js";
+export {
+  buildTerminalEvidenceEntry,
+  appendTerminalEvidence,
+  type TerminalEvidenceEntry,
+} from "./terminal-evidence.js";
 export {
   listFilesDirectories,
   readFilesPreview,

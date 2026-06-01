@@ -29,8 +29,8 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 42 route contract (adds 8 /api/browser/* routes for ADR-0017)", () => {
-    expect(API_ROUTES).toHaveLength(42);
+  it("declares the 43 route contract (ADR-0017 browser + ADR-0018 terminal: -4 PTY, +5 exec)", () => {
+    expect(API_ROUTES).toHaveLength(43);
   });
 
   it("includes the 8 browser-tool routes (#76)", () => {
@@ -69,19 +69,32 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
-  it("includes the desktop terminal control routes", () => {
+  it("includes the ADR-0018 terminal tool routes (no PTY surface)", () => {
     expect(
-      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/terminal/shells"),
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/terminal/policy"),
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/terminal/directories"),
     ).toBeDefined();
     expect(
-      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/terminal/sessions"),
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/terminal/executions"),
     ).toBeDefined();
     expect(
-      API_ROUTES.find((r) => r.method === "DELETE" && r.pattern === "/api/terminal/sessions/:sessionId"),
+      API_ROUTES.find(
+        (r) =>
+          r.method === "DELETE" && r.pattern === "/api/terminal/executions/:executionId",
+      ),
     ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/terminal/events"),
+    ).toBeDefined();
+    // PTY routes must be gone.
+    expect(
+      API_ROUTES.find((r) => r.pattern === "/api/terminal/shells"),
+    ).toBeUndefined();
+    expect(
+      API_ROUTES.find((r) => r.pattern === "/api/terminal/sessions"),
+    ).toBeUndefined();
   });
 
   it("includes the desktop files read-only routes", () => {

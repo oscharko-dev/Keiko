@@ -1,264 +1,349 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
-import type { FitAddon } from "@xterm/addon-fit";
-import type { ITheme, Terminal as XTerm } from "@xterm/xterm";
+// ADR-0018 D11 — TerminalWidget: bounded permitted-command execution surface. The user picks a
+// command from the policy allowlist, supplies args, picks a cwd inside the project, and runs.
+// The synchronous POST returns redacted stdout/stderr; SSE delivers live status of in-flight
+// executions across other tabs. No xterm, no WebSocket, no shell.
+
 import {
-  type CreateTerminalSessionInput,
-  createTerminalSession,
-  deleteTerminalSession,
-} from "../../../../../lib/api";
-import type { TerminalSessionMeta } from "../../../../../lib/types";
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type ReactNode,
+} from "react";
+import { ApiError } from "../../../../../lib/api";
+import {
+  abortTerminalExecution,
+  createTerminalExecution,
+  fetchTerminalDirectories,
+  fetchTerminalPolicy,
+  terminalEventsUrl,
+} from "../../../../../lib/terminal-api";
+import type {
+  TerminalDirectoryEntry,
+  TerminalEventEnvelope,
+  TerminalExecutionResult,
+  TerminalPolicySummary,
+} from "../../../../../lib/types";
 
 interface TerminalWidgetProps {
+  readonly projectPath?: string;
   readonly cwd?: string;
-  readonly shell?: string;
 }
 
-type TerminalServerMessage =
-  | { readonly type: "ready"; readonly session: TerminalSessionMeta }
-  | { readonly type: "output"; readonly data: string }
-  | { readonly type: "exit"; readonly exitCode: number; readonly signal?: number }
-  | { readonly type: "error"; readonly message: string };
-
-function wsUrl(path: string): string {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}${path}`;
+interface ErrorState {
+  readonly code: string;
+  readonly message: string;
 }
 
-function parseServerMessage(raw: string): TerminalServerMessage | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return null;
+const MAX_EVENT_LOG = 30;
+
+function errorFromUnknown(value: unknown): ErrorState {
+  if (value instanceof ApiError) return { code: value.code, message: value.message };
+  if (value instanceof Error) return { code: "INTERNAL", message: value.message };
+  return { code: "INTERNAL", message: "Unexpected error." };
+}
+
+function parseArgs(input: string): readonly string[] {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) return [];
+  // Single-pass split: whitespace-separated tokens. We intentionally do NOT parse quotes; the
+  // BFF re-validates against the allowlist regardless of how the args are split, and the
+  // permitted commands here all accept the bare-token convention.
+  return trimmed.split(/\s+/);
+}
+
+function eventLabel(kind: TerminalEventEnvelope["kind"]): string {
+  switch (kind) {
+    case "execution-started":
+      return "started";
+    case "execution-completed":
+      return "completed";
+    case "execution-failed":
+      return "failed";
+    case "execution-cancelled":
+      return "cancelled";
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-  const msg = parsed as Record<string, unknown>;
-  if (msg.type === "ready" && typeof msg.session === "object" && msg.session !== null) {
-    return { type: "ready", session: msg.session as TerminalSessionMeta };
-  }
-  if (msg.type === "output" && typeof msg.data === "string") {
-    return { type: "output", data: msg.data };
-  }
-  if (msg.type === "exit" && typeof msg.exitCode === "number") {
-    const exit: { type: "exit"; exitCode: number; signal?: number } = {
-      type: "exit",
-      exitCode: msg.exitCode,
-    };
-    if (typeof msg.signal === "number") exit.signal = msg.signal;
-    return exit;
-  }
-  if (msg.type === "error" && typeof msg.message === "string") {
-    return { type: "error", message: msg.message };
-  }
-  return null;
 }
 
-function sendInput(socket: WebSocket | null, data: string): void {
-  if (socket?.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({ type: "input", data }));
+function eventDetail(event: TerminalEventEnvelope): string {
+  const p = event.payload;
+  if (event.kind === "execution-completed") {
+    const exit =
+      typeof p.exitCode === "number" || p.exitCode === null ? `exit ${String(p.exitCode)}` : "";
+    const dur = typeof p.durationMs === "number" ? `${String(p.durationMs)}ms` : "";
+    return [exit, dur].filter(Boolean).join(" · ");
+  }
+  if (event.kind === "execution-failed") {
+    return typeof p.code === "string" ? p.code : "";
+  }
+  if (event.kind === "execution-started") {
+    return typeof p.command === "string" ? p.command : "";
+  }
+  return "";
 }
 
-function sendResize(socket: WebSocket | null, term: XTerm): void {
-  if (socket?.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-}
-
-function terminalTheme(): ITheme {
-  return {
-    background: "#111512",
-    foreground: "#c8d2cb",
-    cursor: "#4EBA87",
-    selectionBackground: "#4EBA8740",
-    black: "#101311",
-    red: "#ef7b68",
-    green: "#4EBA87",
-    yellow: "#d9b15f",
-    blue: "#7aa7ff",
-    magenta: "#c78cff",
-    cyan: "#70d6c7",
-    white: "#d7ded9",
-    brightBlack: "#6f7a73",
-    brightRed: "#ff937f",
-    brightGreen: "#72dca6",
-    brightYellow: "#f0ca79",
-    brightBlue: "#9bbdff",
-    brightMagenta: "#ddb0ff",
-    brightCyan: "#91eee0",
-    brightWhite: "#f4f8f5",
-  };
-}
-
-export function TerminalWidget({ cwd, shell }: TerminalWidgetProps): ReactNode {
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const socketRef = useRef<WebSocket | null>(null);
-  const termRef = useRef<XTerm | null>(null);
-  const fitRef = useRef<FitAddon | null>(null);
-  const sessionIdRef = useRef<string | null>(null);
-  const [status, setStatus] = useState<"starting" | "connected" | "exited" | "failed">("starting");
-  const [meta, setMeta] = useState<TerminalSessionMeta | null>(null);
-  const [restartKey, setRestartKey] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
+  const [policy, setPolicy] = useState<TerminalPolicySummary | null>(null);
+  const [command, setCommand] = useState<string>("");
+  const [argsInput, setArgsInput] = useState<string>("");
+  const [cwdInput, setCwdInput] = useState<string>(props.cwd ?? "");
+  const [projectInput, setProjectInput] = useState<string>(props.projectPath ?? "");
+  const [running, setRunning] = useState(false);
+  // inFlightExecutionId is captured from the SSE execution-started event after submit. It is
+  // null until the BFF emits the event (typically <50ms after POST), so Cancel is shown-but-
+  // disabled during that brief window. Cleared on any terminal event that ends the run.
+  const [inFlightExecutionId, setInFlightExecutionId] = useState<string | null>(null);
+  const [result, setResult] = useState<TerminalExecutionResult | null>(null);
+  const [error, setError] = useState<ErrorState | null>(null);
+  const [events, setEvents] = useState<readonly TerminalEventEnvelope[]>([]);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const runningRef = useRef(false);
+  const [cwdSuggestions, setCwdSuggestions] = useState<readonly TerminalDirectoryEntry[]>([]);
 
   useEffect(() => {
     let cancelled = false;
-    let cleanupStarted = false;
-    let dataDisposable: { dispose: () => void } | null = null;
-    let resizeObserver: ResizeObserver | null = null;
-    let resizeFrame = 0;
-
-    async function cleanupSession(): Promise<void> {
-      if (cleanupStarted) return;
-      cleanupStarted = true;
-      const sessionId = sessionIdRef.current;
-      sessionIdRef.current = null;
-      if (sessionId !== null) {
-        try {
-          await deleteTerminalSession(sessionId);
-        } catch {
-          // Session cleanup is best-effort; the server also has an idle TTL.
-        }
-      }
-    }
-
-    async function start(): Promise<void> {
-      const host = hostRef.current;
-      if (host === null) return;
-      setStatus("starting");
-      setError(null);
-      host.textContent = "";
-      const [{ Terminal }, { FitAddon }] = await Promise.all([
-        import("@xterm/xterm"),
-        import("@xterm/addon-fit"),
-      ]);
-      if (cancelled) return;
-      const term = new Terminal({
-        allowProposedApi: false,
-        convertEol: true,
-        cursorBlink: true,
-        cursorStyle: "block",
-        fontFamily: "JetBrains Mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
-        fontSize: 12,
-        lineHeight: 1.25,
-        scrollback: 8_000,
-        theme: terminalTheme(),
+    void fetchTerminalPolicy()
+      .then((p) => {
+        if (cancelled) return;
+        setPolicy(p);
+        setCommand((current) => (current.length > 0 ? current : (p.commands[0] ?? "")));
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setError(errorFromUnknown(err));
       });
-      const fit = new FitAddon();
-      term.loadAddon(fit);
-      term.open(host);
-      fit.fit();
-      termRef.current = term;
-      fitRef.current = fit;
-      const optionalInput: Pick<CreateTerminalSessionInput, "cwd" | "shellId"> = {
-        ...(cwd !== undefined && cwd.length > 0 ? { cwd } : {}),
-        ...(shell !== undefined && shell.length > 0 ? { shellId: shell } : {}),
-      };
-      const sessionInput: CreateTerminalSessionInput = {
-        ...optionalInput,
-        cols: term.cols,
-        rows: term.rows,
-      };
-      const created = await createTerminalSession(sessionInput);
-      if (cancelled) {
-        await deleteTerminalSession(created.session.id);
-        return;
-      }
-      sessionIdRef.current = created.session.id;
-      setMeta(created.session);
-      const socket = new WebSocket(wsUrl(created.webSocketPath));
-      socketRef.current = socket;
-      socket.addEventListener("open", () => {
-        setStatus("connected");
-        sendResize(socket, term);
-        term.focus();
-      });
-      socket.addEventListener("message", (event) => {
-        if (typeof event.data !== "string") return;
-        const message = parseServerMessage(event.data);
-        if (message === null) return;
-        if (message.type === "ready") {
-          setMeta(message.session);
-          return;
-        }
-        if (message.type === "output") {
-          term.write(message.data);
-          return;
-        }
-        if (message.type === "exit") {
-          setStatus("exited");
-          term.write(`\r\n[process exited with code ${String(message.exitCode)}]\r\n`);
-          return;
-        }
-        setError(message.message);
-        term.write(`\r\n${message.message}\r\n`);
-      });
-      socket.addEventListener("close", () => {
-        setStatus((current) => (current === "failed" ? current : "exited"));
-      });
-      socket.addEventListener("error", () => {
-        setStatus("failed");
-        setError("Terminal WebSocket connection failed.");
-      });
-      dataDisposable = term.onData((data) => sendInput(socketRef.current, data));
-      if (typeof ResizeObserver !== "undefined") {
-        resizeObserver = new ResizeObserver(() => {
-          cancelAnimationFrame(resizeFrame);
-          resizeFrame = requestAnimationFrame(() => {
-            try {
-              fit.fit();
-              sendResize(socketRef.current, term);
-            } catch {
-              // The terminal can be mid-dispose during React unmount.
-            }
-          });
-        });
-        resizeObserver.observe(host);
-      }
-    }
-
-    void start().catch((err: unknown) => {
-      const message = err instanceof Error ? err.message : "Terminal could not be started.";
-      setStatus("failed");
-      setError(message);
-      termRef.current?.write(`\r\n${message}\r\n`);
-    });
-
-    return () => {
+    return (): void => {
       cancelled = true;
-      cancelAnimationFrame(resizeFrame);
-      resizeObserver?.disconnect();
-      dataDisposable?.dispose();
-      socketRef.current?.close(1000, "terminal widget disposed");
-      socketRef.current = null;
-      fitRef.current = null;
-      termRef.current?.dispose();
-      termRef.current = null;
-      void cleanupSession();
     };
-  }, [cwd, shell, restartKey]);
+  }, []);
 
-  const label = meta === null
-    ? "starting"
-    : `${meta.shellLabel} · ${meta.cwd}`;
+  // Populate the cwd datalist suggestions from the BFF directory picker. Refetches whenever
+  // the project path or the typed cwd changes. Errors are silently swallowed — suggestions
+  // are a UX aid, not a required control.
+  useEffect(() => {
+    if (projectInput.length === 0) {
+      setCwdSuggestions([]);
+      return;
+    }
+    let cancelled = false;
+    void fetchTerminalDirectories(projectInput, cwdInput.length > 0 ? cwdInput : undefined)
+      .then((listing) => {
+        if (!cancelled) setCwdSuggestions(listing.entries);
+      })
+      .catch(() => {
+        if (!cancelled) setCwdSuggestions([]);
+      });
+    return (): void => {
+      cancelled = true;
+    };
+  }, [projectInput, cwdInput]);
+
+  useEffect(() => {
+    const es = new EventSource(terminalEventsUrl());
+    eventSourceRef.current = es;
+    const onMessage = (ev: MessageEvent<string>): void => {
+      try {
+        const parsed = JSON.parse(ev.data) as TerminalEventEnvelope;
+        // Capture the executionId for the cancel button from the first execution-started event
+        // after submit. Single-capture is correct because submit is guarded by `if (running) return`
+        // — only one execution can be in flight at a time from this widget instance.
+        if (parsed.kind === "execution-started" && runningRef.current) {
+          setInFlightExecutionId((current) => (current !== null ? current : parsed.executionId));
+        }
+        // Clear the captured id when the run ends so the next submit starts clean.
+        if (
+          parsed.kind === "execution-completed" ||
+          parsed.kind === "execution-failed" ||
+          parsed.kind === "execution-cancelled"
+        ) {
+          setInFlightExecutionId((current) => {
+            if (current === null || current !== parsed.executionId) return current;
+            return null;
+          });
+        }
+        setEvents((current) => {
+          const next = [parsed, ...current];
+          return next.length > MAX_EVENT_LOG ? next.slice(0, MAX_EVENT_LOG) : next;
+        });
+      } catch {
+        // Ignore unparsable frames; the BFF never emits malformed JSON.
+      }
+    };
+    for (const kind of [
+      "execution-started",
+      "execution-completed",
+      "execution-failed",
+      "execution-cancelled",
+    ] as const) {
+      es.addEventListener(`terminal:${kind}`, onMessage as EventListener);
+    }
+    return (): void => {
+      es.close();
+      eventSourceRef.current = null;
+    };
+  }, []);
+
+  const onSubmit = useCallback(
+    async (e: FormEvent<HTMLFormElement>): Promise<void> => {
+      e.preventDefault();
+      if (running) return;
+      setError(null);
+      setResult(null);
+      setInFlightExecutionId(null);
+      runningRef.current = true;
+      setRunning(true);
+      try {
+        const next = await createTerminalExecution({
+          projectId: projectInput,
+          command,
+          args: parseArgs(argsInput),
+          ...(cwdInput.length > 0 ? { cwd: cwdInput } : {}),
+        });
+        setResult(next);
+      } catch (err: unknown) {
+        setError(errorFromUnknown(err));
+      } finally {
+        runningRef.current = false;
+        setRunning(false);
+        setInFlightExecutionId(null);
+      }
+    },
+    [argsInput, command, cwdInput, projectInput, running],
+  );
+
+  const onAbort = useCallback(async (): Promise<void> => {
+    if (inFlightExecutionId === null) return;
+    try {
+      await abortTerminalExecution(inFlightExecutionId);
+    } catch (err: unknown) {
+      setError(errorFromUnknown(err));
+    }
+  }, [inFlightExecutionId]);
+
+  const limits = useMemo(() => policy?.limits ?? null, [policy]);
 
   return (
     <div className="terminal">
-      <div className="tm-bar">
-        <span className="tm-status" data-state={status}>{status}</span>
-        <span className="tm-label mono" title={label}>{label}</span>
-        <button
-          type="button"
-          className="tm-action"
-          onClick={() => setRestartKey((current) => current + 1)}
-          title="Restart terminal"
-        >
-          Restart
-        </button>
-      </div>
-      <div ref={hostRef} className="tm-host" />
-      {error !== null ? <div className="tm-error">{error}</div> : null}
+      <form className="tm-form" onSubmit={(e) => void onSubmit(e)}>
+        <label className="tm-field">
+          <span>Project path</span>
+          <input
+            type="text"
+            value={projectInput}
+            onChange={(e) => setProjectInput(e.target.value)}
+            placeholder="/absolute/path/to/project"
+            required
+          />
+        </label>
+        <label className="tm-field">
+          <span>Command</span>
+          <select
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            disabled={policy === null}
+            required
+          >
+            {policy?.commands.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="tm-field">
+          <span>Args (space-separated)</span>
+          <input
+            type="text"
+            value={argsInput}
+            onChange={(e) => setArgsInput(e.target.value)}
+            placeholder="e.g. -la src"
+          />
+        </label>
+        <label className="tm-field">
+          <span>Working directory (optional)</span>
+          <input
+            type="text"
+            value={cwdInput}
+            onChange={(e) => setCwdInput(e.target.value)}
+            placeholder="(project root)"
+            list="tm-cwd-suggestions"
+          />
+          <datalist id="tm-cwd-suggestions">
+            {cwdSuggestions.map((entry) => (
+              <option key={entry.path} value={entry.path} />
+            ))}
+          </datalist>
+        </label>
+        <div className="tm-actions">
+          <button type="submit" className="tm-action" disabled={running || policy === null}>
+            {running ? "Running…" : "Run"}
+          </button>
+          {running ? (
+            <button
+              type="button"
+              className="tm-action"
+              disabled={inFlightExecutionId === null}
+              onClick={() => void onAbort()}
+            >
+              Cancel
+            </button>
+          ) : null}
+        </div>
+        {limits !== null ? (
+          <p className="tm-limits">
+            Limits: {limits.maxOutputBytes} bytes output, {limits.defaultTimeoutMs} ms timeout
+          </p>
+        ) : null}
+      </form>
+
+      {error !== null ? (
+        <div className="tm-error" role="alert">
+          <span className="tm-error-text">
+            <strong>{error.code}</strong>: {error.message}
+          </span>
+          {/* B3 — dismissible so keyboard users can clear the error without resubmitting */}
+          <button
+            type="button"
+            className="tm-error-dismiss"
+            aria-label="Dismiss error"
+            onClick={() => setError(null)}
+          >
+            ✕
+          </button>
+        </div>
+      ) : null}
+
+      {result !== null ? (
+        /* B2 — role="status" + aria-live="polite" satisfies WCAG 4.1.3 */
+        <div className="tm-result" role="status" aria-live="polite">
+          <div className="tm-badges">
+            <span className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}>
+              exit {String(result.exitCode)}
+            </span>
+            <span className="tm-badge">{result.durationMs} ms</span>
+            {result.truncated ? <span className="tm-badge tm-badge-warn">truncated</span> : null}
+            {result.timedOut ? <span className="tm-badge tm-badge-warn">timed out</span> : null}
+          </div>
+          {result.stdout.length > 0 ? (
+            <pre className="tm-stdout">{result.stdout}</pre>
+          ) : null}
+          {result.stderr.length > 0 ? (
+            <pre className="tm-stderr">{result.stderr}</pre>
+          ) : null}
+        </div>
+      ) : null}
+
+      <ul className="tm-events" aria-label="Recent terminal events">
+        {events.map((event, idx) => (
+          <li key={`${event.executionId}-${String(idx)}-${event.kind}`} className="tm-event">
+            <span className="tm-event-kind">{eventLabel(event.kind)}</span>
+            <span className="tm-event-detail">{eventDetail(event)}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

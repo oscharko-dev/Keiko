@@ -27,7 +27,10 @@ import {
   resolveUiDbPath,
   type UiStore,
 } from "./store/index.js";
-import { createPtyTerminalSessionManager, type TerminalSessionManager } from "./terminal.js";
+import {
+  createTerminalExecutionManager,
+  type TerminalExecutionManager,
+} from "./terminal.js";
 import {
   createBrowserSessionManager,
   type BrowserSessionManager,
@@ -66,8 +69,9 @@ export interface UiHandlerDeps {
   // Resolved UI database file path when known. Project onboarding uses this to prevent the UI DB
   // and selected repositories from overlapping on disk.
   readonly uiDbPath?: string | undefined;
-  // Local PTY terminal manager. Optional for legacy tests; production wiring creates one per BFF.
-  readonly terminal?: TerminalSessionManager | undefined;
+  // ADR-0018 — bounded permitted-command execution manager. Optional for legacy tests; production
+  // wiring creates one per BFF and injects the UI store for the projectId → workspaceRoot lookup.
+  readonly terminal?: TerminalExecutionManager | undefined;
   // ADR-0017 — browser tool session manager (BYO Chrome over CDP). Optional so existing tests
   // that do not exercise /api/browser/* keep their fixtures unchanged.
   readonly browser?: BrowserSessionManager | undefined;
@@ -216,9 +220,14 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     redactionSecrets: secrets,
     store: uiStore,
     uiDbPath: resolvedUiDbPath,
-    terminal: createPtyTerminalSessionManager({
-      env: options.env,
-      redactor: liveRedactor,
+    terminal: createTerminalExecutionManager({
+      store: uiStore,
+      evidenceStore,
+      processEnv: options.env,
+      redactor: (value: string): string => {
+        const redacted = liveRedactor(value);
+        return typeof redacted === "string" ? redacted : value;
+      },
     }),
     browser: createBrowserSessionManager({
       evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),

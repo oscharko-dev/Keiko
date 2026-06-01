@@ -26,7 +26,6 @@ import {
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import { createTerminalWebSocketGateway } from "./terminal.js";
 
 export const DEFAULT_UI_PORT = 4319;
 export const UI_HOST = "127.0.0.1";
@@ -193,20 +192,16 @@ function handle(
 }
 
 // Creates the BFF server. The caller binds it with `server.listen(deps.port, UI_HOST)` so it never
-// listens on a non-loopback interface.
+// listens on a non-loopback interface. The previous PTY WebSocket upgrade handler is removed —
+// the terminal tool is now bounded-exec over plain HTTP (ADR-0018 D1/D8).
 export function createUiServer(deps: UiServerDeps): Server {
   const handlerDeps = deps.handlerDeps ?? fallbackDeps();
-  const terminalWs = createTerminalWebSocketGateway(handlerDeps, deps.port);
   const server = createServer((req, res) => {
     handle(deps, handlerDeps, req, res);
   });
-  server.on("upgrade", (req, socket, head) => {
-    if (terminalWs.handleUpgrade(req, socket, head)) return;
+  server.on("upgrade", (_req, socket) => {
     socket.write("HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n");
     socket.destroy();
-  });
-  server.on("close", () => {
-    terminalWs.close();
   });
   return server;
 }

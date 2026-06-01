@@ -88,10 +88,10 @@ registerWindowRender("browser", (cfg) => {
 });
 registerWindowRender("terminal", (cfg) => {
   const cwd = str(cfg, "cwd");
-  const shell = str(cfg, "shell");
-  const props: { cwd?: string; shell?: string } = {};
+  const projectPath = str(cfg, "projectPath");
+  const props: { cwd?: string; projectPath?: string } = {};
   if (cwd !== undefined) props.cwd = cwd;
-  if (shell !== undefined) props.shell = shell;
+  if (projectPath !== undefined) props.projectPath = projectPath;
   return <TerminalWidget {...props} />;
 });
 registerWindowRender("review", (cfg) => {
