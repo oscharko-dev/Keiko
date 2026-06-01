@@ -228,8 +228,35 @@ describe("GET /api/terminal/directories", () => {
       `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}`,
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { path: string };
+    const body = (await res.json()) as {
+      path: string;
+      roots: { label: string; path: string }[];
+    };
     expect(typeof body.path).toBe("string");
+    // A3 — roots must contain only the project root, no Home or Filesystem root entries.
+    expect(body.roots.every((r) => r.label !== "Home" && r.label !== "Filesystem root")).toBe(true);
+    expect(body.roots.some((r) => r.label === "Project root")).toBe(true);
+  });
+
+  it("A3 — returns 403 CWD_OUTSIDE_PROJECT for an absolute path outside the project", async () => {
+    const res = await fetch(
+      `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent("/etc")}`,
+    );
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("CWD_OUTSIDE_PROJECT");
+  });
+
+  it("A3 — returns 200 for a subdirectory inside the project root", async () => {
+    // mkdtemp creates a subdirectory; create one inside workspaceRoot to navigate into it.
+    const { mkdir } = await import("node:fs/promises");
+    const { join } = await import("node:path");
+    const sub = join(workspaceRoot, "subdir");
+    await mkdir(sub, { recursive: true });
+    const res = await fetch(
+      `${baseUrl()}/api/terminal/directories?projectId=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent(sub)}`,
+    );
+    expect(res.status).toBe(200);
   });
 });
 
@@ -293,6 +320,50 @@ describe("POST /api/terminal/executions", () => {
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("COMMAND_DENIED");
+  });
+
+  it("A4 — applies Layer-2 redaction to stdout and stderr in the POST response", async () => {
+    // A fake redactor that replaces any occurrence of "SECRET-VALUE" with "[REDACTED]".
+    const secretRedactor = (value: unknown): unknown => {
+      if (typeof value === "string") {
+        return value.replaceAll("SECRET-VALUE", "[REDACTED]");
+      }
+      if (typeof value === "object" && value !== null) {
+        const result: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(value)) {
+          result[k] = secretRedactor(v);
+        }
+        return result;
+      }
+      return value;
+    };
+    const localTerminal = new FakeTerminalExecutionManager({
+      executeResult: {
+        executionId: "e-redact",
+        exitCode: 0,
+        stdout: "output contains SECRET-VALUE here",
+        stderr: "error SECRET-VALUE trace",
+        durationMs: 1,
+        truncated: false,
+        timedOut: false,
+      },
+    });
+    deps = { ...deps, terminal: localTerminal, redactor: secretRedactor };
+    await closeServer();
+    const rebuilt = await buildServer(deps);
+    server = rebuilt.server;
+    port = rebuilt.port;
+    const res = await fetch(`${baseUrl()}/api/terminal/executions`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ projectId: workspaceRoot, command: "ls", args: [] }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { stdout: string; stderr: string };
+    expect(body.stdout).not.toContain("SECRET-VALUE");
+    expect(body.stdout).toContain("[REDACTED]");
+    expect(body.stderr).not.toContain("SECRET-VALUE");
+    expect(body.stderr).toContain("[REDACTED]");
   });
 });
 

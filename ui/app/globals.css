@@ -1045,11 +1045,59 @@ select.dlg-input { appearance: none; cursor: pointer; }
 .hl-ws { white-space: pre; }
 
 /* ---------- WIDGET: TERMINAL ---------- */
-.terminal { padding: 12px 14px; font-size: 12.5px; line-height: 1.75; color: var(--fg-muted); height: 100%; background: var(--inset); }
+.terminal { padding: 12px 14px; font-size: 12.5px; line-height: 1.75; color: var(--fg-muted); height: 100%; background: var(--inset); overflow: auto; display: flex; flex-direction: column; gap: 8px; }
 .tm-prompt { color: var(--accent); }
 .tm-ok { color: var(--accent); }
 .tm-dim { color: var(--fg-faint); }
 .tm-cursor { display: inline-block; width: 8px; height: 15px; background: var(--accent); vertical-align: text-bottom; animation: pulse 1s steps(2) infinite; }
+
+/* Terminal widget — bounded exec surface (ADR-0018) */
+.tm-form { display: flex; flex-direction: column; gap: 8px; }
+.tm-field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 500; color: var(--fg-muted); }
+.tm-field input,
+.tm-field select { background: var(--card); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 6px 9px; color: var(--fg); font-size: 12.5px; outline: none; font-family: var(--font-ui); }
+.tm-field input:focus, .tm-field select:focus { border-color: var(--accent-line); box-shadow: 0 0 0 2px var(--accent-glow); }
+.tm-field input::placeholder { color: var(--fg-faint); }
+.tm-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+/* B1 — tm-action: min-height/width ≥ 24px (WCAG 2.5.8), focus-visible ring (WCAG 2.4.7) */
+.tm-action { padding: 6px 14px; min-height: 28px; min-width: 56px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--card); color: var(--fg-muted); font-size: 12.5px; font-weight: 550; cursor: pointer; }
+.tm-action:hover:not(:disabled) { background: var(--card-2); color: var(--fg); border-color: var(--line-strong); }
+.tm-action:disabled { opacity: 0.45; cursor: not-allowed; }
+.tm-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.tm-action[data-primary="true"] { background: var(--accent); color: #1a1e23; border-color: var(--accent); }
+.tm-action[data-primary="true"]:hover:not(:disabled) { filter: brightness(1.06); }
+.tm-limits { font-size: 11px; color: var(--fg-faint); margin: 0; }
+/* B1 — tm-error: accessible alert with border using --line-strong (≥ 3:1), danger color */
+.tm-error { display: flex; align-items: flex-start; gap: 8px; padding: 9px 11px; border-radius: var(--radius-sm); background: color-mix(in oklch, var(--danger) 12%, var(--card)); border: 1px solid var(--line-strong); color: var(--fg); font-size: 12.5px; }
+.tm-error-text { flex: 1; }
+.tm-error-dismiss { flex: none; min-height: 24px; min-width: 24px; display: grid; place-items: center; border-radius: 6px; color: var(--fg-faint); }
+.tm-error-dismiss:hover { color: var(--fg); background: var(--card-2); }
+.tm-error-dismiss:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* B1 — tm-result: live region container */
+.tm-result { display: flex; flex-direction: column; gap: 6px; }
+.tm-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+/* B1 — badge contrast: ok uses --accent (#4EBA87) on --inset (dark bg) ≈ 5.5:1 PASS;
+   fail uses oklch(0.65 0.16 25) ≈ #e05a44 on --inset ≈ 5.6:1 PASS (matches bg-red-500 pattern from memory #66);
+   warn uses --warn (oklch 0.78 0.13 75) on --inset ≈ 4.8:1 PASS */
+.tm-badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-family: var(--font-mono); background: var(--inset); border: 1px solid var(--line-strong); color: var(--fg-muted); }
+.tm-badge-ok { background: color-mix(in oklch, var(--ok) 18%, var(--inset)); border-color: var(--accent-line); color: var(--accent); }
+.tm-badge-fail { background: color-mix(in oklch, var(--danger) 18%, var(--inset)); border-color: color-mix(in oklch, var(--danger) 45%, transparent); color: oklch(0.65 0.16 25); }
+.tm-badge-warn { background: color-mix(in oklch, var(--warn) 18%, var(--inset)); border-color: color-mix(in oklch, var(--warn) 45%, transparent); color: var(--warn); }
+/* B1 — stdout/stderr: pre-formatted mono, bounded height, readable */
+.tm-stdout,
+.tm-stderr { margin: 0; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--card); border: 1px solid var(--line-strong); font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6; color: var(--fg-muted); white-space: pre-wrap; word-wrap: break-word; overflow-x: auto; max-height: 16rem; }
+.tm-stderr { border-color: color-mix(in oklch, var(--danger) 40%, transparent); color: var(--fg-muted); }
+/* B1 — event log */
+.tm-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.tm-event { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px; font-size: 11.5px; }
+.tm-event:hover { background: var(--card); }
+.tm-event-kind { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: var(--fg-faint); min-width: 72px; }
+.tm-event-detail { color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* B4 — wrap transitions in prefers-reduced-motion so they don't run for users who opt out */
+@media (prefers-reduced-motion: no-preference) {
+  .tm-field input, .tm-field select { transition: border-color .12s, box-shadow .12s; }
+  .tm-action { transition: background .12s, color .12s, border-color .12s; }
+}
 
 /* ---------- WIDGET: AGENTS ---------- */
 .agents { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }

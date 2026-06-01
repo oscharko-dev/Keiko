@@ -82,7 +82,7 @@ describe("TerminalWidget", () => {
     expect(screen.getByRole("option", { name: "git" })).toBeInTheDocument();
   });
 
-  it("submits the run, displays exit code + stdout", async () => {
+  it("submits the run, displays exit code + stdout, result has role=status (B2)", async () => {
     vi.mocked(createTerminalExecution).mockResolvedValue({
       executionId: "e1",
       exitCode: 0,
@@ -98,6 +98,8 @@ describe("TerminalWidget", () => {
     await userEvent.click(screen.getByRole("button", { name: /run/i }));
     await screen.findByText(/exit 0/i);
     expect(screen.getByText(/hello/)).toBeInTheDocument();
+    // B2 — result container must have role="status"
+    expect(screen.getByRole("status")).toBeInTheDocument();
     expect(createTerminalExecution).toHaveBeenCalledWith({
       projectId: "/proj",
       command: "ls",
@@ -114,6 +116,18 @@ describe("TerminalWidget", () => {
     await userEvent.click(screen.getByRole("button", { name: /run/i }));
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("COMMAND_DENIED");
+  });
+
+  it("B3 — error alert is dismissible via the Dismiss button", async () => {
+    vi.mocked(createTerminalExecution).mockRejectedValue(
+      new ApiError("COMMAND_DENIED", "Command is not in the allowlist.", 403),
+    );
+    render(<TerminalWidget projectPath="/proj" />);
+    await screen.findByRole("combobox", { name: /command/i });
+    await userEvent.click(screen.getByRole("button", { name: /run/i }));
+    await screen.findByRole("alert");
+    await userEvent.click(screen.getByRole("button", { name: /dismiss error/i }));
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("appends SSE events to the recent events list", async () => {

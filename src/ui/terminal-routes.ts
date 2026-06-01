@@ -190,7 +190,15 @@ export async function handleCreateTerminalExecution(
       ...(cwd === undefined ? {} : { cwd }),
       ...(timeoutMs === undefined ? {} : { timeoutMs }),
     };
-    const result = await guard.execute(input);
+    const raw = await guard.execute(input);
+    // A4 (M3) — Layer-2 redaction on the synchronous POST response body. runCommand already
+    // applied Layer-1 env-value redaction; this pass catches structural patterns (Bearer tokens,
+    // sk-* keys, PEM markers) via the audit redactor before the output reaches the browser.
+    const redactStr = (s: string): string => {
+      const v = deps.redactor(s);
+      return typeof v === "string" ? v : s;
+    };
+    const result = { ...raw, stdout: redactStr(raw.stdout), stderr: redactStr(raw.stderr) };
     return { status: 200, body: result };
   });
 }

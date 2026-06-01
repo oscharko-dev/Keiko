@@ -257,12 +257,130 @@ describe("isTerminalCommandAllowed — git (subcommand allowlist + value-flag sa
     expect(isTerminalCommandAllowed("git", ["-C", "/tmp", "status"]).allowed).toBe(true);
   });
 
+  // A2 — git branch positional gate
   it("denies git branch -D (branch deletion)", () => {
     expect(isTerminalCommandAllowed("git", ["branch", "-D", "old"]).allowed).toBe(false);
   });
 
-  it("denies git remote --delete (remote mutation)", () => {
+  it("denies git branch newbranch (positional = creation)", () => {
+    expect(isTerminalCommandAllowed("git", ["branch", "newbranch"]).allowed).toBe(false);
+  });
+
+  it("denies git branch -c old new (copy flag)", () => {
+    expect(isTerminalCommandAllowed("git", ["branch", "-c", "old", "new"]).allowed).toBe(false);
+  });
+
+  it("denies git branch -C old new (force-copy flag)", () => {
+    expect(isTerminalCommandAllowed("git", ["branch", "-C", "old", "new"]).allowed).toBe(false);
+  });
+
+  it("denies git branch -f main HEAD~5 (force flag)", () => {
+    expect(isTerminalCommandAllowed("git", ["branch", "-f", "main", "HEAD~5"]).allowed).toBe(false);
+  });
+
+  it("allows git branch with no args (listing)", () => {
+    expect(isTerminalCommandAllowed("git", ["branch"]).allowed).toBe(true);
+  });
+
+  it("allows git branch -v (verbose listing)", () => {
+    expect(isTerminalCommandAllowed("git", ["branch", "-v"]).allowed).toBe(true);
+  });
+
+  it("allows git branch --list (explicit list flag)", () => {
+    expect(isTerminalCommandAllowed("git", ["branch", "--list"]).allowed).toBe(true);
+  });
+
+  // A1 — git remote positional gate
+  it("denies git remote --delete (remote mutation flag via Layer-1 CommandRule)", () => {
     expect(isTerminalCommandAllowed("git", ["remote", "--delete", "origin"]).allowed).toBe(false);
+  });
+
+  it("denies git remote remove origin (mutation subcommand)", () => {
+    expect(isTerminalCommandAllowed("git", ["remote", "remove", "origin"]).allowed).toBe(false);
+  });
+
+  it("denies git remote add x https://example.com (add subcommand)", () => {
+    expect(
+      isTerminalCommandAllowed("git", ["remote", "add", "x", "https://example.com"]).allowed,
+    ).toBe(false);
+  });
+
+  it("denies git remote set-url origin https://... (set-url mutation)", () => {
+    expect(
+      isTerminalCommandAllowed("git", ["remote", "set-url", "origin", "https://x.com"]).allowed,
+    ).toBe(false);
+  });
+
+  it("denies git remote update (update subcommand)", () => {
+    expect(isTerminalCommandAllowed("git", ["remote", "update"]).allowed).toBe(false);
+  });
+
+  it("allows git remote (no args)", () => {
+    expect(isTerminalCommandAllowed("git", ["remote"]).allowed).toBe(true);
+  });
+
+  it("allows git remote -v (verbose flag)", () => {
+    expect(isTerminalCommandAllowed("git", ["remote", "-v"]).allowed).toBe(true);
+  });
+
+  it("allows git remote show origin", () => {
+    expect(isTerminalCommandAllowed("git", ["remote", "show", "origin"]).allowed).toBe(true);
+  });
+
+  it("allows git remote show (no remote name)", () => {
+    expect(isTerminalCommandAllowed("git", ["remote", "show"]).allowed).toBe(true);
+  });
+
+  // A5 — git global flag denial
+  it("denies git -c http.proxy=... log (config injection)", () => {
+    expect(isTerminalCommandAllowed("git", ["-c", "http.proxy=evil", "log"]).allowed).toBe(false);
+  });
+
+  it("denies git --git-dir=/tmp/x status (git-dir injection)", () => {
+    expect(isTerminalCommandAllowed("git", ["--git-dir=/tmp/x", "status"]).allowed).toBe(false);
+  });
+
+  it("denies git --work-tree=/tmp status (work-tree injection)", () => {
+    expect(isTerminalCommandAllowed("git", ["--work-tree=/tmp", "status"]).allowed).toBe(false);
+  });
+
+  it("denies git --namespace=ns log (namespace injection)", () => {
+    expect(isTerminalCommandAllowed("git", ["--namespace=ns", "log"]).allowed).toBe(false);
+  });
+
+  it("denies git --exec-path=/tmp log (exec-path injection)", () => {
+    expect(isTerminalCommandAllowed("git", ["--exec-path=/tmp", "log"]).allowed).toBe(false);
+  });
+
+  it("allows git log --all (non-denied flag, no global flags)", () => {
+    expect(isTerminalCommandAllowed("git", ["log", "--all"]).allowed).toBe(true);
+  });
+});
+
+describe("TERMINAL_COMMAND_RULES — A6 derivation invariant", () => {
+  it("has no duplicate executable names (A6: sorted derivation is sound)", () => {
+    const names = TERMINAL_COMMAND_RULES.map((r) => r.executable);
+    const unique = new Set(names);
+    expect(unique.size).toBe(names.length);
+  });
+
+  it("sorted derivation matches the expected sorted list (A6: no silent drift)", () => {
+    const derived = [...TERMINAL_COMMAND_RULES.map((r) => r.executable)].sort();
+    expect(derived).toEqual([
+      "cat",
+      "echo",
+      "find",
+      "git",
+      "grep",
+      "head",
+      "ls",
+      "node",
+      "npm",
+      "pwd",
+      "tail",
+      "tree",
+      "wc",
+    ]);
   });
 });
 

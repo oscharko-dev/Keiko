@@ -25,14 +25,16 @@ import {
   parse as parsePath,
   resolve as resolvePath,
 } from "node:path";
-import { homedir } from "node:os";
 import {
   CommandCancelledError,
   CommandDeniedError,
   CommandTimeoutError,
 } from "../tools/errors.js";
 import { nodeSpawnFn, runCommand, type RunCommandDeps } from "../tools/exec.js";
-import { isTerminalCommandAllowed } from "../tools/terminal-policy.js";
+import {
+  isTerminalCommandAllowed,
+  TERMINAL_COMMAND_RULES,
+} from "../tools/terminal-policy.js";
 import { isWithinWorkspace, resolveWithinWorkspace } from "../workspace/paths.js";
 import { PathDeniedError } from "../workspace/errors.js";
 import type { WorkspaceInfo } from "../workspace/types.js";
@@ -491,23 +493,12 @@ export function createTerminalExecutionManager(
 
 // ─── Policy summary (GET /api/terminal/policy) ───────────────────────────────────
 
+// A6 — Derived from TERMINAL_COMMAND_RULES so the policy and the summary stay in sync.
 // Materialized once at module load so the GET handler is O(1) and the public surface is a
 // frozen list — a test that compares against this exact set locks the deny-by-default invariant.
-const ALLOWED_COMMAND_NAMES: readonly string[] = Object.freeze([
-  "cat",
-  "echo",
-  "find",
-  "git",
-  "grep",
-  "head",
-  "ls",
-  "node",
-  "npm",
-  "pwd",
-  "tail",
-  "tree",
-  "wc",
-]);
+const ALLOWED_COMMAND_NAMES: readonly string[] = Object.freeze(
+  [...TERMINAL_COMMAND_RULES.map((r) => r.executable)].sort(),
+);
 
 export function buildTerminalPolicySummary(
   policy: SandboxPolicy = DEFAULT_SANDBOX_POLICY,
@@ -521,53 +512,62 @@ export function buildTerminalPolicySummary(
   };
 }
 
-// ─── Directory picker (preserved from the PTY surface, anchored at the project root) ──
+// ─── Directory picker (anchored at the project root — A3 containment) ────────────
 
-function expandHome(input: string, home: string): string {
-  if (input === "~") return home;
-  if (input.startsWith("~/") || input.startsWith("~\\")) return join(home, input.slice(2));
-  return input;
-}
-
-function defaultCwdFromProject(project: Project | undefined): string {
-  if (project !== undefined && existsSync(project.path)) return project.path;
+function defaultCwdFromProject(project: Project): string {
+  if (existsSync(project.path)) return project.path;
   return process.cwd();
 }
 
-function parentPath(pathValue: string): string | null {
+function parentPath(pathValue: string, projectRoot: string): string | null {
+  // Do not let parent navigation escape the project root.
+  if (pathValue === projectRoot) return null;
   const parsed = parsePath(pathValue);
   return pathValue === parsed.root ? null : dirname(pathValue);
 }
 
-function rootPaths(home: string, cwd: string): readonly TerminalDirectoryRoot[] {
-  const roots: TerminalDirectoryRoot[] = [
-    { label: "Home", path: home },
-    { label: "Current workspace", path: cwd },
-  ];
-  const fsRoot = parsePath(cwd).root;
-  if (fsRoot.length > 0 && fsRoot !== home && fsRoot !== cwd) {
-    roots.push({ label: "Filesystem root", path: fsRoot });
-  }
-  return roots;
-}
-
-function normalizeClientPath(pathInput: string | undefined, home: string, cwd: string): string {
+// A3 — Normalise the client-supplied path to an absolute path that is lexically inside
+// `projectRoot`. Absolute paths are allowed but must still be contained. Throws
+// CWD_OUTSIDE_PROJECT (403) on containment failure — same error code as D10 / ADR-0018.
+function normalizeClientPath(pathInput: string | undefined, projectRoot: string): string {
   const raw = pathInput?.trim();
-  const base = raw === undefined || raw.length === 0 ? cwd : expandHome(raw, home);
-  return isAbsolute(base) ? base : resolvePath(cwd, base);
+  if (raw === undefined || raw.length === 0) {
+    return projectRoot;
+  }
+  // Resolve relative paths against the project root; absolute paths are kept as-is but will
+  // be range-checked by isWithinWorkspace below.
+  const candidate = isAbsolute(raw) ? raw : resolvePath(projectRoot, raw);
+  try {
+    const lexical = resolveWithinWorkspace(projectRoot, candidate);
+    if (!isWithinWorkspace(projectRoot, lexical)) {
+      throw new TerminalToolError(
+        "CWD_OUTSIDE_PROJECT",
+        "Working directory is outside the selected project.",
+      );
+    }
+    return lexical;
+  } catch (err) {
+    if (err instanceof TerminalToolError) throw err;
+    throw new TerminalToolError(
+      "CWD_OUTSIDE_PROJECT",
+      "Working directory is outside the selected project.",
+    );
+  }
 }
 
-async function resolveDirectory(
-  pathInput: string | undefined,
-  home: string,
-  cwd: string,
-): Promise<string> {
-  const candidate = normalizeClientPath(pathInput, home, cwd);
+async function resolveDirectory(candidate: string, projectRoot: string): Promise<string> {
   let resolved: string;
   try {
     resolved = await realpath(candidate);
   } catch {
     throw new TerminalToolError("BAD_REQUEST", "The working directory does not exist.");
+  }
+  // Realpath containment check — catches symlink escapes (Tier 2 of ADR-0018 D2).
+  if (!isWithinWorkspace(projectRoot, resolved)) {
+    throw new TerminalToolError(
+      "CWD_OUTSIDE_PROJECT",
+      "Working directory is outside the selected project.",
+    );
   }
   const info = await stat(resolved);
   if (!info.isDirectory()) {
@@ -585,18 +585,23 @@ export async function listDirectories(
   if (project === undefined) {
     throw new TerminalToolError("PROJECT_NOT_FOUND", "Project not found.");
   }
-  const home = homedir();
-  const cwd = defaultCwdFromProject(project);
-  const pathValue = await resolveDirectory(pathInput, home, cwd);
+  const projectRoot = defaultCwdFromProject(project);
+  const lexical = normalizeClientPath(pathInput, projectRoot);
+  const pathValue = await resolveDirectory(lexical, projectRoot);
   const entries = await readdir(pathValue, { withFileTypes: true });
   const dirs = entries
     .filter((entry) => entry.isDirectory())
     .map((entry) => ({ name: entry.name, path: join(pathValue, entry.name) }))
     .sort((a, b) => a.name.localeCompare(b.name));
+  // A3 — roots contains only the project root. Home and FS-root are no longer exposed because
+  // they could be outside the project boundary. The UI cwd picker shows only project-scoped paths.
+  const roots: readonly TerminalDirectoryRoot[] = [
+    { label: "Project root", path: projectRoot },
+  ];
   return {
     path: pathValue,
-    parent: parentPath(pathValue),
+    parent: parentPath(pathValue, projectRoot),
     entries: dirs,
-    roots: rootPaths(home, cwd),
+    roots,
   };
 }

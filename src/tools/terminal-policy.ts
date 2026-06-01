@@ -78,9 +78,33 @@ const FIND_DENY_FLAGS: ReadonlySet<string> = new Set([
 // Only --version and -v are accepted for node. Every other positional or flag is denied.
 const NODE_ALLOWED_ARGS: ReadonlySet<string> = new Set(["--version", "-v"]);
 
-// Branch/remote mutation flags. These are scoped to the `git branch` and `git remote` subcommands
-// (a global denyFlags entry would also block harmless uses like `git -C dir status`).
-const GIT_BRANCH_DENY_FLAGS: ReadonlySet<string> = new Set(["-D", "-d", "-m", "-M", "--delete"]);
+// Branch mutation flags (A2). Scoped to `git branch` only — these deny branch creation, deletion,
+// copy, rename, and force operations. `-c`/`-C` are included here because for `branch` they mean
+// copy, not the git-global config flag (which is caught by A5 before we reach here).
+const GIT_BRANCH_DENY_FLAGS: ReadonlySet<string> = new Set([
+  "-D",
+  "-d",
+  "-m",
+  "-M",
+  "--delete",
+  "-c",
+  "-C",
+  "-f",
+  "--copy",
+  "--force",
+]);
+
+// Global git flags that modify git's own config, working-tree, or execution path (A5 / ADR-0018
+// S-H2). `-C` (chdir) is intentionally omitted — `git -C subdir status` is a legitimate read-only
+// use. These are checked BEFORE subcommand resolution so they cannot be smuggled via a value-flag
+// value that happens to look like a subcommand.
+const GIT_GLOBAL_DENY_FLAGS: ReadonlySet<string> = new Set([
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--exec-path",
+]);
 
 export interface TerminalCommandDecision {
   readonly allowed: boolean;
@@ -109,17 +133,20 @@ function checkNode(args: readonly string[]): TerminalCommandDecision {
   return { allowed: true };
 }
 
+// Shared value-flags used by gitSubcommand and argsAfterSubcommand. Kept as a module-level
+// constant (not re-created per call) so the hot-path doesn't allocate on every invocation.
+const GIT_VALUE_FLAGS: ReadonlySet<string> = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--exec-path",
+]);
+
 // Resolves the git subcommand (first non-flag arg, skipping value-flag pairs). Returns undefined
 // when the subcommand can't be determined — the caller treats that as not-a-mutation.
 function gitSubcommand(args: readonly string[]): string | undefined {
-  const valueFlags = new Set([
-    "-C",
-    "-c",
-    "--git-dir",
-    "--work-tree",
-    "--namespace",
-    "--exec-path",
-  ]);
   let skipNext = false;
   for (const arg of args) {
     if (skipNext) {
@@ -129,23 +156,94 @@ function gitSubcommand(args: readonly string[]): string | undefined {
     if (!arg.startsWith("-")) {
       return arg;
     }
-    if (!arg.includes("=") && valueFlags.has(arg)) {
+    if (!arg.includes("=") && GIT_VALUE_FLAGS.has(arg)) {
       skipNext = true;
     }
   }
   return undefined;
 }
 
-function checkGit(args: readonly string[]): TerminalCommandDecision {
-  const sub = gitSubcommand(args);
-  if (sub !== "branch" && sub !== "remote") {
-    return { allowed: true };
+// Returns the slice of args that appears AFTER the first token equal to `subcommand`, skipping
+// value-flag pairs using the same walk as gitSubcommand. Returns undefined when not found.
+function argsAfterSubcommand(
+  args: readonly string[],
+  subcommand: string,
+): readonly string[] | undefined {
+  // Convert to a mutable array for indexed access so we can use a for...of without a C-style loop
+  // (avoids noUncheckedIndexedAccess while remaining tsc-clean under no-non-null-assertion).
+  const arr = Array.from(args);
+  let skipNext = false;
+  for (const [i, arg] of arr.entries()) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (arg === subcommand) {
+      return args.slice(i + 1);
+    }
+    if (arg.startsWith("-") && !arg.includes("=") && GIT_VALUE_FLAGS.has(arg)) {
+      skipNext = true;
+    }
   }
-  for (const arg of args) {
+  return undefined;
+}
+
+// A2 — After resolving the `branch` subcommand, walk the remaining args. Any non-flag positional
+// (a branch name operand) denies creation/switching. Deny all known mutation flags.
+function checkGitBranch(argsAfterBranch: readonly string[]): TerminalCommandDecision {
+  for (const arg of argsAfterBranch) {
     const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
     if (GIT_BRANCH_DENY_FLAGS.has(flag)) {
-      return denied(`git ${sub}: denied mutation flag ${flag}`);
+      return denied(`git branch: denied mutation flag ${flag}`);
     }
+    if (!arg.startsWith("-")) {
+      // A bare positional after `branch` is a branch name operand — implies creation or mutation.
+      return denied("git branch: positional operand denied (read-only listing only)");
+    }
+  }
+  return { allowed: true };
+}
+
+// A1 — After resolving the `remote` subcommand, walk the remaining args. The only allowed
+// non-flag positional is `show` (optionally followed by a remote name for `git remote show <name>`).
+// All other positionals (add, rm, rename, set-url, set-head, set-branches, prune, update…) are
+// mutation subcommands and are denied.
+function checkGitRemote(argsAfterRemote: readonly string[]): TerminalCommandDecision {
+  for (const arg of argsAfterRemote) {
+    if (arg.startsWith("-")) {
+      // Pure flag (e.g. -v / --verbose) — already covered by the CommandRule valueFlags/denyFlags
+      // at Layer 1, but we allow flags through here to avoid double-denying them.
+      continue;
+    }
+    // First non-flag positional: must be "show" or it is a mutation subcommand.
+    if (arg !== "show") {
+      return denied(
+        `git remote: subcommand "${arg}" is denied (read-only: use flags or "show" only)`,
+      );
+    }
+    // "show" is safe; subsequent positionals are remote names — safe to accept.
+    return { allowed: true };
+  }
+  return { allowed: true };
+}
+
+function checkGit(args: readonly string[]): TerminalCommandDecision {
+  // A5 — Deny global config/env-injection flags before resolving the subcommand. `-C` (chdir)
+  // is intentionally omitted so `git -C subdir status` keeps working for project-internal nav.
+  for (const arg of args) {
+    const flag = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    if (GIT_GLOBAL_DENY_FLAGS.has(flag)) {
+      return denied(`git: denied global flag ${flag}`);
+    }
+  }
+  const sub = gitSubcommand(args);
+  if (sub === "branch") {
+    const rest = argsAfterSubcommand(args, "branch") ?? [];
+    return checkGitBranch(rest);
+  }
+  if (sub === "remote") {
+    const rest = argsAfterSubcommand(args, "remote") ?? [];
+    return checkGitRemote(rest);
   }
   return { allowed: true };
 }

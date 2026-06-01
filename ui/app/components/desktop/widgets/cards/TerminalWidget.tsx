@@ -241,12 +241,24 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
 
       {error !== null ? (
         <div className="tm-error" role="alert">
-          <strong>{error.code}</strong>: {error.message}
+          <span className="tm-error-text">
+            <strong>{error.code}</strong>: {error.message}
+          </span>
+          {/* B3 — dismissible so keyboard users can clear the error without resubmitting */}
+          <button
+            type="button"
+            className="tm-error-dismiss"
+            aria-label="Dismiss error"
+            onClick={() => setError(null)}
+          >
+            ✕
+          </button>
         </div>
       ) : null}
 
       {result !== null ? (
-        <div className="tm-result" aria-live="polite">
+        /* B2 — role="status" + aria-live="polite" satisfies WCAG 4.1.3 */
+        <div className="tm-result" role="status" aria-live="polite">
           <div className="tm-badges">
             <span className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}>
               exit {String(result.exitCode)}
