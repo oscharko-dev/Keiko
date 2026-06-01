@@ -547,6 +547,62 @@ export interface EvidenceReasoningEntry {
   modelResponse?: string;
 }
 
+export interface EvidenceBrowserViewportPx {
+  width: number;
+  height: number;
+}
+
+export interface EvidenceBrowserEvent {
+  schemaVersion: "1";
+  type: string;
+  sessionId: string;
+  seq: number;
+  ts: number;
+  originOnly?: string;
+  httpStatus?: number | null;
+  captureSeq?: number;
+  persisted?: boolean;
+  viewportPx?: EvidenceBrowserViewportPx;
+  path?: string;
+  sha256?: string;
+  bytes?: number;
+  byteLength?: number;
+  reason?: string;
+  warning?: string;
+  code?: string;
+  message?: string;
+}
+
+export interface EvidenceBrowserScreenshot {
+  seq: number;
+  path: string;
+  sha256: string;
+  bytes: number;
+  capturedAt: number;
+  viewportPx: EvidenceBrowserViewportPx;
+}
+
+export interface EvidenceBrowserContentCapture {
+  seq: number;
+  byteLength: number;
+  capturedAt: number;
+  redactedHtml: string;
+}
+
+export interface EvidenceBrowserCapture {
+  sessionId: string;
+  cdpPort: number;
+  targetId: string;
+  status: "open" | "closed";
+  startedAt: number;
+  closedAt?: number;
+  closeReason?: string;
+  lastOriginOnly?: string;
+  events: EvidenceBrowserEvent[];
+  screenshots?: EvidenceBrowserScreenshot[];
+  contentCaptures?: EvidenceBrowserContentCapture[];
+}
+
 export interface EvidenceManifest {
   evidenceSchemaVersion: "1";
   run: EvidenceRunIdentity;
@@ -565,6 +621,7 @@ export interface EvidenceManifest {
   verification?: VerificationAuditSummary;
   failure?: { category: string; message: string };
   reasoning?: EvidenceReasoningEntry[];
+  browser?: EvidenceBrowserCapture;
 }
 
 // ---------------------------------------------------------------------------
@@ -962,6 +1019,12 @@ export type BrowserEventKind =
   | "error";
 
 export interface BrowserEventEnvelope {
+  readonly schemaVersion?: "1";
+  readonly type?: string;
+  readonly runId?: string;
+  readonly fingerprint?: string;
+  readonly seq?: number;
+  readonly ts?: number;
   readonly kind: BrowserEventKind;
   readonly sessionId: string;
   readonly payload: Readonly<Record<string, unknown>>;

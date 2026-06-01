@@ -1,4 +1,4 @@
-// ADR-0017 D8 — seven /api/browser/* BFF route handlers. CSRF guarding is enforced by the
+// ADR-0017 D8 — eight /api/browser/* BFF route handlers. CSRF guarding is enforced by the
 // server.ts state-changing-request gate (POST/DELETE all flow through it). GET status + GET
 // events are exempt by the same gate. SSE framing reuses the existing sse.ts helpers.
 
@@ -240,6 +240,9 @@ export function handleBrowserEvents(ctx: RouteContext, deps: UiHandlerDeps): Han
   if (sessionId.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "sessionId is required.") };
   }
+  if (!guard.hasSession(sessionId)) {
+    return { status: 404, body: errorBody("SESSION_NOT_FOUND", "Browser session not found.") };
+  }
   openBrowserSseStream(ctx.res, guard, sessionId, deps.redactor);
   ctx.req.on("close", () => {
     ctx.res.end();
@@ -258,6 +261,10 @@ function openBrowserSseStream(
   const unsubscribe = manager.subscribe(sessionId, (event) => {
     seq += 1;
     writeBrowserEvent(res, event, seq, redactor);
+    if (event.kind === "session-closed") {
+      unsubscribe();
+      res.end();
+    }
   });
   res.write(readyMessage());
   res.on("close", () => {

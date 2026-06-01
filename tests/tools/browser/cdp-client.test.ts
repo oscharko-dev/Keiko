@@ -198,6 +198,20 @@ describe("CdpClient disconnect", () => {
     expect(client.isClosed()).toBe(true);
   });
 
+  it("notifies close listeners when Chrome disconnects", async () => {
+    let serverSocket: ServerSocket | undefined;
+    server.onConnection((socket) => {
+      serverSocket = socket;
+    });
+    const client = makeClient(2000);
+    await client.connect();
+    const reason = new Promise<string>((resolve) => {
+      client.onClose(resolve);
+    });
+    serverSocket?.close();
+    await expect(reason).resolves.toBe("chrome-disconnected");
+  });
+
   it("send after close throws TARGET_CLOSED without opening a new request", async () => {
     const client = makeClient();
     client.close();

@@ -4,7 +4,7 @@
 //
 // Security invariants:
 //   • webSocketDebuggerUrl from /json/version is validated for loopback host + matching port (H1).
-//   • pendingScreenshots per session is capped at MAX_PENDING_SCREENSHOTS (4) with insertion-order
+//   • pendingScreenshots per session is capped at MAX_PENDING_SCREENSHOTS (1) with insertion-order
 //     eviction to bound memory use (M1).
 //   • Session slot is reserved synchronously before any await to prevent TOCTOU on the limit (M2).
 //
@@ -28,14 +28,26 @@ import type {
   BrowserViewportPx,
   CdpReachability,
 } from "./types.js";
+import { resolveCostClass } from "../../audit/aggregate.js";
 import { writeSideFile, type SideFileWriterOptions } from "../../audit/side-file.js";
+import type { EvidenceStore } from "../../audit/store.js";
+import {
+  EVIDENCE_SCHEMA_VERSION,
+  type EvidenceBrowserContentCapture,
+  type EvidenceBrowserEvent,
+  type EvidenceBrowserScreenshot,
+  type EvidenceManifest,
+} from "../../audit/types.js";
+import { HARNESS_VERSION } from "../../harness/session.js";
 
 const MAX_SESSIONS = 4;
 const SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 const MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024;
 const MAX_CONTENT_BYTES = 2 * 1024 * 1024;
+const MAX_VERSION_BODY_BYTES = 64_000;
+const VERSION_FETCH_TIMEOUT_MS = 5000;
 // M1: cap per-session pending screenshots; oldest (insertion-order) is evicted on overflow.
-const MAX_PENDING_SCREENSHOTS = 4;
+const MAX_PENDING_SCREENSHOTS = 1;
 const DEFAULT_VIEWPORT: BrowserViewportPx = { width: 1280, height: 800 };
 const FRAGMENT_RECHECK_TIMEOUT_MS = 5000;
 const VERSION_PATH = "/json/version";
@@ -50,6 +62,12 @@ export type BrowserEventKind =
   | "error";
 
 export interface BrowserEventEnvelope {
+  readonly schemaVersion: "1";
+  readonly type: `browser:${BrowserEventKind}`;
+  readonly runId: string;
+  readonly fingerprint: string;
+  readonly seq: number;
+  readonly ts: number;
   readonly kind: BrowserEventKind;
   readonly sessionId: string;
   readonly payload: Readonly<Record<string, unknown>>;
@@ -59,6 +77,7 @@ export type BrowserEventEmitter = (event: BrowserEventEnvelope) => void;
 
 export interface BrowserSessionManagerOptions {
   readonly evidenceDir: string;
+  readonly evidenceStore?: EvidenceStore | undefined;
   readonly redactor?: (value: unknown) => unknown;
   readonly cdpClientFactory?: (url: string, opts: CdpClientOptions) => CdpClient;
   readonly fetchVersion?: (url: string) => Promise<unknown>;
@@ -80,15 +99,25 @@ interface SessionRecord {
   readonly client: CdpClient;
   readonly cdpSessionId: string;
   readonly runId: string;
+  readonly fingerprint: string;
+  readonly startedAt: number;
+  closedAt: number | undefined;
+  closeReason: string | undefined;
   lastUrl: string | null;
   lastOriginOnly: string | null;
+  expectedOriginOnly: string | null;
   originAllowed: boolean;
   captureSeq: number;
+  auditSeq: number;
+  auditEvents: EvidenceBrowserEvent[];
+  screenshots: EvidenceBrowserScreenshot[];
+  contentCaptures: EvidenceBrowserContentCapture[];
   pendingScreenshots: Map<number, PendingScreenshot>;
   idleTimer: NodeJS.Timeout | undefined;
   lastTouchedMs: number;
   closed: boolean;
   removeCdpListener: () => void;
+  removeCdpCloseListener: () => void;
 }
 
 interface AttachResult {
@@ -107,7 +136,7 @@ interface OuterHtmlResult {
   readonly outerHTML: string;
 }
 interface FrameNavigatedParams {
-  readonly frame?: { readonly url?: string };
+  readonly frame?: { readonly url?: string; readonly parentId?: string };
 }
 
 export interface BrowserSessionManager {
@@ -122,6 +151,7 @@ export interface BrowserSessionManager {
   ) => Promise<BrowserScreenshotResult>;
   readonly content: (sessionId: string) => Promise<BrowserContentResult>;
   readonly listSessionIds: () => readonly string[];
+  readonly hasSession: (sessionId: string) => boolean;
   readonly dispose: () => Promise<void>;
   readonly subscribe: (sessionId: string, listener: BrowserEventEmitter) => () => void;
   readonly counterAccessor: () => { readonly navigations: number };
@@ -191,11 +221,33 @@ function defaultVersionInfo(port: number): VersionInfo {
 }
 
 async function fetchVersionJson(url: string): Promise<unknown> {
-  const res = await fetch(url);
-  if (!res.ok) {
-    throw new BrowserToolError("CHROME_UNREACHABLE", "CDP version endpoint returned a non-200.");
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, VERSION_FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { redirect: "manual", signal: controller.signal });
+    if (res.url !== url || (res.status >= 300 && res.status < 400)) {
+      throw new BrowserToolError("CDP_TRANSPORT_REFUSED", "CDP version endpoint redirected.");
+    }
+    if (!res.ok) {
+      throw new BrowserToolError("CHROME_UNREACHABLE", "CDP version endpoint returned a non-200.");
+    }
+    const text = await readCappedText(res);
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new BrowserToolError(
+        "CHROME_UNREACHABLE",
+        "CDP version endpoint returned invalid JSON.",
+      );
+    }
+  } catch (error) {
+    if (error instanceof BrowserToolError) throw error;
+    throw new BrowserToolError("CHROME_UNREACHABLE", "CDP version endpoint is unreachable.");
+  } finally {
+    clearTimeout(timer);
   }
-  return res.json() as Promise<unknown>;
 }
 
 function isChromiumUserAgent(userAgent: string | null): boolean {
@@ -214,6 +266,82 @@ function safeOrigin(url: string): string | null {
   } catch {
     return null;
   }
+}
+
+type EvidenceBrowserEventPatch = Partial<
+  Omit<EvidenceBrowserEvent, "schemaVersion" | "type" | "sessionId" | "seq" | "ts">
+>;
+
+function evidenceStringField(
+  key: keyof EvidenceBrowserEventPatch,
+  value: unknown,
+): EvidenceBrowserEventPatch {
+  return typeof value === "string" ? { [key]: value } : {};
+}
+
+function evidenceNumberField(
+  key: keyof EvidenceBrowserEventPatch,
+  value: unknown,
+): EvidenceBrowserEventPatch {
+  return typeof value === "number" ? { [key]: value } : {};
+}
+
+function evidenceBooleanField(
+  key: keyof EvidenceBrowserEventPatch,
+  value: unknown,
+): EvidenceBrowserEventPatch {
+  return typeof value === "boolean" ? { [key]: value } : {};
+}
+
+function evidenceNullableNumberField(
+  key: keyof EvidenceBrowserEventPatch,
+  value: unknown,
+): EvidenceBrowserEventPatch {
+  return typeof value === "number" || value === null ? { [key]: value } : {};
+}
+
+function browserViewportPayload(value: unknown): BrowserViewportPx | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const rec = value as Record<string, unknown>;
+  return typeof rec.width === "number" && typeof rec.height === "number"
+    ? { width: rec.width, height: rec.height }
+    : undefined;
+}
+
+function evidenceViewportField(value: unknown): EvidenceBrowserEventPatch {
+  const viewportPx = browserViewportPayload(value);
+  return viewportPx === undefined ? {} : { viewportPx };
+}
+
+function isSubframeNavigation(params: FrameNavigatedParams): boolean {
+  return typeof params.frame?.parentId === "string" && params.frame.parentId.length > 0;
+}
+
+function mainFrameUrl(params: FrameNavigatedParams): string | null {
+  const url = params.frame?.url;
+  if (typeof url !== "string" || url.length === 0 || url === "about:blank") return null;
+  return url;
+}
+
+async function readCappedText(res: Response): Promise<string> {
+  if (res.body === null) return "";
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_VERSION_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new BrowserToolError(
+        "PAYLOAD_TOO_LARGE",
+        "CDP version response exceeds the size limit.",
+      );
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString("utf8");
 }
 
 // The class form keeps each method small (max-lines-per-function gate) while sharing one private
@@ -237,6 +365,118 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     this.fetchVersion = opts.fetchVersion ?? fetchVersionJson;
     this.idleTtlMs = opts.idleTtlMs ?? SESSION_IDLE_TTL_MS;
     this.nowMs = opts.nowMs ?? ((): number => Date.now());
+  }
+
+  private toEvidenceEvent(event: BrowserEventEnvelope): EvidenceBrowserEvent {
+    const p = event.payload;
+    return {
+      schemaVersion: "1",
+      type: event.type,
+      sessionId: event.sessionId,
+      seq: event.seq,
+      ts: event.ts,
+      ...evidenceStringField("originOnly", p.originOnly),
+      ...evidenceNullableNumberField("httpStatus", p.httpStatus),
+      ...evidenceNumberField("captureSeq", p.captureSeq),
+      ...evidenceBooleanField("persisted", p.persisted),
+      ...evidenceViewportField(p.viewportPx),
+      ...evidenceStringField("path", p.path),
+      ...evidenceStringField("sha256", p.sha256),
+      ...evidenceNumberField("bytes", p.bytes),
+      ...evidenceNumberField("byteLength", p.byteLength),
+      ...evidenceStringField("reason", p.reason),
+      ...evidenceStringField("warning", p.warning),
+      ...evidenceStringField("code", p.code),
+      ...evidenceStringField("message", p.message),
+    };
+  }
+
+  private buildManifest(record: SessionRecord): EvidenceManifest {
+    const finishedAt = record.closedAt ?? this.nowMs();
+    const manifest: EvidenceManifest = {
+      evidenceSchemaVersion: EVIDENCE_SCHEMA_VERSION,
+      run: {
+        runId: record.runId,
+        fingerprint: record.fingerprint,
+        harnessVersion: HARNESS_VERSION,
+        taskType: "browser-capture",
+        outcome: "completed",
+        startedAt: record.startedAt,
+        finishedAt,
+        durationMs: Math.max(0, finishedAt - record.startedAt),
+      },
+      model: { modelId: "browser-tool", costClass: resolveCostClass("browser-tool") },
+      usageTotals: { promptTokens: 0, completionTokens: 0, requestCount: 0, totalLatencyMs: 0 },
+      stateTransitions: [],
+      toolCalls: [],
+      commandExecutions: [],
+      browser: {
+        sessionId: record.id,
+        cdpPort: record.cdpPort,
+        targetId: record.targetId,
+        status: record.closed ? "closed" : "open",
+        startedAt: record.startedAt,
+        ...(record.closedAt === undefined ? {} : { closedAt: record.closedAt }),
+        ...(record.closeReason === undefined ? {} : { closeReason: record.closeReason }),
+        ...(record.lastOriginOnly === null ? {} : { lastOriginOnly: record.lastOriginOnly }),
+        events: record.auditEvents,
+        ...(record.screenshots.length === 0 ? {} : { screenshots: record.screenshots }),
+        ...(record.contentCaptures.length === 0 ? {} : { contentCaptures: record.contentCaptures }),
+      },
+    };
+    const redacted = this.redactor(manifest);
+    return typeof redacted === "object" && redacted !== null
+      ? (redacted as EvidenceManifest)
+      : manifest;
+  }
+
+  private persistRecord(record: SessionRecord): void {
+    const store = this.opts.evidenceStore;
+    if (store === undefined) return;
+    const manifest = this.buildManifest(record);
+    store.put(record.runId, JSON.stringify(manifest, null, 2));
+  }
+
+  private emitRecord(
+    record: SessionRecord,
+    kind: BrowserEventKind,
+    payload: Readonly<Record<string, unknown>>,
+  ): BrowserEventEnvelope {
+    record.auditSeq += 1;
+    const event: BrowserEventEnvelope = {
+      schemaVersion: "1",
+      type: `browser:${kind}`,
+      runId: record.runId,
+      fingerprint: record.fingerprint,
+      seq: record.auditSeq,
+      ts: this.nowMs(),
+      kind,
+      sessionId: record.id,
+      payload,
+    };
+    record.auditEvents.push(this.toEvidenceEvent(event));
+    this.persistRecord(record);
+    this.fanout(event);
+    return event;
+  }
+
+  private emitErrorRecord(record: SessionRecord, code: string, message: string): void {
+    this.emitRecord(record, "error", { code, message });
+  }
+
+  private async runSessionAction<T>(
+    sessionId: string,
+    action: (record: SessionRecord) => Promise<T> | T,
+  ): Promise<T> {
+    const record = this.requireRecord(sessionId);
+    try {
+      return await action(record);
+    } catch (error) {
+      if (error instanceof BrowserToolError) {
+        this.emitErrorRecord(record, error.code, error.message);
+      }
+      throw error;
+    }
   }
 
   public readonly checkStatus = async (cdpPort: number): Promise<CdpReachability> => {
@@ -277,10 +517,12 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       connect: (): Promise<void> => Promise.resolve(),
       send: (): Promise<Record<string, unknown>> => Promise.resolve({}),
       onEvent: (): (() => void) => noop,
+      onClose: (): (() => void) => noop,
       close: noop,
       isClosed: (): boolean => true,
       closeCause: (): undefined => undefined,
     } as unknown as CdpClient;
+    const now = this.nowMs();
     return {
       id,
       cdpPort,
@@ -288,15 +530,25 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       client: fakeClient,
       cdpSessionId: "",
       runId: id.replace(/-/g, ""),
+      fingerprint: `browser-${id.replace(/-/g, "")}`,
+      startedAt: now,
+      closedAt: undefined,
+      closeReason: undefined,
       lastUrl: null,
       lastOriginOnly: null,
+      expectedOriginOnly: null,
       originAllowed: false,
       captureSeq: 0,
+      auditSeq: 0,
+      auditEvents: [],
+      screenshots: [],
+      contentCaptures: [],
       pendingScreenshots: new Map(),
       idleTimer: undefined,
-      lastTouchedMs: this.nowMs(),
+      lastTouchedMs: now,
       closed: true,
       removeCdpListener: noop,
+      removeCdpCloseListener: noop,
     };
   }
 
@@ -344,15 +596,15 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     });
     const record = this.buildRecord(client, cdpPort, target.targetId, attach.sessionId, reservedId);
     record.removeCdpListener = client.onEvent(this.frameNavigatedListener(record));
+    record.removeCdpCloseListener = client.onClose((reason) => {
+      if (reason === "explicit") return;
+      void this.closeRecord(record, "chrome-disconnected", false).catch(() => undefined);
+    });
     await client.send("Page.enable", {}, attach.sessionId);
     this.sessions.set(record.id, record);
     this.touch(record);
-    await this.emitTrustWarningIfHeadless(client, record.id);
-    this.emit({
-      kind: "session-opened",
-      sessionId: record.id,
-      payload: { cdpPort, targetId: target.targetId },
-    });
+    await this.emitTrustWarningForProfileMetadata(client, record);
+    this.emitRecord(record, "session-opened", { cdpPort, targetId: target.targetId });
     return {
       sessionId: record.id,
       cdpPort,
@@ -369,38 +621,57 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     cdpSessionId: string,
     id: string = randomUUID(),
   ): SessionRecord {
+    const runId = id.replace(/-/g, "");
+    const now = this.nowMs();
     return {
       id,
       cdpPort,
       targetId,
       client,
       cdpSessionId,
-      runId: id.replace(/-/g, ""),
+      runId,
+      fingerprint: `browser-${runId}`,
+      startedAt: now,
+      closedAt: undefined,
+      closeReason: undefined,
       lastUrl: null,
       lastOriginOnly: null,
+      expectedOriginOnly: null,
       originAllowed: false,
       captureSeq: 0,
+      auditSeq: 0,
+      auditEvents: [],
+      screenshots: [],
+      contentCaptures: [],
       pendingScreenshots: new Map(),
       idleTimer: undefined,
-      lastTouchedMs: this.nowMs(),
+      lastTouchedMs: now,
       closed: false,
       removeCdpListener: (): void => undefined,
+      removeCdpCloseListener: (): void => undefined,
     };
   }
 
-  private async emitTrustWarningIfHeadless(client: CdpClient, sessionId: string): Promise<void> {
+  private async emitTrustWarningForProfileMetadata(
+    client: CdpClient,
+    record: SessionRecord,
+  ): Promise<void> {
     const browser = await client
       .send<Record<string, unknown>>("Browser.getVersion")
       .catch(() => null);
-    if (
+    const commandLine = browser?.commandLine;
+    if (typeof commandLine === "string" && commandLine.includes("--user-data-dir=")) {
+      return;
+    }
+    const warning =
       browser !== null &&
       typeof browser.userAgent === "string" &&
       browser.userAgent.includes("Headless")
-    ) {
-      this.emit({
-        kind: "trust-warning",
-        sessionId,
-        payload: { warning: "Headless Chromium detected; verify ephemeral --user-data-dir." },
+        ? "Headless Chromium detected; verify ephemeral --user-data-dir."
+        : "Chrome command-line metadata unavailable; verify ephemeral --user-data-dir.";
+    if (warning.length > 0) {
+      this.emitRecord(record, "trust-warning", {
+        warning,
       });
     }
   }
@@ -408,62 +679,75 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
   public readonly closeSession = async (sessionId: string): Promise<void> => {
     const record = this.sessions.get(sessionId);
     if (record === undefined || record.closed) return;
+    await this.closeRecord(record, "explicit", true);
+  };
+
+  private async closeRecord(
+    record: SessionRecord,
+    reason: string,
+    closeTarget: boolean,
+  ): Promise<void> {
+    if (record.closed) return;
     record.closed = true;
+    record.closedAt = this.nowMs();
+    record.closeReason = reason;
     if (record.idleTimer !== undefined) clearTimeout(record.idleTimer);
     record.removeCdpListener();
-    try {
-      await record.client.send("Target.closeTarget", { targetId: record.targetId });
-    } catch {
-      // Best-effort cleanup; the BFF is shutting the session down regardless.
+    record.removeCdpCloseListener();
+    if (closeTarget) {
+      try {
+        await record.client.send("Target.closeTarget", { targetId: record.targetId });
+      } catch {
+        // Best-effort cleanup; the BFF is shutting the session down regardless.
+      }
+      record.client.close();
     }
-    record.client.close();
-    this.sessions.delete(sessionId);
-    this.emit({ kind: "session-closed", sessionId, payload: { reason: "explicit" } });
-  };
+    this.sessions.delete(record.id);
+    try {
+      this.emitRecord(record, "session-closed", { reason });
+    } finally {
+      this.subscribers.delete(record.id);
+    }
+  }
 
   public readonly navigate = async (
     sessionId: string,
     url: string,
   ): Promise<BrowserNavigateResult> => {
-    const record = this.requireRecord(sessionId);
-    const normalized = normalizeNavigateUrl(url);
-    this.touch(record);
-    record.originAllowed = false;
-    record.lastUrl = null;
-    record.lastOriginOnly = null;
-    const cdpStatus = await this.invokeNavigate(record, normalized.url);
-    await this.waitForOriginRecheck(record, normalized.originOnly);
-    // record.originAllowed is mutated by the async frameNavigated listener; the TS narrower can't
-    // see across the awaited recheck so a runtime guard remains required here.
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-    if (!record.originAllowed) {
-      throw new BrowserToolError(
-        "ORIGIN_NOT_ALLOWED",
-        "Post-navigate origin is not on the loopback interface.",
-      );
-    }
-    this.counters.navigations += 1;
-    this.emit({
-      kind: "navigated",
-      sessionId,
-      payload: { originOnly: record.lastOriginOnly, httpStatus: cdpStatus },
+    return this.runSessionAction(sessionId, async (record) => {
+      const normalized = normalizeNavigateUrl(url);
+      this.touch(record);
+      record.originAllowed = false;
+      record.lastUrl = null;
+      record.lastOriginOnly = null;
+      record.expectedOriginOnly = normalized.originOnly;
+      const cdpStatus = await this.invokeNavigate(record, normalized.url);
+      await this.waitForOriginRecheck(record, normalized.originOnly);
+      // record.originAllowed is mutated by the async frameNavigated listener; the TS narrower can't
+      // see across the awaited recheck so a runtime guard remains required here.
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+      if (!record.originAllowed) {
+        throw new BrowserToolError(
+          "ORIGIN_NOT_ALLOWED",
+          "Post-navigate origin is not on the requested loopback origin.",
+        );
+      }
+      this.counters.navigations += 1;
+      this.emitRecord(record, "navigated", {
+        originOnly: record.lastOriginOnly,
+        httpStatus: cdpStatus,
+      });
+      return { originOnly: normalized.originOnly, httpStatus: cdpStatus };
     });
-    return { originOnly: normalized.originOnly, httpStatus: cdpStatus };
   };
 
   private async invokeNavigate(record: SessionRecord, url: string): Promise<number | null> {
-    try {
-      const result = await record.client.send<{ httpStatus?: number }>(
-        "Page.navigate",
-        { url },
-        record.cdpSessionId,
-      );
-      return typeof result.httpStatus === "number" ? result.httpStatus : null;
-    } catch (error) {
-      const code = error instanceof BrowserToolError ? error.code : "CHROME_UNREACHABLE";
-      this.emitError(record.id, code, "Navigation failed.");
-      throw error;
-    }
+    const result = await record.client.send<{ httpStatus?: number }>(
+      "Page.navigate",
+      { url },
+      record.cdpSessionId,
+    );
+    return typeof result.httpStatus === "number" ? result.httpStatus : null;
   }
 
   private async waitForOriginRecheck(record: SessionRecord, expectedOrigin: string): Promise<void> {
@@ -482,128 +766,153 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
   }
 
   public readonly screenshot = async (sessionId: string): Promise<BrowserScreenshotResult> => {
-    const record = this.requireRecord(sessionId);
-    this.requireOriginAllowed(record, "Screenshot");
-    this.touch(record);
-    const result = await record.client.send<ScreenshotCdpResult>(
-      "Page.captureScreenshot",
-      { format: "png" },
-      record.cdpSessionId,
-    );
-    // Defence in depth against the frameNavigated race: if a redirect arrived while
-    // captureScreenshot was in flight, the listener has now run and flipped originAllowed.
-    // Discard the bytes rather than hand evidence from a non-loopback origin to the caller.
-    if (!record.originAllowed) {
-      throw new BrowserToolError(
-        "ORIGIN_NOT_ALLOWED",
-        "Screenshot blocked: origin drifted off-loopback during capture.",
+    return this.runSessionAction(sessionId, async (record) => {
+      this.requireOriginAllowed(record, "Screenshot");
+      this.touch(record);
+      const result = await record.client.send<ScreenshotCdpResult>(
+        "Page.captureScreenshot",
+        { format: "png" },
+        record.cdpSessionId,
       );
-    }
-    const bytes = Buffer.from(result.data, "base64");
-    if (bytes.length > MAX_SCREENSHOT_BYTES) {
-      throw new BrowserToolError("SCREENSHOT_TOO_LARGE", "Screenshot exceeds the size limit.");
-    }
-    record.captureSeq += 1;
-    const seq = record.captureSeq;
-    // M1: evict the oldest entry if the cap is reached (Map is insertion-ordered).
-    if (record.pendingScreenshots.size >= MAX_PENDING_SCREENSHOTS) {
-      const oldest = record.pendingScreenshots.keys().next().value;
-      if (oldest !== undefined) record.pendingScreenshots.delete(oldest);
-    }
-    record.pendingScreenshots.set(seq, { seq, viewportPx: DEFAULT_VIEWPORT, bytes });
-    this.emit({
-      kind: "screenshot-captured",
-      sessionId,
-      payload: { captureSeq: seq, persisted: false, viewportPx: DEFAULT_VIEWPORT },
+      // Defence in depth against the frameNavigated race: if a redirect arrived while
+      // captureScreenshot was in flight, the listener has now run and flipped originAllowed.
+      // Discard the bytes rather than hand evidence from a non-loopback origin to the caller.
+      if (!record.originAllowed) {
+        throw new BrowserToolError(
+          "ORIGIN_NOT_ALLOWED",
+          "Screenshot blocked: origin drifted off-loopback during capture.",
+        );
+      }
+      const bytes = Buffer.from(result.data, "base64");
+      if (bytes.length > MAX_SCREENSHOT_BYTES) {
+        throw new BrowserToolError("SCREENSHOT_TOO_LARGE", "Screenshot exceeds the size limit.");
+      }
+      record.captureSeq += 1;
+      const seq = record.captureSeq;
+      // M1: evict the oldest entry if the cap is reached (Map is insertion-ordered).
+      if (record.pendingScreenshots.size >= MAX_PENDING_SCREENSHOTS) {
+        const oldest = record.pendingScreenshots.keys().next().value;
+        if (oldest !== undefined) record.pendingScreenshots.delete(oldest);
+      }
+      record.pendingScreenshots.set(seq, { seq, viewportPx: DEFAULT_VIEWPORT, bytes });
+      this.emitRecord(record, "screenshot-captured", {
+        captureSeq: seq,
+        persisted: false,
+        viewportPx: DEFAULT_VIEWPORT,
+      });
+      return { seq, viewportPx: DEFAULT_VIEWPORT, dataBase64: result.data, persisted: false };
     });
-    return { seq, viewportPx: DEFAULT_VIEWPORT, dataBase64: result.data, persisted: false };
   };
 
-  public readonly applyScreenshot = (
+  public readonly applyScreenshot = async (
     sessionId: string,
     captureSeq: number,
-  ): Promise<BrowserScreenshotResult> => {
-    const record = this.requireRecord(sessionId);
-    const pending = record.pendingScreenshots.get(captureSeq);
-    if (pending === undefined) {
-      return Promise.reject(
-        new BrowserToolError("NO_PENDING_SCREENSHOT", "No pending screenshot for this sequence."),
+  ): Promise<BrowserScreenshotResult> =>
+    this.runSessionAction(sessionId, (record) => {
+      const pending = record.pendingScreenshots.get(captureSeq);
+      if (pending === undefined) {
+        throw new BrowserToolError(
+          "NO_PENDING_SCREENSHOT",
+          "No pending screenshot for this sequence.",
+        );
+      }
+      this.touch(record);
+      const name = `browser-${String(pending.seq)}.png`;
+      const written = writeSideFile(
+        this.opts.evidenceDir,
+        record.runId,
+        name,
+        pending.bytes,
+        this.opts.sideFileOptions,
       );
-    }
-    this.touch(record);
-    const name = `browser-${String(pending.seq)}.png`;
-    const written = writeSideFile(
-      this.opts.evidenceDir,
-      record.runId,
-      name,
-      pending.bytes,
-      this.opts.sideFileOptions,
-    );
-    record.pendingScreenshots.delete(captureSeq);
-    this.emit({
-      kind: "screenshot-captured",
-      sessionId,
-      payload: {
+      const capturedAt = this.nowMs();
+      const screenshot: EvidenceBrowserScreenshot = {
+        seq: pending.seq,
+        viewportPx: pending.viewportPx,
+        path: written.relativePath,
+        sha256: written.sha256,
+        bytes: written.bytes,
+        capturedAt,
+      };
+      record.screenshots.push(screenshot);
+      record.pendingScreenshots.delete(captureSeq);
+      this.emitRecord(record, "screenshot-captured", {
         captureSeq,
         persisted: true,
         viewportPx: pending.viewportPx,
         path: written.relativePath,
         sha256: written.sha256,
-      },
+        bytes: written.bytes,
+      });
+      return {
+        seq: pending.seq,
+        viewportPx: pending.viewportPx,
+        persisted: true,
+        path: written.relativePath,
+        sha256: written.sha256,
+        bytes: written.bytes,
+      };
     });
-    return Promise.resolve({
-      seq: pending.seq,
-      viewportPx: pending.viewportPx,
-      persisted: true,
-      path: written.relativePath,
-      sha256: written.sha256,
-      bytes: written.bytes,
-    });
-  };
 
   public readonly content = async (sessionId: string): Promise<BrowserContentResult> => {
-    const record = this.requireRecord(sessionId);
-    this.requireOriginAllowed(record, "Content capture");
-    this.touch(record);
-    const doc = await record.client.send<DocumentRoot>("DOM.getDocument", {}, record.cdpSessionId);
-    const html = await record.client.send<OuterHtmlResult>(
-      "DOM.getOuterHTML",
-      { nodeId: doc.root.nodeId },
-      record.cdpSessionId,
-    );
-    // Defence in depth against the frameNavigated race during the DOM.getOuterHTML RPC.
-    if (!record.originAllowed) {
-      throw new BrowserToolError(
-        "ORIGIN_NOT_ALLOWED",
-        "Content capture blocked: origin drifted off-loopback during capture.",
+    return this.runSessionAction(sessionId, async (record) => {
+      this.requireOriginAllowed(record, "Content capture");
+      this.touch(record);
+      const doc = await record.client.send<DocumentRoot>(
+        "DOM.getDocument",
+        {},
+        record.cdpSessionId,
       );
-    }
-    const raw = html.outerHTML;
-    if (Buffer.byteLength(raw, "utf8") > MAX_CONTENT_BYTES) {
-      throw new BrowserToolError("CONTENT_TOO_LARGE", "Page content exceeds the size limit.");
-    }
-    const redacted = this.redactor(raw);
-    const redactedHtml = typeof redacted === "string" ? redacted : raw;
-    record.captureSeq += 1;
-    const seq = record.captureSeq;
-    const byteLength = Buffer.byteLength(redactedHtml, "utf8");
-    this.emit({
-      kind: "page-content-captured",
-      sessionId,
-      payload: { captureSeq: seq, byteLength },
+      const html = await record.client.send<OuterHtmlResult>(
+        "DOM.getOuterHTML",
+        { nodeId: doc.root.nodeId },
+        record.cdpSessionId,
+      );
+      // Defence in depth against the frameNavigated race during the DOM.getOuterHTML RPC.
+      if (!record.originAllowed) {
+        throw new BrowserToolError(
+          "ORIGIN_NOT_ALLOWED",
+          "Content capture blocked: origin drifted off-loopback during capture.",
+        );
+      }
+      const raw = html.outerHTML;
+      if (Buffer.byteLength(raw, "utf8") > MAX_CONTENT_BYTES) {
+        throw new BrowserToolError("CONTENT_TOO_LARGE", "Page content exceeds the size limit.");
+      }
+      const redacted = this.redactor(raw);
+      const redactedHtml = typeof redacted === "string" ? redacted : raw;
+      const byteLength = Buffer.byteLength(redactedHtml, "utf8");
+      if (byteLength > MAX_CONTENT_BYTES) {
+        throw new BrowserToolError("CONTENT_TOO_LARGE", "Page content exceeds the size limit.");
+      }
+      record.captureSeq += 1;
+      const seq = record.captureSeq;
+      record.contentCaptures.push({ seq, byteLength, capturedAt: this.nowMs(), redactedHtml });
+      this.emitRecord(record, "page-content-captured", { captureSeq: seq, byteLength });
+      return { seq, byteLength, redactedHtml };
     });
-    return { seq, byteLength, redactedHtml };
   };
 
   public readonly listSessionIds = (): readonly string[] => [...this.sessions.keys()];
 
+  public readonly hasSession = (sessionId: string): boolean => {
+    const record = this.sessions.get(sessionId);
+    return record !== undefined && !record.closed;
+  };
+
   public readonly dispose = async (): Promise<void> => {
     for (const id of [...this.sessions.keys()]) {
-      await this.closeSession(id);
+      const record = this.sessions.get(id);
+      if (record !== undefined) {
+        await this.closeRecord(record, "process-exit", true);
+      }
     }
   };
 
   public readonly subscribe = (sessionId: string, listener: BrowserEventEmitter): (() => void) => {
+    if (!this.hasSession(sessionId)) {
+      return (): void => undefined;
+    }
     let set = this.subscribers.get(sessionId);
     if (set === undefined) {
       set = new Set<BrowserEventEmitter>();
@@ -639,11 +948,11 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     record.lastTouchedMs = this.nowMs();
     if (record.idleTimer !== undefined) clearTimeout(record.idleTimer);
     record.idleTimer = setTimeout(() => {
-      void this.closeSession(record.id).catch(() => undefined);
+      void this.closeRecord(record, "idle-timeout", true).catch(() => undefined);
     }, this.idleTtlMs).unref();
   }
 
-  private emit(event: BrowserEventEnvelope): void {
+  private fanout(event: BrowserEventEnvelope): void {
     const set = this.subscribers.get(event.sessionId);
     if (set === undefined) return;
     for (const listener of [...set]) {
@@ -655,34 +964,46 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     }
   }
 
-  private emitError(sessionId: string, code: string, message: string): void {
-    this.emit({ kind: "error", sessionId, payload: { code, message } });
-  }
-
   private frameNavigatedListener(record: SessionRecord): CdpEventListener {
     return (event): void => {
       if (event.method !== "Page.frameNavigated") return;
-      const params = event.params as FrameNavigatedParams;
-      const url = params.frame?.url;
-      if (typeof url !== "string" || url.length === 0) return;
-      // Ignore navigations triggered by Target.createTarget("about:blank") and similar.
-      if (url === "about:blank") return;
-      record.lastUrl = url;
-      if (isLoopbackUrl(url)) {
-        record.originAllowed = true;
-        record.lastOriginOnly = safeOrigin(url);
-        return;
-      }
-      record.originAllowed = false;
-      // Best-effort stop loading; ignore the rejection — the next caller will see
-      // ORIGIN_NOT_ALLOWED on screenshot/content anyway.
-      void record.client.send("Page.stopLoading", {}, record.cdpSessionId).catch(() => undefined);
-      this.emitError(
-        record.id,
-        "ORIGIN_NOT_ALLOWED",
-        "Navigation drifted to a non-loopback origin.",
-      );
+      this.handleFrameNavigated(record, event.params as FrameNavigatedParams);
     };
+  }
+
+  private handleFrameNavigated(record: SessionRecord, params: FrameNavigatedParams): void {
+    if (isSubframeNavigation(params)) return;
+    const url = mainFrameUrl(params);
+    if (url === null) return;
+    record.lastUrl = url;
+    const originOnly = safeOrigin(url);
+    if (this.isExpectedOrigin(record, url, originOnly)) {
+      record.originAllowed = true;
+      record.lastOriginOnly = originOnly;
+      return;
+    }
+    this.rejectFrameNavigation(record, originOnly);
+  }
+
+  private isExpectedOrigin(
+    record: SessionRecord,
+    url: string,
+    originOnly: string | null,
+  ): originOnly is string {
+    return isLoopbackUrl(url) && originOnly !== null && originOnly === record.expectedOriginOnly;
+  }
+
+  private rejectFrameNavigation(record: SessionRecord, originOnly: string | null): void {
+    record.originAllowed = false;
+    record.lastOriginOnly = originOnly;
+    // Best-effort stop loading; ignore the rejection — the next caller will see
+    // ORIGIN_NOT_ALLOWED on screenshot/content anyway.
+    void record.client.send("Page.stopLoading", {}, record.cdpSessionId).catch(() => undefined);
+    this.emitErrorRecord(
+      record,
+      "ORIGIN_NOT_ALLOWED",
+      "Navigation drifted away from the requested loopback origin.",
+    );
   }
 }
 

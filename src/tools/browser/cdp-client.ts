@@ -33,6 +33,7 @@ export type CdpEventListener = (event: {
   readonly params: unknown;
   readonly sessionId?: string;
 }) => void;
+export type CdpCloseListener = (reason: string) => void;
 
 interface PendingRequest {
   readonly resolve: (value: unknown) => void;
@@ -76,6 +77,7 @@ export class CdpClient {
   private readonly timeoutMs: number;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly listeners = new Set<CdpEventListener>();
+  private readonly closeListeners = new Set<CdpCloseListener>();
   private nextId = 1;
   private connectPromise: Promise<void> | undefined;
   private closed = false;
@@ -122,6 +124,13 @@ export class CdpClient {
     this.listeners.add(listener);
     return (): void => {
       this.listeners.delete(listener);
+    };
+  }
+
+  public onClose(listener: CdpCloseListener): () => void {
+    this.closeListeners.add(listener);
+    return (): void => {
+      this.closeListeners.delete(listener);
     };
   }
 
@@ -240,5 +249,12 @@ export class CdpClient {
       pending.reject(new BrowserToolError("TARGET_CLOSED", "CDP connection closed."));
     }
     this.pending.clear();
+    for (const listener of [...this.closeListeners]) {
+      try {
+        listener(reason);
+      } catch {
+        // A close listener throwing must not stop cleanup notifications.
+      }
+    }
   }
 }

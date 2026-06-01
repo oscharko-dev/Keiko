@@ -5,15 +5,15 @@
 // not a recognised version is reported with a typed error (D5), not silently coerced. This is the
 // #13 UI seam.
 
-import type { RunOutcome, TaskType } from "../harness/types.js";
+import type { RunOutcome } from "../harness/types.js";
 import { EvidenceReadError, EvidenceSchemaError } from "./errors.js";
 import type { EvidenceStore } from "./store.js";
-import type { EvidenceManifest } from "./types.js";
+import type { EvidenceManifest, EvidenceTaskType } from "./types.js";
 import { EVIDENCE_SCHEMA_VERSION } from "./types.js";
 
 export interface EvidenceListEntry {
   readonly runId: string;
-  readonly taskType: TaskType;
+  readonly taskType: EvidenceTaskType;
   readonly outcome: RunOutcome;
   readonly startedAt: number;
   readonly finishedAt: number;
@@ -125,6 +125,7 @@ function validateManifestShape(parsed: Record<string, unknown>, runId: string): 
   requireOptionalRecord(parsed, "patch", runId);
   requireOptionalRecord(parsed, "verification", runId);
   requireOptionalRecord(parsed, "failure", runId);
+  requireOptionalRecord(parsed, "browser", runId);
 }
 
 function parseManifest(json: string, runId: string): EvidenceManifest {
