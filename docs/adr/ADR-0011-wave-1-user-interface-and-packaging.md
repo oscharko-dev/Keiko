@@ -43,7 +43,7 @@ runs `dependency-review-action` with `fail-on-severity: high` and `deny-licenses
 AGPL-3.0, LGPL-2.1, LGPL-3.0`. Whatever the UI introduces must keep all seven green.
 
 **Zero new runtime dependencies (ADR-0001, load-bearing).** The shipped package today has an empty
-`dependencies` map and `files: ["dist", "README.md", "LICENSE"]`. The supply-chain gates measure
+`dependencies` map and `files: ["dist", "README.md", "LICENSE", "NOTICE", "TRADEMARKS.md"]`. The supply-chain gates measure
 the _shipped, production_ surface (`npm audit --audit-level=high` over the install tree; `npm sbom
 --omit dev`). A UI framework that ends up in the package's runtime dependency tree expands that
 surface to the entire Next/React runtime — a large, high-CVE-churn, regulated-pilot install burden
@@ -260,7 +260,7 @@ separate UI build path:
   deterministically without lifecycle scripts.
 - A `build:ui` script runs the UI export and then copies `ui/out/` into **`dist/ui/static/`**.
 - `package.json#files` already includes `dist`, so `dist/ui/static/` ships as part of `dist`; no
-  `ui/` sources and no `.tsx` are shipped. (The list stays `["dist", "README.md", "LICENSE"]`.)
+  `ui/` sources and no `.tsx` are shipped. (The list stays `["dist", "README.md", "LICENSE", "NOTICE", "TRADEMARKS.md"]`.)
 - A `prepack`/`prepublishOnly` hook runs `npm run build && npm run ui:ci && npm run build:ui` and then a
   **package-surface verification** step that asserts the tarball (`npm pack --dry-run`) contains the
   UI assets and contains **no source maps, no `.env`, no secrets, no local absolute paths, and no

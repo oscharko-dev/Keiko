@@ -34,6 +34,14 @@ if (!paths.includes("dist/ui/csp-hashes.json")) {
   fail("the tarball does not include dist/ui/csp-hashes.json (run `npm run build:ui`).");
 }
 
+if (!paths.includes("NOTICE")) {
+  fail("the tarball does not include NOTICE.");
+}
+
+if (!paths.includes("TRADEMARKS.md")) {
+  fail("the tarball does not include TRADEMARKS.md.");
+}
+
 const forbidden = [
   { test: (p) => p.endsWith(".map"), label: "a source map" },
   { test: (p) => p === ".env" || p.startsWith(".env."), label: "an environment file" },
