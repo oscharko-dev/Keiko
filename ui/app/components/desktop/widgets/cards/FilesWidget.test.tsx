@@ -136,6 +136,25 @@ describe("FilePreview", () => {
     expect(container.innerHTML).not.toContain("some/secret.pem");
   });
 
+  it("does not render the requested path while a denied preview is still loading", async () => {
+    let rejectPreview: ((error: unknown) => void) | undefined;
+    vi.mocked(fetchFilesPreview).mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        rejectPreview = reject;
+      }),
+    );
+
+    const { container } = render(
+      <FilePreview root="/repo" path="some/secret.pem" onClose={() => undefined} />,
+    );
+
+    expect(container.textContent ?? "").not.toContain("some/secret.pem");
+    expect(container.innerHTML).not.toContain("some/secret.pem");
+
+    rejectPreview?.(new ApiError("DENIED", "hidden", 403));
+    await screen.findByRole("alert");
+  });
+
   it("renders the raw error message for non-denied errors", async () => {
     vi.mocked(fetchFilesPreview).mockRejectedValueOnce(new Error("boom"));
 

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { fetchFilesTree } from "../../../../../lib/api";
+import { fetchFilesTree, fetchProjects } from "../../../../../lib/api";
 import type { FilesTreeEntry } from "../../../../../lib/types";
 import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
@@ -39,7 +39,9 @@ function formatBytes(bytes: number): string {
 
 export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): ReactNode {
   const trimmedRoot = root?.trim();
-  const apiRoot = trimmedRoot !== undefined && trimmedRoot.length > 0 ? trimmedRoot : ".";
+  const configuredRoot = trimmedRoot !== undefined && trimmedRoot.length > 0 ? trimmedRoot : null;
+  const [fallbackRoot, setFallbackRoot] = useState<string | null>(null);
+  const apiRoot = configuredRoot ?? fallbackRoot ?? "";
   const [resolvedRoot, setResolvedRoot] = useState<string | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
@@ -48,7 +50,36 @@ export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): Rea
   const activeFileChangeRef = useRef(onActiveFileChange);
   activeFileChangeRef.current = onActiveFileChange;
 
+  useEffect(() => {
+    if (configuredRoot !== null) return;
+    let cancelled = false;
+    void fetchProjects()
+      .then((payload) => {
+        if (cancelled) return;
+        const first = payload.projects.find((project) => project.available)?.path;
+        setFallbackRoot(first ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setFallbackRoot(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [configuredRoot]);
+
   const loadDirectory = useCallback(async (path: string): Promise<void> => {
+    if (apiRoot.length === 0) {
+      setDirectories((current) => ({
+        ...current,
+        [path]: {
+          entries: [],
+          truncated: false,
+          loading: false,
+          error: "No registered project is available.",
+        },
+      }));
+      return;
+    }
     setDirectories((current) => ({
       ...current,
       [path]: {
@@ -126,6 +157,7 @@ export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): Rea
             style={{ paddingLeft: pad }}
             type="button"
             disabled={!entry.readable}
+            aria-expanded={open}
             onClick={() => toggleDirectory(entry)}
             title={entry.readable ? entry.path : "Symlink target is outside the selected root"}
           >
