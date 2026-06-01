@@ -2,13 +2,19 @@
 // 30-min idle TTL, fresh Target.createTarget only (never attaches to user tabs), post-navigate
 // frameNavigated origin re-check, dry-run-by-default screenshots, redactor over captured HTML.
 //
+// Security invariants:
+//   • webSocketDebuggerUrl from /json/version is validated for loopback host + matching port (H1).
+//   • pendingScreenshots per session is capped at MAX_PENDING_SCREENSHOTS (4) with insertion-order
+//     eviction to bound memory use (M1).
+//   • Session slot is reserved synchronously before any await to prevent TOCTOU on the limit (M2).
+//
 // Composition: validators (M1) + CDP client (M2) + side-file writer (M3) + the existing audit
 // redactor. No new safety primitives — every guard is reused.
 
 import { randomUUID } from "node:crypto";
 import { CdpClient, type CdpClientOptions, type CdpEventListener } from "./cdp-client.js";
 import { BrowserToolError } from "./errors.js";
-import { isLoopbackUrl, normalizeCdpPort, normalizeNavigateUrl } from "./validators.js";
+import { isLoopbackHost, isLoopbackUrl, normalizeCdpPort, normalizeNavigateUrl } from "./validators.js";
 import type {
   BrowserContentResult,
   BrowserNavigateResult,
@@ -23,6 +29,8 @@ const MAX_SESSIONS = 4;
 const SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
 const MAX_SCREENSHOT_BYTES = 10 * 1024 * 1024;
 const MAX_CONTENT_BYTES = 2 * 1024 * 1024;
+// M1: cap per-session pending screenshots; oldest (insertion-order) is evicted on overflow.
+const MAX_PENDING_SCREENSHOTS = 4;
 const DEFAULT_VIEWPORT: BrowserViewportPx = { width: 1280, height: 800 };
 const FRAGMENT_RECHECK_TIMEOUT_MS = 5000;
 const VERSION_PATH = "/json/version";
@@ -124,6 +132,24 @@ interface VersionInfo {
   readonly browserVersion: string | null;
 }
 
+// H1: validate webSocketDebuggerUrl host+port so a malicious /json/version responder
+// cannot redirect the WebSocket to a non-loopback host (ADR-0017 D2 layer-1).
+function assertWsUrlTrusted(ws: string, expectedPort: number): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(ws);
+  } catch {
+    throw new BrowserToolError("CDP_TRANSPORT_REFUSED", "CDP endpoint returned an invalid WebSocket URL.");
+  }
+  const host = parsed.hostname.startsWith("[") && parsed.hostname.endsWith("]")
+    ? parsed.hostname.slice(1, -1)
+    : parsed.hostname;
+  const port = parsed.port === "" ? (parsed.protocol === "wss:" ? 443 : 80) : Number.parseInt(parsed.port, 10);
+  if (!isLoopbackHost(host) || port !== expectedPort) {
+    throw new BrowserToolError("CDP_TRANSPORT_REFUSED", "CDP endpoint returned a WebSocket URL that is not on the expected loopback address.");
+  }
+}
+
 function browserWsUrlFromVersion(version: unknown, fallbackPort: number): VersionInfo {
   if (typeof version !== "object" || version === null) {
     return defaultVersionInfo(fallbackPort);
@@ -133,6 +159,7 @@ function browserWsUrlFromVersion(version: unknown, fallbackPort: number): Versio
   if (typeof ws !== "string" || !ws.startsWith("ws://")) {
     return defaultVersionInfo(fallbackPort);
   }
+  assertWsUrlTrusted(ws, fallbackPort);
   const ua = rec["User-Agent"] ?? rec.userAgent;
   const product = rec.Browser ?? rec.product;
   return {
@@ -230,24 +257,40 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
 
   public readonly openSession = async (cdpPort: number): Promise<BrowserSessionMeta> => {
     normalizeCdpPort(cdpPort);
+    // M2: reserve the slot synchronously before any await, closing the TOCTOU window where
+    // concurrent calls could each pass the size check and then all succeed.
     if (this.sessions.size >= MAX_SESSIONS) {
       throw new BrowserToolError("SESSION_LIMIT_EXCEEDED", "Too many active browser sessions.");
     }
-    const versionInfo = await this.checkStatus(cdpPort);
-    if (!versionInfo.reachable || versionInfo.webSocketDebuggerUrl === null) {
-      throw new BrowserToolError("CHROME_UNREACHABLE", "CDP endpoint is not reachable.");
-    }
-    const client = this.clientFactory(versionInfo.webSocketDebuggerUrl, {});
+    const reservedId = randomUUID();
+    const placeholder = this.buildRecord(
+      { connect: (): Promise<void> => Promise.resolve(), send: (): Promise<unknown> => Promise.resolve({}), onEvent: (): (() => void) => (): void => undefined, close: (): void => undefined, isClosed: (): boolean => false, closeCause: (): undefined => undefined } as unknown as import("./cdp-client.js").CdpClient,
+      cdpPort,
+      "",
+      "",
+      reservedId,
+    );
+    this.sessions.set(reservedId, placeholder);
     try {
-      return await this.attachAndRegister(client, cdpPort);
+      const versionInfo = await this.checkStatus(cdpPort);
+      if (!versionInfo.reachable || versionInfo.webSocketDebuggerUrl === null) {
+        throw new BrowserToolError("CHROME_UNREACHABLE", "CDP endpoint is not reachable.");
+      }
+      const client = this.clientFactory(versionInfo.webSocketDebuggerUrl, {});
+      try {
+        return await this.attachAndRegister(client, cdpPort, reservedId);
+      } catch (error) {
+        client.close();
+        if (error instanceof BrowserToolError) throw error;
+        throw new BrowserToolError("CHROME_UNREACHABLE", "Failed to open browser session.");
+      }
     } catch (error) {
-      client.close();
-      if (error instanceof BrowserToolError) throw error;
-      throw new BrowserToolError("CHROME_UNREACHABLE", "Failed to open browser session.");
+      this.sessions.delete(reservedId);
+      throw error;
     }
   };
 
-  private async attachAndRegister(client: CdpClient, cdpPort: number): Promise<BrowserSessionMeta> {
+  private async attachAndRegister(client: CdpClient, cdpPort: number, reservedId: string): Promise<BrowserSessionMeta> {
     await client.connect();
     const target = await client.send<CreateTargetResult>("Target.createTarget", {
       url: "about:blank",
@@ -256,7 +299,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       targetId: target.targetId,
       flatten: true,
     });
-    const record = this.buildRecord(client, cdpPort, target.targetId, attach.sessionId);
+    const record = this.buildRecord(client, cdpPort, target.targetId, attach.sessionId, reservedId);
     record.removeCdpListener = client.onEvent(this.frameNavigatedListener(record));
     await client.send("Page.enable", {}, attach.sessionId);
     this.sessions.set(record.id, record);
@@ -281,8 +324,8 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     cdpPort: number,
     targetId: string,
     cdpSessionId: string,
+    id: string = randomUUID(),
   ): SessionRecord {
-    const id = randomUUID();
     return {
       id,
       cdpPort,
@@ -299,6 +342,38 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       lastTouchedMs: this.nowMs(),
       closed: false,
       removeCdpListener: (): void => undefined,
+    };
+  }
+
+  private buildPlaceholder(id: string, cdpPort: number): SessionRecord {
+    // A closed sentinel record that reserves the sessions slot without an active CdpClient.
+    // It is replaced by the live record inside attachAndRegister once the CDP handshake
+    // completes. Because closed=true, requireRecord and closeSession treat it as unavailable.
+    const noop = (): void => undefined;
+    const fakeClient = {
+      connect: (): Promise<void> => Promise.resolve(),
+      send: (): Promise<Record<string, unknown>> => Promise.resolve({}),
+      onEvent: (): (() => void) => noop,
+      close: noop,
+      isClosed: (): boolean => true,
+      closeCause: (): undefined => undefined,
+    } as unknown as CdpClient;
+    return {
+      id,
+      cdpPort,
+      targetId: "",
+      client: fakeClient,
+      cdpSessionId: "",
+      runId: id.replace(/-/g, ""),
+      lastUrl: null,
+      lastOriginOnly: null,
+      originAllowed: false,
+      captureSeq: 0,
+      pendingScreenshots: new Map(),
+      idleTimer: undefined,
+      lastTouchedMs: this.nowMs(),
+      closed: true,
+      removeCdpListener: noop,
     };
   }
 
@@ -419,6 +494,11 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     }
     record.captureSeq += 1;
     const seq = record.captureSeq;
+    // M1: evict the oldest entry if the cap is reached (Map is insertion-ordered).
+    if (record.pendingScreenshots.size >= MAX_PENDING_SCREENSHOTS) {
+      const oldest = record.pendingScreenshots.keys().next().value;
+      if (oldest !== undefined) record.pendingScreenshots.delete(oldest);
+    }
     record.pendingScreenshots.set(seq, { seq, viewportPx: DEFAULT_VIEWPORT, bytes });
     this.emit({
       kind: "screenshot-captured",
@@ -549,7 +629,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     if (record.idleTimer !== undefined) clearTimeout(record.idleTimer);
     record.idleTimer = setTimeout(() => {
       void this.closeSession(record.id).catch(() => undefined);
-    }, this.idleTtlMs);
+    }, this.idleTtlMs).unref();
   }
 
   private emit(event: BrowserEventEnvelope): void {

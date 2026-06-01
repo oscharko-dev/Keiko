@@ -439,7 +439,7 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
         )}
       </div>
 
-      <div className="bw-log" aria-label="Browser event log">
+      <div className="bw-log" aria-label="Browser event log" aria-live="polite" aria-atomic="false">
         <ul className="bw-log-list">
           {events.slice(-10).map((event, idx) => (
             <li key={`${String(event.kind)}-${String(idx)}`} className="bw-log-item">

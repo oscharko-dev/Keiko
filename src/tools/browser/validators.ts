@@ -8,6 +8,8 @@ import type { NormalizedNavigateUrl } from "./types.js";
 const MIN_PORT = 1024;
 const MAX_PORT = 65535;
 const ALLOWED_SCHEMES: ReadonlySet<string> = new Set(["http:", "https:"]);
+// Strict literal-host policy: IPv4-mapped IPv6 forms like `::ffff:127.0.0.1` are
+// REJECTED on purpose. ADR-0017 D2 normalises only `localhost`/`127.0.0.1`/`::1`.
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "::1"]);
 
 export function normalizeCdpPort(value: unknown): number {
@@ -83,6 +85,13 @@ function bareHost(parsed: URL): string {
   const h = parsed.hostname;
   if (h.startsWith("[") && h.endsWith("]")) return h.slice(1, -1);
   return h;
+}
+
+// Narrow host-string check: takes a bare hostname (no scheme, no port, no brackets stripped)
+// and returns true if it is a loopback literal. Used by session.ts to validate the host
+// component of webSocketDebuggerUrl returned by /json/version (ADR-0017 D2 H1).
+export function isLoopbackHost(host: string): boolean {
+  return LOOPBACK_HOSTS.has(host);
 }
 
 // Re-check after a navigation completes (ADR-0017 D2 layer 2). The CDP `frameNavigated` event

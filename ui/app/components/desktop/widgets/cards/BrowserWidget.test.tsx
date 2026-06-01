@@ -203,6 +203,13 @@ describe("BrowserWidget", () => {
     expect(deleteBrowserSession).toHaveBeenCalledWith("session-1");
   });
 
+  it("event log container has aria-live polite for screen-reader announcements", () => {
+    render(<BrowserWidget />);
+    const log = document.querySelector(".bw-log");
+    expect(log).toHaveAttribute("aria-live", "polite");
+    expect(log).toHaveAttribute("aria-atomic", "false");
+  });
+
   it("invokes content capture", async () => {
     vi.mocked(createBrowserSession).mockResolvedValueOnce(sessionMeta);
     vi.mocked(browserContent).mockResolvedValueOnce({

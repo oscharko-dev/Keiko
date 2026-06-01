@@ -8,7 +8,7 @@ export {
   type BrowserErrorCode,
 } from "./errors.js";
 
-export { isLoopbackUrl, normalizeCdpPort, normalizeNavigateUrl } from "./validators.js";
+export { isLoopbackHost, isLoopbackUrl, normalizeCdpPort, normalizeNavigateUrl } from "./validators.js";
 
 export type {
   BrowserContentResult,

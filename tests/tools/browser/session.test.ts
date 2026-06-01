@@ -105,6 +105,7 @@ function defaultResponder(call: RecordedCall): unknown {
 async function makeFixture(overrides?: {
   readonly responder?: Responder;
   readonly redactor?: (v: unknown) => unknown;
+  readonly fetchVersion?: (url: string) => Promise<unknown>;
 }): Promise<ManagerFixture> {
   const evidenceDir = await realpath(await mkdtemp(join(tmpdir(), "keiko-browser-")));
   let captured: FakeCdpClient | undefined;
@@ -115,12 +116,14 @@ async function makeFixture(overrides?: {
       overrides?.redactor ??
       ((value: unknown): unknown =>
         typeof value === "string" ? value.replace(/secret=[^<]+/g, "secret=***") : value),
-    fetchVersion: () =>
-      Promise.resolve({
-        webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/xyz",
-        "User-Agent": "Chrome/130.0",
-        Browser: "Chrome/130.0",
-      }),
+    fetchVersion:
+      overrides?.fetchVersion ??
+      ((): Promise<unknown> =>
+        Promise.resolve({
+          webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/xyz",
+          "User-Agent": "Chrome/130.0",
+          Browser: "Chrome/130.0",
+        })),
     cdpClientFactory: (
       url: string,
       _opts: CdpClientOptions,
@@ -429,5 +432,99 @@ describe("subscribe", () => {
     await fixture.manager.closeSession(meta.sessionId);
     expect(a.some((e) => e.kind === "session-closed")).toBe(false);
     expect(b.some((e) => e.kind === "session-closed")).toBe(true);
+  });
+});
+
+describe("webSocketDebuggerUrl host validation (H1)", () => {
+  it("rejects a WS URL pointing to a non-loopback host", async () => {
+    const fixture = await withFixture({
+      fetchVersion: () =>
+        Promise.resolve({
+          webSocketDebuggerUrl: "ws://evil.example:9222/devtools/browser/x",
+          "User-Agent": "Chrome/130",
+          Browser: "Chrome/130",
+        }),
+    });
+    await expect(fixture.manager.openSession(9222)).rejects.toMatchObject({
+      code: "CDP_TRANSPORT_REFUSED",
+    });
+  });
+
+  it("rejects a WS URL whose port differs from the user-supplied port", async () => {
+    const fixture = await withFixture({
+      fetchVersion: () =>
+        Promise.resolve({
+          webSocketDebuggerUrl: "ws://127.0.0.1:9999/devtools/browser/x",
+          "User-Agent": "Chrome/130",
+          Browser: "Chrome/130",
+        }),
+    });
+    await expect(fixture.manager.openSession(9222)).rejects.toMatchObject({
+      code: "CDP_TRANSPORT_REFUSED",
+    });
+  });
+});
+
+describe("pending screenshot cap (M1)", () => {
+  async function navigatedForCap(): Promise<{ fixture: ManagerFixture; sessionId: string }> {
+    const fixture = await withFixture();
+    const meta = await fixture.manager.openSession(9222);
+    fixture.subscribe(meta.sessionId);
+    setTimeout(() => {
+      fixture.client.emitFrameNavigated("http://127.0.0.1:5173/");
+    }, 5);
+    await fixture.manager.navigate(meta.sessionId, "http://127.0.0.1:5173/");
+    return { fixture, sessionId: meta.sessionId };
+  }
+
+  it("caps pendingScreenshots at 4 and evicts the oldest entry on the 5th", async () => {
+    const { fixture, sessionId } = await navigatedForCap();
+    // Take 5 screenshots — the 5th triggers eviction of seq=1.
+    for (let i = 0; i < 5; i += 1) {
+      await fixture.manager.screenshot(sessionId);
+    }
+    // seq=1 must have been evicted.
+    await expect(fixture.manager.applyScreenshot(sessionId, 1)).rejects.toMatchObject({
+      code: "NO_PENDING_SCREENSHOT",
+    });
+    // seq=5 (most recent, still in map) must still be present.
+    const applied = await fixture.manager.applyScreenshot(sessionId, 5);
+    expect(applied.persisted).toBe(true);
+  });
+});
+
+describe("session-limit TOCTOU reservation (M2)", () => {
+  it("allows at most 4 concurrent openSession calls to succeed", async () => {
+    const releaseSignals: (() => void)[] = [];
+    const fixture = await withFixture({
+      fetchVersion: () =>
+        new Promise<unknown>((resolve) => {
+          // Hold the version fetch until release() is called so all 6 calls are in-flight.
+          releaseSignals.push(() => {
+            resolve({
+              webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/x",
+              "User-Agent": "Chrome/130",
+              Browser: "Chrome/130",
+            });
+          });
+        }),
+    });
+    // Fire 6 concurrent openSession calls.
+    const openOne = (): Promise<{ ok: true } | { ok: false; err: unknown }> =>
+      fixture.manager.openSession(9222).then(
+        () => ({ ok: true as const }),
+        (err: unknown) => ({ ok: false as const, err }),
+      );
+    const promises = [openOne(), openOne(), openOne(), openOne(), openOne(), openOne()];
+    // Allow all held version fetches to resolve.
+    for (const release of releaseSignals) release();
+    const results = await Promise.all(promises);
+    const successes = results.filter((r) => r.ok);
+    const failures = results.filter((r): r is { ok: false; err: unknown } => !r.ok);
+    expect(successes).toHaveLength(4);
+    expect(failures).toHaveLength(2);
+    for (const f of failures) {
+      expect((f.err as { code?: string }).code).toBe("SESSION_LIMIT_EXCEEDED");
+    }
   });
 });
