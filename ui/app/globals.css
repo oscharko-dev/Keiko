@@ -1008,18 +1008,18 @@ select.dlg-input { appearance: none; cursor: pointer; }
 .rv-body { flex: 1; overflow: auto; }
 /* apply controls */
 .rv-controls { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--line-soft); }
-.rv-apply-status { font-size: 11.5px; color: var(--fg-faint); flex: 1; }
-.rv-apply-error { font-size: 11.5px; color: var(--danger); }
-/* "Applied" terminal badge */
-.rv-final { font-size: 12px; color: var(--ok); padding: 3px 8px; border-radius: 6px; background: var(--accent-dim); }
+.rv-apply-status { font-size: 11.5px; color: var(--fg-muted); flex: 1; }
+.rv-apply-error { font-size: 11.5px; color: var(--fg); padding: 3px 8px; border-radius: 6px; background: color-mix(in oklch, var(--danger) 16%, transparent); border: 1px solid color-mix(in oklch, var(--danger) 30%, transparent); }
+/* "Applied" terminal badge — solid accent pill matches .arun-btn.primary contrast ≥6:1 (WCAG 1.4.3) */
+.rv-final { font-size: 12px; color: #06281b; padding: 3px 8px; border-radius: 6px; background: var(--accent); border: 1px solid var(--accent); }
 /* truncation note */
-.rv-truncated { padding: 8px 12px; font-size: 11.5px; color: var(--fg-faint); border-top: 1px solid var(--line-soft); }
+.rv-truncated { padding: 8px 12px; font-size: 11.5px; color: var(--fg-muted); border-top: 1px solid var(--line-soft); }
 .rv-truncated a { color: var(--accent); }
 .rv-truncated a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* empty state */
 .rv-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 8px; padding: 24px; text-align: center; }
 .rv-empty-h { font-size: 14px; font-weight: 600; color: var(--fg-muted); margin: 0; }
-.rv-empty-p { font-size: 12.5px; color: var(--fg-faint); margin: 0; }
+.rv-empty-p { font-size: 12.5px; color: var(--fg-muted); margin: 0; }
 /* loading skeleton */
 .rv-loading { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .rv-skel { height: 14px; border-radius: 6px; background: var(--inset); animation: pulse 1.4s ease-in-out infinite; }
@@ -1027,7 +1027,7 @@ select.dlg-input { appearance: none; cursor: pointer; }
 /* error state */
 .rv-error { margin: 12px; padding: 10px 12px; border-radius: 8px; background: color-mix(in oklch, var(--danger) 10%, transparent); color: var(--fg); font-size: 12.5px; border: 1px solid color-mix(in oklch, var(--danger) 30%, transparent); }
 /* no-diff message */
-.rv-no-diff { padding: 16px 12px; font-size: 12.5px; color: var(--fg-faint); }
+.rv-no-diff { padding: 16px 12px; font-size: 12.5px; color: var(--fg-muted); }
 /* focus ring on the Apply button inside rv-controls (WCAG 2.4.7) */
 .rv-controls .arun-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* syntax token classes from syntaxHighlight.ts */
