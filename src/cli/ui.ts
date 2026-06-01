@@ -222,7 +222,7 @@ function alreadyFlagged(env: EnvSource, execArgv: readonly string[]): boolean {
 
 // Re-spawns the current process with --experimental-sqlite prepended, inheriting stdio. Returns
 // the exit code the child terminated with so the parent can propagate it.
-export async function reExecWithSqliteFlag(spawnFn: SpawnFn): Promise<number> {
+export async function reExecWithSqliteFlag(_env: EnvSource, spawnFn: SpawnFn): Promise<number> {
   const entry = process.argv[1];
   if (entry === undefined) return 1;
   const childArgs: string[] = [SQLITE_FLAG, ...process.execArgv, entry, ...process.argv.slice(2)];
@@ -258,7 +258,7 @@ async function maybeReExecForSqlite(env: EnvSource, deps: UiCliDeps): Promise<nu
   const probe = deps.sqliteProbe ?? defaultSqliteProbe;
   if (probe()) return undefined;
   const spawnFn = deps.spawnFn ?? spawn;
-  return reExecWithSqliteFlag(spawnFn);
+  return reExecWithSqliteFlag(env, spawnFn);
 }
 
 export async function runUiCli(
