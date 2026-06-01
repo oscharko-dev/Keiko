@@ -136,7 +136,16 @@ describe("GET /api/models", () => {
       depsWith({
         config: {
           ...SAMPLE_CONFIG,
-          providers: [{ ...SAMPLE_CONFIG.providers[0], modelId: "gpt-oss-120b" }],
+          providers: [
+            {
+              modelId: "gpt-oss-120b",
+              baseUrl: "https://api.example.com",
+              apiKey: "sk-super-secret-value-1234567890",
+              timeoutMs: 1000,
+              maxRetries: 2,
+              retryBaseDelayMs: 10,
+            },
+          ],
         },
         configPresent: true,
       }),
