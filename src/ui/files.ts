@@ -213,6 +213,12 @@ function isContained(root: string, target: string): boolean {
 async function resolveInsideRoot(rootInput: string | null, pathInput: string | null): Promise<ResolvedTarget> {
   const root = await resolveRoot(rootInput);
   const relativePath = normalizeRelativePath(pathInput);
+  // Deny check runs BEFORE realpath so existence of a denied path is not
+  // observable via the 403/404 status-code difference. A non-existent denied
+  // path returns 403, identical to an existing denied path.
+  if (pathIsDenied(relativePath)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
   const candidate = nativePath(root, relativePath);
   let target: string;
   try {
@@ -377,9 +383,6 @@ async function listTreeEntries(
 
 export async function readFilesTree(rootInput: string | null, pathInput: string | null): Promise<FilesTreeResponse> {
   const target = await resolveInsideRoot(rootInput, pathInput);
-  if (pathIsDenied(target.relativePath)) {
-    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
-  }
   if (!target.stats.isDirectory()) {
     throw new FilesError(400, "NOT_DIRECTORY", "The requested path is not a directory.");
   }
@@ -542,9 +545,6 @@ export async function readFilesPreview(
   redactor: UiHandlerDeps["redactor"],
 ): Promise<FilesPreviewResponse> {
   const target = await resolveInsideRoot(rootInput, pathInput);
-  if (pathIsDenied(target.relativePath)) {
-    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
-  }
   if (!target.stats.isFile()) {
     throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
   }

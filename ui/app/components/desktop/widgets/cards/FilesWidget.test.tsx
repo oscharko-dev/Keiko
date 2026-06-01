@@ -121,12 +121,19 @@ describe("FilePreview", () => {
       new ApiError("DENIED", bffMessage, 403),
     );
 
-    render(<FilePreview root="/repo" path="some/secret.pem" onClose={() => undefined} />);
+    const { container } = render(
+      <FilePreview root="/repo" path="some/secret.pem" onClose={() => undefined} />,
+    );
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/excluded from the read surface for safety/i);
     expect(alert.textContent ?? "").not.toContain(bffMessage);
     expect(alert.textContent ?? "").not.toContain("some/secret.pem");
+    // The requested path must not be visible anywhere in the rendered tree
+    // (the header still renders, but with a generic "Hidden file" label so the
+    // path is not leaked via the document or any title attribute).
+    expect(container.textContent ?? "").not.toContain("some/secret.pem");
+    expect(container.innerHTML).not.toContain("some/secret.pem");
   });
 
   it("renders the raw error message for non-denied errors", async () => {

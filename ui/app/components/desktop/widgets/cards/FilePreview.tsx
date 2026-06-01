@@ -95,7 +95,10 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
     };
   }, [path, root]);
 
-  const lang = preview !== null ? previewKindLabel(preview) : "loading";
+  const denied = error?.denied === true;
+  const lang = preview !== null ? previewKindLabel(preview) : denied ? "denied" : "loading";
+  const headerName = denied ? "Hidden file" : preview?.name ?? path;
+  const headerTitle = denied ? "Hidden file" : path;
   const lines = preview?.kind === "text" ? highlightLines(preview.content, langOf(preview.name)) : [];
 
   return (
@@ -110,8 +113,8 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
         >
           <Icons.back size={15} />
         </button>
-        <FileIcon name={preview?.name ?? path} />
-        <span className="fpv-name" title={path}>{preview?.name ?? path}</span>
+        <FileIcon name={denied ? "" : preview?.name ?? path} />
+        <span className="fpv-name" title={headerTitle}>{headerName}</span>
         <span className="fpv-lang mono">{lang}</span>
         <span className="spacer" />
         <button

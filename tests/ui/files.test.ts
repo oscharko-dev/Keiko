@@ -223,6 +223,24 @@ describe("desktop files browser", () => {
     });
   });
 
+  it("returns 403 DENIED for non-existent denied paths (no existence probing)", async () => {
+    // No file is created. A denied path that does not exist must still return
+    // 403 DENIED — never 404 — so callers cannot tell whether a deny-listed
+    // file exists under the selected root.
+    await expect(readFilesPreview(root, ".env", buildRedactor({}))).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+    await expect(readFilesTree(root, ".git")).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+    await expect(readFilesPreview(root, "node_modules/missing.js", buildRedactor({}))).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+  });
+
   it("allows previewing .env.example as text", async () => {
     await writeFile(join(root, ".env.example"), "# example env template\n");
 
