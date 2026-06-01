@@ -95,12 +95,10 @@ registerWindowRender("terminal", (cfg) => {
   return <TerminalWidget {...props} />;
 });
 registerWindowRender("review", (cfg) => {
-  const base = str(cfg, "base");
-  const head = str(cfg, "head");
-  const props: { base?: string; head?: string } = {};
-  if (base !== undefined) props.base = base;
-  if (head !== undefined) props.head = head;
-  return <ReviewWidget {...props} />;
+  const runId = str(cfg, "runId");
+  return runId !== undefined && runId !== ""
+    ? <ReviewWidget runId={runId} />
+    : <ReviewWidget />;
 });
 registerWindowRender("agents", (cfg, ctx) => (
   <AgentRunWidget cfg={toAgentCfg(cfg)} linkedRoot={ctx.linkedRoot} linkedFilePath={ctx.linkedFilePath} />
