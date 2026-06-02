@@ -63,6 +63,12 @@ function startBgPan(
   window.addEventListener("pointerup", up);
 }
 
+function windowIdFromEventTarget(target: EventTarget | null): string | undefined {
+  if (!(target instanceof Element)) return undefined;
+  const windowElement = target.closest<HTMLElement>(".window[data-window-id]");
+  return windowElement?.dataset.windowId;
+}
+
 export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): ReactNode {
   const { wins, view, snapPrev, conns, connecting, api } = ws;
   const top = topWindow(wins);
@@ -103,6 +109,16 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     [view],
   );
 
+  const onWorkspacePointerDownCapture = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (event.button !== 0 || connecting === null || connFrom === null || wins === null) return;
+    const targetId = windowIdFromEventTarget(event.target);
+    if (targetId === undefined || targetId === connFrom.id) return;
+    const target = wins.find((w) => w.id === targetId);
+    if (target !== undefined && canConnect(connFrom.type, target.type)) {
+      api.confirmConnect(target.id, event);
+    }
+  };
+
   const empty = wins !== null && wins.length === 0;
 
   return (
@@ -110,6 +126,7 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       className="workspace"
       ref={wsRef}
       data-connecting={connecting !== null ? "true" : undefined}
+      onPointerDownCapture={onWorkspacePointerDownCapture}
       onPointerDown={onBgPointerDown}
     >
       <WorkspaceShader />

@@ -277,6 +277,7 @@ interface ConnectArgs {
   readonly connsRef: MutableRefObject<Connection[]>;
   readonly connectingRef: MutableRefObject<ConnectingState | null>;
   readonly connectCleanupRef: MutableRefObject<(() => void) | null>;
+  readonly focus: WorkspaceApi["focus"];
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
   readonly setConnecting: Dispatch<SetStateAction<ConnectingState | null>>;
 }
@@ -311,6 +312,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     connsRef,
     connectingRef,
     connectCleanupRef,
+    focus,
     setConns,
     setConnecting,
   } = args;
@@ -320,6 +322,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       connectCleanupRef.current();
       connectCleanupRef.current = null;
     }
+    connectingRef.current = null;
     setConnecting(null);
   };
 
@@ -337,6 +340,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
           ? cs
           : [...cs, { id: `${c.from}~${toId}`, a: c.from, b: toId }],
       );
+      focus(toId);
     }
     cancelConnect();
   };
@@ -361,9 +365,13 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       connectCleanupRef.current();
       connectCleanupRef.current = null;
     }
-    setConnecting({ from: fromId, x: toWX(e.clientX), y: toWY(e.clientY) });
+    const initial: ConnectingState = { from: fromId, x: toWX(e.clientX), y: toWY(e.clientY) };
+    connectingRef.current = initial;
+    setConnecting(initial);
     const move = (ev: PointerEvent): void => {
-      setConnecting({ from: fromId, x: toWX(ev.clientX), y: toWY(ev.clientY) });
+      const next: ConnectingState = { from: fromId, x: toWX(ev.clientX), y: toWY(ev.clientY) };
+      connectingRef.current = next;
+      setConnecting(next);
     };
     window.addEventListener("pointermove", move);
     connectCleanupRef.current = (): void => {

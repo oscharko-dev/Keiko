@@ -446,6 +446,7 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
       connsRef,
       connectingRef,
       connectCleanupRef,
+      focus,
       setConns,
       setConnecting,
     });

@@ -335,6 +335,7 @@ export function WindowFrame({
       data-top={top ? "true" : "false"}
       data-max={win.max ? "true" : "false"}
       data-conn={connState ?? undefined}
+      data-window-id={win.id}
       style={sectionStyle}
       onPointerDown={(e) => {
         if (connState === "valid") api.confirmConnect(win.id, e);
