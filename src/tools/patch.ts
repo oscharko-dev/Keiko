@@ -155,7 +155,10 @@ function startsWithSequence(
   return needle.every((line, offset) => lines[index + offset] === line);
 }
 
-function uniqueSequenceIndex(lines: readonly string[], needle: readonly string[]): number | undefined {
+function uniqueSequenceIndex(
+  lines: readonly string[],
+  needle: readonly string[],
+): number | undefined {
   if (needle.length === 0 || needle.length > lines.length) {
     return undefined;
   }

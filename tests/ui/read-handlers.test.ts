@@ -107,6 +107,22 @@ const SAMPLE_CONFIG: GatewayConfig = {
     },
   ],
   circuitBreaker: { failureThreshold: 5, cooldownMs: 1000, halfOpenProbes: 1 },
+  capabilities: [
+    {
+      id: "gpt-test",
+      kind: "chat",
+      contextWindow: 8_192,
+      maxOutputTokens: 1_024,
+      toolCalling: true,
+      structuredOutput: true,
+      streaming: true,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test fixture",
+      preferredUseCases: ["UI tests"],
+      knownLimitations: [],
+    },
+  ],
 };
 
 describe("GET /api/config", () => {
@@ -152,6 +168,15 @@ describe("GET /api/models", () => {
     );
     const body = result.body as { models: { id: string }[] };
     expect(body.models.map((model) => model.id)).toEqual(["gpt-oss-120b"]);
+  });
+
+  it("returns customer-declared configured models that are absent from the static registry", () => {
+    const result = handleModels(
+      ctx("/api/models"),
+      depsWith({ config: SAMPLE_CONFIG, configPresent: true }),
+    );
+    const body = result.body as { models: { id: string }[] };
+    expect(body.models.map((model) => model.id)).toEqual(["gpt-test"]);
   });
 
   it("returns no models when no config is resolved", () => {

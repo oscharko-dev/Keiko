@@ -11,6 +11,7 @@ import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
 import { CommandPalette, type Command } from "./modals/CommandPalette";
+import { GatewaySetupDialog } from "./modals/GatewaySetupDialog";
 import { NewWindowDialog } from "./modals/NewWindowDialog";
 import { Palette } from "./modals/Palette";
 import { type Cfg } from "./modals/PermControl";
@@ -158,6 +159,7 @@ function AppShellInner(): ReactNode {
     () => buildCommands(ws.api, pick, theme, toggleTheme),
     [ws.api, pick, theme, toggleTheme],
   );
+  const needsGatewaySetup = !session.loading && session.models.length === 0;
 
   const paletteNode = palOpen ? (
     <Palette
@@ -205,6 +207,7 @@ function AppShellInner(): ReactNode {
             />
           )}
           {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
+          {needsGatewaySetup ? <GatewaySetupDialog /> : null}
         </div>
       </WsContext.Provider>
     </ChatSessionProvider>

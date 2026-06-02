@@ -79,7 +79,7 @@ Live model CLI surfaces (`keiko models validate`, `keiko gen-tests`, `keiko inve
 
 See the README's [Configuration and secrets](../../README.md#configuration-and-secrets) section and `.env.example` for the full set of variable names.
 
-Which model to use for which workflow is a deliberate choice. The two Wave 1 workflows produce structured diffs and should be routed to a model with both tool-calling and reliable structured output; this is operator routing guidance, not a runtime guard in the default selector. The [model capability guide](./model-capability-guide.md) maps the pilot portfolio to roles and flags the models that are unfit (`Qwen2.5-Coder-7B-Instruct`, whose `structuredOutput` is false) or not callable in Wave 1 (the OCR and embedding models).
+Which model to use for which workflow is a deliberate choice. The two Wave 1 workflows produce structured diffs; when `--model` is omitted, Keiko selects only configured chat models that declare both tool-calling and structured output. The [model capability guide](./model-capability-guide.md) maps the pilot portfolio to roles and flags the models that are unfit (`Qwen2.5-Coder-7B-Instruct`, whose `structuredOutput` is false) or not callable in Wave 1 (the OCR and embedding models). For private model ids that are not in the public registry, declare local provider `capability` metadata in the gateway config and keep that config out of version control.
 
 ---
 

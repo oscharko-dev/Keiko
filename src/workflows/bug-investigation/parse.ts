@@ -34,7 +34,11 @@ function closeFenceIndex(lines: readonly string[], openIndex: number): number | 
   return closeIndex === -1 ? undefined : closeIndex;
 }
 
-function fenceBody(lines: readonly string[], openIndex: number, closeIndex: number | undefined): string {
+function fenceBody(
+  lines: readonly string[],
+  openIndex: number,
+  closeIndex: number | undefined,
+): string {
   const bodyLines =
     closeIndex === undefined ? lines.slice(openIndex + 1) : lines.slice(openIndex + 1, closeIndex);
   return bodyLines.join("\n").trim();
@@ -46,7 +50,9 @@ function appendNonDiffFence(
   openIndex: number,
   closeIndex: number | undefined,
 ): void {
-  restLines.push(...lines.slice(openIndex, closeIndex === undefined ? lines.length : closeIndex + 1));
+  restLines.push(
+    ...lines.slice(openIndex, closeIndex === undefined ? lines.length : closeIndex + 1),
+  );
 }
 
 function nextFenceScanIndex(lines: readonly string[], closeIndex: number | undefined): number {
@@ -83,7 +89,9 @@ function extractFencedDiffs(content: string): FenceExtraction {
   }
   // No recognised diff fence: if the whole content looks like a raw diff, treat it as one;
   // otherwise it is prose.
-  return looksLikeDiff(content) ? { diffs: [content.trim()], rest: "" } : { diffs: [""], rest: content };
+  return looksLikeDiff(content)
+    ? { diffs: [content.trim()], rest: "" }
+    : { diffs: [""], rest: content };
 }
 
 // A cheap unfenced-diff heuristic: a unified diff begins with a `diff --git`, `--- `, or `+++ `
@@ -126,13 +134,15 @@ function parseConfidence(rest: string): "low" | "medium" | "high" | undefined {
 }
 
 export function parseBugModelOutput(content: string): ParsedBugOutput {
-  return parseBugModelOutputCandidates(content)[0] ?? {
-    diff: "",
-    rootCause: undefined,
-    regressionTestStrategy: undefined,
-    uncertainty: undefined,
-    confidence: undefined,
-  };
+  return (
+    parseBugModelOutputCandidates(content)[0] ?? {
+      diff: "",
+      rootCause: undefined,
+      regressionTestStrategy: undefined,
+      uncertainty: undefined,
+      confidence: undefined,
+    }
+  );
 }
 
 export function parseBugModelOutputCandidates(content: string): readonly ParsedBugOutput[] {

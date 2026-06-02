@@ -127,6 +127,30 @@ describe("runModelsCli validate", () => {
     expect(c.err()).toContain("capability registry");
   });
 
+  it("accepts a config whose unregistered modelId declares local capability metadata", () => {
+    const path = join(dir, "custom-model.json");
+    const parsed = JSON.parse(validConfig()) as {
+      providers: Record<string, unknown>[];
+    };
+    const provider = parsed.providers[0];
+    if (provider === undefined) {
+      throw new Error("test fixture must include one provider");
+    }
+    provider.modelId = "customer-internal-chat";
+    provider.capability = {
+      kind: "chat",
+      toolCalling: true,
+      structuredOutput: true,
+      costClass: "medium",
+      latencyClass: "standard",
+    };
+    writeFileSync(path, JSON.stringify(parsed), "utf8");
+    const c = makeIo();
+    const code = runModelsCli(["validate", "--config", path], c.io, {});
+    expect(code).toBe(0);
+    expect(c.out()).toContain("valid");
+  });
+
   it("never prints a credential value when reporting a validation error", () => {
     const path = join(dir, "leak.json");
     writeFileSync(

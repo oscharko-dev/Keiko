@@ -48,6 +48,8 @@ export { OpenAiAdapter, type AdapterDeps } from "./openai-adapter.js";
 
 export {
   assertConfiguredModel,
+  findConfiguredCapability,
+  listConfiguredCapabilities,
   selectConfiguredModel,
   type ModelSelectionQuery,
 } from "./model-selection.js";

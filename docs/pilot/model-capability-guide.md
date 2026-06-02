@@ -8,11 +8,11 @@ This guide maps the customer's nine-model pilot portfolio to recommended Wave 1 
 
 ## How to read the numbers
 
-The qualitative and numeric figures below — cost class, latency class, and context window — are **documented assumptions** sourced from public model cards as of 2026-05-28. They live in the capability registry as starting defaults, and several carry an explicit `[assumption]` marker in the source.
+The qualitative and numeric figures below — cost class, latency class, and context window — are **documented assumptions** sourced from public model cards as of 2026-05-28. They live in the static capability registry as starting defaults, and several carry an explicit `[assumption]` marker in the source.
 
-These figures are documented assumptions baked into the static capability registry (`src/gateway/capabilities.data.ts`); Wave 1 does not expose capability-metadata overrides in the gateway config (which configures providers, credentials, timeouts, and circuit-breaker only). Treat the registry values as a sensible default to validate against your own hosted endpoints, not a measured guarantee — and update the registry in the codebase if your authoritative numbers differ.
+Gateway config may also declare provider-local `capability` metadata for private or customer-hosted model ids that are absent from the static registry. Treat both registry values and customer-declared values as routing metadata to validate against the target endpoint, not measured guarantees.
 
-For how credentials resolve and how the gateway config is structured, see [Configuration and secrets](../../README.md#configuration-and-secrets). That configuration covers providers, credentials, timeouts, and circuit-breaker settings — not capability-metadata overrides.
+For how credentials resolve and how the gateway config is structured, see [Configuration and secrets](../../README.md#configuration-and-secrets).
 
 ---
 
@@ -23,7 +23,7 @@ The two Wave 1 chat workflows — [unit-test generation](../adr/README.md#adr-00
 - `toolCalling` — the workflow drives the model through tool steps.
 - `structuredOutput` — the workflow expects a reliably structured patch.
 
-This is operator routing guidance, not a runtime guard in the current CLI default selector. If a workflow command is run without `--model`, Keiko selects from configured chat providers by cost; operators should configure or pass a model with the capabilities above for structured-diff work. A model with `structuredOutput: false` can still serve inline completion or chat, but it is a poor fit for the structured-diff workflows. Two portfolio entries are not chat models at all: their methods are Wave 2 and they are not callable by Wave 1 workflows.
+If a workflow command is run without `--model`, Keiko selects from configured chat providers that declare both `toolCalling` and `structuredOutput`, preferring the lowest cost class. A model with `structuredOutput: false` can still serve explicit chat or operator-selected runs, but it is not selected as the default for structured-diff workflows. Two portfolio entries are not chat models at all: their methods are Wave 2 and they are not callable by Wave 1 workflows.
 
 ---
 
@@ -67,13 +67,13 @@ Medium cost, standard latency. Suited to documentation summarisation, code expla
 
 ### Not suited to the structured-diff workflows
 
-`Qwen2.5-Coder-7B-Instruct` declares `structuredOutput: false`. It is low cost and fast and works well for inline completion, snippets, and high-throughput batch use. It is **not** a reliable choice for unit-test generation or bug investigation, which depend on a structured patch. Route those workflows explicitly to a model with `structuredOutput: true`; do not rely on the default cheapest-chat selection when this model is configured.
+`Qwen2.5-Coder-7B-Instruct` declares `structuredOutput: false`. It is low cost and fast and works well for inline completion, snippets, and high-throughput batch use. It is **not** a reliable choice for unit-test generation or bug investigation, which depend on a structured patch. It is not selected by the default workflow selector unless an operator passes it explicitly with `--model`.
 
 ---
 
 ## Per-model notes
 
-Each note records the model's intended use and its known limitation, as declared in the capability registry. All numeric figures are documented assumptions from the static capability registry; validate them against your endpoints. Wave 1 has no gateway-config field to override them.
+Each note records the model's intended use and its known limitation, as declared in the capability registry. All numeric figures are documented assumptions from the static capability registry; validate them against your endpoints. For private hosted ids, declare local provider `capability` metadata in the gateway config rather than adding customer-specific ids to the public registry.
 
 Note: `multilingual-e5-large Embedding` is the exact identifier in the capability registry, including the trailing word and the space. As a Wave 2 embedding model it is not referenced by Wave 1 chat workflows or their gateway configuration.
 

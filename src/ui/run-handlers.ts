@@ -17,6 +17,7 @@ import type { SseWriter, StreamEvent } from "./sink.js";
 import type { RouteContext, RouteResult, HandlerOutcome } from "./routes.js";
 import { errorBody, STREAMING } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { currentRedactionSecrets } from "./deps.js";
 import type { ModelPort } from "../harness/index.js";
 import { UiStoreError, type ChatMessage, type NewChatMessage } from "./store/index.js";
 
@@ -264,7 +265,7 @@ function engineContextFor(
     evidence: {
       store: deps.evidenceStore,
       env: deps.env,
-      additionalSecrets: deps.redactionSecrets ?? [],
+      additionalSecrets: currentRedactionSecrets(deps),
     },
   };
 }
@@ -343,7 +344,7 @@ export async function handleCreateRun(
     evidence: {
       store: deps.evidenceStore,
       env: deps.env,
-      additionalSecrets: deps.redactionSecrets ?? [],
+      additionalSecrets: currentRedactionSecrets(deps),
     },
   };
   try {

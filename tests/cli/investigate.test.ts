@@ -255,7 +255,7 @@ describe("runInvestigateCli (AC #1 CLI)", () => {
     expect(seenModelId).toBe("Mistral-Small-3.1-24B-Instruct-2503");
   });
 
-  it("defaults to a configured chat model that does not advertise structured output", async () => {
+  it("does not default to a configured chat model without structured output", async () => {
     const configPath = join(dir, "gateway.json");
     writeFileSync(configPath, gatewayConfig(["Qwen2.5-Coder-7B-Instruct"]), "utf8");
     let seenModelId: string | undefined;
@@ -268,6 +268,37 @@ describe("runInvestigateCli (AC #1 CLI)", () => {
     const cap = makeIo();
     const code = await runInvestigateCli(
       ["--description", "half is wrong", "--dir-root", dir, "--config", configPath],
+      cap.io,
+      {},
+      { model },
+    );
+    expect(code).toBe(1);
+    expect(seenModelId).toBeUndefined();
+    expect(cap.err()).toContain("workflow-capable chat model");
+  });
+
+  it("allows an explicit configured chat model even when it does not advertise structured output", async () => {
+    const configPath = join(dir, "gateway.json");
+    writeFileSync(configPath, gatewayConfig(["Qwen2.5-Coder-7B-Instruct"]), "utf8");
+    let seenModelId: string | undefined;
+    const model: ModelPort = {
+      call: (request): Promise<NormalizedResponse> => {
+        seenModelId = request.modelId;
+        return Promise.resolve(modelReturning(FIX).call(request, new AbortController().signal));
+      },
+    };
+    const cap = makeIo();
+    const code = await runInvestigateCli(
+      [
+        "--description",
+        "half is wrong",
+        "--dir-root",
+        dir,
+        "--config",
+        configPath,
+        "--model",
+        "Qwen2.5-Coder-7B-Instruct",
+      ],
       cap.io,
       {},
       { model },

@@ -1,12 +1,12 @@
 // The six read-only BFF endpoints (ADR-0011 D5 routes 2,3,4,10,11,12). Each returns a redacted JSON
-// projection of already-safe data: config via `toSafeObject` (strips apiKey), the full capability
-// registry, the workflow launch-form descriptors, the workspace summary built from the workspace
+// projection of already-safe data: config via `toSafeObject` (strips apiKey), configured model
+// capabilities, the workflow launch-form descriptors, the workspace summary built from the workspace
 // layer, and evidence list/detail served straight from the store (manifests are redacted-by-
 // construction on disk, served as-is per D9). No secret reaches any response; the config route
 // never leaks the config path even on a load failure (handled upstream in deps.ts, which yields
 // `config: undefined` rather than throwing).
 
-import { toSafeObject, listCapabilities } from "../gateway/index.js";
+import { toSafeObject, listConfiguredCapabilities } from "../gateway/index.js";
 import {
   UNIT_TEST_WORKFLOW_DESCRIPTOR,
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
@@ -34,19 +34,26 @@ import {
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { currentGatewayConfig, currentGatewayConfigPresent } from "./deps.js";
 import { validateProjectPath } from "./store/validation.js";
 
 // Route 2 — resolved config (SafeGatewayConfig, never apiKey/baseUrl) or null when no config was resolved.
 export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  const config = deps.config === undefined ? null : toSafeObject(deps.config);
-  return { status: 200, body: { config, configPresent: deps.configPresent } };
+  const config = currentGatewayConfig(deps);
+  return {
+    status: 200,
+    body: {
+      config: config === undefined ? null : toSafeObject(config),
+      configPresent: currentGatewayConfigPresent(deps),
+    },
+  };
 }
 
 // Route 3 — models published by the resolved UI gateway config. If no config is resolved, no
 // model-backed run can start, so the endpoint returns an empty list.
 export function handleModels(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  const configured = new Set(deps.config?.providers.map((provider) => provider.modelId) ?? []);
-  const models = listCapabilities().filter((model) => configured.has(model.id));
+  const config = currentGatewayConfig(deps);
+  const models = config === undefined ? [] : listConfiguredCapabilities(config);
   return { status: 200, body: { models } };
 }
 

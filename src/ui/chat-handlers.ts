@@ -4,7 +4,13 @@
 
 import type { IncomingMessage } from "node:http";
 import { basename } from "node:path";
-import { GatewayError, findCapability } from "../gateway/index.js";
+import {
+  GatewayError,
+  findCapability,
+  findConfiguredCapability,
+  listConfiguredCapabilities,
+  type ModelCapability,
+} from "../gateway/index.js";
 import {
   UiStoreError,
   isProjectAvailable,
@@ -14,6 +20,7 @@ import {
 } from "./store/index.js";
 import { validateProjectPath } from "./store/validation.js";
 import type { UiHandlerDeps } from "./deps.js";
+import { currentGatewayConfig } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 
@@ -95,13 +102,30 @@ function isRouteResult(value: unknown): value is RouteResult {
   return isRecord(value) && typeof value.status === "number" && "body" in value;
 }
 
-function modelFromBody(body: Record<string, unknown>): string | RouteResult {
+function chatCapability(deps: UiHandlerDeps, modelId: string): ModelCapability | undefined {
+  const config = currentGatewayConfig(deps);
+  return config === undefined ? findCapability(modelId) : findConfiguredCapability(config, modelId);
+}
+
+function defaultChatModelId(deps: UiHandlerDeps): string {
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) {
+    return DEFAULT_CHAT_MODEL;
+  }
+  const configured = listConfiguredCapabilities(config);
+  return (
+    configured.find((model) => model.id === DEFAULT_CHAT_MODEL && model.kind === "chat") ??
+    configured.find((model) => model.kind === "chat")
+  )?.id ?? DEFAULT_CHAT_MODEL;
+}
+
+function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): string | RouteResult {
   const modelId = typeof body.modelId === "string" && body.modelId.length > 0
     ? body.modelId
-    : DEFAULT_CHAT_MODEL;
-  const capability = findCapability(modelId);
+    : defaultChatModelId(deps);
+  const capability = chatCapability(deps, modelId);
   if (capability?.kind !== "chat") {
-    return { status: 400, body: errorBody("BAD_REQUEST", "modelId must be a chat model registry id.") };
+    return { status: 400, body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id.") };
   }
   return modelId;
 }
@@ -215,12 +239,12 @@ function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequ
   };
 }
 
-function invalidChatModelResult(modelId: string): RouteResult | undefined {
-  const capability = findCapability(modelId);
+function invalidChatModelResult(modelId: string, deps: UiHandlerDeps): RouteResult | undefined {
+  const capability = chatCapability(deps, modelId);
   if (capability?.kind === "chat") {
     return undefined;
   }
-  return { status: 400, body: errorBody("BAD_REQUEST", "modelId must be a chat model registry id.") };
+  return { status: 400, body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id.") };
 }
 
 function createUserMessage(deps: UiHandlerDeps, request: SendDesktopChatRequest): ChatMessage {
@@ -299,7 +323,7 @@ export async function handleCreateDesktopChat(
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req);
   if (isRouteResult(body)) return body;
-  const modelId = modelFromBody(body);
+  const modelId = modelFromBody(body, deps);
   if (isRouteResult(modelId)) return modelId;
   try {
     const projectPath = pickProjectPath(body, deps);
@@ -331,7 +355,7 @@ export async function handleSendDesktopChat(
     return { status: 404, body: errorBody("NOT_FOUND", "Chat not found.") };
   }
   const modelId = request.modelId ?? chat.selectedModel;
-  const invalidModel = invalidChatModelResult(modelId);
+  const invalidModel = invalidChatModelResult(modelId, deps);
   if (invalidModel !== undefined) return invalidModel;
   return persistModelChatTurn(deps, request, chat, modelId);
 }

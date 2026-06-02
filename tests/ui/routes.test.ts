@@ -29,8 +29,14 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 43 route contract (ADR-0017 browser + ADR-0018 terminal: -4 PTY, +5 exec)", () => {
-    expect(API_ROUTES).toHaveLength(43);
+  it("declares the 44 route contract (ADR-0017 browser + ADR-0018 terminal + first-run gateway setup)", () => {
+    expect(API_ROUTES).toHaveLength(44);
+  });
+
+  it("includes the first-run gateway setup route", () => {
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/gateway/setup"),
+    ).toBeDefined();
   });
 
   it("includes the 8 browser-tool routes (#76)", () => {

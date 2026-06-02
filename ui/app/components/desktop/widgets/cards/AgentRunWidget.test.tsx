@@ -61,7 +61,7 @@ describe("AgentRunWidget", () => {
         structuredOutput: false,
         streaming: false,
         costClass: "medium",
-        latencyClass: "medium",
+        latencyClass: "standard",
         throughputHint: "test",
         preferredUseCases: [],
         knownLimitations: [],

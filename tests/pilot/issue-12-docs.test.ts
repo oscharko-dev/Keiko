@@ -94,14 +94,14 @@ describe("Issue #12 docs drift", () => {
     expect(uiServer).toContain('export const UI_HOST = "127.0.0.1"');
   });
 
-  it("states that structured-diff model capability routing is guidance, not enforced selection", () => {
+  it("states that structured-diff defaults require workflow-capable chat models", () => {
     const guide = readText("docs/pilot/model-capability-guide.md");
 
     expect(guide).toContain(
-      "This is operator routing guidance, not a runtime guard in the current CLI default selector.",
+      "Keiko selects from configured chat providers that declare both `toolCalling` and `structuredOutput`",
     );
     expect(guide).toContain(
-      "do not rely on the default cheapest-chat selection when this model is configured",
+      "It is not selected by the default workflow selector unless an operator passes it explicitly with `--model`",
     );
   });
 

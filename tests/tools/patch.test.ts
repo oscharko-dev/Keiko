@@ -117,7 +117,8 @@ describe("validatePatch — rejections", () => {
   });
 
   it("rejects escaped newline artifacts inside diff body lines", () => {
-    const diff = "--- /dev/null\n+++ b/tests/x.test.js\n@@\n+it('x', () => {\\n+  expect(1).toBe(1);\\n+});\n";
+    const diff =
+      "--- /dev/null\n+++ b/tests/x.test.js\n@@\n+it('x', () => {\\n+  expect(1).toBe(1);\\n+});\n";
     const v = validatePatch(info, diff);
     expect(v.ok).toBe(false);
     expect(v.reasons.map((r) => r.code)).toContain("malformed");
@@ -133,7 +134,8 @@ describe("validatePatch — rejections", () => {
   });
 
   it("normalizes an LLM shorthand create hunk before validation", () => {
-    const diff = "--- /dev/null\n+++ b/tests/generated.test.js\n@@\n+import { it } from \"vitest\";\n+it(\"runs\", () => {});\n";
+    const diff =
+      '--- /dev/null\n+++ b/tests/generated.test.js\n@@\n+import { it } from "vitest";\n+it("runs", () => {});\n';
     const v = validatePatch(info, diff);
     expect(v.ok).toBe(true);
     expect(v.normalizedDiff).toContain("@@ -0,0 +1,2 @@");
@@ -142,7 +144,8 @@ describe("validatePatch — rejections", () => {
   });
 
   it("normalizes a create-only modify diff for a missing file", () => {
-    const diff = "--- a/tests/generated.test.js\n+++ b/tests/generated.test.js\n@@ -0,0 +1,1 @@\n+it(\"runs\", () => {});\n";
+    const diff =
+      '--- a/tests/generated.test.js\n+++ b/tests/generated.test.js\n@@ -0,0 +1,1 @@\n+it("runs", () => {});\n';
     const v = validatePatch(info, diff);
     expect(v.ok).toBe(true);
     expect(v.files[0]?.kind).toBe("create");
@@ -159,7 +162,8 @@ describe("validatePatch — rejections", () => {
 
   it("normalizes LLM blank context lines inside hunks", () => {
     write("src/x.txt", "one\n\ntwo\n");
-    const diff = "--- a/src/x.txt\n+++ b/src/x.txt\n@@ -1,3 +1,4 @@ context\n one\n\n two\n+three\n";
+    const diff =
+      "--- a/src/x.txt\n+++ b/src/x.txt\n@@ -1,3 +1,4 @@ context\n one\n\n two\n+three\n";
     const v = validatePatch(info, diff);
     expect(v.ok).toBe(true);
     expect(v.normalizedDiff).toContain(" one\n \n two");

@@ -140,10 +140,7 @@ function sourceBugRequiresSourcePatch(
   report: BugReportInput,
   evidence: FailureEvidence,
 ): boolean {
-  const paths = [
-    ...(report.targetFiles ?? []),
-    ...evidence.frames.map((frame) => frame.file),
-  ];
+  const paths = [...(report.targetFiles ?? []), ...evidence.frames.map((frame) => frame.file)];
   return paths.some((path) => !isTestPath(workspace, path));
 }
 

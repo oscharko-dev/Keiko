@@ -33,14 +33,29 @@ export function assertConfiguredModel(config: GatewayConfig, modelId: string): v
   }
 }
 
+export function findConfiguredCapability(
+  config: GatewayConfig,
+  modelId: string,
+): ModelCapability | undefined {
+  return (
+    config.capabilities?.find((capability) => capability.id === modelId) ??
+    listCapabilities().find((capability) => capability.id === modelId)
+  );
+}
+
+export function listConfiguredCapabilities(config: GatewayConfig): readonly ModelCapability[] {
+  return config.providers
+    .map((provider) => findConfiguredCapability(config, provider.modelId))
+    .filter((capability): capability is ModelCapability => capability !== undefined);
+}
+
 export function selectConfiguredModel(
   config: GatewayConfig,
   query: ModelSelectionQuery,
 ): string | undefined {
-  const configured = new Set(config.providers.map((provider) => provider.modelId));
   let best: ModelCapability | undefined;
-  for (const capability of listCapabilities()) {
-    if (!configured.has(capability.id) || !matches(capability, query)) {
+  for (const capability of listConfiguredCapabilities(config)) {
+    if (!matches(capability, query)) {
       continue;
     }
     if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {

@@ -45,6 +45,7 @@ export interface CircuitBreakerConfig {
 export interface GatewayConfig {
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
+  readonly capabilities?: readonly ModelCapability[] | undefined;
 }
 
 // ─── Request / response ───────────────────────────────────────────────────────
