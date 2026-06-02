@@ -1,8 +1,22 @@
 # Keiko
 
-Keiko is a local enterprise coding assistant for regulated engineering teams. It helps inspect a repository, chat with configured language models, generate reviewable unit tests, investigate bugs, run verification, and keep redacted evidence for human review.
+Keiko is a governed agentic workspace for knowledge work that learns from experience.
 
-Keiko is developer-controlled by design. It does not commit, push, open pull requests, merge code, or apply changes without an explicit local action. The manifest-producing surfaces emit redacted evidence for audit.
+The current npm release starts with local developer-assist workflows for regulated engineering teams. Keiko helps inspect a repository, chat with configured language models, generate reviewable unit tests, investigate bugs, run verification, and keep redacted evidence for human review.
+
+Keiko is human-controlled by design. It does not commit, push, open pull requests, merge code, or apply changes without an explicit local action. The manifest-producing surfaces emit redacted evidence for audit.
+
+## Vision
+
+Keiko's long-term direction is a governed workspace where people can delegate knowledge work to learning agents without giving up control, oversight, or accountability.
+
+- **Governed delegation:** agents start with a task, not standing rights.
+- **Harness-first control:** agent actions, tool calls, connector access, approvals, failures, and outcomes flow through one observable control layer.
+- **Keiko Twin:** a governed work representative that can build controlled memory about user preferences, project routines, accepted outcomes, and recurring corrections.
+- **Learning from experience:** Keiko should improve future tool selection, escalation, policy suggestions, and workflow quality from structured evidence and feedback.
+- **Enterprise boundaries:** learning can improve suggestions and routines, but it must never grant itself authority or bypass human and organizational policy.
+
+Software engineering is the first use case because repositories, tests, reviews, and tool calls create hard evidence. The product direction is broader: a controlled agentic workspace for enterprise knowledge work.
 
 ## Requirements
 
@@ -45,8 +59,12 @@ If no model gateway is configured, the UI asks for:
 
 - Base URL, for example `https://llm-gateway.example.com/v1`
 - API token
+- Optional API-key header, only when your gateway admin provides a custom header
+- Deployment names, only when the gateway cannot expose a reliable model list
 
-Keiko calls the gateway model list endpoint, tests discovered chat models with a small chat-completions request, and stores only callable chat models in the local runtime configuration. Credentials stay on the local machine and are not returned to the browser.
+Keiko calls the gateway model list endpoint, tests discovered chat models with a small chat-completions request, and stores only callable chat models in the local runtime configuration. LiteLLM-compatible gateways can also provide model metadata that lets Keiko filter non-chat models before testing. Credentials stay on the local machine and are not returned to the browser.
+
+For OpenAI-compatible gateways such as LiteLLM, usually leave deployment names empty. For Azure AI Foundry, paste the deployment names you want Keiko to offer in the UI.
 
 The UI runs on loopback only. The `--host` option can validate a loopback host value; the server always binds `127.0.0.1`.
 
@@ -89,7 +107,8 @@ The UI can create a local runtime config during first-run setup. For scripted us
     {
       "modelId": "example-chat-model",
       "baseUrl": "https://llm-gateway.example.com/v1",
-      "apiKey": "replace-me"
+      "apiKey": "replace-me",
+      "apiKeyHeaderName": "authorization"
     }
   ]
 }
@@ -97,14 +116,18 @@ The UI can create a local runtime config during first-run setup. For scripted us
 
 Environment variables can override file values:
 
-| Variable                    | Purpose                        |
-| --------------------------- | ------------------------------ |
-| `KEIKO_CONFIG_FILE`         | Path to a gateway config file. |
-| `KEIKO_DEFAULT_BASE_URL`    | Fallback gateway base URL.     |
-| `KEIKO_DEFAULT_API_KEY`     | Fallback gateway API token.    |
-| `KEIKO_MODEL_<ID>_BASE_URL` | Per-model base URL override.   |
-| `KEIKO_MODEL_<ID>_API_KEY`  | Per-model API token override.  |
-| `KEIKO_UI_PORT`             | Local UI port override.        |
+| Variable                               | Purpose                           |
+| -------------------------------------- | --------------------------------- |
+| `KEIKO_CONFIG_FILE`                    | Path to a gateway config file.    |
+| `KEIKO_DEFAULT_BASE_URL`               | Fallback gateway base URL.        |
+| `KEIKO_DEFAULT_API_KEY`                | Fallback gateway API token.       |
+| `KEIKO_DEFAULT_API_KEY_HEADER_NAME`    | Fallback credential header name.  |
+| `KEIKO_MODEL_<ID>_BASE_URL`            | Per-model base URL override.      |
+| `KEIKO_MODEL_<ID>_API_KEY`             | Per-model API token override.     |
+| `KEIKO_MODEL_<ID>_API_KEY_HEADER_NAME` | Per-model credential header name. |
+| `KEIKO_UI_PORT`                        | Local UI port override.           |
+
+Supported credential headers are `authorization`, `x-litellm-key`, `x-api-key`, and `api-key`.
 
 Do not commit gateway config files, API tokens, `.keiko/`, or evidence that contains project-specific review material unless your process explicitly requires it.
 
@@ -129,13 +152,14 @@ Known limits:
 
 ## Troubleshooting
 
-| Symptom               | Check                                                                                                   |
-| --------------------- | ------------------------------------------------------------------------------------------------------- |
-| UI does not open      | Run `npm run keiko:status`, then inspect `.keiko/ui.log`.                                               |
-| Port is busy          | Start with `KEIKO_UI_PORT=1984 npm run keiko:start` or stop the process using the port.                 |
-| No model appears      | Reopen Settings, verify the base URL and token, then run the credential test again.                     |
-| Credential test fails | Confirm the gateway accepts OpenAI-compatible chat-completions requests at the configured base URL.     |
-| Stale process state   | Run `npm run keiko:stop`, delete `.keiko/ui.pid` if the process is no longer running, then start again. |
+| Symptom                | Check                                                                                                    |
+| ---------------------- | -------------------------------------------------------------------------------------------------------- |
+| UI does not open       | Run `npm run keiko:status`, then inspect `.keiko/ui.log`.                                                |
+| Port is busy           | Start with `KEIKO_UI_PORT=1984 npm run keiko:start` or stop the process using the port.                  |
+| No model appears       | Reopen Settings, verify the base URL and token, then run the credential test again.                      |
+| Credential test fails  | Confirm the gateway accepts OpenAI-compatible chat-completions requests at the configured base URL.      |
+| Custom proxy key fails | Confirm whether your gateway expects `Authorization` or a custom API-key header such as `X-Litellm-Key`. |
+| Stale process state    | Run `npm run keiko:stop`, delete `.keiko/ui.pid` if the process is no longer running, then start again.  |
 
 ## Further Reading
 

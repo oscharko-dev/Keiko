@@ -10,7 +10,7 @@ function manifestFixture(runId: string, startedAt: number): EvidenceManifest {
     run: {
       runId,
       fingerprint: "fp",
-      harnessVersion: "0.1.3",
+      harnessVersion: "0.1.4",
       taskType: "explain-plan",
       outcome: "completed",
       startedAt,

@@ -91,6 +91,25 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
     store.close();
   });
 
+  it("applies KEIKO_MODEL_* custom API key headers in env-only mode", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-env-header-");
+    const deps = buildUiHandlerDeps({
+      configPath: join(evidenceDir, "missing-keiko.config.json"),
+      evidenceDir,
+      env: {
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_BASE_URL: "https://models.example.invalid/openai/v1",
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY: "fake-test-key",
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY_HEADER_NAME: "X-Litellm-Key",
+      },
+      store,
+    });
+
+    expect(deps.configPresent).toBe(true);
+    expect(deps.config?.providers[0]?.apiKeyHeaderName).toBe("x-litellm-key");
+    store.close();
+  });
+
   it("does not publish every registry model from KEIKO_DEFAULT_* alone", () => {
     const store = createInMemoryUiStore();
     const evidenceDir = tmp("ev-env-default-only-");

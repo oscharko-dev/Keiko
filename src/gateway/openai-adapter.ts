@@ -13,7 +13,8 @@ import {
   TimeoutError,
   TransportError,
 } from "./errors.js";
-import { gatewayFetch } from "./http.js";
+import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME } from "./config.js";
+import { gatewayFetch, readJsonCapped } from "./http.js";
 import { normalizeChatResponse } from "./normalize.js";
 import { redact } from "./redaction.js";
 import type {
@@ -196,6 +197,11 @@ function mapHttpError(
   );
 }
 
+function apiKeyHeaders(config: ModelProviderConfig): Record<string, string> {
+  const headerName = config.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
+  return { [headerName]: apiKeyHeaderValue(headerName, config.apiKey) };
+}
+
 export class OpenAiAdapter implements ProviderAdapter {
   private readonly now: () => number;
 
@@ -248,7 +254,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     const body = JSON.stringify(buildBody(request));
     const headers = {
       "content-type": "application/json",
-      authorization: `Bearer ${config.apiKey}`,
+      ...apiKeyHeaders(config),
     };
     try {
       return await gatewayFetch(url, {
@@ -288,7 +294,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     secrets: readonly string[],
   ): Promise<unknown> {
     try {
-      return await response.json();
+      return await readJsonCapped(response);
     } catch {
       throw new TransportError(`provider sent an unreadable body for '${config.modelId}'`, secrets);
     }
@@ -296,7 +302,7 @@ export class OpenAiAdapter implements ProviderAdapter {
 
   private async readErrorBody(response: Response): Promise<unknown> {
     try {
-      return await response.json();
+      return await readJsonCapped(response);
     } catch {
       return null;
     }

@@ -92,7 +92,7 @@ export interface UiHandlerDeps {
     | undefined;
   // Test seam for model discovery. Production calls the OpenAI-compatible /models endpoint.
   readonly gatewayModelDiscovery?:
-    | ((baseUrl: string, apiKey: string) => Promise<readonly string[]>)
+    | ((baseUrl: string, apiKey: string, apiKeyHeaderName?: string) => Promise<readonly string[]>)
     | undefined;
 }
 
@@ -117,7 +117,7 @@ export interface BuildHandlerDepsOptions {
     | undefined;
   // Optional setup discovery seam (tests); production calls the model-list endpoint.
   readonly gatewayModelDiscovery?:
-    | ((baseUrl: string, apiKey: string) => Promise<readonly string[]>)
+    | ((baseUrl: string, apiKey: string, apiKeyHeaderName?: string) => Promise<readonly string[]>)
     | undefined;
 }
 

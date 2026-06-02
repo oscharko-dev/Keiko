@@ -45,7 +45,29 @@ describe("parseGatewayConfig", () => {
     const config = parseGatewayConfig(validRaw());
     expect(config.providers).toHaveLength(1);
     expect(config.providers[0]?.modelId).toBe("example-chat-model");
+    expect(config.providers[0]?.apiKeyHeaderName).toBe("authorization");
     expect(config.circuitBreaker.failureThreshold).toBe(5);
+  });
+
+  it("accepts a safe custom API key header name", () => {
+    const raw = rawWithProvider((p) => ({ ...p, apiKeyHeaderName: "X-Litellm-Key" }));
+    const config = parseGatewayConfig(raw);
+    expect(config.providers[0]?.apiKeyHeaderName).toBe("x-litellm-key");
+  });
+
+  it("rejects unsupported API key header names", () => {
+    const raw = rawWithProvider((p) => ({ ...p, apiKeyHeaderName: "Content-Type" }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/must be one of/);
+  });
+
+  it("rejects proxy routing headers as API key header names", () => {
+    const raw = rawWithProvider((p) => ({ ...p, apiKeyHeaderName: "X-Forwarded-Host" }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/must be one of/);
+  });
+
+  it("rejects malformed API key header names", () => {
+    const raw = rawWithProvider((p) => ({ ...p, apiKeyHeaderName: "X Bad" }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/valid HTTP header/);
   });
 
   it("throws ConfigInvalidError when providers is missing", () => {
@@ -143,6 +165,22 @@ describe("parseGatewayConfig", () => {
     expect(config.providers[0]?.apiKey).toBe("example-per-model-token-1234567890");
   });
 
+  it("env default API key header applies when config omits it", () => {
+    const config = parseGatewayConfig(validRaw(), {
+      KEIKO_DEFAULT_API_KEY_HEADER_NAME: "X-Api-Key",
+    });
+    expect(config.providers[0]?.apiKeyHeaderName).toBe("x-api-key");
+  });
+
+  it("env per-model API key header overrides file and default headers", () => {
+    const raw = rawWithProvider((p) => ({ ...p, apiKeyHeaderName: "api-key" }));
+    const config = parseGatewayConfig(raw, {
+      KEIKO_DEFAULT_API_KEY_HEADER_NAME: "X-Api-Key",
+      KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY_HEADER_NAME: "X-Litellm-Key",
+    });
+    expect(config.providers[0]?.apiKeyHeaderName).toBe("x-litellm-key");
+  });
+
   it("global default fills in a provider with no key from file or per-model env", () => {
     const raw = rawWithProvider(({ apiKey: _drop, ...rest }) => rest);
     const config = parseGatewayConfig(raw, {
@@ -177,6 +215,19 @@ describe("parseGatewayConfig", () => {
       }
     });
 
+    it("rejects a baseUrl with a query string or fragment", () => {
+      const withQuery = rawWithProvider((p) => ({
+        ...p,
+        baseUrl: "https://host.example/v1?api-version=latest",
+      }));
+      const withFragment = rawWithProvider((p) => ({
+        ...p,
+        baseUrl: "https://host.example/v1#fragment",
+      }));
+      expect(() => parseGatewayConfig(withQuery)).toThrow(/query string or fragment/);
+      expect(() => parseGatewayConfig(withFragment)).toThrow(/query string or fragment/);
+    });
+
     it("rejects a plaintext non-loopback baseUrl", () => {
       const raw = rawWithProvider((p) => ({ ...p, baseUrl: "http://10.0.0.5:8000/v1" }));
       expect(() => parseGatewayConfig(raw)).toThrow(/https/);
@@ -194,6 +245,18 @@ describe("parseGatewayConfig", () => {
 
     it("accepts a standard https baseUrl", () => {
       const raw = rawWithProvider((p) => ({ ...p, baseUrl: "https://api.example.com/v1" }));
+      expect(() => parseGatewayConfig(raw)).not.toThrow();
+    });
+
+    it("rejects a plaintext baseUrl whose host only starts with 127. (not real loopback)", () => {
+      for (const host of ["127.evil.com", "127.0.0.1.evil.com"]) {
+        const raw = rawWithProvider((p) => ({ ...p, baseUrl: `http://${host}/v1` }));
+        expect(() => parseGatewayConfig(raw)).toThrow(/https/);
+      }
+    });
+
+    it("accepts https regardless of host (host filtering is intentionally not done)", () => {
+      const raw = rawWithProvider((p) => ({ ...p, baseUrl: "https://127.evil.com/v1" }));
       expect(() => parseGatewayConfig(raw)).not.toThrow();
     });
   });
@@ -214,6 +277,7 @@ describe("toSafeObject", () => {
     const config = parseGatewayConfig(validRaw());
     const safe = toSafeObject(config);
     expect(safe.providers[0]?.modelId).toBe("example-chat-model");
+    expect(safe.providers[0]?.credentialHeaderName).toBe("authorization");
     expect(safe.providers[0]?.timeoutMs).toBe(30000);
   });
 

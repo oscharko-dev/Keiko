@@ -33,6 +33,7 @@ export interface ModelCapability {
 
 export interface SafeProviderConfig {
   readonly modelId: string;
+  readonly credentialHeaderName: string;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;

@@ -31,6 +31,7 @@ export interface ModelProviderConfig {
   readonly modelId: string;
   readonly baseUrl: string;
   readonly apiKey: string;
+  readonly apiKeyHeaderName?: string | undefined;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;

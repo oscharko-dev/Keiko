@@ -122,6 +122,7 @@ export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
 export interface GatewaySetupInput {
   readonly baseUrl: string;
   readonly apiKey: string;
+  readonly apiKeyHeaderName?: string | undefined;
   readonly deploymentNames?: readonly string[] | undefined;
 }
 

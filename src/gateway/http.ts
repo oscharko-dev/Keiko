@@ -2,6 +2,9 @@ import { readFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
 import { rootCertificates } from "node:tls";
 
+// Caps a single gateway response at 10 MB; real chat completions are far smaller.
+export const MAX_RESPONSE_BYTES = 10_000_000;
+
 export interface GatewayFetchOptions extends RequestInit {
   readonly fetchImpl?: typeof fetch | undefined;
   readonly useCaFallback?: boolean | undefined;
@@ -92,7 +95,14 @@ function fetchWithCaBundle(url: string, init: RequestInit): Promise<Response> {
       },
       (res) => {
         const chunks: Buffer[] = [];
+        let total = 0;
         res.on("data", (chunk: Buffer) => {
+          total += chunk.length;
+          if (total > MAX_RESPONSE_BYTES) {
+            req.destroy();
+            reject(new Error("gateway response exceeded the size limit"));
+            return;
+          }
           chunks.push(chunk);
         });
         res.on("end", () => {
@@ -126,4 +136,29 @@ export async function gatewayFetch(
     }
     throw error;
   }
+}
+
+export async function readJsonCapped(
+  response: Response,
+  maxBytes: number = MAX_RESPONSE_BYTES,
+): Promise<unknown> {
+  if (response.body === null) {
+    return response.json();
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error("response body exceeded the size limit");
+    }
+    parts.push(decoder.decode(value, { stream: true }));
+  }
+  parts.push(decoder.decode());
+  return JSON.parse(parts.join("")) as unknown;
 }

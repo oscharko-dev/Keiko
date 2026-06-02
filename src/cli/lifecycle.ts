@@ -309,7 +309,7 @@ async function cmdStart(
     return 1;
   }
   child.unref();
-  writeFileSync(pidFile(options), `${String(child.pid)}\n`, "utf8");
+  writeFileSync(pidFile(options), `${String(child.pid)}\n`, { encoding: "utf8", mode: 0o600 });
   io.out(`Starting Keiko UI on ${healthUrl(options).replace("/api/health", "")} ...\n`);
 
   const healthy = await waitForHealth(options, child.pid, deps);

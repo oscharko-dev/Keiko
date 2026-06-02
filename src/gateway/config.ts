@@ -4,6 +4,7 @@
 // and are excluded from every serialisation path.
 
 import { readFileSync } from "node:fs";
+import { isIP } from "node:net";
 import { ConfigInvalidError } from "./errors.js";
 import type {
   CircuitBreakerConfig,
@@ -21,11 +22,26 @@ const DEFAULT_RETRY_BASE_DELAY_MS = 500;
 const DEFAULT_FAILURE_THRESHOLD = 5;
 const DEFAULT_COOLDOWN_MS = 30_000;
 const DEFAULT_HALF_OPEN_PROBES = 2;
+export const DEFAULT_API_KEY_HEADER_NAME = "authorization";
+const MAX_API_KEY_HEADER_NAME_LENGTH = 64;
+const API_KEY_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
+export const SUPPORTED_API_KEY_HEADER_NAMES = [
+  DEFAULT_API_KEY_HEADER_NAME,
+  "x-litellm-key",
+  "x-api-key",
+  "api-key",
+] as const;
+const SUPPORTED_API_KEY_HEADER_NAME_SET = new Set<string>(SUPPORTED_API_KEY_HEADER_NAMES);
+const BEARER_API_KEY_HEADER_NAME_SET = new Set<string>([
+  DEFAULT_API_KEY_HEADER_NAME,
+  "x-litellm-key",
+]);
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
 
 export interface SafeProviderConfig {
   readonly modelId: string;
+  readonly credentialHeaderName: string;
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
@@ -96,6 +112,45 @@ function optionalNonEmptyString(value: unknown, path: string, fallback: string):
   return requireNonEmptyString(value, path);
 }
 
+export function normalizeApiKeyHeaderName(
+  value: unknown,
+  path: string,
+  fallback = DEFAULT_API_KEY_HEADER_NAME,
+): string {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value !== "string") {
+    throw new ConfigInvalidError(`${path} must be a string`);
+  }
+  const headerName = value.trim().toLowerCase();
+  if (headerName.length === 0) {
+    return fallback;
+  }
+  if (
+    headerName.length > MAX_API_KEY_HEADER_NAME_LENGTH ||
+    !API_KEY_HEADER_NAME_RE.test(headerName)
+  ) {
+    throw new ConfigInvalidError(`${path} must be a valid HTTP header name`);
+  }
+  if (!SUPPORTED_API_KEY_HEADER_NAME_SET.has(headerName)) {
+    throw new ConfigInvalidError(
+      `${path} must be one of ${SUPPORTED_API_KEY_HEADER_NAMES.join(", ")}`,
+    );
+  }
+  return headerName;
+}
+
+export function apiKeyHeaderValue(headerName: string, apiKey: string): string {
+  if (
+    BEARER_API_KEY_HEADER_NAME_SET.has(headerName) &&
+    !apiKey.toLowerCase().startsWith("bearer ")
+  ) {
+    return `Bearer ${apiKey}`;
+  }
+  return apiKey;
+}
+
 function requireEnum<T extends string>(value: unknown, path: string, allowed: readonly T[]): T {
   if (typeof value !== "string" || !allowed.includes(value as T)) {
     throw new ConfigInvalidError(`${path} must be one of ${allowed.join(", ")}`);
@@ -120,20 +175,42 @@ function resolveSecret(modelId: string, fileValue: string, env: EnvSource, suffi
   return fallback ?? "";
 }
 
+function resolveApiKeyHeaderName(
+  rawValue: unknown,
+  path: string,
+  modelId: string,
+  env: EnvSource,
+): string {
+  const token = envModelToken(modelId);
+  const perModelName = `KEIKO_MODEL_${token}_API_KEY_HEADER_NAME`;
+  const perModel = env[perModelName];
+  if (perModel !== undefined && perModel.length > 0) {
+    return normalizeApiKeyHeaderName(perModel, perModelName);
+  }
+  if (rawValue !== undefined) {
+    return normalizeApiKeyHeaderName(rawValue, path);
+  }
+  return normalizeApiKeyHeaderName(
+    env.KEIKO_DEFAULT_API_KEY_HEADER_NAME,
+    "KEIKO_DEFAULT_API_KEY_HEADER_NAME",
+  );
+}
+
 // Validates a resolved baseUrl for scheme and credential hygiene. Host/IP is
 // intentionally NOT restricted: Keiko addresses private network endpoints
 // (private IPs are a valid, first-class target); this guard is scheme/credential
 // hygiene + defence-in-depth, not host filtering.
 function isLoopbackHost(hostname: string): boolean {
-  return (
-    hostname === "localhost" ||
-    hostname === "::1" ||
-    hostname === "[::1]" ||
-    hostname.startsWith("127.")
-  );
+  if (hostname === "localhost" || hostname === "::1" || hostname === "[::1]") {
+    return true;
+  }
+  // Real IPv4 loopback only. isIP === 4 guarantees a well-formed dotted-quad, so a "127." prefix
+  // here is the 127.0.0.0/8 block — never a domain such as "127.evil.com" or "127.0.0.1.evil.com".
+  // The WHATWG URL parser has already canonicalised IPv4 shorthand/hex into url.hostname.
+  return isIP(hostname) === 4 && hostname.startsWith("127.");
 }
 
-function validateBaseUrl(baseUrl: string, path: string): void {
+export function validateBaseUrl(baseUrl: string, path: string): void {
   let url: URL;
   try {
     url = new URL(baseUrl);
@@ -142,6 +219,9 @@ function validateBaseUrl(baseUrl: string, path: string): void {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new ConfigInvalidError(`${path}.baseUrl must use the http or https scheme`);
+  }
+  if (url.search !== "" || url.hash !== "") {
+    throw new ConfigInvalidError(`${path}.baseUrl must not contain a query string or fragment`);
   }
   if (url.protocol === "http:" && !isLoopbackHost(url.hostname)) {
     throw new ConfigInvalidError(
@@ -243,6 +323,12 @@ function parseProviderConfig(
     modelId,
     baseUrl,
     apiKey,
+    apiKeyHeaderName: resolveApiKeyHeaderName(
+      raw.apiKeyHeaderName,
+      `${path}.apiKeyHeaderName`,
+      modelId,
+      env,
+    ),
     timeoutMs: requirePositiveInt(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
     retryBaseDelayMs: requirePositiveInt(
@@ -331,6 +417,7 @@ export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
   return {
     providers: config.providers.map((provider) => ({
       modelId: provider.modelId,
+      credentialHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
       timeoutMs: provider.timeoutMs,
       maxRetries: provider.maxRetries,
       retryBaseDelayMs: provider.retryBaseDelayMs,

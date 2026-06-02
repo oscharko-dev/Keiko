@@ -35,9 +35,13 @@ export {
 } from "./capabilities.js";
 
 export {
+  apiKeyHeaderValue,
+  DEFAULT_API_KEY_HEADER_NAME,
   loadConfigFromFile,
+  normalizeApiKeyHeaderName,
   parseGatewayConfig,
   toSafeObject,
+  validateBaseUrl,
   type EnvSource,
   type SafeGatewayConfig,
   type SafeProviderConfig,

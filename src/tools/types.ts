@@ -119,6 +119,21 @@ export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
       "--namespace",
       "--exec-path",
     ]),
+    // Deny git's code-execution / external-driver flags. `git -c diff.external=<cmd> diff` (and
+    // --config-env/--ext-diff/--textconv) make git spawn an arbitrary command via its OWN shell,
+    // defeating the Node spawn's shell:false; --exec-path redirects git to attacker-supplied sub-binaries.
+    // hasDeniedFlag runs BEFORE subcommand resolution and matches both `--flag value` and
+    // `--flag=value`. `-C`/--git-dir/--work-tree stay value-flags (location only, not execution).
+    denyFlags: Object.freeze([
+      "-c",
+      "--config-env",
+      "--exec-path",
+      "--ext-diff",
+      "--textconv",
+      "--no-index",
+      "--output",
+      "--contents",
+    ]),
   },
 ]);
 

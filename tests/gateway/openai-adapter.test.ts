@@ -69,6 +69,38 @@ describe("OpenAiAdapter.call", () => {
     expect(seenAuth).toBe("Bearer example-test-token-1234567890abcd");
   });
 
+  it("sends a LiteLLM custom API key header without an Authorization fallback", async () => {
+    let seenAuth: string | null = null;
+    let seenCustom: string | null = null;
+    const adapter = adapterWith((_url, init) => {
+      const headers = new Headers(init?.headers);
+      seenAuth = headers.get("authorization");
+      seenCustom = headers.get("x-litellm-key");
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(REQUEST, { ...CONFIG, apiKeyHeaderName: "x-litellm-key" });
+    expect(seenAuth).toBeNull();
+    expect(seenCustom).toBe("Bearer example-test-token-1234567890abcd");
+  });
+
+  it("sends an x-api-key custom API key header as a raw token", async () => {
+    let seenAuth: string | null = null;
+    let seenCustom: string | null = null;
+    const adapter = adapterWith((_url, init) => {
+      const headers = new Headers(init?.headers);
+      seenAuth = headers.get("authorization");
+      seenCustom = headers.get("x-api-key");
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(REQUEST, { ...CONFIG, apiKeyHeaderName: "x-api-key" });
+    expect(seenAuth).toBeNull();
+    expect(seenCustom).toBe("example-test-token-1234567890abcd");
+  });
+
   it("throws AuthenticationError on HTTP 401", async () => {
     const adapter = adapterWith(() =>
       Promise.resolve(jsonResponse({ error: "bad key" }, { status: 401 })),

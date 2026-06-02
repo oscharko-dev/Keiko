@@ -31,6 +31,7 @@ function isAzureFoundryUrl(value: string): boolean {
 export function GatewaySetupDialog({ onCancel }: { readonly onCancel?: (() => void) | undefined }): ReactNode {
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [apiKeyHeaderName, setApiKeyHeaderName] = useState("");
   const [deploymentNames, setDeploymentNames] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
@@ -52,6 +53,7 @@ export function GatewaySetupDialog({ onCancel }: { readonly onCancel?: (() => vo
       const result = await setupGateway({
         baseUrl,
         apiKey,
+        apiKeyHeaderName: apiKeyHeaderName.trim() === "" ? undefined : apiKeyHeaderName.trim(),
         deploymentNames: parsedDeploymentNames,
       });
       const count = result.testedModelIds.length;
@@ -99,6 +101,17 @@ export function GatewaySetupDialog({ onCancel }: { readonly onCancel?: (() => vo
           />
         </label>
         <label className="gw-field">
+          <span>API key header optional</span>
+          <input
+            className="gw-input mono"
+            value={apiKeyHeaderName}
+            placeholder="Authorization"
+            autoComplete="off"
+            disabled={busy || success !== undefined}
+            onChange={(event) => setApiKeyHeaderName(event.target.value)}
+          />
+        </label>
+        <label className="gw-field">
           <span>Deployment names for Azure</span>
           <textarea
             className="gw-input gw-textarea mono"
@@ -110,9 +123,11 @@ export function GatewaySetupDialog({ onCancel }: { readonly onCancel?: (() => vo
           />
         </label>
         <div className="gw-note">
-          Leave this empty only for OpenAI-compatible gateways with model discovery. For Azure AI Foundry,
-          paste deployment names exactly as shown in the Deployments tab. Testing several deployments can take
-          up to 30 seconds.
+          Leave the header field empty unless your gateway admin gave you a custom API-key header, for
+          example X-Litellm-Key. Supported headers are Authorization, X-Litellm-Key, X-Api-Key, and
+          api-key. Leave deployment names empty only for OpenAI-compatible gateways with model discovery.
+          For Azure AI Foundry, paste deployment names exactly as shown in the Deployments tab. Testing
+          several deployments can take up to 30 seconds.
         </div>
         {error !== undefined ? <div className="gw-error">{error}</div> : null}
         {success !== undefined ? <div className="gw-success">{success}</div> : null}

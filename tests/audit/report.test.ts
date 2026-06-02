@@ -8,7 +8,7 @@ function manifest(over: Partial<EvidenceManifest> = {}): EvidenceManifest {
     run: {
       runId: "run-1",
       fingerprint: "fp-xyz",
-      harnessVersion: "0.1.3",
+      harnessVersion: "0.1.4",
       taskType: "investigate-bug",
       outcome: "completed",
       startedAt: 100,

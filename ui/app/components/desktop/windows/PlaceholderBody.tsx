@@ -1,6 +1,6 @@
 "use client";
 
-// Welle-3/4/5-TODO: the real <FilesWidget>/<TerminalWidget>/<KeikoTwinPanel>/etc. replace this.
+// Later waves replace this with the real Files, Terminal, and Keiko Twin widgets.
 import type { ReactNode } from "react";
 import { Icons } from "../Icons";
 import { WIN_TYPES, type WindowType } from "./WindowsRegistry";

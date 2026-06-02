@@ -199,3 +199,40 @@ describe("isCommandAllowed — S-H2 value-flag bypass + transitive shell", () =>
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npx", ["eslint", "."]).allowed).toBe(false);
   });
 });
+
+describe("isCommandAllowed — git external-command injection (diff.external RCE)", () => {
+  const deniedInvocations: readonly { readonly label: string; readonly args: readonly string[] }[] =
+    [
+      {
+        label: "-c diff.external=<cmd> diff",
+        args: ["-c", "diff.external=touch /tmp/x", "diff", "f.txt"],
+      },
+      {
+        label: "-c diff.external=<cmd> log -p --ext-diff",
+        args: ["-c", "diff.external=x", "log", "-p", "--ext-diff"],
+      },
+      {
+        label: "--config-env diff.external=<env> diff",
+        args: ["--config-env=diff.external=GIT_EXTERNAL_DIFF", "diff", "f.txt"],
+      },
+      { label: "--ext-diff show HEAD", args: ["--ext-diff", "show", "HEAD"] },
+      { label: "--textconv show", args: ["--textconv", "show", "HEAD:f"] },
+      { label: "--exec-path=/evil status", args: ["--exec-path=/tmp/evil", "status"] },
+      { label: "-c=foo diff (flag=value form)", args: ["-c=foo", "diff"] },
+      { label: "--no-index diff /etc/passwd", args: ["--no-index", "diff", "/etc/passwd", "f"] },
+    ];
+
+  for (const { label, args } of deniedInvocations) {
+    it(`denies git ${label}`, () => {
+      expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", args).allowed).toBe(false);
+    });
+  }
+
+  it("still allows read-only git (status, diff HEAD~1, and -C dir status)", () => {
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["status"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["diff", "HEAD~1"]).allowed).toBe(true);
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["-C", "sub", "status"]).allowed).toBe(
+      true,
+    );
+  });
+});

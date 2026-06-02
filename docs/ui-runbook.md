@@ -33,8 +33,14 @@ When Keiko has no model gateway configuration, Settings asks for:
 
 - Base URL, for example `https://llm-gateway.example.com/v1`
 - API token
+- Optional API-key header, only when your gateway admin provides a custom header
+- Deployment names, only when the gateway cannot expose a reliable model list
 
-Keiko tests the credentials immediately. It lists available models from the gateway, performs a small chat-completions smoke test, and saves only callable chat models in the local runtime configuration.
+Supported credential headers are `authorization`, `x-litellm-key`, `x-api-key`, and `api-key`.
+
+Keiko tests the credentials immediately. It lists available models from the gateway, uses LiteLLM-style model metadata when available, performs a small chat-completions smoke test, and saves only callable chat models in the local runtime configuration.
+
+For OpenAI-compatible gateways such as LiteLLM, usually leave deployment names empty. For Azure AI Foundry, paste the deployment names you want Keiko to offer in the UI.
 
 Environment variables are still supported for scripted starts. They are not a standalone UI configuration source when the UI needs to discover models for a first-time user.
 
@@ -77,4 +83,5 @@ Keep `.keiko/`, runtime config files, and API tokens out of version control.
 | Port conflict          | Stop the conflicting process or start Keiko with another port.                       |
 | No model appears       | Re-run Settings credential test and confirm the gateway exposes chat models.         |
 | Credential test fails  | Confirm the base URL points to an OpenAI-compatible API and that the token is valid. |
+| Custom proxy key fails | Confirm whether your gateway expects `Authorization` or a custom API-key header.     |
 | Stop does not clean up | Ensure the process is gone, then remove `.keiko/ui.pid` and start again.             |

@@ -6,13 +6,18 @@
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import {
+  apiKeyHeaderValue,
+  ConfigInvalidError,
+  DEFAULT_API_KEY_HEADER_NAME,
   Gateway,
   createDefaultChatCapability,
   listConfiguredCapabilities,
+  normalizeApiKeyHeaderName,
   parseGatewayConfig,
   toSafeObject,
+  validateBaseUrl,
 } from "../gateway/index.js";
-import { gatewayFetch } from "../gateway/http.js";
+import { gatewayFetch, readJsonCapped } from "../gateway/http.js";
 import { redact } from "../gateway/redaction.js";
 import type { GatewayConfig } from "../gateway/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -21,9 +26,12 @@ import type { UiHandlerDeps } from "./deps.js";
 
 const MAX_BODY_BYTES = 64_000;
 const MAX_DISCOVERED_MODELS = 100;
+const MAX_DEPLOYMENT_NAMES = 100;
+const MAX_MODEL_ID_LENGTH = 160;
 const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 15_000;
 const DEPLOYMENT_SMOKE_TIMEOUT_MS = 30_000;
 const SETUP_SMOKE_CONCURRENCY = 4;
+const CHAT_COMPATIBLE_MODES = new Set(["chat", "completion", "responses"]);
 
 type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
@@ -108,6 +116,7 @@ function isAzureFoundryBaseUrl(baseUrl: string): boolean {
 interface ProviderRawOptions {
   readonly timeoutMs?: number | undefined;
   readonly maxRetries?: number | undefined;
+  readonly apiKeyHeaderName?: string | undefined;
 }
 
 function providerRaw(
@@ -120,6 +129,7 @@ function providerRaw(
     modelId,
     baseUrl,
     apiKey,
+    apiKeyHeaderName: options.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
     capability: createDefaultChatCapability(modelId),
     timeoutMs: options.timeoutMs ?? 30_000,
     maxRetries: options.maxRetries ?? 2,
@@ -143,19 +153,73 @@ function modelsEndpoint(baseUrl: string): string {
   return `${baseUrl}/models`;
 }
 
-function modelIdFromDiscoveryItem(item: unknown): string | undefined {
-  if (!isRecord(item) || typeof item.id !== "string") {
-    return undefined;
+function modelInfoEndpointCandidates(baseUrl: string): readonly string[] {
+  const normalized = normalizeBaseUrl(baseUrl);
+  return [`${normalized}/model/info`];
+}
+
+function apiKeyHeaders(apiKey: string, apiKeyHeaderName: string): Record<string, string> {
+  return { [apiKeyHeaderName]: apiKeyHeaderValue(apiKeyHeaderName, apiKey) };
+}
+
+function hasDisallowedModelIdCharacter(id: string): boolean {
+  for (let index = 0; index < id.length; index += 1) {
+    const code = id.charCodeAt(index);
+    if (code <= 31 || code === 127) {
+      return true;
+    }
   }
-  const id = item.id.trim();
-  if (id.length === 0) {
-    return undefined;
+  return false;
+}
+
+function isUsableModelId(id: string): boolean {
+  return id.length > 0 && id.length <= MAX_MODEL_ID_LENGTH && !hasDisallowedModelIdCharacter(id);
+}
+
+function modelIdFromKnownFields(item: Record<string, unknown>): string | undefined {
+  for (const field of ["id", "model_name", "model", "deployment_name", "deploymentName"]) {
+    const value = item[field];
+    if (typeof value === "string") {
+      const id = value.trim();
+      if (isUsableModelId(id)) {
+        return id;
+      }
+    }
   }
+  return undefined;
+}
+
+function nestedRecord(value: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const nested = value[key];
+  return isRecord(nested) ? nested : undefined;
+}
+
+function modelModeFromDiscoveryItem(item: Record<string, unknown>): string | undefined {
+  const modelInfo = nestedRecord(item, "model_info");
+  const litellmParams = nestedRecord(item, "litellm_params");
+  const candidates = [item.mode, modelInfo?.mode, litellmParams?.mode];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim().toLowerCase();
+    }
+  }
+  return undefined;
+}
+
+function isExplicitlyNonChatModel(item: Record<string, unknown>): boolean {
   const capabilities = isRecord(item.capabilities) ? item.capabilities : undefined;
   if (capabilities?.chat_completion === false) {
+    return true;
+  }
+  const mode = modelModeFromDiscoveryItem(item);
+  return mode !== undefined && !CHAT_COMPATIBLE_MODES.has(mode);
+}
+
+function modelIdFromDiscoveryItem(item: unknown): string | undefined {
+  if (!isRecord(item) || isExplicitlyNonChatModel(item)) {
     return undefined;
   }
-  return id;
+  return modelIdFromKnownFields(item);
 }
 
 function parseModelList(payload: unknown): readonly string[] {
@@ -176,25 +240,54 @@ function parseModelList(payload: unknown): readonly string[] {
   return unique.slice(0, MAX_DISCOVERED_MODELS);
 }
 
-async function defaultGatewayModelDiscovery(
-  baseUrl: string,
+async function fetchDiscoveryJson(
+  url: string,
   apiKey: string,
-): Promise<readonly string[]> {
-  const response = await gatewayFetch(modelsEndpoint(baseUrl), {
+  apiKeyHeaderName: string,
+): Promise<unknown> {
+  const response = await gatewayFetch(url, {
     method: "GET",
-    headers: { authorization: `Bearer ${apiKey}` },
+    headers: apiKeyHeaders(apiKey, apiKeyHeaderName),
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) {
     throw new Error(`model discovery returned HTTP ${String(response.status)}`);
   }
-  let payload: unknown;
   try {
-    payload = await response.json();
+    return await readJsonCapped(response);
   } catch {
     throw new Error("model discovery response was not readable JSON");
   }
-  return parseModelList(payload);
+}
+
+async function discoverLiteLlmModelInfo(
+  baseUrl: string,
+  apiKey: string,
+  apiKeyHeaderName: string,
+): Promise<readonly string[] | undefined> {
+  for (const endpoint of modelInfoEndpointCandidates(baseUrl)) {
+    try {
+      return parseModelList(await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName));
+    } catch {
+      // /model/info is a LiteLLM-specific enrichment endpoint. If it is absent or blocked,
+      // continue with OpenAI-compatible /models discovery so customer gateways are not broken.
+    }
+  }
+  return undefined;
+}
+
+async function defaultGatewayModelDiscovery(
+  baseUrl: string,
+  apiKey: string,
+  apiKeyHeaderName = DEFAULT_API_KEY_HEADER_NAME,
+): Promise<readonly string[]> {
+  const litellmModels = await discoverLiteLlmModelInfo(baseUrl, apiKey, apiKeyHeaderName);
+  if (litellmModels !== undefined) {
+    return litellmModels;
+  }
+  return parseModelList(
+    await fetchDiscoveryJson(modelsEndpoint(baseUrl), apiKey, apiKeyHeaderName),
+  );
 }
 
 function deploymentNameValues(value: unknown): readonly string[] | undefined {
@@ -224,7 +317,38 @@ function parseDeploymentNames(value: unknown): readonly string[] | RouteResult {
       body: errorBody("BAD_REQUEST", "deploymentNames must be a string or an array of strings."),
     };
   }
-  return normalizeDeploymentNames(values);
+  const names = normalizeDeploymentNames(values);
+  if (names.length > MAX_DEPLOYMENT_NAMES) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "deploymentNames exceeds the model setup limit."),
+    };
+  }
+  if (names.some((name) => !isUsableModelId(name))) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "deploymentNames contains an invalid model id."),
+    };
+  }
+  return names;
+}
+
+function validateSetupConnection(
+  baseUrl: string,
+  apiKey: string,
+  apiKeyHeaderName: string,
+): RouteResult | undefined {
+  try {
+    parseGatewayConfig(
+      buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }),
+    );
+    return undefined;
+  } catch (error) {
+    if (error instanceof ConfigInvalidError) {
+      return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
+    }
+    throw error;
+  }
 }
 
 async function defaultGatewaySetupTester(
@@ -285,6 +409,7 @@ function readSetupRequest(
   | {
       readonly baseUrl: string;
       readonly apiKey: string;
+      readonly apiKeyHeaderName: string;
       readonly deploymentNames: readonly string[];
     }
   | RouteResult {
@@ -296,11 +421,28 @@ function readSetupRequest(
   if (baseUrl.length === 0 || apiKey.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "baseUrl and apiKey are required.") };
   }
+  let apiKeyHeaderName: string;
+  try {
+    apiKeyHeaderName = normalizeApiKeyHeaderName(
+      raw.apiKeyHeaderName,
+      "apiKeyHeaderName",
+      DEFAULT_API_KEY_HEADER_NAME,
+    );
+  } catch (error) {
+    if (error instanceof ConfigInvalidError) {
+      return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
+    }
+    throw error;
+  }
   const deploymentNames = parseDeploymentNames(raw.deploymentNames);
   if ("status" in deploymentNames) {
     return deploymentNames;
   }
-  return { baseUrl, apiKey, deploymentNames };
+  const invalidConnection = validateSetupConnection(baseUrl, apiKey, apiKeyHeaderName);
+  if (invalidConnection !== undefined) {
+    return invalidConnection;
+  }
+  return { baseUrl, apiKey, apiKeyHeaderName, deploymentNames };
 }
 
 function safeError(error: unknown, secrets: readonly string[]): string {
@@ -319,21 +461,26 @@ interface VerifiedSetup {
 async function verifySetupCandidate(
   baseUrl: string,
   apiKey: string,
+  apiKeyHeaderName: string,
   deploymentNames: readonly string[],
   tester: GatewaySetupTester,
   discovery: GatewayModelDiscovery,
 ): Promise<VerifiedSetup> {
+  // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
+  // scheme/credential/loopback validation as the originally submitted base URL.
+  validateBaseUrl(baseUrl, "candidate");
   const candidateModelIds =
-    deploymentNames.length > 0 ? deploymentNames : await discovery(baseUrl, apiKey);
+    deploymentNames.length > 0 ? deploymentNames : await discovery(baseUrl, apiKey, apiKeyHeaderName);
   const smokeTimeoutMs =
     deploymentNames.length > 0 ? DEPLOYMENT_SMOKE_TIMEOUT_MS : DISCOVERED_MODEL_SMOKE_TIMEOUT_MS;
   const candidateRawConfig = buildRawConfig(baseUrl, apiKey, candidateModelIds, {
+    apiKeyHeaderName,
     timeoutMs: smokeTimeoutMs,
     maxRetries: 0,
   });
   const candidateConfig = parseGatewayConfig(candidateRawConfig);
   const testedModelIds = await tester(candidateConfig, candidateModelIds);
-  const rawConfig = buildRawConfig(baseUrl, apiKey, testedModelIds);
+  const rawConfig = buildRawConfig(baseUrl, apiKey, testedModelIds, { apiKeyHeaderName });
   const config = parseGatewayConfig(rawConfig);
   return { rawConfig, config, testedModelIds };
 }
@@ -428,6 +575,7 @@ export async function handleGatewaySetup(ctx: RouteContext, deps: UiHandlerDeps)
       const verified = await verifySetupCandidate(
         baseUrl,
         request.apiKey,
+        request.apiKeyHeaderName,
         request.deploymentNames,
         tester,
         discovery,
@@ -436,7 +584,9 @@ export async function handleGatewaySetup(ctx: RouteContext, deps: UiHandlerDeps)
       deps.gatewayConfig.set(verified.config, true);
       return setupSuccessResult(verified.config, verified.testedModelIds);
     } catch (error) {
-      errors.push(`candidate ${String(errors.length + 1)}: ${safeError(error, [request.apiKey, baseUrl])}`);
+      errors.push(
+        `candidate ${String(errors.length + 1)}: ${safeError(error, [request.apiKey, request.baseUrl, baseUrl])}`,
+      );
     }
   }
   return setupFailureResult(errors);
