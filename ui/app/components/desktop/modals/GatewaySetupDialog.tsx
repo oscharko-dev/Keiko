@@ -14,9 +14,16 @@ function errorMessage(error: unknown): string {
   return "The gateway could not be configured.";
 }
 
+function deploymentNamesFromInput(value: string): readonly string[] {
+  return Array.from(
+    new Set(value.split(/[\n,]/u).map((item) => item.trim()).filter((item) => item.length > 0)),
+  );
+}
+
 export function GatewaySetupDialog({ onCancel }: { readonly onCancel?: (() => void) | undefined }): ReactNode {
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
+  const [deploymentNames, setDeploymentNames] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [success, setSuccess] = useState<string | undefined>();
@@ -28,7 +35,11 @@ export function GatewaySetupDialog({ onCancel }: { readonly onCancel?: (() => vo
     setError(undefined);
     setSuccess(undefined);
     try {
-      const result = await setupGateway({ baseUrl, apiKey });
+      const result = await setupGateway({
+        baseUrl,
+        apiKey,
+        deploymentNames: deploymentNamesFromInput(deploymentNames),
+      });
       const count = result.testedModelIds.length;
       setSuccess(`Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}. Reloading Keiko...`);
       window.setTimeout(() => window.location.reload(), 800);
@@ -73,8 +84,20 @@ export function GatewaySetupDialog({ onCancel }: { readonly onCancel?: (() => vo
             onChange={(event) => setApiKey(event.target.value)}
           />
         </label>
+        <label className="gw-field">
+          <span>Deployment names optional</span>
+          <textarea
+            className="gw-input gw-textarea mono"
+            value={deploymentNames}
+            placeholder={"phi-4\nmistral-large-3\ngpt-oss-120b"}
+            autoComplete="off"
+            disabled={busy || success !== undefined}
+            onChange={(event) => setDeploymentNames(event.target.value)}
+          />
+        </label>
         <div className="gw-note">
-          Keiko will try the URL as entered and, if needed, also the same URL with <span className="mono">/v1</span>.
+          Leave deployment names empty for OpenAI-compatible gateways with model discovery. For Azure AI Foundry,
+          paste the deployment names from the Deployments tab. Testing several deployments can take up to 30 seconds.
         </div>
         {error !== undefined ? <div className="gw-error">{error}</div> : null}
         {success !== undefined ? <div className="gw-success">{success}</div> : null}

@@ -133,6 +133,96 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("requires deployment names for Azure AI Foundry endpoints", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-azure-required-");
+    const evidenceDir = await tempDir("keiko-gw-ev-azure-required-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.reject(new Error("discovery should not run")),
+      gatewaySetupTester: () => Promise.reject(new Error("tester should not run")),
+    });
+    const result = await handleGatewaySetup(
+      ctx({
+        baseUrl: "https://workspace.example.services.ai.azure.com/openai/v1",
+        apiKey: "example-secret-token",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("GATEWAY_DEPLOYMENTS_REQUIRED");
+    expect(deps.gatewayConfig?.present()).toBe(false);
+    deps.store.close();
+  });
+
+  it("uses supplied deployment names instead of Azure model catalog discovery", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-azure-deployments-");
+    const evidenceDir = await tempDir("keiko-gw-ev-azure-deployments-");
+    const originalFetch = globalThis.fetch;
+    const seenModels: string[] = [];
+    const fakeFetch: typeof fetch = (url, init) => {
+      expect(fetchInputUrl(url)).not.toContain("/models");
+      if (init?.body !== undefined && typeof init.body !== "string") {
+        throw new Error("expected JSON string request body");
+      }
+      const body = JSON.parse(init?.body ?? "{}") as { model?: string };
+      if (body.model !== undefined) {
+        seenModels.push(body.model);
+      }
+      if (body.model === "text-embedding-3-large") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { message: "not a chat deployment" } }), {
+            status: 400,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 3, completion_tokens: 1 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    };
+    globalThis.fetch = fakeFetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://workspace.example.services.ai.azure.com/openai/v1",
+          apiKey: "example-secret-token",
+          deploymentNames: ["phi-4", "text-embedding-3-large", "gpt-oss-120b"],
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(seenModels).toEqual(["phi-4", "text-embedding-3-large", "gpt-oss-120b"]);
+      expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
+        "phi-4",
+        "gpt-oss-120b",
+      ]);
+      expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
+        "phi-4",
+        "gpt-oss-120b",
+      ]);
+      const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+      expect(saved).not.toContain("text-embedding-3-large");
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
   it("production setup discovers models and stores only chat-callable models", async () => {
     const uiDir = await tempDir("keiko-gw-ui-all-");
     const evidenceDir = await tempDir("keiko-gw-ev-all-");
@@ -144,6 +234,10 @@ describe("handleGatewaySetup", () => {
           new Response(
             JSON.stringify({
               data: [
+                {
+                  id: "example-image-model",
+                  capabilities: { chat_completion: false },
+                },
                 { id: "example-chat-model-large" },
                 { id: "example-chat-model-fast" },
                 { id: "example-embedding-model" },

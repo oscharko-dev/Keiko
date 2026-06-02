@@ -1199,6 +1199,10 @@ select.dlg-input { appearance: none; cursor: pointer; }
   box-shadow: 0 0 0 3px var(--accent-glow);
 }
 .gw-input::placeholder { color: var(--fg-faint); }
+.gw-textarea {
+  min-height: 82px;
+  resize: vertical;
+}
 .gw-note {
   padding: 10px 12px;
   border-radius: 12px;

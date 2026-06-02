@@ -12,6 +12,7 @@ import {
   parseGatewayConfig,
   toSafeObject,
 } from "../gateway/index.js";
+import { gatewayFetch } from "../gateway/http.js";
 import { redact } from "../gateway/redaction.js";
 import type { GatewayConfig } from "../gateway/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -19,7 +20,10 @@ import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 
 const MAX_BODY_BYTES = 64_000;
-const MAX_DISCOVERED_MODELS = 25;
+const MAX_DISCOVERED_MODELS = 100;
+const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 15_000;
+const DEPLOYMENT_SMOKE_TIMEOUT_MS = 30_000;
+const SETUP_SMOKE_CONCURRENCY = 4;
 
 type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
@@ -73,20 +77,52 @@ function normalizeBaseUrl(raw: string): string {
 function candidateBaseUrls(baseUrl: string): readonly string[] {
   const primary = normalizeBaseUrl(baseUrl);
   const candidates = [primary];
-  if (!primary.endsWith("/v1")) {
-    candidates.push(`${primary}/v1`);
+  try {
+    const url = new URL(primary);
+    if (url.hostname.endsWith(".services.ai.azure.com")) {
+      if (url.pathname === "" || url.pathname === "/") {
+        candidates.push(`${url.origin}/openai/v1`);
+      } else if (primary.endsWith("/openai")) {
+        candidates.push(`${primary}/v1`);
+      }
+    } else if (!primary.endsWith("/v1")) {
+      candidates.push(`${primary}/v1`);
+    }
+  } catch {
+    if (!primary.endsWith("/v1")) {
+      candidates.push(`${primary}/v1`);
+    }
   }
   return Array.from(new Set(candidates));
 }
 
-function providerRaw(modelId: string, baseUrl: string, apiKey: string): Record<string, unknown> {
+function isAzureFoundryBaseUrl(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.hostname.endsWith(".services.ai.azure.com");
+  } catch {
+    return false;
+  }
+}
+
+interface ProviderRawOptions {
+  readonly timeoutMs?: number | undefined;
+  readonly maxRetries?: number | undefined;
+}
+
+function providerRaw(
+  modelId: string,
+  baseUrl: string,
+  apiKey: string,
+  options: ProviderRawOptions = {},
+): Record<string, unknown> {
   return {
     modelId,
     baseUrl,
     apiKey,
     capability: createDefaultChatCapability(modelId),
-    timeoutMs: 30_000,
-    maxRetries: 2,
+    timeoutMs: options.timeoutMs ?? 30_000,
+    maxRetries: options.maxRetries ?? 2,
     retryBaseDelayMs: 500,
   };
 }
@@ -95,9 +131,10 @@ function buildRawConfig(
   baseUrl: string,
   apiKey: string,
   modelIds: readonly string[],
+  options: ProviderRawOptions = {},
 ): Record<string, unknown> {
   return {
-    providers: modelIds.map((modelId) => providerRaw(modelId, baseUrl, apiKey)),
+    providers: modelIds.map((modelId) => providerRaw(modelId, baseUrl, apiKey, options)),
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
   };
 }
@@ -106,16 +143,31 @@ function modelsEndpoint(baseUrl: string): string {
   return `${baseUrl}/models`;
 }
 
+function modelIdFromDiscoveryItem(item: unknown): string | undefined {
+  if (!isRecord(item) || typeof item.id !== "string") {
+    return undefined;
+  }
+  const id = item.id.trim();
+  if (id.length === 0) {
+    return undefined;
+  }
+  const capabilities = isRecord(item.capabilities) ? item.capabilities : undefined;
+  if (capabilities?.chat_completion === false) {
+    return undefined;
+  }
+  return id;
+}
+
 function parseModelList(payload: unknown): readonly string[] {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw new Error("model discovery response must contain a data array");
   }
   const ids: string[] = [];
   for (const item of payload.data) {
-    if (!isRecord(item) || typeof item.id !== "string" || item.id.trim().length === 0) {
-      continue;
+    const id = modelIdFromDiscoveryItem(item);
+    if (id !== undefined) {
+      ids.push(id);
     }
-    ids.push(item.id.trim());
   }
   const unique = Array.from(new Set(ids));
   if (unique.length === 0) {
@@ -128,7 +180,7 @@ async function defaultGatewayModelDiscovery(
   baseUrl: string,
   apiKey: string,
 ): Promise<readonly string[]> {
-  const response = await fetch(modelsEndpoint(baseUrl), {
+  const response = await gatewayFetch(modelsEndpoint(baseUrl), {
     method: "GET",
     headers: { authorization: `Bearer ${apiKey}` },
     signal: AbortSignal.timeout(30_000),
@@ -145,28 +197,74 @@ async function defaultGatewayModelDiscovery(
   return parseModelList(payload);
 }
 
+function deploymentNameValues(value: unknown): readonly string[] | undefined {
+  if (typeof value === "string") {
+    return value.split(/[\n,]/u);
+  }
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+    return value;
+  }
+  return undefined;
+}
+
+function normalizeDeploymentNames(values: readonly string[]): readonly string[] {
+  return Array.from(
+    new Set(values.map((item) => item.trim()).filter((item) => item.length > 0)),
+  );
+}
+
+function parseDeploymentNames(value: unknown): readonly string[] | RouteResult {
+  if (value === undefined) {
+    return [];
+  }
+  const values = deploymentNameValues(value);
+  if (values === undefined) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "deploymentNames must be a string or an array of strings."),
+    };
+  }
+  return normalizeDeploymentNames(values);
+}
+
 async function defaultGatewaySetupTester(
   config: GatewayConfig,
   candidateModelIds: readonly string[],
 ): Promise<readonly string[]> {
   const gateway = new Gateway(config);
-  const tested: string[] = [];
-  for (const modelId of candidateModelIds) {
-    try {
-      await gateway.chat({
-        modelId,
-        messages: [{ role: "user", content: "Reply with exactly: OK" }],
-      });
-      tested.push(modelId);
-    } catch {
-      // Non-chat models can appear in OpenAI-compatible model discovery responses. They are
-      // intentionally ignored so only chat-callable models become selectable in the UI.
+  const tested = Array<string | undefined>(candidateModelIds.length).fill(undefined);
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < candidateModelIds.length) {
+      const index = next;
+      next += 1;
+      const modelId = candidateModelIds[index];
+      if (modelId === undefined) {
+        continue;
+      }
+      try {
+        await gateway.chat({
+          modelId,
+          messages: [{ role: "user", content: "Reply with exactly: OK" }],
+        });
+        tested[index] = modelId;
+      } catch {
+        // Non-chat models can appear in OpenAI-compatible model discovery responses. They are
+        // intentionally ignored so only chat-callable models become selectable in the UI.
+      }
     }
   }
-  if (tested.length === 0) {
+  await Promise.all(
+    Array.from(
+      { length: Math.min(SETUP_SMOKE_CONCURRENCY, candidateModelIds.length) },
+      () => worker(),
+    ),
+  );
+  const accepted = tested.filter((modelId): modelId is string => modelId !== undefined);
+  if (accepted.length === 0) {
     throw new Error("no discovered model accepted the chat-completions smoke test");
   }
-  return tested;
+  return accepted;
 }
 
 function savePrivateJson(path: string, raw: Record<string, unknown>): void {
@@ -181,7 +279,15 @@ function savePrivateJson(path: string, raw: Record<string, unknown>): void {
   }
 }
 
-function readSetupRequest(raw: unknown): { readonly baseUrl: string; readonly apiKey: string } | RouteResult {
+function readSetupRequest(
+  raw: unknown,
+):
+  | {
+      readonly baseUrl: string;
+      readonly apiKey: string;
+      readonly deploymentNames: readonly string[];
+    }
+  | RouteResult {
   if (!isRecord(raw)) {
     return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
   }
@@ -190,7 +296,11 @@ function readSetupRequest(raw: unknown): { readonly baseUrl: string; readonly ap
   if (baseUrl.length === 0 || apiKey.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "baseUrl and apiKey are required.") };
   }
-  return { baseUrl, apiKey };
+  const deploymentNames = parseDeploymentNames(raw.deploymentNames);
+  if ("status" in deploymentNames) {
+    return deploymentNames;
+  }
+  return { baseUrl, apiKey, deploymentNames };
 }
 
 function safeError(error: unknown, secrets: readonly string[]): string {
@@ -209,11 +319,18 @@ interface VerifiedSetup {
 async function verifySetupCandidate(
   baseUrl: string,
   apiKey: string,
+  deploymentNames: readonly string[],
   tester: GatewaySetupTester,
   discovery: GatewayModelDiscovery,
 ): Promise<VerifiedSetup> {
-  const candidateModelIds = await discovery(baseUrl, apiKey);
-  const candidateRawConfig = buildRawConfig(baseUrl, apiKey, candidateModelIds);
+  const candidateModelIds =
+    deploymentNames.length > 0 ? deploymentNames : await discovery(baseUrl, apiKey);
+  const smokeTimeoutMs =
+    deploymentNames.length > 0 ? DEPLOYMENT_SMOKE_TIMEOUT_MS : DISCOVERED_MODEL_SMOKE_TIMEOUT_MS;
+  const candidateRawConfig = buildRawConfig(baseUrl, apiKey, candidateModelIds, {
+    timeoutMs: smokeTimeoutMs,
+    maxRetries: 0,
+  });
   const candidateConfig = parseGatewayConfig(candidateRawConfig);
   const testedModelIds = await tester(candidateConfig, candidateModelIds);
   const rawConfig = buildRawConfig(baseUrl, apiKey, testedModelIds);
@@ -246,10 +363,21 @@ function setupFailureResult(errors: readonly string[]): RouteResult {
   };
 }
 
-export async function handleGatewaySetup(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
-  if (deps.gatewayConfig === undefined) {
-    return { status: 500, body: errorBody("GATEWAY_SETUP_UNAVAILABLE", "Gateway setup is unavailable.") };
-  }
+function deploymentNamesRequiredResult(): RouteResult {
+  return {
+    status: 400,
+    body: errorBody(
+      "GATEWAY_DEPLOYMENTS_REQUIRED",
+      "Azure AI Foundry endpoints require deployment names from the Deployments tab.",
+    ),
+  };
+}
+
+interface ParsedSetupBody {
+  readonly parsed: unknown;
+}
+
+async function readJsonSetupBody(ctx: RouteContext): Promise<ParsedSetupBody | RouteResult> {
   let bodyText: string;
   try {
     bodyText = await readBody(ctx.req);
@@ -259,22 +387,51 @@ export async function handleGatewaySetup(ctx: RouteContext, deps: UiHandlerDeps)
     }
     throw error;
   }
-  let parsed: unknown;
   try {
-    parsed = JSON.parse(bodyText);
+    return { parsed: JSON.parse(bodyText) as unknown };
   } catch {
     return { status: 400, body: errorBody("BAD_REQUEST", "Request body is not valid JSON.") };
   }
-  const request = readSetupRequest(parsed);
+}
+
+function gatewayUnavailableResult(): RouteResult {
+  return {
+    status: 500,
+    body: errorBody("GATEWAY_SETUP_UNAVAILABLE", "Gateway setup is unavailable."),
+  };
+}
+
+export async function handleGatewaySetup(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
+  if (deps.gatewayConfig === undefined) {
+    return gatewayUnavailableResult();
+  }
+  const bodyResult = await readJsonSetupBody(ctx);
+  if ("status" in bodyResult) {
+    return bodyResult;
+  }
+  const request = readSetupRequest(bodyResult.parsed);
   if ("status" in request) {
     return request;
   }
   const tester = deps.gatewaySetupTester ?? defaultGatewaySetupTester;
   const discovery = deps.gatewayModelDiscovery ?? defaultGatewayModelDiscovery;
+  const baseUrlCandidates = candidateBaseUrls(request.baseUrl);
+  if (
+    request.deploymentNames.length === 0 &&
+    baseUrlCandidates.some((baseUrl) => isAzureFoundryBaseUrl(baseUrl))
+  ) {
+    return deploymentNamesRequiredResult();
+  }
   const errors: string[] = [];
-  for (const baseUrl of candidateBaseUrls(request.baseUrl)) {
+  for (const baseUrl of baseUrlCandidates) {
     try {
-      const verified = await verifySetupCandidate(baseUrl, request.apiKey, tester, discovery);
+      const verified = await verifySetupCandidate(
+        baseUrl,
+        request.apiKey,
+        request.deploymentNames,
+        tester,
+        discovery,
+      );
       savePrivateJson(deps.gatewayConfig.storagePath, verified.rawConfig);
       deps.gatewayConfig.set(verified.config, true);
       return setupSuccessResult(verified.config, verified.testedModelIds);

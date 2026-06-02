@@ -3,8 +3,6 @@
 // with no network I/O and no real time. The raw provider body is never echoed into
 // an error; only a redacted, status-level summary is surfaced.
 
-import { request as httpsRequest } from "node:https";
-import { rootCertificates } from "node:tls";
 import {
   AuthenticationError,
   CancelledError,
@@ -15,6 +13,7 @@ import {
   TimeoutError,
   TransportError,
 } from "./errors.js";
+import { gatewayFetch } from "./http.js";
 import { normalizeChatResponse } from "./normalize.js";
 import { redact } from "./redaction.js";
 import type {
@@ -49,35 +48,6 @@ interface ChatRequestBody {
   }[];
   readonly tools?: unknown;
   readonly response_format?: unknown;
-}
-
-function headersFromNode(headers: Record<string, string | string[] | undefined>): Headers {
-  const out = new Headers();
-  for (const [name, value] of Object.entries(headers)) {
-    if (Array.isArray(value)) {
-      for (const item of value) out.append(name, item);
-    } else if (value !== undefined) {
-      out.set(name, value);
-    }
-  }
-  return out;
-}
-
-function isMissingIssuerError(error: unknown): boolean {
-  const cause = isRecord(error) ? error.cause : undefined;
-  const candidates = [error, cause];
-  return candidates.some((item) => {
-    if (!isRecord(item)) return false;
-    return item.code === "UNABLE_TO_GET_ISSUER_CERT_LOCALLY";
-  });
-}
-
-function usesHttps(url: string): boolean {
-  try {
-    return new URL(url).protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 function buildMessage(
@@ -227,14 +197,10 @@ function mapHttpError(
 }
 
 export class OpenAiAdapter implements ProviderAdapter {
-  private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
-  private readonly useBundledCaFallback: boolean;
 
   constructor(private readonly deps: AdapterDeps) {
-    this.fetchImpl = deps.fetchImpl ?? globalThis.fetch;
     this.now = deps.now ?? Date.now;
-    this.useBundledCaFallback = deps.fetchImpl === undefined;
   }
 
   call = async (
@@ -285,60 +251,16 @@ export class OpenAiAdapter implements ProviderAdapter {
       authorization: `Bearer ${config.apiKey}`,
     };
     try {
-      return await this.fetchImpl(url, {
+      return await gatewayFetch(url, {
         method: "POST",
         headers,
         body,
         signal,
+        fetchImpl: this.deps.fetchImpl,
       });
     } catch (error) {
-      if (this.useBundledCaFallback && usesHttps(url) && isMissingIssuerError(error)) {
-        try {
-          // Some shared-OpenSSL Node builds do not use Node's bundled public CA set by default.
-          return await this.dispatchWithBundledCa(url, headers, body, signal);
-        } catch (fallbackError) {
-          throw this.mapDispatchError(fallbackError, config, cancel, timeoutSignal, secrets);
-        }
-      }
       throw this.mapDispatchError(error, config, cancel, timeoutSignal, secrets);
     }
-  }
-
-  private dispatchWithBundledCa(
-    url: string,
-    headers: Record<string, string>,
-    body: string,
-    signal: AbortSignal,
-  ): Promise<Response> {
-    return new Promise<Response>((resolve, reject) => {
-      const req = httpsRequest(
-        url,
-        {
-          method: "POST",
-          headers,
-          ca: Array.from(rootCertificates),
-          signal,
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on("data", (chunk: Buffer) => {
-            chunks.push(chunk);
-          });
-          res.on("end", () => {
-            resolve(
-              new Response(Buffer.concat(chunks), {
-                status: res.statusCode ?? 500,
-                statusText: res.statusMessage ?? "",
-                headers: headersFromNode(res.headers),
-              }),
-            );
-          });
-          res.on("error", reject);
-        },
-      );
-      req.on("error", reject);
-      req.end(body);
-    });
   }
 
   private mapDispatchError(
