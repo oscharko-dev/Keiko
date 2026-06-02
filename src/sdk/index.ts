@@ -1,5 +1,5 @@
 // Single-sourced package version; CLI and SDK both read this to avoid drift.
-export const SDK_VERSION = "0.1.0-beta.3";
+export const SDK_VERSION = "0.1.1";
 
 // The typed agent surface. AgentConfig, the session factory, the run result, and the
 // session handle all live in the harness module (ADR-0004); the SDK re-exports them so

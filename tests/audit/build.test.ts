@@ -129,7 +129,7 @@ function makeManifest(events: readonly HarnessEvent[]): RunManifest {
   return {
     runId: RUN_ID,
     fingerprint: FP,
-    harnessVersion: "0.1.0-beta.3",
+    harnessVersion: "0.1.1",
     taskType: "investigate-bug",
     taskInput,
     limits,
@@ -156,7 +156,7 @@ describe("buildEvidenceManifest — full event mix mapping", () => {
     expect(manifest.run).toMatchObject({
       runId: RUN_ID,
       fingerprint: FP,
-      harnessVersion: "0.1.0-beta.3",
+      harnessVersion: "0.1.1",
       taskType: "investigate-bug",
       outcome: "completed",
       startedAt: 100,

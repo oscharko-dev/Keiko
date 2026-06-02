@@ -106,7 +106,7 @@ describe("MemoryEventSink", () => {
     const manifest = sink.collectManifest({
       runId: "run-1",
       fingerprint: "fp",
-      harnessVersion: "0.1.0-beta.3",
+      harnessVersion: "0.1.1",
       taskType: "explain-plan",
       taskInput: { taskType: "explain-plan", input: { filePath: "src/foo.ts" } },
       limits: DEFAULT_LIMITS,

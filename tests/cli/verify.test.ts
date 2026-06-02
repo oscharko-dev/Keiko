@@ -38,7 +38,7 @@ function writePackage(scripts: Record<string, string>, options: PackageOptions =
     JSON.stringify(
       {
         name: "verify-demo",
-        version: "0.1.0-beta.3",
+        version: "0.1.1",
         scripts,
         ...(options.devDependencies === undefined
           ? {}
