@@ -132,6 +132,29 @@ Live model CLI surfaces (`keiko models validate`, `keiko gen-tests`, `keiko inve
 
 Provider `baseUrl` values must use `https:` unless they target `localhost` or loopback for local development.
 
+Private or customer-hosted model ids that are not in Keiko's static registry can be declared in the provider entry with a local `capability` object. This metadata is used only for routing and UI display; it is not a credential. Keep customer configs out of version control.
+
+```json
+{
+  "providers": [
+    {
+      "modelId": "customer-internal-chat",
+      "baseUrl": "https://models.example.internal/v1",
+      "apiKey": "",
+      "capability": {
+        "kind": "chat",
+        "toolCalling": true,
+        "structuredOutput": true,
+        "streaming": true,
+        "costClass": "medium",
+        "latencyClass": "standard"
+      }
+    }
+  ],
+  "circuitBreaker": {}
+}
+```
+
 ### Per-model variables
 
 Derive the variable name from the model id: uppercase it, then replace every non-alphanumeric character with `_`. Suffix with `_API_KEY` or `_BASE_URL`.

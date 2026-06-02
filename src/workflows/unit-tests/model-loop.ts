@@ -89,7 +89,7 @@ async function attemptOnce(
   });
   const effectiveDiff = validation.normalizedDiff ?? parsed.diff;
   const guardCode = validation.ok
-    ? emptyPatchRejection(effectiveDiff, validation) ?? productionGuard(workspace, validation)
+    ? (emptyPatchRejection(effectiveDiff, validation) ?? productionGuard(workspace, validation))
     : validation.reasons[0]?.code;
   emitValidation(state, validation, guardCode);
   if (validation.ok && guardCode === undefined) {

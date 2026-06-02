@@ -195,9 +195,12 @@ function splitPaths(value: string): string[] {
 function chooseDefaultModel(models: readonly ModelCapability[]): string {
   return (
     models.find((model) => model.id === "gpt-oss-120b") ??
-    models.find((model) => model.kind === "chat") ??
     models[0]
   )?.id ?? "";
+}
+
+export function isAgentWorkflowModel(model: ModelCapability): boolean {
+  return model.kind === "chat" && model.toolCalling && model.structuredOutput;
 }
 
 function toPosix(value: string): string {
@@ -475,9 +478,9 @@ function AgentLauncher({
     void Promise.all([fetchModels(), fetchProjects()])
       .then(([modelPayload, projectPayload]) => {
         if (cancelled) return;
-        const chatModels = modelPayload.models.filter((model) => model.kind === "chat");
-        setModels(chatModels);
-        setModelId((current) => current || chooseDefaultModel(chatModels));
+        const workflowModels = modelPayload.models.filter(isAgentWorkflowModel);
+        setModels(workflowModels);
+        setModelId((current) => current || chooseDefaultModel(workflowModels));
         setProjects(availableProjectPaths(projectPayload.projects));
       })
       .catch((error: unknown) => {

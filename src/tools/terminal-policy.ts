@@ -46,14 +46,7 @@ export const TERMINAL_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   {
     executable: "npm",
     allowedSubcommands: Object.freeze(["ls", "list", "help"]),
-    denyFlags: Object.freeze([
-      "-c",
-      "--call",
-      "--prefix",
-      "--global",
-      "-g",
-      "--location",
-    ]),
+    denyFlags: Object.freeze(["-c", "--call", "--prefix", "--global", "-g", "--location"]),
   },
   {
     executable: "git",

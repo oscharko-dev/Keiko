@@ -86,6 +86,38 @@ describe("Gateway.chat", () => {
     expect(result.usage.costClass).toBe("high");
   });
 
+  it("routes customer-declared chat capabilities that are absent from the static registry", async () => {
+    const modelId = "customer-internal-chat";
+    const gateway = new Gateway(
+      {
+        ...config([provider({ modelId })]),
+        capabilities: [
+          {
+            id: modelId,
+            kind: "chat",
+            contextWindow: 64_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "internal endpoint",
+            preferredUseCases: ["Customer coding workflow"],
+            knownLimitations: [],
+          },
+        ],
+      },
+      {
+        adapter: fakeAdapter((_req, cfg) => Promise.resolve(okResponse(cfg.modelId))),
+        clock: stubClock(),
+      },
+    );
+    const result = await gateway.chat({ modelId, messages: [{ role: "user", content: "q" }] });
+    expect(result.modelId).toBe(modelId);
+    expect(result.usage.costClass).toBe("medium");
+  });
+
   it("throws UnknownModelError when the model is not configured", async () => {
     const gateway = new Gateway(config([provider()]), {
       adapter: fakeAdapter(() => Promise.resolve(okResponse("x"))),

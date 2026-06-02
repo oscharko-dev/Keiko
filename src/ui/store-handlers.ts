@@ -6,7 +6,8 @@ import type { IncomingMessage } from "node:http";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { findCapability } from "../gateway/index.js";
+import { currentGatewayConfig } from "./deps.js";
+import { findCapability, findConfiguredCapability } from "../gateway/index.js";
 import {
   UiStoreError,
   assertUiDbOutsideProject,
@@ -141,22 +142,33 @@ function optionalString(body: Record<string, unknown>, name: string): string | u
   return v;
 }
 
-function assertChatModelRegistryId(modelId: string): void {
-  const capability = findCapability(modelId);
+function assertChatModelId(deps: UiHandlerDeps, modelId: string): void {
+  const config = currentGatewayConfig(deps);
+  const capability = config === undefined
+    ? findCapability(modelId)
+    : findConfiguredCapability(config, modelId);
   if (capability?.kind !== "chat") {
-    throw new InvalidRequest('Field "selectedModel" must be a chat model registry id.');
+    throw new InvalidRequest('Field "selectedModel" must be a configured chat model id.');
   }
 }
 
-function requireChatModelId(body: Record<string, unknown>, name: string): string {
+function requireChatModelId(
+  deps: UiHandlerDeps,
+  body: Record<string, unknown>,
+  name: string,
+): string {
   const modelId = requireString(body, name);
-  assertChatModelRegistryId(modelId);
+  assertChatModelId(deps, modelId);
   return modelId;
 }
 
-function optionalChatModelId(body: Record<string, unknown>, name: string): string | undefined {
+function optionalChatModelId(
+  deps: UiHandlerDeps,
+  body: Record<string, unknown>,
+  name: string,
+): string | undefined {
   const modelId = optionalString(body, name);
-  if (modelId !== undefined) assertChatModelRegistryId(modelId);
+  if (modelId !== undefined) assertChatModelId(deps, modelId);
   return modelId;
 }
 
@@ -371,7 +383,7 @@ export async function handleCreateChat(
     const body = await readJsonObject(ctx.req);
     const projectPath = requireString(body, "projectPath");
     const title = requireString(body, "title");
-    const selectedModel = requireChatModelId(body, "selectedModel");
+    const selectedModel = requireChatModelId(deps, body, "selectedModel");
     const branchLabel = optionalString(body, "branchLabel");
     const chat = deps.store.createChat(
       projectPath,
@@ -387,9 +399,9 @@ export async function handleCreateChat(
 // Route 19 — PATCH /api/chats?id=...
 // ──────────────────────────────────────────────────────────────────────────
 
-function buildChatPatch(body: Record<string, unknown>): UpdateChatPatch {
+function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): UpdateChatPatch {
   const title = optionalString(body, "title");
-  const selectedModel = optionalChatModelId(body, "selectedModel");
+  const selectedModel = optionalChatModelId(deps, body, "selectedModel");
   const branchLabel = optionalString(body, "branchLabel");
   const statusRaw = body.status;
   const patch: UpdateChatPatch = {
@@ -411,7 +423,7 @@ export async function handleUpdateChat(
   return runHandler(async () => {
     const id = requireQuery(ctx, "id");
     const body = await readJsonObject(ctx.req);
-    const patch = buildChatPatch(body);
+    const patch = buildChatPatch(deps, body);
     const chat = deps.store.updateChat(id, patch);
     return { status: 200, body: { chat } };
   });

@@ -16,6 +16,7 @@ import {
   type UiHandlerDeps,
 } from "../../src/ui/index.js";
 import { createInMemoryUiStore, type UiStore } from "../../src/ui/store/index.js";
+import type { GatewayConfig } from "../../src/gateway/index.js";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const PATCH_HEADERS = POST_HEADERS;
@@ -45,6 +46,38 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
 
 function url(path: string): string {
   return `http://${UI_HOST}:${String(port)}${path}`;
+}
+
+function customModelConfig(modelId = "customer-internal-chat"): GatewayConfig {
+  return {
+    providers: [
+      {
+        modelId,
+        baseUrl: "https://provider.example/v1",
+        apiKey: "test-config-secret-value-1234567890",
+        timeoutMs: 30_000,
+        maxRetries: 0,
+        retryBaseDelayMs: 500,
+      },
+    ],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    capabilities: [
+      {
+        id: modelId,
+        kind: "chat",
+        contextWindow: 64_000,
+        maxOutputTokens: 4_096,
+        toolCalling: true,
+        structuredOutput: true,
+        streaming: true,
+        costClass: "medium",
+        latencyClass: "standard",
+        throughputHint: "internal endpoint",
+        preferredUseCases: ["Customer coding workflow"],
+        knownLimitations: [],
+      },
+    ],
+  };
 }
 
 async function listen(): Promise<number> {
@@ -438,6 +471,24 @@ describe("POST /api/chats", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("accepts a configured custom chat model absent from the static registry", async () => {
+    const modelId = "customer-internal-chat";
+    await restartWithDeps({ config: customModelConfig(modelId), configPresent: true });
+    store.createProject(projDir);
+    const res = await fetch(url("/api/chats"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({
+        projectPath: projDir,
+        title: "t",
+        selectedModel: modelId,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { chat: { selectedModel: string } };
+    expect(body.chat.selectedModel).toBe(modelId);
+  });
 });
 
 // ─── Route 19: PATCH /api/chats ──────────────────────────────────────────────
@@ -478,6 +529,21 @@ describe("PATCH /api/chats", () => {
       body: JSON.stringify({ selectedModel: "multilingual-e5-large Embedding" }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it("updates selectedModel to a configured custom chat model", async () => {
+    const modelId = "customer-internal-chat";
+    await restartWithDeps({ config: customModelConfig(modelId), configPresent: true });
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "gpt-oss-120b");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ selectedModel: modelId }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { chat: { selectedModel: string } };
+    expect(body.chat.selectedModel).toBe(modelId);
   });
 
   it("returns 404 for unknown id", async () => {

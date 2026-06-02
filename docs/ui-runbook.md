@@ -132,7 +132,7 @@ keiko ui --port 8080 --config ~/keiko.json --evidence-dir /tmp/runs
 
 **Evidence browser** — Filterable list of all past runs persisted to disk (by workflow, model, outcome, date range). Clicking a run loads the full evidence manifest: usage totals, config fingerprint, verification status, optional reasoning trace, and the git-readable diff (if generated). Evidence is redacted on disk and served as-is to the UI.
 
-**Config and model inspector** — View the active gateway configuration (no API keys shown), the full model capability registry with cost class and latency bounds, and the configured limits for workflows. No secrets are displayed.
+**Config and model inspector** — View the active gateway configuration (no API keys shown), configured model capabilities with cost class and latency bounds, and the configured limits for workflows. No secrets are displayed.
 
 ## Known follow-ups and MVP limitations
 

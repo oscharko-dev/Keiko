@@ -4,8 +4,8 @@
 // the audit ledger (issue #10) has a reliable typed target on every response.
 
 import { randomUUID } from "node:crypto";
-import { findCapability } from "./capabilities.js";
 import { UnknownModelError } from "./errors.js";
+import { findConfiguredCapability } from "./model-selection.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
 import type {
@@ -105,7 +105,7 @@ export class Gateway {
     if (provider === undefined) {
       throw new UnknownModelError(`no provider configured for model '${modelId}'`);
     }
-    const capability = findCapability(modelId);
+    const capability = findConfiguredCapability(this.config, modelId);
     if (capability === undefined) {
       throw new UnknownModelError(`model '${modelId}' is not in the capability registry`);
     }

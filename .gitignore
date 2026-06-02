@@ -123,6 +123,10 @@ coverage/
 keiko.config.json
 keiko-live-start.png
 
+# Local release-smoke sandbox. Contains installed npm packages, copied runtime config, browser
+# state, and evidence from manual release verification; never commit it.
+/sandbox/
+
 # Per-run tmp copy of the unit-test-generation integration fixture (ADR-0008 D11). Created under
 # the repo root so `npx vitest` resolves vitest from the repo's node_modules; cleaned up per test.
 .keiko-itest-*/
@@ -138,3 +142,8 @@ ui/.next/
 ui/out/
 ui/next-env.d.ts
 ui/*.tsbuildinfo
+
+# Customer/internal material. Contains photos, extracted model inventories, API endpoints,
+# local customer credentials, and derived notes. Never commit this folder.
+/only-for-internal-use/
+/Only for Internal Use/

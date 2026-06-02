@@ -12,7 +12,7 @@ import { buildCspHeader } from "../../src/ui/csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../src/ui/index.js";
 import { createInMemoryUiStore, type UiStore } from "../../src/ui/store/index.js";
 import type { ModelPort } from "../../src/harness/index.js";
-import type { GatewayRequest, NormalizedResponse } from "../../src/gateway/index.js";
+import type { GatewayConfig, GatewayRequest, NormalizedResponse } from "../../src/gateway/index.js";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "gpt-oss-120b";
@@ -47,7 +47,10 @@ function fakeModel(content: string): ModelPort {
   };
 }
 
-function deps(model: ModelPort = fakeModel("test response")): UiHandlerDeps {
+function deps(
+  model: ModelPort = fakeModel("test response"),
+  overrides: Partial<UiHandlerDeps> = {},
+): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
@@ -57,11 +60,59 @@ function deps(model: ModelPort = fakeModel("test response")): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => model,
     store,
+    ...overrides,
   };
 }
 
 function base(): string {
   return `http://${UI_HOST}:${String(port)}`;
+}
+
+function customModelConfig(modelId = "customer-internal-chat"): GatewayConfig {
+  return {
+    providers: [
+      {
+        modelId,
+        baseUrl: "https://provider.example/v1",
+        apiKey: "test-config-secret-value-1234567890",
+        timeoutMs: 30_000,
+        maxRetries: 0,
+        retryBaseDelayMs: 500,
+      },
+    ],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    capabilities: [
+      {
+        id: modelId,
+        kind: "chat",
+        contextWindow: 64_000,
+        maxOutputTokens: 4_096,
+        toolCalling: true,
+        structuredOutput: true,
+        streaming: true,
+        costClass: "medium",
+        latencyClass: "standard",
+        throughputHint: "internal endpoint",
+        preferredUseCases: ["Customer coding workflow"],
+        knownLimitations: [],
+      },
+    ],
+  };
+}
+
+async function restartWithDeps(handlerDeps: UiHandlerDeps): Promise<void> {
+  await new Promise<void>((resolve) => {
+    server.close(() => {
+      resolve();
+    });
+  });
+  server = createUiServer({
+    staticRoot,
+    csp: buildCspHeader([]),
+    port,
+    handlerDeps,
+  });
+  await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
 }
 
 beforeEach(async () => {
@@ -116,6 +167,26 @@ describe("desktop chat routes", () => {
     expect(body.project).toMatchObject({ path: projectDir, available: true });
     expect(body.chat).toMatchObject({ projectPath: projectDir, selectedModel: CHAT_MODEL });
     expect(body.messages).toEqual([]);
+  });
+
+  it("uses the configured custom chat model as the default when no modelId is supplied", async () => {
+    const modelId = "customer-internal-chat";
+    await restartWithDeps(
+      deps(fakeModel("custom response"), {
+        config: customModelConfig(modelId),
+        configPresent: true,
+      }),
+    );
+    const res = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      chat: { projectPath: string; selectedModel: string };
+    };
+    expect(body.chat).toMatchObject({ projectPath: projectDir, selectedModel: modelId });
   });
 
   it("persists user and assistant messages while calling the configured model port", async () => {

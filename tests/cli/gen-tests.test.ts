@@ -204,7 +204,7 @@ describe("runGenTestsCli (AC #1)", () => {
     expect(seenModelId).toBe("Mistral-Small-3.1-24B-Instruct-2503");
   });
 
-  it("defaults to a configured chat model that does not advertise structured output", async () => {
+  it("does not default to a configured chat model without structured output", async () => {
     const configPath = join(dir, "gateway.json");
     writeFileSync(configPath, gatewayConfig(["Qwen2.5-Coder-7B-Instruct"]), "utf8");
     let seenModelId: string | undefined;
@@ -217,6 +217,37 @@ describe("runGenTestsCli (AC #1)", () => {
     const c = makeIo();
     const code = await runGenTestsCli(
       ["--file", "src/add.ts", "--dir-root", dir, "--config", configPath],
+      c.io,
+      {},
+      { model },
+    );
+    expect(code).toBe(1);
+    expect(seenModelId).toBeUndefined();
+    expect(c.err()).toContain("workflow-capable chat model");
+  });
+
+  it("allows an explicit configured chat model even when it does not advertise structured output", async () => {
+    const configPath = join(dir, "gateway.json");
+    writeFileSync(configPath, gatewayConfig(["Qwen2.5-Coder-7B-Instruct"]), "utf8");
+    let seenModelId: string | undefined;
+    const model: ModelPort = {
+      call: (request): Promise<NormalizedResponse> => {
+        seenModelId = request.modelId;
+        return Promise.resolve(modelReturning(FENCED).call(request, new AbortController().signal));
+      },
+    };
+    const c = makeIo();
+    const code = await runGenTestsCli(
+      [
+        "--file",
+        "src/add.ts",
+        "--dir-root",
+        dir,
+        "--config",
+        configPath,
+        "--model",
+        "Qwen2.5-Coder-7B-Instruct",
+      ],
       c.io,
       {},
       { model },

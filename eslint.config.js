@@ -4,7 +4,19 @@ import tseslint from "typescript-eslint";
 import prettier from "eslint-config-prettier";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "coverage/**", "node_modules/**", "ui/**", ".claude/**", ".keiko/**"] },
+  {
+    ignores: [
+      "dist/**",
+      "coverage/**",
+      "node_modules/**",
+      "ui/**",
+      ".claude/**",
+      ".keiko/**",
+      "sandbox/**",
+      "only-for-internal-use/**",
+      "Only for Internal Use/**",
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.strictTypeChecked,
   ...tseslint.configs.stylisticTypeChecked,

@@ -119,6 +119,29 @@ export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
   return modelsRequest;
 }
 
+export interface GatewaySetupInput {
+  readonly baseUrl: string;
+  readonly apiKey: string;
+}
+
+export interface GatewaySetupResponse {
+  readonly ok: true;
+  readonly testedModelId: string;
+  readonly testedModelIds: readonly string[];
+  readonly providerCount: number;
+  readonly models: ModelCapability[];
+  readonly config: SafeGatewayConfig;
+}
+
+export async function setupGateway(body: GatewaySetupInput): Promise<GatewaySetupResponse> {
+  const response = await fetchJson<GatewaySetupResponse>("/api/gateway/setup", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+  clearModelCacheForTests();
+  return response;
+}
+
 // ---------------------------------------------------------------------------
 // Route 4 — workflows
 // ---------------------------------------------------------------------------

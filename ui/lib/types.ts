@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------------
 
 export type CostClass = "low" | "medium" | "high";
-export type LatencyClass = "fast" | "medium" | "slow";
+export type LatencyClass = "fast" | "standard" | "slow";
 export type ModelKind = "chat" | "embedding" | "ocr-vision";
 
 export interface ModelCapability {
@@ -47,6 +47,7 @@ export interface SafeCircuitBreakerConfig {
 export interface SafeGatewayConfig {
   readonly providers: readonly SafeProviderConfig[];
   readonly circuitBreaker: SafeCircuitBreakerConfig;
+  readonly capabilities?: readonly ModelCapability[];
 }
 
 // ---------------------------------------------------------------------------

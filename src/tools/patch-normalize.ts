@@ -11,10 +11,7 @@ function isBodyLine(line: string): boolean {
 }
 
 function isFileHeaderPair(lines: readonly string[], index: number): boolean {
-  return (
-    lines[index]?.startsWith("--- ") === true &&
-    lines[index + 1]?.startsWith("+++ ") === true
-  );
+  return lines[index]?.startsWith("--- ") === true && lines[index + 1]?.startsWith("+++ ") === true;
 }
 
 function hunkEnd(lines: readonly string[], start: number): number {

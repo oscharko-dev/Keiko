@@ -6,13 +6,7 @@
 // pass unchanged; the handlers degrade gracefully (no config → 400 NO_MODEL on a run, null config on
 // the inspector; no store → an empty evidence list).
 
-import {
-  listCapabilities,
-  loadConfigFromFile,
-  parseGatewayConfig,
-  type EnvSource,
-  type GatewayConfig,
-} from "../gateway/index.js";
+import { listCapabilities, loadConfigFromFile, parseGatewayConfig, type EnvSource, type GatewayConfig } from "../gateway/index.js";
 import { GatewayError, Gateway } from "../gateway/index.js";
 import { GatewayModelPort } from "../harness/index.js";
 import type { ModelPort } from "../harness/index.js";
@@ -20,6 +14,7 @@ import { createAuditRedactor } from "../audit/index.js";
 import { deepRedactStrings } from "../audit/redaction.js";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "../audit/store.js";
 import type { EvidenceStore } from "../audit/index.js";
+import { dirname, join } from "node:path";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
 import {
@@ -45,6 +40,13 @@ export type Redactor = (value: unknown) => unknown;
 // model can be built so the run route maps it to a 400 NO_MODEL — the BFF never calls a model
 // directly, only through the harness/workflow entry points the port feeds.
 export type ModelPortFactory = (modelId: string) => ModelPort | undefined;
+
+export interface RuntimeGatewayConfig {
+  readonly storagePath: string;
+  current(): GatewayConfig | undefined;
+  present(): boolean;
+  set(config: GatewayConfig | undefined, present: boolean): void;
+}
 
 export interface UiHandlerDeps {
   // The resolved gateway config, or undefined when no config file was provided / it failed to load.
@@ -75,6 +77,13 @@ export interface UiHandlerDeps {
   // ADR-0017 — browser tool session manager (BYO Chrome over CDP). Optional so existing tests
   // that do not exercise /api/browser/* keep their fixtures unchanged.
   readonly browser?: BrowserSessionManager | undefined;
+  // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
+  // and can be updated after a successful credential test without restarting the loopback server.
+  readonly gatewayConfig?: RuntimeGatewayConfig | undefined;
+  // Test seam for first-run setup. Production uses the real OpenAI-compatible gateway call.
+  readonly gatewaySetupTester?:
+    | ((config: GatewayConfig, candidateModelIds: readonly string[]) => Promise<readonly string[]>)
+    | undefined;
 }
 
 export interface BuildHandlerDepsOptions {
@@ -92,6 +101,10 @@ export interface BuildHandlerDepsOptions {
   readonly uiDbPath?: string | undefined;
   // Optional injected UiStore (tests); a node store opened at the resolved path is built otherwise.
   readonly store?: UiStore | undefined;
+  // Optional setup tester (tests); production performs a real gateway call.
+  readonly gatewaySetupTester?:
+    | ((config: GatewayConfig, candidateModelIds: readonly string[]) => Promise<readonly string[]>)
+    | undefined;
 }
 
 function envModelToken(modelId: string): string {
@@ -122,14 +135,28 @@ function resolveEnvOnlyConfig(env: EnvSource): GatewayConfig | undefined {
   }
 }
 
+function localGatewayConfigPath(uiDbPath: string): string {
+  return join(dirname(uiDbPath), "keiko.config.json");
+}
+
 // Loads the config without leaking the path or any secret on failure: a missing/invalid config file
 // falls back to KEIKO_MODEL_* env wiring when present, otherwise it is a normal "no config" state.
 function resolveConfig(
   configPath: string | undefined,
   env: EnvSource,
+  localConfigPath: string,
 ): { config: GatewayConfig | undefined; configPresent: boolean } {
   if (configPath === undefined) {
-    const config = resolveEnvOnlyConfig(env);
+    let config: GatewayConfig | undefined;
+    try {
+      config = loadConfigFromFile(localConfigPath, env);
+    } catch (error) {
+      if (error instanceof GatewayError) {
+        config = resolveEnvOnlyConfig(env);
+      } else {
+        throw error;
+      }
+    }
     return { config, configPresent: config !== undefined };
   }
   try {
@@ -141,6 +168,32 @@ function resolveConfig(
     }
     throw error;
   }
+}
+
+function createRuntimeGatewayConfig(
+  initial: GatewayConfig | undefined,
+  initialPresent: boolean,
+  storagePath: string,
+): RuntimeGatewayConfig {
+  let config = initial;
+  let present = initialPresent;
+  return {
+    storagePath,
+    current: (): GatewayConfig | undefined => config,
+    present: (): boolean => present,
+    set(next: GatewayConfig | undefined, nextPresent: boolean): void {
+      config = next;
+      present = nextPresent;
+    },
+  };
+}
+
+export function currentGatewayConfig(deps: UiHandlerDeps): GatewayConfig | undefined {
+  return deps.gatewayConfig?.current() ?? deps.config;
+}
+
+export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
+  return deps.gatewayConfig?.present() ?? deps.configPresent;
 }
 
 function isKeikoApiKeyEnvName(name: string): boolean {
@@ -179,11 +232,16 @@ export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor 
   return (value: unknown): unknown => deepRedactStrings(value, redactString);
 }
 
+export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
+  return redactionSecrets(deps.env, currentGatewayConfig(deps));
+}
+
 // The production ModelPort factory: a GatewayModelPort over a Gateway built from the resolved
 // config (mirrors the CLI's `new GatewayModelPort(new Gateway(config))`). Returns undefined when no
 // config was resolved so the run route answers 400 NO_MODEL rather than constructing a broken port.
-function defaultModelPortFactory(config: GatewayConfig | undefined): ModelPortFactory {
+function defaultModelPortFactory(runtimeConfig: RuntimeGatewayConfig): ModelPortFactory {
   return (): ModelPort | undefined => {
+    const config = runtimeConfig.current();
     if (config === undefined) {
       return undefined;
     }
@@ -196,17 +254,24 @@ function defaultModelPortFactory(config: GatewayConfig | undefined): ModelPortFa
 // created at the resolved UI-DB path (explicit → KEIKO_UI_DATA_DIR → ~/.keiko/keiko-ui.db) unless
 // an injected store is supplied (tests).
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
-  const { config, configPresent } = resolveConfig(options.configPath, options.env);
+  const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
+  const runtimeConfigPath = localGatewayConfigPath(resolvedUiDbPath);
+  const { config, configPresent } = resolveConfig(
+    options.configPath,
+    options.env,
+    runtimeConfigPath,
+  );
+  const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, runtimeConfigPath);
   const evidenceStore = createNodeEvidenceStore(
     resolveEvidenceDir(options.evidenceDir, options.env),
   );
-  const secrets = redactionSecrets(options.env, config);
-  const redactString = createAuditRedactor(
-    { additionalSecrets: secrets },
-    options.env,
-  );
-  const liveRedactor = buildRedactor(options.env, config);
-  const resolvedUiDbPath = resolveUiDbPath(options.uiDbPath, options.env);
+  const redactString = (value: string): string =>
+    createAuditRedactor(
+      { additionalSecrets: redactionSecrets(options.env, runtimeConfig.current()) },
+      options.env,
+    )(value);
+  const liveRedactor = (value: unknown): unknown =>
+    deepRedactStrings(value, redactString);
   const uiStore =
     options.store ?? createNodeUiStore(resolvedUiDbPath, { redactString });
   return {
@@ -216,10 +281,12 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     env: options.env,
     redactor: liveRedactor,
     registry: options.registry ?? createRunRegistry(),
-    modelPortFactory: options.modelPortFactory ?? defaultModelPortFactory(config),
-    redactionSecrets: secrets,
+    modelPortFactory: options.modelPortFactory ?? defaultModelPortFactory(runtimeConfig),
+    redactionSecrets: redactionSecrets(options.env, runtimeConfig.current()),
     store: uiStore,
     uiDbPath: resolvedUiDbPath,
+    gatewayConfig: runtimeConfig,
+    gatewaySetupTester: options.gatewaySetupTester,
     terminal: createTerminalExecutionManager({
       store: uiStore,
       evidenceStore,

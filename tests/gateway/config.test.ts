@@ -78,6 +78,43 @@ describe("parseGatewayConfig", () => {
     expect(() => parseGatewayConfig(raw)).toThrow(/capability registry/);
   });
 
+  it("accepts an unregistered provider when capability metadata is declared", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "customer-internal-chat",
+      capability: {
+        kind: "chat",
+        contextWindow: 64_000,
+        maxOutputTokens: 4_096,
+        toolCalling: true,
+        structuredOutput: true,
+        streaming: true,
+        costClass: "medium",
+        latencyClass: "fast",
+        throughputHint: "internal hosted endpoint",
+        preferredUseCases: ["Customer coding workflow"],
+        knownLimitations: ["Validate against the customer's endpoint"],
+      },
+    }));
+    const config = parseGatewayConfig(raw);
+    expect(config.providers[0]?.modelId).toBe("customer-internal-chat");
+    expect(config.capabilities?.[0]).toMatchObject({
+      id: "customer-internal-chat",
+      kind: "chat",
+      toolCalling: true,
+      structuredOutput: true,
+    });
+  });
+
+  it("rejects custom capability metadata whose id differs from the provider modelId", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "customer-internal-chat",
+      capability: { id: "other-model", kind: "chat" },
+    }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/capability\.id/);
+  });
+
   it("rejects an empty providers array", () => {
     expect(() => parseGatewayConfig({ providers: [], circuitBreaker: {} })).toThrow(
       ConfigInvalidError,
@@ -177,6 +214,29 @@ describe("toSafeObject", () => {
     const safe = toSafeObject(config);
     expect(safe.providers[0]?.modelId).toBe("gpt-oss-120b");
     expect(safe.providers[0]?.timeoutMs).toBe(30000);
+  });
+
+  it("preserves declared capability metadata without provider secrets", () => {
+    const config = parseGatewayConfig(
+      rawWithProvider((p) => ({
+        ...p,
+        modelId: "customer-internal-chat",
+        capability: {
+          kind: "chat",
+          toolCalling: true,
+          structuredOutput: true,
+        },
+      })),
+    );
+    const safe = toSafeObject(config);
+    expect(safe.capabilities?.[0]).toMatchObject({
+      id: "customer-internal-chat",
+      kind: "chat",
+      toolCalling: true,
+      structuredOutput: true,
+    });
+    expect(JSON.stringify(safe)).not.toContain("sk-secret-key-value-1234567890");
+    expect(JSON.stringify(safe)).not.toContain("https://host.example/v1");
   });
 });
 

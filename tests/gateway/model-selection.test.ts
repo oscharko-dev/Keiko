@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ConfigInvalidError } from "../../src/gateway/errors.js";
 import { assertConfiguredModel, selectConfiguredModel } from "../../src/gateway/model-selection.js";
-import type { GatewayConfig, ModelProviderConfig } from "../../src/gateway/types.js";
+import type {
+  GatewayConfig,
+  ModelCapability,
+  ModelProviderConfig,
+} from "../../src/gateway/types.js";
 
 function provider(modelId: string): ModelProviderConfig {
   return {
@@ -14,10 +18,14 @@ function provider(modelId: string): ModelProviderConfig {
   };
 }
 
-function config(modelIds: readonly string[]): GatewayConfig {
+function config(
+  modelIds: readonly string[],
+  capabilities: readonly ModelCapability[] = [],
+): GatewayConfig {
   return {
     providers: modelIds.map(provider),
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    ...(capabilities.length === 0 ? {} : { capabilities }),
   };
 }
 
@@ -37,6 +45,32 @@ describe("selectConfiguredModel", () => {
       structuredOutput: true,
     });
     expect(selected).toBeUndefined();
+  });
+
+  it("selects a configured customer-declared capability that is absent from the static registry", () => {
+    const selected = selectConfiguredModel(
+      config(
+        ["customer-internal-chat"],
+        [
+          {
+            id: "customer-internal-chat",
+            kind: "chat",
+            contextWindow: 64_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "internal endpoint",
+            preferredUseCases: ["Customer coding workflow"],
+            knownLimitations: [],
+          },
+        ],
+      ),
+      { kind: "chat", toolCalling: true, structuredOutput: true },
+    );
+    expect(selected).toBe("customer-internal-chat");
   });
 });
 

@@ -39,6 +39,7 @@ import {
   handleUpdateMessage,
 } from "./store-handlers.js";
 import { handleCreateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
+import { handleGatewaySetup } from "./gateway-setup.js";
 import {
   handleCreateTerminalExecution,
   handleDeleteTerminalExecution,
@@ -100,14 +101,15 @@ function health(): RouteResult {
   return { status: 200, body: { status: "ok", version: SDK_VERSION } };
 }
 
-// The full route contract: the twelve original (ADR-0011 D5), the 10 additive UI-store
-// routes (ADR-0013 D7), three Issue #66 run-summary routes, two desktop chat routes,
-// desktop terminal JSON routes, and read-only Files widget routes. Terminal byte I/O
-// uses a token-scoped WebSocket upgrade path.
+// The full route contract: the twelve original (ADR-0011 D5), the first-run gateway setup
+// endpoint, the 10 additive UI-store routes (ADR-0013 D7), three Issue #66 run-summary routes,
+// two desktop chat routes, desktop terminal JSON routes, and read-only Files widget routes.
+// Terminal byte I/O uses a token-scoped WebSocket upgrade path.
 export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/health", handler: health },
   { method: "GET", pattern: "/api/config", handler: handleConfig },
   { method: "GET", pattern: "/api/models", handler: handleModels },
+  { method: "POST", pattern: "/api/gateway/setup", handler: handleGatewaySetup },
   { method: "GET", pattern: "/api/workflows", handler: handleWorkflows },
   { method: "POST", pattern: "/api/runs", handler: handleCreateRun },
   { method: "GET", pattern: "/api/runs/:runId/events", handler: handleRunEvents },

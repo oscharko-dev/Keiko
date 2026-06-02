@@ -181,9 +181,11 @@ function buildModel(
       parsed.model ??
       selectConfiguredModel(config, {
         kind: "chat",
+        toolCalling: true,
+        structuredOutput: true,
       });
     if (modelId === undefined) {
-      io.err("Error: no configured chat model is available.\n");
+      io.err("Error: no configured workflow-capable chat model is available.\n");
       return 1;
     }
     return { port: new GatewayModelPort(new Gateway(config)), modelId };
@@ -211,6 +213,8 @@ function resolveConfiguredModelId(parsed: InvestigateArgs, env: EnvSource): stri
   }
   return selectConfiguredModel(config, {
     kind: "chat",
+    toolCalling: true,
+    structuredOutput: true,
   });
 }
 
@@ -224,7 +228,7 @@ function resolveModel(
     try {
       const modelId = resolveConfiguredModelId(parsed, env);
       if (modelId === undefined) {
-        io.err("Error: no configured chat model is available.\n");
+        io.err("Error: no configured workflow-capable chat model is available.\n");
         return 1;
       }
       return { port: deps.model, modelId };
