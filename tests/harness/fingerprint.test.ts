@@ -16,7 +16,7 @@ function baseInput(): FingerprintInput {
     modelId: "model-a",
     workingDirectory: "/repo",
     dryRun: true,
-    harnessVersion: "0.1.4",
+    harnessVersion: "0.1.5",
   };
 }
 
@@ -32,7 +32,7 @@ describe("configFingerprint", () => {
   it("ignores key order in nested objects (canonical JSON sorts keys)", () => {
     const a = configFingerprint(baseInput());
     const reordered: FingerprintInput = {
-      harnessVersion: "0.1.4",
+      harnessVersion: "0.1.5",
       modelId: "model-a",
       workingDirectory: "/repo",
       dryRun: true,

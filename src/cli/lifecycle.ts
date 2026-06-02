@@ -11,6 +11,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvSource } from "../gateway/config.js";
+import { SDK_VERSION } from "../sdk/index.js";
 import { DEFAULT_UI_PORT, UI_HOST } from "../ui/index.js";
 import type { CliIo } from "./runner.js";
 
@@ -81,6 +82,11 @@ interface LifecycleRuntimeDeps {
   readonly sleep: SleepFn;
   readonly isProcessAlive: (pid: number) => boolean;
   readonly killProcess: ProcessKiller;
+}
+
+interface HealthProbeResult {
+  readonly reachable: boolean;
+  readonly version: string | undefined;
 }
 
 function readFlagValue(args: readonly string[], index: number): string | null {
@@ -182,6 +188,35 @@ function logFile(options: LifecycleOptions): string {
 
 function healthUrl(options: LifecycleOptions): string {
   return `http://${options.host}:${String(options.port)}/api/health`;
+}
+
+function healthVersion(payload: unknown): string | undefined {
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const version = (payload as { readonly version?: unknown }).version;
+  return typeof version === "string" ? version : undefined;
+}
+
+async function probeHealth(
+  options: LifecycleOptions,
+  fetchImpl: FetchFn,
+): Promise<HealthProbeResult> {
+  try {
+    const response = await fetchImpl(healthUrl(options), {
+      signal: AbortSignal.timeout(1_000),
+    });
+    if (!response.ok) {
+      return { reachable: false, version: undefined };
+    }
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      return { reachable: true, version: undefined };
+    }
+    return { reachable: true, version: healthVersion(body) };
+  } catch {
+    return { reachable: false, version: undefined };
+  }
 }
 
 function readPid(path: string): number | undefined {
@@ -296,10 +331,21 @@ async function cmdStart(
 ): Promise<number> {
   const running = runningPid(options, deps.isProcessAlive);
   if (running !== undefined) {
-    io.out(
-      `Keiko UI already running on ${healthUrl(options).replace("/api/health", "")} (pid ${String(running)}).\n`,
-    );
-    return 0;
+    const health = await probeHealth(options, deps.fetchImpl);
+    if (health.version === SDK_VERSION) {
+      io.out(
+        `Keiko UI already running on ${healthUrl(options).replace("/api/health", "")} (pid ${String(running)}).\n`,
+      );
+      return 0;
+    }
+    const reason = !health.reachable
+      ? "health check is unreachable"
+      : health.version === undefined
+        ? "health check did not return the current Keiko version"
+        : `running version ${health.version} differs from installed version ${SDK_VERSION}`;
+    io.out(`Keiko UI process is stale (${reason}); restarting pid ${String(running)}.\n`);
+    const stopped = await cmdStop(options, io, deps);
+    if (stopped !== 0) return stopped;
   }
 
   const { child, logPath } = spawnUiProcess(options, env, deps, cwd);

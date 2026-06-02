@@ -48,7 +48,7 @@ function buildInput(runId: string, finishedAt: number): EvidenceBuildInput {
   const manifest: RunManifest = {
     runId,
     fingerprint: FP,
-    harnessVersion: "0.1.4",
+    harnessVersion: "0.1.5",
     taskType: "explain-plan",
     taskInput,
     limits: DEFAULT_LIMITS,

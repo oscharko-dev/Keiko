@@ -4,6 +4,9 @@
 // after the build steps.
 
 import { spawnSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { extractInlineScriptHashes } from "../dist/ui/csp.js";
 
 function packFiles() {
   // `--ignore-scripts` prevents the prepack hook from re-running this check recursively (npm runs
@@ -22,6 +25,43 @@ function packFiles() {
 function fail(message) {
   console.error(`package-surface check failed: ${message}`);
   process.exit(1);
+}
+
+function collectHtmlFiles(dir) {
+  const files = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectHtmlFiles(full));
+    } else if (entry.name.endsWith(".html")) {
+      files.push(full);
+    }
+  }
+  return files;
+}
+
+function readJsonArray(path) {
+  const parsed = JSON.parse(readFileSync(path, "utf8"));
+  return Array.isArray(parsed) ? parsed : [];
+}
+
+function assertCspHashesMatchStaticHtml() {
+  const staticRoot = join("dist", "ui", "static");
+  const htmlFiles = collectHtmlFiles(staticRoot);
+  const expected = extractInlineScriptHashes(htmlFiles.map((file) => readFileSync(file, "utf8")));
+  const actual = readJsonArray(join("dist", "ui", "csp-hashes.json")).filter(
+    (entry) => typeof entry === "string",
+  );
+  const expectedSet = new Set(expected);
+  const actualSet = new Set(actual);
+  const missing = expected.filter((hash) => !actualSet.has(hash));
+  const stale = actual.filter((hash) => !expectedSet.has(hash));
+  if (missing.length > 0 || stale.length > 0 || expected.length !== actual.length) {
+    fail(
+      "dist/ui/csp-hashes.json does not match dist/ui/static HTML inline scripts " +
+        `(missing ${String(missing.length)}, stale ${String(stale.length)}). Run \`npm run build:ui\`.`,
+    );
+  }
 }
 
 const files = packFiles();
@@ -66,5 +106,7 @@ for (const path of paths) {
     }
   }
 }
+
+assertCspHashesMatchStaticHtml();
 
 console.log(`package-surface check passed: ${String(paths.length)} files, dist/ui/static present.`);
