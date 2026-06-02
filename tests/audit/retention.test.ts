@@ -9,7 +9,7 @@ function manifest(runId: string, startedAt: number, finishedAt: number): Evidenc
     run: {
       runId,
       fingerprint: "fp",
-      harnessVersion: "0.1.2",
+      harnessVersion: "0.1.3",
       taskType: "explain-plan",
       outcome: "completed",
       startedAt,

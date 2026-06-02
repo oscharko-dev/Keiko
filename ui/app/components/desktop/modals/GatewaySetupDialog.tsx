@@ -20,6 +20,14 @@ function deploymentNamesFromInput(value: string): readonly string[] {
   );
 }
 
+function isAzureFoundryUrl(value: string): boolean {
+  try {
+    return new URL(value.trim()).hostname.endsWith(".services.ai.azure.com");
+  } catch {
+    return false;
+  }
+}
+
 export function GatewaySetupDialog({ onCancel }: { readonly onCancel?: (() => void) | undefined }): ReactNode {
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -35,10 +43,16 @@ export function GatewaySetupDialog({ onCancel }: { readonly onCancel?: (() => vo
     setError(undefined);
     setSuccess(undefined);
     try {
+      const parsedDeploymentNames = deploymentNamesFromInput(deploymentNames);
+      if (isAzureFoundryUrl(baseUrl) && parsedDeploymentNames.length === 0) {
+        setError("Azure AI Foundry requires deployment names. Paste the names from the Deployments tab.");
+        setBusy(false);
+        return;
+      }
       const result = await setupGateway({
         baseUrl,
         apiKey,
-        deploymentNames: deploymentNamesFromInput(deploymentNames),
+        deploymentNames: parsedDeploymentNames,
       });
       const count = result.testedModelIds.length;
       setSuccess(`Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}. Reloading Keiko...`);
@@ -85,19 +99,20 @@ export function GatewaySetupDialog({ onCancel }: { readonly onCancel?: (() => vo
           />
         </label>
         <label className="gw-field">
-          <span>Deployment names optional</span>
+          <span>Deployment names for Azure</span>
           <textarea
             className="gw-input gw-textarea mono"
             value={deploymentNames}
-            placeholder={"phi-4\nmistral-large-3\ngpt-oss-120b"}
+            placeholder="Paste deployment names, one per line"
             autoComplete="off"
             disabled={busy || success !== undefined}
             onChange={(event) => setDeploymentNames(event.target.value)}
           />
         </label>
         <div className="gw-note">
-          Leave deployment names empty for OpenAI-compatible gateways with model discovery. For Azure AI Foundry,
-          paste the deployment names from the Deployments tab. Testing several deployments can take up to 30 seconds.
+          Leave this empty only for OpenAI-compatible gateways with model discovery. For Azure AI Foundry,
+          paste deployment names exactly as shown in the Deployments tab. Testing several deployments can take
+          up to 30 seconds.
         </div>
         {error !== undefined ? <div className="gw-error">{error}</div> : null}
         {success !== undefined ? <div className="gw-success">{success}</div> : null}

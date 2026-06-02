@@ -34,7 +34,7 @@ function manifest(runId: string): EvidenceManifest {
     run: {
       runId,
       fingerprint: "fp",
-      harnessVersion: "0.1.2",
+      harnessVersion: "0.1.3",
       taskType: "explain-plan",
       outcome: "completed",
       startedAt: 100,
