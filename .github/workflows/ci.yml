@@ -90,6 +90,10 @@ jobs:
       - run: npm ci
       - name: Build
         run: npm run build
+      - name: Installable-package smoke (Issue #169 AC2)
+        run: npm run smoke:install
+      - name: Workspace SBOM and license gate (Issue #169 AC4)
+        run: npm run check:workspace-supply-chain
       - name: Smoke - offline evaluate exits 0
         run: KEIKO_EVIDENCE_DIR="$(mktemp -d)" node dist/cli/index.js evaluate --suite all
       - name: Security audit (high and above)
@@ -112,6 +116,12 @@ jobs:
         with:
           name: sbom-cyclonedx
           path: sbom.cdx.json
+          retention-days: 90
+      - name: Upload workspace SBOMs (Issue #169 AC4)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workspace-sboms-cyclonedx
+          path: sbom/
           retention-days: 90
 
   ui:
