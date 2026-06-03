@@ -11,12 +11,7 @@ import {
   fetchProjects,
   sendDesktopChat,
 } from "@/lib/api";
-import type {
-  Chat,
-  ChatMessage,
-  ModelCapability,
-  ProjectWithAvailability,
-} from "@/lib/types";
+import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
 
 export const DEFAULT_MODEL_ID = "example-chat-model";
 export const DEFAULT_CHAT_TITLE = "New chat";
@@ -255,6 +250,11 @@ export function useChatSession(): UseChatSessionResult {
       role: "user",
       content,
       timestamp: Date.now(),
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
     };
     setDraft("");
     setSending(true);

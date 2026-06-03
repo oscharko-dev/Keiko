@@ -19,6 +19,8 @@ function makeChat(overrides: Partial<Chat> & { id: string; projectPath: string }
   return {
     title: "Chat",
     selectedModel: "model",
+    branchLabel: undefined,
+    status: undefined,
     createdAt: 1000,
     updatedAt: 1000,
     ...overrides,

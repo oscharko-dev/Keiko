@@ -57,8 +57,20 @@ const MULTI_FILE_REPORT = {
     "",
   ].join("\n"),
   changedFiles: [
-    { path: "src/alpha.ts", kind: "modified", addedLines: 1, removedLines: 1, elevatedReview: false },
-    { path: "src/beta.ts", kind: "modified", addedLines: 1, removedLines: 1, elevatedReview: false },
+    {
+      path: "src/alpha.ts",
+      kind: "modified",
+      addedLines: 1,
+      removedLines: 1,
+      elevatedReview: false,
+    },
+    {
+      path: "src/beta.ts",
+      kind: "modified",
+      addedLines: 1,
+      removedLines: 1,
+      elevatedReview: false,
+    },
   ],
 };
 
@@ -69,7 +81,7 @@ function evidenceManifest(runId: string): EvidenceManifest {
       runId,
       fingerprint: "fp",
       harnessVersion: "1",
-      taskType: "unit-test-generation",
+      taskType: "generate-unit-tests",
       startedAt: 0,
       finishedAt: 100,
       outcome: "completed",
@@ -196,24 +208,18 @@ describe("ReviewWidget", () => {
   });
 
   it("shows 404 message when report fetch returns NOT_FOUND", async () => {
-    vi.mocked(fetchRunReport).mockRejectedValue(
-      new ApiError("NOT_FOUND", "Run not found.", 404),
-    );
+    vi.mocked(fetchRunReport).mockRejectedValue(new ApiError("NOT_FOUND", "Run not found.", 404));
     mockEvidenceNotFound();
 
     render(<ReviewWidget runId="r-missing" />);
 
     await waitFor(() => {
-      expect(screen.getByRole("alert")).toHaveTextContent(
-        "No run with that ID was found.",
-      );
+      expect(screen.getByRole("alert")).toHaveTextContent("No run with that ID was found.");
     });
   });
 
   it("keeps evidence navigation when the live run record has expired", async () => {
-    vi.mocked(fetchRunReport).mockRejectedValue(
-      new ApiError("NOT_FOUND", "Run not found.", 404),
-    );
+    vi.mocked(fetchRunReport).mockRejectedValue(new ApiError("NOT_FOUND", "Run not found.", 404));
     vi.mocked(fetchEvidenceManifest).mockResolvedValue({
       manifest: evidenceManifest("r-expired"),
     });
@@ -239,7 +245,9 @@ describe("ReviewWidget", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("status")).toHaveTextContent(/run is still running/i);
-      expect(screen.queryByText(/this run has no proposed diff to review/i)).not.toBeInTheDocument();
+      expect(
+        screen.queryByText(/this run has no proposed diff to review/i),
+      ).not.toBeInTheDocument();
     });
   });
 
@@ -252,9 +260,7 @@ describe("ReviewWidget", () => {
     render(<ReviewWidget runId="r-nodiff" />);
 
     await waitFor(() => {
-      expect(
-        screen.getByText(/this run has no proposed diff to review/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/this run has no proposed diff to review/i)).toBeInTheDocument();
     });
   });
 
@@ -263,7 +269,13 @@ describe("ReviewWidget", () => {
       report: {
         status: "completed" as const,
         changedFiles: [
-          { path: "src/foo.ts", kind: "modified", addedLines: 1, removedLines: 0, elevatedReview: false },
+          {
+            path: "src/foo.ts",
+            kind: "modified",
+            addedLines: 1,
+            removedLines: 0,
+            elevatedReview: false,
+          },
         ],
       },
     });
@@ -272,9 +284,7 @@ describe("ReviewWidget", () => {
     render(<ReviewWidget runId="r-cfonly" />);
 
     await waitFor(() => {
-      expect(
-        screen.getByText(/this run has no proposed diff to review/i),
-      ).toBeInTheDocument();
+      expect(screen.getByText(/this run has no proposed diff to review/i)).toBeInTheDocument();
     });
   });
 

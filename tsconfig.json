@@ -7,5 +7,5 @@
     "outDir": "dist"
   },
   "include": ["src", "tests", "*.config.ts", "packages/*/src/**/*.ts", "packages/*/*.config.ts"],
-  "exclude": ["tests/architecture/fixtures/**", "packages/*/dist/**"]
+  "exclude": ["tests/architecture/fixtures/**", "packages/*/dist/**", "packages/keiko-ui/**"]
 }

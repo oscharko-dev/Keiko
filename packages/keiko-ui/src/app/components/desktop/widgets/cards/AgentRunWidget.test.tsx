@@ -41,7 +41,7 @@ describe("AgentRunWidget", () => {
           runId: "run-123456",
           fingerprint: "fp",
           seq: 1,
-          ts: new Date(1).toISOString(),
+          ts: 1,
           type: "workflow:model:call:completed",
           attempt: 1,
           finishReason: "stop",
@@ -52,20 +52,22 @@ describe("AgentRunWidget", () => {
       ],
     });
     vi.mocked(fetchModels).mockResolvedValue({
-      models: [{
-        id: "example-chat-model",
-        kind: "chat",
-        contextWindow: 1,
-        maxOutputTokens: 1,
-        toolCalling: false,
-        structuredOutput: false,
-        streaming: false,
-        costClass: "medium",
-        latencyClass: "standard",
-        throughputHint: "test",
-        preferredUseCases: [],
-        knownLimitations: [],
-      }],
+      models: [
+        {
+          id: "example-chat-model",
+          kind: "chat",
+          contextWindow: 1,
+          maxOutputTokens: 1,
+          toolCalling: false,
+          structuredOutput: false,
+          streaming: false,
+          costClass: "medium",
+          latencyClass: "standard",
+          throughputHint: "test",
+          preferredUseCases: [],
+          knownLimitations: [],
+        },
+      ],
     });
     vi.mocked(fetchRunReport).mockResolvedValue({
       report: {
@@ -93,7 +95,7 @@ describe("AgentRunWidget", () => {
           model: "example-chat-model",
           runId: "run-123456",
           workspaceRoot: "/repo",
-          inputJson: "{\"workspaceRoot\":\"/repo\"}",
+          inputJson: '{"workspaceRoot":"/repo"}',
         }}
         linkedRoot="/repo"
         linkedFilePath={undefined}
