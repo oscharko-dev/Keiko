@@ -40,9 +40,16 @@ export {
   type WorkspaceCode,
 } from "./errors.js";
 
-export { type WorkspaceDirEntry, type WorkspaceFs, type WorkspaceStat } from "./fs.js";
+export {
+  nodeWorkspaceFs,
+  type WorkspaceDirEntry,
+  type WorkspaceFs,
+  type WorkspaceStat,
+} from "./fs.js";
 
 export { isWithinWorkspace, resolveWithinWorkspace } from "./paths.js";
+
+export { assertContainedRealPath, containedRealPathInfo } from "./realpath.js";
 
 export {
   compileIgnore,
@@ -70,3 +77,5 @@ export {
 } from "./contextPack.js";
 
 export { buildWorkspaceSummary, summarizeForAudit } from "./summary.js";
+
+export { KEIKO_WORKSPACE_VERSION } from "./version.js";

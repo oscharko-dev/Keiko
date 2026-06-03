@@ -16,7 +16,7 @@ import { compileIgnore, isDenied, isIgnored, type IgnoreMatcher } from "./ignore
 import { resolveWithinWorkspace } from "./paths.js";
 import { assertContainedRealPath } from "./realpath.js";
 import { FileTooLargeError, PathDeniedError, WorkspaceReadError } from "./errors.js";
-import { redact } from "../gateway/redaction.js";
+import { redact } from "@oscharko-dev/keiko-security";
 import {
   DEFAULT_READ_OPTIONS,
   type DiscoveredFile,
