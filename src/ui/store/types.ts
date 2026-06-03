@@ -6,6 +6,21 @@
 // collide with unit-test-events.ts and gateway.ts in the main contracts index.
 // verbatimModuleSyntax is on: type-only names use `export type`.
 
+// import+export split so UiStore interface can reference these types in its own field signatures.
+// Drop .js extension: the package.json exports key is ./bff-wire (no extension), NodeNext matches
+// the literal specifier so the extension must match exactly.
+import type {
+  Project,
+  Chat,
+  ChatRole,
+  WorkflowStatus,
+  ChatMessage,
+  CreateChatOptions,
+  UpdateProjectPatch,
+  UpdateChatPatch,
+  NewChatMessage,
+  UpdateChatMessagePatch,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 export type {
   Project,
   Chat,
@@ -17,7 +32,7 @@ export type {
   UpdateChatPatch,
   NewChatMessage,
   UpdateChatMessagePatch,
-} from "@oscharko-dev/keiko-contracts/bff-wire.js";
+};
 
 export interface UiStore {
   readonly listProjects: () => readonly Project[];

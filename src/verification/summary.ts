@@ -6,12 +6,20 @@
 
 // Re-export shim: the pure summary type interfaces live in @oscharko-dev/keiko-contracts (issue #158).
 // All import sites (`from "../verification/summary.js"`) continue to resolve unchanged.
-export type {
+// import+export split so this file can reference VerificationSummary/VerificationAuditSummary in
+// its own function return types.
+import type {
   VerificationResultSummary,
   VerificationSummary,
   AuditResultEntry,
   VerificationAuditSummary,
 } from "@oscharko-dev/keiko-contracts";
+export type {
+  VerificationResultSummary,
+  VerificationSummary,
+  AuditResultEntry,
+  VerificationAuditSummary,
+};
 
 import { redact } from "../gateway/redaction.js";
 import type { VerificationReport, VerificationResult, VerificationStatus } from "./types.js";

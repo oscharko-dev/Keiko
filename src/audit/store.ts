@@ -42,7 +42,9 @@ export function resolveEvidenceDir(
 }
 
 // Re-export shim: EvidenceStore port interface lives in @oscharko-dev/keiko-contracts (issue #158).
-export type { EvidenceStore } from "@oscharko-dev/keiko-contracts";
+// import+export split so this file can reference EvidenceStore in its own function signatures.
+import type { EvidenceStore } from "@oscharko-dev/keiko-contracts";
+export type { EvidenceStore };
 
 // ─── In-memory store (tests) ──────────────────────────────────────────────────────
 
