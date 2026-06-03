@@ -6,6 +6,6 @@
     "sourceMap": true,
     "outDir": "dist"
   },
-  "include": ["src", "tests", "*.config.ts", "packages/*/src/**/*.ts"],
+  "include": ["src", "tests", "*.config.ts", "packages/*/src/**/*.ts", "packages/*/*.config.ts"],
   "exclude": ["tests/architecture/fixtures/**", "packages/*/dist/**"]
 }
