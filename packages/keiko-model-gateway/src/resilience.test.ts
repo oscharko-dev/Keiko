@@ -6,9 +6,9 @@ import {
   RateLimitError,
   TimeoutError,
   TransportError,
-} from "../../src/gateway/errors.js";
-import { CircuitBreaker, executeWithRetry } from "../../src/gateway/resilience.js";
-import type { Clock } from "../../src/gateway/types.js";
+} from "@oscharko-dev/keiko-security/errors/gateway";
+import { CircuitBreaker, executeWithRetry } from "./resilience.js";
+import type { Clock } from "./types.js";
 
 function stubClock(): { clock: Clock; sleeps: number[]; advance: (ms: number) => void } {
   let current = 0;

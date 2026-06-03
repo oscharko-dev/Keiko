@@ -5,7 +5,7 @@ import {
   findCapability,
   listCapabilities,
   selectCheapest,
-} from "../../src/gateway/capabilities.js";
+} from "./capabilities.js";
 
 describe("capability registry", () => {
   it("ships no deployment-specific built-in models", () => {

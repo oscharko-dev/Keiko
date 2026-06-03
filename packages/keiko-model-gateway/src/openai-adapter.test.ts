@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { OpenAiAdapter } from "../../src/gateway/openai-adapter.js";
+import { OpenAiAdapter } from "./openai-adapter.js";
 import {
   AuthenticationError,
   CancelledError,
@@ -9,8 +9,8 @@ import {
   RateLimitError,
   TimeoutError,
   TransportError,
-} from "../../src/gateway/errors.js";
-import type { GatewayRequest, ModelProviderConfig } from "../../src/gateway/types.js";
+} from "@oscharko-dev/keiko-security/errors/gateway";
+import type { GatewayRequest, ModelProviderConfig } from "./types.js";
 
 const CONFIG: ModelProviderConfig = {
   modelId: "example-chat-model",

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { MalformedToolCallError, ModelRefusalError } from "../../src/gateway/errors.js";
-import { normalizeChatResponse } from "../../src/gateway/normalize.js";
+import { MalformedToolCallError, ModelRefusalError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { normalizeChatResponse } from "./normalize.js";
 
 const BASE_USAGE = { requestId: "req-1", latencyMs: 12, costClass: "medium" } as const;
 

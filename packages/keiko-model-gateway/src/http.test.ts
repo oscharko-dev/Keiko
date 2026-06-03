@@ -7,7 +7,7 @@ import {
   isRecoverableTlsTrustError,
   MAX_RESPONSE_BYTES,
   readJsonCapped,
-} from "../../src/gateway/http.js";
+} from "./http.js";
 
 // ---------------------------------------------------------------------------
 // gatewayFetch — success path with injected fetchImpl

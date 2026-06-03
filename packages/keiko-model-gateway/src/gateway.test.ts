@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { Gateway } from "../../src/gateway/gateway.js";
-import { CircuitOpenError, TransportError, UnknownModelError } from "../../src/gateway/errors.js";
+import { Gateway } from "./gateway.js";
+import { CircuitOpenError, TransportError, UnknownModelError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
   Clock,
   GatewayConfig,
@@ -8,7 +8,7 @@ import type {
   ModelProviderConfig,
   NormalizedResponse,
   ProviderAdapter,
-} from "../../src/gateway/types.js";
+} from "./types.js";
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 

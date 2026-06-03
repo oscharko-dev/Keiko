@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ConfigInvalidError } from "../../src/gateway/errors.js";
-import { loadConfigFromFile, parseGatewayConfig, toSafeObject } from "../../src/gateway/config.js";
+import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { loadConfigFromFile, parseGatewayConfig, toSafeObject } from "./config.js";
 
 interface RawProvider {
   modelId: string;
