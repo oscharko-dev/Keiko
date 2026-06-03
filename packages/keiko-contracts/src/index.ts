@@ -240,7 +240,7 @@ export { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "./evidence.js";
 // ─── BFF wire types (ADR-0013; entity shapes that travel over the HTTP wire) ──────────────
 // NOTE: WorkflowStatus and ChatMessage are NOT re-exported here because those names are already
 // taken by unit-test-events.ts and gateway.ts respectively. Import them directly from
-// "@oscharko-dev/keiko-contracts/bff-wire.js" when needed.
+// "@oscharko-dev/keiko-contracts/bff-wire" when needed (the subpath key has no .js suffix).
 export type {
   Project,
   Chat,
