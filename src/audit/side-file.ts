@@ -7,6 +7,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { SideFileWriteResult } from "@oscharko-dev/keiko-contracts";
 import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
 import { resolveWithinWorkspace } from "../workspace/paths.js";
 import { assertContainedRealPath } from "../workspace/realpath.js";
@@ -15,14 +16,11 @@ import { EvidenceWriteError } from "./errors.js";
 
 const MAX_NAME_LENGTH = 128;
 
-export interface SideFileWriteResult {
-  // Path RELATIVE to the per-run subdir (the value to embed in the manifest).
-  readonly relativePath: string;
-  readonly sha256: string;
-  readonly bytes: number;
-  // The realpath-contained absolute path the file was written at.
-  readonly absolutePath: string;
-}
+// SideFileWriteResult moved to @oscharko-dev/keiko-contracts in issue #162 so the
+// tools package can consume an injected side-file writer without depending on src/audit.
+// Re-exported here so every existing `import { SideFileWriteResult } from "../audit/side-file.js"`
+// keeps resolving unchanged.
+export type { SideFileWriteResult };
 
 export interface SideFileWriterOptions {
   readonly fs?: WorkspaceFs;

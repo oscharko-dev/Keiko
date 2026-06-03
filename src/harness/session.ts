@@ -2,6 +2,7 @@
 // asynchronously, and exposes the run id, config fingerprint, a result Promise, and a
 // cancel() that aborts the single per-run AbortController (ADR-0004 D4, D9).
 
+import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts";
 import { systemClock } from "../gateway/resilience.js";
 import type { Clock } from "../gateway/types.js";
 import { newCounters, type RunContext } from "./context.js";
@@ -20,7 +21,9 @@ import {
   type TaskInput,
 } from "./types.js";
 
-export const HARNESS_VERSION = "0.1.6";
+// HARNESS_VERSION lives in @oscharko-dev/keiko-contracts (issue #162); re-exported here so
+// every existing `import { HARNESS_VERSION } from "../harness/session.js"` keeps resolving.
+export { HARNESS_VERSION };
 
 export interface AgentConfig {
   readonly model: string;
