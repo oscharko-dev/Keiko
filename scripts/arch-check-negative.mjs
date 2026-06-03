@@ -64,9 +64,32 @@ if (result.status === 0) {
 }
 
 const stdout = result.stdout;
-const missing = EXPECTED_RULES.filter((rule) => !stdout.includes(rule));
-if (missing.length > 0) {
-  console.error(`arch-check-negative: FAIL — expected rules did not fire: ${missing.join(", ")}`);
+
+// Count rule firings per expected name. Each rule must fire EXACTLY ONCE in this run: each
+// fixture subdir is tightly scoped to one rule via its `from.path` in .dependency-cruiser.cjs, so
+// a second firing would indicate either a fixture leak across subdirs or a duplicate report.
+// `includes()` alone would silently accept duplicates and drift the gate over time.
+function countOccurrences(haystack, needle) {
+  let count = 0;
+  let from = 0;
+  for (;;) {
+    const at = haystack.indexOf(needle, from);
+    if (at === -1) return count;
+    count += 1;
+    from = at + needle.length;
+  }
+}
+
+const wrong = EXPECTED_RULES.map((rule) => ({
+  rule,
+  count: countOccurrences(stdout, rule),
+})).filter((entry) => entry.count !== 1);
+if (wrong.length > 0) {
+  for (const { rule, count } of wrong) {
+    console.error(
+      `arch-check-negative: FAIL — rule \`${rule}\` fired ${String(count)} times (expected 1).`,
+    );
+  }
   console.error("  Stdout:");
   console.error(stdout);
   console.error("  Stderr:");
