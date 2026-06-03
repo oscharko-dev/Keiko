@@ -34,6 +34,8 @@ export {
   type CapabilityQuery,
 } from "./capabilities.js";
 
+export { CAPABILITY_DATA } from "./capabilities.data.js";
+
 export {
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
@@ -63,7 +65,15 @@ export { CircuitBreaker, executeWithRetry, systemClock, type RetryConfig } from 
 
 export { normalizeChatResponse, type UsageSeed } from "./normalize.js";
 
-export { gatewayFetch, readJsonCapped } from "./http.js";
+export {
+  gatewayFetch,
+  gatewayTrustedCaCertificates,
+  isMissingIssuerError,
+  isRecoverableTlsTrustError,
+  MAX_RESPONSE_BYTES,
+  readJsonCapped,
+  type GatewayFetchOptions,
+} from "./http.js";
 
 export { redact } from "@oscharko-dev/keiko-security";
 
