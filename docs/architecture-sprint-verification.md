@@ -18,8 +18,8 @@ This verification proves that the in-tree modular architecture is internally con
 that the artifact `npm pack` produces is installable, runnable, and read-compatible with a
 0.1.x install. It does NOT publish a release to the npm registry, it does NOT add a new
 Windows-hosted CI runner, and it does NOT introduce new test infrastructure: every cited
-primitive already exists on `dev` and is exercised by the same scripts that run on every
-push via the `build-scan-sbom-smoke` job in
+primitive already exists on `dev` and is exercised on every push by the `ci`,
+`build-scan-sbom-smoke`, and `ui` jobs in
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 
 ## Verification context
@@ -93,23 +93,27 @@ ADR-0019 rules plus the 10-fixture negative test passed in this gauntlet run.
 ## Release-gate primitives
 
 The four release-gate scripts named below are wired into the `prepack` chain in
-[`package.json`](../package.json) and into the `build-scan-sbom-smoke` job in
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
+[`package.json`](../package.json) and exercised on every push to `dev` across the `ci`,
+`build-scan-sbom-smoke`, and `ui` jobs in
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml). The per-script CI placement is
+called out below.
 
-- [`scripts/check-package-surface.mjs`](../scripts/check-package-surface.mjs) — static asserts
-  on the packed file list: CLI bin executable bit, no `.env`, no source maps, no
-  `packages/keiko-ui/` source leakage, `dist/ui/static` present, `dist/ui/csp-hashes.json`
-  matches inline-script hashes, and SDK sentinel `runVerification` is exported.
-- [`scripts/installable-package-smoke.mjs`](../scripts/installable-package-smoke.mjs) —
-  packs and installs into a tmpdir with `--ignore-scripts`, asserts the CLI bin executes,
-  the bundled workspace payload is present for every entry in `bundleDependencies`, and the
-  SDK root import succeeds.
-- [`scripts/check-workspace-supply-chain.mjs`](../scripts/check-workspace-supply-chain.mjs) —
-  per-workspace SBOM emission and license allow-list enforcement; 12 CycloneDX SBOMs total
-  (`sbom/root.cdx.json` + 11 `sbom/workspace-keiko-*.cdx.json`).
-- [`scripts/arch-check-negative.mjs`](../scripts/arch-check-negative.mjs) — invokes
-  `depcruise` against 10 intentional-violation fixtures and asserts every expected rule fires
-  EXACTLY ONCE.
+- [`scripts/check-package-surface.mjs`](../scripts/check-package-surface.mjs) (CI job: `ui`,
+  after `build:ui` + `prepare:bin`) — static asserts on the packed file list: CLI bin
+  executable bit, no `.env`, no source maps, no `packages/keiko-ui/` source leakage,
+  `dist/ui/static` present, `dist/ui/csp-hashes.json` matches inline-script hashes, and SDK
+  sentinel `runVerification` is exported.
+- [`scripts/installable-package-smoke.mjs`](../scripts/installable-package-smoke.mjs) (CI
+  job: `build-scan-sbom-smoke`) — packs and installs into a tmpdir with `--ignore-scripts`,
+  asserts the CLI bin executes, the bundled workspace payload is present for every entry in
+  `bundleDependencies`, and the SDK root import succeeds.
+- [`scripts/check-workspace-supply-chain.mjs`](../scripts/check-workspace-supply-chain.mjs)
+  (CI job: `build-scan-sbom-smoke`) — per-workspace SBOM emission and license allow-list
+  enforcement; 12 CycloneDX SBOMs total (`sbom/root.cdx.json` + 11
+  `sbom/workspace-keiko-*.cdx.json`).
+- [`scripts/arch-check-negative.mjs`](../scripts/arch-check-negative.mjs) (CI job: `ci`) —
+  invokes `depcruise` against 10 intentional-violation fixtures and asserts every expected
+  rule fires EXACTLY ONCE.
 
 ## Known limitations
 
