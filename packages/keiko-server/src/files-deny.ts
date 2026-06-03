@@ -3,7 +3,7 @@
 // gate that filters secret/dep/build/vcs/log entries from both tree listings
 // and previews. See ADR-0016.
 
-import { isDenied } from "../workspace/ignore.js";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 // Generic, non-leaking deny message. NEVER include the requested path or the
 // matched pattern: the deny list is treated as a server-side safety invariant

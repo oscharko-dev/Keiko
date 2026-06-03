@@ -7,22 +7,22 @@
 // true is the gated apply path (run-handlers), which re-invokes this engine with apply:true.
 
 import { createHash, randomUUID } from "node:crypto";
-import { DryRunToolPort } from "../harness/index.js";
+import { DryRunToolPort } from "@oscharko-dev/keiko-harness";
 import {
   canonicalise,
   createSession,
   HARNESS_VERSION,
   type AgentConfig,
-} from "../harness/index.js";
-import type { ModelPort } from "../harness/index.js";
-import { generateUnitTests, investigateBug } from "../workflows/index.js";
+} from "@oscharko-dev/keiko-harness";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { generateUnitTests, investigateBug } from "@oscharko-dev/keiko-workflows";
 import {
   buildVerificationPlan,
   detectScripts,
   runVerification,
   type VerificationReport,
-} from "../verification/index.js";
-import { detectWorkspace, readWorkspaceFile } from "../workspace/index.js";
+} from "../../../src/verification/index.js";
+import { detectWorkspace, readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
 import type {
   UnitTestWorkflowInput,
   UnitTestWorkflowReport,
@@ -38,9 +38,9 @@ import type {
   TaskInput,
   RunResult,
   TaskType,
-} from "../harness/index.js";
-import { DEFAULT_LIMITS } from "../harness/index.js";
-import type { EvidenceReport } from "../audit/index.js";
+} from "@oscharko-dev/keiko-harness";
+import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-harness";
+import type { EvidenceReport } from "@oscharko-dev/keiko-evidence";
 import type { RunRequest } from "./run-request.js";
 import { QueueEventSink } from "./sink.js";
 import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";

@@ -16,10 +16,10 @@ import {
   parseGatewayConfig,
   toSafeObject,
   validateBaseUrl,
-} from "../gateway/index.js";
-import { gatewayFetch, readJsonCapped } from "../gateway/http.js";
-import { redact } from "../gateway/redaction.js";
-import type { GatewayConfig } from "../gateway/index.js";
+} from "@oscharko-dev/keiko-model-gateway";
+import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway";
+import { redact } from "@oscharko-dev/keiko-security";
+import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";

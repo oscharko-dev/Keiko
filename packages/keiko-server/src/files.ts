@@ -22,7 +22,7 @@ import {
   relative,
   resolve,
 } from "node:path";
-import { compileIgnore, isIgnored, type IgnoreMatcher } from "../workspace/ignore.js";
+import { compileIgnore, isIgnored, type IgnoreMatcher } from "@oscharko-dev/keiko-workspace";
 import { DENIED_MESSAGE, pathIsDenied } from "./files-deny.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";

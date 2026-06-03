@@ -18,7 +18,7 @@ import type { RouteContext, RouteResult, HandlerOutcome } from "./routes.js";
 import { errorBody, STREAMING } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentRedactionSecrets } from "./deps.js";
-import type { ModelPort } from "../harness/index.js";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { UiStoreError, type ChatMessage, type NewChatMessage } from "./store/index.js";
 
 const MAX_BODY_BYTES = 1_000_000;

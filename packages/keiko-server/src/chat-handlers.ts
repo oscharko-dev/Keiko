@@ -10,7 +10,7 @@ import {
   findConfiguredCapability,
   listConfiguredCapabilities,
   type ModelCapability,
-} from "../gateway/index.js";
+} from "@oscharko-dev/keiko-model-gateway";
 import {
   UiStoreError,
   isProjectAvailable,

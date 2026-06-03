@@ -6,12 +6,12 @@
 // never leaks the config path even on a load failure (handled upstream in deps.ts, which yields
 // `config: undefined` rather than throwing).
 
-import { toSafeObject, listConfiguredCapabilities } from "../gateway/index.js";
+import { toSafeObject, listConfiguredCapabilities } from "@oscharko-dev/keiko-model-gateway";
 import {
   UNIT_TEST_WORKFLOW_DESCRIPTOR,
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
-} from "../workflows/index.js";
-import { DEFAULT_LIMITS } from "../harness/index.js";
+} from "@oscharko-dev/keiko-workflows";
+import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-harness";
 import {
   listEvidence,
   loadEvidence,
@@ -19,7 +19,7 @@ import {
   EvidenceReadError,
   EvidenceSchemaError,
   type EvidenceListEntry,
-} from "../audit/index.js";
+} from "@oscharko-dev/keiko-evidence";
 import {
   buildContextPackFromFiles,
   buildWorkspaceSummary,
@@ -30,7 +30,7 @@ import {
   WorkspaceError,
   type WorkspaceCode,
   type WorkspaceSummary,
-} from "../workspace/index.js";
+} from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";

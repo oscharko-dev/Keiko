@@ -3,12 +3,12 @@
 // APIs can parse it. The terminal-specific data lives in the standard run/task identity plus one
 // commandExecutions record. It carries counts only — never command args, never output bytes.
 
-import { deepRedactStrings } from "../audit/redaction.js";
-import type { EvidenceStore } from "../audit/store.js";
-import type { EvidenceManifest } from "../audit/types.js";
-import { EVIDENCE_SCHEMA_VERSION } from "../audit/types.js";
-import { HARNESS_VERSION } from "../harness/session.js";
-import type { RunOutcome } from "../harness/types.js";
+import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { EvidenceManifest } from "@oscharko-dev/keiko-evidence";
+import { EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-evidence";
+import { HARNESS_VERSION } from "@oscharko-dev/keiko-harness";
+import type { RunOutcome } from "@oscharko-dev/keiko-harness";
 
 export const TERMINAL_EVIDENCE_KIND = "terminal-execution" as const;
 

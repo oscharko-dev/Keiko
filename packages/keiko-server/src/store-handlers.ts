@@ -7,7 +7,7 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
-import { findCapability, findConfiguredCapability } from "../gateway/index.js";
+import { findCapability, findConfiguredCapability } from "@oscharko-dev/keiko-model-gateway";
 import {
   UiStoreError,
   assertUiDbOutsideProject,

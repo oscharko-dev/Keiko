@@ -7,7 +7,7 @@ import {
   BrowserToolError,
   type BrowserEventEnvelope,
   type BrowserSessionManager,
-} from "../tools/browser/index.js";
+} from "@oscharko-dev/keiko-tools";
 import type { UiHandlerDeps } from "./deps.js";
 import { SSE_HEADERS, readyMessage } from "./sse.js";
 import {
