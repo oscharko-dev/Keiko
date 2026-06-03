@@ -75,26 +75,28 @@ function generateRootSbom(outPath) {
   return JSON.parse(result.stdout);
 }
 
-function collectLicenseOffenders(sbom) {
+function offendersForComponent(component) {
+  const id = `${component.name}@${component.version}`;
+  const licenses = Array.isArray(component.licenses) ? component.licenses : [];
+  // CycloneDX entries without an explicit `licenses` array are treated as offenders — we cannot
+  // prove they are acceptable without a declaration.
+  if (licenses.length === 0) {
+    return [{ id, license: "<missing>" }];
+  }
   const offenders = [];
-  const components = Array.isArray(sbom.components) ? sbom.components : [];
-  for (const component of components) {
-    const licenses = Array.isArray(component.licenses) ? component.licenses : [];
-    if (licenses.length === 0) {
-      // CycloneDX entries without a `licenses` array are treated as offenders — we cannot
-      // prove they are acceptable without an explicit declaration.
-      offenders.push({ id: `${component.name}@${component.version}`, license: "<missing>" });
-      continue;
-    }
-    for (const entry of licenses) {
-      const license = entry?.license ?? {};
-      const candidate = license.id ?? license.name ?? "<unknown>";
-      if (!APPROVED_LICENSES.has(candidate)) {
-        offenders.push({ id: `${component.name}@${component.version}`, license: candidate });
-      }
+  for (const entry of licenses) {
+    const license = entry?.license ?? {};
+    const candidate = license.id ?? license.name ?? "<unknown>";
+    if (!APPROVED_LICENSES.has(candidate)) {
+      offenders.push({ id, license: candidate });
     }
   }
   return offenders;
+}
+
+function collectLicenseOffenders(sbom) {
+  const components = Array.isArray(sbom.components) ? sbom.components : [];
+  return components.flatMap(offendersForComponent);
 }
 
 function assertWorkspaceManifestLicense(packages) {
