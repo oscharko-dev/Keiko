@@ -262,6 +262,12 @@ export interface EvidenceDeps {
   // Wall-clock seam, kept for parity with sibling workflow layers; unused unless a future report
   // field needs it. Bare function (matches #8/#9), not the harness Clock.
   readonly now?: (() => number) | undefined;
+  // Cost-class lookup port (issue #163). The evidence package stays leaf-clean against ADR-0019
+  // rule 3d (contracts + security + workspace only) by consuming the cost class through this port
+  // instead of importing the model-gateway capability registry directly. Caller wires the default
+  // from @oscharko-dev/keiko-model-gateway's resolveCostClass. Absent → "unknown", matching the
+  // pre-#163 fall-through for an unrecognised model id.
+  readonly costClassResolver?: ((modelId: string) => CostClass | "unknown") | undefined;
 }
 
 // ─── EvidenceStore port (D4) ───────────────────────────────────────────────────────

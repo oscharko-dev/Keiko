@@ -17,6 +17,7 @@ import type {
   ToolCallResult,
   ToolCallMetadata,
   SideFileWriteResult,
+  EvidenceDeps,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
@@ -71,5 +72,16 @@ describe("keiko-contracts package surface", () => {
     pin<ToolCallResult>();
     pin<ToolCallMetadata>();
     pin<SideFileWriteResult>();
+  });
+
+  it("EvidenceDeps.costClassResolver (#163) is an optional injection port shape", () => {
+    // Pin the new optional field added in issue #163 so a future refactor that drops it from the
+    // EvidenceDeps surface fails this test instead of silently weakening the evidence layer's
+    // dependency-direction posture (ADR-0019 rule 3d). Phantom assignment proves the function
+    // signature compiles; absence path is the runtime default the package contract guarantees.
+    const deps: EvidenceDeps = { costClassResolver: (_modelId) => "unknown" };
+    expect(deps.costClassResolver?.("any")).toBe("unknown");
+    const empty: EvidenceDeps = {};
+    expect(empty.costClassResolver).toBeUndefined();
   });
 });
