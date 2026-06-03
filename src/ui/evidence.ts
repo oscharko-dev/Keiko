@@ -74,7 +74,7 @@ export function persistWorkflowEvidence(
     },
     report,
     events,
-    ctx,
+    { ...ctx, costClassResolver: resolveCostClass },
   );
 }
 

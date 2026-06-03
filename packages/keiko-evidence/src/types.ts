@@ -1,6 +1,7 @@
-// Re-export shim: all Evidence* interfaces, the retention/redaction config tables, and the frozen
-// EVIDENCE_SCHEMA_VERSION / DEFAULT_RETENTION constants live in @oscharko-dev/keiko-contracts
-// (#158) and reach @oscharko-dev/keiko-evidence's public surface in #163 (ADR-0019).
+// Re-export shim: all Evidence* interfaces, retention/redaction config, and the frozen
+// EVIDENCE_SCHEMA_VERSION / DEFAULT_RETENTION tables live in @oscharko-dev/keiko-contracts
+// (issue #158). All existing import sites (`from "../audit/types.js"`) continue to resolve unchanged.
+// verbatimModuleSyntax is on: type-only names use `export type`, value-emitting tables use `export`.
 
 export type {
   EvidenceRunIdentity,
@@ -9,6 +10,7 @@ export type {
   EvidenceStateTransition,
   EvidenceToolCall,
   EvidenceCommandExecution,
+  EvidenceSandboxConfiguration,
   EvidenceVerificationResult,
   EvidencePatch,
   EvidenceReasoningEntry,
@@ -27,5 +29,5 @@ export type {
   EvidenceBuildInput,
   EvidenceDeps,
   EvidenceStore,
-} from "@oscharko-dev/keiko-evidence";
-export { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "@oscharko-dev/keiko-evidence";
+} from "@oscharko-dev/keiko-contracts";
+export { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "@oscharko-dev/keiko-contracts";

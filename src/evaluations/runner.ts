@@ -19,6 +19,7 @@ import {
 import type { ModelPort } from "../harness/ports.js";
 import { canonicalise, HARNESS_VERSION, type TaskType } from "../harness/index.js";
 import type { EnvSource } from "../gateway/config.js";
+import { resolveCostClass } from "../gateway/index.js";
 import type { SpawnFn } from "../tools/index.js";
 import { createEvaluationModelProvider } from "./model-provider.js";
 import { aggregateScorecard, scoreFixture, summarizeScorecard } from "./scorer.js";
@@ -160,7 +161,7 @@ function persistAndCheck(
     },
     report,
     events,
-    { store, env },
+    { store, env, costClassResolver: resolveCostClass },
   );
   const raw = store.get(runId);
   return {

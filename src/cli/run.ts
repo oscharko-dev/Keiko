@@ -20,6 +20,7 @@ import { renderEvidenceReport } from "../audit/report.js";
 import { createNodeEvidenceStore, resolveEvidenceDir, type EvidenceStore } from "../audit/store.js";
 import { AuditError } from "../audit/errors.js";
 import { redact } from "../gateway/redaction.js";
+import { resolveCostClass } from "../gateway/index.js";
 import type { EnvSource } from "../gateway/config.js";
 import type { CliIo } from "./runner.js";
 
@@ -179,7 +180,7 @@ function writeEvidence(
           includeDiff: ctx.flags.includeDiff,
         },
       },
-      { store, env: ctx.env },
+      { store, env: ctx.env, costClassResolver: resolveCostClass },
     );
     io.out(renderEvidenceReport(out.report));
     return undefined;
