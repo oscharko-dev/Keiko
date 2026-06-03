@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["tests/**/*.test.ts"],
+    include: ["tests/**/*.test.ts", "packages/*/src/**/*.test.ts"],
     // Fixture target-projects are standalone mini-projects copied to a tmp dir and run by the
     // integration tests via their OWN vitest config; their *.test.ts files (e.g. the
     // bug-investigation fixture's intentionally fail-before regression test) must not be collected
