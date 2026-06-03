@@ -4,10 +4,15 @@ This document is the upgrade-compatibility contract referenced by issue #170. It
 on-disk path, environment variable, and SQLite schema that Keiko reads or writes locally, and
 records the per-category verdict for the 0.1.x → post-modular (epic #156, PRs #159–#168) upgrade.
 
-The executable evidence backing every claim here is
+The executable evidence backing this contract is
 [`tests/upgrade-smoke/upgrade-compatibility.test.ts`](../tests/upgrade-smoke/upgrade-compatibility.test.ts),
-which exercises each category against a frozen pre-modular install fixture at
-[`tests/upgrade-smoke/fixture/pre-modular-0.1.x/`](../tests/upgrade-smoke/fixture/pre-modular-0.1.x/).
+which exercises the on-disk categories (1, 3, 4, 5, 6) against a frozen pre-modular install
+fixture at [`tests/upgrade-smoke/fixture/pre-modular-0.1.x/`](../tests/upgrade-smoke/fixture/pre-modular-0.1.x/).
+Categories 2 (credential env-var names) and 7 (`ui.pid` / `ui.log` lifecycle files) are
+documentary-only: the smoke verifies the env-var names are preserved in the fixture `.env`,
+and the lifecycle files exist only while `keiko ui` is running, so their compatibility is
+asserted by the unchanged `packages/keiko-cli/src/lifecycle.ts:165-186` path constants rather
+than by an in-process read.
 
 ## Scope
 
@@ -59,8 +64,8 @@ The four categories that resolve a configurable path follow an explicit-flag →
 | Evidence dir    | `--evidence-dir` → `$KEIKO_EVIDENCE_DIR` → `./.keiko/evidence`                      | `packages/keiko-evidence/src/store.ts:40-45` (resolveEvidenceDir)                                                                                        |
 | Lifecycle state | `--state-dir` → `$KEIKO_STATE_DIR` → `.keiko` (cwd-relative)                        | `packages/keiko-cli/src/lifecycle.ts:140-167` (buildLifecycleOptions)                                                                                    |
 
-For the UI-DB path, the configured-path branch additionally enforces seven fail-closed rules
-(absolute, not-inside-cwd, not-symlink, no-symlink-ancestor, normalized) at
+For the UI-DB path, the configured-path branch additionally enforces four fail-closed rules
+(absolute, not-inside-cwd, not-symlink, no-symlink-ancestor) and normalizes the result at
 `packages/keiko-server/src/store/paths.ts:30-44`. The same containment rules apply to a value
 supplied via `$KEIKO_UI_DATA_DIR`.
 

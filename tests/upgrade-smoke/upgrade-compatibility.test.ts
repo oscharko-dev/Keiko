@@ -88,13 +88,14 @@ afterEach(() => {
 });
 
 describe("upgrade compatibility (issue #175)", () => {
-  it("gateway config: resolves via $KEIKO_CONFIG_FILE without re-entry", () => {
+  it("gateway config: pre-modular keiko.config.json parses with the post-modular loader", () => {
     const dest = join(workdir, "keiko.config.json");
     cpSync(FIXTURE_CONFIG, dest);
 
-    // loadConfigFromFile is the same resolver `keiko ui` uses after applying the precedence
-    // ladder (--config → $KEIKO_CONFIG_FILE → sibling default). Passing the path explicitly
-    // exercises the resolved-config code path without spawning a subprocess.
+    // The CLI applies the --config → $KEIKO_CONFIG_FILE → sibling-default ladder before calling
+    // loadConfigFromFile (see packages/keiko-cli/src/ui.ts:164). This test pins the file-read leg:
+    // a pre-modular keiko.config.json is consumed by the post-modular loader without schema or
+    // credential changes. The env-resolution leg is covered by keiko-cli's own unit tests.
     const config = loadConfigFromFile(dest, { KEIKO_CONFIG_FILE: dest });
 
     expect(config.providers).toHaveLength(1);

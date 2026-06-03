@@ -41,6 +41,7 @@ CREATE INDEX idx_messages_chat_id ON chat_messages(chat_id);
 CREATE INDEX idx_messages_chat_ts ON chat_messages(chat_id, timestamp);
 
 -- Seeded rows used by tests/upgrade-smoke/upgrade-compatibility.test.ts.
--- Project path is rewritten by build-fixture.mjs to a tmpdir at fixture-build time so
--- validateProjectPath's mustExist:true gate passes; the committed binary's project row
--- references the fixture-build-time tmp path. The smoke test re-builds the row when copying.
+-- build-fixture.mjs seeds the literal placeholder path `/keiko-fixture-project` so the
+-- committed binary is byte-stable across rebuilds. The smoke test reads this row through
+-- the store API without re-validating the project path (the path-on-disk check is exercised
+-- separately by keiko-server's own unit tests).
