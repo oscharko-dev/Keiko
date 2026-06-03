@@ -8,6 +8,9 @@
     "node": ">=22"
   },
   "packageManager": "npm@10.9.8",
+  "workspaces": [
+    "packages/*"
+  ],
   "bin": {
     "keiko": "dist/cli/index.js"
   },
