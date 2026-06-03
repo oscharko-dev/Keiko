@@ -27,11 +27,16 @@ module.exports = {
       name: "adr-0019-direction-1-contracts-leaf",
       comment:
         "ADR-0019 direction rule 1: keiko-contracts is the leaf package and must not import " +
-        "from any other @oscharko-dev/keiko-* package.",
+        "from any other @oscharko-dev/keiko-* package. Also fires on the negative-test fixture " +
+        "under tests/architecture/fixtures/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs.",
       severity: "error",
-      from: { path: "^packages/keiko-contracts/src/" },
+      from: { path: "^(packages/keiko-contracts/src/|tests/architecture/fixtures/)" },
       to: {
-        path: "^(packages/keiko-(?!contracts)|node_modules/@oscharko-dev/keiko-(?!contracts))",
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts)|" +
+          "@oscharko-dev/keiko-(?!contracts))",
       },
     },
     {

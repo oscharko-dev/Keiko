@@ -15,6 +15,7 @@ export default tseslint.config(
       "sandbox/**",
       "only-for-internal-use/**",
       "Only for Internal Use/**",
+      "tests/architecture/fixtures/**",
     ],
   },
   js.configs.recommended,
