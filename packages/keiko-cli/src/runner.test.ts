@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { runCli, type CliIo } from "./runner.js";
 import { SDK_VERSION } from "./_sdk-version.js";
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+// Root product package.json is 4 levels up from this test file:
+//   packages/keiko-cli/src/runner.test.ts → ../../../package.json
+const ROOT_PACKAGE_JSON = resolve(HERE, "..", "..", "..", "package.json");
 
 interface Captured {
   readonly io: CliIo;
@@ -35,12 +42,14 @@ function isPackageJson(value: unknown): value is { readonly version: string } {
   );
 }
 
-// Reads the ROOT product package.json (../../package.json relative to the keiko-cli
-// package's cwd during `vitest run`). The CLI surfaces the root product version via
-// `keiko --version`, so the assertion below guards against drift between the local
-// SDK_VERSION literal (_sdk-version.ts) and the root package's version field.
+// Reads the ROOT product package.json via an absolute path derived from this
+// test file's location, so the assertion works whether `vitest` runs from the
+// repo root (`npm test`) or from this package (`cd packages/keiko-cli && npm test`).
+// The CLI surfaces the root product version via `keiko --version`, so the assertion
+// below guards against drift between the local SDK_VERSION literal
+// (_sdk-version.ts) and the root package's version field.
 function packageVersion(): string {
-  const parsed: unknown = JSON.parse(readFileSync("../../package.json", "utf8"));
+  const parsed: unknown = JSON.parse(readFileSync(ROOT_PACKAGE_JSON, "utf8"));
   if (!isPackageJson(parsed)) {
     throw new Error("package.json version is missing");
   }

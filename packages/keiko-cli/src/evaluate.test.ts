@@ -14,7 +14,7 @@ import {
   createScriptedModelPort,
   type EvaluationFixture,
   type EvaluationMode,
-} from "../../src/evaluations/index.js";
+} from "../../../src/evaluations/index.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 

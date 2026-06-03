@@ -80,7 +80,7 @@ describe("Issue #12 docs drift", () => {
   it("keeps UI host documentation aligned with the loopback bind implementation", () => {
     const readme = readText("README.md");
     const uiRunbook = readText("docs/ui-runbook.md");
-    const uiCli = readText("src/cli/ui.ts");
+    const uiCli = readText("packages/keiko-cli/src/ui.ts");
     const uiServer = readText("packages/keiko-server/src/server.ts");
     const hostContract = /validate a loopback host value.*server always binds `127\.0\.0\.1`/i;
 

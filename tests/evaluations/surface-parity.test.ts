@@ -8,9 +8,7 @@ import {
   UNIT_TEST_WORKFLOW_DESCRIPTOR,
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
 } from "../../src/workflows/index.js";
-import { runGenTestsCli } from "../../src/cli/gen-tests.js";
-import { runInvestigateCli } from "../../src/cli/investigate.js";
-import type { CliIo } from "../../src/cli/runner.js";
+import { runGenTestsCli, runInvestigateCli, type CliIo } from "@oscharko-dev/keiko-cli";
 
 // ─── Full checkSurfaceParity result on the real codebase ──────────────────────
 
