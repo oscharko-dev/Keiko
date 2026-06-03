@@ -97,12 +97,16 @@ module.exports = {
           "tests/architecture/fixtures/model-gateway/)",
       },
       to: {
+        // Forbidden destinations include the still-`src/`-resident sibling domains (workspace,
+        // tools, audit) so a future packages/keiko-model-gateway/src/** that reaches into
+        // ../../src/tools/... is caught by this rule. pathNot only filters self-references via
+        // the src/gateway/ shim path; it must NOT silently exclude the sibling domains.
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway)|" +
           "@oscharko-dev/keiko-(?!contracts|security|model-gateway)|" +
-          "src/(harness|workflows|cli|ui|verification|evaluations))",
-        pathNot: "^src/(gateway|workspace|tools|audit)/",
+          "src/(harness|workflows|cli|ui|verification|evaluations|workspace|tools|audit))",
+        pathNot: "^src/gateway/",
       },
     },
     {
