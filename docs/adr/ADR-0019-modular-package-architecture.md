@@ -56,7 +56,7 @@ The first architecture sprint should converge on the following package map. Name
 | `@oscharko-dev/keiko-evidence` | Evidence manifests, audit reports, retention, tamper-resistant local artifacts, evidence indexing. | Provider access, UI composition, workflow business logic. |
 | `@oscharko-dev/keiko-server` | Local loopback BFF, route dispatch, static UI serving, CSRF/CSP/host checks, runtime dependency wiring. | Product workflow internals, provider SDK calls outside gateway, long-term domain contracts. |
 | `@oscharko-dev/keiko-cli` | CLI commands, `keiko init`, `keiko start`, `keiko stop`, local lifecycle, release-facing entrypoints. | Domain logic that belongs in gateway, workspace, harness, workflows, or evidence. |
-| `@oscharko-dev/keiko-ui` | Next-based local UI application and browser-facing components. | Provider endpoints, API tokens, direct filesystem IO, direct model calls. |
+| `@oscharko-dev/keiko-ui` | Next.js-based local UI application and browser-facing components. | Provider endpoints, API tokens, direct filesystem IO, direct model calls. |
 | `@oscharko-dev/keiko` | Public product package and installable meta-artifact. | New domain logic except product-surface composition and export wiring. |
 
 ## Required Dependency Direction
