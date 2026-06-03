@@ -10,7 +10,7 @@ export default tseslint.config(
       "**/dist/**",
       "coverage/**",
       "node_modules/**",
-      "ui/**",
+      "packages/keiko-ui/**",
       ".claude/**",
       ".keiko/**",
       "sandbox/**",
