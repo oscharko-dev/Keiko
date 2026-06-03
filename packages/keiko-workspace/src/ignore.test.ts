@@ -4,7 +4,7 @@ import {
   DEFAULT_DENY_PATTERNS,
   isDenied,
   isIgnored,
-} from "../../src/workspace/ignore.js";
+} from "./ignore.js";
 
 describe("DEFAULT_DENY_PATTERNS", () => {
   it("is a frozen, non-empty list", () => {

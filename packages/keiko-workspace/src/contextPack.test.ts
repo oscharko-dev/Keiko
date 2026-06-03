@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildContextPack } from "../../src/workspace/contextPack.js";
-import { lexicalRetrievalStrategy } from "../../src/workspace/retrieval.js";
-import type { ContextPack, ContextRequest, WorkspaceInfo } from "../../src/workspace/types.js";
+import { buildContextPack } from "./contextPack.js";
+import { lexicalRetrievalStrategy } from "./retrieval.js";
+import type { ContextPack, ContextRequest, WorkspaceInfo } from "./types.js";
 import { memFs } from "./_memfs.js";
 
 const ROOT = "/ws";

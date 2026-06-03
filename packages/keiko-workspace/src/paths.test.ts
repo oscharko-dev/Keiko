@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { PathEscapeError } from "../../src/workspace/errors.js";
-import { isWithinWorkspace, resolveWithinWorkspace } from "../../src/workspace/paths.js";
+import { PathEscapeError } from "./errors.js";
+import { isWithinWorkspace, resolveWithinWorkspace } from "./paths.js";
 
 const ROOT = "/repo/root";
 const NUL = "\u0000";

@@ -1,4 +1,4 @@
-import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "../../src/workspace/fs.js";
+import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "./fs.js";
 
 // Minimal in-memory WorkspaceFs over a flat path->content map. Directories are implied by
 // path prefixes. Keys are relative POSIX paths under a single absolute root. No symlinks.

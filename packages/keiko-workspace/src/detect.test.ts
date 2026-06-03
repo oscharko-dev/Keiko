@@ -2,9 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { detectWorkspace } from "../../src/workspace/detect.js";
-import { WorkspaceNotFoundError } from "../../src/workspace/errors.js";
-import type { WorkspaceFs } from "../../src/workspace/fs.js";
+import { detectWorkspace } from "./detect.js";
+import { WorkspaceNotFoundError } from "./errors.js";
+import type { WorkspaceFs } from "./fs.js";
 
 let dir: string;
 

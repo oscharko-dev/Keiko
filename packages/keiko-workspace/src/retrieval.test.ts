@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { lexicalRetrievalStrategy } from "../../src/workspace/retrieval.js";
-import type { DiscoveredFile, SelectionReason } from "../../src/workspace/types.js";
+import { lexicalRetrievalStrategy } from "./retrieval.js";
+import type { DiscoveredFile, SelectionReason } from "./types.js";
 
 function files(...paths: readonly string[]): readonly DiscoveredFile[] {
   return paths.map((p) => ({ relativePath: p, sizeBytes: 1 }));

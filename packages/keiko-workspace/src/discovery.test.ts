@@ -6,16 +6,16 @@ import {
   discoverFiles,
   discoverWithStats,
   readWorkspaceFile,
-} from "../../src/workspace/discovery.js";
-import { detectWorkspace } from "../../src/workspace/detect.js";
+} from "./discovery.js";
+import { detectWorkspace } from "./detect.js";
 import {
   FileTooLargeError,
   PathDeniedError,
   PathEscapeError,
   WorkspaceReadError,
-} from "../../src/workspace/errors.js";
-import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "../../src/workspace/fs.js";
-import { DEFAULT_DISCOVERY_OPTIONS, type WorkspaceInfo } from "../../src/workspace/types.js";
+} from "./errors.js";
+import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "./fs.js";
+import { DEFAULT_DISCOVERY_OPTIONS, type WorkspaceInfo } from "./types.js";
 
 let dir: string;
 

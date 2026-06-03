@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildWorkspaceSummary, summarizeForAudit } from "../../src/workspace/summary.js";
-import type { ContextPack, DiscoveryStats, WorkspaceInfo } from "../../src/workspace/types.js";
+import { buildWorkspaceSummary, summarizeForAudit } from "./summary.js";
+import type { ContextPack, DiscoveryStats, WorkspaceInfo } from "./types.js";
 
 function workspace(): WorkspaceInfo {
   return {
