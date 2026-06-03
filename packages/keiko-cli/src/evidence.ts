@@ -6,11 +6,19 @@
 // 2 on usage (unknown or missing subcommand, invalid runId). Tests inject an in-memory store via deps
 // so no disk is touched.
 
-import { buildEvidenceReport, renderEvidenceReport } from "../audit/report.js";
-import { listEvidence, loadEvidence, type EvidenceListEntry } from "../audit/index-api.js";
-import { createNodeEvidenceStore, resolveEvidenceDir, type EvidenceStore } from "../audit/store.js";
-import { AuditError, InvalidRunIdError } from "../audit/errors.js";
-import type { EnvSource } from "../gateway/config.js";
+import {
+  buildEvidenceReport,
+  renderEvidenceReport,
+  listEvidence,
+  loadEvidence,
+  type EvidenceListEntry,
+  createNodeEvidenceStore,
+  resolveEvidenceDir,
+  type EvidenceStore,
+  AuditError,
+  InvalidRunIdError,
+} from "@oscharko-dev/keiko-evidence";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:

@@ -6,15 +6,19 @@
 // gateway is needed. Exit 0 on completed/dry-run, 1 on rejected/cancelled/failed/runtime, 2 on
 // usage. Mirrors runVerifyCli's flag-parse / typed-error-catch structure.
 
-import { Gateway } from "../gateway/gateway.js";
-import { loadConfigFromFile, type EnvSource } from "../gateway/config.js";
-import { ConfigInvalidError, GatewayError } from "../gateway/errors.js";
-import { assertConfiguredModel, selectConfiguredModel } from "../gateway/model-selection.js";
-import { redact } from "../gateway/redaction.js";
-import { GatewayModelPort } from "../harness/adapters.js";
-import type { ModelPort } from "../harness/ports.js";
-import { WorkspaceError } from "../workspace/index.js";
-import { generateUnitTests, renderMarkdownReport } from "../workflows/index.js";
+import {
+  Gateway,
+  loadConfigFromFile,
+  type EnvSource,
+  ConfigInvalidError,
+  GatewayError,
+  assertConfiguredModel,
+  selectConfiguredModel,
+  redact,
+} from "@oscharko-dev/keiko-model-gateway";
+import { GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
+import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
+import { generateUnitTests, renderMarkdownReport } from "@oscharko-dev/keiko-workflows";
 import type { UnitTestTarget, UnitTestWorkflowReport } from "@oscharko-dev/keiko-workflows";
 import type { CliIo } from "./runner.js";
 

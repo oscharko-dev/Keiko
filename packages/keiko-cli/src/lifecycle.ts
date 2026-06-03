@@ -10,9 +10,9 @@ import {
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { EnvSource } from "../gateway/config.js";
-import { SDK_VERSION } from "../sdk/index.js";
-import { DEFAULT_UI_PORT, UI_HOST } from "../ui/index.js";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { SDK_VERSION } from "./_sdk-version.js";
+import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-server";
 import type { CliIo } from "./runner.js";
 
 type LifecycleCommand = "start" | "stop" | "status" | "restart";

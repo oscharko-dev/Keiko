@@ -5,8 +5,7 @@
 // occurred; 2 on a usage error. Mirrors runContextCli's structure (flag parsing, --json, typed
 // error catch at the boundary).
 
-import { detectWorkspace } from "../workspace/index.js";
-import { WorkspaceError } from "../workspace/index.js";
+import { detectWorkspace, WorkspaceError } from "@oscharko-dev/keiko-workspace";
 import {
   buildVerificationPlan,
   buildVerificationSummary,
@@ -16,7 +15,7 @@ import {
   VerificationError,
   type VerificationKind,
   type VerificationReport,
-} from "../verification/index.js";
+} from "../../../src/verification/index.js";
 import type { CliIo } from "./runner.js";
 
 const VALID_KINDS: ReadonlySet<string> = new Set<VerificationKind>([

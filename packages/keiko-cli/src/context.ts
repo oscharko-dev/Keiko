@@ -3,12 +3,15 @@
 // given), and prints a human table or JSON. It NEVER constructs an agent session and NEVER
 // calls a model: there is no import of the harness/gateway run path in this file.
 
-import { detectWorkspace } from "../workspace/detect.js";
-import { discoverWithStats } from "../workspace/discovery.js";
-import { buildContextPackFromFiles } from "../workspace/contextPack.js";
-import { buildWorkspaceSummary } from "../workspace/summary.js";
-import { WorkspaceError } from "../workspace/errors.js";
-import { DEFAULT_CONTEXT_REQUEST, type WorkspaceSummary } from "../workspace/types.js";
+import {
+  detectWorkspace,
+  discoverWithStats,
+  buildContextPackFromFiles,
+  buildWorkspaceSummary,
+  WorkspaceError,
+  DEFAULT_CONTEXT_REQUEST,
+  type WorkspaceSummary,
+} from "@oscharko-dev/keiko-workspace";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:

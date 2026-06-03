@@ -1,4 +1,4 @@
-import type { EnvSource } from "../gateway/index.js";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 export type ConfigPathResolution =
   | { readonly kind: "path"; readonly path: string }

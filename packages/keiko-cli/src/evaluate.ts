@@ -7,10 +7,8 @@
 // error; 2 on usage error (unknown flag, mutual exclusion, unknown suite/fixture name).
 
 import { writeFileSync } from "node:fs";
-import { GatewayError } from "../gateway/errors.js";
-import { redact } from "../gateway/redaction.js";
-import type { EnvSource } from "../gateway/config.js";
-import { createAuditRedactor, deepRedactStrings } from "../audit/index.js";
+import { GatewayError, redact, type EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { createAuditRedactor, deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 import {
   fixtureByName,
@@ -21,7 +19,7 @@ import {
   type EvalRunnerDeps,
   type EvalScorecard,
   type EvaluationFixture,
-} from "../evaluations/index.js";
+} from "../../../src/evaluations/index.js";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:

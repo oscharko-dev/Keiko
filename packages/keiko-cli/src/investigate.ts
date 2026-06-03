@@ -8,20 +8,24 @@
 // Exit 0 on fix-applied/fix-proposed/investigation-only, 1 on
 // rejected/cancelled/failed/runtime, 2 on usage. Mirrors runGenTestsCli's structure.
 
-import { Gateway } from "../gateway/gateway.js";
-import { loadConfigFromFile, type EnvSource } from "../gateway/config.js";
-import { ConfigInvalidError, GatewayError } from "../gateway/errors.js";
-import { assertConfiguredModel, selectConfiguredModel } from "../gateway/model-selection.js";
-import { redact } from "../gateway/redaction.js";
-import { GatewayModelPort } from "../harness/adapters.js";
-import type { ModelPort } from "../harness/ports.js";
+import {
+  Gateway,
+  loadConfigFromFile,
+  type EnvSource,
+  ConfigInvalidError,
+  GatewayError,
+  assertConfiguredModel,
+  selectConfiguredModel,
+  redact,
+} from "@oscharko-dev/keiko-model-gateway";
+import { GatewayModelPort, type ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   detectWorkspace,
   readWorkspaceFile,
   WorkspaceError,
   type WorkspaceInfo,
-} from "../workspace/index.js";
-import { investigateBug, renderBugMarkdownReport } from "../workflows/index.js";
+} from "@oscharko-dev/keiko-workspace";
+import { investigateBug, renderBugMarkdownReport } from "@oscharko-dev/keiko-workflows";
 import type { BugInvestigationReport, BugReportInput } from "@oscharko-dev/keiko-workflows";
 import type { CliIo } from "./runner.js";
 

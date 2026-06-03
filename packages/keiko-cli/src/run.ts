@@ -8,20 +8,24 @@
 // --evidence-dir relocates it. Tests inject an in-memory EvidenceStore via deps so no write ever
 // touches the repository tree.
 
-import type { GatewayRequest, NormalizedResponse } from "../gateway/types.js";
-import { DryRunToolPort } from "../harness/adapters.js";
-import { createSession, HARNESS_VERSION, type AgentConfig } from "../harness/session.js";
-import { CliEventSink, MemoryEventSink, type ManifestSeed } from "../harness/sinks.js";
-import type { EventSink } from "../harness/ports.js";
-import type { HarnessEvent, RunResult, TaskInput, TaskType } from "../harness/types.js";
-import { DEFAULT_LIMITS } from "../harness/types.js";
-import { persistEvidence } from "../audit/persist.js";
-import { renderEvidenceReport } from "../audit/report.js";
-import { createNodeEvidenceStore, resolveEvidenceDir, type EvidenceStore } from "../audit/store.js";
-import { AuditError } from "../audit/errors.js";
-import { redact } from "../gateway/redaction.js";
-import { resolveCostClass } from "../gateway/index.js";
-import type { EnvSource } from "../gateway/config.js";
+import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import { DryRunToolPort } from "@oscharko-dev/keiko-harness";
+import { createSession, HARNESS_VERSION, type AgentConfig } from "@oscharko-dev/keiko-harness";
+import { CliEventSink, MemoryEventSink, type ManifestSeed } from "@oscharko-dev/keiko-harness";
+import type { EventSink } from "@oscharko-dev/keiko-harness";
+import type { HarnessEvent, RunResult, TaskInput, TaskType } from "@oscharko-dev/keiko-harness";
+import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-harness";
+import { persistEvidence } from "@oscharko-dev/keiko-evidence";
+import { renderEvidenceReport } from "@oscharko-dev/keiko-evidence";
+import {
+  createNodeEvidenceStore,
+  resolveEvidenceDir,
+  type EvidenceStore,
+} from "@oscharko-dev/keiko-evidence";
+import { AuditError } from "@oscharko-dev/keiko-evidence";
+import { redact } from "@oscharko-dev/keiko-model-gateway";
+import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 
 const TASK_TYPES: ReadonlySet<string> = new Set<TaskType>([

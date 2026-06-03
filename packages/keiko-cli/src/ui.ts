@@ -24,8 +24,8 @@ import {
   DEFAULT_UI_PORT,
   UI_HOST,
   type UiHandlerDeps,
-} from "../ui/index.js";
-import type { EnvSource } from "../gateway/config.js";
+} from "@oscharko-dev/keiko-server";
+import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
