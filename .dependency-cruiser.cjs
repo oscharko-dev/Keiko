@@ -197,16 +197,46 @@ module.exports = {
     {
       name: "adr-0019-direction-4-harness-scope",
       comment:
-        "ADR-0019 direction rule 4: keiko-harness may depend only on contracts, security, " +
-        "model-gateway, workspace, tools, evidence. Imports from workflows, server, cli, or ui " +
-        "are forbidden.",
+        "ADR-0019 direction rule 4 (base safety net): keiko-harness may depend only on " +
+        "contracts, security, model-gateway, workspace, tools, evidence. Imports from " +
+        "workflows, server, cli, or ui are forbidden. After issue #164 the strict variant " +
+        "adr-0019-direction-4a-* fires at error severity for the same scope; this rule stays " +
+        "as a warn-level safety net so a regression that slips past the strict variant (e.g. a " +
+        "future import target the strict regex misses) still surfaces in dep-cruiser output.",
       severity: "warn",
-      from: { path: "^(packages/keiko-harness/src/|src/harness/)" },
+      from: { path: "^packages/keiko-harness/src/" },
       to: {
         path:
           "^(packages/keiko-(workflows|server|cli|ui)/|" +
           "node_modules/@oscharko-dev/keiko-(workflows|server|cli|ui)|" +
           "src/(workflows|cli|ui))",
+      },
+    },
+    {
+      name: "adr-0019-direction-4a-harness-only-contracts-security-model-gateway-workspace-tools-evidence",
+      comment:
+        "ADR-0019 direction rule 4 (harness strict variant): keiko-harness and the src/harness/ " +
+        "shims may depend on keiko-contracts, keiko-security, keiko-model-gateway, " +
+        "keiko-workspace, keiko-tools, and keiko-evidence only. Promoted to error severity by " +
+        "issue #164 because the harness package physically exists. Also fires on the " +
+        "negative-test fixture under tests/architecture/fixtures/harness/ so the gate can be " +
+        "proven live by scripts/arch-check-negative.mjs. pathNot only filters self-references " +
+        "via the src/harness/ shim path; it must NOT silently exclude sibling-but-still-in-src/ " +
+        "domains (memory lesson from issues #160 and #162).",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-harness/src/|" +
+          "src/harness/|" +
+          "tests/architecture/fixtures/harness/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|evidence)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|evidence)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|evidence)|" +
+          "src/(workflows|cli|ui|verification|evaluations))",
+        pathNot: "^src/harness/",
       },
     },
     {
