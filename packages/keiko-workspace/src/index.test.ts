@@ -23,7 +23,8 @@ describe("keiko-workspace public surface", () => {
     expect(typeof workspace.compileIgnore).toBe("function");
     expect(typeof workspace.isDenied).toBe("function");
     expect(typeof workspace.isIgnored).toBe("function");
-    expect(typeof workspace.lexicalRetrievalStrategy).toBe("function");
+    expect(typeof workspace.lexicalRetrievalStrategy).toBe("object");
+    expect(typeof workspace.lexicalRetrievalStrategy.rank).toBe("function");
     expect(typeof workspace.assertContainedRealPath).toBe("function");
     expect(typeof workspace.containedRealPathInfo).toBe("function");
     expect(typeof workspace.nodeWorkspaceFs).toBe("object");

@@ -79,9 +79,9 @@ export {
 
 export { buildWorkspaceSummary, summarizeForAudit } from "@oscharko-dev/keiko-workspace";
 
-// nodeWorkspaceFs is used directly by callers (e.g. src/audit/side-file.ts, src/ui/terminal.ts).
-export { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
-
-// containedRealPathInfo + assertContainedRealPath are consumed by tools and ui.
-// Keep them accessible from the public barrel.
-export { assertContainedRealPath, containedRealPathInfo } from "@oscharko-dev/keiko-workspace";
+// Note: nodeWorkspaceFs, assertContainedRealPath, and containedRealPathInfo are intentionally
+// NOT re-exported through this legacy barrel. They were never on the pre-extraction
+// `src/workspace/index.ts` surface (verified against tests/sdk/sdk.test.ts which asserts
+// `nodeWorkspaceFs` does not leak through the SDK/root barrel re-export chain). Callers
+// that need them continue to import from the per-file shims `src/workspace/fs.js` and
+// `src/workspace/realpath.js`, both of which re-export from @oscharko-dev/keiko-workspace.
