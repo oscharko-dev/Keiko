@@ -1,0 +1,35 @@
+{
+  "name": "@oscharko-dev/keiko-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Internal harness package: Keiko agent runtime loop, session/cancellation/limits, state machine, event emission, port abstractions, and dry-run-first patch proposal seam (ADR-0004 + ADR-0019). Not published independently.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@oscharko-dev/keiko-contracts": "*",
+    "@oscharko-dev/keiko-security": "*",
+    "@oscharko-dev/keiko-model-gateway": "*",
+    "@oscharko-dev/keiko-workspace": "*",
+    "@oscharko-dev/keiko-tools": "*"
+  }
+}

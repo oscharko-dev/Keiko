@@ -1,7 +1,12 @@
 // Public barrel for the agent harness: the session API, all ports/adapters/sinks, the
 // task types, the event schema, the limit/error taxonomy, and the deterministic ID and
 // fingerprint sources. Downstream issues (#6 tools, #10 audit, #13 UI) depend only on
-// these typed seams (ADR-0004 D2).
+// these typed seams (ADR-0004 D2). After issue #164 (ADR-0019) the harness lives in
+// `packages/keiko-harness/`; the legacy `src/harness/` directory now contains only
+// enumerated re-export shims that keep every consumer's existing import path resolving
+// unchanged.
+
+export { KEIKO_HARNESS_VERSION } from "./version.js";
 
 export {
   createSession,
