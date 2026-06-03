@@ -1,11 +1,8 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import {
-  API_ROUTES,
-  isApiPath,
-  matchRoute,
-  STREAMING,
-  type RouteContext,
-} from "./routes.js";
+import { API_ROUTES, isApiPath, matchRoute, STREAMING, type RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { SDK_VERSION } from "./_sdk-version.js";
@@ -42,7 +39,9 @@ describe("API route contract", () => {
   it("includes the 8 browser-tool routes (#76)", () => {
     const browserRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/browser"));
     expect(browserRoutes).toHaveLength(8);
-    expect(browserRoutes.find((r) => r.method === "GET" && r.pattern === "/api/browser/status")).toBeDefined();
+    expect(
+      browserRoutes.find((r) => r.method === "GET" && r.pattern === "/api/browser/status"),
+    ).toBeDefined();
     expect(
       browserRoutes.find(
         (r) => r.method === "GET" && r.pattern === "/api/browser/sessions/:sessionId/events",
@@ -87,20 +86,15 @@ describe("API route contract", () => {
     ).toBeDefined();
     expect(
       API_ROUTES.find(
-        (r) =>
-          r.method === "DELETE" && r.pattern === "/api/terminal/executions/:executionId",
+        (r) => r.method === "DELETE" && r.pattern === "/api/terminal/executions/:executionId",
       ),
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "GET" && r.pattern === "/api/terminal/events"),
     ).toBeDefined();
     // PTY routes must be gone.
-    expect(
-      API_ROUTES.find((r) => r.pattern === "/api/terminal/shells"),
-    ).toBeUndefined();
-    expect(
-      API_ROUTES.find((r) => r.pattern === "/api/terminal/sessions"),
-    ).toBeUndefined();
+    expect(API_ROUTES.find((r) => r.pattern === "/api/terminal/shells")).toBeUndefined();
+    expect(API_ROUTES.find((r) => r.pattern === "/api/terminal/sessions")).toBeUndefined();
   });
 
   it("includes the desktop files read-only routes", () => {
@@ -193,5 +187,25 @@ describe("isApiPath", () => {
   it("rejects non-api paths", () => {
     expect(isApiPath("/index.html")).toBe(false);
     expect(isApiPath("/apixyz")).toBe(false);
+  });
+});
+
+// Drift guard: the SDK_VERSION literal copied into this package's
+// `_sdk-version.ts` (avoids a transitive-import cascade through the root SDK
+// surface; see file header) must stay in sync with the root product's
+// `package.json` "version" field. The root SDK module enforces the same
+// invariant in tests/cli/runner.test.ts:73 — keeping the assertion mirror'd
+// catches drift on either side at test time, well before a release.
+describe("_sdk-version local literal", () => {
+  it("matches the root package.json version", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const rootPackageJsonPath = join(here, "..", "..", "..", "package.json");
+    const parsed: unknown = JSON.parse(readFileSync(rootPackageJsonPath, "utf8"));
+    const version =
+      typeof parsed === "object" && parsed !== null && "version" in parsed
+        ? (parsed as { version: unknown }).version
+        : undefined;
+    expect(typeof version).toBe("string");
+    expect(SDK_VERSION).toBe(version);
   });
 });
