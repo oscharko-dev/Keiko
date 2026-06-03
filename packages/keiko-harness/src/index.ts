@@ -70,6 +70,7 @@ export type {
   FingerprintInput,
   IdSource,
   ModelPort,
+  ToolCallMetadata,
   ToolCallRequest,
   ToolCallResult,
   ToolPort,
@@ -93,3 +94,23 @@ export {
 } from "./fingerprint.js";
 
 export { resolveTaskPlan, type TaskPlan } from "./tasks/policy.js";
+
+// Harness internals re-exported on the package barrel so the legacy
+// `src/harness/<file>.ts` shims (issue #164) and the package's own
+// `src/<file>.test.ts` suites can both reach them through one import source. These
+// symbols are NOT documented in the harness public-API surface — they are exposed
+// here purely so a) the legacy `src/harness/` shim layer can keep `from
+// "../harness/loop.js"` style imports resolving without subpath-importing into the
+// package, and b) the in-package tests can use the same `@oscharko-dev/keiko-harness`
+// entry point as production consumers. Downstream consumers should depend on the
+// documented surface above, not on these.
+export { Emitter } from "./emitter.js";
+export { runLoop } from "./loop.js";
+export { handleModelCall, handleToolCall } from "./executor.js";
+export { handlePatchProposal, handleReporting, handleVerification } from "./patcher.js";
+export { handleContextSelection, handlePlanning } from "./planner.js";
+export { contextBytes, newCounters, type RunContext, type StateStep } from "./context.js";
+export { buildExplainPlan } from "./tasks/explain-plan.js";
+export { buildGenerateUnitTests } from "./tasks/generate-unit-tests.js";
+export { buildInvestigateBug } from "./tasks/investigate-bug.js";
+export { buildVerify } from "./tasks/verify.js";

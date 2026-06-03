@@ -53,11 +53,16 @@ import type {
   TerminalState,
   ToolCallCompletedEvent,
   ToolCallFailedEvent,
+  ToolCallMetadata,
   ToolCallRequest,
   ToolCallResult,
   ToolCallStartedEvent,
   ToolPort,
   VerificationResultEvent,
+  // Harness internals re-exported on the public barrel for the legacy `src/harness/`
+  // shim layer (issue #164). Pinned here so the pin test catches a surface regression.
+  RunContext,
+  StateStep,
 } from "./index.js";
 
 describe("keiko-harness public surface", () => {
@@ -95,6 +100,22 @@ describe("keiko-harness public surface", () => {
     expect(harness.defaultIdSource).toBeDefined();
     // Task-policy resolver:
     expect(typeof harness.resolveTaskPlan).toBe("function");
+    // Harness internals re-exported for the legacy src/harness/ shim layer (issue #164).
+    expect(typeof harness.Emitter).toBe("function");
+    expect(typeof harness.runLoop).toBe("function");
+    expect(typeof harness.handleModelCall).toBe("function");
+    expect(typeof harness.handleToolCall).toBe("function");
+    expect(typeof harness.handlePatchProposal).toBe("function");
+    expect(typeof harness.handleReporting).toBe("function");
+    expect(typeof harness.handleVerification).toBe("function");
+    expect(typeof harness.handleContextSelection).toBe("function");
+    expect(typeof harness.handlePlanning).toBe("function");
+    expect(typeof harness.contextBytes).toBe("function");
+    expect(typeof harness.newCounters).toBe("function");
+    expect(typeof harness.buildExplainPlan).toBe("function");
+    expect(typeof harness.buildGenerateUnitTests).toBe("function");
+    expect(typeof harness.buildInvestigateBug).toBe("function");
+    expect(typeof harness.buildVerify).toBe("function");
   });
 
   it("every type-only re-export is reachable by name at compile time", () => {
@@ -143,10 +164,13 @@ describe("keiko-harness public surface", () => {
     pin<TerminalState>();
     pin<ToolCallCompletedEvent>();
     pin<ToolCallFailedEvent>();
+    pin<ToolCallMetadata>();
     pin<ToolCallRequest>();
     pin<ToolCallResult>();
     pin<ToolCallStartedEvent>();
     pin<ToolPort>();
     pin<VerificationResultEvent>();
+    pin<RunContext>();
+    pin<StateStep>();
   });
 });
