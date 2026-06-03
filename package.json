@@ -29,13 +29,14 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build:packages": "npm --workspace @oscharko-dev/keiko-contracts run build",
+    "build": "npm run build:packages && tsc -p tsconfig.build.json",
+    "typecheck": "npm run build:packages && tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
+    "test": "npm run build:packages && vitest run",
+    "test:coverage": "npm run build:packages && vitest run --coverage",
     "ui:ci": "npm --prefix ui ci --ignore-scripts",
     "prepare:bin": "node scripts/ensure-bin-mode.mjs",
     "build:ui": "node scripts/build-ui.mjs",
@@ -44,7 +45,7 @@
     "arch:check:negative": "node scripts/arch-check-negative.mjs",
     "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run ui:ci && npm run build:ui && npm run check:package-surface",
     "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run ui:ci && npm run build:ui && npm run check:package-surface",
-    "clean": "rm -rf dist coverage"
+    "clean": "rm -rf dist coverage packages/keiko-contracts/dist"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
