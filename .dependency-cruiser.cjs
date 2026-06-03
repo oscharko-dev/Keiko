@@ -61,22 +61,46 @@ module.exports = {
     {
       name: "adr-0019-direction-3-infra-only-contracts-security",
       comment:
-        "ADR-0019 direction rule 3: model-gateway, workspace, tools, and evidence may depend only " +
-        "on contracts and security. Imports from harness, workflows, server, cli, ui, or each " +
-        "other are forbidden. Also fires on the negative-test fixture under " +
-        "tests/architecture/fixtures/model-gateway/ so the gate can be proven live by " +
-        "scripts/arch-check-negative.mjs.",
+        "ADR-0019 direction rule 3 (still-unextracted packages variant): workspace, tools, and " +
+        "evidence may depend only on contracts and security. Imports from harness, workflows, " +
+        "server, cli, ui, or each other are forbidden. Stays at warn severity until each package " +
+        "physically lands in packages/ via its own extraction issue, at which point the " +
+        "extraction PR splits a strict per-package companion rule the way " +
+        "adr-0019-direction-3a-model-gateway-only-contracts-security does for model-gateway.",
+      severity: "warn",
+      from: {
+        path: "^(packages/keiko-(workspace|tools|evidence)/src/|" + "src/(workspace|tools|audit)/)",
+      },
+      to: {
+        path:
+          "^(packages/keiko-(?!contracts|security)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security)|" +
+          "src/(harness|workflows|cli|ui|verification|evaluations))",
+        pathNot: "^src/(gateway|workspace|tools|audit)/",
+      },
+    },
+    {
+      name: "adr-0019-direction-3a-model-gateway-only-contracts-security",
+      comment:
+        "ADR-0019 direction rule 3 (model-gateway strict variant): keiko-model-gateway and the " +
+        "src/gateway/ shims may depend only on keiko-contracts and keiko-security. Promoted to " +
+        "error severity by issue #160 because the model-gateway package physically exists. " +
+        "Also fires on the negative-test fixture under tests/architecture/fixtures/model-gateway/ " +
+        "so the gate can be proven live by scripts/arch-check-negative.mjs. The other three " +
+        "packages governed by the base rule 3 (workspace, tools, evidence) stay at warn until " +
+        "their own extraction issues land.",
       severity: "error",
       from: {
         path:
-          "^(packages/keiko-(model-gateway|workspace|tools|evidence)/src/|" +
-          "src/(gateway|workspace|tools|audit)/|" +
+          "^(packages/keiko-model-gateway/src/|" +
+          "src/gateway/|" +
           "tests/architecture/fixtures/model-gateway/)",
       },
       to: {
         path:
-          "^(packages/keiko-(?!contracts|security|model-gateway)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway)|" +
           "src/(harness|workflows|cli|ui|verification|evaluations))",
         pathNot: "^src/(gateway|workspace|tools|audit)/",
       },

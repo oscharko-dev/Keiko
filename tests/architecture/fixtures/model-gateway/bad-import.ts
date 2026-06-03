@@ -1,14 +1,13 @@
 /**
  * INTENTIONAL ADR-0019 VIOLATION FIXTURE
  *
- * Deliberately violates ADR-0019 §"Required Dependency Direction" rule 3
- * (`keiko-model-gateway`, `keiko-workspace`, `keiko-tools`, and `keiko-evidence`
- * may depend only on `keiko-contracts` and `keiko-security`). Exists only to
- * prove the architecture gate fires on real violations for the model-gateway
- * boundary.
+ * Deliberately violates the strict model-gateway variant of ADR-0019 §"Required
+ * Dependency Direction" rule 3 (`keiko-model-gateway` may depend only on
+ * `keiko-contracts` and `keiko-security`). Exists only to prove the architecture
+ * gate fires on real violations for the model-gateway boundary.
  *
  * Gate wiring:
- *   - rule `adr-0019-direction-3-infra-only-contracts-security` in
+ *   - rule `adr-0019-direction-3a-model-gateway-only-contracts-security` in
  *     `.dependency-cruiser.cjs` extends its `from.path` regex to include
  *     `tests/architecture/fixtures/model-gateway/` so this file is treated as if
  *     it were under the `keiko-model-gateway` boundary, and its `to.path` regex

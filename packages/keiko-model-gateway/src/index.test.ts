@@ -182,45 +182,43 @@ describe("keiko-model-gateway package surface", () => {
   });
 
   it("each type-only export is reachable by name at compile time", () => {
-    // verbatimModuleSyntax requires the type imports above to be used, not just re-imported.
-    // Touching every type with `void` keeps each symbol load-bearing on the public surface.
-    const touch = (..._args: readonly unknown[]): void => {
-      void _args;
-    };
-    touch(
-      undefined as unknown as CapabilityQuery,
-      undefined as unknown as EnvSource,
-      undefined as unknown as SafeGatewayConfig,
-      undefined as unknown as SafeProviderConfig,
-      undefined as unknown as GatewayDeps,
-      undefined as unknown as AdapterDeps,
-      undefined as unknown as ModelSelectionQuery,
-      undefined as unknown as RetryConfig,
-      undefined as unknown as UsageSeed,
-      undefined as unknown as GatewayFetchOptions,
-      undefined as unknown as ErrorCode,
-      undefined as unknown as CircuitBreakerConfig,
-      undefined as unknown as CircuitBreakerStatus,
-      undefined as unknown as CircuitState,
-      undefined as unknown as ChatMessage,
-      undefined as unknown as Clock,
-      undefined as unknown as CostClass,
-      undefined as unknown as FinishReason,
-      undefined as unknown as GatewayConfig,
-      undefined as unknown as GatewayRequest,
-      undefined as unknown as LatencyClass,
-      undefined as unknown as ModelCapability,
-      undefined as unknown as ModelKind,
-      undefined as unknown as ModelProviderConfig,
-      undefined as unknown as NormalizedResponse,
-      undefined as unknown as NormalizedToolCall,
-      undefined as unknown as ProviderAdapter,
-      undefined as unknown as ResponseFormat,
-      undefined as unknown as StreamDelta,
-      undefined as unknown as StreamEvent,
-      undefined as unknown as ToolDefinition,
-      undefined as unknown as UsageMetadata,
-    );
+    // verbatimModuleSyntax requires the type imports above to be used in a type position. A
+    // phantom generic `pin<T>()` references the type argument at the call site without producing
+    // any runtime value, so each symbol stays load-bearing on the public surface without tripping
+    // `no-unnecessary-type-assertion`.
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<CapabilityQuery>();
+    pin<EnvSource>();
+    pin<SafeGatewayConfig>();
+    pin<SafeProviderConfig>();
+    pin<GatewayDeps>();
+    pin<AdapterDeps>();
+    pin<ModelSelectionQuery>();
+    pin<RetryConfig>();
+    pin<UsageSeed>();
+    pin<GatewayFetchOptions>();
+    pin<ErrorCode>();
+    pin<CircuitBreakerConfig>();
+    pin<CircuitBreakerStatus>();
+    pin<CircuitState>();
+    pin<ChatMessage>();
+    pin<Clock>();
+    pin<CostClass>();
+    pin<FinishReason>();
+    pin<GatewayConfig>();
+    pin<GatewayRequest>();
+    pin<LatencyClass>();
+    pin<ModelCapability>();
+    pin<ModelKind>();
+    pin<ModelProviderConfig>();
+    pin<NormalizedResponse>();
+    pin<NormalizedToolCall>();
+    pin<ProviderAdapter>();
+    pin<ResponseFormat>();
+    pin<StreamDelta>();
+    pin<StreamEvent>();
+    pin<ToolDefinition>();
+    pin<UsageMetadata>();
     expect(true).toBe(true);
   });
 });

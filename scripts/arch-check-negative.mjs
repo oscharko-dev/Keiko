@@ -27,7 +27,7 @@ const INCLUDE_ONLY_OVERRIDE = "^(tests/architecture/fixtures|\\.\\./|src|package
 const EXPECTED_RULES = [
   "adr-0019-direction-1-contracts-leaf",
   "adr-0019-direction-2-security-only-contracts",
-  "adr-0019-direction-3-infra-only-contracts-security",
+  "adr-0019-direction-3a-model-gateway-only-contracts-security",
 ];
 
 // `npx --no-install` keeps CI hermetic by refusing to fetch from the registry when the
