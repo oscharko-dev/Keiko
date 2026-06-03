@@ -5,10 +5,10 @@ import {
   matchRoute,
   STREAMING,
   type RouteContext,
-} from "../../src/ui/routes.js";
-import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../src/ui/index.js";
-import { createInMemoryUiStore } from "../../src/ui/store/index.js";
-import { SDK_VERSION } from "../../src/sdk/index.js";
+} from "./routes.js";
+import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import { createInMemoryUiStore } from "./store/index.js";
+import { SDK_VERSION } from "./_sdk-version.js";
 
 const emptyCtx: RouteContext = {
   req: {} as RouteContext["req"],

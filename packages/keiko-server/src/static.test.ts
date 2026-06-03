@@ -4,7 +4,7 @@ import { resolve, join, sep } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveContainedPath, serveFile } from "../../src/ui/static.js";
+import { resolveContainedPath, serveFile } from "./static.js";
 
 const ROOT = resolve("/var/app/dist/ui/static");
 

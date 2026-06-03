@@ -4,7 +4,7 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createInMemoryUiStore, UiStoreError, type UiStore } from "../../../src/ui/store/index.js";
+import { createInMemoryUiStore, UiStoreError, type UiStore } from "./index.js";
 
 let tmp: string;
 let proj: string;

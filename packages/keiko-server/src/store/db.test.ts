@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync, statSync, existsSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { createInMemoryUiStore, createNodeUiStore } from "../../../src/ui/store/index.js";
+import { createInMemoryUiStore, createNodeUiStore } from "./index.js";
 
 // Narrows an array-index access (T | undefined) to T without a non-null assertion.
 function must<T>(value: T | undefined): T {

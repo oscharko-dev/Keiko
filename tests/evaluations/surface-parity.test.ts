@@ -171,7 +171,7 @@ describe("SDK exports", () => {
 
 describe("RunRequest shape (UI BFF contract)", () => {
   it("parseRunRequest accepts a valid unit-tests request and returns the required fields", async () => {
-    const { parseRunRequest } = await import("../../src/ui/run-request.js");
+    const { parseRunRequest } = await import("../../src/ui/index.js");
     const result = parseRunRequest(
       JSON.stringify({
         workflowId: "unit-test-generation",
@@ -192,7 +192,7 @@ describe("RunRequest shape (UI BFF contract)", () => {
   });
 
   it("parseRunRequest accepts a valid bug-investigation request", async () => {
-    const { parseRunRequest } = await import("../../src/ui/run-request.js");
+    const { parseRunRequest } = await import("../../src/ui/index.js");
     const result = parseRunRequest(
       JSON.stringify({
         workflowId: "bug-investigation",
@@ -208,7 +208,7 @@ describe("RunRequest shape (UI BFF contract)", () => {
   });
 
   it("parseRunRequest carries limits for both workflow request shapes", async () => {
-    const { parseRunRequest } = await import("../../src/ui/run-request.js");
+    const { parseRunRequest } = await import("../../src/ui/index.js");
     for (const body of [
       {
         workflowId: "unit-test-generation",

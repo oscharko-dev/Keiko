@@ -13,8 +13,8 @@ import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createUiServer, UI_HOST } from "../../src/ui/server.js";
-import { buildCspHeader } from "../../src/ui/csp.js";
+import { createUiServer, UI_HOST } from "./server.js";
+import { buildCspHeader } from "./csp.js";
 import {
   buildRedactor,
   createRunRegistry,
@@ -22,17 +22,17 @@ import {
   handleGetRun,
   QueueEventSink,
   type UiHandlerDeps,
-} from "../../src/ui/index.js";
-import { createInMemoryUiStore } from "../../src/ui/store/index.js";
+} from "./index.js";
+import { createInMemoryUiStore } from "./store/index.js";
 import {
   createInMemoryEvidenceStore,
   listEvidence,
   loadEvidence,
   type EvidenceStore,
-} from "../../src/audit/index.js";
-import type { ModelPort } from "../../src/harness/index.js";
-import { CancelledError } from "../../src/gateway/errors.js";
-import type { NormalizedResponse } from "../../src/gateway/types.js";
+} from "@oscharko-dev/keiko-evidence";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(here, "..", "fixtures", "unit-tests", "target-project");

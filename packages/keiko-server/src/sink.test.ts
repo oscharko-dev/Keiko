@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { QueueEventSink, type StreamEvent, type SseWriter } from "../../src/ui/sink.js";
+import { QueueEventSink, type StreamEvent, type SseWriter } from "./sink.js";
 
 function event(seq: number, type = "tick"): StreamEvent {
   return { schemaVersion: "1", runId: "run-1", fingerprint: "fp", seq, ts: seq, type };

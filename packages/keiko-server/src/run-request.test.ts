@@ -3,7 +3,7 @@
 // a selected local project workspaceRoot; verify adds targetFiles-specific validation on top.
 
 import { describe, expect, it } from "vitest";
-import { parseRunRequest } from "../../src/ui/run-request.js";
+import { parseRunRequest } from "./run-request.js";
 
 function ok(value: ReturnType<typeof parseRunRequest>): asserts value is Exclude<
   ReturnType<typeof parseRunRequest>,

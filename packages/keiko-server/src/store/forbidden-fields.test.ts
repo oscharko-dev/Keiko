@@ -21,7 +21,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createNodeUiStore } from "../../../src/ui/store/index.js";
+import { createNodeUiStore } from "./index.js";
 
 // ── Allowed column sets (source of truth: src/ui/store/schema.ts) ──────────
 // These sets are intentionally replicated verbatim from the schema rather than

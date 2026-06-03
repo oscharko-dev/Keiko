@@ -8,8 +8,8 @@ import {
   listFilesDirectories,
   readFilesPreview,
   readFilesTree,
-} from "../../src/ui/index.js";
-import type { UiStore } from "../../src/ui/store/index.js";
+} from "./index.js";
+import type { UiStore } from "./store/index.js";
 
 const PNG_1X1 = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMB/ax6XK0AAAAASUVORK5CYII=",

@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { runMigrations, SCHEMA_VERSION } from "../../../src/ui/store/index.js";
+import { runMigrations, SCHEMA_VERSION } from "./index.js";
 
 function openMem(): DatabaseSync {
   return new DatabaseSync(":memory:");

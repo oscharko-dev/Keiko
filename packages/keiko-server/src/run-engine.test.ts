@@ -8,11 +8,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { startRun } from "../../src/ui/run-engine.js";
-import { createRunRegistry, type RunRegistry } from "../../src/ui/runs.js";
-import { parseRunRequest, type RunRequest } from "../../src/ui/run-request.js";
-import type { ModelPort } from "../../src/harness/index.js";
-import type { NormalizedResponse } from "../../src/gateway/types.js";
+import { startRun } from "./run-engine.js";
+import { createRunRegistry, type RunRegistry } from "./runs.js";
+import { parseRunRequest, type RunRequest } from "./run-request.js";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 const REJECT_MODEL: ModelPort = {
   call: (): Promise<NormalizedResponse> =>

@@ -9,7 +9,7 @@ import {
   isProjectAvailable,
   UiStoreError,
   type UiStore,
-} from "../../../src/ui/store/index.js";
+} from "./index.js";
 
 let tmp: string;
 let projA: string;

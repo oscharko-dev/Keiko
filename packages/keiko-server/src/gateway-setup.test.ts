@@ -5,10 +5,10 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
-import { currentGatewayConfig } from "../../src/ui/deps.js";
-import { buildUiHandlerDeps } from "../../src/ui/deps.js";
-import { handleGatewaySetup } from "../../src/ui/gateway-setup.js";
-import type { RouteContext } from "../../src/ui/routes.js";
+import { currentGatewayConfig } from "./deps.js";
+import { buildUiHandlerDeps } from "./deps.js";
+import { handleGatewaySetup } from "./gateway-setup.js";
+import type { RouteContext } from "./routes.js";
 
 const tmpDirs: string[] = [];
 

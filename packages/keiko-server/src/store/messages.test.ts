@@ -10,7 +10,7 @@ import {
   type ChatRole,
   type UiStore,
   type WorkflowStatus,
-} from "../../../src/ui/store/index.js";
+} from "./index.js";
 
 let tmp: string;
 let proj: string;

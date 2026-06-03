@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { buildCspHeader, extractInlineScriptHashes } from "../../src/ui/csp.js";
+import { buildCspHeader, extractInlineScriptHashes } from "./csp.js";
 
 function sha256Token(body: string): string {
   return `'sha256-${createHash("sha256").update(body, "utf8").digest("base64")}'`;

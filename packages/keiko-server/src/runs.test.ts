@@ -4,8 +4,8 @@ import {
   ActiveRunLimitError,
   type RunRegistry,
   type RegisterRunInput,
-} from "../../src/ui/runs.js";
-import { QueueEventSink } from "../../src/ui/sink.js";
+} from "./runs.js";
+import { QueueEventSink } from "./sink.js";
 
 function reg(now: () => number, maxActiveRuns = 2, terminatedTtlMs = 1000): RunRegistry {
   return createRunRegistry({ now, maxActiveRuns, terminatedTtlMs });

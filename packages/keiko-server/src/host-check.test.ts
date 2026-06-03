@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { describe, expect, it } from "vitest";
-import { isAllowedHost } from "../../src/ui/host-check.js";
+import { isAllowedHost } from "./host-check.js";
 
 function reqWith(headers: Record<string, string | undefined>): IncomingMessage {
   return { headers } as unknown as IncomingMessage;

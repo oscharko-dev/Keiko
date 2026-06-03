@@ -8,15 +8,15 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createUiServer, UI_HOST } from "../../src/ui/server.js";
-import { buildCspHeader } from "../../src/ui/csp.js";
+import { createUiServer, UI_HOST } from "./server.js";
+import { buildCspHeader } from "./csp.js";
 import {
   buildRedactor,
   createRunRegistry,
   type UiHandlerDeps,
-} from "../../src/ui/index.js";
-import { createInMemoryUiStore, type UiStore } from "../../src/ui/store/index.js";
-import type { GatewayConfig } from "../../src/gateway/index.js";
+} from "./index.js";
+import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const PATCH_HEADERS = POST_HEADERS;

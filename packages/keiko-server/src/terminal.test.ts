@@ -8,19 +8,19 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listEvidence, loadEvidence } from "../../src/audit/index-api.js";
+import { listEvidence, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import {
   createTerminalExecutionManager,
   type TerminalEventEnvelope,
   type TerminalExecutionManager,
-} from "../../src/ui/terminal.js";
+} from "./terminal.js";
 import {
   createInMemoryEvidenceStore,
   type EvidenceStore,
-} from "../../src/audit/store.js";
-import { createInMemoryUiStore, type UiStore } from "../../src/ui/store/index.js";
-import { TerminalToolError } from "../../src/ui/terminal-errors.js";
-import type { SpawnFn } from "../../src/tools/exec.js";
+} from "@oscharko-dev/keiko-evidence";
+import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { TerminalToolError } from "./terminal-errors.js";
+import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 
 // ── Fake spawn helpers ─────────────────────────────────────────────────────────
 

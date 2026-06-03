@@ -6,7 +6,7 @@ import {
   assertUiDbOutsideProject,
   resolveUiDbPath,
   UiStoreError,
-} from "../../../src/ui/store/index.js";
+} from "./index.js";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 

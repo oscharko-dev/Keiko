@@ -9,13 +9,13 @@ import {
   handleWorkspace,
   handleEvidenceList,
   handleEvidenceDetail,
-} from "../../src/ui/read-handlers.js";
-import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../src/ui/index.js";
-import { createInMemoryUiStore } from "../../src/ui/store/index.js";
-import type { RouteContext, RouteResult } from "../../src/ui/routes.js";
-import { STREAMING } from "../../src/ui/routes.js";
-import type { GatewayConfig } from "../../src/gateway/index.js";
-import { EvidenceReadError, EvidenceSchemaError, type EvidenceStore } from "../../src/audit/index.js";
+} from "./read-handlers.js";
+import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import { createInMemoryUiStore } from "./store/index.js";
+import type { RouteContext, RouteResult } from "./routes.js";
+import { STREAMING } from "./routes.js";
+import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { EvidenceReadError, EvidenceSchemaError, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 
 function ctx(path: string, params: Record<string, string> = {}): RouteContext {
   return {

@@ -5,7 +5,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateProjectPath, UiStoreError } from "../../../src/ui/store/index.js";
+import { validateProjectPath, UiStoreError } from "./index.js";
 
 let tmpDir: string;
 let realDir: string;

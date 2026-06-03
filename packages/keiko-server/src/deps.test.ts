@@ -2,8 +2,8 @@ import { describe, expect, it, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildRedactor, buildUiHandlerDeps } from "../../src/ui/deps.js";
-import { createInMemoryUiStore } from "../../src/ui/store/index.js";
+import { buildRedactor, buildUiHandlerDeps } from "./deps.js";
+import { createInMemoryUiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
 
 const tmpDirs: string[] = [];

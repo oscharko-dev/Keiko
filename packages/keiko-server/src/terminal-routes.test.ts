@@ -8,14 +8,14 @@ import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { buildCspHeader } from "../../src/ui/csp.js";
+import { buildCspHeader } from "./csp.js";
 import {
   buildRedactor,
   createInMemoryUiStore,
   type UiHandlerDeps,
-} from "../../src/ui/index.js";
-import { createRunRegistry } from "../../src/ui/runs.js";
-import { createUiServer, UI_HOST } from "../../src/ui/server.js";
+} from "./index.js";
+import { createRunRegistry } from "./runs.js";
+import { createUiServer, UI_HOST } from "./server.js";
 import {
   TerminalToolError,
   type TerminalEventEmitter,
@@ -23,7 +23,7 @@ import {
   type TerminalExecutionInput,
   type TerminalExecutionManager,
   type TerminalExecutionResult,
-} from "../../src/ui/index.js";
+} from "./index.js";
 
 interface FakeOptions {
   readonly executeShouldThrow?: TerminalToolError;
