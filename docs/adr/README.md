@@ -16,5 +16,6 @@ This page keeps only the product decisions needed by reviewers. It is not an imp
 | Evidence | Supported surfaces write redacted local evidence for human review. |
 | Credentials | API tokens are local secrets and are never logged, serialized, or returned to the browser. |
 | Evaluation | Pilot decisions require offline thresholds plus human-reviewed live model runs. |
+| Package architecture | [ADR-0019](ADR-0019-modular-package-architecture.md) defines the modular workspace package architecture while preserving one customer-facing npm product package. |
 
 For operational details, use the README, the local UI guide, the security boundaries, and the pilot guide.
