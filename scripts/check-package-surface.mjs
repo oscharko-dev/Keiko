@@ -1,6 +1,6 @@
 // Package-surface verification (ADR-0011 D6). Asserts the publish tarball ships the UI assets,
 // exposes an executable CLI bin, and includes nothing it must not: no source maps, no `.env`,
-// no `ui/` source, and no absolute local paths in the file list. Run from `prepack`/`prepublishOnly`
+// no workspace `packages/keiko-ui/` source, and no absolute local paths. Run from `prepack`/`prepublishOnly`
 // after the build steps.
 
 import { spawnSync } from "node:child_process";
@@ -97,7 +97,10 @@ if ((cliBin.mode & 0o111) === 0) {
 const forbidden = [
   { test: (p) => p.endsWith(".map"), label: "a source map" },
   { test: (p) => p === ".env" || p.startsWith(".env."), label: "an environment file" },
-  { test: (p) => p === "ui" || p.startsWith("ui/"), label: "ui/ source" },
+  {
+    test: (p) => p === "packages/keiko-ui" || p.startsWith("packages/keiko-ui/"),
+    label: "keiko-ui workspace source",
+  },
   { test: (p) => p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p), label: "an absolute local path" },
 ];
 
