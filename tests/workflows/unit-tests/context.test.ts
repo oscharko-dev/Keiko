@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildTestGenContext } from "../../../src/workflows/unit-tests/context.js";
 import { DEFAULT_WORKFLOW_LIMITS } from "../../../src/workflows/unit-tests/types.js";
 import type { UnitTestWorkflowInput } from "../../../src/workflows/unit-tests/types.js";
-import { memFs } from "../../workspace/_memfs.js";
+import { memFs } from "../../../packages/keiko-workspace/src/_memfs.js";
 import { makeWorkspaceInfo } from "./_support.js";
 
 const ROOT = "/repo";

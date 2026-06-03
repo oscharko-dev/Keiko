@@ -8,7 +8,7 @@ import {
   type BugRunState,
 } from "../../../src/workflows/bug-investigation/internal.js";
 import { computeBugFingerprint } from "../../../src/workflows/bug-investigation/emit.js";
-import { memFs } from "../../workspace/_memfs.js";
+import { memFs } from "../../../packages/keiko-workspace/src/_memfs.js";
 import {
   detectWorkspace,
   type WorkspaceFs,

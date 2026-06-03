@@ -12,7 +12,7 @@ import {
   summarizeForAudit,
 } from "../../src/sdk/index.js";
 import * as root from "../../src/index.js";
-import { memFs } from "../workspace/_memfs.js";
+import { memFs } from "../../packages/keiko-workspace/src/_memfs.js";
 import { DryRunToolPort, MemoryEventSink } from "../../src/harness/index.js";
 import type { ModelPort } from "../../src/harness/ports.js";
 import type { NormalizedResponse } from "../../src/gateway/types.js";

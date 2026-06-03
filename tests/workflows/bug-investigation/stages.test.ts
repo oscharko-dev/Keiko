@@ -4,7 +4,7 @@ import type {
   BugInvestigationDeps,
   BugInvestigationInput,
 } from "../../../src/workflows/bug-investigation/types.js";
-import { memFs } from "../../workspace/_memfs.js";
+import { memFs } from "../../../packages/keiko-workspace/src/_memfs.js";
 import { recordingWriter, response, scriptedModel } from "./_support.js";
 
 const ROOT = "/repo";

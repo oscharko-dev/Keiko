@@ -5,7 +5,7 @@ import type {
   UnitTestWorkflowInput,
 } from "../../../src/workflows/unit-tests/types.js";
 import { SKIP_UNRESOLVED } from "../../../src/workflows/unit-tests/verify-stage.js";
-import { memFs } from "../../workspace/_memfs.js";
+import { memFs } from "../../../packages/keiko-workspace/src/_memfs.js";
 import { recordingSpawn, scriptChildClose } from "../../verification/_support.js";
 import { recordingSink, recordingWriter, response, scriptedModel } from "./_support.js";
 
