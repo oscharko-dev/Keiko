@@ -158,8 +158,10 @@ module.exports = {
       to: {
         // Composition is allowed via the package surface (node_modules/@oscharko-dev/keiko-*).
         // Reaching directly into another workspace package's source files bypasses the public
-        // surface and re-introduces domain coupling at the product layer.
-        path: "^packages/keiko-(?!).*/src/",
+        // surface and re-introduces domain coupling at the product layer. The pattern matches
+        // any sibling whose directory begins with `keiko-` — naturally excluding the root
+        // `packages/keiko/src/` itself (which has no trailing hyphen).
+        path: "^packages/keiko-[^/]+/src/",
       },
     },
 

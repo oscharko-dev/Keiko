@@ -28,9 +28,14 @@ if (result.status === null) {
   process.exit(1);
 }
 
-if (result.status === 0) {
-  console.error("arch-check-negative: FAIL — the gate exited 0 on a known violation fixture.");
-  console.error("  Expected: non-zero exit (gate fires).");
+// dependency-cruiser exits 1 specifically when validation rules fire on the input. Exit 2 (and
+// other non-zero codes) signal internal errors — bad config, missing files, parse failures —
+// which must NOT be accepted as a successful gate-fired result. Asserting exactly 1 keeps the
+// negative test honest if dep-cruiser's config loader breaks in a future release.
+if (result.status !== 1) {
+  console.error(
+    `arch-check-negative: FAIL — expected dep-cruiser exit 1 (rule fired), got ${String(result.status)}.`,
+  );
   console.error("  Stdout:");
   console.error(result.stdout);
   console.error("  Stderr:");
@@ -38,9 +43,7 @@ if (result.status === 0) {
   process.exit(1);
 }
 
-console.log(
-  `arch-check-negative: PASS — gate fired on fixture as expected (exit ${String(result.status)}).`,
-);
+console.log("arch-check-negative: PASS — gate fired on fixture as expected (exit 1).");
 if (result.stdout.trim().length > 0) {
   console.log(result.stdout.trim());
 }
