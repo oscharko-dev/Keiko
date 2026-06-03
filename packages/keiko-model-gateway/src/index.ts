@@ -1,6 +1,8 @@
 // Public barrel for the model gateway: all types, the Gateway orchestrator, the
 // capability registry helpers, config loaders, and the typed error taxonomy.
 
+export { KEIKO_MODEL_GATEWAY_VERSION } from "./version.js";
+
 export type {
   CircuitBreakerConfig,
   CircuitBreakerStatus,
