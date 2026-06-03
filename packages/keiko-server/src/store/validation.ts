@@ -71,10 +71,16 @@ function rejectStructural(input: string): PathShape {
   if (input.length === 0) throw invalidPath("Path is empty.");
   if (input.length > MAX_PATH_LEN) throw invalidPath("Path too long.");
   if (input.includes("\0")) throw invalidPath("Path contains a null byte.");
-  if (REMOTE_URL_PREFIX_RE.test(input)) throw invalidPath("Remote URL forms are not allowed.");
+  const shape = classifyPathShape(input);
+  // Windows drive paths with redundant forward slashes (for example `C://Users/Example`) match the
+  // scheme-prefix regex even though they are valid local paths. Classify the shape first and skip
+  // the remote-URL check for Windows drive shapes; other shapes still fail closed on `http://`,
+  // `ssh://`, `file://`, and similar URL forms.
+  if (shape !== "windows-drive" && REMOTE_URL_PREFIX_RE.test(input)) {
+    throw invalidPath("Remote URL forms are not allowed.");
+  }
   rejectUnsafeShape(input, "input");
   rejectTraversal(input);
-  const shape = classifyPathShape(input);
   if (shape === "relative") throw invalidPath("Path must be absolute.");
   return shape;
 }

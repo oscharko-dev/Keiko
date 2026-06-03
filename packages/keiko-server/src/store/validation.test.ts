@@ -174,6 +174,11 @@ describe("validateProjectPath — Windows drive paths (cross-platform, mustExist
     expect(out).toBe("C:\\Users\\Example");
   });
 
+  it("accepts a Windows drive path with redundant forward slashes (looks like a URL scheme prefix)", () => {
+    const out = validateProjectPath("C://Users/Example/Project", { mustExist: false });
+    expect(out).toBe("C:\\Users\\Example\\Project");
+  });
+
   it("rejects a Windows drive path with a traversal segment", () => {
     expectCode(
       () => validateProjectPath("C:\\Users\\..\\Windows", { mustExist: false }),
