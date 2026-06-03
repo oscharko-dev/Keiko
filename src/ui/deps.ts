@@ -17,8 +17,11 @@ import { GatewayError, Gateway } from "../gateway/index.js";
 import { GatewayModelPort } from "../harness/index.js";
 import type { ModelPort } from "../harness/index.js";
 import { createAuditRedactor } from "../audit/index.js";
+import { resolveCostClass } from "../audit/aggregate.js";
+import { writeSideFile } from "../audit/side-file.js";
 import { deepRedactStrings } from "../audit/redaction.js";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "../audit/store.js";
 import type { EvidenceStore } from "../audit/index.js";
 import { dirname, join } from "node:path";
@@ -288,6 +291,25 @@ function buildTerminalManager(options: {
   });
 }
 
+// ADR-0019 direction rule 3c: the tools package cannot import src/audit. The BFF injects the
+// cost-class resolver and a side-file writer that closes over the resolved evidenceDir + the
+// nodeWorkspaceFs realpath-containment port, so the browser session manager stays self-contained
+// against contracts + security + workspace only.
+function buildBrowserManager(options: {
+  readonly evidenceDir: string;
+  readonly evidenceStore: EvidenceStore;
+  readonly redactor: Redactor;
+}): BrowserSessionManager {
+  return createBrowserSessionManager({
+    evidenceDir: options.evidenceDir,
+    evidenceStore: options.evidenceStore,
+    redactor: options.redactor,
+    costClassResolver: resolveCostClass,
+    sideFileWriter: (basename, bytes, runId) =>
+      writeSideFile(options.evidenceDir, runId, basename, bytes, { fs: nodeWorkspaceFs }),
+  });
+}
+
 // Assembles the handler deps for the real `keiko ui` process, mirroring the CLI config/evidence
 // wiring (loadConfigFromFile / resolveEvidenceDir / createNodeEvidenceStore). The UI store is
 // created at the resolved UI-DB path (explicit → KEIKO_UI_DATA_DIR → ~/.keiko/keiko-ui.db) unless
@@ -333,7 +355,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
       env: options.env,
       liveRedactor,
     }),
-    browser: createBrowserSessionManager({
+    browser: buildBrowserManager({
       evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),
       evidenceStore,
       redactor: liveRedactor,

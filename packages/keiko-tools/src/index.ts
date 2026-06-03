@@ -62,10 +62,12 @@ export { nodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
 
 // ─── Command execution boundary ─────────────────────────────────────────────────────
 export {
+  nodeHomeProvider,
   nodeSpawnFn,
   runCommand,
   type ExecutableResolver,
   type ExecutableResolverDeps,
+  type HomeProvider,
   type RunCommandDeps,
   type RunCommandInput,
   type SpawnFn,
@@ -81,7 +83,8 @@ export {
   type ValidateDeps,
 } from "./patch.js";
 export { normalizeUnifiedDiffHunks } from "./patch-normalize.js";
-export { parseUnifiedDiff, type ParsedPatch } from "./patch-parse.js";
+export { parseUnifiedDiff, PatchParseError, type ParsedPatch } from "./patch-parse.js";
+export { computeFileContent, type ApplyOutcome, type HunkConflict } from "./patch-content.js";
 
 // ─── Tool definitions (model-facing JSON-Schema table) ──────────────────────────────
 export { TOOL_DEFINITIONS } from "./schemas.js";
