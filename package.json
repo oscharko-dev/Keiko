@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Enterprise model-agnostic developer-assist coding agent for regulated engineering workflows.",
   "type": "module",
   "license": "Apache-2.0",

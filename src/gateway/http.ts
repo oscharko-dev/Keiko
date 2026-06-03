@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { request as httpsRequest } from "node:https";
-import { rootCertificates } from "node:tls";
+import * as tls from "node:tls";
 
 // Caps a single gateway response at 10 MB; real chat completions are far smaller.
 export const MAX_RESPONSE_BYTES = 10_000_000;
@@ -44,6 +44,22 @@ export function isMissingIssuerError(error: unknown): boolean {
   });
 }
 
+const RECOVERABLE_TLS_TRUST_ERROR_CODES = new Set([
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+]);
+
+export function isRecoverableTlsTrustError(error: unknown): boolean {
+  const cause = isRecord(error) ? error.cause : undefined;
+  const candidates = [error, cause];
+  return candidates.some((item) => {
+    if (!isRecord(item) || typeof item.code !== "string") return false;
+    return RECOVERABLE_TLS_TRUST_ERROR_CODES.has(item.code);
+  });
+}
+
 function usesHttps(url: string): boolean {
   try {
     return new URL(url).protocol === "https:";
@@ -64,8 +80,30 @@ function extraCaCertificates(): readonly string[] {
   }
 }
 
-function caBundle(): readonly string[] {
-  return [...rootCertificates, ...extraCaCertificates()];
+type CaCertificateSource = "default" | "system" | "bundled" | "extra";
+
+function nodeCaCertificates(source: CaCertificateSource): readonly string[] {
+  const getter = tls.getCACertificates;
+  if (typeof getter !== "function") {
+    return [];
+  }
+  try {
+    return getter(source);
+  } catch {
+    return [];
+  }
+}
+
+export function gatewayTrustedCaCertificates(): readonly string[] {
+  return Array.from(
+    new Set([
+      ...nodeCaCertificates("default"),
+      ...tls.rootCertificates,
+      ...nodeCaCertificates("system"),
+      ...nodeCaCertificates("extra"),
+      ...extraCaCertificates(),
+    ]),
+  );
 }
 
 function bodyToString(body: BodyInit | null | undefined): string | undefined {
@@ -90,7 +128,7 @@ function fetchWithCaBundle(url: string, init: RequestInit): Promise<Response> {
       {
         method: init.method ?? "GET",
         headers,
-        ca: [...caBundle()],
+        ca: [...gatewayTrustedCaCertificates()],
         signal: init.signal ?? undefined,
       },
       (res) => {
@@ -131,7 +169,7 @@ export async function gatewayFetch(
   try {
     return await doFetch(url, init);
   } catch (error) {
-    if (useCaFallback && usesHttps(url) && isMissingIssuerError(error)) {
+    if (useCaFallback && usesHttps(url) && isRecoverableTlsTrustError(error)) {
       return fetchWithCaBundle(url, init);
     }
     throw error;

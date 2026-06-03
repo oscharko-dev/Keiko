@@ -1,7 +1,10 @@
+import { rootCertificates } from "node:tls";
 import { describe, expect, it } from "vitest";
 import {
+  gatewayTrustedCaCertificates,
   gatewayFetch,
   isMissingIssuerError,
+  isRecoverableTlsTrustError,
   MAX_RESPONSE_BYTES,
   readJsonCapped,
 } from "../../src/gateway/http.js";
@@ -31,6 +34,7 @@ describe("gatewayFetch", () => {
     // isMissingIssuerError is the gate; assert it returns false for unrelated codes.
     const unrelated = Object.assign(new Error("boom"), { code: "CERT_HAS_EXPIRED" });
     expect(isMissingIssuerError(unrelated)).toBe(false);
+    expect(isRecoverableTlsTrustError(unrelated)).toBe(false);
   });
 });
 
@@ -67,6 +71,52 @@ describe("isMissingIssuerError", () => {
     expect(isMissingIssuerError(null)).toBe(false);
     expect(isMissingIssuerError("string")).toBe(false);
     expect(isMissingIssuerError(42)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isRecoverableTlsTrustError — retry only errors that additional trusted CAs can fix
+// ---------------------------------------------------------------------------
+
+describe("isRecoverableTlsTrustError", () => {
+  it.each([
+    "DEPTH_ZERO_SELF_SIGNED_CERT",
+    "SELF_SIGNED_CERT_IN_CHAIN",
+    "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+    "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  ])("returns true for %s", (code) => {
+    const err = Object.assign(new Error("tls"), { code });
+    expect(isRecoverableTlsTrustError(err)).toBe(true);
+  });
+
+  it("returns true when the recoverable TLS code is on the cause", () => {
+    const cause = Object.assign(new Error("inner"), {
+      code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+    });
+    const outer = Object.assign(new Error("outer"), { cause });
+    expect(isRecoverableTlsTrustError(outer)).toBe(true);
+  });
+
+  it.each(["CERT_HAS_EXPIRED", "ERR_TLS_CERT_ALTNAME_INVALID", "ECONNRESET"])(
+    "returns false for non-recoverable code %s",
+    (code) => {
+      const err = Object.assign(new Error("tls"), { code });
+      expect(isRecoverableTlsTrustError(err)).toBe(false);
+    },
+  );
+});
+
+// ---------------------------------------------------------------------------
+// gatewayTrustedCaCertificates — preserve Node defaults and add enterprise trust sources
+// ---------------------------------------------------------------------------
+
+describe("gatewayTrustedCaCertificates", () => {
+  it("preserves Node bundled root certificates in the gateway CA bundle", () => {
+    const bundle = gatewayTrustedCaCertificates();
+    expect(bundle.length).toBeGreaterThanOrEqual(rootCertificates.length);
+    for (const certificate of rootCertificates) {
+      expect(bundle).toContain(certificate);
+    }
   });
 });
 
