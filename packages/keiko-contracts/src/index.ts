@@ -198,3 +198,56 @@ export type {
   BugWorkflowEventSink,
 } from "./bug-investigation-events.js";
 export { DEFAULT_BUG_WORKFLOW_LIMITS } from "./bug-investigation-events.js";
+
+// ─── Verification summary (pure types; runtime functions stay in src/verification/summary.ts) ──
+export type {
+  VerificationResultSummary,
+  VerificationSummary,
+  AuditResultEntry,
+  VerificationAuditSummary,
+} from "./verification-summary.js";
+
+// ─── Evidence (ADR-0010; store port + manifest types + retention config) ────────────────────
+export type {
+  EvidenceRunIdentity,
+  EvidenceModel,
+  EvidenceUsageTotals,
+  EvidenceStateTransition,
+  EvidenceToolCall,
+  EvidenceCommandExecution,
+  EvidenceSandboxConfiguration,
+  EvidenceVerificationResult,
+  EvidencePatch,
+  EvidenceReasoningEntry,
+  EvidenceFailure,
+  EvidenceTaskType,
+  EvidenceBrowserViewportPx,
+  EvidenceBrowserEventType,
+  EvidenceBrowserEvent,
+  EvidenceBrowserScreenshot,
+  EvidenceBrowserContentCapture,
+  EvidenceBrowserCapture,
+  EvidenceManifest,
+  AuditRedactionConfig,
+  RetentionPolicy,
+  BuildOptions,
+  EvidenceBuildInput,
+  EvidenceDeps,
+  EvidenceStore,
+} from "./evidence.js";
+export { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "./evidence.js";
+
+// ─── BFF wire types (ADR-0013; entity shapes that travel over the HTTP wire) ──────────────
+// NOTE: WorkflowStatus and ChatMessage are NOT re-exported here because those names are already
+// taken by unit-test-events.ts and gateway.ts respectively. Import them directly from
+// "@oscharko-dev/keiko-contracts/bff-wire.js" when needed.
+export type {
+  Project,
+  Chat,
+  ChatRole,
+  CreateChatOptions,
+  UpdateProjectPatch,
+  UpdateChatPatch,
+  NewChatMessage,
+  UpdateChatMessagePatch,
+} from "./bff-wire.js";

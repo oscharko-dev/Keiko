@@ -41,19 +41,8 @@ export function resolveEvidenceDir(
   return explicit ?? env?.KEIKO_EVIDENCE_DIR ?? DEFAULT_EVIDENCE_DIR;
 }
 
-export interface EvidenceStore {
-  // Persist one manifest atomically under the base dir, named <runId>.json. Returns the path.
-  readonly put: (runId: string, json: string) => string;
-  // List runIds present in the base dir (deterministic, sorted), reading ONLY the base dir.
-  readonly list: () => readonly string[];
-  // Load one manifest's raw JSON by runId, or undefined if absent.
-  readonly get: (runId: string) => string | undefined;
-  // Return the location used for reports for this runId. Optional so custom SDK stores from earlier
-  // callers remain source-compatible; consumers fall back to <runId>.json when absent.
-  readonly location?: ((runId: string) => string) | undefined;
-  // Delete one ledger-created manifest by runId (retention, D6). No-op if absent.
-  readonly delete: (runId: string) => void;
-}
+// Re-export shim: EvidenceStore port interface lives in @oscharko-dev/keiko-contracts (issue #158).
+export type { EvidenceStore } from "@oscharko-dev/keiko-contracts";
 
 // ─── In-memory store (tests) ──────────────────────────────────────────────────────
 

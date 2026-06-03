@@ -4,55 +4,17 @@
 // only status/exit/duration/appliedLimits/counts; renderMarkdownSummary is a PR/issue table. Every
 // composed string is run through redact() so nothing a summary emits can leak a secret. Pure — no IO.
 
+// Re-export shim: the pure summary type interfaces live in @oscharko-dev/keiko-contracts (issue #158).
+// All import sites (`from "../verification/summary.js"`) continue to resolve unchanged.
+export type {
+  VerificationResultSummary,
+  VerificationSummary,
+  AuditResultEntry,
+  VerificationAuditSummary,
+} from "@oscharko-dev/keiko-contracts";
+
 import { redact } from "../gateway/redaction.js";
-import type {
-  ResourceLimitDecision,
-  VerificationReport,
-  VerificationResult,
-  VerificationStatus,
-} from "./types.js";
-
-export interface VerificationResultSummary {
-  readonly kind: VerificationResult["kind"];
-  readonly scriptName: string | undefined;
-  readonly command: string;
-  readonly status: VerificationStatus;
-  readonly exitCode: number | null;
-  readonly durationMs: number;
-  readonly truncated: boolean;
-  readonly outputSummary: string;
-  readonly appliedLimits: readonly ResourceLimitDecision[];
-  readonly detail: string | undefined;
-}
-
-export interface VerificationSummary {
-  readonly workspaceRoot: string;
-  readonly overallStatus: VerificationStatus;
-  readonly durationMs: number;
-  readonly counts: Readonly<Record<VerificationStatus, number>>;
-  readonly results: readonly VerificationResultSummary[];
-}
-
-// The audit projection: identical metadata MINUS the raw output digest and detail text, so no
-// command output ever reaches the audit ledger (#10). appliedLimits and counts are retained.
-export interface AuditResultEntry {
-  readonly kind: VerificationResult["kind"];
-  readonly scriptName: string | undefined;
-  readonly command: string;
-  readonly status: VerificationStatus;
-  readonly exitCode: number | null;
-  readonly durationMs: number;
-  readonly truncated: boolean;
-  readonly appliedLimits: readonly ResourceLimitDecision[];
-}
-
-export interface VerificationAuditSummary {
-  readonly workspaceRoot: string;
-  readonly overallStatus: VerificationStatus;
-  readonly durationMs: number;
-  readonly counts: Readonly<Record<VerificationStatus, number>>;
-  readonly results: readonly AuditResultEntry[];
-}
+import type { VerificationReport, VerificationResult, VerificationStatus } from "./types.js";
 
 export function buildVerificationSummary(report: VerificationReport): VerificationSummary {
   return {
