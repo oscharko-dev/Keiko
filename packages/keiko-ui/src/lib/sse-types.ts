@@ -13,7 +13,7 @@ interface ReadySentinel {
   readonly runId: string;
   readonly fingerprint: string;
   readonly seq: number;
-  readonly ts: string;
+  readonly ts: number;
   readonly type: "ready";
 }
 

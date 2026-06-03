@@ -127,6 +127,8 @@ jobs:
           cache: "npm"
       - name: Install workspaces (single root lockfile after #167)
         run: npm ci
+      - name: Build internal packages so contracts dist resolves for UI tsc
+        run: npm run build:packages
       - name: Security audit UI dependencies (moderate and above)
         run: npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui
       - name: Lint UI
