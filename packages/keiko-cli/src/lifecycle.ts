@@ -273,7 +273,7 @@ function cliEntryPath(): string {
   // than the cli package barrel (which is not executable). The
   // import.meta.url fallback preserves the pre-extraction behaviour for callers
   // that invoke runLifecycleCli without going through the bin shim.
-  const fromEnv = process.env["KEIKO_CLI_BIN_PATH"];
+  const fromEnv = process.env.KEIKO_CLI_BIN_PATH;
   if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
   return join(dirname(fileURLToPath(import.meta.url)), "index.js");
 }

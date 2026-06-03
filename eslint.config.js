@@ -11,6 +11,7 @@ export default tseslint.config(
       "coverage/**",
       "node_modules/**",
       "packages/keiko-ui/**",
+      "ui/**",
       ".claude/**",
       ".keiko/**",
       "sandbox/**",

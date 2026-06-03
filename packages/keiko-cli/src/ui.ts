@@ -124,7 +124,7 @@ function defaultStaticRoot(): string {
   // cli package does not have to know its own installation layout. The
   // import.meta.url fallback preserves the standalone behaviour for callers that
   // construct UiCliDeps without going through the bin shim (e.g. in tests).
-  const fromEnv = process.env["KEIKO_UI_STATIC_ROOT"];
+  const fromEnv = process.env.KEIKO_UI_STATIC_ROOT;
   if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
   return resolve(dirname(fileURLToPath(import.meta.url)), "..", "ui", "static");
 }

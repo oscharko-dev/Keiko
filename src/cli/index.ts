@@ -18,8 +18,8 @@ import { runCli } from "@oscharko-dev/keiko-cli";
 // override either variable to point at fixtures.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT_DIST = resolve(HERE, "..");
-process.env["KEIKO_CLI_BIN_PATH"] ??= resolve(HERE, "index.js");
-process.env["KEIKO_UI_STATIC_ROOT"] ??= resolve(ROOT_DIST, "ui", "static");
+process.env.KEIKO_CLI_BIN_PATH ??= resolve(HERE, "index.js");
+process.env.KEIKO_UI_STATIC_ROOT ??= resolve(ROOT_DIST, "ui", "static");
 
 // runCli returns a number for synchronous commands and a Promise<number> for
 // the async `run` command; Promise.resolve normalises both before exiting.
