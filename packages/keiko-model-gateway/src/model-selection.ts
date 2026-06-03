@@ -1,5 +1,5 @@
 import { createDefaultChatCapability, listCapabilities } from "./capabilities.js";
-import { ConfigInvalidError } from "./errors.js";
+import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { GatewayConfig, ModelCapability, ModelKind } from "./types.js";
 
 const COST_RANK = { low: 0, medium: 1, high: 2 } as const;

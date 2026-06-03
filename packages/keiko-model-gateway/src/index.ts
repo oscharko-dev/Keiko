@@ -63,7 +63,9 @@ export { CircuitBreaker, executeWithRetry, systemClock, type RetryConfig } from 
 
 export { normalizeChatResponse, type UsageSeed } from "./normalize.js";
 
-export { redact } from "./redaction.js";
+export { gatewayFetch, readJsonCapped } from "./http.js";
+
+export { redact } from "@oscharko-dev/keiko-security";
 
 export {
   AuthenticationError,
@@ -81,4 +83,4 @@ export {
   TransportError,
   UnknownModelError,
   type ErrorCode,
-} from "./errors.js";
+} from "@oscharko-dev/keiko-security/errors/gateway";

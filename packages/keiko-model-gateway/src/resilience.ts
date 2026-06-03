@@ -2,7 +2,12 @@
 // loop, and a per-(model,endpoint) circuit breaker. All time-dependent behaviour
 // flows through the injectable Clock so tests are deterministic and instant.
 
-import { CancelledError, CircuitOpenError, GatewayError, RateLimitError } from "./errors.js";
+import {
+  CancelledError,
+  CircuitOpenError,
+  GatewayError,
+  RateLimitError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import type { CircuitBreakerConfig, CircuitBreakerStatus, CircuitState, Clock } from "./types.js";
 
 const MAX_BACKOFF_MS = 30_000;

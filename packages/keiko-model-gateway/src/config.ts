@@ -5,7 +5,7 @@
 
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
-import { ConfigInvalidError } from "./errors.js";
+import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
   CircuitBreakerConfig,
   CostClass,

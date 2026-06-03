@@ -12,11 +12,11 @@ import {
   RateLimitError,
   TimeoutError,
   TransportError,
-} from "./errors.js";
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME } from "./config.js";
 import { gatewayFetch, readJsonCapped } from "./http.js";
 import { normalizeChatResponse } from "./normalize.js";
-import { redact } from "./redaction.js";
+import { redact } from "@oscharko-dev/keiko-security";
 import type {
   CostClass,
   GatewayRequest,

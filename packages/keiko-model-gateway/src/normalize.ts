@@ -1,7 +1,10 @@
 // Provider payload → NormalizedResponse. The internal contract is strict and small
 // so workflows fail closed when a provider response is unsafe or malformed.
 
-import { MalformedToolCallError, ModelRefusalError } from "./errors.js";
+import {
+  MalformedToolCallError,
+  ModelRefusalError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
   CostClass,
   FinishReason,
