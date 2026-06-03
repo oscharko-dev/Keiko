@@ -263,16 +263,23 @@ module.exports = {
         "ADR-0019 direction rule 5 (workflows strict variant): keiko-workflows and the " +
         "src/workflows/ shims may depend on keiko-contracts, keiko-security, " +
         "keiko-model-gateway, keiko-workspace, keiko-tools, keiko-harness, and " +
-        "keiko-evidence only. Promoted to error severity by issue #165 because the " +
-        "workflows package physically exists. Also fires on the negative-test fixture " +
-        "under tests/architecture/fixtures/workflows/ so the gate can be proven live by " +
-        "scripts/arch-check-negative.mjs. pathNot only filters self-references via the " +
-        "src/workflows/ shim path; it must NOT silently exclude sibling-but-still-in-src/ " +
-        "domains (memory lesson from issues #160 and #162). src/verification/ is " +
-        "intentionally NOT in the forbidden list: workflows depends on the verification " +
-        "orchestrator (apply-mode verification per ADR-0008 D5) and verification is not " +
-        "yet a physical package — the boundary will be re-evaluated when verification " +
-        "is extracted in a future issue.",
+        "keiko-evidence only, and must reach those allowed dependencies through their " +
+        "public package surfaces (`@oscharko-dev/keiko-<name>`) — NOT by deep-importing " +
+        "the legacy `src/<name>/` shim layers. The to.path therefore forbids both the " +
+        "non-allow-listed siblings (`cli|ui|evaluations`) AND the allow-listed siblings' " +
+        "src/ shim paths (`gateway|workspace|tools|harness|audit`); the latter group " +
+        "appears in the package allow-list above but their `src/` shim copies are " +
+        "implementation detail and must not be reached directly (boundary-weakening gap " +
+        "pattern from issue #160 — Copilot finding on issue #165). Promoted to error " +
+        "severity by issue #165 because the workflows package physically exists. Also " +
+        "fires on the negative-test fixture under tests/architecture/fixtures/workflows/ " +
+        "so the gate can be proven live by scripts/arch-check-negative.mjs. pathNot only " +
+        "filters self-references via the src/workflows/ shim path; it must NOT silently " +
+        "exclude sibling-but-still-in-src/ domains (same #160/#162 memory lesson). " +
+        "src/verification/ is intentionally NOT in the forbidden list: workflows depends " +
+        "on the verification orchestrator (apply-mode verification per ADR-0008 D5) and " +
+        "verification is not yet a physical package — the boundary will be re-evaluated " +
+        "when verification is extracted in a future issue.",
       severity: "error",
       from: {
         path:
@@ -285,7 +292,7 @@ module.exports = {
           "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence)|" +
           "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence)|" +
-          "src/(cli|ui|evaluations))",
+          "src/(cli|ui|evaluations|gateway|workspace|tools|harness|audit))",
         pathNot: "^src/workflows/",
       },
     },
