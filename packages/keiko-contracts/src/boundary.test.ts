@@ -45,7 +45,7 @@ describe("keiko-contracts boundary: no external keiko-* imports", () => {
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (/from\s+["']@oscharko-dev\/keiko-(?!contracts)/.test(line ?? "")) {
-          violations.push(`${file}:${i + 1}: ${(line ?? "").trim()}`);
+          violations.push(`${file}:${String(i + 1)}: ${(line ?? "").trim()}`);
         }
       }
     }
@@ -62,7 +62,7 @@ describe("keiko-contracts boundary: no external keiko-* imports", () => {
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
         if (/from\s+["']\.\.\/\.\.\/\.\.\/src\//.test(line ?? "")) {
-          violations.push(`${file}:${i + 1}: ${(line ?? "").trim()}`);
+          violations.push(`${file}:${String(i + 1)}: ${(line ?? "").trim()}`);
         }
       }
     }
@@ -72,7 +72,7 @@ describe("keiko-contracts boundary: no external keiko-* imports", () => {
 
 describe("keiko-contracts boundary: package.json has no keiko-* runtime deps", () => {
   it("dependencies contains no @oscharko-dev/keiko-* entries", () => {
-    const deps = PKG_JSON["dependencies"];
+    const deps = PKG_JSON.dependencies;
     if (deps !== undefined && deps !== null && typeof deps === "object") {
       const forbidden = Object.keys(deps as Record<string, unknown>).filter((k) =>
         k.startsWith("@oscharko-dev/keiko-"),
@@ -85,7 +85,7 @@ describe("keiko-contracts boundary: package.json has no keiko-* runtime deps", (
   });
 
   it("peerDependencies contains no @oscharko-dev/keiko-* entries", () => {
-    const deps = PKG_JSON["peerDependencies"];
+    const deps = PKG_JSON.peerDependencies;
     if (deps !== undefined && deps !== null && typeof deps === "object") {
       const forbidden = Object.keys(deps as Record<string, unknown>).filter((k) =>
         k.startsWith("@oscharko-dev/keiko-"),
