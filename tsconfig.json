@@ -6,7 +6,6 @@
     "sourceMap": true,
     "outDir": "dist"
   },
-  "include": ["src", "tests", "*.config.ts"],
-  "exclude": ["tests/architecture/fixtures/**"],
-  "references": [{ "path": "packages/keiko-contracts" }]
+  "include": ["src", "tests", "*.config.ts", "packages/*/src/**/*.ts"],
+  "exclude": ["tests/architecture/fixtures/**", "packages/*/dist/**"]
 }

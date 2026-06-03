@@ -10,7 +10,7 @@ Accepted
 
 ## Version
 
-1.0
+1.1
 
 ## Context
 
@@ -57,7 +57,7 @@ We will use a shared `tsconfig.base.json` at the repo root and per-package `tsco
 - `rootDir: "src"`, `outDir: "dist"`
 - `references: [...]` listing its declared `@oscharko-dev/keiko-*` peer packages
 
-**Root package `tsconfig.json`**: retains its current role (full type-check program including `src/`, `tests/`, `*.config.ts`) and additionally includes project `references` entries for each workspace package. This means `npm run typecheck` at the root (`tsc -p tsconfig.json --noEmit`) checks all packages in one pass. The root `tsconfig.build.json` remains the emit config for the root package only and is unchanged.
+**Root package `tsconfig.json`**: retains its current role (full type-check program including `src/`, `tests/`, `*.config.ts`) and additionally includes `packages/*/src/**/*.ts` directly in its `include` glob so that `npm run typecheck` at the root (`tsc -p tsconfig.json --noEmit`) checks all packages in one pass. Per-package `tsconfig.json` files use `composite: true` and act as the per-package build configs; the root tsconfig deliberately does NOT add `references` entries, because `tsc -p ... --noEmit` with references would trigger TS6305 (referenced project's `dist/*.d.ts` must already exist). Project references become load-bearing only when the build script migrates to `tsc -b`, which is deferred per the "Build" paragraph below. The root `tsconfig.build.json` remains the emit config for the root package only and is unchanged.
 
 **Per-package typecheck**: `npm run typecheck -w @oscharko-dev/keiko-contracts` runs the package's own `tsc -p tsconfig.json --noEmit`. No new tooling required.
 
@@ -216,3 +216,4 @@ If workspace manager, layout, gate tooling, or stub strategy changes materially,
 | Version | Date | Change |
 | --- | --- | --- |
 | 1.0 | 2026-06-03 | Initial operational addendum to ADR-0019: workspace manager, layout, TS references, architecture gate, stub strategy, and script topology for Issue #157. |
+| 1.1 | 2026-06-03 | D3 clarification: root tsconfig uses direct `packages/*/src/**/*.ts` include rather than `references` entries to avoid TS6305 under `tsc -p ... --noEmit`. Same one-pass typecheck intent; project references remain inside each package and become load-bearing when the build migrates to `tsc -b`. |
