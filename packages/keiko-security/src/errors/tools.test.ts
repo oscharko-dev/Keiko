@@ -11,7 +11,7 @@ import {
   ToolArgumentError,
   ToolError,
   UnknownToolError,
-} from "../../src/tools/errors.js";
+} from "./tools.js";
 
 describe("tool errors", () => {
   it("redacts the message at construction", () => {

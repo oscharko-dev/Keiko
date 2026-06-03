@@ -11,6 +11,7 @@ import { GatewayError } from "../gateway/errors.js";
 import { redact } from "../gateway/redaction.js";
 import type { EnvSource } from "../gateway/config.js";
 import { createAuditRedactor, deepRedactStrings } from "../audit/index.js";
+import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 import {
   fixtureByName,
   fixturesForSuite,
@@ -146,25 +147,8 @@ function redactedScorecard(scorecard: EvalScorecard, live: boolean, env: EnvSour
   if (!live) {
     return scorecard;
   }
-  const redactFn = createAuditRedactor({ additionalSecrets: keikoApiKeySecrets(env) }, env);
+  const redactFn = createAuditRedactor({ additionalSecrets: keikoApiKeySecretValues(env) }, env);
   return deepRedactStrings(scorecard, redactFn);
-}
-
-function isKeikoApiKeyEnvName(name: string): boolean {
-  return (
-    name === "KEIKO_DEFAULT_API_KEY" ||
-    (name.startsWith("KEIKO_MODEL_") && name.endsWith("_API_KEY"))
-  );
-}
-
-function keikoApiKeySecrets(env: EnvSource): readonly string[] {
-  const secrets: string[] = [];
-  for (const [name, value] of Object.entries(env)) {
-    if (value !== undefined && isKeikoApiKeyEnvName(name)) {
-      secrets.push(value);
-    }
-  }
-  return secrets;
 }
 
 function writeScorecard(path: string, output: unknown): void {

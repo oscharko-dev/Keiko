@@ -3,16 +3,15 @@
 // `script-src 'self'` with NO `'unsafe-inline'`, so each distinct inline script must be allowed by
 // its SHA-256 hash. `extractInlineScriptHashes` computes those hashes from exported HTML at build
 // time; `buildCspHeader` folds them into the policy the BFF sets on every response.
+//
+// The SHA-256 base64 primitive is sourced from @oscharko-dev/keiko-security so the CSP hash and the
+// rest of Keiko's content hashing share one audited cryptographic boundary.
 
-import { createHash } from "node:crypto";
+import { sha256Base64 } from "@oscharko-dev/keiko-security";
 
 // `/\bsrc\s*=/i` matches an attribute key only — no `<`/`>` involved, so it does not trigger
 // CodeQL js/bad-tag-filter (which fires on regexes that structurally match HTML tags).
 const SRC_ATTRIBUTE_PATTERN = /\bsrc\s*=/i;
-
-function sha256Base64(body: string): string {
-  return createHash("sha256").update(body, "utf8").digest("base64");
-}
 
 // Finds the next inline-script body starting at cursor `i`, using a case-insensitive indexOf scan
 // rather than a tag-matching regex (eliminates the CodeQL js/bad-tag-filter class entirely). Body

@@ -5,9 +5,10 @@
 // `adr-0019-trust-N-…` so a grep can prove all 17 are present.
 //
 // Severity policy (ADR-0020 D4):
-//   - `error` for source packages that physically exist today (only `keiko-contracts`).
+//   - `error` for source packages that physically exist today (`keiko-contracts` and
+//     `keiko-security`).
 //   - `warn`  for source packages that have not yet been extracted into `packages/` (the
-//     remaining 11 named packages). This avoids the gate blocking on the not-yet-extracted
+//     remaining 10 named packages). This avoids the gate blocking on the not-yet-extracted
 //     `src/` tree while still surfacing the violation class.
 //
 // Path conventions used in rules:
@@ -28,10 +29,10 @@ module.exports = {
       comment:
         "ADR-0019 direction rule 1: keiko-contracts is the leaf package and must not import " +
         "from any other @oscharko-dev/keiko-* package. Also fires on the negative-test fixture " +
-        "under tests/architecture/fixtures/ so the gate can be proven live by " +
+        "under tests/architecture/fixtures/contracts/ so the gate can be proven live by " +
         "scripts/arch-check-negative.mjs.",
       severity: "error",
-      from: { path: "^(packages/keiko-contracts/src/|tests/architecture/fixtures/)" },
+      from: { path: "^(packages/keiko-contracts/src/|tests/architecture/fixtures/contracts/)" },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts)|" +
@@ -43,13 +44,18 @@ module.exports = {
       name: "adr-0019-direction-2-security-only-contracts",
       comment:
         "ADR-0019 direction rule 2: keiko-security may only depend on keiko-contracts. Imports " +
-        "from any other @oscharko-dev/keiko-* package are forbidden.",
-      severity: "warn",
-      from: { path: "^packages/keiko-security/src/" },
+        "from any other @oscharko-dev/keiko-* package are forbidden. Also fires on the negative-" +
+        "test fixture under tests/architecture/fixtures/security/ so the gate can be proven live " +
+        "by scripts/arch-check-negative.mjs.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-security/src/|" + "tests/architecture/fixtures/security/)",
+      },
       to: {
         path:
-          "^(packages/keiko-(?!contracts|security)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security))",
+          "^((\\.\\./)*packages/keiko-(?!contracts|security)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security)|" +
+          "@oscharko-dev/keiko-(?!contracts|security))",
       },
     },
     {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { assertValidRunId } from "../../src/audit/runid.js";
-import { InvalidRunIdError } from "../../src/audit/errors.js";
+import { assertValidRunId } from "./runid.js";
+import { InvalidRunIdError } from "./errors/audit.js";
 
 const NUL = String.fromCharCode(0);
 

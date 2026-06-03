@@ -7,7 +7,7 @@ import {
   WorkspaceError,
   WorkspaceNotFoundError,
   WorkspaceReadError,
-} from "../../src/workspace/errors.js";
+} from "./workspace.js";
 
 describe("workspace errors", () => {
   it("redacts the message at construction", () => {

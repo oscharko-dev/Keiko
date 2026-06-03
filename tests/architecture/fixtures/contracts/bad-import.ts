@@ -7,11 +7,12 @@
  *
  * Gate wiring:
  *   - rule `adr-0019-direction-1-contracts-leaf` in `.dependency-cruiser.cjs`
- *     extends its `from.path` regex to include `tests/architecture/fixtures/`
- *     so this file is treated as if it were under the `keiko-contracts` boundary,
- *     and its `to.path` regex matches the relative import below.
- *   - `scripts/arch-check-negative.mjs` runs the gate against this fixture and
- *     asserts a non-zero exit code.
+ *     extends its `from.path` regex to include
+ *     `tests/architecture/fixtures/contracts/` so this file is treated as if it
+ *     were under the `keiko-contracts` boundary, and its `to.path` regex matches
+ *     the relative import below.
+ *   - `scripts/arch-check-negative.mjs` runs the gate against the fixtures and
+ *     asserts that every expected rule fired by name.
  *
  * Toolchain exclusions (so this fixture does not break the normal pipeline):
  *   - root `tsconfig.json` `exclude` (kept out of the type-check program)
@@ -24,7 +25,9 @@
  * regex matches that path string and fires the rule.
  */
 
-import { violationTarget } from "../../../packages/keiko-harness/src/index.js";
+import { violationTarget } from "../../../../packages/keiko-harness/src/index.js";
 
 export const violation: string =
-  typeof violationTarget === "string" ? violationTarget : "intentional ADR-0019 violation fixture";
+  typeof violationTarget === "string"
+    ? violationTarget
+    : "intentional ADR-0019 violation fixture (contracts boundary)";

@@ -14,7 +14,7 @@ import {
   TimeoutError,
   TransportError,
   UnknownModelError,
-} from "../../src/gateway/errors.js";
+} from "./gateway.js";
 
 describe("error code constants", () => {
   it("maps each name to its stable string code", () => {
@@ -80,5 +80,16 @@ describe("error subclasses", () => {
   it("scrubs caller-supplied secrets from the message", () => {
     const err = new TransportError("connect to https://host?token=opaque-1", ["opaque-1"]);
     expect(err.message).not.toContain("opaque-1");
+  });
+
+  it("redacts a provider URL passed as a caller-supplied additional secret (AC #1)", () => {
+    // The product treats provider base URLs as private runtime values. When the caller hands the
+    // URL to the error as an additional secret, it must NEVER appear in the rendered message — the
+    // safe-error contract is what keeps a browser-displayed error from leaking the internal host.
+    const providerUrl = "https://internal.corp.example/v1";
+    const err = new TransportError(`upstream failure talking to ${providerUrl}`, [providerUrl]);
+    expect(err.message).not.toContain(providerUrl);
+    expect(err.message).not.toContain("internal.corp.example");
+    expect(err.message).toContain("[REDACTED]");
   });
 });

@@ -18,6 +18,7 @@ import { GatewayModelPort } from "../harness/index.js";
 import type { ModelPort } from "../harness/index.js";
 import { createAuditRedactor } from "../audit/index.js";
 import { deepRedactStrings } from "../audit/redaction.js";
+import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "../audit/store.js";
 import type { EvidenceStore } from "../audit/index.js";
 import { dirname, join } from "node:path";
@@ -234,29 +235,12 @@ export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
   return deps.gatewayConfig?.present() ?? deps.configPresent;
 }
 
-function isKeikoApiKeyEnvName(name: string): boolean {
-  return (
-    name === "KEIKO_DEFAULT_API_KEY" ||
-    (name.startsWith("KEIKO_MODEL_") && name.endsWith("_API_KEY"))
-  );
-}
-
-function envSecretValues(env: EnvSource): readonly string[] {
-  const values: string[] = [];
-  for (const [key, value] of Object.entries(env)) {
-    if (value !== undefined && isKeikoApiKeyEnvName(key)) {
-      values.push(value);
-    }
-  }
-  return values;
-}
-
 function configSecretValues(config: GatewayConfig | undefined): readonly string[] {
   return config?.providers.map((provider) => provider.apiKey) ?? [];
 }
 
 function redactionSecrets(env: EnvSource, config: GatewayConfig | undefined): readonly string[] {
-  return [...envSecretValues(env), ...configSecretValues(config)];
+  return [...keikoApiKeySecretValues(env), ...configSecretValues(config)];
 }
 
 // Builds the live-payload redactor from the configured redaction settings + env. No new regex: this
