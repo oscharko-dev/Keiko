@@ -91,7 +91,9 @@ function assertBundledPayload(tmp) {
 }
 
 function assertCliVersionAndHelp(tmp) {
-  const bin = join(tmp, "node_modules", ".bin", "keiko");
+  // Resolve the installed CLI entry directly rather than the `node_modules/.bin/keiko` symlink so
+  // the gate does not depend on npm's per-platform `.bin` shim shape (Copilot review on #169).
+  const bin = join(tmp, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js");
   const versionResult = run("node", [bin, "--version"], { cwd: tmp });
   if (versionResult.status !== 0) {
     fail(`keiko --version exited ${String(versionResult.status)}: ${versionResult.stderr}`);

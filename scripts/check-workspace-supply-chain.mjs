@@ -8,7 +8,7 @@
 // SBOM step so the per-workspace artifacts can be uploaded alongside the root SBOM.
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 // SPDX IDs and names already present in the repo's resolved transitive graph plus a small
@@ -65,14 +65,25 @@ function generateSbom(workspaceName, outPath) {
 }
 
 function generateRootSbom(outPath) {
+  // Reuse the CI-generated `sbom.cdx.json` at the repo root when present (CI emits it in the
+  // step just before this gate runs, see ci.yml). Standalone local runs fall through to a fresh
+  // `npm sbom` so the script remains usable outside CI (Copilot review on #169).
+  const ciRootSbomPath = join(repoRoot, "sbom.cdx.json");
+  const sbomJson = existsSync(ciRootSbomPath)
+    ? readFileSync(ciRootSbomPath, "utf8")
+    : runRootSbom();
+  writeFileSync(outPath, sbomJson);
+  return JSON.parse(sbomJson);
+}
+
+function runRootSbom() {
   const result = spawnSync("npm", ["sbom", "--sbom-format", "cyclonedx", "--omit", "dev"], {
     encoding: "utf8",
   });
   if (result.status !== 0) {
     fail(`npm sbom (root) exited ${String(result.status)}: ${result.stderr}`);
   }
-  writeFileSync(outPath, result.stdout);
-  return JSON.parse(result.stdout);
+  return result.stdout;
 }
 
 function offendersForComponent(component) {
