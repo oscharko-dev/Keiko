@@ -57,6 +57,12 @@ export const DEFAULT_LIMITS: HarnessLimits = {
   maxFailureAttempts: 3,
 } as const;
 
+// Version manifest stamped onto every RunManifest and side-file fingerprint header. Bump on a
+// breaking-shape change to the harness event union or RunManifest schema; consumers compare the
+// literal at parse time. Lives in contracts (not src/harness/session.ts) because tools' browser
+// side-file emission needs the same constant without importing the harness layer.
+export const HARNESS_VERSION = "0.1.6";
+
 // ─── Task types ───────────────────────────────────────────────────────────────
 
 export type TaskType = "generate-unit-tests" | "investigate-bug" | "explain-plan" | "verify";

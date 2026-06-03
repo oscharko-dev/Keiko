@@ -279,3 +279,17 @@ export interface EvidenceStore {
   // Delete one ledger-created manifest by runId (retention, D6). No-op if absent.
   readonly delete: (runId: string) => void;
 }
+
+// ─── Side-file writer result (ADR-0017 D5; binary evidence not in the JSON manifest) ──
+
+// Returned by the per-run side-file writer that the BFF wires into the tools layer's browser
+// adapter. Tools and audit both reference this shape; lives in contracts so the tools package
+// can call an injected writer without depending on src/audit/**.
+export interface SideFileWriteResult {
+  // Path RELATIVE to the per-run subdir (the value to embed in the manifest).
+  readonly relativePath: string;
+  readonly sha256: string;
+  readonly bytes: number;
+  // The realpath-contained absolute path the file was written at.
+  readonly absolutePath: string;
+}

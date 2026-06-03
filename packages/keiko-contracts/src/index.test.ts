@@ -3,12 +3,20 @@ import {
   KEIKO_CONTRACTS_VERSION,
   HARNESS_CODES,
   DEFAULT_LIMITS,
+  HARNESS_VERSION,
   EVIDENCE_SCHEMA_VERSION,
   DEFAULT_RETENTION,
   DEFAULT_PATCH_LIMITS,
   DEFAULT_VERIFICATION_LIMITS,
   EVAL_SCORECARD_SCHEMA_VERSION,
   TERMINAL_STATES,
+} from "./index.js";
+import type {
+  ToolPort,
+  ToolCallRequest,
+  ToolCallResult,
+  ToolCallMetadata,
+  SideFileWriteResult,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
@@ -22,6 +30,10 @@ describe("keiko-contracts package surface", () => {
 
   it("DEFAULT_LIMITS.maxIterations is 10", () => {
     expect(DEFAULT_LIMITS.maxIterations).toBe(10);
+  });
+
+  it("HARNESS_VERSION is the literal '0.1.6'", () => {
+    expect(HARNESS_VERSION).toBe("0.1.6");
   });
 
   it("EVIDENCE_SCHEMA_VERSION is the literal string '1'", () => {
@@ -47,5 +59,17 @@ describe("keiko-contracts package surface", () => {
   it("TERMINAL_STATES contains 'completed' and 'failed'", () => {
     expect(TERMINAL_STATES.has("completed")).toBe(true);
     expect(TERMINAL_STATES.has("failed")).toBe(true);
+  });
+
+  it("each new type-only export added by #162 is reachable by name at compile time", () => {
+    // verbatimModuleSyntax requires the type imports above to be used in a type position. A
+    // phantom generic `pin<T>()` references the type argument at the call site without producing
+    // any runtime value, so each symbol stays load-bearing on the public surface.
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<ToolPort>();
+    pin<ToolCallRequest>();
+    pin<ToolCallResult>();
+    pin<ToolCallMetadata>();
+    pin<SideFileWriteResult>();
   });
 });

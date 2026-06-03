@@ -57,7 +57,7 @@ export type {
   BrowserEvent,
   HarnessEvent,
 } from "./harness.js";
-export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES } from "./harness.js";
+export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES, HARNESS_VERSION } from "./harness.js";
 
 // ─── Workflow descriptor ────────────────────────────────────────────────────────
 export type { WorkflowDescriptor, WorkflowInputSpec } from "./workflow-descriptor.js";
@@ -125,6 +125,10 @@ export type {
   PatchApplyResult,
   ToolHostConfig,
   ToolHostConfigInput,
+  ToolCallRequest,
+  ToolCallMetadata,
+  ToolCallResult,
+  ToolPort,
 } from "./tools.js";
 export {
   DEFAULT_ENV_ALLOWLIST,
@@ -234,6 +238,7 @@ export type {
   EvidenceBuildInput,
   EvidenceDeps,
   EvidenceStore,
+  SideFileWriteResult,
 } from "./evidence.js";
 export { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "./evidence.js";
 
