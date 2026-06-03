@@ -12,12 +12,21 @@ import type { WorkflowEventSink } from "./events.js";
 
 // ─── Status & target selection ───────────────────────────────────────────────────
 
-export type WorkflowStatus =
-  | "completed" // patch applied and verification ran (apply mode)
-  | "dry-run" // dry-run mode: diff produced, no files written
-  | "rejected" // model produced an invalid or out-of-scope patch after all retries
-  | "cancelled" // AbortSignal fired
-  | "failed"; // unexpected error at an IO boundary
+// WorkflowStatus, FileNamingStyle, WorkflowLimits, and DEFAULT_WORKFLOW_LIMITS were extracted to
+// @oscharko-dev/keiko-contracts in issue #158. Re-exported here so consumers of
+// "./types.js" continue to resolve them unchanged.
+import type {
+  FileNamingStyle,
+  WorkflowLimits,
+  WorkflowStatus,
+} from "@oscharko-dev/keiko-contracts";
+
+export type {
+  WorkflowStatus,
+  FileNamingStyle,
+  WorkflowLimits,
+} from "@oscharko-dev/keiko-contracts";
+export { DEFAULT_WORKFLOW_LIMITS } from "@oscharko-dev/keiko-contracts";
 
 // Target selection: exactly one of file/module/changedFiles.
 export type UnitTestTarget =
@@ -31,8 +40,6 @@ export type UnitTestTarget =
 
 // ─── Conventions (D7) ──────────────────────────────────────────────────────────────
 
-export type FileNamingStyle = "sibling" | "mirrored" | "unknown";
-
 export interface TestConventions {
   readonly framework: TestFramework;
   readonly testDirs: readonly string[];
@@ -40,26 +47,6 @@ export interface TestConventions {
   // Up to 2 excerpts of nearby test files sampled from the ContextPack (already redacted by #5).
   readonly assertionStyleSamples: readonly string[];
 }
-
-// ─── Limits (D2/D8) ──────────────────────────────────────────────────────────────
-
-export interface WorkflowLimits {
-  // Maximum model calls for this workflow run including retries. Default: 3.
-  readonly maxModelCalls: number;
-  // Maximum retries on empty / invalid / out-of-scope patch. Default: 2.
-  readonly maxRetries: number;
-  // Context pack byte budget fed to #5 buildContextPack. Default: 65_536.
-  readonly contextBudgetBytes: number;
-  // Max bytes per file in context pack. Default: 8_192.
-  readonly maxBytesPerFile: number;
-}
-
-export const DEFAULT_WORKFLOW_LIMITS: WorkflowLimits = {
-  maxModelCalls: 3,
-  maxRetries: 2,
-  contextBudgetBytes: 65_536,
-  maxBytesPerFile: 8_192,
-} as const;
 
 // ─── Input & deps (D2) ─────────────────────────────────────────────────────────────
 

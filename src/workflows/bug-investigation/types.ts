@@ -12,13 +12,13 @@ import type { BugWorkflowEventSink } from "./events.js";
 
 // ─── Status (D4) ─────────────────────────────────────────────────────────────────
 
-export type BugWorkflowStatus =
-  | "fix-applied" // apply mode: in-scope patch written, verification ran
-  | "fix-proposed" // dry-run: in-scope patch produced, no files written
-  | "investigation-only" // no patch, but a root-cause hypothesis was produced
-  | "rejected" // insufficient input OR out-of-scope/invalid patch after all retries
-  | "cancelled" // AbortSignal fired
-  | "failed"; // unexpected error at an IO boundary
+// BugWorkflowStatus, BugWorkflowLimits, and DEFAULT_BUG_WORKFLOW_LIMITS were extracted to
+// @oscharko-dev/keiko-contracts in issue #158. Re-exported here so consumers of "./types.js"
+// continue to resolve them unchanged.
+import type { BugWorkflowLimits, BugWorkflowStatus } from "@oscharko-dev/keiko-contracts";
+
+export type { BugWorkflowStatus, BugWorkflowLimits } from "@oscharko-dev/keiko-contracts";
+export { DEFAULT_BUG_WORKFLOW_LIMITS } from "@oscharko-dev/keiko-contracts";
 
 // ─── Failure evidence (D7) ──────────────────────────────────────────────────────────
 
@@ -34,34 +34,6 @@ export interface FailureEvidence {
   // Short assertion / error messages. Capped; redacted at the report boundary.
   readonly messages: readonly string[];
 }
-
-// ─── Limits (D13) ──────────────────────────────────────────────────────────────────
-
-export interface BugWorkflowLimits {
-  // Maximum model calls for this workflow run including retries. Default: 3.
-  readonly maxModelCalls: number;
-  // Maximum retries on a malformed / out-of-scope / oversized NON-empty patch. Default: 2.
-  readonly maxRetries: number;
-  // Context pack byte budget fed to #5 buildContextPack. Default: 65_536.
-  readonly contextBudgetBytes: number;
-  // Max bytes per file in context pack. Default: 8_192.
-  readonly maxBytesPerFile: number;
-  // The tighter bug-fix change budget (D6). Derived into a #6 PatchLimits view and passed to
-  // validatePatch/applyPatch via their `limits` override seam (#6's defaults stay untouched).
-  readonly maxFilesChanged: number; // 10
-  readonly maxChangedLines: number; // 300
-  readonly maxPatchBytes: number; // 65_536
-}
-
-export const DEFAULT_BUG_WORKFLOW_LIMITS: BugWorkflowLimits = {
-  maxModelCalls: 3,
-  maxRetries: 2,
-  contextBudgetBytes: 65_536,
-  maxBytesPerFile: 8_192,
-  maxFilesChanged: 10,
-  maxChangedLines: 300,
-  maxPatchBytes: 65_536,
-} as const;
 
 // ─── Input & deps (D2) ─────────────────────────────────────────────────────────────
 

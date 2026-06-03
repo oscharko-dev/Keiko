@@ -11,6 +11,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./unit-test-events": {
+      "types": "./dist/unit-test-events.d.ts",
+      "import": "./dist/unit-test-events.js"
+    },
+    "./bug-investigation-events": {
+      "types": "./dist/bug-investigation-events.d.ts",
+      "import": "./dist/bug-investigation-events.js"
     }
   },
   "scripts": {
