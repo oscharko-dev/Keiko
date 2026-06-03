@@ -351,7 +351,10 @@ module.exports = {
       name: "adr-0019-direction-7-domain-not-cli",
       comment:
         "ADR-0019 direction rule 7: domain packages must not import from keiko-cli. CLI may " +
-        "depend on domain packages, never the reverse.",
+        "depend on domain packages, never the reverse. After issue #168 the strict variant " +
+        "adr-0019-direction-7a-* fires at error severity for the forward direction (cli → " +
+        "allow-listed only); this rule stays as a warn-level safety net for the reverse " +
+        "direction (domain → cli).",
       severity: "warn",
       from: {
         path:
@@ -360,6 +363,43 @@ module.exports = {
       },
       to: {
         path: "^(packages/keiko-cli/|node_modules/@oscharko-dev/keiko-cli|src/cli/)",
+      },
+    },
+    {
+      name: "adr-0019-direction-7a-cli-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence-server",
+      comment:
+        "ADR-0019 direction rule 7 (cli strict variant): keiko-cli and the src/cli/ bin shim " +
+        "may depend on keiko-contracts, keiko-security, keiko-model-gateway, keiko-workspace, " +
+        "keiko-tools, keiko-harness, keiko-workflows, keiko-evidence, and keiko-server only, " +
+        "and must reach those allowed dependencies through their public package surfaces " +
+        "(`@oscharko-dev/keiko-<name>`) — NOT by deep-importing the legacy `src/<name>/` shim " +
+        "layers. The to.path therefore forbids both the non-allow-listed siblings " +
+        "(`evaluations`, browser-tier `keiko-ui`) AND the allow-listed siblings' src/ shim " +
+        "paths (`gateway|workspace|tools|harness|workflows|audit|ui`); the latter group " +
+        "appears in the package allow-list above but their `src/` shim copies are " +
+        "implementation detail and must not be reached directly (boundary-weakening gap " +
+        "pattern from issues #160 and #165). Promoted to error severity by issue #168 " +
+        "because the cli package physically exists. Also fires on the negative-test fixture " +
+        "under tests/architecture/fixtures/cli/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs. pathNot only filters self-references via the " +
+        "src/cli/ shim path; it must NOT silently exclude sibling-but-still-in-src/ " +
+        "domains (same #160/#162 memory lesson). src/verification/ AND src/evaluations/ are " +
+        "intentionally NOT in the forbidden list: the CLI's `verify` command consumes the " +
+        "verification orchestrator (per ADR-0007) and the `evaluate` command consumes the " +
+        "evaluation harness (per ADR-0012). Neither layer is a physical package yet — both " +
+        "boundaries will be re-evaluated when verification and evaluations are extracted in " +
+        "future issues.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-cli/src/|src/cli/|tests/architecture/fixtures/cli/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server|cli)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server|cli)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server|cli)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui))",
+        pathNot: "^src/cli/",
       },
     },
     {

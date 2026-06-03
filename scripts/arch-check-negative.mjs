@@ -34,6 +34,7 @@ const EXPECTED_RULES = [
   "adr-0019-direction-4a-harness-only-contracts-security-model-gateway-workspace-tools-evidence",
   "adr-0019-direction-5a-workflows-only-contracts-security-model-gateway-workspace-tools-harness-evidence",
   "adr-0019-direction-6a-server-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence",
+  "adr-0019-direction-7a-cli-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence-server",
 ];
 
 // `npx --no-install` keeps CI hermetic by refusing to fetch from the registry when the
