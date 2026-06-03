@@ -4,9 +4,7 @@
 // has its own scorecard section and its own test file. A parity failure is a hard blocker that causes
 // `keiko evaluate` to exit 1 regardless of dimension scores.
 
-import { runGenTestsCli } from "../cli/gen-tests.js";
-import { runInvestigateCli } from "../cli/investigate.js";
-import type { CliIo } from "../cli/runner.js";
+import { runGenTestsCli, runInvestigateCli, type CliIo } from "@oscharko-dev/keiko-cli";
 import {
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
   UNIT_TEST_WORKFLOW_DESCRIPTOR,

@@ -6,7 +6,10 @@
     "declarationMap": true,
     "rootDir": "../..",
     "outDir": "dist",
-    "tsBuildInfoFile": "dist/.tsbuildinfo"
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "paths": {
+      "@oscharko-dev/keiko-cli": ["./src/index.ts"]
+    }
   },
   "include": [
     "src",
