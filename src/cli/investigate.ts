@@ -22,10 +22,7 @@ import {
   type WorkspaceInfo,
 } from "../workspace/index.js";
 import { investigateBug, renderBugMarkdownReport } from "../workflows/index.js";
-import type {
-  BugInvestigationReport,
-  BugReportInput,
-} from "@oscharko-dev/keiko-workflows";
+import type { BugInvestigationReport, BugReportInput } from "@oscharko-dev/keiko-workflows";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:

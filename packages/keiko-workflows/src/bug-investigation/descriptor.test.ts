@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR } from "./descriptor.js";
-import {
-  DEFAULT_BUG_WORKFLOW_LIMITS,
-  type BugWorkflowLimits,
-} from "./types.js";
+import { DEFAULT_BUG_WORKFLOW_LIMITS, type BugWorkflowLimits } from "./types.js";
 import type { WorkflowInputSpec } from "../descriptor.js";
 
 function inputNamed(name: string): WorkflowInputSpec | undefined {

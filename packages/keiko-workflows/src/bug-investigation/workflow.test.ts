@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { investigateBug } from "./workflow.js";
-import type {
-  BugInvestigationDeps,
-  BugInvestigationInput,
-} from "./types.js";
+import type { BugInvestigationDeps, BugInvestigationInput } from "./types.js";
 import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
 import { recordingSink, recordingWriter, response, scriptedModel } from "./_support.js";
 

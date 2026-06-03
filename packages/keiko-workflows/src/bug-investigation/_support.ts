@@ -6,10 +6,7 @@ import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { ContextEntry, ContextPack, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
-import type {
-  BugInvestigationEvent,
-  BugWorkflowEventSink,
-} from "./events.js";
+import type { BugInvestigationEvent, BugWorkflowEventSink } from "./events.js";
 
 export function makeWorkspaceInfo(overrides: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
   return {

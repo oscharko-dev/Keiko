@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  isElevatedReviewPath,
-  isSensitivePath,
-} from "./guard.js";
+import { isElevatedReviewPath, isSensitivePath } from "./guard.js";
 
 describe("isSensitivePath (AC #9 patch handling / D6 scope guard)", () => {
   it("rejects an absolute path (fail-closed traversal)", () => {

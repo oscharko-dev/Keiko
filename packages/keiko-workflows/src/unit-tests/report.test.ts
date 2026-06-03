@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  assembleReport,
-  renderMarkdownReport,
-  type ReportParts,
-} from "./report.js";
+import { assembleReport, renderMarkdownReport, type ReportParts } from "./report.js";
 import type { PatchFileChange } from "@oscharko-dev/keiko-tools";
 import type { VerificationAuditSummary } from "../../../../src/verification/index.js";
 

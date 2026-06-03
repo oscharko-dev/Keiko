@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  computeBugFingerprint,
-  createBugEventEmitter,
-} from "./emit.js";
+import { computeBugFingerprint, createBugEventEmitter } from "./emit.js";
 import { recordingSink } from "./_support.js";
 import type { BugReportInput } from "./types.js";
 

@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { generateUnitTests } from "./workflow.js";
-import type {
-  UnitTestWorkflowDeps,
-  UnitTestWorkflowInput,
-} from "./types.js";
+import type { UnitTestWorkflowDeps, UnitTestWorkflowInput } from "./types.js";
 import { SKIP_UNRESOLVED } from "./verify-stage.js";
 import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
 import { recordingSpawn, scriptChildClose } from "../../../../tests/verification/_support.js";
