@@ -203,7 +203,7 @@ describe("_sdk-version local literal", () => {
     const parsed: unknown = JSON.parse(readFileSync(rootPackageJsonPath, "utf8"));
     const version =
       typeof parsed === "object" && parsed !== null && "version" in parsed
-        ? (parsed as { version: unknown }).version
+        ? parsed.version
         : undefined;
     expect(typeof version).toBe("string");
     expect(SDK_VERSION).toBe(version);
