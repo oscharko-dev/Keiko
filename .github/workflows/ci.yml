@@ -125,23 +125,20 @@ jobs:
         with:
           node-version: "22.x"
           cache: "npm"
-          cache-dependency-path: ui/package-lock.json
-      - name: Install UI dependencies
-        run: npm --prefix ui ci --ignore-scripts
-      - name: Security audit UI dependencies (moderate and above)
-        run: npm --prefix ui audit --audit-level=moderate
-      - name: Lint UI
-        run: npm --prefix ui run lint
-      - name: Typecheck UI
-        run: npm --prefix ui run typecheck
-      - name: Build UI (static export)
-        run: npm --prefix ui run build
-      - name: Generate UI CycloneDX SBOM
-        run: npm --prefix ui sbom --sbom-format cyclonedx --omit dev > ui-sbom.cdx.json
-      - name: Test UI (jsdom + axe a11y)
-        run: npm --prefix ui run test
-      - name: Install root dependencies
+      - name: Install workspaces (single root lockfile after #167)
         run: npm ci
+      - name: Security audit UI dependencies (moderate and above)
+        run: npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui
+      - name: Lint UI
+        run: npm run lint --workspace @oscharko-dev/keiko-ui
+      - name: Typecheck UI
+        run: npm run typecheck --workspace @oscharko-dev/keiko-ui
+      - name: Build UI (static export)
+        run: npm run build --workspace @oscharko-dev/keiko-ui
+      - name: Generate UI CycloneDX SBOM
+        run: npm sbom --sbom-format cyclonedx --omit dev --workspace @oscharko-dev/keiko-ui > ui-sbom.cdx.json
+      - name: Test UI (jsdom + axe a11y)
+        run: npm run test --workspace @oscharko-dev/keiko-ui
       - name: Build package and UI assets
         run: |
           npm run build
