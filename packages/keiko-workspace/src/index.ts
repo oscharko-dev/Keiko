@@ -1,6 +1,11 @@
 // Public barrel for the repository-context & workspace-access layer (ADR-0005). The only
-// file-read path exposed is the boundary-checked one; no export returns raw arbitrary file
-// content. Explicit named re-exports, `type` keyword for type-only, double quotes, `.js`.
+// boundary-checked file-read seam is `readWorkspaceFile` (lexical containment + symlink
+// realpath gate + size cap + redaction). `nodeWorkspaceFs` is the `WorkspaceFs` IO port
+// that consumers inject INTO the security primitives (`readWorkspaceFile`,
+// `assertContainedRealPath`, `containedRealPathInfo`); it is not a parallel read path —
+// ADR-0019 trust rule 4 forbids raw `node:fs` in tools/harness/workflows precisely so
+// every workspace-rooted read routes through this port and the primitives that consume
+// it. Explicit named re-exports, `type` keyword for type-only, double quotes, `.js`.
 
 export type {
   AuditEntry,
