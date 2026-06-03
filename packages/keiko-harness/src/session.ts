@@ -3,8 +3,7 @@
 // cancel() that aborts the single per-run AbortController (ADR-0004 D4, D9).
 
 import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts";
-import { systemClock } from "../gateway/resilience.js";
-import type { Clock } from "../gateway/types.js";
+import { systemClock, type Clock } from "@oscharko-dev/keiko-model-gateway";
 import { newCounters, type RunContext } from "./context.js";
 import { Emitter } from "./emitter.js";
 import { HARNESS_CODES, toFailure } from "./errors.js";

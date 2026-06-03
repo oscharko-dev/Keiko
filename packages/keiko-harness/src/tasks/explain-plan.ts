@@ -2,7 +2,7 @@
 // or verification for this task type — enforced here by setting all `allows*` flags false.
 // State path: intake -> planning -> context-selection -> model-call -> reporting -> completed.
 
-import type { ChatMessage } from "../../gateway/types.js";
+import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
 import type { ExplainPlanInput } from "../types.js";
 import type { TaskPlan } from "./policy.js";
 

@@ -3,8 +3,12 @@
 // records tool calls without executing them — the Wave-1 no-op executor that keeps the
 // CLI dry-run path free of any side effect (real executors land in issue #6).
 
-import { CancelledError } from "../gateway/errors.js";
-import type { GatewayRequest, NormalizedResponse, ToolDefinition } from "../gateway/types.js";
+import {
+  CancelledError,
+  type GatewayRequest,
+  type NormalizedResponse,
+  type ToolDefinition,
+} from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort, ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
 
 // The minimal Gateway surface the model port depends on. Depending on this structural

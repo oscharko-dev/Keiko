@@ -4,7 +4,7 @@
 // the discriminated union can carry a verify variant alongside the model-driven tasks. All
 // `allows*` flags are false: there is no model call, no tool call, no patch proposal.
 
-import type { ChatMessage } from "../../gateway/types.js";
+import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
 import type { VerifyInput } from "../types.js";
 import type { TaskPlan } from "./policy.js";
 

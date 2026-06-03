@@ -3,10 +3,8 @@
 // terminal-outcome carriers (patchDiff, report, failure). Keeping this in one place lets
 // each handler file stay small and free of cross-handler imports.
 
-import type { ChatMessage } from "../gateway/types.js";
-import type { Clock } from "../gateway/types.js";
+import type { ChatMessage, Clock, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import { Emitter } from "./emitter.js";
-import type { NormalizedResponse } from "../gateway/types.js";
 import type { ModelPort, ToolPort } from "./ports.js";
 import type { TaskPlan } from "./tasks/policy.js";
 import type {

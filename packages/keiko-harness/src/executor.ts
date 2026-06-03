@@ -2,15 +2,16 @@
 // control flow: it inspects finishReason and toolCalls and decides the next state. A model
 // response is never executed as an instruction (ADR-0004 D1).
 
-import { CancelledError, GatewayError } from "../gateway/errors.js";
-import { ToolError } from "../tools/errors.js";
-import { WorkspaceError } from "../workspace/errors.js";
-import type {
-  ChatMessage,
-  GatewayRequest,
-  NormalizedResponse,
-  NormalizedToolCall,
-} from "../gateway/types.js";
+import {
+  CancelledError,
+  GatewayError,
+  type ChatMessage,
+  type GatewayRequest,
+  type NormalizedResponse,
+  type NormalizedToolCall,
+} from "@oscharko-dev/keiko-model-gateway";
+import { ToolError } from "@oscharko-dev/keiko-tools";
+import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
 import { contextBytes, type RunContext, type StateStep } from "./context.js";
 import { HARNESS_CODES, toFailure } from "./errors.js";
 import type { ToolCallMetadata } from "./ports.js";

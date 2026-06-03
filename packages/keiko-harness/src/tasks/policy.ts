@@ -3,7 +3,7 @@
 // allowed to enter. The loop reads `allows*` flags to route — read-only enforcement for
 // explain-plan is a property of the task, not of configuration (ADR-0004 D8).
 
-import type { ChatMessage } from "../../gateway/types.js";
+import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
 import type { TaskInput } from "../types.js";
 import { buildExplainPlan } from "./explain-plan.js";
 import { buildGenerateUnitTests } from "./generate-unit-tests.js";

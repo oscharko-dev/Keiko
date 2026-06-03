@@ -2,8 +2,7 @@
 // then forwards it to the sink. SENSITIVE fields (rationale, modelResponse, diff) are
 // redacted before forwarding UNLESS the sink retains raw content for replay (ADR-0004 D6).
 
-import { redact } from "../gateway/redaction.js";
-import type { Clock } from "../gateway/types.js";
+import { redact, type Clock } from "@oscharko-dev/keiko-model-gateway";
 import type { EventSink } from "./ports.js";
 import type { HarnessEvent } from "./types.js";
 

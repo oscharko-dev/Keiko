@@ -4,7 +4,7 @@
 // intake -> planning -> context-selection -> model-call -> patch-proposal -> verification
 //        -> reporting -> completed (verification may loop back to model-call).
 
-import type { ChatMessage } from "../../gateway/types.js";
+import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
 import type { GenerateUnitTestsInput } from "../types.js";
 import type { TaskPlan } from "./policy.js";
 

@@ -7,7 +7,7 @@
 // and the tools-package implementer, so both sides import from contracts. Re-exported here
 // so every existing `import ... from "../harness/ports.js"` keeps resolving unchanged.
 
-import type { GatewayRequest, NormalizedResponse } from "../gateway/types.js";
+import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type {
   ToolCallMetadata,
   ToolCallRequest,
