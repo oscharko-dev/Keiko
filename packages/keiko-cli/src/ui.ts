@@ -120,6 +120,12 @@ export function parseUiArgs(args: readonly string[]): UiCliArgs | null {
 }
 
 function defaultStaticRoot(): string {
+  // The root bin shim (`dist/cli/index.js`) surfaces `KEIKO_UI_STATIC_ROOT` so the
+  // cli package does not have to know its own installation layout. The
+  // import.meta.url fallback preserves the standalone behaviour for callers that
+  // construct UiCliDeps without going through the bin shim (e.g. in tests).
+  const fromEnv = process.env["KEIKO_UI_STATIC_ROOT"];
+  if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
   return resolve(dirname(fileURLToPath(import.meta.url)), "..", "ui", "static");
 }
 
