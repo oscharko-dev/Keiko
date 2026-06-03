@@ -60,6 +60,7 @@
     "vitest": "^4.1.7"
   },
   "dependencies": {
+    "@oscharko-dev/keiko-contracts": "*",
     "ws": "^8.21.0"
   }
 }
