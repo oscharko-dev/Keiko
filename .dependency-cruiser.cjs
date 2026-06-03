@@ -61,15 +61,16 @@ module.exports = {
     {
       name: "adr-0019-direction-3-infra-only-contracts-security",
       comment:
-        "ADR-0019 direction rule 3 (still-unextracted packages variant): workspace, tools, and " +
-        "evidence may depend only on contracts and security. Imports from harness, workflows, " +
-        "server, cli, ui, or each other are forbidden. Stays at warn severity until each package " +
-        "physically lands in packages/ via its own extraction issue, at which point the " +
-        "extraction PR splits a strict per-package companion rule the way " +
-        "adr-0019-direction-3a-model-gateway-only-contracts-security does for model-gateway.",
+        "ADR-0019 direction rule 3 (still-unextracted packages variant): tools and evidence may " +
+        "depend only on contracts and security. Imports from harness, workflows, server, cli, ui, " +
+        "or each other are forbidden. Stays at warn severity until each package physically lands " +
+        "in packages/ via its own extraction issue, at which point the extraction PR splits a " +
+        "strict per-package companion rule the way " +
+        "adr-0019-direction-3a-model-gateway-only-contracts-security does for model-gateway and " +
+        "adr-0019-direction-3b-workspace-only-contracts-security does for workspace.",
       severity: "warn",
       from: {
-        path: "^(packages/keiko-(workspace|tools|evidence)/src/|" + "src/(workspace|tools|audit)/)",
+        path: "^(packages/keiko-(tools|evidence)/src/|src/(tools|audit)/)",
       },
       to: {
         path:
@@ -77,6 +78,32 @@ module.exports = {
           "node_modules/@oscharko-dev/keiko-(?!contracts|security)|" +
           "src/(harness|workflows|cli|ui|verification|evaluations))",
         pathNot: "^src/(gateway|workspace|tools|audit)/",
+      },
+    },
+    {
+      name: "adr-0019-direction-3b-workspace-only-contracts-security",
+      comment:
+        "ADR-0019 direction rule 3 (workspace strict variant): keiko-workspace and the " +
+        "src/workspace/ shims may depend only on keiko-contracts and keiko-security. Promoted to " +
+        "error severity by issue #161 because the workspace package physically exists. Also " +
+        "fires on the negative-test fixture under tests/architecture/fixtures/workspace/ so the " +
+        "gate can be proven live by scripts/arch-check-negative.mjs. The other two packages " +
+        "governed by the base rule 3 (tools, evidence) stay at warn until their own extraction " +
+        "issues land.",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-workspace/src/|" +
+          "src/workspace/|" +
+          "tests/architecture/fixtures/workspace/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|workspace)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|workspace)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|workspace)|" +
+          "src/(harness|workflows|cli|ui|verification|evaluations|gateway|tools|audit))",
+        pathNot: "^src/workspace/",
       },
     },
     {
