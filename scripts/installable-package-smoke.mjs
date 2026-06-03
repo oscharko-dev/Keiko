@@ -48,9 +48,12 @@ function installInto(tmp, tarballPath) {
   if (initResult.status !== 0) {
     fail(`npm init -y exited ${String(initResult.status)}: ${initResult.stderr}`);
   }
+  // `--ignore-scripts` matches the conservative posture the gate models for consumer installs:
+  // a future bundled package that acquires a `postinstall` hook would otherwise execute it on
+  // every CI build and developer machine before review (issue #169 security-triage finding L1).
   const installResult = run(
     "npm",
-    ["install", tarballPath, "--no-audit", "--no-fund", "--omit=optional"],
+    ["install", tarballPath, "--ignore-scripts", "--no-audit", "--no-fund", "--omit=optional"],
     { cwd: tmp, timeout: NPM_INSTALL_TIMEOUT_MS },
   );
   if (installResult.status !== 0) {
@@ -102,12 +105,18 @@ function assertCliVersionAndHelp(tmp) {
   }
 }
 
+// `runVerification` is the SDK sentinel mirrored from `scripts/check-package-surface.mjs`:
+// the static surface check asserts the same symbol resolves as a function, so the runtime
+// smoke would otherwise be weaker than the static gate (issue #169 verifier finding gap 1).
+const SDK_SENTINEL_TOKEN = "runVerification";
+
 function assertSdkRootImport(tmp) {
   const sdkProbe =
     "import('@oscharko-dev/keiko').then(m => { " +
     "if (typeof m !== 'object' || m === null) process.exit(2); " +
     "const keys = Object.keys(m); " +
     "if (keys.length === 0) process.exit(3); " +
+    `if (typeof m["${SDK_SENTINEL_TOKEN}"] !== 'function') process.exit(4); ` +
     "console.log(String(keys.length)); " +
     "});";
   const result = run("node", ["-e", sdkProbe], { cwd: tmp });
