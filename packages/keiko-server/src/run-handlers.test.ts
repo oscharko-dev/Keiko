@@ -35,7 +35,7 @@ import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const FIXTURE = join(here, "..", "fixtures", "unit-tests", "target-project");
+const FIXTURE = join(here, "..", "..", "..", "tests", "fixtures", "unit-tests", "target-project");
 
 // A secret-shaped value the redactor must scrub from every response body.
 const SECRET = "sk-abcdefghijklmnop0123456789";
@@ -47,7 +47,7 @@ const TEST_DIFF =
   `+// token ${SECRET}\n` +
   "+describe('add', () => {\n" +
   "+  it('adds', () => expect(add(1, 2)).toBe(3));\n" +
-	  "+});\n";
+  "+});\n";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 
@@ -99,7 +99,11 @@ async function start(model: ModelPort, options: HandlerDepsOptions = {}): Promis
   server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0 });
   await new Promise<void>((res) => server.listen(0, UI_HOST, res));
   port = (server.address() as AddressInfo).port;
-  await new Promise<void>((res) => server.close(() => { res(); }));
+  await new Promise<void>((res) =>
+    server.close(() => {
+      res();
+    }),
+  );
   server = createUiServer({
     staticRoot,
     csp: buildCspHeader([]),
@@ -151,7 +155,11 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  await new Promise<void>((res) => server.close(() => { res(); }));
+  await new Promise<void>((res) =>
+    server.close(() => {
+      res();
+    }),
+  );
   rmSync(staticRoot, { recursive: true, force: true });
   rmSync(workspace, { recursive: true, force: true });
 });
@@ -170,7 +178,11 @@ describe("POST /api/runs", () => {
     server.close();
     await new Promise<void>((res) => server.listen(port, UI_HOST, res));
     // Rebuild with a factory that yields no model.
-    await new Promise<void>((res) => server.close(() => { res(); }));
+    await new Promise<void>((res) =>
+      server.close(() => {
+        res();
+      }),
+    );
     server = createUiServer({
       staticRoot,
       csp: buildCspHeader([]),
@@ -491,11 +503,16 @@ describe("FIX 4 — apply rebuilds the ModelPort from the run's modelId, not the
       sink: new QueueEventSink(),
       cancel: (): void => undefined,
     });
-    localRegistry.complete("fix4-run", "completed", { status: "dry-run" }, {
-      kind: "unit-tests",
-      payload: { workspaceRoot: ".", target: { kind: "file", filePath: "x.ts" } },
-      limits: undefined,
-    });
+    localRegistry.complete(
+      "fix4-run",
+      "completed",
+      { status: "dry-run" },
+      {
+        kind: "unit-tests",
+        payload: { workspaceRoot: ".", target: { kind: "file", filePath: "x.ts" } },
+        limits: undefined,
+      },
+    );
 
     const seen: string[] = [];
     const deps: UiHandlerDeps = {
@@ -535,11 +552,16 @@ describe("FIX B — apply snapshot retains the original limits from the dry-run"
       sink: new QueueEventSink(),
       cancel: (): void => undefined,
     });
-    localRegistry.complete("fixb-run", "completed", { status: "dry-run" }, {
-      kind: "unit-tests",
-      payload: { workspaceRoot: ".", target: { kind: "file", filePath: "x.ts" } },
-      limits: testLimits,
-    });
+    localRegistry.complete(
+      "fixb-run",
+      "completed",
+      { status: "dry-run" },
+      {
+        kind: "unit-tests",
+        payload: { workspaceRoot: ".", target: { kind: "file", filePath: "x.ts" } },
+        limits: testLimits,
+      },
+    );
 
     // The snapshot stored in the registry must carry the limits verbatim.
     const record = localRegistry.get("fixb-run");
@@ -609,7 +631,11 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
-      body: JSON.stringify({ taskType: "verify", input: { workspaceRoot: "/tmp/not-registered" }, modelId: "m" }),
+      body: JSON.stringify({
+        taskType: "verify",
+        input: { workspaceRoot: "/tmp/not-registered" },
+        modelId: "m",
+      }),
     });
     expect(res.status).toBe(403);
     const json = (await res.json()) as { error: { code: string } };
@@ -621,7 +647,11 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
-      body: JSON.stringify({ taskType: "verify", input: { workspaceRoot: workspace }, modelId: "m" }),
+      body: JSON.stringify({
+        taskType: "verify",
+        input: { workspaceRoot: workspace },
+        modelId: "m",
+      }),
     });
     expect(res.status).toBe(202);
   });
@@ -631,7 +661,11 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
     const res = await fetch(`${base()}/api/runs`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
-      body: JSON.stringify({ taskType: "verify", input: { workspaceRoot: workspace }, modelId: "m" }),
+      body: JSON.stringify({
+        taskType: "verify",
+        input: { workspaceRoot: workspace },
+        modelId: "m",
+      }),
     });
     expect(res.status).toBe(202);
   });
