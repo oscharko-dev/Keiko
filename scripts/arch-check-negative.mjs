@@ -6,20 +6,32 @@
 // gate stayed silent — the gate is broken).
 //
 // `--include-only` here overrides the production config's includeOnly (which scopes
-// the production scan to ^(src|packages/[^/]+/src)). The override widens it to also
-// include the fixture file AND its unresolved relative import target so the
-// dependency edge is preserved and the rule's `to.path` regex can match. Without
-// covering the target path in includeOnly, dependency-cruiser drops the edge.
+// the production scan to ^(src|packages/[^/]+/src)). The override is a strict superset:
+// it covers the fixture file itself, its unresolved relative import target (`../`-form,
+// emitted when the target package does not yet exist on disk), AND the production
+// includeOnly so that once a future PR creates the target package, dependency-cruiser
+// still resolves the import to a `packages/...` path that stays inside the scan.
 
 import { spawnSync } from "node:child_process";
 
 const RULES_FILE = ".dependency-cruiser.cjs";
 const FIXTURE_PATH = "tests/architecture/fixtures";
-const INCLUDE_ONLY_OVERRIDE = "^(tests/architecture/fixtures|\\.\\./)";
+const INCLUDE_ONLY_OVERRIDE = "^(tests/architecture/fixtures|\\.\\./|src|packages/[^/]+/src)";
 
+// `npx --no-install` keeps CI hermetic by refusing to fetch from the registry when the
+// local devDependency is missing. dependency-cruiser is a root devDependency, so npm
+// resolution must already provide the local binary.
 const result = spawnSync(
   "npx",
-  ["depcruise", "--validate", RULES_FILE, "--include-only", INCLUDE_ONLY_OVERRIDE, FIXTURE_PATH],
+  [
+    "--no-install",
+    "depcruise",
+    "--validate",
+    RULES_FILE,
+    "--include-only",
+    INCLUDE_ONLY_OVERRIDE,
+    FIXTURE_PATH,
+  ],
   { encoding: "utf8" },
 );
 

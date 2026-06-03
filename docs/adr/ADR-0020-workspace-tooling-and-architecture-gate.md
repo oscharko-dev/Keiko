@@ -10,7 +10,7 @@ Accepted
 
 ## Version
 
-1.1
+1.2
 
 ## Context
 
@@ -127,7 +127,7 @@ Root scripts preserve their current semantics exactly:
 
 | Existing script | Behaviour after this PR |
 | --- | --- |
-| `npm run typecheck` | Unchanged: `tsc -p tsconfig.json --noEmit`. Root tsconfig gains workspace package `references` entries. |
+| `npm run typecheck` | Unchanged: `tsc -p tsconfig.json --noEmit`. Root tsconfig adds `packages/*/src/**/*.ts` to its `include` glob (per D3 — direct include, not `references`, to avoid TS6305 under `--noEmit`). |
 | `npm run lint` | Unchanged: `eslint . --max-warnings=0`. ESLint flat config un-ignores `packages/*/src` as packages are extracted; `ui/` continues to be ignored (unchanged). |
 | `npm test` | Unchanged: `vitest run`. Root vitest config `include` gains `packages/*/src/**/*.test.ts`. |
 | `npm run build` | Unchanged this sprint: `tsc -p tsconfig.build.json`. Updated to `tsc -b` when first real extraction makes project references load-bearing. |
@@ -217,3 +217,4 @@ If workspace manager, layout, gate tooling, or stub strategy changes materially,
 | --- | --- | --- |
 | 1.0 | 2026-06-03 | Initial operational addendum to ADR-0019: workspace manager, layout, TS references, architecture gate, stub strategy, and script topology for Issue #157. |
 | 1.1 | 2026-06-03 | D3 clarification: root tsconfig uses direct `packages/*/src/**/*.ts` include rather than `references` entries to avoid TS6305 under `tsc -p ... --noEmit`. Same one-pass typecheck intent; project references remain inside each package and become load-bearing when the build migrates to `tsc -b`. |
+| 1.2 | 2026-06-03 | D6 script-topology table updated to match D3's direct-include strategy (drift caught in review). No behaviour change. |
