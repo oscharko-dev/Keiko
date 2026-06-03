@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { runCli, type CliIo } from "../../src/cli/runner.js";
-import { SDK_VERSION } from "../../src/sdk/index.js";
+import { runCli, type CliIo } from "./runner.js";
+import { SDK_VERSION } from "./_sdk-version.js";
 
 interface Captured {
   readonly io: CliIo;
@@ -35,8 +35,12 @@ function isPackageJson(value: unknown): value is { readonly version: string } {
   );
 }
 
+// Reads the ROOT product package.json (../../package.json relative to the keiko-cli
+// package's cwd during `vitest run`). The CLI surfaces the root product version via
+// `keiko --version`, so the assertion below guards against drift between the local
+// SDK_VERSION literal (_sdk-version.ts) and the root package's version field.
 function packageVersion(): string {
-  const parsed: unknown = JSON.parse(readFileSync("package.json", "utf8"));
+  const parsed: unknown = JSON.parse(readFileSync("../../package.json", "utf8"));
   if (!isPackageJson(parsed)) {
     throw new Error("package.json version is missing");
   }

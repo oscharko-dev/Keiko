@@ -2,11 +2,11 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runInvestigateCli } from "../../src/cli/investigate.js";
-import { runCli } from "../../src/cli/runner.js";
-import type { CliIo } from "../../src/cli/runner.js";
-import type { ModelPort } from "../../src/harness/ports.js";
-import type { NormalizedResponse } from "../../src/gateway/types.js";
+import { runInvestigateCli } from "./investigate.js";
+import { runCli } from "./runner.js";
+import type { CliIo } from "./runner.js";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 interface Captured {
   readonly io: CliIo;

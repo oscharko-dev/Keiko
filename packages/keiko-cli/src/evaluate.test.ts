@@ -6,17 +6,17 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runEvaluateCli } from "../../src/cli/evaluate.js";
-import type { EvaluateDeps } from "../../src/cli/evaluate.js";
-import { createInMemoryEvidenceStore } from "../../src/audit/index.js";
-import { ConfigInvalidError } from "../../src/gateway/errors.js";
+import { runEvaluateCli } from "./evaluate.js";
+import type { EvaluateDeps } from "./evaluate.js";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { ConfigInvalidError } from "@oscharko-dev/keiko-model-gateway";
 import {
   createScriptedModelPort,
   type EvaluationFixture,
   type EvaluationMode,
 } from "../../src/evaluations/index.js";
-import type { ModelPort } from "../../src/harness/ports.js";
-import type { NormalizedResponse } from "../../src/gateway/types.js";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 // ─── IO capture helpers ───────────────────────────────────────────────────────
 

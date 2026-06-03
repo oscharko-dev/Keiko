@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runLifecycleCli } from "../../src/cli/lifecycle.js";
-import type { CliIo } from "../../src/cli/runner.js";
-import { SDK_VERSION } from "../../src/sdk/index.js";
+import { runLifecycleCli } from "./lifecycle.js";
+import type { CliIo } from "./runner.js";
+import { SDK_VERSION } from "./_sdk-version.js";
 
 interface Captured {
   readonly io: CliIo;

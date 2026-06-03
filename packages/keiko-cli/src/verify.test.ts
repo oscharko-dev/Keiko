@@ -2,8 +2,8 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runVerifyCli } from "../../src/cli/verify.js";
-import type { CliIo } from "../../src/cli/runner.js";
+import { runVerifyCli } from "./verify.js";
+import type { CliIo } from "./runner.js";
 
 interface Captured {
   readonly io: CliIo;

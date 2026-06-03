@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runAgentCli } from "../../src/cli/run.js";
-import type { CliIo } from "../../src/cli/runner.js";
+import { runAgentCli } from "./run.js";
+import type { CliIo } from "./runner.js";
 
 // This file deliberately does NOT mock node:fs (unlike tests/harness/cli-run.test.ts) so the real
 // node evidence store runs end-to-end — proving the CLI threads KEIKO_EVIDENCE_DIR and --evidence-dir

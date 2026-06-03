@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { runContextCli } from "../../src/cli/context.js";
-import type { CliIo } from "../../src/cli/runner.js";
+import { runContextCli } from "./context.js";
+import type { CliIo } from "./runner.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -140,7 +140,7 @@ describe("runContextCli", () => {
   it("never imports the harness session or gateway run path (dry-run by construction)", () => {
     // Structural guarantee: the context command source must not pull in the agent run loop
     // or the model gateway, so it cannot construct a session or call a model.
-    const source = readFileSync(join(HERE, "..", "..", "src", "cli", "context.ts"), "utf8");
+    const source = readFileSync(join(HERE, "context.ts"), "utf8");
     expect(source).not.toContain("harness/session");
     expect(source).not.toContain("harness/index");
     expect(source).not.toContain("createSession");

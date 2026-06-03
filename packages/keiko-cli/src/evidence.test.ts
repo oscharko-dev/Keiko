@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runEvidenceCli } from "../../src/cli/evidence.js";
+import { runEvidenceCli } from "./evidence.js";
 import {
   createInMemoryEvidenceStore,
   createNodeEvidenceStore,
   type EvidenceStore,
-} from "../../src/audit/store.js";
-import type { CliIo } from "../../src/cli/runner.js";
-import type { EvidenceManifest } from "../../src/audit/types.js";
+} from "@oscharko-dev/keiko-evidence";
+import type { CliIo } from "./runner.js";
+import type { EvidenceManifest } from "@oscharko-dev/keiko-evidence";
 
 function capture(): { io: CliIo; out: () => string; err: () => string } {
   let out = "";

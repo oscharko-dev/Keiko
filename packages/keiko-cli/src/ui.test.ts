@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseUiArgs, runUiCli, waitForShutdown, type UiCliDeps } from "../../src/cli/ui.js";
-import { DEFAULT_UI_PORT } from "../../src/ui/index.js";
-import type { UiHandlerDeps } from "../../src/ui/index.js";
-import type { CliIo } from "../../src/cli/runner.js";
+import { parseUiArgs, runUiCli, waitForShutdown, type UiCliDeps } from "./ui.js";
+import { DEFAULT_UI_PORT } from "@oscharko-dev/keiko-server";
+import type { UiHandlerDeps } from "@oscharko-dev/keiko-server";
+import type { CliIo } from "./runner.js";
 
 function captureIo(): { io: CliIo; out: string[]; err: string[] } {
   const out: string[] = [];

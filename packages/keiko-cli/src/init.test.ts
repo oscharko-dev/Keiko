@@ -2,8 +2,8 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runInitCli } from "../../src/cli/init.js";
-import type { CliIo } from "../../src/cli/runner.js";
+import { runInitCli } from "./init.js";
+import type { CliIo } from "./runner.js";
 
 interface Captured {
   readonly io: CliIo;

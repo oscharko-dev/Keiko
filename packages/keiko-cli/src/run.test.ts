@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { runAgentCli } from "../../src/cli/run.js";
-import { runCli, type CliIo } from "../../src/cli/runner.js";
-import { createInMemoryEvidenceStore, type EvidenceStore } from "../../src/audit/store.js";
-import { EvidenceWriteError } from "../../src/audit/errors.js";
+import { runAgentCli } from "./run.js";
+import { runCli, type CliIo } from "./runner.js";
+import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { EvidenceWriteError } from "@oscharko-dev/keiko-evidence";
 
 // Replace every filesystem write entry point with a throwing stub. With these mocked, any code path
 // that touched the disk would throw. The run command now writes evidence by DEFAULT, so the tests
