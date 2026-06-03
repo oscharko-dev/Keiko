@@ -5,8 +5,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AddressInfo } from "node:net";
 import { WebSocketServer, type WebSocket as ServerSocket } from "ws";
-import { BrowserToolError } from "../../../src/tools/browser/errors.js";
-import { CdpClient, PERMITTED_CDP_METHODS } from "../../../src/tools/browser/cdp-client.js";
+import { BrowserToolError } from "./errors.js";
+import { CdpClient, PERMITTED_CDP_METHODS } from "./cdp-client.js";
 
 interface ServerHandle {
   readonly url: string;

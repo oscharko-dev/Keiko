@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseUnifiedDiff } from "../../src/tools/patch-parse.js";
+import { parseUnifiedDiff } from "./patch-parse.js";
 
 describe("parseUnifiedDiff", () => {
   it("parses a modify with explicit hunk counts", () => {

@@ -10,25 +10,11 @@ import {
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  nodeSpawnFn,
-  runCommand,
-  type HomeProvider,
-  type RunCommandDeps,
-} from "../../src/tools/exec.js";
-import {
-  CommandCancelledError,
-  CommandDeniedError,
-  CommandTimeoutError,
-} from "../../src/tools/errors.js";
-import { PathEscapeError } from "../../src/workspace/errors.js";
-import {
-  DEFAULT_COMMAND_RULES,
-  DEFAULT_SANDBOX_POLICY,
-  type CommandRule,
-} from "../../src/tools/types.js";
+import { nodeSpawnFn, runCommand, type HomeProvider, type RunCommandDeps } from "./exec.js";
+import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
+import { PathEscapeError, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { DEFAULT_COMMAND_RULES, DEFAULT_SANDBOX_POLICY, type CommandRule } from "./types.js";
 import { makeWorkspace, recordingSpawn } from "./_support.js";
-import type { WorkspaceInfo } from "../../src/workspace/types.js";
 
 let root: string;
 let info: WorkspaceInfo;

@@ -1,19 +1,19 @@
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { WorkspaceToolHost } from "../../src/tools/registry.js";
+import { WorkspaceToolHost } from "./registry.js";
 import {
   CommandCancelledError,
   CommandDeniedError,
   PatchApplyDisabledError,
   ToolArgumentError,
   UnknownToolError,
-} from "../../src/tools/errors.js";
-import { nodeSpawnFn } from "../../src/tools/exec.js";
-import { DEFAULT_COMMAND_RULES, type CommandRule } from "../../src/tools/types.js";
+} from "./errors.js";
+import { nodeSpawnFn } from "./exec.js";
+import { DEFAULT_COMMAND_RULES, type CommandRule } from "./types.js";
 import { makeWorkspace, recordingSpawn } from "./_support.js";
-import type { ToolCallRequest } from "../../src/harness/ports.js";
-import type { WorkspaceInfo } from "../../src/workspace/types.js";
+import type { ToolCallRequest } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 let root: string;
 let info: WorkspaceInfo;

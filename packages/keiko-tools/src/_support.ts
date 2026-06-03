@@ -7,9 +7,9 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
-import type { SpawnFn, SpawnOptions } from "../../src/tools/exec.js";
-import type { WorkspaceWriter } from "../../src/tools/writer.js";
-import type { WorkspaceInfo } from "../../src/workspace/types.js";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { SpawnFn, SpawnOptions } from "./exec.js";
+import type { WorkspaceWriter } from "./writer.js";
 
 export function makeWorkspace(): { root: string; info: WorkspaceInfo } {
   const root = mkdtempSync(join(tmpdir(), "keiko-tools-"));

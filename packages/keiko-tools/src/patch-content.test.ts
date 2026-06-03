@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { computeFileContent } from "../../src/tools/patch-content.js";
-import type { PatchFileChange } from "../../src/tools/types.js";
+import { computeFileContent } from "./patch-content.js";
+import type { PatchFileChange } from "./types.js";
 
 function modify(lines: readonly string[], oldStart = 1): PatchFileChange {
   return {

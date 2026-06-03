@@ -15,17 +15,16 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyPatch, validatePatch } from "../../src/tools/patch.js";
-import { runCommand } from "../../src/tools/exec.js";
-import { nodeSpawnFn } from "../../src/tools/exec.js";
-import { PatchValidationError } from "../../src/tools/errors.js";
-import { PathDeniedError, PathEscapeError } from "../../src/workspace/errors.js";
+import { applyPatch, validatePatch } from "./patch.js";
+import { runCommand } from "./exec.js";
+import { nodeSpawnFn } from "./exec.js";
+import { PatchValidationError } from "./errors.js";
 import {
-  DEFAULT_COMMAND_RULES,
-  DEFAULT_SANDBOX_POLICY,
-  type CommandRule,
-} from "../../src/tools/types.js";
-import type { WorkspaceInfo } from "../../src/workspace/types.js";
+  PathDeniedError,
+  PathEscapeError,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
+import { DEFAULT_COMMAND_RULES, DEFAULT_SANDBOX_POLICY, type CommandRule } from "./types.js";
 
 let root: string;
 let outside: string;

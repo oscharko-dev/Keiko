@@ -1,15 +1,15 @@
 import { linkSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { applyPatch, renderDryRun, validatePatch } from "../../src/tools/patch.js";
+import { applyPatch, renderDryRun, validatePatch } from "./patch.js";
 import {
   CommandCancelledError,
   PatchApplyDisabledError,
   PatchApplyError,
   PatchValidationError,
-} from "../../src/tools/errors.js";
+} from "./errors.js";
 import { makeWorkspace, recordingWriter } from "./_support.js";
-import type { WorkspaceInfo } from "../../src/workspace/types.js";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 let root: string;
 let info: WorkspaceInfo;

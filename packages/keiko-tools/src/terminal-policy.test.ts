@@ -5,10 +5,7 @@
 // least one assertion in this file.
 
 import { describe, expect, it } from "vitest";
-import {
-  TERMINAL_COMMAND_RULES,
-  isTerminalCommandAllowed,
-} from "../../src/tools/terminal-policy.js";
+import { TERMINAL_COMMAND_RULES, isTerminalCommandAllowed } from "./terminal-policy.js";
 
 describe("TERMINAL_COMMAND_RULES", () => {
   it("contains exactly the 13 commands ADR-0018 D3 documents", () => {

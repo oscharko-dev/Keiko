@@ -1,14 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildSandboxEnv,
-  collectSensitiveEnvValues,
-  isCommandAllowed,
-} from "../../src/tools/sandbox.js";
-import {
-  DEFAULT_COMMAND_RULES,
-  DEFAULT_ENV_ALLOWLIST,
-  type CommandRule,
-} from "../../src/tools/types.js";
+import { buildSandboxEnv, collectSensitiveEnvValues, isCommandAllowed } from "./sandbox.js";
+import { DEFAULT_COMMAND_RULES, DEFAULT_ENV_ALLOWLIST, type CommandRule } from "./types.js";
 
 const NODE_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   { executable: "node" },

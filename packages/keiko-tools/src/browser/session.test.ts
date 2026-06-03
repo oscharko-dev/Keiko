@@ -8,16 +8,76 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadEvidence } from "../../../src/audit/index-api.js";
-import { createInMemoryEvidenceStore } from "../../../src/audit/store.js";
-import type { EvidenceBrowserCapture, EvidenceManifest } from "../../../src/audit/types.js";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import type {
+  EvidenceBrowserCapture,
+  EvidenceManifest,
+  EvidenceStore,
+  SideFileWriteResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   createBrowserSessionManager,
   type BrowserEventEnvelope,
   type BrowserSessionManager,
+  type BrowserSideFileWriter,
   type CdpClientOptions,
   type CdpEventListener,
-} from "../../../src/tools/browser/index.js";
+} from "../index.js";
+
+// Local in-memory EvidenceStore: the test only needs to read back what was put. Mirrors the
+// shape of src/audit/store.ts createInMemoryEvidenceStore — kept local because the tools
+// package cannot import src/audit (ADR-0019 direction rule 3c).
+function createInMemoryEvidenceStore(): EvidenceStore {
+  const data = new Map<string, string>();
+  return {
+    put: (runId, json): string => {
+      data.set(runId, json);
+      return `${runId}.json`;
+    },
+    list: (): readonly string[] => [...data.keys()].sort(),
+    get: (runId): string | undefined => data.get(runId),
+    location: (runId): string => `${runId}.json`,
+    delete: (runId): void => {
+      data.delete(runId);
+    },
+  };
+}
+
+// Local manifest loader: JSON.parse over store.get. Matches the surface of src/audit/index-api.ts
+// loadEvidence for this test's purposes; the structural assertions below validate the parsed shape.
+function loadEvidence(
+  store: ReturnType<typeof createInMemoryEvidenceStore>,
+  runId: string,
+): EvidenceManifest | undefined {
+  const json = store.get(runId);
+  if (json === undefined) {
+    return undefined;
+  }
+  return JSON.parse(json) as EvidenceManifest;
+}
+
+// Local sideFileWriter: writes the bytes to <evidenceDir>/<runId>/<basename> and computes SHA-256.
+// Mirrors src/audit/side-file.ts writeSideFile body but skips realpath containment (the test
+// already roots files under a mkdtemp tmpdir). The test asserts file contents and the returned
+// sha256/bytes/relativePath, so the writer must produce identical output to the production one.
+function makeTestSideFileWriter(evidenceDir: string): BrowserSideFileWriter {
+  return (basename, bytes, runId): SideFileWriteResult => {
+    const runDir = join(evidenceDir, runId);
+    mkdirSync(runDir, { recursive: true });
+    const absolutePath = join(runDir, basename);
+    const tmp = `${absolutePath}.${randomUUID()}.tmp`;
+    writeFileSync(tmp, bytes);
+    // Atomic rename matches the production writer's invariant.
+    renameSync(tmp, absolutePath);
+    return {
+      relativePath: basename,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      bytes: bytes.length,
+      absolutePath,
+    };
+  };
+}
 
 interface RecordedCall {
   readonly method: string;
@@ -153,15 +213,19 @@ async function makeFixture(overrides?: {
       ((value: unknown): unknown =>
         typeof value === "string" ? value.replace(/secret=[^<]+/g, "secret=***") : value),
     ...(fetchVersion === undefined ? {} : { fetchVersion }),
+    // R3 ports: the tools package cannot import src/audit, so the BFF (here: the test fixture)
+    // injects both. "unknown" matches the production fallback for browser-tool's cost class.
+    costClassResolver: () => "unknown",
+    sideFileWriter: makeTestSideFileWriter(evidenceDir),
     cdpClientFactory: (
       url: string,
       _opts: CdpClientOptions,
-    ): import("../../../src/tools/browser/cdp-client.js").CdpClient => {
+    ): import("./cdp-client.js").CdpClient => {
       const responder = overrides?.responder ?? defaultResponder;
       const c = new FakeCdpClient(url, responder);
       captured = c;
       // Cast through unknown: the manager only relies on connect/send/onEvent/close.
-      return c as unknown as import("../../../src/tools/browser/cdp-client.js").CdpClient;
+      return c as unknown as import("./cdp-client.js").CdpClient;
     },
     idleTtlMs: 50,
   });

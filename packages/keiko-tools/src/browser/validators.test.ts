@@ -3,11 +3,8 @@
 // removes the /etc/hosts attack surface before any WebSocket is opened.
 
 import { describe, expect, it } from "vitest";
-import {
-  BrowserToolError,
-  normalizeCdpPort,
-  normalizeNavigateUrl,
-} from "../../../src/tools/browser/index.js";
+import { BrowserToolError } from "./errors.js";
+import { normalizeCdpPort, normalizeNavigateUrl } from "./validators.js";
 
 describe("normalizeCdpPort", () => {
   it("accepts integers in the [1024, 65535] range", () => {
