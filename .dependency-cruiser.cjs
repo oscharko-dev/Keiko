@@ -297,6 +297,42 @@ module.exports = {
       },
     },
     {
+      name: "adr-0019-direction-6a-server-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence",
+      comment:
+        "ADR-0019 direction rule 6 (server strict variant): keiko-server and the src/ui/ " +
+        "shim may depend on keiko-contracts, keiko-security, keiko-model-gateway, " +
+        "keiko-workspace, keiko-tools, keiko-harness, keiko-workflows, and keiko-evidence " +
+        "only, and must reach those allowed dependencies through their public package " +
+        "surfaces (`@oscharko-dev/keiko-<name>`) — NOT by deep-importing the legacy " +
+        "`src/<name>/` shim layers. The to.path therefore forbids both the non-allow-listed " +
+        "siblings (`cli|evaluations`) AND the allow-listed siblings' src/ shim paths " +
+        "(`gateway|workspace|tools|harness|workflows|audit`); the latter group appears in " +
+        "the package allow-list above but their `src/` shim copies are implementation " +
+        "detail and must not be reached directly (boundary-weakening gap pattern from " +
+        "issue #160 — Copilot finding on issue #165). Promoted to error severity by " +
+        "issue #166 because the server package physically exists. Also fires on the " +
+        "negative-test fixture under tests/architecture/fixtures/server/ so the gate can " +
+        "be proven live by scripts/arch-check-negative.mjs. pathNot only filters self-" +
+        "references via the src/ui/ shim path; it must NOT silently exclude sibling-but-" +
+        "still-in-src/ domains (same #160/#162 memory lesson). src/verification/ is " +
+        "intentionally NOT in the forbidden list: the server depends on the verification " +
+        "orchestrator (run-engine.ts via the apply-mode verification gate) and " +
+        "verification is not yet a physical package — the boundary will be re-evaluated " +
+        "when verification is extracted in a future issue.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-server/src/|" + "src/ui/|" + "tests/architecture/fixtures/server/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server)|" +
+          "src/(cli|evaluations|gateway|workspace|tools|harness|workflows|audit))",
+        pathNot: "^src/ui/",
+      },
+    },
+    {
       name: "adr-0019-direction-6-domain-not-server",
       comment:
         "ADR-0019 direction rule 6: domain packages (contracts, security, model-gateway, " +
@@ -378,9 +414,15 @@ module.exports = {
       name: "adr-0019-trust-2-ui-no-provider-config",
       comment:
         "ADR-0019 trust rule 2: browser-visible packages (keiko-ui) must not import credential-" +
-        "bearing provider config modules from the model-gateway package.",
+        "bearing provider config modules from the model-gateway package. After issue #166 the " +
+        "src/ui/ tree is the LOOPBACK BFF (Node-side keiko-server, not the browser tier), and " +
+        "the BFF legitimately reads provider config (gateway-setup.ts) and gateway internals " +
+        "(chat-handlers.ts) to mediate first-run credential storage and chat routing. Removing " +
+        "src/ui/ from from.path eliminates a false-positive that would otherwise drift the " +
+        "53-warning baseline. The browser-tier scope is preserved by keeping " +
+        "^packages/keiko-ui/src/ — that is the Next.js frontend in `ui/`, not the BFF.",
       severity: "warn",
-      from: { path: "^(packages/keiko-ui/src/|src/ui/)" },
+      from: { path: "^packages/keiko-ui/src/" },
       to: {
         path:
           "^(packages/keiko-model-gateway/src/.*(config|credentials|provider-config)|" +
@@ -391,9 +433,13 @@ module.exports = {
       name: "adr-0019-trust-3-ui-no-gateway-internals",
       comment:
         "ADR-0019 trust rule 3: keiko-ui must not import keiko-model-gateway internals. UI must " +
-        "reach the gateway only through the same-origin BFF surface (enforces safe error routing).",
+        "reach the gateway only through the same-origin BFF surface (enforces safe error routing). " +
+        "After issue #166 src/ui/ is the BFF itself (the same-origin surface), so it must NOT " +
+        "be in from.path — the BFF is the legitimate consumer of gateway internals it then " +
+        "redacts before returning to the browser. Same reasoning as trust-2; keeps the rule " +
+        "tight on the actual browser tier (keiko-ui/) without drifting the warning baseline.",
       severity: "warn",
-      from: { path: "^(packages/keiko-ui/src/|src/ui/)" },
+      from: { path: "^packages/keiko-ui/src/" },
       to: {
         path: "^(packages/keiko-model-gateway/src/|src/gateway/)",
       },
