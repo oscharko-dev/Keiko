@@ -20,6 +20,9 @@ export const BROWSER_ERROR_CODES = {
   BAD_REQUEST: "BAD_REQUEST",
   NO_PENDING_SCREENSHOT: "NO_PENDING_SCREENSHOT",
   PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
+  // Issue #162: the BFF must inject a side-file writer when evidenceStore is set. Without one,
+  // applyScreenshot refuses to drop binary evidence on the floor — fail-closed.
+  SIDE_FILE_WRITER_MISSING: "SIDE_FILE_WRITER_MISSING",
 } as const;
 
 export type BrowserErrorCode = (typeof BROWSER_ERROR_CODES)[keyof typeof BROWSER_ERROR_CODES];
@@ -46,6 +49,9 @@ const STATUS_MAP: Readonly<Record<BrowserErrorCode, number>> = {
   BAD_REQUEST: 400,
   NO_PENDING_SCREENSHOT: 409,
   PAYLOAD_TOO_LARGE: 413,
+  // BFF configuration error (impossible if BFF correctly wires the writer port). 500 reflects
+  // the server-side misconfiguration, never reaches the UI in normal operation.
+  SIDE_FILE_WRITER_MISSING: 500,
 };
 
 export class BrowserToolError extends Error {

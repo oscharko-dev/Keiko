@@ -12,13 +12,17 @@ import type { ChildProcess } from "node:child_process";
 import { accessSync, constants, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
-import { redact } from "../gateway/redaction.js";
-import { isDenied } from "../workspace/ignore.js";
-import { isWithinWorkspace, resolveWithinWorkspace } from "../workspace/paths.js";
-import { containedRealPathInfo } from "../workspace/realpath.js";
-import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
-import { PathDeniedError } from "../workspace/errors.js";
-import type { WorkspaceInfo } from "../workspace/types.js";
+import { redact } from "@oscharko-dev/keiko-security";
+import {
+  containedRealPathInfo,
+  isDenied,
+  isWithinWorkspace,
+  nodeWorkspaceFs,
+  PathDeniedError,
+  resolveWithinWorkspace,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { buildSandboxEnv, collectSensitiveEnvValues, isCommandAllowed } from "./sandbox.js";
 import type { CommandResult, CommandRule, SandboxPolicy } from "./types.js";

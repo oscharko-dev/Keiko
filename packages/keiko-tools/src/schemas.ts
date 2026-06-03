@@ -2,7 +2,7 @@
 // from registry.ts so the dispatch logic stays small and the schema table is a single frozen
 // surface the gateway/model see. No runtime logic — just the frozen definitions.
 
-import type { ToolDefinition } from "../gateway/types.js";
+import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 
 function obj(
   properties: Record<string, unknown>,

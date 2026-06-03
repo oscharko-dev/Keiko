@@ -28,17 +28,17 @@ import type {
   BrowserViewportPx,
   CdpReachability,
 } from "./types.js";
-import { resolveCostClass } from "../../audit/aggregate.js";
-import { writeSideFile, type SideFileWriterOptions } from "../../audit/side-file.js";
-import type { EvidenceStore } from "../../audit/store.js";
 import {
   EVIDENCE_SCHEMA_VERSION,
+  HARNESS_VERSION,
+  type CostClass,
   type EvidenceBrowserContentCapture,
   type EvidenceBrowserEvent,
   type EvidenceBrowserScreenshot,
   type EvidenceManifest,
-} from "../../audit/types.js";
-import { HARNESS_VERSION } from "../../harness/session.js";
+  type EvidenceStore,
+  type SideFileWriteResult,
+} from "@oscharko-dev/keiko-contracts";
 
 const MAX_SESSIONS = 4;
 const SESSION_IDLE_TTL_MS = 30 * 60 * 1000;
@@ -75,13 +75,25 @@ export interface BrowserEventEnvelope {
 
 export type BrowserEventEmitter = (event: BrowserEventEnvelope) => void;
 
+// Port-injected side-file writer: the BFF closes over baseDir and the WorkspaceFs adapter and
+// passes (basename, bytes, runId) through. The tools package never touches `src/audit/**`
+// directly (ADR-0019 trust rule 6 + direction rule 3c). Required iff `evidenceStore` is set —
+// session.applyScreenshot fails closed otherwise.
+export type BrowserSideFileWriter = (
+  basename: string,
+  bytes: Buffer,
+  runId: string,
+) => SideFileWriteResult;
+
 export interface BrowserSessionManagerOptions {
   readonly evidenceDir: string;
   readonly evidenceStore?: EvidenceStore | undefined;
   readonly redactor?: (value: unknown) => unknown;
   readonly cdpClientFactory?: (url: string, opts: CdpClientOptions) => CdpClient;
   readonly fetchVersion?: (url: string) => Promise<unknown>;
-  readonly sideFileOptions?: SideFileWriterOptions;
+  // ADR-0019 trust-6 + direction-3c: tools cannot import src/audit. The BFF injects these.
+  readonly costClassResolver?: (modelId: string) => CostClass | "unknown";
+  readonly sideFileWriter?: BrowserSideFileWriter;
   readonly idleTtlMs?: number;
   readonly nowMs?: () => number;
 }
@@ -352,6 +364,12 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
   private readonly redactor: (value: unknown) => unknown;
   private readonly clientFactory: (url: string, opts: CdpClientOptions) => CdpClient;
   private readonly fetchVersion: (url: string) => Promise<unknown>;
+  // Falls back to "unknown" when the BFF didn't inject a resolver (e.g. evidence-store-less
+  // dev runs). Manifests still build; just no per-model cost tier annotation.
+  private readonly costClassResolver: (modelId: string) => CostClass | "unknown";
+  // Optional — applyScreenshot fails closed (BrowserToolError code SIDE_FILE_WRITER_MISSING)
+  // when evidenceStore is set but no writer was injected; preserves the audit invariant.
+  private readonly sideFileWriter: BrowserSideFileWriter | undefined;
   private readonly idleTtlMs: number;
   private readonly nowMs: () => number;
   private readonly sessions = new Map<string, SessionRecord>();
@@ -364,6 +382,8 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
     this.clientFactory =
       opts.cdpClientFactory ?? ((url, options): CdpClient => new CdpClient(url, options));
     this.fetchVersion = opts.fetchVersion ?? fetchVersionJson;
+    this.costClassResolver = opts.costClassResolver ?? ((): CostClass | "unknown" => "unknown");
+    this.sideFileWriter = opts.sideFileWriter;
     this.idleTtlMs = opts.idleTtlMs ?? SESSION_IDLE_TTL_MS;
     this.nowMs = opts.nowMs ?? ((): number => Date.now());
   }
@@ -406,7 +426,7 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
         finishedAt,
         durationMs: Math.max(0, finishedAt - record.startedAt),
       },
-      model: { modelId: "browser-tool", costClass: resolveCostClass("browser-tool") },
+      model: { modelId: "browser-tool", costClass: this.costClassResolver("browser-tool") },
       usageTotals: { promptTokens: 0, completionTokens: 0, requestCount: 0, totalLatencyMs: 0 },
       stateTransitions: [],
       toolCalls: [],
@@ -826,13 +846,16 @@ class BrowserSessionManagerImpl implements BrowserSessionManager {
       }
       this.touch(record);
       const name = `browser-${String(pending.seq)}.png`;
-      const written = writeSideFile(
-        this.opts.evidenceDir,
-        record.runId,
-        name,
-        pending.bytes,
-        this.opts.sideFileOptions,
-      );
+      // Fail-closed: a configured evidenceStore implies the BFF promised side-file persistence.
+      // Without an injected writer we cannot honour that promise — refuse rather than silently
+      // drop binary evidence (ADR-0017 D5; preserves the audit invariant after the R3 split).
+      if (this.sideFileWriter === undefined) {
+        throw new BrowserToolError(
+          "SIDE_FILE_WRITER_MISSING",
+          "No side-file writer was injected; cannot persist screenshot binary evidence.",
+        );
+      }
+      const written = this.sideFileWriter(name, pending.bytes, record.runId);
       const screenshot: EvidenceBrowserScreenshot = {
         seq: pending.seq,
         viewportPx: pending.viewportPx,

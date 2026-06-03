@@ -5,16 +5,20 @@
 // reads go through the workspace layer; all writes through the WorkspaceWriter; all spawns through
 // the injected SpawnFn — so a unit test needs no real secrets and no real processes.
 
-import type { ToolDefinition } from "../gateway/types.js";
 import type {
   ToolCallMetadata,
   ToolCallRequest,
   ToolCallResult,
+  ToolDefinition,
   ToolPort,
-} from "../harness/ports.js";
-import { discoverWithStats, readWorkspaceFile } from "../workspace/discovery.js";
-import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
-import type { WorkspaceInfo } from "../workspace/types.js";
+} from "@oscharko-dev/keiko-contracts";
+import {
+  discoverWithStats,
+  nodeWorkspaceFs,
+  readWorkspaceFile,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import { nodeSpawnFn, runCommand, type ExecutableResolver, type SpawnFn } from "./exec.js";
 import { CommandCancelledError, ToolArgumentError, UnknownToolError } from "./errors.js";
 import { applyPatch, renderDryRun, validatePatch } from "./patch.js";

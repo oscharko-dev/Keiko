@@ -5,12 +5,16 @@
 // (ADR-0006 D4). node:fs is never imported here — reads go through WorkspaceFs, writes through
 // WorkspaceWriter, both injected.
 
-import { isDenied } from "../workspace/ignore.js";
-import { resolveWithinWorkspace } from "../workspace/paths.js";
-import { containedRealPathInfo } from "../workspace/realpath.js";
-import { PathDeniedError, PathEscapeError } from "../workspace/errors.js";
-import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
-import type { WorkspaceInfo } from "../workspace/types.js";
+import {
+  containedRealPathInfo,
+  isDenied,
+  nodeWorkspaceFs,
+  PathDeniedError,
+  PathEscapeError,
+  resolveWithinWorkspace,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import {
   CommandCancelledError,
   PatchApplyDisabledError,
