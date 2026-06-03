@@ -7,8 +7,8 @@
 // network or live-model call is made in offline mode; no Date.now / Math.random touches a scored path.
 
 import { createHash, randomUUID } from "node:crypto";
-import { generateUnitTests } from "../workflows/unit-tests/workflow.js";
-import { investigateBug } from "../workflows/bug-investigation/workflow.js";
+import { generateUnitTests } from "@oscharko-dev/keiko-workflows";
+import { investigateBug } from "@oscharko-dev/keiko-workflows";
 import {
   createNodeEvidenceStore,
   persistWorkflowEvidence,

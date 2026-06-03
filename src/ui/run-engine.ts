@@ -26,11 +26,11 @@ import { detectWorkspace, readWorkspaceFile } from "../workspace/index.js";
 import type {
   UnitTestWorkflowInput,
   UnitTestWorkflowReport,
-} from "../workflows/unit-tests/types.js";
+} from "@oscharko-dev/keiko-workflows";
 import type {
   BugInvestigationInput,
   BugInvestigationReport,
-} from "../workflows/bug-investigation/types.js";
+} from "@oscharko-dev/keiko-workflows";
 import type {
   HarnessEvent,
   RunCompletedEvent,

@@ -25,7 +25,7 @@ import { investigateBug, renderBugMarkdownReport } from "../workflows/index.js";
 import type {
   BugInvestigationReport,
   BugReportInput,
-} from "../workflows/bug-investigation/types.js";
+} from "@oscharko-dev/keiko-workflows";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:

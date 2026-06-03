@@ -15,7 +15,7 @@ import { GatewayModelPort } from "../harness/adapters.js";
 import type { ModelPort } from "../harness/ports.js";
 import { WorkspaceError } from "../workspace/index.js";
 import { generateUnitTests, renderMarkdownReport } from "../workflows/index.js";
-import type { UnitTestTarget, UnitTestWorkflowReport } from "../workflows/unit-tests/types.js";
+import type { UnitTestTarget, UnitTestWorkflowReport } from "@oscharko-dev/keiko-workflows";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:

@@ -16,7 +16,17 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const FIXTURE = join(here, "..", "..", "fixtures", "bug-investigation", "target-project");
+const FIXTURE = join(
+  here,
+  "..",
+  "..",
+  "..",
+  "..",
+  "tests",
+  "fixtures",
+  "bug-investigation",
+  "target-project",
+);
 
 function vitestHostRoot(): string | undefined {
   try {

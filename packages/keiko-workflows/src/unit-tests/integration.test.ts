@@ -15,7 +15,17 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const FIXTURE = join(here, "..", "..", "fixtures", "unit-tests", "target-project");
+const FIXTURE = join(
+  here,
+  "..",
+  "..",
+  "..",
+  "..",
+  "tests",
+  "fixtures",
+  "unit-tests",
+  "target-project",
+);
 
 // Resolve the directory that CONTAINS the node_modules providing vitest. A tmp project created here
 // resolves vitest by walking up into that node_modules — no install, no network. require.resolve
