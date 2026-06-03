@@ -200,7 +200,7 @@ async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
 // time guarantee is enforced by the TypeScript check; this is the runtime shape assertion (D7 d).
 // Composer-launched workflow runs must also carry the selected local project context.
 async function checkRunRequestShapes(): Promise<readonly SurfaceParityCheckResult[]> {
-  const { parseRunRequest } = await import("../ui/run-request.js");
+  const { parseRunRequest } = await import("../ui/index.js");
   return RUN_REQUEST_EXPECTATIONS.map((expectation) => {
     const parsed = parseRunRequest(
       JSON.stringify({

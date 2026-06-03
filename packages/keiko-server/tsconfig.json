@@ -11,7 +11,6 @@
   "include": [
     "src",
     "../../src/verification/**/*.ts",
-    "../../src/sdk/index.ts",
     "../../src/workspace/**/*.ts",
     "../../src/gateway/**/*.ts",
     "../../src/tools/**/*.ts",

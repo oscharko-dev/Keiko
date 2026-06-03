@@ -17,37 +17,28 @@
 
 import { randomUUID } from "node:crypto";
 import { readdir, realpath, stat } from "node:fs/promises";
-import {
-  dirname,
-  isAbsolute,
-  join,
-  parse as parsePath,
-  resolve as resolvePath,
-} from "node:path";
+import { dirname, isAbsolute, join, parse as parsePath, resolve as resolvePath } from "node:path";
 import {
   CommandCancelledError,
   CommandDeniedError,
   CommandTimeoutError,
-} from "../tools/errors.js";
-import { nodeSpawnFn, runCommand, type RunCommandDeps } from "../tools/exec.js";
-import {
-  isTerminalCommandAllowed,
-  TERMINAL_COMMAND_RULES,
-} from "../tools/terminal-policy.js";
-import { isWithinWorkspace, resolveWithinWorkspace } from "../workspace/paths.js";
-import { PathDeniedError } from "../workspace/errors.js";
-import { isDenied } from "../workspace/ignore.js";
-import { nodeWorkspaceFs, type WorkspaceFs } from "../workspace/fs.js";
-import { containedRealPathInfo } from "../workspace/realpath.js";
-import type { WorkspaceInfo } from "../workspace/types.js";
-import { DEFAULT_SANDBOX_POLICY, type SandboxPolicy } from "../tools/types.js";
+} from "@oscharko-dev/keiko-tools";
+import { nodeSpawnFn, runCommand, type RunCommandDeps } from "@oscharko-dev/keiko-tools";
+import { isTerminalCommandAllowed, TERMINAL_COMMAND_RULES } from "@oscharko-dev/keiko-tools";
+import { isWithinWorkspace, resolveWithinWorkspace } from "@oscharko-dev/keiko-workspace";
+import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { containedRealPathInfo } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { DEFAULT_SANDBOX_POLICY, type SandboxPolicy } from "@oscharko-dev/keiko-tools";
 import {
   appendTerminalEvidence,
   buildTerminalEvidenceEntry,
   type TerminalEvidenceEntry,
 } from "./terminal-evidence.js";
 import { TerminalToolError } from "./terminal-errors.js";
-import type { EvidenceStore } from "../audit/store.js";
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { Project, UiStore } from "./store/index.js";
 
 const MAX_CONCURRENT_EXECUTIONS = 8;
@@ -212,7 +203,10 @@ function requestIdPayload(input: TerminalExecutionInput): Record<string, string>
 
 function assertOperandInsideProject(ctx: OperandValidationContext, operand: string): void {
   if (operand.length === 0 || operand === "-") {
-    throw new TerminalToolError("COMMAND_DENIED", "Command operands must stay inside the selected project.");
+    throw new TerminalToolError(
+      "COMMAND_DENIED",
+      "Command operands must stay inside the selected project.",
+    );
   }
   let lexical: string;
   try {
@@ -381,7 +375,9 @@ const GREP_SCALAR_VALUE_FLAGS: ReadonlySet<string> = new Set([
 ]);
 
 function shortClusterEndsWithFlag(arg: string, flag: string): boolean {
-  return arg.startsWith("-") && !arg.startsWith("--") && arg.length > 2 && arg.endsWith(flag.slice(1));
+  return (
+    arg.startsWith("-") && !arg.startsWith("--") && arg.length > 2 && arg.endsWith(flag.slice(1))
+  );
 }
 
 function consumePendingGrepOperand(
@@ -507,7 +503,16 @@ function validateGrepOperands(ctx: OperandValidationContext, args: readonly stri
   }
 }
 
-const FIND_ROOT_OPTIONS: ReadonlySet<string> = new Set(["-H", "-L", "-P", "-E", "-X", "-d", "-s", "-x"]);
+const FIND_ROOT_OPTIONS: ReadonlySet<string> = new Set([
+  "-H",
+  "-L",
+  "-P",
+  "-E",
+  "-X",
+  "-d",
+  "-s",
+  "-x",
+]);
 const FIND_PATH_VALUE_FLAGS: ReadonlySet<string> = new Set([
   "-anewer",
   "-cnewer",
@@ -771,7 +776,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
   ): Promise<TerminalExecutionResult> {
     const deps = this.buildRunDepsFor(projectRoot);
     const timeoutMs = clampTimeout(input.timeoutMs, this.policy.defaultTimeoutMs);
-    let result: import("../tools/types.js").CommandResult;
+    let result: import("@oscharko-dev/keiko-tools").CommandResult;
     try {
       result = await runCommand(
         {
@@ -793,7 +798,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
   private handleSuccess(
     executionId: string,
     input: TerminalExecutionInput,
-    result: import("../tools/types.js").CommandResult,
+    result: import("@oscharko-dev/keiko-tools").CommandResult,
     startedAt: number,
   ): TerminalExecutionResult {
     const stdoutBytes = Buffer.byteLength(result.stdout, "utf8");
@@ -891,7 +896,10 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     counts: CompletionCounts,
   ): void {
     if (this.evidenceStore === undefined) {
-      throw new TerminalToolError("EVIDENCE_WRITE_FAILED", "Terminal evidence store is unavailable.");
+      throw new TerminalToolError(
+        "EVIDENCE_WRITE_FAILED",
+        "Terminal evidence store is unavailable.",
+      );
     }
     const entry: TerminalEvidenceEntry = buildTerminalEvidenceEntry({
       executionId,
@@ -910,7 +918,10 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     try {
       appendTerminalEvidence(this.evidenceStore, entry, this.redactor);
     } catch {
-      throw new TerminalToolError("EVIDENCE_WRITE_FAILED", "Terminal evidence could not be written.");
+      throw new TerminalToolError(
+        "EVIDENCE_WRITE_FAILED",
+        "Terminal evidence could not be written.",
+      );
     }
   }
 
@@ -925,7 +936,10 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
       const mapped =
         error instanceof TerminalToolError
           ? error
-          : new TerminalToolError("EVIDENCE_WRITE_FAILED", "Terminal evidence could not be written.");
+          : new TerminalToolError(
+              "EVIDENCE_WRITE_FAILED",
+              "Terminal evidence could not be written.",
+            );
       this.emit({
         kind: "execution-failed",
         executionId,
@@ -959,11 +973,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     return new TerminalToolError("COMMAND_DENIED", "Command is not in the allowlist.");
   }
 
-  private emitStarted(
-    executionId: string,
-    input: TerminalExecutionInput,
-    startedAt: number,
-  ): void {
+  private emitStarted(executionId: string, input: TerminalExecutionInput, startedAt: number): void {
     this.emit({
       kind: "execution-started",
       executionId,
@@ -1083,9 +1093,7 @@ export async function listDirectories(
     .sort((a, b) => a.name.localeCompare(b.name));
   // A3 — roots contains only the project root. Home and FS-root are no longer exposed because
   // they could be outside the project boundary. The UI cwd picker shows only project-scoped paths.
-  const roots: readonly TerminalDirectoryRoot[] = [
-    { label: "Project root", path: projectRoot },
-  ];
+  const roots: readonly TerminalDirectoryRoot[] = [{ label: "Project root", path: projectRoot }];
   return {
     path: pathValue,
     parent: parentPath(pathValue, projectRoot),
