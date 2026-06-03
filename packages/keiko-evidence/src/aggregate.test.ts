@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { aggregateUsage } from "../../src/audit/aggregate.js";
-import type { HarnessEvent } from "../../src/harness/types.js";
+import { aggregateUsage } from "./aggregate.js";
+import type { HarnessEvent } from "@oscharko-dev/keiko-contracts";
 
 function modelCompleted(
   seq: number,

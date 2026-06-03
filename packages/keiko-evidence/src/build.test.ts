@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { buildEvidenceManifest } from "../../src/audit/build.js";
-import type { EvidenceBuildInput } from "../../src/audit/types.js";
+import { buildEvidenceManifest } from "./build.js";
+import type { EvidenceBuildInput } from "./types.js";
 import type {
   HarnessEvent,
   HarnessLimits,
   RunManifest,
   RunResult,
   TaskInput,
-} from "../../src/harness/types.js";
-import { DEFAULT_LIMITS } from "../../src/harness/types.js";
-import type { AuditSummary } from "../../src/workspace/types.js";
-import type { VerificationAuditSummary } from "../../src/verification/summary.js";
+} from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-contracts";
+import type { AuditSummary } from "@oscharko-dev/keiko-contracts";
+import type { VerificationAuditSummary } from "@oscharko-dev/keiko-contracts";
 
 const RUN_ID = "run-abc";
 const FP = "fp-1";

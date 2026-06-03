@@ -2,17 +2,17 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { persistEvidence } from "../../src/audit/persist.js";
-import { createNodeEvidenceStore } from "../../src/audit/store.js";
-import { listEvidence, loadEvidence } from "../../src/audit/index-api.js";
-import type { EvidenceBuildInput } from "../../src/audit/types.js";
+import { persistEvidence } from "./persist.js";
+import { createNodeEvidenceStore } from "./store.js";
+import { listEvidence, loadEvidence } from "./index-api.js";
+import type { EvidenceBuildInput } from "./types.js";
 import {
   DEFAULT_LIMITS,
   type HarnessEvent,
   type RunManifest,
   type RunResult,
   type TaskInput,
-} from "../../src/harness/types.js";
+} from "@oscharko-dev/keiko-contracts";
 
 const FP = "fp-int";
 

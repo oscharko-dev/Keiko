@@ -61,24 +61,54 @@ module.exports = {
     {
       name: "adr-0019-direction-3-infra-only-contracts-security",
       comment:
-        "ADR-0019 direction rule 3 (still-unextracted packages variant): after issue #162 only " +
-        "the evidence tier (src/audit) remains under this base warn rule. tools has its own " +
-        "strict variant (3c) at error severity. Stays at warn severity until the evidence " +
-        "package physically lands in packages/ via its own extraction issue, at which point the " +
-        "extraction PR splits a strict per-package companion rule the way " +
-        "adr-0019-direction-3a-model-gateway-only-contracts-security does for model-gateway, " +
-        "adr-0019-direction-3b-workspace-only-contracts-security does for workspace, and " +
-        "adr-0019-direction-3c-tools-only-contracts-security-workspace does for tools.",
+        "ADR-0019 direction rule 3 (legacy base variant): after issue #163 every infrastructure " +
+        "package physically exists and is governed by its own strict per-package variant — " +
+        "3a (model-gateway), 3b (workspace), 3c (tools), and 3d (evidence). This base rule stays " +
+        "scoped to packages/keiko-evidence/src/ as a warn-level safety net so a regression that " +
+        "re-introduces a forbidden import is still surfaced even when the strict 3d rule's " +
+        "regex changes. The rule no longer matches src/audit/ — that domain is fully governed " +
+        "by 3d at error severity.",
       severity: "warn",
       from: {
-        path: "^(packages/keiko-evidence/src/|src/audit/)",
+        path: "^packages/keiko-evidence/src/",
       },
       to: {
         path:
-          "^(packages/keiko-(?!contracts|security)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security)|" +
+          "^(packages/keiko-(?!contracts|security|workspace|evidence)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|workspace|evidence)|" +
           "src/(harness|workflows|cli|ui|verification|evaluations))",
         pathNot: "^src/(gateway|workspace|tools|audit)/",
+      },
+    },
+    {
+      name: "adr-0019-direction-3d-evidence-only-contracts-security-workspace",
+      comment:
+        "ADR-0019 direction rule 3 (evidence strict variant): keiko-evidence and the src/audit/ " +
+        "shims may depend on keiko-contracts, keiko-security, and keiko-workspace only. " +
+        "Workspace is an allowed dependency because ADR-0019 trust rule 4 explicitly directs " +
+        "evidence to route file writes (manifests + side files) through keiko-workspace (path " +
+        "containment + symlink realpath gate + atomic temp/rename). Promoted to error severity " +
+        "by issue #163 because the evidence package physically exists. Also fires on the " +
+        "negative-test fixture under tests/architecture/fixtures/evidence/ so the gate can be " +
+        "proven live by scripts/arch-check-negative.mjs. After issue #163 every infrastructure " +
+        "package has its own strict per-package variant; the legacy base rule 3 stays as a " +
+        "warn-level safety net for this same scope. pathNot only filters self-references via " +
+        "the src/audit/ shim path; it must NOT silently exclude sibling-but-still-in-src/ " +
+        "domains (memory lesson from issues #160 and #162).",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-evidence/src/|" +
+          "src/audit/|" +
+          "tests/architecture/fixtures/evidence/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|workspace|evidence)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|workspace|evidence)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|workspace|evidence)|" +
+          "src/(harness|workflows|cli|ui|verification|evaluations|gateway|tools))",
+        pathNot: "^src/audit/",
       },
     },
     {
@@ -88,8 +118,8 @@ module.exports = {
         "src/workspace/ shims may depend only on keiko-contracts and keiko-security. Promoted to " +
         "error severity by issue #161 because the workspace package physically exists. Also " +
         "fires on the negative-test fixture under tests/architecture/fixtures/workspace/ so the " +
-        "gate can be proven live by scripts/arch-check-negative.mjs. After issue #162 only the " +
-        "evidence tier remains under the base warn rule 3.",
+        "gate can be proven live by scripts/arch-check-negative.mjs. After issue #163 every " +
+        "infrastructure package has its own strict per-package variant (3a-3d).",
       severity: "error",
       from: {
         path:
@@ -116,8 +146,9 @@ module.exports = {
         "deny/ignore rules + read-cap redaction). Promoted to error severity by issue #162 " +
         "because the tools package physically exists. Also fires on the negative-test fixture " +
         "under tests/architecture/fixtures/tools/ so the gate can be proven live by " +
-        "scripts/arch-check-negative.mjs. After issue #162 only the evidence tier remains under " +
-        "the base warn rule 3. pathNot only filters self-references via the src/tools/ shim " +
+        "scripts/arch-check-negative.mjs. After issue #163 every infrastructure package has its " +
+        "own strict per-package variant (3a-3d). pathNot only filters self-references via the " +
+        "src/tools/ shim " +
         "path; it must NOT silently exclude sibling-but-still-in-src/ domains (memory lesson " +
         "from issue #160).",
       severity: "error",
@@ -141,9 +172,8 @@ module.exports = {
         "src/gateway/ shims may depend only on keiko-contracts and keiko-security. Promoted to " +
         "error severity by issue #160 because the model-gateway package physically exists. " +
         "Also fires on the negative-test fixture under tests/architecture/fixtures/model-gateway/ " +
-        "so the gate can be proven live by scripts/arch-check-negative.mjs. The other three " +
-        "packages governed by the base rule 3 (workspace, tools, evidence) stay at warn until " +
-        "their own extraction issues land.",
+        "so the gate can be proven live by scripts/arch-check-negative.mjs. After issue #163 " +
+        "every infrastructure package has its own strict per-package variant (3a-3d).",
       severity: "error",
       from: {
         path:

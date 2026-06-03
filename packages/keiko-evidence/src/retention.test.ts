@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { applyRetention } from "../../src/audit/retention.js";
-import { createInMemoryEvidenceStore, type EvidenceStore } from "../../src/audit/store.js";
-import type { EvidenceManifest } from "../../src/audit/types.js";
+import { applyRetention } from "./retention.js";
+import { createInMemoryEvidenceStore, type EvidenceStore } from "./store.js";
+import type { EvidenceManifest } from "./types.js";
 
 function manifest(runId: string, startedAt: number, finishedAt: number): EvidenceManifest {
   return {

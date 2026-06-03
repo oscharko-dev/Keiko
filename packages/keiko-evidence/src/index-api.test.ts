@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { listEvidence, loadEvidence } from "../../src/audit/index-api.js";
-import { createInMemoryEvidenceStore } from "../../src/audit/store.js";
-import { EvidenceReadError, EvidenceSchemaError } from "../../src/audit/errors.js";
-import type { EvidenceManifest } from "../../src/audit/types.js";
+import { listEvidence, loadEvidence } from "./index-api.js";
+import { createInMemoryEvidenceStore } from "./store.js";
+import { EvidenceReadError, EvidenceSchemaError } from "./errors.js";
+import type { EvidenceManifest } from "./types.js";
 
 function manifestFixture(runId: string, startedAt: number): EvidenceManifest {
   return {

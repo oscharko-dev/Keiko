@@ -6,8 +6,8 @@ import {
   persistWorkflowEvidence,
   type WorkflowEventLike,
   type WorkflowRunIdentity,
-} from "../../src/audit/index.js";
-import type { VerificationAuditSummary } from "../../src/verification/index.js";
+} from "./index.js";
+import type { VerificationAuditSummary } from "@oscharko-dev/keiko-contracts";
 
 const verification: VerificationAuditSummary = {
   workspaceRoot: "/repo",

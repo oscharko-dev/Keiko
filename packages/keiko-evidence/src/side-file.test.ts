@@ -8,8 +8,8 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { writeSideFile } from "../../src/audit/side-file.js";
-import { EvidenceWriteError, InvalidRunIdError } from "../../src/audit/errors.js";
+import { writeSideFile } from "./side-file.js";
+import { EvidenceWriteError, InvalidRunIdError } from "./errors.js";
 
 let baseDir: string;
 let outsideDir: string;

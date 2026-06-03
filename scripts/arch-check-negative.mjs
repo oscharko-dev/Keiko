@@ -30,6 +30,7 @@ const EXPECTED_RULES = [
   "adr-0019-direction-3a-model-gateway-only-contracts-security",
   "adr-0019-direction-3b-workspace-only-contracts-security",
   "adr-0019-direction-3c-tools-only-contracts-security-workspace",
+  "adr-0019-direction-3d-evidence-only-contracts-security-workspace",
 ];
 
 // `npx --no-install` keeps CI hermetic by refusing to fetch from the registry when the

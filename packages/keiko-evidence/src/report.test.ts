@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildEvidenceReport, renderEvidenceReport } from "../../src/audit/report.js";
-import type { EvidenceManifest } from "../../src/audit/types.js";
+import { buildEvidenceReport, renderEvidenceReport } from "./report.js";
+import type { EvidenceManifest } from "./types.js";
 
 function manifest(over: Partial<EvidenceManifest> = {}): EvidenceManifest {
   return {

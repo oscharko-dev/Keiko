@@ -14,13 +14,13 @@ import {
   createInMemoryEvidenceStore,
   createNodeEvidenceStore,
   resolveEvidenceDir,
-} from "../../src/audit/store.js";
-import { nodeWorkspaceFs } from "../../src/workspace/fs.js";
+} from "./store.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import {
   EvidenceReadError,
   EvidenceWriteError,
   InvalidRunIdError,
-} from "../../src/audit/errors.js";
+} from "./errors.js";
 
 describe("resolveEvidenceDir — precedence (C4)", () => {
   it("prefers the explicit value over env and default", () => {
