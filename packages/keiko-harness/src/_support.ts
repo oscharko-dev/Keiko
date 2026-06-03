@@ -2,22 +2,17 @@
 // port, and a RunContext builder. No real timers, network, or fs (ADR-0004 test rules).
 
 import type {
+  Clock,
   NormalizedResponse,
   NormalizedToolCall,
   ToolDefinition,
-} from "../../src/gateway/types.js";
-import type { Clock } from "../../src/gateway/types.js";
-import { Emitter } from "../../src/harness/emitter.js";
-import { MemoryEventSink } from "../../src/harness/sinks.js";
-import { newCounters, type RunContext } from "../../src/harness/context.js";
-import type {
-  ModelPort,
-  ToolCallRequest,
-  ToolCallResult,
-  ToolPort,
-} from "../../src/harness/ports.js";
-import { resolveTaskPlan } from "../../src/harness/tasks/policy.js";
-import { DEFAULT_LIMITS, type HarnessLimits, type TaskInput } from "../../src/harness/types.js";
+} from "@oscharko-dev/keiko-model-gateway";
+import { Emitter } from "./emitter.js";
+import { MemoryEventSink } from "./sinks.js";
+import { newCounters, type RunContext } from "./context.js";
+import type { ModelPort, ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
+import { resolveTaskPlan } from "./tasks/policy.js";
+import { DEFAULT_LIMITS, type HarnessLimits, type TaskInput } from "./types.js";
 
 export function stubClock(start = 0): { clock: Clock; set: (ms: number) => void } {
   let current = start;

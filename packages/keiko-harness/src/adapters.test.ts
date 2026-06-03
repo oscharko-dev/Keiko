@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { CancelledError } from "../../src/gateway/errors.js";
-import type {
-  GatewayRequest,
-  NormalizedResponse,
-  ToolDefinition,
-} from "../../src/gateway/types.js";
-import { DryRunToolPort, GatewayModelPort } from "../../src/harness/adapters.js";
+import {
+  CancelledError,
+  type GatewayRequest,
+  type NormalizedResponse,
+  type ToolDefinition,
+} from "@oscharko-dev/keiko-model-gateway";
+import { DryRunToolPort, GatewayModelPort } from "./adapters.js";
 
 function response(): NormalizedResponse {
   return {

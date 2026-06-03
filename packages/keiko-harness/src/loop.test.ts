@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { NormalizedResponse } from "../../src/gateway/types.js";
-import { runLoop } from "../../src/harness/loop.js";
-import type { ModelPort } from "../../src/harness/ports.js";
-import type { HarnessEvent, TaskInput } from "../../src/harness/types.js";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import { runLoop } from "./loop.js";
+import type { ModelPort } from "./ports.js";
+import type { HarnessEvent, TaskInput } from "./types.js";
 import {
   buildContext,
   recordingTool,
@@ -241,7 +241,7 @@ describe("runLoop — limit breaches each map to their category", () => {
   });
 
   it("maxFailureAttempts -> HARNESS_LIMIT_FAILURE_ATTEMPTS on repeated retryable model errors", async () => {
-    const { TransportError } = await import("../../src/gateway/errors.js");
+    const { TransportError } = await import("@oscharko-dev/keiko-model-gateway");
     const { port } = scriptedModel([new TransportError("boom")]);
     const { ctx, sink } = buildContext({
       task: GENERATE,
@@ -259,7 +259,7 @@ describe("runLoop — limit breaches each map to their category", () => {
     const { port } = scriptedModel([
       response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "run_command")] }),
     ]);
-    const commandTool: import("../../src/harness/ports.js").ToolPort = {
+    const commandTool: import("./ports.js").ToolPort = {
       execute: (req) =>
         Promise.resolve({
           toolCallId: req.toolCallId,
@@ -289,7 +289,7 @@ describe("runLoop — limit breaches each map to their category", () => {
       response({ content: "should not run" }),
     ]);
     const seen: string[] = [];
-    const commandTool: import("../../src/harness/ports.js").ToolPort = {
+    const commandTool: import("./ports.js").ToolPort = {
       execute: (req) => {
         seen.push(req.toolCallId);
         return Promise.resolve({
@@ -318,7 +318,7 @@ describe("runLoop — limit breaches each map to their category", () => {
       response({ finishReason: "tool_calls", toolCalls: [toolCall("t1", "read_file")] }),
       response({ content: "--- a/x\n+++ b/x\n+fix" }),
     ]);
-    const readTool: import("../../src/harness/ports.js").ToolPort = {
+    const readTool: import("./ports.js").ToolPort = {
       execute: (req) =>
         Promise.resolve({
           toolCallId: req.toolCallId,
@@ -341,7 +341,7 @@ describe("runLoop — limit breaches each map to their category", () => {
   });
 
   it("non-retryable model error -> failed with HARNESS_MODEL_ERROR", async () => {
-    const { AuthenticationError } = await import("../../src/gateway/errors.js");
+    const { AuthenticationError } = await import("@oscharko-dev/keiko-model-gateway");
     const { port } = scriptedModel([new AuthenticationError("nope")]);
     const { ctx, sink } = buildContext({ task: EXPLAIN, model: port });
     const outcome = await runLoop(ctx);
@@ -354,7 +354,7 @@ describe("runLoop — limit breaches each map to their category", () => {
       response({ finishReason: "tool_calls", toolCalls: [toolCall("t1")] }),
       response({ content: "should not run" }),
     ]);
-    const failingTool: import("../../src/harness/ports.js").ToolPort = {
+    const failingTool: import("./ports.js").ToolPort = {
       execute: () => Promise.reject(new Error("tool exploded")),
       listTools: () => [{ name: "read_file", description: "read", parameters: {} }],
     };
@@ -374,7 +374,7 @@ describe("runLoop — limit breaches each map to their category", () => {
       response({ content: "should not run" }),
     ]);
     const seen: string[] = [];
-    const abortingTool: import("../../src/harness/ports.js").ToolPort = {
+    const abortingTool: import("./ports.js").ToolPort = {
       execute: (req) => {
         seen.push(req.toolCallId);
         controller.abort("after first tool");
@@ -406,7 +406,7 @@ describe("runLoop — limit breaches each map to their category", () => {
       response({ finishReason: "tool_calls", toolCalls: [toolCall("t1")] }),
       response({ content: "should not reach here" }),
     ]);
-    const largeTool: import("../../src/harness/ports.js").ToolPort = {
+    const largeTool: import("./ports.js").ToolPort = {
       execute: (req) =>
         Promise.resolve({ toolCallId: req.toolCallId, output: largeOutput, durationMs: 0 }),
       listTools: () => [{ name: "read_file", description: "read", parameters: {} }],

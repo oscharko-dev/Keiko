@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildInvestigateBug } from "../../../src/harness/tasks/investigate-bug.js";
+import { buildInvestigateBug } from "./investigate-bug.js";
 
 describe("buildInvestigateBug", () => {
   it("allows tools, patch, and verification", () => {

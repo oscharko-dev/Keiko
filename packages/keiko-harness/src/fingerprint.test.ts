@@ -4,9 +4,9 @@ import {
   configFingerprint,
   counterIdSource,
   defaultFingerprinter,
-} from "../../src/harness/fingerprint.js";
-import { DEFAULT_LIMITS } from "../../src/harness/types.js";
-import type { FingerprintInput } from "../../src/harness/ports.js";
+} from "./fingerprint.js";
+import { DEFAULT_LIMITS } from "./types.js";
+import type { FingerprintInput } from "./ports.js";
 
 function baseInput(): FingerprintInput {
   return {

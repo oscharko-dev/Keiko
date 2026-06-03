@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildGenerateUnitTests } from "../../../src/harness/tasks/generate-unit-tests.js";
+import { buildGenerateUnitTests } from "./generate-unit-tests.js";
 
 describe("buildGenerateUnitTests", () => {
   it("allows patch and verification but not free tool use", () => {

@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { CancelledError } from "../../src/gateway/errors.js";
-import type { NormalizedResponse } from "../../src/gateway/types.js";
-import type { Clock } from "../../src/gateway/types.js";
-import { createSession, type AgentConfig, type HarnessDeps } from "../../src/harness/session.js";
-import { counterIdSource } from "../../src/harness/fingerprint.js";
-import type { ModelPort, ToolPort } from "../../src/harness/ports.js";
-import { MemoryEventSink } from "../../src/harness/sinks.js";
-import type { HarnessEvent, TaskInput } from "../../src/harness/types.js";
+import {
+  CancelledError,
+  type Clock,
+  type NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
+import { createSession, type AgentConfig, type HarnessDeps } from "./session.js";
+import { counterIdSource } from "./fingerprint.js";
+import type { ModelPort, ToolPort } from "./ports.js";
+import { MemoryEventSink } from "./sinks.js";
+import type { HarnessEvent, TaskInput } from "./types.js";
 import { recordingTool, response, scriptedModel, stubClock } from "./_support.js";
 
 const EXPLAIN: TaskInput = { taskType: "explain-plan", input: { filePath: "src/foo.ts" } };

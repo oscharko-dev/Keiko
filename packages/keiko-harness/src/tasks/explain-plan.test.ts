@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildExplainPlan } from "../../../src/harness/tasks/explain-plan.js";
+import { buildExplainPlan } from "./explain-plan.js";
 
 describe("buildExplainPlan", () => {
   it("is read-only: tools, patch, and verification are all disallowed", () => {

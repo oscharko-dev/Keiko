@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { CliEventSink, MemoryEventSink } from "../../src/harness/sinks.js";
-import { DEFAULT_LIMITS } from "../../src/harness/types.js";
-import type { HarnessEvent } from "../../src/harness/types.js";
+import { CliEventSink, MemoryEventSink } from "./sinks.js";
+import { DEFAULT_LIMITS } from "./types.js";
+import type { HarnessEvent } from "./types.js";
 
 function startedEvent(seq: number): HarnessEvent {
   return {

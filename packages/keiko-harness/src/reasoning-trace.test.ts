@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { Emitter } from "../../src/harness/emitter.js";
-import { runLoop } from "../../src/harness/loop.js";
-import type { EventSink } from "../../src/harness/ports.js";
-import { MemoryEventSink } from "../../src/harness/sinks.js";
-import type { HarnessEvent, TaskInput } from "../../src/harness/types.js";
+import { Emitter } from "./emitter.js";
+import { runLoop } from "./loop.js";
+import type { EventSink } from "./ports.js";
+import { MemoryEventSink } from "./sinks.js";
+import type { HarnessEvent, TaskInput } from "./types.js";
 import { buildContext, response, scriptedModel, stubClock } from "./_support.js";
 
 const EXPLAIN: TaskInput = { taskType: "explain-plan", input: { filePath: "src/foo.ts" } };

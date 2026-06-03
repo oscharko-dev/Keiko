@@ -3,11 +3,11 @@
 // stdout, or file contents/paths reach the event stream.
 
 import { describe, expect, it } from "vitest";
-import { handleToolCall } from "../../src/harness/executor.js";
-import type { ToolCallRequest, ToolCallResult, ToolPort } from "../../src/harness/ports.js";
-import type { HarnessEvent } from "../../src/harness/types.js";
-import { CommandDeniedError } from "../../src/tools/errors.js";
-import { PathDeniedError } from "../../src/workspace/errors.js";
+import { handleToolCall } from "./executor.js";
+import type { ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
+import type { HarnessEvent } from "./types.js";
+import { CommandDeniedError } from "@oscharko-dev/keiko-tools";
+import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 import { response, toolCall, buildContext } from "./_support.js";
 
 const COMMAND_SANDBOX = {
