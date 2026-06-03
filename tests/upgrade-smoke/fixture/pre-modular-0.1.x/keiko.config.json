@@ -1,0 +1,14 @@
+{
+  "providers": [
+    {
+      "modelId": "fixture-model",
+      "baseUrl": "https://example.test/v1",
+      "apiKey": "REDACTED-FIXTURE-VALUE",
+      "capability": {
+        "modelId": "fixture-model",
+        "kind": "chat",
+        "costClass": "low"
+      }
+    }
+  ]
+}
