@@ -6,7 +6,9 @@
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { extractInlineScriptHashes } from "../dist/ui/csp.js";
+// `extractInlineScriptHashes` lives in `@oscharko-dev/keiko-server` after issue #166; the legacy
+// `dist/ui/index.js` shim re-exports it without changing the runtime contract.
+import { extractInlineScriptHashes } from "../dist/ui/index.js";
 
 function packFiles() {
   // `--ignore-scripts` prevents the prepack hook from re-running this check recursively (npm runs

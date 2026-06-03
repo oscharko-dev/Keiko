@@ -1,14 +1,17 @@
-// UI packaging step (ADR-0011 D6). Runs after `npm run build` (tsc) so `dist/ui/csp.js` exists.
+// UI packaging step (ADR-0011 D6). Runs after `npm run build` (tsc) so `dist/ui/index.js` exists.
 // It requires the nested ui/ package to be installed explicitly by the caller, produces the static
 // export, copies it into `dist/ui/static/`, and writes `dist/ui/csp-hashes.json` — the inline-script
-// SHA-256 hashes the BFF folds into `script-src` (see src/ui/load-csp.ts). Pure Node ESM, no shell-isms.
+// SHA-256 hashes the BFF folds into `script-src`. `extractInlineScriptHashes` is re-exported from
+// the keiko-server package barrel via the legacy `src/ui/index.ts` shim, so this script reaches it
+// through the compiled shim at `dist/ui/index.js` rather than the now-extracted package internals
+// (issue #166). Pure Node ESM, no shell-isms.
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, readFile, writeFile, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractInlineScriptHashes } from "../dist/ui/csp.js";
+import { extractInlineScriptHashes } from "../dist/ui/index.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const uiDir = join(repoRoot, "ui");
