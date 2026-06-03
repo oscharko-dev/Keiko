@@ -15,8 +15,8 @@ const nextConfig = {
   productionBrowserSourceMaps: false,
   images: { unoptimized: true },
   reactStrictMode: true,
-  // Pin the file-tracing root to this nested package so Next does not infer the repository root.
-  // The repo intentionally has two lockfiles (root and ui/) per ADR-0011 D3/D4 isolation.
+  // Pin the file-tracing root to this package so Next does not climb to the repo root and pull
+  // unrelated workspace files into its trace (issue #167: single root lockfile post-extraction).
   outputFileTracingRoot: here,
 };
 

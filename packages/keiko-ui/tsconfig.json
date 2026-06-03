@@ -20,7 +20,7 @@
     "noEmit": true,
     "plugins": [{ "name": "next" }],
     "types": ["node", "@testing-library/jest-dom", "vitest/globals"],
-    "paths": { "@/*": ["./*"] }
+    "paths": { "@/*": ["./src/*"] }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
   "exclude": ["node_modules", "out", ".next"]

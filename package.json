@@ -37,15 +37,18 @@
     "format:check": "prettier --check .",
     "test": "npm run build:packages && vitest run",
     "test:coverage": "npm run build:packages && vitest run --coverage",
-    "ui:ci": "npm --prefix ui ci --ignore-scripts",
     "prepare:bin": "node scripts/ensure-bin-mode.mjs",
     "build:ui": "node scripts/build-ui.mjs",
     "check:package-surface": "node scripts/check-package-surface.mjs",
     "arch:check": "depcruise --validate .dependency-cruiser.cjs src packages",
     "arch:check:negative": "node scripts/arch-check-negative.mjs",
-    "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run ui:ci && npm run build:ui && npm run check:package-surface",
-    "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run ui:ci && npm run build:ui && npm run check:package-surface",
-    "clean": "rm -rf dist coverage packages/keiko-contracts/dist packages/keiko-security/dist packages/keiko-model-gateway/dist packages/keiko-workspace/dist packages/keiko-tools/dist packages/keiko-evidence/dist packages/keiko-harness/dist packages/keiko-workflows/dist packages/keiko-server/dist"
+    "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:package-surface",
+    "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:package-surface",
+    "clean": "rm -rf dist coverage packages/keiko-contracts/dist packages/keiko-security/dist packages/keiko-model-gateway/dist packages/keiko-workspace/dist packages/keiko-tools/dist packages/keiko-evidence/dist packages/keiko-harness/dist packages/keiko-workflows/dist packages/keiko-server/dist packages/keiko-ui/.next packages/keiko-ui/out"
+  },
+  "overrides": {
+    "postcss": "8.5.15",
+    "sharp": "npm:empty-npm-package@1.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
