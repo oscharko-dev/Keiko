@@ -29,7 +29,7 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build:packages": "npm --workspace @oscharko-dev/keiko-contracts run build && npm --workspace @oscharko-dev/keiko-security run build",
+    "build:packages": "npm --workspace @oscharko-dev/keiko-contracts run build && npm --workspace @oscharko-dev/keiko-security run build && npm --workspace @oscharko-dev/keiko-model-gateway run build",
     "build": "npm run build:packages && tsc -p tsconfig.build.json",
     "typecheck": "npm run build:packages && tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
@@ -45,7 +45,7 @@
     "arch:check:negative": "node scripts/arch-check-negative.mjs",
     "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run ui:ci && npm run build:ui && npm run check:package-surface",
     "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run ui:ci && npm run build:ui && npm run check:package-surface",
-    "clean": "rm -rf dist coverage packages/keiko-contracts/dist packages/keiko-security/dist"
+    "clean": "rm -rf dist coverage packages/keiko-contracts/dist packages/keiko-security/dist packages/keiko-model-gateway/dist"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -62,6 +62,7 @@
   },
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "*",
+    "@oscharko-dev/keiko-model-gateway": "*",
     "@oscharko-dev/keiko-security": "*",
     "ws": "^8.21.0"
   }

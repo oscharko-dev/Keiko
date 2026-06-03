@@ -63,17 +63,20 @@ module.exports = {
       comment:
         "ADR-0019 direction rule 3: model-gateway, workspace, tools, and evidence may depend only " +
         "on contracts and security. Imports from harness, workflows, server, cli, ui, or each " +
-        "other are forbidden.",
-      severity: "warn",
+        "other are forbidden. Also fires on the negative-test fixture under " +
+        "tests/architecture/fixtures/model-gateway/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs.",
+      severity: "error",
       from: {
         path:
           "^(packages/keiko-(model-gateway|workspace|tools|evidence)/src/|" +
-          "src/(gateway|workspace|tools|audit)/)",
+          "src/(gateway|workspace|tools|audit)/|" +
+          "tests/architecture/fixtures/model-gateway/)",
       },
       to: {
         path:
-          "^(packages/keiko-(?!contracts|security)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security)|" +
+          "^(packages/keiko-(?!contracts|security|model-gateway)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway)|" +
           "src/(harness|workflows|cli|ui|verification|evaluations))",
         pathNot: "^src/(gateway|workspace|tools|audit)/",
       },
@@ -179,7 +182,7 @@ module.exports = {
       comment:
         "ADR-0019 trust rule 1: direct LLM provider SDK imports (openai, @anthropic-ai/*, any " +
         "*-ai-sdk) are forbidden everywhere except keiko-model-gateway.",
-      severity: "warn",
+      severity: "error",
       from: {
         path: "^(packages/keiko-|src/)",
         pathNot: "^(packages/keiko-model-gateway/|src/gateway/)",
