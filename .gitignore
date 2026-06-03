@@ -141,7 +141,10 @@ keiko-live-start.png
 ui/.next/
 ui/out/
 ui/next-env.d.ts
-ui/*.tsbuildinfo
+
+# TypeScript project-references incremental cache (ADR-0020 D3). Generated when `tsc -b` or
+# `tsc --build` runs in any workspace package; never commit it.
+*.tsbuildinfo
 
 # Customer/internal material. Contains photos, extracted model inventories, API endpoints,
 # local customer credentials, and derived notes. Never commit this folder.
