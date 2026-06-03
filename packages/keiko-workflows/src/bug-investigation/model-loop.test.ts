@@ -1,21 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { runBugModelLoop } from "../../../src/workflows/bug-investigation/model-loop.js";
-import { buildBugRunState } from "../../../src/workflows/bug-investigation/internal.js";
-import { computeBugFingerprint } from "../../../src/workflows/bug-investigation/emit.js";
-import { parseFailureEvidence } from "../../../src/workflows/bug-investigation/failure-parse.js";
+import { runBugModelLoop } from "./model-loop.js";
+import { buildBugRunState } from "./internal.js";
+import { computeBugFingerprint } from "./emit.js";
+import { parseFailureEvidence } from "./failure-parse.js";
 import type {
   BugInvestigationDeps,
   BugInvestigationInput,
-} from "../../../src/workflows/bug-investigation/types.js";
-import { memFs } from "../../../packages/keiko-workspace/src/_memfs.js";
+} from "./types.js";
+import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
 import {
   detectWorkspace,
   type WorkspaceFs,
   type WorkspaceInfo,
-} from "../../../src/workspace/index.js";
+} from "@oscharko-dev/keiko-workspace";
 import { makePack, response, scriptedModel } from "./_support.js";
-import type { NormalizedResponse } from "../../../src/gateway/types.js";
-import type { BugRunState } from "../../../src/workflows/bug-investigation/internal.js";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { BugRunState } from "./internal.js";
 
 const ROOT = "/repo";
 

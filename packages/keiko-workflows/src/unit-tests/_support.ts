@@ -2,11 +2,11 @@
 // builders, a scripted ModelPort, a recording WorkspaceWriter, a recording event sink, and a
 // canned NormalizedResponse. No real timers, network, or fs.
 
-import type { NormalizedResponse } from "../../../src/gateway/types.js";
-import type { ModelPort } from "../../../src/harness/ports.js";
-import type { ContextEntry, ContextPack, WorkspaceInfo } from "../../../src/workspace/index.js";
-import type { WorkspaceWriter } from "../../../src/tools/index.js";
-import type { WorkflowEvent, WorkflowEventSink } from "../../../src/workflows/unit-tests/events.js";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { ContextEntry, ContextPack, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
+import type { WorkflowEvent, WorkflowEventSink } from "./events.js";
 
 export function makeWorkspaceInfo(overrides: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
   return {

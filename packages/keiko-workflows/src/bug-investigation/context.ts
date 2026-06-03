@@ -18,8 +18,8 @@ import {
   type RetrievalStrategy,
   type SelectionReason,
   type WorkspaceInfo,
-} from "../../workspace/index.js";
-import { nodeWorkspaceFs, type WorkspaceFs } from "../../workspace/fs.js";
+} from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { BugWorkflowLimits, FailureEvidence } from "./types.js";
 
 export interface BugContextDeps {

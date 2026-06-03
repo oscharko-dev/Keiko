@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { buildBugPrompt } from "../../../src/workflows/bug-investigation/prompt.js";
-import { parseFailureEvidence } from "../../../src/workflows/bug-investigation/failure-parse.js";
+import { buildBugPrompt } from "./prompt.js";
+import { parseFailureEvidence } from "./failure-parse.js";
 import { makeEntry, makePack } from "./_support.js";
-import type { BugReportInput } from "../../../src/workflows/bug-investigation/types.js";
+import type { BugReportInput } from "./types.js";
 
 const REPORT: BugReportInput = {
   description: "half() returns the wrong value",

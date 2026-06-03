@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_FRAMES,
   parseFailureEvidence,
-} from "../../../src/workflows/bug-investigation/failure-parse.js";
+} from "./failure-parse.js";
 
 describe("parseFailureEvidence (AC #4 / AC #9 failure-output handling)", () => {
   it("extracts a node stack frame of the form `at fn (path:line:col)`", () => {

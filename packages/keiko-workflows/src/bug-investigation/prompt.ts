@@ -7,9 +7,9 @@
 // redacted and byte-capped before it enters the model prompt.
 
 import { TextDecoder } from "node:util";
-import { redact } from "../../gateway/redaction.js";
-import type { ChatMessage } from "../../gateway/types.js";
-import type { ContextPack } from "../../workspace/index.js";
+import { redact } from "@oscharko-dev/keiko-security";
+import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
+import type { ContextPack } from "@oscharko-dev/keiko-workspace";
 import type { BugReportInput, FailureEvidence } from "./types.js";
 
 const MAX_PROMPT_TEXT_BYTES = 16_384;

@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   computeBugFingerprint,
   createBugEventEmitter,
-} from "../../../src/workflows/bug-investigation/emit.js";
+} from "./emit.js";
 import { recordingSink } from "./_support.js";
-import type { BugReportInput } from "../../../src/workflows/bug-investigation/types.js";
+import type { BugReportInput } from "./types.js";
 
 const REPORT: BugReportInput = { description: "bug", failingOutput: "boom" };
 

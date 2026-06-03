@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   UNIT_TEST_WORKFLOW_DESCRIPTOR,
   type WorkflowInputSpec,
-} from "../../../src/workflows/unit-tests/descriptor.js";
-import { DEFAULT_WORKFLOW_LIMITS } from "../../../src/workflows/unit-tests/types.js";
+} from "./descriptor.js";
+import { DEFAULT_WORKFLOW_LIMITS } from "./types.js";
 
 function inputNamed(name: string): WorkflowInputSpec | undefined {
   return UNIT_TEST_WORKFLOW_DESCRIPTOR.inputs.find((i) => i.name === name);

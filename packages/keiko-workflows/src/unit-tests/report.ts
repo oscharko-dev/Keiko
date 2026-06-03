@@ -5,9 +5,9 @@
 // redact() here so nothing the report carries can leak a secret — defence in depth on top of the
 // redaction already applied upstream. Pure: no IO, no clock; the caller injects durationMs and counters.
 
-import { redact } from "../../gateway/redaction.js";
-import type { PatchFileChange } from "../../tools/index.js";
-import type { VerificationAuditSummary } from "../../verification/index.js";
+import { redact } from "@oscharko-dev/keiko-security";
+import type { PatchFileChange } from "@oscharko-dev/keiko-tools";
+import type { VerificationAuditSummary } from "../../../../src/verification/index.js";
 import type { AddedTestFile, UnitTestWorkflowReport, WorkflowStatus } from "./types.js";
 
 const TEST_CASE_PREFIXES: readonly string[] = ["test(", "it(", "describe("];

@@ -2,21 +2,21 @@ import { describe, expect, it } from "vitest";
 import {
   runBugVerification,
   SKIP_UNRESOLVED,
-} from "../../../src/workflows/bug-investigation/verify-stage.js";
+} from "./verify-stage.js";
 import {
   buildBugRunState,
   type BugRunState,
-} from "../../../src/workflows/bug-investigation/internal.js";
-import { computeBugFingerprint } from "../../../src/workflows/bug-investigation/emit.js";
-import { memFs } from "../../../packages/keiko-workspace/src/_memfs.js";
+} from "./internal.js";
+import { computeBugFingerprint } from "./emit.js";
+import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
 import {
   detectWorkspace,
   type WorkspaceFs,
   type WorkspaceInfo,
-} from "../../../src/workspace/index.js";
-import type { PatchFileChange, SpawnFn } from "../../../src/tools/index.js";
-import type { BugInvestigationInput } from "../../../src/workflows/bug-investigation/types.js";
-import { recordingSpawn, scriptChildClose } from "../../verification/_support.js";
+} from "@oscharko-dev/keiko-workspace";
+import type { PatchFileChange, SpawnFn } from "@oscharko-dev/keiko-tools";
+import type { BugInvestigationInput } from "./types.js";
+import { recordingSpawn, scriptChildClose } from "../../../../tests/verification/_support.js";
 
 const ROOT = "/repo";
 

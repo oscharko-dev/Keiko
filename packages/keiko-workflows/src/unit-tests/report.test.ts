@@ -3,9 +3,9 @@ import {
   assembleReport,
   renderMarkdownReport,
   type ReportParts,
-} from "../../../src/workflows/unit-tests/report.js";
-import type { PatchFileChange } from "../../../src/tools/index.js";
-import type { VerificationAuditSummary } from "../../../src/verification/index.js";
+} from "./report.js";
+import type { PatchFileChange } from "@oscharko-dev/keiko-tools";
+import type { VerificationAuditSummary } from "../../../../src/verification/index.js";
 
 function patchFile(overrides: Partial<PatchFileChange> = {}): PatchFileChange {
   return {

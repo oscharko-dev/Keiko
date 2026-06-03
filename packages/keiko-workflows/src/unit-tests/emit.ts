@@ -6,7 +6,7 @@
 // redacted by the CALLER before handing the event here (this helper does not inspect payloads).
 
 import { createHash } from "node:crypto";
-import { canonicalise } from "../../harness/index.js";
+import { canonicalise } from "@oscharko-dev/keiko-harness";
 import type { UnitTestTarget } from "./types.js";
 import type { WorkflowEvent, WorkflowEventSink } from "./events.js";
 

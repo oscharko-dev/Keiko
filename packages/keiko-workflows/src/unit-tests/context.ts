@@ -18,8 +18,8 @@ import {
   type RetrievalStrategy,
   type SelectionReason,
   type WorkspaceInfo,
-} from "../../workspace/index.js";
-import { nodeWorkspaceFs, type WorkspaceFs } from "../../workspace/fs.js";
+} from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { UnitTestTarget, UnitTestWorkflowInput, WorkflowLimits } from "./types.js";
 
 export interface TestGenContextDeps {

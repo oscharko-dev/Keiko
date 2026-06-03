@@ -4,8 +4,8 @@
 // reason when neither resolves or the framework is unknown. Verification reuses the #7 orchestrator
 // unchanged; this stage only wires the plan and projects an output-text-free audit summary.
 
-import { nodeSpawnFn } from "../../tools/index.js";
-import { type WorkspaceFs, type WorkspaceInfo } from "../../workspace/index.js";
+import { nodeSpawnFn } from "@oscharko-dev/keiko-tools";
+import { type WorkspaceFs, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   buildVerificationPlan,
   detectScripts,
@@ -15,7 +15,7 @@ import {
   DEFAULT_VERIFICATION_LIMITS,
   type VerificationAuditSummary,
   type VerificationPlan,
-} from "../../verification/index.js";
+} from "../../../../src/verification/index.js";
 import type { RunState } from "./internal.js";
 import type { UnitTestTarget } from "./types.js";
 

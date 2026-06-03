@@ -3,7 +3,7 @@
 // are re-exported from index.ts. Splitting them out keeps each pipeline file under the LOC limit
 // while leaving a single source of truth for the resolved RunState and the loop result shape.
 
-import type { PatchValidation } from "../../tools/index.js";
+import type { PatchValidation } from "@oscharko-dev/keiko-tools";
 import { createEventEmitter, type EventEmitter } from "./emit.js";
 import {
   DEFAULT_WORKFLOW_LIMITS,

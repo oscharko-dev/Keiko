@@ -4,10 +4,10 @@
 // `readonly` everywhere; optional props are `| undefined` because exactOptionalPropertyTypes
 // is on. Every report shape is plain JSON-serializable so the #10 audit ledger can persist it.
 
-import type { ModelPort } from "../../harness/ports.js";
-import type { SpawnFn, WorkspaceWriter } from "../../tools/index.js";
-import type { TestFramework, WorkspaceFs } from "../../workspace/index.js";
-import type { VerificationAuditSummary } from "../../verification/index.js";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
+import type { TestFramework, WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import type { VerificationAuditSummary } from "../../../../src/verification/index.js";
 import type { WorkflowEventSink } from "./events.js";
 
 // ─── Status & target selection ───────────────────────────────────────────────────

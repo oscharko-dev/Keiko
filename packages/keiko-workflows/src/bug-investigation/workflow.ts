@@ -8,9 +8,9 @@
 // boundary that maps a CancelledError to a "cancelled" report and any other IO failure to a
 // redacted "failed" report.
 
-import { CancelledError } from "../../gateway/errors.js";
-import { detectWorkspace } from "../../workspace/index.js";
-import { nodeWorkspaceFs } from "../../workspace/fs.js";
+import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
+import { detectWorkspace } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { buildBugContext } from "./context.js";
 import { computeBugFingerprint } from "./emit.js";
 import { parseFailureEvidence } from "./failure-parse.js";

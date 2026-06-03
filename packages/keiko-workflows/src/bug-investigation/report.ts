@@ -7,9 +7,9 @@
 // redaction. renderBugMarkdownReport produces the CLI text path. Pure: no IO, no clock; the caller
 // injects durationMs and counters.
 
-import { redact } from "../../gateway/redaction.js";
-import type { PatchFileChange } from "../../tools/index.js";
-import type { VerificationAuditSummary } from "../../verification/index.js";
+import { redact } from "@oscharko-dev/keiko-security";
+import type { PatchFileChange } from "@oscharko-dev/keiko-tools";
+import type { VerificationAuditSummary } from "../../../../src/verification/index.js";
 import { isElevatedReviewPath } from "./guard.js";
 import type {
   BugInvestigationReport,

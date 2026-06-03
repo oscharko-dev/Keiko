@@ -4,10 +4,10 @@
 // rejections, or when model calls reach the maxModelCalls hard ceiling — whichever comes first. The
 // model call is the one IO boundary here; its failure propagates to the workflow catch boundary.
 
-import type { ChatMessage } from "../../gateway/types.js";
-import { nodeWorkspaceFs } from "../../workspace/fs.js";
-import type { ContextPack, WorkspaceInfo } from "../../workspace/index.js";
-import { validatePatch, type PatchValidation } from "../../tools/index.js";
+import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import type { ContextPack, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { validatePatch, type PatchValidation } from "@oscharko-dev/keiko-tools";
 import { isTestPath } from "./conventions.js";
 import { parseModelOutput } from "./parse.js";
 import { buildPrompt } from "./prompt.js";

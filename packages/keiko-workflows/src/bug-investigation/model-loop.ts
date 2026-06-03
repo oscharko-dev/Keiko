@@ -6,10 +6,10 @@
 // #6 validatePatch; the sensitive-path guard (D6 bound 2) runs on validation.files[].path. The
 // model call is the one IO boundary here; its failure propagates to the workflow catch boundary.
 
-import type { ChatMessage } from "../../gateway/types.js";
-import { nodeWorkspaceFs } from "../../workspace/fs.js";
-import type { ContextPack, WorkspaceInfo } from "../../workspace/index.js";
-import { validatePatch, type PatchValidation } from "../../tools/index.js";
+import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import type { ContextPack, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { validatePatch, type PatchValidation } from "@oscharko-dev/keiko-tools";
 import { isTestPath } from "../unit-tests/conventions.js";
 import { isSensitivePath } from "./guard.js";
 import { parseBugModelOutputCandidates } from "./parse.js";

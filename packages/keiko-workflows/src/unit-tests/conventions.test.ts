@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectConventions, isTestPath } from "../../../src/workflows/unit-tests/conventions.js";
+import { detectConventions, isTestPath } from "./conventions.js";
 import { makeEntry, makePack, makeWorkspaceInfo } from "./_support.js";
 
 describe("isTestPath (AC #9 production-code guard, D6)", () => {

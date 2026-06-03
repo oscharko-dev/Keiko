@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseModelOutput } from "../../../src/workflows/unit-tests/parse.js";
+import { parseModelOutput } from "./parse.js";
 
 const DIFF_BODY =
   "--- /dev/null\n+++ b/tests/add.test.ts\n@@ -0,0 +1,3 @@\n+import { add } from '../src/add';\n+test('adds', () => expect(add(1,2)).toBe(3));\n";

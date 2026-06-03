@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseBugModelOutput } from "../../../src/workflows/bug-investigation/parse.js";
+import { parseBugModelOutput } from "./parse.js";
 
 const FULL = [
   "```diff",

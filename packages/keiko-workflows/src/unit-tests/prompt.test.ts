@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildPrompt } from "../../../src/workflows/unit-tests/prompt.js";
+import { buildPrompt } from "./prompt.js";
 import type {
   TestConventions,
   UnitTestWorkflowInput,
-} from "../../../src/workflows/unit-tests/types.js";
+} from "./types.js";
 import { makeEntry, makePack } from "./_support.js";
 
 function conventions(overrides: Partial<TestConventions> = {}): TestConventions {

@@ -6,7 +6,7 @@
 // Sensitive fields are redacted by the CALLER before handing the event here.
 
 import { createHash } from "node:crypto";
-import { canonicalise } from "../../harness/index.js";
+import { canonicalise } from "@oscharko-dev/keiko-harness";
 import type { BugReportInput } from "./types.js";
 import type { BugInvestigationEvent, BugWorkflowEventSink } from "./events.js";
 

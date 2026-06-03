@@ -6,8 +6,8 @@
 // stage only wires the plan and projects an output-text-free audit summary. DEFERRED (D11): a
 // pre-patch reproduction baseline — Wave-1 verifies only the post-apply state.
 
-import { nodeSpawnFn, type PatchFileChange } from "../../tools/index.js";
-import { type WorkspaceFs, type WorkspaceInfo } from "../../workspace/index.js";
+import { nodeSpawnFn, type PatchFileChange } from "@oscharko-dev/keiko-tools";
+import { type WorkspaceFs, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   buildVerificationPlan,
   detectScripts,
@@ -18,7 +18,7 @@ import {
   type VerificationAuditSummary,
   type VerificationPlan,
   type VerificationStep,
-} from "../../verification/index.js";
+} from "../../../../src/verification/index.js";
 import { isSensitivePath } from "./guard.js";
 import type { BugRunState } from "./internal.js";
 

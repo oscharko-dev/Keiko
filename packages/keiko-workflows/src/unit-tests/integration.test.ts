@@ -10,9 +10,9 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { generateUnitTests } from "../../../src/workflows/unit-tests/workflow.js";
-import type { ModelPort } from "../../../src/harness/ports.js";
-import type { NormalizedResponse } from "../../../src/gateway/types.js";
+import { generateUnitTests } from "./workflow.js";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(here, "..", "..", "fixtures", "unit-tests", "target-project");

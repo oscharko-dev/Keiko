@@ -3,10 +3,10 @@ import {
   assembleBugReport,
   renderBugMarkdownReport,
   type BugReportParts,
-} from "../../../src/workflows/bug-investigation/report.js";
-import type { PatchFileChange } from "../../../src/tools/index.js";
-import type { VerificationAuditSummary } from "../../../src/verification/index.js";
-import type { Hypothesis } from "../../../src/workflows/bug-investigation/types.js";
+} from "./report.js";
+import type { PatchFileChange } from "@oscharko-dev/keiko-tools";
+import type { VerificationAuditSummary } from "../../../../src/verification/index.js";
+import type { Hypothesis } from "./types.js";
 
 function patchFile(overrides: Partial<PatchFileChange> = {}): PatchFileChange {
   return {

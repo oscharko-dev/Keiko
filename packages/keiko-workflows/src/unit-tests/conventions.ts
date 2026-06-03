@@ -4,7 +4,7 @@
 // there is no ReDoS surface (CodeQL js/polynomial-redos, steering note F).
 
 import { basename, dirname, extname } from "node:path";
-import type { ContextPack, WorkspaceInfo } from "../../workspace/index.js";
+import type { ContextPack, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { FileNamingStyle, TestConventions } from "./types.js";
 
 const MAX_ASSERTION_SAMPLES = 2;

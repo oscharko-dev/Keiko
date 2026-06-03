@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { investigateBug } from "../../../src/workflows/bug-investigation/workflow.js";
+import { investigateBug } from "./workflow.js";
 import type {
   BugInvestigationDeps,
   BugInvestigationInput,
-} from "../../../src/workflows/bug-investigation/types.js";
-import { memFs } from "../../../packages/keiko-workspace/src/_memfs.js";
+} from "./types.js";
+import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
 import { recordingWriter, response, scriptedModel } from "./_support.js";
 
 const ROOT = "/repo";

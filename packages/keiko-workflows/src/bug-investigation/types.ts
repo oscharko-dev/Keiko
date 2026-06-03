@@ -4,10 +4,10 @@
 // plain JSON-serializable so the #10 audit ledger can persist it. Names are DISTINCT from the
 // unit-test workflow's (ADR-0009 D5) because both barrels are re-exported from the package root.
 
-import type { ModelPort } from "../../harness/ports.js";
-import type { PatchChangeKind, SpawnFn, WorkspaceWriter } from "../../tools/index.js";
-import type { WorkspaceFs } from "../../workspace/index.js";
-import type { VerificationAuditSummary } from "../../verification/index.js";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { PatchChangeKind, SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import type { VerificationAuditSummary } from "../../../../src/verification/index.js";
 import type { BugWorkflowEventSink } from "./events.js";
 
 // ─── Status (D4) ─────────────────────────────────────────────────────────────────

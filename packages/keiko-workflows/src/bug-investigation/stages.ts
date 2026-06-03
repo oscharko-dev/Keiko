@@ -5,15 +5,15 @@
 // tighter PatchLimits as validatePatch (D6 bound 1, defence-in-depth re-validation). finishPipeline
 // selects the branch; emitCompleted stamps the terminal event. All redaction is inside assembleBugReport.
 
-import { redact } from "../../gateway/redaction.js";
+import { redact } from "@oscharko-dev/keiko-security";
 import {
   applyPatch,
   CommandCancelledError,
   renderDryRun,
   type PatchApplyResult,
-} from "../../tools/index.js";
-import { nodeWorkspaceFs } from "../../workspace/fs.js";
-import type { WorkspaceInfo } from "../../workspace/index.js";
+} from "@oscharko-dev/keiko-tools";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { assembleBugReport } from "./report.js";
 import { runBugVerification } from "./verify-stage.js";
 import {

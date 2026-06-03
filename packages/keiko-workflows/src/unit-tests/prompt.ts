@@ -4,8 +4,8 @@
 // optional labeled prose) that parse.ts consumes (steering note B). Context excerpts handed in are
 // already redacted by #5; this module does no redaction.
 
-import type { ChatMessage } from "../../gateway/types.js";
-import type { ContextPack } from "../../workspace/index.js";
+import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
+import type { ContextPack } from "@oscharko-dev/keiko-workspace";
 import type { TestConventions, UnitTestTarget, UnitTestWorkflowInput } from "./types.js";
 
 const OUTPUT_CONTRACT =
