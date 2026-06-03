@@ -20,6 +20,16 @@ export function findCapability(modelId: string): ModelCapability | undefined {
   return CAPABILITY_REGISTRY.find((cap) => cap.id === modelId);
 }
 
+// Resolves the cost class for a model id by consulting the capability registry.
+// Returns "unknown" for unrecognised models so callers can record an honest, non-fatal
+// fall-through rather than silently dropping the run. Used by the evidence layer
+// (`@oscharko-dev/keiko-evidence`, issue #163) which routes the value in through the
+// injectable `EvidenceDeps.costClassResolver` port to keep the evidence package
+// leaf-clean against ADR-0019 dependency direction.
+export function resolveCostClass(modelId: string): CostClass | "unknown" {
+  return findCapability(modelId)?.costClass ?? "unknown";
+}
+
 export function listCapabilities(): readonly ModelCapability[] {
   return CAPABILITY_REGISTRY;
 }

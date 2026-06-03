@@ -85,7 +85,6 @@ export {
   createNodeEvidenceStore,
   createInMemoryEvidenceStore,
   aggregateUsage,
-  resolveCostClass,
   listEvidence,
   loadEvidence,
   applyRetention,
@@ -112,6 +111,14 @@ export {
   type EvidenceVerificationResult,
   type RetentionPolicy,
 } from "./audit/index.js";
+
+// Cost-class resolver (relocated to the model gateway in issue #163 so the evidence package stays
+// leaf-clean against ADR-0019 rule 3d). Re-exported on the root surface here to preserve the
+// pre-#163 public API for downstream callers that imported `resolveCostClass` from "keiko".
+// The `export * from "./gateway/index.js"` at the top of this file already re-exports it via the
+// gateway shim; the explicit line below makes the surface guarantee auditable and survives a
+// future barrel refactor.
+export { resolveCostClass } from "./gateway/index.js";
 
 // Wave 1 evaluation harness (ADR-0012 D11). Exported explicitly (not via `export *`) to keep the
 // public surface auditable, matching the workflow/audit precedent above. None of these names

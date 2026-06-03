@@ -17,7 +17,8 @@ import type {
   ToolCallFailedEvent,
   VerificationResultEvent,
 } from "../harness/types.js";
-import { aggregateUsage, resolveCostClass } from "./aggregate.js";
+import { resolveCostClass } from "../gateway/index.js";
+import { aggregateUsage } from "./aggregate.js";
 import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
 import type {
   EvidenceBuildInput,

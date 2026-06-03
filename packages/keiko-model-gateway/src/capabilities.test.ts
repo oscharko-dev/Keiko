@@ -4,6 +4,7 @@ import {
   createDefaultChatCapability,
   findCapability,
   listCapabilities,
+  resolveCostClass,
   selectCheapest,
 } from "./capabilities.js";
 
@@ -41,5 +42,12 @@ describe("listCapabilities", () => {
 describe("selectCheapest", () => {
   it("returns undefined when no built-in capability satisfies the requirements", () => {
     expect(selectCheapest({ kind: "chat", toolCalling: true })).toBeUndefined();
+  });
+});
+
+describe("resolveCostClass", () => {
+  it("returns 'unknown' for runtime-configured / unregistered model ids", () => {
+    expect(resolveCostClass("example-chat-model")).toBe("unknown");
+    expect(resolveCostClass("")).toBe("unknown");
   });
 });

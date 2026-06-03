@@ -31,6 +31,7 @@ export {
   createDefaultChatCapability,
   findCapability,
   listCapabilities,
+  resolveCostClass,
   selectCheapest,
 } from "@oscharko-dev/keiko-model-gateway";
 export type { CapabilityQuery } from "@oscharko-dev/keiko-model-gateway";

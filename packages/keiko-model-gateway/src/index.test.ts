@@ -12,6 +12,7 @@ import {
   createDefaultChatCapability,
   findCapability,
   listCapabilities,
+  resolveCostClass,
   selectCheapest,
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
@@ -101,6 +102,7 @@ describe("keiko-model-gateway package surface", () => {
     expect(typeof createDefaultChatCapability).toBe("function");
     expect(typeof findCapability).toBe("function");
     expect(typeof listCapabilities).toBe("function");
+    expect(typeof resolveCostClass).toBe("function");
     expect(typeof selectCheapest).toBe("function");
   });
 

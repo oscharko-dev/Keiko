@@ -123,7 +123,6 @@ export {
   createNodeEvidenceStore,
   createInMemoryEvidenceStore,
   aggregateUsage,
-  resolveCostClass,
   listEvidence,
   loadEvidence,
   applyRetention,
@@ -150,6 +149,11 @@ export {
   type EvidenceVerificationResult,
   type RetentionPolicy,
 } from "../audit/index.js";
+
+// Cost-class resolver (relocated to the model gateway in issue #163 so the evidence package stays
+// leaf-clean against ADR-0019 rule 3d). Re-exported on the SDK surface here to preserve the
+// pre-#163 public API for downstream callers that imported `resolveCostClass` from "keiko".
+export { resolveCostClass } from "../gateway/index.js";
 
 // Wave 1 evaluation harness (ADR-0012 D11). The deterministic offline runner, the product-code
 // scripted-model replay port, and the versioned scorecard schema, exported via an explicit named

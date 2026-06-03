@@ -32,6 +32,7 @@ export {
   createDefaultChatCapability,
   findCapability,
   listCapabilities,
+  resolveCostClass,
   selectCheapest,
   type CapabilityQuery,
 } from "./capabilities.js";

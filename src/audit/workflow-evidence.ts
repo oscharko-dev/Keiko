@@ -9,7 +9,7 @@
 // re-exports it (behaviour-preserving); the evaluation runner imports it directly.
 //
 import { buildEvidenceReport, type EvidenceReport } from "./report.js";
-import { resolveCostClass } from "./aggregate.js";
+import { resolveCostClass } from "../gateway/index.js";
 import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
 import { EVIDENCE_SCHEMA_VERSION, type EvidenceManifest } from "./types.js";
 import type { EvidenceStore } from "./store.js";

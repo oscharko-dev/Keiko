@@ -17,7 +17,7 @@ import { GatewayError, Gateway } from "../gateway/index.js";
 import { GatewayModelPort } from "../harness/index.js";
 import type { ModelPort } from "../harness/index.js";
 import { createAuditRedactor } from "../audit/index.js";
-import { resolveCostClass } from "../audit/aggregate.js";
+import { resolveCostClass } from "../gateway/index.js";
 import { writeSideFile } from "../audit/side-file.js";
 import { deepRedactStrings } from "../audit/redaction.js";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";

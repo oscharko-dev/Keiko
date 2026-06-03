@@ -1,11 +1,11 @@
 // Usage/cost aggregation (ADR-0010 D7). aggregateUsage is a PURE fold over model:call:completed
-// events; resolveCostClass recovers the cost class from the gateway capability registry rather than
-// the event (the harness model:call:completed event omits costClass by design and we do NOT add it —
-// no harness edit). One model per run is assumed (RunManifest.modelId is single-valued); the
-// multi-model caveat is documented in the ADR Consequences, not silently mis-aggregated.
+// events; cost-class resolution lives in `@oscharko-dev/keiko-model-gateway` (issue #163) and is
+// supplied to the evidence builder through the `EvidenceDeps.costClassResolver` port — the
+// evidence package never imports gateway primitives directly. The harness model:call:completed
+// event omits costClass by design and we do NOT add it — no harness edit. One model per run is
+// assumed (RunManifest.modelId is single-valued); the multi-model caveat is documented in the ADR
+// Consequences, not silently mis-aggregated.
 
-import { findCapability } from "../gateway/capabilities.js";
-import type { CostClass } from "../gateway/types.js";
 import type { HarnessEvent } from "../harness/types.js";
 import type { EvidenceUsageTotals } from "./types.js";
 
@@ -24,8 +24,4 @@ export function aggregateUsage(events: readonly HarnessEvent[]): EvidenceUsageTo
     requestCount += 1;
   }
   return { promptTokens, completionTokens, requestCount, totalLatencyMs };
-}
-
-export function resolveCostClass(modelId: string): CostClass | "unknown" {
-  return findCapability(modelId)?.costClass ?? "unknown";
 }
