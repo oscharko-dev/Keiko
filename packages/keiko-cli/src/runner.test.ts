@@ -6,8 +6,8 @@ import { runCli, type CliIo } from "./runner.js";
 import { SDK_VERSION } from "./_sdk-version.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-// Root product package.json is 4 levels up from this test file:
-//   packages/keiko-cli/src/runner.test.ts → ../../../package.json
+// Root product package.json sits three directories above this test file:
+//   packages/keiko-cli/src/runner.test.ts → packages/keiko-cli/ → packages/ → <root>
 const ROOT_PACKAGE_JSON = resolve(HERE, "..", "..", "..", "package.json");
 
 interface Captured {
