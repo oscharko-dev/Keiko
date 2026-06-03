@@ -9,15 +9,21 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      // Mirror the tsconfig paths alias so vitest resolves @/* correctly.
-      "@": resolve(here, "."),
+      // Mirror the tsconfig paths alias so vitest resolves @/* correctly. After the issue-167
+      // src-directory move, both the alias and the include globs are rooted at ./src.
+      "@": resolve(here, "src"),
     },
   },
   test: {
     environment: "jsdom",
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
-    include: ["app/**/*.test.ts", "app/**/*.test.tsx", "components/**/*.test.tsx", "lib/**/*.test.ts"],
+    include: [
+      "src/app/**/*.test.ts",
+      "src/app/**/*.test.tsx",
+      "src/components/**/*.test.tsx",
+      "src/lib/**/*.test.ts",
+    ],
     exclude: ["node_modules/**", "out/**", ".next/**"],
   },
 });

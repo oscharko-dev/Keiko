@@ -17,7 +17,6 @@ const PACKAGE_SURFACE_CHAIN = [
   "npm run clean",
   "npm run build",
   "npm run prepare:bin",
-  "npm run ui:ci",
   "npm run build:ui",
   "npm run check:package-surface",
 ].join(" && ");
@@ -108,7 +107,7 @@ describe("Issue #12 docs drift", () => {
       readText("docs/pilot/runbook.md"),
       readText("docs/security-and-audit-boundaries.md"),
       readText("docs/ui-runbook.md"),
-      readText("ui/app/components/desktop/widgets/panels/SettingsPanel.tsx"),
+      readText("packages/keiko-ui/src/app/components/desktop/widgets/panels/SettingsPanel.tsx"),
     ].join("\n");
     const forbiddenPhrases = [
       ["customer", "model"],

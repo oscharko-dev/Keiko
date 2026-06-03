@@ -201,20 +201,20 @@ export interface WorkflowModelOptions {
 }
 
 export interface ExplainPlanInputSpec {
-  readonly inputs: ReadonlyArray<{
+  readonly inputs: readonly {
     readonly name: string;
     readonly type: WorkflowInputType;
     readonly required: boolean;
-  }>;
+  }[];
   readonly defaultLimits: Readonly<Record<string, unknown>>;
 }
 
 export interface VerifyInputSpec {
-  readonly inputs: ReadonlyArray<{
+  readonly inputs: readonly {
     readonly name: string;
     readonly type: WorkflowInputType;
     readonly required: boolean;
-  }>;
+  }[];
   readonly defaultLimits: Readonly<Record<string, unknown>>;
 }
 
@@ -273,8 +273,10 @@ export type BffErrorCode =
   | "WORKSPACE_READ_FAILED"
   | "INTERNAL";
 
+// The wire shape carries `code: string` — the BFF can emit codes outside the BffErrorCode union
+// (forwarded from underlying packages). Consumers narrow against BffErrorCode when needed.
 export interface BffError {
-  readonly error: { readonly code: BffErrorCode | string; readonly message: string };
+  readonly error: { readonly code: string; readonly message: string };
 }
 
 // ─── Run report (BFF GET /api/runs/:runId — projection over evidence + state) ─────
