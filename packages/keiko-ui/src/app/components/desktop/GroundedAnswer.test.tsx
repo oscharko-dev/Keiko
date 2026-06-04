@@ -84,7 +84,7 @@ describe("GroundedAnswer", () => {
     render(<GroundedAnswer answer={a} busy={false} />);
     const button = screen.getByRole("button");
     expect(button.textContent).toContain("src/qux.ts");
-    expect(button.getAttribute("aria-label")).toBe("Open citation for src/qux.ts");
+    expect(button.getAttribute("aria-label")).toBe("Evidence citation in src/qux.ts");
   });
 
   it("renders the uncertainty marker count + deduped kinds", () => {
