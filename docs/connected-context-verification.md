@@ -67,8 +67,8 @@ Six cases named in #188's Deliverables. For each: existing coverage citation **p
 
 The Files-window connector and Conversation Center repository-Q&A surfaces are stable in unit and component tests covering both presentational state and behavioural state transitions:
 
-- Files-window connector: [`packages/keiko-ui/src/app/components/desktop/ConnectedScopePill.test.tsx`](../packages/keiko-ui/src/app/components/desktop/ConnectedScopePill.test.tsx) and `ScopeConnectButton.test.tsx`
-- Grounded answer presentation: [`packages/keiko-ui/src/app/components/desktop/GroundedAnswer.test.tsx`](../packages/keiko-ui/src/app/components/desktop/GroundedAnswer.test.tsx) plus the jest-axe smoke at `GroundedAnswer.a11y.test.tsx`
+- Files-window connector: [`packages/keiko-ui/src/app/components/desktop/ConnectedScopePill.test.tsx`](../packages/keiko-ui/src/app/components/desktop/ConnectedScopePill.test.tsx) and [`packages/keiko-ui/src/app/components/desktop/ScopeConnectButton.test.tsx`](../packages/keiko-ui/src/app/components/desktop/ScopeConnectButton.test.tsx)
+- Grounded answer presentation: [`packages/keiko-ui/src/app/components/desktop/GroundedAnswer.test.tsx`](../packages/keiko-ui/src/app/components/desktop/GroundedAnswer.test.tsx) plus the jest-axe smoke at [`packages/keiko-ui/src/app/components/desktop/GroundedAnswer.a11y.test.tsx`](../packages/keiko-ui/src/app/components/desktop/GroundedAnswer.a11y.test.tsx)
 
 A live browser-smoke session was not automated in this PR. The manual smoke procedure is:
 

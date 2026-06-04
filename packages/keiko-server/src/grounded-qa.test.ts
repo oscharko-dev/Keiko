@@ -457,6 +457,8 @@ describe("handleGroundedAsk", () => {
       runnerB,
     );
 
+    expect(resultA.status).toBe(200);
+    expect(resultB.status).toBe(200);
     const answerA = resultA.body as GroundedAnswer;
     const answerB = resultB.body as GroundedAnswer;
     expect(answerA.contextPack.elapsedMs).toBe(10);

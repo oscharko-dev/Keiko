@@ -181,10 +181,13 @@ describe("searchText (memFs)", () => {
     expect(r.atoms[0]?.score).toBe(1);
   });
 
-  // Issue #188 Case 2: exact symbol question — workspace with two files where only the
-  // defining file contains "function foo"; the search must resolve to exactly that file.
-  // Mutation guard: if the exact-symbol filter matches both files (e.g. falls back to NL
-  // scoring), atoms.length would be 2 and the scopePath assertion would be unreliable.
+  // Issue #188 Case 2: exact-symbol question across a two-file scope where the named
+  // symbol appears in both the defining file and a call site. exact-symbol is a substring
+  // matcher (per repoSearchMatchers) so both files are expected to match; the regression
+  // asserts the defining file survives ranking and the call-site file's atom (when present)
+  // never escapes the workspace. Mutation guard: if the matcher drops the defining file —
+  // e.g. by misordering candidate gathering or rejecting first-occurrence atoms — the
+  // `definingAtom` assertion below fails.
   it("returns the symbol-defining file when an exact-symbol query targets a named function", async () => {
     const { scope, fs } = memScope({
       "src/foo.ts": "export function foo(): void { return; }\n",
