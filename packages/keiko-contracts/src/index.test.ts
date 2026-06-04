@@ -18,6 +18,26 @@ import {
   checkPatchAgainstScope,
   validatePatchScope,
   validateWorkflowHandoffRequest,
+  LOCAL_KNOWLEDGE_SCHEMA_VERSION,
+  EMBEDDING_VECTOR_METRICS,
+  KNOWLEDGE_SOURCE_SCOPE_KINDS,
+  CAPSULE_LIFECYCLE_STATES,
+  CAPSULE_RETRIEVAL_EFFORTS,
+  CAPSULE_OUTPUT_MODES,
+  CAPSULE_ANSWER_GROUNDING_POLICIES,
+  CONNECTOR_NODE_KINDS,
+  DOCUMENT_STATUSES,
+  PARSED_UNIT_KINDS,
+  PARSER_DIAGNOSTIC_SEVERITIES,
+  INDEXING_JOB_STATUSES,
+  isSafeScopePath,
+  isSafeStorageReference,
+  isSafeDisplaySummary,
+  validateEmbeddingModelIdentity,
+  validateKnowledgeSourceScope,
+  validateKnowledgeCapsule,
+  validateCapsuleSet,
+  validateConnectorGraphState,
 } from "./index.js";
 import type {
   ToolPort,
@@ -35,11 +55,43 @@ import type {
   WorkflowHandoffRequest,
   UserApprovalTokenInput,
   ExpectedCheck,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+  CapsuleSetId,
+  DocumentId,
+  ChunkId,
+  VectorId,
+  EmbeddingModelIdentity,
+  ParserIdentity,
+  KnowledgeSource,
+  KnowledgeSourceScope,
+  KnowledgeCapsule,
+  CapsuleSet,
+  ConnectorGraphState,
+  ConnectorNode,
+  ConnectorNodeRef,
+  ConnectorEdge,
+  DocumentRecord,
+  PageRecord,
+  SectionRecord,
+  ParsedUnit,
+  ChunkRecord,
+  VectorRecord,
+  CitationReference,
+  RetrievalReference,
+  ParserResult,
+  ParserDiagnostic,
+  IndexingJobRecord,
+  CapsuleHealth,
+  CapsuleDeleteRequest,
+  LocalKnowledgeValidation,
+  LocalKnowledgeValidationOk,
+  LocalKnowledgeValidationFail,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
-  it("exposes the version constant pinned at 0.4.0", () => {
-    expect(KEIKO_CONTRACTS_VERSION).toBe("0.4.0");
+  it("exposes the version constant pinned at 0.5.0", () => {
+    expect(KEIKO_CONTRACTS_VERSION).toBe("0.5.0");
   });
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {
@@ -116,6 +168,72 @@ describe("keiko-contracts package surface", () => {
     pin<WorkflowHandoffRequest>();
     pin<UserApprovalTokenInput>();
     pin<ExpectedCheck>();
+  });
+
+  it("local-knowledge value re-exports are reachable through the barrel (#191)", () => {
+    expect(LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("1");
+    expect(EMBEDDING_VECTOR_METRICS).toContain("cosine");
+    expect(KNOWLEDGE_SOURCE_SCOPE_KINDS).toContain("folder");
+    expect(KNOWLEDGE_SOURCE_SCOPE_KINDS).toContain("repository");
+    expect(KNOWLEDGE_SOURCE_SCOPE_KINDS).toContain("files");
+    expect(CAPSULE_LIFECYCLE_STATES).toContain("ready");
+    expect(CAPSULE_RETRIEVAL_EFFORTS).toContain("default");
+    expect(CAPSULE_OUTPUT_MODES).toContain("answers");
+    expect(CAPSULE_ANSWER_GROUNDING_POLICIES).toContain("require-citations");
+    expect(CONNECTOR_NODE_KINDS).toContain("local-knowledge");
+    expect(DOCUMENT_STATUSES).toContain("extracted");
+    expect(PARSED_UNIT_KINDS).toContain("page");
+    expect(PARSER_DIAGNOSTIC_SEVERITIES).toContain("error");
+    expect(INDEXING_JOB_STATUSES).toContain("succeeded");
+    expect(typeof isSafeScopePath).toBe("function");
+    expect(typeof isSafeStorageReference).toBe("function");
+    expect(typeof isSafeDisplaySummary).toBe("function");
+    expect(typeof validateEmbeddingModelIdentity).toBe("function");
+    expect(typeof validateKnowledgeSourceScope).toBe("function");
+    expect(typeof validateKnowledgeCapsule).toBe("function");
+    expect(typeof validateCapsuleSet).toBe("function");
+    expect(typeof validateConnectorGraphState).toBe("function");
+  });
+
+  it("local-knowledge type re-exports are reachable through the barrel (#191)", () => {
+    // Phantom generic pins each new local-knowledge type onto the barrel surface; a future
+    // refactor that drops one of these names fails this test at compile time. See #186 above
+    // for the same pattern. The lineage pins below assert KnowledgeCapsuleId, KnowledgeSourceId,
+    // and DocumentId are reachable as distinct branded names — the Foundry-IQ contract that no
+    // record can collapse capsule/source/document lineage into a single global pool.
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<KnowledgeCapsuleId>();
+    pin<KnowledgeSourceId>();
+    pin<CapsuleSetId>();
+    pin<DocumentId>();
+    pin<ChunkId>();
+    pin<VectorId>();
+    pin<EmbeddingModelIdentity>();
+    pin<ParserIdentity>();
+    pin<KnowledgeSource>();
+    pin<KnowledgeSourceScope>();
+    pin<KnowledgeCapsule>();
+    pin<CapsuleSet>();
+    pin<ConnectorGraphState>();
+    pin<ConnectorNode>();
+    pin<ConnectorNodeRef>();
+    pin<ConnectorEdge>();
+    pin<DocumentRecord>();
+    pin<PageRecord>();
+    pin<SectionRecord>();
+    pin<ParsedUnit>();
+    pin<ChunkRecord>();
+    pin<VectorRecord>();
+    pin<CitationReference>();
+    pin<RetrievalReference>();
+    pin<ParserResult>();
+    pin<ParserDiagnostic>();
+    pin<IndexingJobRecord>();
+    pin<CapsuleHealth>();
+    pin<CapsuleDeleteRequest>();
+    pin<LocalKnowledgeValidation<KnowledgeCapsule>>();
+    pin<LocalKnowledgeValidationOk<KnowledgeCapsule>>();
+    pin<LocalKnowledgeValidationFail>();
   });
 
   it("EvidenceDeps.costClassResolver (#163) is an optional injection port shape", () => {
