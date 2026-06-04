@@ -37,7 +37,7 @@ function listMembershipChanges(
     .prepare(
       "SELECT id, capsule_id, change_kind, source_id, occurred_at FROM capsule_membership_changes WHERE capsule_id = :c ORDER BY occurred_at ASC, id ASC",
     )
-    .all({ c: capsuleId }) as readonly MembershipRow[];
+    .all({ c: capsuleId }) as unknown as readonly MembershipRow[];
 }
 
 describe("emitCapsuleAuditEvent + sqlite sink", () => {

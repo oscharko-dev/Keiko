@@ -35,7 +35,14 @@ interface ChangesRow {
   readonly changes: number;
 }
 
-function cutoffFor(now: number, days: number): number {
+function cutoffFor(now: number, days: number | undefined): number {
+  // Caller guards on `hasXyzPolicy` (a `policy.field !== undefined` check) before calling
+  // this, so `days === undefined` indicates a programmer error rather than a runtime
+  // condition. The `?? 0` fallback is defense-in-depth — it returns `now` (zero cutoff,
+  // matches everything) without crashing the transaction.
+  if (days === undefined) {
+    return now;
+  }
   return now - days * DAY_MS;
 }
 
@@ -79,11 +86,11 @@ export function applyRetentionToCapsule(
   db.exec("BEGIN");
   try {
     if (hasVectorPolicy) {
-      const vectorCutoff = cutoffFor(now, policy.retainVectorsDays as number);
+      const vectorCutoff = cutoffFor(now, policy.retainVectorsDays);
       deletedVectorCount = runDelete(store, DELETE_OLD_VECTORS_SQL, capsuleId, vectorCutoff);
     }
     if (hasTextPolicy) {
-      const textCutoff = cutoffFor(now, policy.retainExtractedTextDays as number);
+      const textCutoff = cutoffFor(now, policy.retainExtractedTextDays);
       deletedExtractedTextCount = runDelete(
         store,
         DELETE_OLD_PARSED_UNITS_SQL,

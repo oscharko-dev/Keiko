@@ -78,14 +78,14 @@ function seedDocWithVector(store: KnowledgeStore, opts: SeedDocOptions): void {
 function vectorIdsForCapsule(store: KnowledgeStore, capsuleId: KnowledgeCapsuleId): string[] {
   const rows = store._internal.db
     .prepare("SELECT id FROM vectors WHERE capsule_id = :c ORDER BY id ASC")
-    .all({ c: capsuleId }) as ReadonlyArray<{ readonly id: string }>;
+    .all({ c: capsuleId }) as unknown as readonly { readonly id: string }[];
   return rows.map((r) => r.id);
 }
 
 function parsedUnitIdsForCapsule(store: KnowledgeStore, capsuleId: KnowledgeCapsuleId): string[] {
   const rows = store._internal.db
     .prepare("SELECT id FROM parsed_units WHERE capsule_id = :c ORDER BY id ASC")
-    .all({ c: capsuleId }) as ReadonlyArray<{ readonly id: string }>;
+    .all({ c: capsuleId }) as unknown as readonly { readonly id: string }[];
   return rows.map((r) => r.id);
 }
 
