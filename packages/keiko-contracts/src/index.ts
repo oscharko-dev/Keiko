@@ -11,8 +11,13 @@
 //
 // Issue #178 adds the connected repository context surface (Epic #177): pure type contracts plus
 // pure validation helpers for the upcoming Files window → Conversation Center handoff.
+//
+// Issue #191 adds the Local Knowledge Connector surface (Epic #189): KnowledgeSource /
+// KnowledgeCapsule / CapsuleSet primitives, document and vector lineage records, connector
+// graph state, and pure validation helpers. No implementation — types only. Implementation
+// lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.4.0" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.5.0" as const;
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -338,3 +343,87 @@ export {
   isApprovalTokenShape,
   checkPatchAgainstScope,
 } from "./workflow-handoff.js";
+
+// ─── Local Knowledge Connector (Issue #191 / Epic #189) ─────────────────────────
+// KnowledgeSource / KnowledgeCapsule / CapsuleSet are kept structurally distinct: a source is
+// the smallest selectable scope, a capsule is a named local KB over one or more sources, a
+// CapsuleSet is a logical composed view over multiple capsules (no vector copy). Every
+// document-derived record carries capsuleId + sourceId + documentId lineage so retrieval can
+// never silently merge sources across capsules.
+export type {
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+  CapsuleSetId,
+  DocumentId,
+  ChunkId,
+  VectorId,
+  EmbeddingVectorMetric,
+  EmbeddingModelIdentity,
+  ParserIdentity,
+  KnowledgeSourceScope,
+  KnowledgeSourceScopeKind,
+  KnowledgeSource,
+  CapsuleLifecycleState,
+  CapsuleRetrievalEffort,
+  CapsuleOutputMode,
+  CapsuleAnswerGroundingPolicy,
+  KnowledgeCapsule,
+  CapsuleSet,
+  ConnectorNodeKind,
+  LocalKnowledgeNodeTarget,
+  ConnectorNode,
+  ConnectorNodeRef,
+  ConnectorEdge,
+  ConnectorGraphState,
+} from "./local-knowledge.js";
+export {
+  LOCAL_KNOWLEDGE_SCHEMA_VERSION,
+  EMBEDDING_VECTOR_METRICS,
+  KNOWLEDGE_SOURCE_SCOPE_KINDS,
+  CAPSULE_LIFECYCLE_STATES,
+  CAPSULE_RETRIEVAL_EFFORTS,
+  CAPSULE_OUTPUT_MODES,
+  CAPSULE_ANSWER_GROUNDING_POLICIES,
+  CONNECTOR_NODE_KINDS,
+} from "./local-knowledge.js";
+export type {
+  DocumentStatus,
+  DocumentRecord,
+  PageBoundingBox,
+  PageRecord,
+  SectionRecord,
+  ParsedUnit,
+  ParsedUnitKind,
+  ChunkRecord,
+  VectorRecord,
+  CitationReference,
+  RetrievalReference,
+  ParserDiagnosticSeverity,
+  ParserDiagnostic,
+  ParserResult,
+  IndexingJobStatus,
+  IndexingJobError,
+  IndexingJobRecord,
+  CapsuleHealth,
+  CapsuleDeleteRequest,
+} from "./local-knowledge-records.js";
+export {
+  DOCUMENT_STATUSES,
+  PARSED_UNIT_KINDS,
+  PARSER_DIAGNOSTIC_SEVERITIES,
+  INDEXING_JOB_STATUSES,
+} from "./local-knowledge-records.js";
+export { isSafeScopePath, isSafeStorageReference } from "./local-knowledge-paths.js";
+export type {
+  ValidationOk as LocalKnowledgeValidationOk,
+  ValidationFail as LocalKnowledgeValidationFail,
+  LocalKnowledgeValidation,
+} from "./local-knowledge-validation.js";
+export {
+  isSafeDisplaySummary,
+  validateEmbeddingModelIdentity,
+  validateKnowledgeSourceScope,
+  validateKnowledgeCapsule,
+  validateCapsuleSet,
+  validateConnectorGraphState,
+} from "./local-knowledge-validation.js";
