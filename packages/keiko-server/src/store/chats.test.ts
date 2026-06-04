@@ -107,6 +107,85 @@ describe("updateChat", () => {
   });
 });
 
+// Issue #184 — round-trip tests for the connectedScope wire round-trip through SQLite.
+// Three-state semantics: undefined (omit) leaves the binding alone; null clears; a value writes.
+describe("updateChat — connectedScope round-trip (#184)", () => {
+  it("createChat leaves connectedScope undefined", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(c.connectedScope).toBeUndefined();
+  });
+
+  it("sets a connectedScope and round-trips it through SELECT", () => {
+    const c = store.createChat(proj, "t", "m");
+    const updated = store.updateChat(c.id, {
+      connectedScope: { relativePaths: ["src/lib", "src/app/page.tsx"], connectedAtMs: 42 },
+    });
+    expect(updated.connectedScope).toEqual({
+      relativePaths: ["src/lib", "src/app/page.tsx"],
+      connectedAtMs: 42,
+    });
+    const fetched = store.listChats(proj).find((x) => x.id === c.id);
+    expect(fetched?.connectedScope).toEqual({
+      relativePaths: ["src/lib", "src/app/page.tsx"],
+      connectedAtMs: 42,
+    });
+  });
+
+  it("clears connectedScope when patched with null", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      connectedScope: { relativePaths: ["src/a"], connectedAtMs: 1 },
+    });
+    const cleared = store.updateChat(c.id, { connectedScope: null });
+    expect(cleared.connectedScope).toBeUndefined();
+    const fetched = store.listChats(proj).find((x) => x.id === c.id);
+    expect(fetched?.connectedScope).toBeUndefined();
+  });
+
+  it("leaves connectedScope untouched when the field is omitted from the patch", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      connectedScope: { relativePaths: ["src/keep"], connectedAtMs: 7 },
+    });
+    const renamed = store.updateChat(c.id, { title: "renamed" });
+    expect(renamed.title).toBe("renamed");
+    expect(renamed.connectedScope).toEqual({
+      relativePaths: ["src/keep"],
+      connectedAtMs: 7,
+    });
+  });
+
+  it("supports replacement: a second scope patch overwrites the prior binding", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      connectedScope: { relativePaths: ["src/a"], connectedAtMs: 1 },
+    });
+    const replaced = store.updateChat(c.id, {
+      connectedScope: { relativePaths: ["src/b", "src/c"], connectedAtMs: 2 },
+    });
+    expect(replaced.connectedScope).toEqual({
+      relativePaths: ["src/b", "src/c"],
+      connectedAtMs: 2,
+    });
+  });
+
+  it("rejects an empty relativePaths array", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, { connectedScope: { relativePaths: [], connectedAtMs: 1 } }),
+    ).toThrow(UiStoreError);
+  });
+
+  it("rejects a non-integer connectedAtMs", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, {
+        connectedScope: { relativePaths: ["src/a"], connectedAtMs: 1.5 },
+      }),
+    ).toThrow(UiStoreError);
+  });
+});
+
 describe("deleteChat", () => {
   it("deletes the chat and cascades to messages", () => {
     const c = store.createChat(proj, "t", "m");

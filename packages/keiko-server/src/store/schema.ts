@@ -4,7 +4,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 interface Migration {
   readonly version: number;
@@ -55,9 +55,20 @@ const V2_SQL = `
 ALTER TABLE chat_messages ADD COLUMN task_type TEXT;
 `;
 
+// V3 (issue #184) adds two additive columns to `chats` so a chat can carry its connected
+// Files-window scope across reloads. `connected_scope_paths` stores a JSON array of workspace-
+// relative paths; `connected_scope_at` stores epoch ms. Both NULL for pre-binding rows;
+// patching either column to NULL clears the binding. The combination round-trips into the
+// wire-type ChatConnectedScope at the store boundary.
+const V3_SQL = `
+ALTER TABLE chats ADD COLUMN connected_scope_paths TEXT;
+ALTER TABLE chats ADD COLUMN connected_scope_at INTEGER;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
+  { version: 3, sql: V3_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

@@ -12,6 +12,7 @@
 import type {
   Project,
   Chat,
+  ChatConnectedScope,
   ChatRole,
   WorkflowStatus,
   ChatMessage,
@@ -24,6 +25,7 @@ import type {
 export type {
   Project,
   Chat,
+  ChatConnectedScope,
   ChatRole,
   WorkflowStatus,
   ChatMessage,

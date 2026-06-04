@@ -2,6 +2,7 @@
 
 export type {
   Chat,
+  ChatConnectedScope,
   ChatMessage,
   ChatRole,
   CreateChatOptions,
