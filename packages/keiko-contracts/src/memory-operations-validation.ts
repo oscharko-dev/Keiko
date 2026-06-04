@@ -77,18 +77,7 @@ export function validateMemoryProposal(input: unknown): MemoryValidation<MemoryP
 }
 
 // ─── Acceptance ───────────────────────────────────────────────────────────────
-export function validateMemoryAcceptance(input: unknown): MemoryValidation<MemoryAcceptance> {
-  if (!isRecord(input)) {
-    return { ok: false, errors: ["acceptance must be an object"] };
-  }
-  const errors: string[] = [];
-  validateSchemaVersionLiteral(input, errors);
-  validateMemoryIdString("acceptance.proposalId", input.proposalId, errors);
-  validateMemoryIdString("acceptance.mintedMemoryId", input.mintedMemoryId, errors);
-  validateMemoryIdString("acceptance.reviewerId", input.reviewerId, errors);
-  if (!isFiniteNonNegativeNumber(input.acceptedAt)) {
-    errors.push("acceptance.acceptedAt must be a finite non-negative number");
-  }
+function validateAcceptanceOverrides(input: Record<string, unknown>, errors: string[]): void {
   if (input.bodyOverride !== undefined && !isSafeText(input.bodyOverride, MEMORY_BODY_MAX_CHARS)) {
     errors.push("acceptance.bodyOverride must be a bounded control-free string when set");
   }
@@ -109,6 +98,21 @@ export function validateMemoryAcceptance(input: unknown): MemoryValidation<Memor
   ) {
     errors.push("acceptance.reviewerNote must be a bounded control-free string when set");
   }
+}
+
+export function validateMemoryAcceptance(input: unknown): MemoryValidation<MemoryAcceptance> {
+  if (!isRecord(input)) {
+    return { ok: false, errors: ["acceptance must be an object"] };
+  }
+  const errors: string[] = [];
+  validateSchemaVersionLiteral(input, errors);
+  validateMemoryIdString("acceptance.proposalId", input.proposalId, errors);
+  validateMemoryIdString("acceptance.mintedMemoryId", input.mintedMemoryId, errors);
+  validateMemoryIdString("acceptance.reviewerId", input.reviewerId, errors);
+  if (!isFiniteNonNegativeNumber(input.acceptedAt)) {
+    errors.push("acceptance.acceptedAt must be a finite non-negative number");
+  }
+  validateAcceptanceOverrides(input, errors);
   if (errors.length > 0) {
     return { ok: false, errors };
   }

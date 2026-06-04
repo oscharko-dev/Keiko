@@ -45,25 +45,16 @@ function validateRecordSchemaVersion(input: Record<string, unknown>, errors: str
   }
 }
 
-function validateRecordCoreShape(input: Record<string, unknown>, errors: string[]): void {
-  if (!isNonEmptyTrimmedString(input.id)) {
-    errors.push("record.id must be a non-empty string");
-  }
+function validateRecordEnums(input: Record<string, unknown>, errors: string[]): void {
   if (!isMember(input.type, MEMORY_TYPES)) {
     errors.push(`record.type must be one of ${MEMORY_TYPES.join("|")}`);
-  }
-  if (!isSafeText(input.body, MEMORY_BODY_MAX_CHARS)) {
-    errors.push("record.body must be a bounded control-free non-empty string");
   }
   if (!isMember(input.status, MEMORY_STATUSES)) {
     errors.push(`record.status must be one of ${MEMORY_STATUSES.join("|")}`);
   }
-  if (typeof input.pinned !== "boolean") {
-    errors.push("record.pinned must be a boolean");
-  }
-  if (input.staleReason !== undefined && !isSafeText(input.staleReason, MEMORY_REASON_MAX_CHARS)) {
-    errors.push("record.staleReason must be a bounded control-free string when set");
-  }
+}
+
+function validateRecordTimestamps(input: Record<string, unknown>, errors: string[]): void {
   if (!isFiniteNonNegativeNumber(input.createdAt)) {
     errors.push("record.createdAt must be a finite non-negative number");
   }
@@ -77,6 +68,23 @@ function validateRecordCoreShape(input: Record<string, unknown>, errors: string[
   ) {
     errors.push("record.updatedAt must be greater than or equal to record.createdAt");
   }
+}
+
+function validateRecordCoreShape(input: Record<string, unknown>, errors: string[]): void {
+  if (!isNonEmptyTrimmedString(input.id)) {
+    errors.push("record.id must be a non-empty string");
+  }
+  if (!isSafeText(input.body, MEMORY_BODY_MAX_CHARS)) {
+    errors.push("record.body must be a bounded control-free non-empty string");
+  }
+  if (typeof input.pinned !== "boolean") {
+    errors.push("record.pinned must be a boolean");
+  }
+  if (input.staleReason !== undefined && !isSafeText(input.staleReason, MEMORY_REASON_MAX_CHARS)) {
+    errors.push("record.staleReason must be a bounded control-free string when set");
+  }
+  validateRecordEnums(input, errors);
+  validateRecordTimestamps(input, errors);
 }
 
 function validateRecordRetentionHint(input: Record<string, unknown>, errors: string[]): void {

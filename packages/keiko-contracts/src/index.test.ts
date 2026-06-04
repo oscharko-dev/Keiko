@@ -332,7 +332,7 @@ describe("keiko-contracts package surface", () => {
     expect(typeof mod.hasStaleModelMetadata).toBe("function");
   });
 
-  it("memory contract type re-exports are reachable through the barrel (#205)", async () => {
+  it("memory contract type re-exports are reachable through the barrel (#205)", () => {
     type Mod = typeof import("./index.js");
     const pin = <T>(_value?: T): T | undefined => undefined;
     pin<Mod["MEMORY_SCOPE_KINDS"]>();

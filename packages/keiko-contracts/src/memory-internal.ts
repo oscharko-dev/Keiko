@@ -62,7 +62,7 @@ export function validateTags(input: unknown, errors: string[]): void {
     return;
   }
   if (input.length > MEMORY_TAGS_MAX_COUNT) {
-    errors.push(`tags must have at most ${MEMORY_TAGS_MAX_COUNT} entries`);
+    errors.push(`tags must have at most ${String(MEMORY_TAGS_MAX_COUNT)} entries`);
     return;
   }
   for (const tag of input) {

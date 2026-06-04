@@ -6,7 +6,6 @@
 import { describe, it, expect } from "vitest";
 import {
   MEMORY_AUDIT_ACTION_KINDS,
-  MEMORY_AUDIT_INITIATOR_SURFACES,
   MEMORY_EDGE_KINDS,
   MEMORY_SCHEMA_VERSION,
   MEMORY_SCOPE_KINDS,
@@ -15,13 +14,12 @@ import {
   MEMORY_STATUSES,
   MEMORY_STATUS_TRANSITIONS,
   MEMORY_TYPES,
-  MEMORY_UPDATE_FIELDS,
 } from "./memory.js";
 import { MEMORY_STRUCTURED_PAYLOAD_KINDS } from "./memory-records.js";
+import { MEMORY_AUDIT_INITIATOR_SURFACES, MEMORY_UPDATE_FIELDS } from "./memory-operations.js";
 import type {
   MemoryEdgeId,
   MemoryId,
-  MemoryProposalId,
   MemoryReviewerId,
   MemoryStatus,
   ProjectId,
@@ -62,7 +60,6 @@ import {
 
 // ─── Branded-ID helpers ───────────────────────────────────────────────────────
 const mem = (s: string): MemoryId => s as MemoryId;
-const prop = (s: string): MemoryProposalId => s as MemoryProposalId;
 const reviewer = (s: string): MemoryReviewerId => s as MemoryReviewerId;
 const edge = (s: string): MemoryEdgeId => s as MemoryEdgeId;
 const audit = (s: string): MemoryAuditRecordId => s as MemoryAuditRecordId;
@@ -1122,49 +1119,37 @@ describe("hasStaleModelMetadata", () => {
 
 // ─── Type-level lineage invariants ───────────────────────────────────────────
 describe("type-level scope coordinate invariants", () => {
-  it("MemoryRecord cannot omit scope and cannot omit the scope coordinate for non-global kinds", () => {
-    // @ts-expect-error — missing scope
-    const missingScope: MemoryRecord = {
+  it("MemoryRecord rejects construction without a scope", () => {
+    const recordWithoutScope = {
       id: mem("m-1"),
-      schemaVersion: "1",
-      type: "preference",
+      schemaVersion: "1" as const,
+      type: "preference" as const,
       body: "ok",
       provenance: {
-        sourceKind: "explicit-user-instruction",
+        sourceKind: "explicit-user-instruction" as const,
         capturedAt: 0,
         confidence: 1,
-        sensitivity: "public",
+        sensitivity: "public" as const,
       },
       validity: { validFrom: 0 },
-      status: "accepted",
+      status: "accepted" as const,
       pinned: false,
       tags: [],
       createdAt: 0,
       updatedAt: 0,
     };
-    expect(missingScope.id).toBe(mem("m-1"));
+    // @ts-expect-error — MemoryRecord requires `scope`; the structural omission is rejected.
+    const assigned: MemoryRecord = recordWithoutScope;
+    expect(assigned.id).toBe(mem("m-1"));
+  });
 
-    // @ts-expect-error — kind=user but userId is missing
-    const missingUserId: MemoryRecord = {
-      id: mem("m-2"),
-      schemaVersion: "1",
-      scope: { kind: "user" },
-      type: "preference",
-      body: "ok",
-      provenance: {
-        sourceKind: "explicit-user-instruction",
-        capturedAt: 0,
-        confidence: 1,
-        sensitivity: "public",
-      },
-      validity: { validFrom: 0 },
-      status: "accepted",
-      pinned: false,
-      tags: [],
-      createdAt: 0,
-      updatedAt: 0,
-    };
-    expect(missingUserId.id).toBe(mem("m-2"));
+  it("MemoryScope kind=user requires userId at the type level", () => {
+    // The faulty coordinate is the value the type system rejects; assigning a `{ kind: "user" }`
+    // object to a `MemoryScope` variable is the exact site that fails compilation.
+    const userScopeMissingId = { kind: "user" as const };
+    // @ts-expect-error — scope.kind="user" requires `userId`; the structural omission is rejected.
+    const assigned: import("./memory.js").MemoryScope = userScopeMissingId;
+    expect(assigned.kind).toBe("user");
   });
 
   it("MemoryForget.userAcknowledgedDestructive is pinned to the literal true", () => {
@@ -1178,15 +1163,17 @@ describe("type-level scope coordinate invariants", () => {
       userAcknowledgedDestructive: true,
     };
     expect(happy.userAcknowledgedDestructive).toBe(true);
-    // @ts-expect-error — userAcknowledgedDestructive must be the literal true.
-    const bad: Forget = {
-      schemaVersion: "1",
+
+    const forgetWithFalseAck = {
+      schemaVersion: "1" as const,
       memoryId: mem("m-1"),
       reviewerId: reviewer("rev-1"),
       forgottenAt: 0,
       reason: "GDPR",
-      userAcknowledgedDestructive: false,
+      userAcknowledgedDestructive: false as const,
     };
+    // @ts-expect-error — userAcknowledgedDestructive must be the literal `true`.
+    const bad: Forget = forgetWithFalseAck;
     expect(bad).toBeDefined();
   });
 });

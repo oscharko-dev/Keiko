@@ -285,17 +285,7 @@ export function validateMemoryStructuredPayload(
 }
 
 // ─── Edge ─────────────────────────────────────────────────────────────────────
-export function validateMemoryEdge(input: unknown): MemoryValidation<MemoryEdge> {
-  if (!isRecord(input)) {
-    return { ok: false, errors: ["edge must be an object"] };
-  }
-  const errors: string[] = [];
-  if (input.schemaVersion !== "1") {
-    errors.push('edge.schemaVersion must be the literal "1"');
-  }
-  if (!isNonEmptyTrimmedString(input.id)) {
-    errors.push("edge.id must be a non-empty string");
-  }
+function validateEdgeEndpoints(input: Record<string, unknown>, errors: string[]): void {
   if (!isNonEmptyTrimmedString(input.fromMemoryId)) {
     errors.push("edge.fromMemoryId must be a non-empty string");
   }
@@ -309,12 +299,9 @@ export function validateMemoryEdge(input: unknown): MemoryValidation<MemoryEdge>
   ) {
     errors.push("edge.fromMemoryId and edge.toMemoryId must differ");
   }
-  if (!isMember(input.kind, MEMORY_EDGE_KINDS)) {
-    errors.push(`edge.kind must be one of ${MEMORY_EDGE_KINDS.join("|")}`);
-  }
-  if (!isFiniteNonNegativeNumber(input.createdAt)) {
-    errors.push("edge.createdAt must be a finite non-negative number");
-  }
+}
+
+function validateEdgeOptionalFields(input: Record<string, unknown>, errors: string[]): void {
   if (input.confidence !== undefined && !isUnitInterval(input.confidence)) {
     errors.push("edge.confidence must be a finite number in [0, 1] when set");
   }
@@ -324,6 +311,27 @@ export function validateMemoryEdge(input: unknown): MemoryValidation<MemoryEdge>
   ) {
     errors.push("edge.provenanceSummary must be a bounded control-free string when set");
   }
+}
+
+export function validateMemoryEdge(input: unknown): MemoryValidation<MemoryEdge> {
+  if (!isRecord(input)) {
+    return { ok: false, errors: ["edge must be an object"] };
+  }
+  const errors: string[] = [];
+  if (input.schemaVersion !== "1") {
+    errors.push('edge.schemaVersion must be the literal "1"');
+  }
+  if (!isNonEmptyTrimmedString(input.id)) {
+    errors.push("edge.id must be a non-empty string");
+  }
+  validateEdgeEndpoints(input, errors);
+  if (!isMember(input.kind, MEMORY_EDGE_KINDS)) {
+    errors.push(`edge.kind must be one of ${MEMORY_EDGE_KINDS.join("|")}`);
+  }
+  if (!isFiniteNonNegativeNumber(input.createdAt)) {
+    errors.push("edge.createdAt must be a finite non-negative number");
+  }
+  validateEdgeOptionalFields(input, errors);
   if (errors.length > 0) {
     return { ok: false, errors };
   }

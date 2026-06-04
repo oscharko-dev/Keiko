@@ -155,9 +155,7 @@ export const MEMORY_STATUSES: readonly MemoryStatus[] = [
 //  - "archived" can be restored to "accepted" — archival is non-destructive.
 //  - A "proposed" memory can also reach "expired" if its capture window elapses before
 //    review (proposal TTL is enforced by #207, not by this contract).
-export const MEMORY_STATUS_TRANSITIONS: {
-  readonly [K in MemoryStatus]: readonly MemoryStatus[];
-} = {
+export const MEMORY_STATUS_TRANSITIONS: Readonly<Record<MemoryStatus, readonly MemoryStatus[]>> = {
   proposed: ["accepted", "rejected", "expired"],
   accepted: ["superseded", "archived", "forgotten", "conflicted", "expired"],
   rejected: [],

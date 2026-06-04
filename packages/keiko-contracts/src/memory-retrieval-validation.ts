@@ -33,10 +33,10 @@ function validateRetrievalScopes(input: unknown, errors: string[]): void {
   }
 }
 
-function validateRetrievalEnumFilter<T extends string>(
+function validateRetrievalEnumFilter(
   field: string,
   values: unknown,
-  allowed: readonly T[],
+  allowed: readonly string[],
   errors: string[],
 ): void {
   if (values === undefined) {
@@ -63,6 +63,28 @@ function validateRetrievalNumericLimit(field: string, value: unknown, errors: st
   }
 }
 
+function validateRetrievalFilters(input: Record<string, unknown>, errors: string[]): void {
+  validateRetrievalEnumFilter("typeFilter", input.typeFilter, MEMORY_TYPES, errors);
+  validateRetrievalEnumFilter("statusFilter", input.statusFilter, MEMORY_STATUSES, errors);
+  if (input.textQuery !== undefined && !isSafeText(input.textQuery, MEMORY_BODY_MAX_CHARS)) {
+    errors.push("retrieval.textQuery must be a bounded control-free string when set");
+  }
+  if (input.tagsFilter !== undefined) {
+    validateTags(input.tagsFilter, errors);
+  }
+}
+
+function validateRetrievalBudgetAndToggles(input: Record<string, unknown>, errors: string[]): void {
+  validateRetrievalNumericLimit("maxResults", input.maxResults, errors);
+  validateRetrievalNumericLimit("maxBodyChars", input.maxBodyChars, errors);
+  if (input.includeArchived !== undefined && typeof input.includeArchived !== "boolean") {
+    errors.push("retrieval.includeArchived must be a boolean when set");
+  }
+  if (input.includeSuperseded !== undefined && typeof input.includeSuperseded !== "boolean") {
+    errors.push("retrieval.includeSuperseded must be a boolean when set");
+  }
+}
+
 export function validateMemoryRetrievalRequest(
   input: unknown,
 ): MemoryValidation<MemoryRetrievalRequest> {
@@ -75,65 +97,41 @@ export function validateMemoryRetrievalRequest(
     errors.push("retrieval.requestedAt must be a finite non-negative number");
   }
   validateRetrievalScopes(input.scopes, errors);
-  validateRetrievalEnumFilter("typeFilter", input.typeFilter, MEMORY_TYPES, errors);
-  validateRetrievalEnumFilter("statusFilter", input.statusFilter, MEMORY_STATUSES, errors);
-  if (input.textQuery !== undefined && !isSafeText(input.textQuery, MEMORY_BODY_MAX_CHARS)) {
-    errors.push("retrieval.textQuery must be a bounded control-free string when set");
-  }
-  if (input.tagsFilter !== undefined) {
-    validateTags(input.tagsFilter, errors);
-  }
-  validateRetrievalNumericLimit("maxResults", input.maxResults, errors);
-  validateRetrievalNumericLimit("maxBodyChars", input.maxBodyChars, errors);
-  if (input.includeArchived !== undefined && typeof input.includeArchived !== "boolean") {
-    errors.push("retrieval.includeArchived must be a boolean when set");
-  }
-  if (input.includeSuperseded !== undefined && typeof input.includeSuperseded !== "boolean") {
-    errors.push("retrieval.includeSuperseded must be a boolean when set");
-  }
+  validateRetrievalFilters(input, errors);
+  validateRetrievalBudgetAndToggles(input, errors);
   if (errors.length > 0) {
     return { ok: false, errors };
   }
   return { ok: true, value: input as unknown as MemoryRetrievalRequest };
 }
 
-// A candidate scope is reachable when an authorized scope of the SAME kind shares the
-// SAME coordinate. The kind discriminator is checked first so two same-string coordinates
-// at different kinds (e.g. a userId equal to a workspaceId) cannot accidentally match —
-// this is the type-level anchor for the no-cross-scope-visibility invariant.
+// A canonical coordinate string per scope. Distinct scope kinds always produce strings
+// with distinct kind prefixes, so a `userId` equal to a `workspaceId` cannot collide.
+// `global` carries a fixed coordinate so set membership remains a pure string compare.
+function scopeCoordinateKey(scope: MemoryScope): string {
+  switch (scope.kind) {
+    case "global":
+      return "global:";
+    case "user":
+      return `user:${scope.userId}`;
+    case "workspace":
+      return `workspace:${scope.workspaceId}`;
+    case "project":
+      return `project:${scope.projectId}`;
+    case "workflow":
+      return `workflow:${scope.workflowDefinitionId}`;
+  }
+}
+
+// A candidate scope is reachable when an authorized scope shares the same canonical
+// coordinate. This is the type-level anchor for the no-cross-scope-visibility invariant.
 export function isScopeReachable(
   candidate: MemoryScope,
   authorized: readonly MemoryScope[],
 ): boolean {
+  const target = scopeCoordinateKey(candidate);
   for (const scope of authorized) {
-    if (scope.kind !== candidate.kind) {
-      continue;
-    }
-    if (scope.kind === "global" && candidate.kind === "global") {
-      return true;
-    }
-    if (scope.kind === "user" && candidate.kind === "user" && scope.userId === candidate.userId) {
-      return true;
-    }
-    if (
-      scope.kind === "workspace" &&
-      candidate.kind === "workspace" &&
-      scope.workspaceId === candidate.workspaceId
-    ) {
-      return true;
-    }
-    if (
-      scope.kind === "project" &&
-      candidate.kind === "project" &&
-      scope.projectId === candidate.projectId
-    ) {
-      return true;
-    }
-    if (
-      scope.kind === "workflow" &&
-      candidate.kind === "workflow" &&
-      scope.workflowDefinitionId === candidate.workflowDefinitionId
-    ) {
+    if (scopeCoordinateKey(scope) === target) {
       return true;
     }
   }
