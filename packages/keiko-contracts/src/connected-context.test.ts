@@ -845,6 +845,22 @@ describe("validateConnectedContextPack", () => {
       "emittedAtMs",
     );
   });
+
+  it("rejects a pack with an uncertainty marker carrying an empty claim", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      uncertainty: [{ kind: "no-evidence", claim: "", impactedAtomIds: [], emittedAtMs: 1 }],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "claim empty");
+  });
+
+  it("rejects a pack with an uncertainty marker carrying a whitespace-only claim", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      uncertainty: [{ kind: "no-evidence", claim: "   ", impactedAtomIds: [], emittedAtMs: 1 }],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "claim empty");
+  });
 });
 
 // ─── Frozen-constant arrays ───────────────────────────────────────────────────

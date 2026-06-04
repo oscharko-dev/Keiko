@@ -566,9 +566,12 @@ function validatePackOmitted(entries: readonly OmittedContextEntry[], reasons: s
 }
 
 function validatePackUncertainty(entries: readonly UncertaintyMarker[], reasons: string[]): void {
-  for (const entry of entries) {
+  for (const [i, entry] of entries.entries()) {
     if (!UNCERTAINTY_MARKER_KINDS.includes(entry.kind)) {
       reasons.push("pack.uncertainty has invalid kind");
+    }
+    if (!isNonEmptyTrimmed(entry.claim)) {
+      reasons.push(`uncertainty[${i.toString()}].claim empty`);
     }
     if (!isFiniteNonNegativeInteger(entry.emittedAtMs)) {
       reasons.push("pack.uncertainty has invalid emittedAtMs");
