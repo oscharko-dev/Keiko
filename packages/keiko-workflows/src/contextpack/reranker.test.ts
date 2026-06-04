@@ -21,7 +21,7 @@ describe("disabledReranker", () => {
   it("reports unavailable with a structured reason", async () => {
     const availability = await disabledReranker.isAvailable();
     expect(availability.available).toBe(false);
-    if (availability.available === false) {
+    if (!availability.available) {
       expect(availability.reason).toBe("reranker-not-configured");
     }
   });
@@ -56,7 +56,7 @@ describe("test-fake reranker over the seam", () => {
   it("reports available with a model label", async () => {
     const availability = await reverseFake.isAvailable();
     expect(availability.available).toBe(true);
-    if (availability.available === true) {
+    if (availability.available) {
       expect(availability.modelLabel).toBe("fake-reverse");
     }
   });

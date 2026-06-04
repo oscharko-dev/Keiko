@@ -124,15 +124,17 @@ export function createMicroIndex(options: MicroIndexOptions): MicroIndex {
     store.set(key, entry);
   }
 
-  return {
-    get,
-    set,
-    delete: (key) => {
-      store.delete(key);
-    },
-    clear: () => {
-      store.clear();
-    },
-    size: () => store.size,
-  };
+  function deleteKey(key: string): void {
+    store.delete(key);
+  }
+
+  function clear(): void {
+    store.clear();
+  }
+
+  function size(): number {
+    return store.size;
+  }
+
+  return { get, set, delete: deleteKey, clear, size };
 }

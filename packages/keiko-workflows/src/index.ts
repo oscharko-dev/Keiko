@@ -18,3 +18,6 @@ export * from "./planner/index.js";
 
 // ─── Candidate ranking & negative context filter (Issue #182 / Epic #177) ────
 export * from "./ranking/index.js";
+
+// ─── Context-pack assembler & micro-index (Issue #183 / Epic #177) ──────────
+export * from "./contextpack/index.js";

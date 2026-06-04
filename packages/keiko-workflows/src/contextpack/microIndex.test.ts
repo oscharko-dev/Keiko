@@ -85,7 +85,7 @@ function clock(initial: number): { now: () => number; advance: (ms: number) => v
   let current = initial;
   return {
     now: () => current,
-    advance: (ms) => {
+    advance: (ms: number): void => {
       current += ms;
     },
   };
