@@ -14,7 +14,9 @@ import type { ModelCapability } from "./gateway.js";
 // browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
 // peer; importing it does not pull in any IO or redaction code.
 import {
+  CANDIDATE_OMISSION_REASONS,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  type CandidateOmissionReason,
   type ConnectedContextPack,
   type ExplorationBudget,
   type ExplorationUsage,
@@ -324,8 +326,22 @@ export interface GroundedAnswerContextPackSummary {
   readonly budget: ExplorationBudget;
   readonly citationCount: number;
   readonly omittedCount: number;
+  readonly omittedCounts: Readonly<Record<CandidateOmissionReason, number>>;
   readonly uncertaintyCount: number;
   readonly elapsedMs: number;
+}
+
+function buildOmittedCounts(
+  pack: ConnectedContextPack,
+): Readonly<Record<CandidateOmissionReason, number>> {
+  const counts = {} as Record<CandidateOmissionReason, number>;
+  for (const reason of CANDIDATE_OMISSION_REASONS) {
+    counts[reason] = 0;
+  }
+  for (const entry of pack.omitted) {
+    counts[entry.reason] += 1;
+  }
+  return counts;
 }
 
 // Pure builder: derives a GroundedAnswerContextPackSummary from the source pack plus the
@@ -346,6 +362,7 @@ export function buildGroundedAnswerContextPackSummary(
     budget: pack.budget,
     citationCount,
     omittedCount: pack.omitted.length,
+    omittedCounts: buildOmittedCounts(pack),
     uncertaintyCount: pack.uncertainty.length,
     elapsedMs,
   };

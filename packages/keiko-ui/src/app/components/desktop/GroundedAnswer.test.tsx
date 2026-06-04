@@ -25,6 +25,19 @@ function uncertainty(overrides: Partial<GroundedUncertainty> = {}): GroundedUnce
   return { kind: "no-evidence", claim: "excerpt unavailable for src/baz.ts", ...overrides };
 }
 
+const OMITTED_COUNTS_ZERO = {
+  "outside-scope": 0,
+  binary: 0,
+  generated: 0,
+  ignored: 0,
+  "size-exceeded": 0,
+  "near-duplicate": 0,
+  "low-relevance": 0,
+  "redacted-only": 0,
+  "budget-exhausted": 0,
+  "tool-unavailable": 0,
+} as const;
+
 function contextPack(
   overrides: Partial<GroundedAnswerContextPackSummary> = {},
 ): GroundedAnswerContextPackSummary {
@@ -54,6 +67,7 @@ function contextPack(
     },
     citationCount: 1,
     omittedCount: 0,
+    omittedCounts: OMITTED_COUNTS_ZERO,
     uncertaintyCount: 0,
     elapsedMs: 1_812,
     ...overrides,
@@ -143,8 +157,21 @@ describe("GroundedAnswer", () => {
   });
 
   it("renders the omitted count when > 0", () => {
-    render(<GroundedAnswer answer={answer({ omittedCount: 3 })} busy={false} />);
-    expect(screen.getByText("Omitted: 3 evidence atoms")).toBeInTheDocument();
+    render(
+      <GroundedAnswer
+        answer={answer({
+          omittedCount: 3,
+          contextPack: contextPack({
+            omittedCount: 3,
+            omittedCounts: { ...OMITTED_COUNTS_ZERO, binary: 1, "low-relevance": 2 },
+          }),
+        })}
+        busy={false}
+      />,
+    );
+    expect(
+      screen.getByText("Omitted: 3 evidence atoms (binary: 1, low relevance: 2)"),
+    ).toBeInTheDocument();
   });
 
   it("does not render an omitted line when count is 0", () => {

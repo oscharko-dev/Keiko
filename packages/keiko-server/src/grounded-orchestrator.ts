@@ -9,13 +9,17 @@
 // package's already-bounded WorkspaceFs port. Path validation is enforced by every composed
 // layer at its own boundary, so this file does not re-validate scope paths.
 
-import type {
-  ConnectedContextPack,
-  ExplorationBudget,
-  ExplorationUsage,
-  RetrievalQuery,
-  SelectedScope,
-  UncertaintyMarker,
+import {
+  isValidScopePath,
+  type CandidateFile,
+  type ConnectedContextPack,
+  type EvidenceAtom,
+  type ExplorationBudget,
+  type ExplorationUsage,
+  type OmittedContextEntry,
+  type RetrievalQuery,
+  type SelectedScope,
+  type UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
   advanceRing,
@@ -26,6 +30,7 @@ import {
   planAndGovern,
   rankCandidates,
   type ClarificationPrompt,
+  type ExcerptWindow,
   type ExplorationPlan,
   type GovernorState,
   type RetrievalRing,
@@ -46,7 +51,6 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import type { EvidenceAtom } from "@oscharko-dev/keiko-contracts/connected-context";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -117,6 +121,7 @@ interface SearchInputs {
 
 interface RingResult {
   readonly atoms: readonly EvidenceAtom[];
+  readonly omitted: readonly OmittedContextEntry[];
   readonly usage: ExplorationUsage;
 }
 
@@ -160,6 +165,27 @@ function budgetClipped(stopReason: string, nowMs: number): UncertaintyMarker {
   };
 }
 
+function omittedFromSearchCandidates(
+  candidates: readonly CandidateFile[],
+  nowMs: number,
+): readonly OmittedContextEntry[] {
+  const omitted: OmittedContextEntry[] = [];
+  for (const candidate of candidates) {
+    if (candidate.omitted === undefined) {
+      continue;
+    }
+    if (!isValidScopePath(candidate.scopePath, { mustBeRelative: true })) {
+      continue;
+    }
+    omitted.push({
+      scopePath: candidate.scopePath,
+      reason: candidate.omitted,
+      omittedAtMs: nowMs,
+    });
+  }
+  return omitted;
+}
+
 async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
   if (ring.kind === "lexical") {
     const result = await searchText(inputs.searchScope, inputs.query, ring.searchLimits, {
@@ -168,6 +194,7 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
     });
     return {
       atoms: result.atoms,
+      omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
       usage: usageDelta({ filesRead: result.filesScanned, elapsedMs: result.elapsedMs }),
     };
   }
@@ -189,12 +216,14 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
   );
   return {
     atoms: result.atoms,
+    omitted: [],
     usage: usageDelta({ elapsedMs: result.elapsedMs }),
   };
 }
 
 interface RingRunSummary {
   readonly atoms: readonly EvidenceAtom[];
+  readonly omitted: readonly OmittedContextEntry[];
   readonly governor: GovernorState;
   readonly uncertainty: readonly UncertaintyMarker[];
 }
@@ -205,6 +234,7 @@ async function runAllRings(
   initialGovernor: GovernorState,
 ): Promise<RingRunSummary> {
   const atoms: EvidenceAtom[] = [];
+  const omitted: OmittedContextEntry[] = [];
   const uncertainty: UncertaintyMarker[] = [];
   let governor = initialGovernor;
   for (const ring of rings) {
@@ -224,6 +254,7 @@ async function runAllRings(
     const afterRing = applyUsage(governor, result.usage);
     const ringAtoms = result.atoms;
     atoms.push(...ringAtoms);
+    omitted.push(...result.omitted);
     if (afterRing.status === "budget-exhausted") {
       governor = afterRing;
       uncertainty.push(budgetClipped(afterRing.stopReason ?? "budget exhausted", inputs.nowMs()));
@@ -234,7 +265,7 @@ async function runAllRings(
   if (governor.status === "running") {
     governor = complete(governor);
   }
-  return { atoms, governor, uncertainty };
+  return { atoms, omitted, governor, uncertainty };
 }
 
 interface ExcerptInputs {
@@ -242,19 +273,122 @@ interface ExcerptInputs {
   readonly fs: WorkspaceFs;
   readonly budget: ExplorationBudget;
   readonly initialUsage: ExplorationUsage;
+  readonly atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>;
   readonly nowMs: () => number;
 }
 
 interface ExcerptReadSummary {
-  readonly excerpts: ReadonlyMap<string, string>;
+  readonly excerpts: ReadonlyMap<string, readonly ExcerptWindow[]>;
   readonly uncertainty: readonly UncertaintyMarker[];
+}
+
+interface LineWindow {
+  readonly startLine: number;
+  readonly endLine: number;
+}
+
+const DEFAULT_EXCERPT_WINDOW: LineWindow = { startLine: 1, endLine: 200 };
+const EXCERPT_CONTEXT_LINES = 2;
+const MAX_EXCERPT_WINDOWS_PER_FILE = 8;
+
+function groupEvidenceAtomsByPath(
+  atoms: readonly EvidenceAtom[],
+): ReadonlyMap<string, readonly EvidenceAtom[]> {
+  const grouped = new Map<string, EvidenceAtom[]>();
+  for (const atom of atoms) {
+    const existing = grouped.get(atom.scopePath);
+    if (existing === undefined) {
+      grouped.set(atom.scopePath, [atom]);
+    } else {
+      existing.push(atom);
+    }
+  }
+  return grouped;
+}
+
+function lineWindowForAtom(atom: EvidenceAtom): LineWindow {
+  const range = atom.lineRange;
+  if (range === undefined) {
+    return DEFAULT_EXCERPT_WINDOW;
+  }
+  return {
+    startLine: Math.max(1, range.startLine - EXCERPT_CONTEXT_LINES),
+    endLine: range.endLine + EXCERPT_CONTEXT_LINES,
+  };
+}
+
+function mergeLineWindows(windows: readonly LineWindow[]): readonly LineWindow[] {
+  const sorted = [...windows].sort((a, b) =>
+    a.startLine === b.startLine ? a.endLine - b.endLine : a.startLine - b.startLine,
+  );
+  const merged: LineWindow[] = [];
+  for (const window of sorted) {
+    const previous = merged[merged.length - 1];
+    if (previous === undefined || window.startLine > previous.endLine + 1) {
+      merged.push(window);
+      continue;
+    }
+    merged[merged.length - 1] = {
+      startLine: previous.startLine,
+      endLine: Math.max(previous.endLine, window.endLine),
+    };
+  }
+  return merged;
+}
+
+function excerptLineWindows(
+  atomsForPath: readonly EvidenceAtom[] | undefined,
+): readonly LineWindow[] {
+  if (atomsForPath === undefined || atomsForPath.length === 0) {
+    return [DEFAULT_EXCERPT_WINDOW];
+  }
+  return mergeLineWindows(atomsForPath.map(lineWindowForAtom)).slice(
+    0,
+    MAX_EXCERPT_WINDOWS_PER_FILE,
+  );
+}
+
+function exhaustedDimensions(remainingFiles: number, remainingBytes: number): string {
+  return [
+    ...(remainingFiles <= 0 ? ["filesRead"] : []),
+    ...(remainingBytes <= 0 ? ["excerptBytes"] : []),
+  ].join(", ");
+}
+
+interface ReadPathExcerptWindowsResult {
+  readonly windows: readonly ExcerptWindow[];
+  readonly bytesConsumed: number;
+}
+
+async function readPathExcerptWindows(
+  scopePath: string,
+  inputs: ExcerptInputs,
+  remainingBytes: number,
+): Promise<ReadPathExcerptWindowsResult> {
+  const windows: ExcerptWindow[] = [];
+  let bytesConsumed = 0;
+  for (const window of excerptLineWindows(inputs.atomsByPath.get(scopePath))) {
+    const availableBytes = remainingBytes - bytesConsumed;
+    if (availableBytes <= 0) {
+      break;
+    }
+    const maxBytes = Math.min(8192, availableBytes);
+    const result = await readExcerpt(
+      inputs.searchScope,
+      { scopePath, startLine: window.startLine, endLine: window.endLine, maxBytes },
+      { fs: inputs.fs },
+    );
+    windows.push({ ...window, content: result.content });
+    bytesConsumed += utf8ByteLength(result.content);
+  }
+  return { windows, bytesConsumed };
 }
 
 async function readKeptExcerpts(
   keptPaths: readonly string[],
   inputs: ExcerptInputs,
 ): Promise<ExcerptReadSummary> {
-  const excerpts = new Map<string, string>();
+  const excerpts = new Map<string, readonly ExcerptWindow[]>();
   const uncertainty: UncertaintyMarker[] = [];
   let remainingFiles = Math.max(0, inputs.budget.filesReadMax - inputs.initialUsage.filesRead);
   let remainingBytes = Math.max(
@@ -263,23 +397,18 @@ async function readKeptExcerpts(
   );
   for (const scopePath of keptPaths) {
     if (remainingFiles <= 0 || remainingBytes <= 0) {
-      const dimensions = [
-        ...(remainingFiles <= 0 ? ["filesRead"] : []),
-        ...(remainingBytes <= 0 ? ["excerptBytes"] : []),
-      ].join(", ");
+      const dimensions = exhaustedDimensions(remainingFiles, remainingBytes);
       uncertainty.push(budgetClipped(`budget-exhausted on ${dimensions}`, inputs.nowMs()));
       break;
     }
     try {
-      const maxBytes = Math.min(8192, remainingBytes);
-      const result = await readExcerpt(
-        inputs.searchScope,
-        { scopePath, startLine: 1, endLine: 200, maxBytes },
-        { fs: inputs.fs },
-      );
-      excerpts.set(scopePath, result.content);
-      remainingFiles -= 1;
-      remainingBytes -= utf8ByteLength(result.content);
+      const result = await readPathExcerptWindows(scopePath, inputs, remainingBytes);
+      const { windows } = result;
+      if (windows.length > 0) {
+        excerpts.set(scopePath, windows);
+        remainingFiles -= 1;
+        remainingBytes -= result.bytesConsumed;
+      }
     } catch (error) {
       if (error instanceof RepoSearchUnsupportedFileError) {
         continue;
@@ -352,10 +481,11 @@ export async function runGroundedExploration(
   const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
 
   const ranking = rankCandidates({ atoms, anchors: plan.anchors }, { nowMs });
+  const atomsByPath = groupEvidenceAtomsByPath(atoms);
 
   const excerptReads = await readKeptExcerpts(
     ranking.kept.map((c) => c.scopePath),
-    { searchScope, fs, budget: plan.budget, initialUsage, nowMs },
+    { searchScope, fs, budget: plan.budget, initialUsage, atomsByPath, nowMs },
   );
 
   const assemble = await assembleContextPack(
@@ -365,7 +495,7 @@ export async function runGroundedExploration(
       budget: plan.budget,
       atoms,
       ranked: ranking.kept,
-      omittedFromRanking: ranking.omitted,
+      omittedFromRanking: [...rings.omitted, ...ranking.omitted],
       excerpts: excerptReads.excerpts,
       initialUsage,
       initialUncertainty: [...rings.uncertainty, ...excerptReads.uncertainty],

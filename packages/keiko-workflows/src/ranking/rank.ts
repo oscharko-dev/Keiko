@@ -124,39 +124,20 @@ function emptyOmittedCounts(): Record<CandidateOmissionReason, number> {
 
 function tallyOmittedCounts(
   omitted: readonly OmittedContextEntry[],
+  outsideScopeCount: number,
 ): Record<CandidateOmissionReason, number> {
   const counts = emptyOmittedCounts();
   for (const entry of omitted) {
     counts[entry.reason] += 1;
   }
+  counts["outside-scope"] += outsideScopeCount;
   return counts;
-}
-
-function buildOutsideScopeEntries(
-  invalidPaths: readonly string[],
-  nowMs: number,
-): OmittedContextEntry[] {
-  return invalidPaths.map((scopePath) => ({
-    scopePath,
-    reason: "outside-scope" as const,
-    omittedAtMs: nowMs,
-  }));
-}
-
-function mergeOmitted(
-  filterOmitted: readonly OmittedContextEntry[],
-  outsideEntries: readonly OmittedContextEntry[],
-): readonly OmittedContextEntry[] {
-  const merged = [...filterOmitted, ...outsideEntries];
-  merged.sort((a, b) => (a.scopePath < b.scopePath ? -1 : a.scopePath > b.scopePath ? 1 : 0));
-  return merged;
 }
 
 export function rankCandidates(input: RankingInput, options: RankingOptions = {}): RankingResult {
   const clock = options.nowMs ?? Date.now;
-  // Capture a single emission timestamp so every OmittedContextEntry created by this call
-  // (filter outputs AND outside-scope entries) carries the same omittedAtMs. The end-of-run
-  // clock read below is the elapsed-time measurement only and never feeds an entry.
+  // Capture a single emission timestamp so every OmittedContextEntry created by this call carries
+  // the same omittedAtMs. The end-of-run clock read below measures elapsed time only.
   const startMs = clock();
   const frozenStartMs: () => number = () => startMs;
   const hints = resolveHints(input.hints);
@@ -165,9 +146,9 @@ export function rankCandidates(input: RankingInput, options: RankingOptions = {}
   const annotated = buildAnnotated(valid, input, hints, weights);
   const filterOptions = resolveFilterOptions(options.filter, frozenStartMs);
   const filterResult = filterCandidates(annotated, filterOptions);
-  const outsideEntries = buildOutsideScopeEntries(invalidPaths, startMs);
-  const omitted = mergeOmitted(filterResult.omitted, outsideEntries);
-  const omittedCounts = tallyOmittedCounts(omitted);
+  // Invalid paths cannot be represented as OmittedContextEntry values without breaking
+  // ConnectedContextPack validation, so keep them diagnostics-only.
+  const omittedCounts = tallyOmittedCounts(filterResult.omitted, invalidPaths.length);
   const elapsedMs = Math.max(0, clock() - startMs);
   const diagnostics: RankingDiagnostics = {
     totalAtoms: input.atoms.length,
@@ -176,5 +157,5 @@ export function rankCandidates(input: RankingInput, options: RankingOptions = {}
     omittedCounts,
     elapsedMs,
   };
-  return { kept: filterResult.kept, omitted, diagnostics };
+  return { kept: filterResult.kept, omitted: filterResult.omitted, diagnostics };
 }

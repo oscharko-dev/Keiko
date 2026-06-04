@@ -10,6 +10,7 @@ import {
   validateConnectedContextPack,
   type CandidateFile,
   type EvidenceAtom,
+  type LineRange,
   type OmittedContextEntry,
   type RetrievalQuery,
   type SelectedScope,
@@ -47,12 +48,12 @@ function query(): RetrievalQuery {
   };
 }
 
-function atom(scopePath: string, stableId: string): EvidenceAtom {
+function atom(scopePath: string, stableId: string, lineRange?: LineRange): EvidenceAtom {
   return {
     schemaVersion: "1",
     stableId,
     scopePath,
-    lineRange: undefined,
+    lineRange,
     score: 0.7,
     provenance: { kind: "lexical-search", tool: "ripgrep", queryFingerprint: "fp" },
     redactionState: "redacted",
@@ -295,5 +296,32 @@ describe("assembleContextPack", () => {
     const result = await assembleContextPack(input, { nowMs: fixedNow });
     const entry = result.pack.files.find((f) => f.scopePath === "a.ts");
     expect(entry?.selectionReason).toBe("ranked by path-bonus");
+  });
+
+  it("slices excerpt windows to each cited atom range instead of duplicating the whole window", async () => {
+    const first = atom("a.ts", "atom-a-10", { startLine: 10, endLine: 10 });
+    const second = atom("a.ts", "atom-a-12", { startLine: 12, endLine: 12 });
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [first, second],
+      ranked: [candidate("a.ts", 0.9)],
+      excerpts: new Map([
+        [
+          "a.ts",
+          [
+            {
+              startLine: 9,
+              endLine: 12,
+              content: "context before\nfirst target\ncontext between\nsecond target",
+            },
+          ],
+        ],
+      ]),
+    };
+    const result = await assembleContextPack(input, { nowMs: fixedNow });
+    const excerpts = result.pack.files[0]?.excerpts;
+    expect(excerpts?.map((excerpt) => excerpt.content)).toEqual(["first target", "second target"]);
+    expect(result.pack.usage.excerptBytes).toBe("first targetsecond target".length);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
   });
 });

@@ -162,9 +162,27 @@ function UncertaintyLine({
   );
 }
 
-function OmittedLine({ omittedCount }: { readonly omittedCount: number }): ReactNode {
+function formatOmissionReason(reason: string): string {
+  return reason.replaceAll("-", " ");
+}
+
+function OmittedLine({
+  omittedCount,
+  omittedCounts,
+}: {
+  readonly omittedCount: number;
+  readonly omittedCounts: GroundedAnswerContextPackSummary["omittedCounts"];
+}): ReactNode {
   if (omittedCount <= 0) return null;
-  return <div className="grounded-meta">{`Omitted: ${String(omittedCount)} evidence atoms`}</div>;
+  const reasonSummary = Object.entries(omittedCounts)
+    .filter(([, count]) => count > 0)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([reason, count]) => `${formatOmissionReason(reason)}: ${String(count)}`)
+    .join(", ");
+  const suffix = reasonSummary.length > 0 ? ` (${reasonSummary})` : "";
+  return (
+    <div className="grounded-meta">{`Omitted: ${String(omittedCount)} evidence atoms${suffix}`}</div>
+  );
 }
 
 export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode {
@@ -176,7 +194,10 @@ export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode
       <div className="grounded-answer-body">{answer.content}</div>
       <CitationList citations={answer.citations} />
       <UncertaintyLine markers={answer.uncertainty} />
-      <OmittedLine omittedCount={answer.omittedCount} />
+      <OmittedLine
+        omittedCount={answer.omittedCount}
+        omittedCounts={answer.contextPack.omittedCounts}
+      />
       <ContextPackSummary contextPack={answer.contextPack} />
     </div>
   );

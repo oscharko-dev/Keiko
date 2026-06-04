@@ -265,6 +265,42 @@ describe("runGroundedExploration", () => {
     expect(out.pack.uncertainty.some((u) => u.claim.includes("searchCalls"))).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
+
+  it("preserves repository-search omission reasons in the context pack", async () => {
+    writeFileSync(join(ROOT, "src/asset.png"), "\x89PNG\r\n\x1a\n\0binary");
+    const out = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    expect(
+      out.pack.omitted.some(
+        (entry) => entry.scopePath === "src/asset.png" && entry.reason === "binary",
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("reads excerpt windows around late-line evidence instead of only the file header", async () => {
+    const filler = Array.from({ length: 239 }, (_, i) => `// filler ${String(i + 1)}`).join("\n");
+    writeFileSync(
+      join(ROOT, "src/late.ts"),
+      `${filler}\nexport const late = 'MyClass late target';\n`,
+    );
+    const out = await runGroundedExploration(
+      input({ query: happyQuery({ text: "Investigate src/late.ts MyClass late target" }) }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    const lateFile = out.pack.files.find((file) => file.scopePath === "src/late.ts");
+    expect(
+      lateFile?.excerpts.some((excerpt) => excerpt.content.includes("MyClass late target")),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
 });
 
 describe("echoAnswerer", () => {

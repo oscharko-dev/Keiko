@@ -9,8 +9,10 @@ import {
   type GroundedAnswerContextPackSummary,
 } from "./bff-wire.js";
 import {
+  CANDIDATE_OMISSION_REASONS,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
+  type CandidateOmissionReason,
   type ConnectedContextPack,
   type ExplorationUsage,
   type RetrievalQuery,
@@ -27,6 +29,14 @@ const USAGE_FIXTURE: ExplorationUsage = {
   elapsedMs: 1_800,
   rerankCalls: 0,
 };
+
+function emptyOmittedCounts(): Record<CandidateOmissionReason, number> {
+  const counts = {} as Record<CandidateOmissionReason, number>;
+  for (const reason of CANDIDATE_OMISSION_REASONS) {
+    counts[reason] = 0;
+  }
+  return counts;
+}
 
 function scope(kind: SelectedScopeKind, relativePaths: readonly string[]): SelectedScope {
   return {
@@ -80,6 +90,7 @@ describe("buildGroundedAnswerContextPackSummary", () => {
       budget: DEFAULT_EXPLORATION_BUDGET,
       citationCount: 4,
       omittedCount: 0,
+      omittedCounts: emptyOmittedCounts(),
       uncertaintyCount: 0,
       elapsedMs: 1_812,
     };
@@ -125,7 +136,17 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     });
     const summary = buildGroundedAnswerContextPackSummary(p, 0, 0);
     expect(summary.omittedCount).toBe(2);
+    expect(summary.omittedCounts.binary).toBe(1);
+    expect(summary.omittedCounts["size-exceeded"]).toBe(1);
+    expect(summary.omittedCounts.generated).toBe(0);
     expect(summary.uncertaintyCount).toBe(1);
+  });
+
+  it("initialises every omitted reason count to zero", () => {
+    const summary = buildGroundedAnswerContextPackSummary(pack(), 0, 0);
+    for (const reason of CANDIDATE_OMISSION_REASONS) {
+      expect(summary.omittedCounts[reason]).toBe(0);
+    }
   });
 
   it("surfaces usage and budget identity-equal to the source pack fields", () => {
@@ -171,8 +192,8 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     expect(summary.budget.searchCallsMax).toBe(Number.POSITIVE_INFINITY);
   });
 
-  it("structural test: summary JSON is bounded (well below the 600-byte review target)", () => {
+  it("structural test: summary JSON is bounded (well below the 1KB review target)", () => {
     const summary = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812);
-    expect(JSON.stringify(summary).length).toBeLessThan(600);
+    expect(JSON.stringify(summary).length).toBeLessThan(1_000);
   });
 });
