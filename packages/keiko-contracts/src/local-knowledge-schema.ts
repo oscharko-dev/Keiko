@@ -25,7 +25,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 1 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 2 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -246,6 +246,27 @@ CREATE TABLE schema_meta (
 ) STRICT;
 `.trim();
 
+// capsule_membership_changes — append-only audit trail for composition events on a capsule
+// (Issue #263). Recorded inline by `addSourcesToCapsule` and `composeCapsules`; consumed by
+// the evidence ledger and the future UI history view. `change_kind` is constrained so a typo
+// at the application layer fails at INSERT rather than silently broadens the audit vocabulary.
+// `source_id` is nullable because compose-events reference a capsule_set rather than a single
+// source — the `details_json` payload carries the structured arguments for that case.
+const CREATE_CAPSULE_MEMBERSHIP_CHANGES = `
+CREATE TABLE capsule_membership_changes (
+  id TEXT PRIMARY KEY NOT NULL,
+  capsule_id TEXT NOT NULL,
+  change_kind TEXT NOT NULL CHECK (change_kind IN ('add-source', 'remove-source', 'compose-set')),
+  source_id TEXT,
+  details_json TEXT,
+  occurred_at INTEGER NOT NULL,
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
+) STRICT;
+`.trim();
+
+const CREATE_CAPSULE_MEMBERSHIP_CHANGES_INDEX =
+  "CREATE INDEX idx_capsule_membership_changes_capsule_time ON capsule_membership_changes(capsule_id, occurred_at);";
+
 // Statements must be applied in this exact order: PRAGMA first (so child-table NOT NULL
 // foreign-key constraints are enforced as the rows arrive), then parents before children.
 export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
@@ -262,6 +283,7 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   CREATE_PARSER_DIAGNOSTICS,
   CREATE_INDEXING_JOBS,
   CREATE_SCHEMA_META,
+  CREATE_CAPSULE_MEMBERSHIP_CHANGES,
 ] as const;
 
 // ─── Indexes (scoped-query patterns only — no full-table scans) ──────────────────
@@ -273,6 +295,7 @@ export const KNOWLEDGE_CAPSULE_INDEXES: readonly string[] = [
   "CREATE INDEX idx_vectors_capsule_identity ON vectors(capsule_id, embedding_model_provider, embedding_model_id, vector_dimensions);",
   "CREATE INDEX idx_parser_diagnostics_capsule_doc ON parser_diagnostics(capsule_id, document_id);",
   "CREATE INDEX idx_indexing_jobs_capsule_status ON indexing_jobs(capsule_id, status);",
+  CREATE_CAPSULE_MEMBERSHIP_CHANGES_INDEX,
 ] as const;
 
 // Runtime deletion primitive (#193 uses this inside a transaction). The cascade chain in
@@ -289,11 +312,47 @@ export interface KnowledgeCapsuleMigration {
   readonly up: readonly string[];
 }
 
+// Version 1 originally applied the entire DDL+indexes set as a single migration. To preserve
+// forward-only semantics we split v2 out as a *delta*: existing v1 databases run only the
+// new CREATE TABLE + CREATE INDEX. Fresh installs apply v1 followed by v2 and end at the
+// same on-disk shape. Each `up` entry stays a single complete statement.
+const V1_DDL_WITHOUT_V2: readonly string[] = [
+  PRAGMA_FOREIGN_KEYS,
+  CREATE_CAPSULES,
+  CREATE_CAPSULE_SOURCES,
+  CREATE_CAPSULE_SET_MEMBERS,
+  CREATE_DOCUMENTS,
+  CREATE_PAGES,
+  CREATE_SECTIONS,
+  CREATE_PARSED_UNITS,
+  CREATE_CHUNKS,
+  CREATE_VECTORS,
+  CREATE_PARSER_DIAGNOSTICS,
+  CREATE_INDEXING_JOBS,
+  CREATE_SCHEMA_META,
+] as const;
+
+const V1_INDEXES_WITHOUT_V2: readonly string[] = [
+  "CREATE INDEX idx_documents_capsule_source ON documents(capsule_id, source_id, status);",
+  "CREATE INDEX idx_documents_content_hash ON documents(capsule_id, content_hash);",
+  "CREATE INDEX idx_chunks_capsule_document_order ON chunks(capsule_id, document_id, order_index);",
+  "CREATE INDEX idx_vectors_capsule ON vectors(capsule_id);",
+  "CREATE INDEX idx_vectors_capsule_identity ON vectors(capsule_id, embedding_model_provider, embedding_model_id, vector_dimensions);",
+  "CREATE INDEX idx_parser_diagnostics_capsule_doc ON parser_diagnostics(capsule_id, document_id);",
+  "CREATE INDEX idx_indexing_jobs_capsule_status ON indexing_jobs(capsule_id, status);",
+] as const;
+
 export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] = [
   {
     version: 1,
     reason: "Initial schema for Local Knowledge Connector capsule store (Issue #265).",
-    up: [...KNOWLEDGE_CAPSULE_DDL, ...KNOWLEDGE_CAPSULE_INDEXES],
+    up: [...V1_DDL_WITHOUT_V2, ...V1_INDEXES_WITHOUT_V2],
+  },
+  {
+    version: 2,
+    reason:
+      "Audit trail for capsule composition events (add-source, remove-source, compose-set) for Issue #263.",
+    up: [CREATE_CAPSULE_MEMBERSHIP_CHANGES, CREATE_CAPSULE_MEMBERSHIP_CHANGES_INDEX],
   },
 ] as const;
 
@@ -312,6 +371,7 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   "parser_diagnostics",
   "indexing_jobs",
   "schema_meta",
+  "capsule_membership_changes",
 ] as const;
 
 export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
@@ -322,4 +382,5 @@ export const KNOWLEDGE_CAPSULE_INDEX_NAMES: readonly string[] = [
   "idx_vectors_capsule_identity",
   "idx_parser_diagnostics_capsule_doc",
   "idx_indexing_jobs_capsule_status",
+  "idx_capsule_membership_changes_capsule_time",
 ] as const;

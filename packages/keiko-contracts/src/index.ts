@@ -17,7 +17,7 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.6.0" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.7.0" as const;
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
