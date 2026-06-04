@@ -33,6 +33,7 @@ import {
   hitLimit,
   probeBinary,
   scanFile,
+  type CandidateSet,
   type RunState,
   type SearchTextRunner,
 } from "./repoSearchScan.js";
@@ -129,9 +130,14 @@ export async function searchText(
   }
   const fs = deps.fs ?? nodeWorkspaceFs;
   const nowMs = deps.nowMs ?? Date.now;
+  // Honor the per-query cap alongside the global limit (Finding 1).
+  const effectiveLimits: SearchLimits = {
+    ...limits,
+    maxMatchesReturned: Math.min(limits.maxMatchesReturned, query.maxResults),
+  };
   const runner: SearchTextRunner = {
     scope,
-    limits,
+    limits: effectiveLimits,
     fs,
     nowMs,
     startMs: nowMs(),
@@ -139,11 +145,16 @@ export async function searchText(
     ignoreMatcher: compileIgnore(scope.workspace.ignoreLines),
     fingerprint: fingerprintFor(query),
   };
-  const files = gatherCandidates(scope, limits, fs);
+  const candidateSet: CandidateSet = gatherCandidates(scope, limits, fs);
   const atoms: EvidenceAtom[] = [];
   const candidates: CandidateFile[] = [];
-  const state: RunState = { filesScanned: 0, matchesReturned: 0, truncated: false };
-  for (const file of files) {
+  // Seed truncated from candidate gathering so a scope.relativePaths cap is preserved.
+  const state: RunState = {
+    filesScanned: 0,
+    matchesReturned: 0,
+    truncated: candidateSet.truncated,
+  };
+  for (const file of candidateSet.files) {
     if (hitLimit(runner, state)) {
       break;
     }
@@ -189,6 +200,8 @@ function findFilesSync(
   nowMs: () => number,
 ): SearchResult {
   const startMs = nowMs();
+  // Honor the per-query cap alongside the global limit (Finding 2).
+  const effectiveMaxMatches = Math.min(limits.maxMatchesReturned, query.maxResults);
   const ctx: FindFilesContext = {
     scope,
     regex: compileGlob(query.text),
@@ -196,13 +209,14 @@ function findFilesSync(
     fingerprint: fingerprintFor(query),
     nowMs,
   };
-  const files = gatherCandidates(scope, limits, fs);
+  const candidateSet: CandidateSet = gatherCandidates(scope, limits, fs);
   const atoms: EvidenceAtom[] = [];
   const candidates: CandidateFile[] = [];
-  let truncated = false;
+  // Seed truncated from candidate gathering so a scope.relativePaths cap is preserved.
+  let truncated = candidateSet.truncated;
   let filesScanned = 0;
-  for (const file of files) {
-    if (atoms.length >= limits.maxMatchesReturned || nowMs() - startMs > limits.elapsedMsMax) {
+  for (const file of candidateSet.files) {
+    if (atoms.length >= effectiveMaxMatches || nowMs() - startMs > limits.elapsedMsMax) {
       truncated = true;
       break;
     }
@@ -255,6 +269,15 @@ function assertExcerptRange(request: ReadExcerptRequest): void {
       `invalid line range: ${request.startLine.toString()}-${request.endLine.toString()}`,
     );
   }
+  if (
+    !Number.isFinite(request.maxBytes) ||
+    !Number.isInteger(request.maxBytes) ||
+    request.maxBytes < 0
+  ) {
+    throw new RepoSearchInvalidRangeError(
+      `invalid maxBytes: ${String(request.maxBytes)} (must be a finite non-negative integer)`,
+    );
+  }
   if (!isValidScopePath(request.scopePath, { mustBeRelative: true })) {
     throw new RepoSearchInvalidRangeError(`invalid scopePath: ${request.scopePath}`);
   }
@@ -271,6 +294,15 @@ export async function readExcerpt(
   const nowMs = deps.nowMs ?? Date.now;
   const abs = resolveWithinWorkspace(scope.workspace.root, request.scopePath);
   assertContainedRealPath(fs, scope.workspace.root, abs, "scope");
+  // Deny/ignore gates must fire BEFORE any byte read (incl. the binary probe) so that a
+  // denied path such as .env is never read at all (Finding 4).
+  const ignoreMatcher = compileIgnore(scope.workspace.ignoreLines);
+  if (isDenied(request.scopePath) || isIgnored(ignoreMatcher, request.scopePath, false)) {
+    throw new RepoSearchUnsupportedFileError(
+      `cannot read excerpt of denied or ignored path: ${request.scopePath}`,
+      "denied",
+    );
+  }
   const stat = fs.stat(abs);
   if (await probeBinary(fs, abs, stat.size)) {
     throw new RepoSearchUnsupportedFileError(

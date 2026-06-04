@@ -104,17 +104,30 @@ function collectFromEntries(
   scope: ScopeShape,
   limits: LimitsShape,
   fs: WorkspaceFs,
-): readonly DiscoveredFile[] {
+): { files: readonly DiscoveredFile[]; truncated: boolean } {
   const out: DiscoveredFile[] = [];
   const root = scope.workspace.root;
+  let scannedSoFar = 0;
+  let truncated = false;
   for (const entry of scope.relativePaths) {
+    if (scannedSoFar >= limits.maxFilesScanned) {
+      truncated = true;
+      break;
+    }
     const abs = resolveWithinWorkspace(root, entry);
     assertContainedRealPath(fs, root, abs, "scope");
+    const entryRel = toRelative(root, abs);
+    // Deny the directory entry itself before recursing so that a denied dir (e.g.
+    // node_modules) listed explicitly in scope.relativePaths is never expanded (Finding 5).
+    if (isDenied(entryRel)) {
+      continue;
+    }
     const stat = fs.stat(abs);
     if (stat.isDirectory) {
+      const remaining = limits.maxFilesScanned - scannedSoFar;
       const nested = discoverFiles(
         { ...scope.workspace, root: abs },
-        { maxDepth: 12, maxFiles: limits.maxFilesScanned, applyGitignore: true },
+        { maxDepth: 12, maxFiles: remaining, applyGitignore: true },
         fs,
       );
       for (const file of nested) {
@@ -122,21 +135,31 @@ function collectFromEntries(
           relativePath: toRelative(root, resolveWithinWorkspace(abs, file.relativePath)),
           sizeBytes: file.sizeBytes,
         });
+        scannedSoFar += 1;
+      }
+      if (nested.length >= remaining) {
+        truncated = true;
       }
       continue;
     }
     if (stat.isFile) {
-      out.push({ relativePath: toRelative(root, abs), sizeBytes: stat.size });
+      out.push({ relativePath: entryRel, sizeBytes: stat.size });
+      scannedSoFar += 1;
     }
   }
-  return out;
+  return { files: out, truncated };
+}
+
+export interface CandidateSet {
+  readonly files: readonly DiscoveredFile[];
+  readonly truncated: boolean;
 }
 
 export function gatherCandidates(
   scope: ScopeShape,
   limits: LimitsShape,
   fs: WorkspaceFs,
-): readonly DiscoveredFile[] {
+): CandidateSet {
   // Defense in depth alongside the realpath gate: validate scope.relativePaths against the
   // contracts-layer shape rules (no absolute paths, no `..`, no drive letters, no backslashes).
   // resolveWithinWorkspace + assertContainedRealPath already provide a complete barrier; this
@@ -147,11 +170,18 @@ export function gatherCandidates(
       throw new RepoSearchInvalidQueryError(`invalid scope.relativePaths entry: ${entry}`);
     }
   }
-  const files =
-    scope.relativePaths.length === 0
-      ? collectFromDirectory(scope, limits, fs)
-      : collectFromEntries(scope, limits, fs);
-  return [...files].sort((a, b) => (a.relativePath < b.relativePath ? -1 : 1));
+  if (scope.relativePaths.length === 0) {
+    const files = collectFromDirectory(scope, limits, fs);
+    return {
+      files: [...files].sort((a, b) => (a.relativePath < b.relativePath ? -1 : 1)),
+      truncated: false,
+    };
+  }
+  const result = collectFromEntries(scope, limits, fs);
+  return {
+    files: [...result.files].sort((a, b) => (a.relativePath < b.relativePath ? -1 : 1)),
+    truncated: result.truncated,
+  };
 }
 
 export async function probeBinary(fs: WorkspaceFs, abs: string, size: number): Promise<boolean> {

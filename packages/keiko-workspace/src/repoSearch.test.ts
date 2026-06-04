@@ -11,7 +11,7 @@ import {
   RepoSearchInvalidRangeError,
   RepoSearchUnsupportedFileError,
 } from "./errors.js";
-import { PathEscapeError } from "@oscharko-dev/keiko-security/errors/workspace";
+import { PathEscapeError, WorkspaceError } from "@oscharko-dev/keiko-security/errors/workspace";
 import { memFs } from "./_memfs.js";
 import {
   DEFAULT_SEARCH_LIMITS,
@@ -642,6 +642,100 @@ describe("readExcerpt (memFs)", () => {
       { fs, nowMs: FIXED_NOW },
     );
     expect(a.atom.stableId).not.toBe(b.atom.stableId);
+  });
+});
+
+// ─── Copilot review findings on PR #248 (memFs) ───────────────────────────────
+describe("Copilot finding fixes (memFs)", () => {
+  it("searchText clamps matches to min(limits.maxMatchesReturned, query.maxResults)", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "match\nmatch\nmatch\nmatch\nmatch\n" });
+    const q: RetrievalQuery = nlq("match", { maxResults: 2 });
+    const r = await searchText(scope, q, DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW });
+    expect(r.atoms).toHaveLength(2);
+    expect(r.truncated).toBe(true);
+  });
+
+  it("findFiles clamps to min(limits.maxMatchesReturned, query.maxResults)", async () => {
+    const { scope, fs } = memScope({
+      "a.ts": "",
+      "b.ts": "",
+      "c.ts": "",
+      "d.ts": "",
+    });
+    const q: RetrievalQuery = fpq("**/*.ts", { maxResults: 2 });
+    const r = await findFiles(scope, q, DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW });
+    expect(r.atoms).toHaveLength(2);
+    expect(r.truncated).toBe(true);
+  });
+
+  it("readExcerpt rejects a negative maxBytes with RepoSearchInvalidRangeError", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "alpha\n" });
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "src/a.ts", startLine: 1, endLine: 1, maxBytes: -1 },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidRangeError);
+  });
+
+  it("readExcerpt rejects a non-integer maxBytes", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "alpha\n" });
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "src/a.ts", startLine: 1, endLine: 1, maxBytes: 1.5 },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidRangeError);
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "src/a.ts", startLine: 1, endLine: 1, maxBytes: Number.NaN },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidRangeError);
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "src/a.ts", startLine: 1, endLine: 1, maxBytes: Number.POSITIVE_INFINITY },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidRangeError);
+  });
+
+  it("readExcerpt refuses a denied path BEFORE the binary probe touches any bytes", async () => {
+    const { scope, fs } = memScope({ ".env": "SECRET=value\n" });
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: ".env", startLine: 1, endLine: 1, maxBytes: 100 },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(WorkspaceError);
+  });
+
+  it("searchText denies node_modules when explicitly listed in scope.relativePaths", async () => {
+    const { scope, fs } = memScope(
+      { "node_modules/foo.ts": "match\n", "src/a.ts": "match\n" },
+      { relativePaths: ["node_modules", "src"] },
+    );
+    const r = await searchText(scope, nlq("match"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/a.ts"]);
+  });
+
+  it("scope.relativePaths cumulatively respects maxFilesScanned across entries", async () => {
+    const { scope, fs } = memScope(
+      { "x/1.ts": "match\n", "x/2.ts": "match\n", "y/3.ts": "match\n", "y/4.ts": "match\n" },
+      { relativePaths: ["x", "y"] },
+    );
+    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2 };
+    const r = await searchText(scope, nlq("match"), limits, { fs, nowMs: FIXED_NOW });
+    expect(r.atoms.length).toBeLessThanOrEqual(2);
+    expect(r.truncated).toBe(true);
   });
 });
 
