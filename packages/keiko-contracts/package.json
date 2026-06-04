@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-contracts",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -27,6 +27,10 @@
     "./verification-summary": {
       "types": "./dist/verification-summary.d.ts",
       "import": "./dist/verification-summary.js"
+    },
+    "./workflow-handoff": {
+      "types": "./dist/workflow-handoff.d.ts",
+      "import": "./dist/workflow-handoff.js"
     },
     "./evidence": {
       "types": "./dist/evidence.d.ts",

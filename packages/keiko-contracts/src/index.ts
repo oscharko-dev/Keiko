@@ -12,7 +12,7 @@
 // Issue #178 adds the connected repository context surface (Epic #177): pure type contracts plus
 // pure validation helpers for the upcoming Files window → Conversation Center handoff.
 
-export const KEIKO_CONTRACTS_VERSION = "0.2.0" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.3.0" as const;
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -309,3 +309,30 @@ export {
   validateRetrievalQuery,
   validateConnectedContextPack,
 } from "./connected-context.js";
+
+// ─── Workflow handoff & patch-scope (Issue #186 / Epic #177) ────────────────────
+// NOTE: `WorkflowKind` and `ValidationResult` are NOT re-exported here because both names
+// are already taken by evaluations.ts and connected-context.ts respectively. Import them
+// directly from "@oscharko-dev/keiko-contracts/workflow-handoff" when needed (the subpath
+// key has no .js suffix).
+export type {
+  PatchScopeLimits,
+  ExpectedCheck,
+  PatchScope,
+  WorkflowHandoffRequest,
+  UserApprovalTokenInput,
+  PatchScopeViolationKind,
+  PatchScopeViolation,
+  PatchScopeCheck,
+  ProposedPatchEntry,
+} from "./workflow-handoff.js";
+export {
+  WORKFLOW_HANDOFF_SCHEMA_VERSION,
+  DEFAULT_PATCH_SCOPE_LIMITS,
+  EXPECTED_CHECKS,
+  WORKFLOW_KINDS,
+  validatePatchScope,
+  validateWorkflowHandoffRequest,
+  isApprovalTokenShape,
+  checkPatchAgainstScope,
+} from "./workflow-handoff.js";

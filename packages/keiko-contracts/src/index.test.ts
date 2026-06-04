@@ -10,6 +10,14 @@ import {
   DEFAULT_VERIFICATION_LIMITS,
   EVAL_SCORECARD_SCHEMA_VERSION,
   TERMINAL_STATES,
+  WORKFLOW_HANDOFF_SCHEMA_VERSION,
+  DEFAULT_PATCH_SCOPE_LIMITS,
+  EXPECTED_CHECKS,
+  WORKFLOW_KINDS,
+  isApprovalTokenShape,
+  checkPatchAgainstScope,
+  validatePatchScope,
+  validateWorkflowHandoffRequest,
 } from "./index.js";
 import type {
   ToolPort,
@@ -18,11 +26,20 @@ import type {
   ToolCallMetadata,
   SideFileWriteResult,
   EvidenceDeps,
+  PatchScope,
+  PatchScopeLimits,
+  PatchScopeViolation,
+  PatchScopeViolationKind,
+  PatchScopeCheck,
+  ProposedPatchEntry,
+  WorkflowHandoffRequest,
+  UserApprovalTokenInput,
+  ExpectedCheck,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
-  it("exposes the version constant pinned at 0.2.0", () => {
-    expect(KEIKO_CONTRACTS_VERSION).toBe("0.2.0");
+  it("exposes the version constant pinned at 0.3.0", () => {
+    expect(KEIKO_CONTRACTS_VERSION).toBe("0.3.0");
   });
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {
@@ -72,6 +89,33 @@ describe("keiko-contracts package surface", () => {
     pin<ToolCallResult>();
     pin<ToolCallMetadata>();
     pin<SideFileWriteResult>();
+  });
+
+  it("workflow-handoff value re-exports are reachable through the barrel (#186)", () => {
+    expect(WORKFLOW_HANDOFF_SCHEMA_VERSION).toBe("1");
+    expect(DEFAULT_PATCH_SCOPE_LIMITS.maxFileCount).toBeGreaterThan(0);
+    expect(EXPECTED_CHECKS).toContain("verify");
+    expect(WORKFLOW_KINDS).toContain("unit-test-generation");
+    expect(typeof isApprovalTokenShape).toBe("function");
+    expect(typeof validatePatchScope).toBe("function");
+    expect(typeof validateWorkflowHandoffRequest).toBe("function");
+    expect(typeof checkPatchAgainstScope).toBe("function");
+  });
+
+  it("workflow-handoff type re-exports are reachable through the barrel (#186)", () => {
+    // Phantom generic keeps verbatimModuleSyntax happy without producing runtime values; if a
+    // future refactor drops one of the names from the package surface, this test stops
+    // compiling — the same guard pattern used for the #162 tool ports above.
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<PatchScope>();
+    pin<PatchScopeLimits>();
+    pin<PatchScopeViolation>();
+    pin<PatchScopeViolationKind>();
+    pin<PatchScopeCheck>();
+    pin<ProposedPatchEntry>();
+    pin<WorkflowHandoffRequest>();
+    pin<UserApprovalTokenInput>();
+    pin<ExpectedCheck>();
   });
 
   it("EvidenceDeps.costClassResolver (#163) is an optional injection port shape", () => {

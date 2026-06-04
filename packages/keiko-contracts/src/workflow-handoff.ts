@@ -125,6 +125,15 @@ export type ValidationResult =
 const APPROVAL_TOKEN_RE = /^[0-9a-f]{64}$/;
 const CONTEXT_PACK_ID_RE = /^(pl-[0-9a-f]{16}|p-[0-9a-f]{64})$/;
 
+// The schema discriminant comparisons below are statically true at the type level (the
+// constant equals the literal field type), so we widen to `string` before comparing. This
+// keeps the validator honest against runtime inputs that bypass the type system — e.g.,
+// objects materialized from JSON.parse or cross-version manifests. Same posture as
+// connected-context.ts schemaMismatch.
+function schemaMismatch(actual: string, expected: string): boolean {
+  return actual !== expected;
+}
+
 function isFiniteNonNegativeInteger(value: number): boolean {
   return Number.isInteger(value) && value >= 0;
 }
@@ -248,7 +257,7 @@ export function validatePatchScope(scope: PatchScope): ValidationResult {
   const reasons: string[] = [];
   pushIf(
     reasons,
-    scope.schemaVersion !== WORKFLOW_HANDOFF_SCHEMA_VERSION,
+    schemaMismatch(scope.schemaVersion, WORKFLOW_HANDOFF_SCHEMA_VERSION),
     "patchScope.schemaVersion mismatch",
   );
   validateScopePathArray(scope.editablePaths, "editablePaths", reasons);
@@ -280,7 +289,7 @@ export function validateWorkflowHandoffRequest(request: WorkflowHandoffRequest):
   const reasons: string[] = [];
   pushIf(
     reasons,
-    request.schemaVersion !== WORKFLOW_HANDOFF_SCHEMA_VERSION,
+    schemaMismatch(request.schemaVersion, WORKFLOW_HANDOFF_SCHEMA_VERSION),
     "request.schemaVersion mismatch",
   );
   if (!isNonEmptyTrimmed(request.contextPackStableId)) {

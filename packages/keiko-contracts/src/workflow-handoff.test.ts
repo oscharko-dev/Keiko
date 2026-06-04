@@ -26,7 +26,7 @@ import type {
 } from "./workflow-handoff.js";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
-const VALID_TOKEN: string = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const VALID_TOKEN = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const VALID_PACK_LEAF_ID = "pl-0123456789abcdef" as const;
 const VALID_PACK_FULL_ID =
   "p-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" as const;
