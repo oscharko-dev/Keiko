@@ -237,6 +237,38 @@ module.exports = {
       },
     },
     {
+      name: "adr-0019-direction-3f-memory-vault-only-contracts-security",
+      comment:
+        "ADR-0019 direction rule 3 (memory-vault strict variant): keiko-memory-vault may " +
+        "depend only on keiko-contracts and keiko-security. The dependency on " +
+        "keiko-security carries the redaction primitive that the storage boundary applies " +
+        "before persisting body/tags/free-text fields (defence-in-depth before the " +
+        "capture-policy gate in #207). The layer does NOT depend on keiko-workspace " +
+        "because the memory vault owns its own DB file path resolver (KEIKO_MEMORY_DIR " +
+        "ladder + absolute/non-symlink/outside-cwd guards) and never touches workspace " +
+        "files. Added at error severity by issue #206 because the memory-vault package " +
+        "physically exists. Also fires on the negative-test fixture under " +
+        "tests/architecture/fixtures/memory-vault/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs. The to.path forbids both non-allow-listed " +
+        "packages AND every sibling src/ shim domain (gateway|workspace|tools|harness|" +
+        "workflows|audit|ui|verification|evaluations|cli) so a future deep-import is " +
+        "caught (boundary-weakening gap pattern from issues #160 and #165). pathNot only " +
+        "filters self-references; it must NOT silently exclude sibling-but-still-in-src/ " +
+        "domains (memory lesson from issues #160 and #162).",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-memory-vault/src/|" + "tests/architecture/fixtures/memory-vault/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-vault)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-vault)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|memory-vault)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+        pathNot: "^packages/keiko-memory-vault/src/",
+      },
+    },
+    {
       name: "adr-0019-direction-4-harness-scope",
       comment:
         "ADR-0019 direction rule 4 (base safety net): keiko-harness may depend only on " +
