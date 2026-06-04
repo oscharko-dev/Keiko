@@ -541,9 +541,11 @@ export async function askGrounded(
   req: GroundedAskRequest,
   signal?: AbortSignal,
 ): Promise<GroundedAnswer> {
+  // RequestInit.signal is `AbortSignal | null`. Under exactOptionalPropertyTypes we cannot
+  // pass `undefined`, so convert here.
   return fetchJson("/api/chats/messages/grounded", {
     method: "POST",
     body: JSON.stringify(req),
-    signal,
+    signal: signal ?? null,
   });
 }
