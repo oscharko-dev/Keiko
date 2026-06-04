@@ -21,3 +21,16 @@ export {
   updateCapsuleState,
   type CreateCapsuleInput,
 } from "./capsule-lifecycle.js";
+export {
+  addSourceToCapsule,
+  listCapsuleSources,
+  removeSourceFromCapsule,
+  type AddCapsuleSourceInput,
+} from "./source-lifecycle.js";
+export {
+  createCapsuleSet,
+  deleteCapsuleSet,
+  getCapsuleSet,
+  listCapsuleSets,
+  type CreateCapsuleSetInput,
+} from "./capsule-set-lifecycle.js";
