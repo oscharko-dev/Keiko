@@ -745,6 +745,33 @@ describe("Copilot finding fixes (memFs)", () => {
     ).rejects.toBeInstanceOf(WorkspaceError);
   });
 
+  it("readExcerpt refuses a path outside scope.relativePaths", async () => {
+    const { scope, fs } = memScope(
+      { "src/a.ts": "alpha\n", "docs/b.md": "secret\n" },
+      { relativePaths: ["src"] },
+    );
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "docs/b.md", startLine: 1, endLine: 1, maxBytes: 64 },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toMatchObject({ reason: "outside-scope" });
+  });
+
+  it("readExcerpt allows a file explicitly selected in scope.relativePaths", async () => {
+    const { scope, fs } = memScope(
+      { "src/a.ts": "alpha\n", "docs/b.md": "secret\n" },
+      { relativePaths: ["docs/b.md"] },
+    );
+    const result = await readExcerpt(
+      scope,
+      { scopePath: "docs/b.md", startLine: 1, endLine: 1, maxBytes: 64 },
+      { fs, nowMs: FIXED_NOW },
+    );
+    expect(result.content).toBe("secret");
+  });
+
   it("searchText denies node_modules when explicitly listed in scope.relativePaths", async () => {
     const { scope, fs } = memScope(
       { "node_modules/foo.ts": "match\n", "src/a.ts": "match\n" },

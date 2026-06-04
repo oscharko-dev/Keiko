@@ -111,8 +111,8 @@ export class RepoSearchInvalidRangeError extends WorkspaceError {
   }
 }
 
-// Raised when readExcerpt is called on a file the facade refuses to interpret (currently:
-// binary content, detected by the NUL-byte heuristic).
+// Raised when readExcerpt is called on a file the facade refuses to read or interpret
+// (for example: outside the selected scope, denied/ignored by policy, or binary content).
 export class RepoSearchUnsupportedFileError extends WorkspaceError {
   readonly code = WORKSPACE_CODES.REPO_SEARCH_UNSUPPORTED_FILE;
   readonly reason: string;
