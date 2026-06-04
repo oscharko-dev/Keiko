@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "*",
+    "@oscharko-dev/keiko-model-gateway": "*",
     "@oscharko-dev/keiko-workspace": "*"
   }
 }
