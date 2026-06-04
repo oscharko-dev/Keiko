@@ -31,6 +31,7 @@ const EXPECTED_RULES = [
   "adr-0019-direction-3b-workspace-only-contracts-security",
   "adr-0019-direction-3c-tools-only-contracts-security-workspace",
   "adr-0019-direction-3d-evidence-only-contracts-security-workspace",
+  "adr-0019-direction-3e-local-knowledge-only-contracts",
   "adr-0019-direction-4a-harness-only-contracts-security-model-gateway-workspace-tools-evidence",
   "adr-0019-direction-5a-workflows-only-contracts-security-model-gateway-workspace-tools-harness-evidence",
   "adr-0019-direction-6a-server-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence",
