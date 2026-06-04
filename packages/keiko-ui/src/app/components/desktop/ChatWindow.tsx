@@ -3,9 +3,15 @@
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
 import { ConnectedScopePill } from "./ConnectedScopePill";
+import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
 import { DEFAULT_MODEL_ID, type ChatSessionApi } from "./hooks/useChatSession";
-import type { Chat, ChatMessage, ModelCapability } from "@/lib/types";
+import type {
+  Chat,
+  ChatMessage,
+  GroundedAnswer as GroundedAnswerWire,
+  ModelCapability,
+} from "@/lib/types";
 
 interface ChatWindowProps {
   readonly mini?: boolean;
@@ -264,10 +270,43 @@ function ChatScopeHeader({
   );
 }
 
+// Issue #185 — surface the latest grounded answer's citations + uncertainty + omitted-count
+// directly under the assistant bubble it explains. Hidden when there is no grounded turn yet
+// or when the active chat carries no connectedScope binding (regular gateway chats never
+// produce one). Rendered as a single live region so screen-reader users hear it on update.
+function GroundedAnswerPanel({
+  chat,
+  answer,
+  busy,
+}: {
+  readonly chat: Chat | undefined;
+  readonly answer: GroundedAnswerWire | undefined;
+  readonly busy: boolean;
+}): ReactNode {
+  if (chat === undefined) return null;
+  if (chat.connectedScope === undefined) return null;
+  if (answer === undefined && !busy) return null;
+  return (
+    <div className="chatw-grounded" aria-live="polite">
+      <GroundedAnswer answer={answer} busy={busy} />
+    </div>
+  );
+}
+
 export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
-  const { messages, draft, loading, sending, error, sendMessage, activeChat, replaceChat } =
-    session;
+  const {
+    messages,
+    draft,
+    loading,
+    sending,
+    error,
+    sendMessage,
+    cancelGrounded,
+    activeChat,
+    replaceChat,
+    latestGrounded,
+  } = session;
   const ready = draft.trim().length > 0 && !sending && !loading;
   const visible = visibleOnly(messages);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -303,7 +342,22 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
             {visible.map((message) => (
               <ChatBubble key={message.id} message={message} />
             ))}
-            {sending ? <TypingBubble /> : null}
+            {sending ? (
+              <div className="chatw-typing-row">
+                <TypingBubble />
+                {activeChat?.connectedScope !== undefined ? (
+                  <button
+                    type="button"
+                    className="grounded-cancel-btn"
+                    aria-label="Cancel grounded request"
+                    onClick={cancelGrounded}
+                  >
+                    Cancel
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            <GroundedAnswerPanel chat={activeChat} answer={latestGrounded} busy={sending} />
           </div>
         )}
       </div>

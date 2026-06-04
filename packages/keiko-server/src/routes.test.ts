@@ -26,8 +26,8 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 44 route contract (ADR-0017 browser + ADR-0018 terminal + first-run gateway setup)", () => {
-    expect(API_ROUTES).toHaveLength(44);
+  it("declares the 45 route contract (ADR-0017 browser + ADR-0018 terminal + first-run gateway setup + #185 grounded Q&A)", () => {
+    expect(API_ROUTES).toHaveLength(45);
   });
 
   it("includes the first-run gateway setup route", () => {

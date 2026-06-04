@@ -10,6 +10,17 @@ import type { VerificationAuditSummary } from "./verification-summary.js";
 // the optional capabilities table to the UI without crossing into the credential-bearing
 // GatewayConfig in gateway.ts.
 import type { ModelCapability } from "./gateway.js";
+// GroundedAnswerContextPackSummary projects the connected-context pack into a counts-only,
+// browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
+// peer; importing it does not pull in any IO or redaction code.
+import {
+  CONNECTED_CONTEXT_SCHEMA_VERSION,
+  type ConnectedContextPack,
+  type ExplorationBudget,
+  type ExplorationUsage,
+  type RetrievalQueryKind,
+  type SelectedScopeKind,
+} from "./connected-context.js";
 
 export interface Project {
   readonly path: string;
@@ -272,6 +283,85 @@ export interface AgentBugInvestigationInput {
   readonly failingOutput?: string;
   readonly stackTrace?: string;
   readonly targetFiles?: readonly string[];
+}
+
+// ─── Grounded Q&A (BFF POST /api/chats/messages/grounded — issue #185) ───────────
+// Wire shapes for the grounded repository-aware Q&A pipeline. The server composes the
+// connected-context layers (#179 search, #180 structural, #181 planner, #182 ranker,
+// #183 assembler) into a single response that carries both the persisted message ids
+// and a redacted citation list. The citation list is the UI-safe projection of the
+// underlying ConnectedContextPack — never the raw excerpts.
+
+export interface GroundedAskRequest {
+  readonly chatId: string;
+  readonly content: string;
+}
+
+export interface GroundedEvidenceCitation {
+  readonly scopePath: string;
+  readonly lineRange: { readonly startLine: number; readonly endLine: number } | undefined;
+  readonly score: number;
+  readonly stableId: string;
+}
+
+export interface GroundedUncertainty {
+  readonly kind: string;
+  readonly claim: string;
+}
+
+// Counts-only projection of a ConnectedContextPack used to display "what was inspected" on
+// every grounded answer (Issue #187 / ADR-0022). Structurally redaction-free by construction:
+// no scope path, no workspace root, no excerpt content, no query text. The sentinel
+// `fileCount === -1` distinguishes the workspace-root scope (no enumerable file set) from
+// directory/files scopes that always report `relativePaths.length` (>= 1).
+export interface GroundedAnswerContextPackSummary {
+  readonly schemaVersion: typeof CONNECTED_CONTEXT_SCHEMA_VERSION;
+  readonly scopeId: string;
+  readonly scopeKind: SelectedScopeKind;
+  readonly fileCount: number;
+  readonly queryKind: RetrievalQueryKind;
+  readonly usage: ExplorationUsage;
+  readonly budget: ExplorationBudget;
+  readonly citationCount: number;
+  readonly omittedCount: number;
+  readonly uncertaintyCount: number;
+  readonly elapsedMs: number;
+}
+
+// Pure builder: derives a GroundedAnswerContextPackSummary from the source pack plus the
+// BFF-computed citation count and total elapsed wall time. No IO, no redaction (the only
+// scope-derived string carried is the opaque `scopeId`); allocates one fresh object.
+export function buildGroundedAnswerContextPackSummary(
+  pack: ConnectedContextPack,
+  citationCount: number,
+  elapsedMs: number,
+): GroundedAnswerContextPackSummary {
+  return {
+    schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+    scopeId: pack.scope.scopeId,
+    scopeKind: pack.scope.kind,
+    fileCount: pack.scope.kind === "workspace-root" ? -1 : pack.scope.relativePaths.length,
+    queryKind: pack.query.kind,
+    usage: pack.usage,
+    budget: pack.budget,
+    citationCount,
+    omittedCount: pack.omitted.length,
+    uncertaintyCount: pack.uncertainty.length,
+    elapsedMs,
+  };
+}
+
+export interface GroundedAnswer {
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
+  readonly content: string;
+  readonly citations: readonly GroundedEvidenceCitation[];
+  readonly uncertainty: readonly GroundedUncertainty[];
+  readonly omittedCount: number;
+  readonly elapsedMs: number;
+  // Issue #187 AC1: every grounded answer reports which scope was inspected and how much
+  // budget was spent. The summary is REQUIRED so the wire shape pins the privacy contract.
+  readonly contextPack: GroundedAnswerContextPackSummary;
 }
 
 // ─── BFF error envelope ───────────────────────────────────────────────────────────

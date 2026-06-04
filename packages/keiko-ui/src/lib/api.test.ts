@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  askGrounded,
   clearModelCacheForTests,
   clearProjectRequestForTests,
   deleteChat,
@@ -319,5 +320,66 @@ describe("updateChatConnectedScope", () => {
         body: JSON.stringify({ connectedScope: null }),
       }),
     );
+  });
+});
+
+// Issue #185 — grounded repository Q&A wire helper.
+describe("askGrounded", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs the request body and CSRF header to /api/chats/messages/grounded", async () => {
+    const response = {
+      userMessageId: "msg-u",
+      assistantMessageId: "msg-a",
+      content: "Inspected 1 file(s) for: how does foo work?",
+      citations: [
+        {
+          scopePath: "src/foo.ts",
+          lineRange: { startLine: 1, endLine: 10 },
+          score: 0.8,
+          stableId: "atom-1",
+        },
+      ],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 42,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await askGrounded({ chatId: "chat-1", content: "how does foo work?" });
+    expect(result).toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/chats/messages/grounded",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ chatId: "chat-1", content: "how does foo work?" }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
+  });
+
+  it("rejects with an AbortError when the signal is aborted before the fetch resolves", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Promise<Response>((_resolve, reject) => {
+          controller.signal.addEventListener("abort", () => {
+            reject(new DOMException("The user aborted a request.", "AbortError"));
+          });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = askGrounded({ chatId: "chat-1", content: "q" }, controller.signal);
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
 });

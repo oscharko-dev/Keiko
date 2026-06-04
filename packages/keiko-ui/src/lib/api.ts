@@ -16,6 +16,8 @@ import type {
   DesktopChatSendResponse,
   EvidenceListEntry,
   EvidenceManifest,
+  GroundedAnswer,
+  GroundedAskRequest,
   FilesDirectoryListing,
   FilesPreviewResponse,
   FilesTreeResponse,
@@ -525,4 +527,25 @@ export async function fetchFilesPreview(root: string, path: string): Promise<Fil
   params.set("root", root);
   params.set("path", path);
   return fetchJson(`/api/files/preview?${params.toString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #185 — Grounded repository Q&A
+// ---------------------------------------------------------------------------
+// POSTs to the BFF orchestrator which composes the #179-#183 connected-context layers,
+// persists the chat round-trip as a normal user/assistant message pair, and returns the
+// redacted citation projection. The CSRF header is supplied by `fetchJson` for all non-GET
+// methods; the caller never sets it directly.
+
+export async function askGrounded(
+  req: GroundedAskRequest,
+  signal?: AbortSignal,
+): Promise<GroundedAnswer> {
+  // RequestInit.signal is `AbortSignal | null`. Under exactOptionalPropertyTypes we cannot
+  // pass `undefined`, so convert here.
+  return fetchJson("/api/chats/messages/grounded", {
+    method: "POST",
+    body: JSON.stringify(req),
+    signal: signal ?? null,
+  });
 }

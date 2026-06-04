@@ -5327,3 +5327,150 @@ select.dlg-input {
   color: var(--danger);
   margin-top: 4px;
 }
+
+/* Issue #185 — grounded repository-aware Q&A answer rendering. Lives inside an assistant
+   chat bubble (see .chat-msg-bubble); the wrapper just stacks content + citations + meta. */
+.grounded-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.grounded-answer-body {
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.grounded-citations-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.grounded-citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.grounded-citations-item {
+  display: inline-flex;
+  margin: 0;
+}
+.grounded-citations-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.grounded-citation {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  min-width: 24px;
+  padding: 4px 8px;
+  border: 1px solid var(--accent-line);
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.grounded-citation:hover {
+  background: var(--accent-glow);
+}
+.grounded-citation:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.grounded-citation-score {
+  margin-left: 6px;
+  color: var(--fg-faint);
+  font-size: 10px;
+}
+.grounded-uncertainty {
+  font-size: 11px;
+  color: var(--ink-muted);
+  font-style: italic;
+}
+.grounded-meta {
+  font-size: 10px;
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+}
+
+/* Issue #187 — context inspection summary on every grounded answer. Counts/enums only;
+   never raw paths, query text, or excerpt content. Both --dt and --dd use --fg: in the dark
+   theme --fg-muted on --card is 3.67:1 which fails WCAG 1.4.3 normal-text 4.5:1 — labels
+   are primary information (they identify each metric) not incidental UI chrome, so they
+   need the full --fg (16.96:1 on --card). Weight + horizontal layout maintain the
+   label-vs-value distinction. */
+.grounded-context-pack {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle, color-mix(in oklab, var(--fg) 12%, transparent));
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.grounded-context-pack-headline {
+  color: var(--fg);
+  margin-bottom: 4px;
+}
+.grounded-context-pack-dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 12px;
+  row-gap: 2px;
+  margin: 0;
+}
+.grounded-context-pack-dt {
+  color: var(--fg);
+  font-weight: 500;
+}
+.grounded-context-pack-dd {
+  color: var(--fg);
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Issue #185 AC3 — typing row wraps the TypingBubble and the cancel button side-by-side. */
+.chatw-typing-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Cancel button rendered next to the TypingBubble during an in-flight grounded request.
+   Min 24×24 per WCAG 2.2 AA (2.5.8 target size). Uses accent palette matching connector btns. */
+.grounded-cancel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--ink-inverse);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  border: 1px solid color-mix(in oklab, var(--accent) 70%, #000 30%);
+  cursor: pointer;
+}
+.grounded-cancel-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.grounded-cancel-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.grounded-cancel-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
