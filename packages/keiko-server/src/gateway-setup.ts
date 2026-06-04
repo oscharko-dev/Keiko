@@ -3,8 +3,17 @@
 // call, stores the resulting config on disk with private permissions, and updates the in-memory
 // runtime config without exposing credentials back to the browser.
 
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   apiKeyHeaderValue,
   ConfigInvalidError,
@@ -17,7 +26,7 @@ import {
   toSafeObject,
   validateBaseUrl,
 } from "@oscharko-dev/keiko-model-gateway";
-import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway";
+import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -392,14 +401,57 @@ async function defaultGatewaySetupTester(
 }
 
 function savePrivateJson(path: string, raw: Record<string, unknown>): void {
-  const dir = dirname(path);
+  const resolvedPath = resolve(path);
+  const dir = dirname(resolvedPath);
+  assertNoSymlinkedPathSegments(resolvedPath);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  assertNoSymlinkedPathSegments(resolvedPath);
   if (process.platform !== "win32") {
     chmodSync(dir, 0o700);
   }
-  writeFileSync(path, `${JSON.stringify(raw, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
-  if (process.platform !== "win32") {
-    chmodSync(path, 0o600);
+  const tempPath = join(
+    dir,
+    `.keiko-config.${String(process.pid)}.${Date.now().toString(36)}.${randomUUID()}.tmp`,
+  );
+  try {
+    writeFileSync(tempPath, `${JSON.stringify(raw, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+    if (process.platform !== "win32") {
+      chmodSync(tempPath, 0o600);
+    }
+    renameSync(tempPath, resolvedPath);
+  } finally {
+    if (existsSync(tempPath)) {
+      try {
+        unlinkSync(tempPath);
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
+  }
+}
+
+function assertNoSymlinkedPathSegments(resolvedPath: string): void {
+  let current = resolvedPath;
+  while (current !== dirname(current)) {
+    if (isSymlink(current)) {
+      throw new Error("refusing to write gateway config through a symlinked path");
+    }
+    current = dirname(current);
+  }
+}
+
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw error;
   }
 }
 

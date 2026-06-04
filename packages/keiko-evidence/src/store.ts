@@ -22,10 +22,10 @@ import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
 import {
   assertContainedRealPath,
-  nodeWorkspaceFs,
   resolveWithinWorkspace,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { EvidenceReadError, EvidenceWriteError } from "./errors.js";
 import { assertValidRunId } from "./runid.js";
 

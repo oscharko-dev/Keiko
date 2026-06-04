@@ -8,7 +8,7 @@
 
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { detectWorkspace } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { buildTestGenContext } from "./context.js";
 import { detectConventions } from "./conventions.js";
 import { computeFingerprint } from "./emit.js";

@@ -54,9 +54,6 @@ export type {
 export { Gateway } from "@oscharko-dev/keiko-model-gateway";
 export type { GatewayDeps } from "@oscharko-dev/keiko-model-gateway";
 
-export { OpenAiAdapter } from "@oscharko-dev/keiko-model-gateway";
-export type { AdapterDeps } from "@oscharko-dev/keiko-model-gateway";
-
 export {
   assertConfiguredModel,
   findConfiguredCapability,
@@ -64,12 +61,6 @@ export {
   selectConfiguredModel,
 } from "@oscharko-dev/keiko-model-gateway";
 export type { ModelSelectionQuery } from "@oscharko-dev/keiko-model-gateway";
-
-export { CircuitBreaker, executeWithRetry, systemClock } from "@oscharko-dev/keiko-model-gateway";
-export type { RetryConfig } from "@oscharko-dev/keiko-model-gateway";
-
-export { normalizeChatResponse } from "@oscharko-dev/keiko-model-gateway";
-export type { UsageSeed } from "@oscharko-dev/keiko-model-gateway";
 
 export { redact } from "@oscharko-dev/keiko-model-gateway";
 

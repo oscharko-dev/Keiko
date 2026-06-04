@@ -1,5 +1,7 @@
-// Public barrel for the model gateway: all types, the Gateway orchestrator, the
-// capability registry helpers, config loaders, and the typed error taxonomy.
+// Public barrel for the model gateway: wire/config types, the Gateway orchestrator,
+// capability helpers, config loaders, model selection, and the typed error taxonomy.
+// Low-level provider adapters, HTTP transport, response normalization, and retry primitives
+// are intentionally kept off this surface so productive calls cannot bypass Gateway routing.
 
 export { KEIKO_MODEL_GATEWAY_VERSION } from "./version.js";
 
@@ -54,8 +56,6 @@ export {
 
 export { Gateway, type GatewayDeps } from "./gateway.js";
 
-export { OpenAiAdapter, type AdapterDeps } from "./openai-adapter.js";
-
 export {
   assertConfiguredModel,
   findConfiguredCapability,
@@ -63,20 +63,6 @@ export {
   selectConfiguredModel,
   type ModelSelectionQuery,
 } from "./model-selection.js";
-
-export { CircuitBreaker, executeWithRetry, systemClock, type RetryConfig } from "./resilience.js";
-
-export { normalizeChatResponse, type UsageSeed } from "./normalize.js";
-
-export {
-  gatewayFetch,
-  gatewayTrustedCaCertificates,
-  isMissingIssuerError,
-  isRecoverableTlsTrustError,
-  MAX_RESPONSE_BYTES,
-  readJsonCapped,
-  type GatewayFetchOptions,
-} from "./http.js";
 
 export { redact } from "@oscharko-dev/keiko-security";
 

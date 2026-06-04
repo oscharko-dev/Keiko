@@ -8,5 +8,5 @@ export {
   isRecoverableTlsTrustError,
   MAX_RESPONSE_BYTES,
   readJsonCapped,
-} from "@oscharko-dev/keiko-model-gateway";
-export type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway";
+} from "@oscharko-dev/keiko-model-gateway/internal/http";
+export type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";

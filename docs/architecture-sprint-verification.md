@@ -41,7 +41,7 @@ primitive already exists on `dev` and is exercised on every push by the `ci`,
 | 2   | The CLI lifecycle and local UI work from a clean sandbox.                                                           | `smoke:install` (tmpdir tarball install + CLI bin + SDK root) + `node dist/cli/index.js ui --port N` + `curl http://127.0.0.1:N/api/health`                                                                                                                                                                      | CLI mode `-rwxr-xr-x`; `--version` → `keiko 0.1.6`; `--help` lists 14 subcommands; unknown command exits 2; UI returns body `{"status":"ok","version":"0.1.6"}`, exits clean on signal. SDK root export resolves 132 named keys and `runVerification` is a function.                                                                                                        | PASS    |
 | 3   | The existing gateway setup, model call, workspace access, workflow run, tool, and evidence behavior is preserved.   | `KEIKO_EVIDENCE_DIR=… node dist/cli/index.js evaluate --suite all` (CI-parity command that exercises the gateway, workflows, tools, and evidence surfaces in one) + the full vitest suite (`npm test`)                                                                                                           | `evaluate` exit 0 in 0.2s: `Verdict: GO — pilot ready (all Go/No-Go thresholds met).` 6 fixtures / 6 PASS, 7 scoring dimensions / 7 PASS, surface-parity 8 checks PASS. Vitest: 148 files / 2059 passed / 2 skipped.                                                                                                                                                        | PASS    |
 | 4   | Pre-modular local state is read by the packed modular artifact without forced reconfiguration or silent state loss. | [`tests/upgrade-smoke/upgrade-compatibility.test.ts`](../tests/upgrade-smoke/upgrade-compatibility.test.ts) (10 tests against [`tests/upgrade-smoke/fixture/pre-modular-0.1.x/`](../tests/upgrade-smoke/fixture/pre-modular-0.1.x/)) + [`docs/local-runtime-state-contract.md`](local-runtime-state-contract.md) | Vitest 10/10 passing. The post-modular surfaces imported by the test (`@oscharko-dev/keiko-server`, `@oscharko-dev/keiko-evidence`, `@oscharko-dev/keiko-model-gateway`) are the same surfaces a tarball-installed consumer resolves. The 8-category verdict is recorded at [issue #170 comment](https://github.com/oscharko-dev/Keiko/issues/170#issuecomment-4616809868). | PASS    |
-| 5   | The Conversation Center and PWA epics can resume with the architecture prerequisite satisfied or documented.        | ADR-0019 §"Required Dependency Direction" (9 rules) + §"Trust-Boundary Rules" (8 rules), encoded in [`.dependency-cruiser.cjs`](../.dependency-cruiser.cjs); negative-test fixtures under [`tests/architecture/fixtures/`](../tests/architecture/fixtures/)                                                      | `arch:check` exit 0: `2 dependency violations (0 errors, 2 warnings). 523 modules, 1130 dependencies cruised.` `arch:check:negative` exit 0: `PASS — gate fired on 10 fixture(s) as expected.` Epics #142 and #121 inherit these boundaries unchanged.                                                                                                                      | PASS    |
+| 5   | The Conversation Center and PWA epics can resume with the architecture prerequisite satisfied or documented.        | ADR-0019 §"Required Dependency Direction" (9 rules) + §"Trust-Boundary Rules" (8 rules), encoded in [`.dependency-cruiser.cjs`](../.dependency-cruiser.cjs); negative-test fixtures under [`tests/architecture/fixtures/`](../tests/architecture/fixtures/)                                                      | Epic #156 audit hardening reran the gate with `arch:check` exit 0: `no dependency violations found (523 modules, 1126 dependencies cruised)`. `arch:check:negative` exit 0: `PASS — gate fired on 12 fixture(s) as expected.` Epics #142 and #121 inherit these boundaries unchanged.                                                                                         | PASS    |
 
 ## Deliverables verdict
 
@@ -49,7 +49,7 @@ primitive already exists on `dev` and is exercised on every push by the `ci`,
 | --- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
 | 1   | Final architecture-sprint verification matrix.   | This document (`docs/architecture-sprint-verification.md`).                                                                                                                                                                                                                                                         | Delivered by this PR.                                        |
 | 2   | Fresh-install evidence from the packed artifact. | [`scripts/installable-package-smoke.mjs`](../scripts/installable-package-smoke.mjs), executed on every push to `dev` via the `build-scan-sbom-smoke` job in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).                                                                                              | Delivered. Latest run captured in the matrix above (step 9). |
-| 3   | Closure comment on the architecture epic.        | To be posted to [issue #156](https://github.com/oscharko-dev/Keiko/issues/156) after this PR merges, linking to this document, to the verdict matrix at [issue #170](https://github.com/oscharko-dev/Keiko/issues/170), and to the merged commit SHA.                                                               | Pending merge of this PR.                                    |
+| 3   | Closure comment on the architecture epic.        | Posted to [issue #156](https://github.com/oscharko-dev/Keiko/issues/156#issuecomment-4617430851) after [PR #241](https://github.com/oscharko-dev/Keiko/pull/241) merged, linking to this document, to the verdict matrix at [issue #170](https://github.com/oscharko-dev/Keiko/issues/170), and to the merged commit SHA. | Delivered.                                                   |
 | 4   | Upgrade-compatibility evidence.                  | [`docs/local-runtime-state-contract.md`](local-runtime-state-contract.md) + [`tests/upgrade-smoke/upgrade-compatibility.test.ts`](../tests/upgrade-smoke/upgrade-compatibility.test.ts) + the 8-category verdict at [issue #170 comment](https://github.com/oscharko-dev/Keiko/issues/170#issuecomment-4616809868). | Delivered.                                                   |
 
 ## ADR-0019 invariants
@@ -82,13 +82,14 @@ against fixtures under [`tests/architecture/fixtures/`](../tests/architecture/fi
 | 3. UI never imports gateway internals                    | `adr-0019-trust-3-ui-no-gateway-internals`        | PASS                                                 |
 | 4. No direct filesystem access outside `keiko-workspace` | `adr-0019-trust-4-no-direct-fs-outside-workspace` | PASS                                                 |
 | 5. Patches route through `keiko-tools`                   | `adr-0019-trust-5-patch-routes-through-tools`     | PASS                                                 |
-| 6. Evidence is written only by allow-listed callers      | `adr-0019-trust-6-evidence-allowed-callers`       | PASS (2 carry-forward warns — see Known limitations) |
+| 6. Evidence is written only by allow-listed callers      | `adr-0019-trust-6-evidence-allowed-callers`       | PASS                                                 |
 | 7. CLI ⇄ server never bypasses the published port        | `adr-0019-trust-7-cli-server-no-port-bypass`      | PASS                                                 |
 | 8. No `doNotFollow` escape hatch in production builds    | `adr-0019-trust-8-no-do-not-follow-in-prod`       | PASS                                                 |
 
-`scripts/arch-check-negative.mjs` asserts 10 expected rules fire EXACTLY ONCE each against
-intentional-violation fixtures, one fixture per physically-extracted package boundary. All 17
-ADR-0019 rules plus the 10-fixture negative test passed in this gauntlet run.
+`scripts/arch-check-negative.mjs` asserts 12 expected rules fire EXACTLY ONCE each against
+intentional-violation fixtures, one fixture per physically-extracted package boundary plus the
+browser UI and root facade composition gates. All 17 ADR-0019 rules plus the 12-fixture
+negative test passed in the Epic #156 audit hardening run.
 
 ## Release-gate primitives
 
@@ -112,7 +113,7 @@ called out below.
   enforcement; 12 CycloneDX SBOMs total (`sbom/root.cdx.json` + 11
   `sbom/workspace-keiko-*.cdx.json`).
 - [`scripts/arch-check-negative.mjs`](../scripts/arch-check-negative.mjs) (CI job: `ci`) —
-  invokes `depcruise` against 10 intentional-violation fixtures and asserts every expected
+  invokes `depcruise` against 12 intentional-violation fixtures and asserts every expected
   rule fires EXACTLY ONCE.
 
 ## Known limitations
@@ -139,10 +140,6 @@ called out below.
   bit) to have run as well. These execute automatically via the `prepack` hook on `npm pack`
   and `npm publish` (`package.json` `scripts.prepack`); they are not enforced when a
   developer runs `build` in isolation. This is existing design, not a regression.
-- Two pre-existing `adr-0019-trust-6-evidence-allowed-callers` warnings from
-  `src/evaluations/runner.ts` and `src/evaluations/manifest-check.ts` are carry-forward from
-  `src/evaluations/` not being extracted in epic #156 (evaluations is a leaf composing the
-  earlier issue layers and was scope-deferred). Severity remains `warn`; `arch:check` exits 0.
 - The native Windows path support added in
   [issue #174](https://github.com/oscharko-dev/Keiko/issues/174) is verified by unit tests on
   the Linux CI runner. A Windows-hosted CI runner is not yet wired up; native execution on
@@ -174,9 +171,10 @@ called out below.
 ## Closure note
 
 This document is the closure evidence for issue
-[#170](https://github.com/oscharko-dev/Keiko/issues/170). After this PR merges, a closure
-comment on epic [#156](https://github.com/oscharko-dev/Keiko/issues/156) will link to this
-document, to the verdict matrix at issue #170, and to the merged commit SHA, marking the
+[#170](https://github.com/oscharko-dev/Keiko/issues/170). After
+[PR #241](https://github.com/oscharko-dev/Keiko/pull/241) merged, a closure comment on epic
+[#156](https://github.com/oscharko-dev/Keiko/issues/156#issuecomment-4617430851) linked to
+this document, to the verdict matrix at issue #170, and to the merged commit SHA, marking the
 modular-architecture sprint complete.
 
 ## Evidence appendix
@@ -185,6 +183,11 @@ modular-architecture sprint complete.
 
 Captured 2026-06-03T22:42:00Z against tree SHA `1a1fd08503871c1498a70e3266d079a9c9209d50`,
 Node v22.22.3, npm 10.9.8.
+
+The table below preserves the original issue #170 closure run. The Epic #156 audit hardening
+run subsequently promoted the UI/root/trust gates, removed the two Trust-6 warnings, and reran
+`arch:check` / `arch:check:negative` with no warnings and 12 negative fixtures as recorded in
+the acceptance matrix above.
 
 | #   | Command                                                            | Exit | Duration | Key output                                                                                       |
 | --- | ------------------------------------------------------------------ | ---- | -------- | ------------------------------------------------------------------------------------------------ |
@@ -232,13 +235,9 @@ Non-blocking anomalies observed in the run:
    `npm run check:package-surface`; the latter also requires `npm run build:ui` and
    `npm run prepare:bin`. These run automatically via `prepack` on `npm pack` and
    `npm publish`. Existing design, not a regression.
-2. Two pre-existing `adr-0019-trust-6-evidence-allowed-callers` warnings from
-   `src/evaluations/runner.ts` and `src/evaluations/manifest-check.ts` — carry-forward from
-   `src/evaluations/` being an unextracted sibling (final extraction not in epic #156
-   scope). Severity `warn`; `arch:check` exits 0.
-3. `ExperimentalWarning: SQLite` fires in `check:package-surface`, `build:ui`, and
+2. `ExperimentalWarning: SQLite` fires in `check:package-surface`, `build:ui`, and
    `keiko ui` startup — pre-existing since
    [issue #62](https://github.com/oscharko-dev/Keiko/issues/62) (Node 22
    `--experimental-sqlite` flag). Non-fatal.
-4. `npm ci` deprecation notices for transitive packages (`eslint@8.57.1`, `inflight@1.0.6`,
+3. `npm ci` deprecation notices for transitive packages (`eslint@8.57.1`, `inflight@1.0.6`,
    `rimraf@3.0.2`, `glob@7.2.3`). `npm audit` reports 0 vulnerabilities.

@@ -6,7 +6,8 @@
 // stage only wires the plan and projects an output-text-free audit summary. DEFERRED (D11): a
 // pre-patch reproduction baseline — Wave-1 verifies only the post-apply state.
 
-import { nodeSpawnFn, type PatchFileChange } from "@oscharko-dev/keiko-tools";
+import type { PatchFileChange } from "@oscharko-dev/keiko-tools";
+import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import { type WorkspaceFs, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   buildVerificationPlan,

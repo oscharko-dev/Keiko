@@ -5,6 +5,9 @@
 export {
   nodeHomeProvider,
   nodeSpawnFn,
+} from "@oscharko-dev/keiko-tools/internal/exec";
+
+export {
   runCommand,
   type ExecutableResolver,
   type ExecutableResolverDeps,

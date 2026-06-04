@@ -11,7 +11,7 @@ import {
   renderDryRun,
   type PatchApplyResult,
 } from "@oscharko-dev/keiko-tools";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { assembleReport } from "./report.js";
 import { runWorkflowVerification } from "./verify-stage.js";

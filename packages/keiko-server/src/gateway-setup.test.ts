@@ -1,4 +1,13 @@
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,7 +28,7 @@ afterEach(() => {
 });
 
 async function tempDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix));
+  const dir = await mkdtemp(join(realpathSync(tmpdir()), prefix));
   tmpDirs.push(dir);
   return dir;
 }
@@ -42,6 +51,9 @@ describe("handleGatewaySetup", () => {
   it("tests, stores, and activates a local gateway config without returning secrets", async () => {
     const uiDir = await tempDir("keiko-gw-ui-");
     const evidenceDir = await tempDir("keiko-gw-ev-");
+    const storagePath = join(uiDir, "keiko.config.json");
+    writeFileSync(storagePath, "stale-config\n", "utf8");
+    const initialStat = statSync(storagePath);
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir,
@@ -66,10 +78,10 @@ describe("handleGatewaySetup", () => {
     ]);
     expect(currentGatewayConfig(deps)?.providers).toHaveLength(1);
     expect(deps.gatewayConfig?.present()).toBe(true);
-    const storagePath = deps.gatewayConfig?.storagePath;
-    expect(storagePath).toBeDefined();
-    expect(existsSync(storagePath ?? "")).toBe(true);
-    const saved = readFileSync(storagePath ?? "", "utf8");
+    const savedPath = deps.gatewayConfig?.storagePath;
+    expect(savedPath).toBeDefined();
+    expect(existsSync(savedPath ?? "")).toBe(true);
+    const saved = readFileSync(savedPath ?? "", "utf8");
     expect(saved).toContain("example-secret-token");
     expect(saved).toContain("example-chat-model-large");
     expect(saved).not.toContain("example-chat-model-fast");
@@ -77,8 +89,65 @@ describe("handleGatewaySetup", () => {
     expect(JSON.stringify(result.body)).not.toContain("example-secret-token");
     expect(JSON.stringify(result.body)).not.toContain("https://llm-gateway.example.com");
     if (process.platform !== "win32") {
-      expect(statSync(storagePath ?? "").mode & 0o777).toBe(0o600);
+      expect(statSync(savedPath ?? "").mode & 0o777).toBe(0o600);
+      expect(statSync(savedPath ?? "").ino).not.toBe(initialStat.ino);
     }
+    deps.store.close();
+  });
+
+  it("rejects a symlinked final gateway config target", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-link-target-");
+    const evidenceDir = await tempDir("keiko-gw-ev-link-target-");
+    const storagePath = join(uiDir, "keiko.config.json");
+    const realTarget = join(uiDir, "keiko.config.real.json");
+    writeFileSync(realTarget, "seed\n", "utf8");
+    symlinkSync(realTarget, storagePath);
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(502);
+    expect(deps.gatewayConfig?.present()).toBe(false);
+    expect(lstatSync(storagePath).isSymbolicLink()).toBe(true);
+    expect(readFileSync(realTarget, "utf8")).toBe("seed\n");
+    deps.store.close();
+  });
+
+  it("rejects a symlinked ancestor of the gateway config path", async () => {
+    const workspaceDir = await tempDir("keiko-gw-ui-link-ancestor-");
+    const realDir = await tempDir("keiko-gw-real-ancestor-");
+    const evidenceDir = await tempDir("keiko-gw-ev-link-ancestor-");
+    const linkedDir = join(workspaceDir, "linked");
+    symlinkSync(realDir, linkedDir, "dir");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {},
+      uiDbPath: join(workspaceDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+    (deps.gatewayConfig as { storagePath: string }).storagePath = join(
+      linkedDir,
+      "keiko.config.json",
+    );
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(502);
+    expect(deps.gatewayConfig?.present()).toBe(false);
+    expect(existsSync(join(realDir, "keiko.config.json"))).toBe(false);
     deps.store.close();
   });
 
