@@ -2,6 +2,7 @@
 // dependency), mirroring openai-adapter.ts. Surfaces only structural status
 // information; the raw provider body never escapes this module.
 
+import { apiKeyHeaderValue } from "./config.js";
 import { gatewayFetch, readJsonCapped } from "./http.js";
 
 export interface OpenAIEmbeddingRequest {
@@ -30,6 +31,7 @@ export type OpenAIEmbeddingErrorKind =
   | "rate-limited"
   | "unsupported-model"
   | "timeout"
+  | "cancelled"
   | "transport"
   | "invalid-response";
 
@@ -93,10 +95,6 @@ function headerName(name: string | undefined): string {
   return name.toLowerCase();
 }
 
-function headerValue(name: string, apiKey: string): string {
-  return name === "authorization" ? `Bearer ${apiKey}` : apiKey;
-}
-
 function classifyStatus(status: number): OpenAIEmbeddingErrorKind | null {
   if (status === 401 || status === 403) return "wrong-header";
   if (status === 429) return "rate-limited";
@@ -105,10 +103,22 @@ function classifyStatus(status: number): OpenAIEmbeddingErrorKind | null {
   return null;
 }
 
-function classifyDispatchError(error: unknown, timeout: AbortSignal): OpenAIEmbeddingErrorKind {
-  if (timeout.aborted) return "timeout";
-  if (error instanceof DOMException && error.name === "AbortError") return "timeout";
+// Distinguishes our own internal-timeout abort from a caller-driven cancellation. If our
+// internal `timeoutSignal` is aborted, it's a timeout. Otherwise, if the caller's signal is
+// aborted (passed via `callerSignal`), it's a user cancellation. Anything else is a
+// transport error. Without this distinction, callers cannot tell whether their user
+// pressed Cancel or the server hung. #192 Copilot finding.
+function classifyDispatchError(
+  error: unknown,
+  timeoutSignal: AbortSignal,
+  callerSignal: AbortSignal | undefined,
+): OpenAIEmbeddingErrorKind {
+  if (timeoutSignal.aborted) return "timeout";
+  if (callerSignal?.aborted === true) return "cancelled";
   if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
+  // A bare AbortError without either of our signals being aborted is a transport error
+  // (e.g. the fetch impl tore down its own internal controller). Mapping it to `cancelled`
+  // would misattribute the failure to the caller — #192 Copilot follow-up finding.
   return "transport";
 }
 
@@ -118,19 +128,30 @@ interface BuiltRequest {
   readonly body: string;
   readonly signal: AbortSignal;
   readonly timeoutSignal: AbortSignal;
+  readonly callerSignal: AbortSignal | undefined;
 }
 
 function buildRequest(request: OpenAIEmbeddingRequest): BuiltRequest {
   const name = headerName(request.apiKeyHeaderName);
+  // Reuse the shared Bearer-prefixing helper from config.ts so this transport handles the
+  // same `bearer ` / `x-litellm-key` / `api-key` cases the chat adapter handles, including
+  // already-prefixed inputs. #192 Copilot finding.
   const headers: Record<string, string> = {
     "content-type": "application/json",
-    [name]: headerValue(name, request.apiKey),
+    [name]: apiKeyHeaderValue(name, request.apiKey),
   };
   const body = JSON.stringify({ model: request.modelId, input: request.input });
   const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
-  return { url: joinUrl(request.endpoint), headers, body, signal, timeoutSignal };
+  return {
+    url: joinUrl(request.endpoint),
+    headers,
+    body,
+    signal,
+    timeoutSignal,
+    callerSignal: request.signal,
+  };
 }
 
 async function discardBody(response: Response): Promise<void> {
@@ -154,7 +175,7 @@ async function dispatch(
       ...(request.fetchImpl !== undefined ? { fetchImpl: request.fetchImpl } : {}),
     });
   } catch (error) {
-    return classifyDispatchError(error, built.timeoutSignal);
+    return classifyDispatchError(error, built.timeoutSignal, built.callerSignal);
   }
 }
 

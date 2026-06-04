@@ -21,6 +21,7 @@ export type EmbeddingFailureReason =
   | "rate-limited"
   | "dimension-mismatch"
   | "timeout"
+  | "cancelled"
   | "unsupported-model"
   | "invalid-response"
   | "incompatible-with-stored-identity";
@@ -68,6 +69,7 @@ const SAFE_MESSAGES: Readonly<Record<EmbeddingFailureReason, string>> = Object.f
   "rate-limited": "model gateway is rate-limited — retry after the configured backoff",
   "dimension-mismatch": "embedding vector dimensions do not match the expected value",
   timeout: "embedding probe timed out",
+  cancelled: "embedding probe was cancelled by the caller",
   "unsupported-model": "embedding model is not available on the configured gateway",
   "invalid-response": "embedding response was malformed",
   "incompatible-with-stored-identity":
@@ -88,6 +90,8 @@ function reasonFromAdapter(kind: OpenAIEmbeddingErrorKind): EmbeddingFailureReas
       return "unsupported-model";
     case "timeout":
       return "timeout";
+    case "cancelled":
+      return "cancelled";
     case "invalid-response":
       return "invalid-response";
     case "transport":
@@ -184,7 +188,10 @@ export function assertCompatibleEmbeddingIdentity(
     return fail("incompatible-with-stored-identity");
   }
   if (revisionDiffers(stored, current)) {
-    return { ok: true, identity: stored, warning: buildRevisionWarning(stored, current) };
+    // Return the CURRENT identity (not stored) so the caller can persist the new revision
+    // and avoid a permanent warning on every subsequent compatibility check. The warning
+    // carries the previous revision for diagnostics. #192 Copilot finding.
+    return { ok: true, identity: current, warning: buildRevisionWarning(stored, current) };
   }
   return { ok: true, identity: stored };
 }
