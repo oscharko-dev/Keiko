@@ -42,7 +42,7 @@ describe("memoryRecordToRow + rowToMemoryRecord", () => {
       ...baseRecord(),
       payload: { kind: "string-list", items: ["a", "b"] },
       provenance: {
-        sourceKind: "workflow-run",
+        sourceKind: "workflow-outcome",
         capturedAt: 1_700_000_000_000,
         confidence: 0.75,
         sensitivity: "confidential",

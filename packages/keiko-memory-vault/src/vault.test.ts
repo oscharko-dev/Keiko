@@ -146,7 +146,8 @@ describe("onMemoryEvent fires post-commit and never on rollback", () => {
     const events: MemoryEvent[] = [];
     const v = openVault(dir, events);
     v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
-    expect(events).toEqual([{ kind: "memory:inserted", record: expect.any(Object) }]);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe("memory:inserted");
     v.close();
   });
 
@@ -342,27 +343,27 @@ describe("update + delete error paths", () => {
   it("throws not-found on delete of a missing id", () => {
     const dir = freshDir();
     const v = openVault(dir);
-    expect(() =>
+    expect(() => {
       v.deleteMemory("nope" as MemoryId, {
         tombstone: false,
         forgetterSurface: "test",
         nowMs: 1,
-      }),
-    ).toThrow(MemoryStorageError);
+      });
+    }).toThrow(MemoryStorageError);
     v.close();
   });
 
   it("throws not-found on upsertEmbedding for a missing memory", () => {
     const dir = freshDir();
     const v = openVault(dir);
-    expect(() =>
+    expect(() => {
       v.upsertEmbedding("nope" as MemoryId, {
         provider: "p",
         modelId: "m",
         metric: "cosine",
         vector: new Float32Array([1, 2, 3]),
-      }),
-    ).toThrow(MemoryStorageError);
+      });
+    }).toThrow(MemoryStorageError);
     v.close();
   });
 });

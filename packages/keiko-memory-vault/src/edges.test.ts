@@ -109,14 +109,18 @@ describe("edges FK enforcement", () => {
   it("rejects an edge whose from_memory_id does not exist", () => {
     const db = openDb();
     insertMemoryRow(db, makeMemory("b"));
-    expect(() => insertEdgeRow(db, makeEdge("e1", "missing", "b", "supersedes"))).toThrow();
+    expect(() => {
+      insertEdgeRow(db, makeEdge("e1", "missing", "b", "supersedes"));
+    }).toThrow();
     db.close();
   });
 
   it("rejects an edge whose to_memory_id does not exist", () => {
     const db = openDb();
     insertMemoryRow(db, makeMemory("a"));
-    expect(() => insertEdgeRow(db, makeEdge("e1", "a", "missing", "supersedes"))).toThrow();
+    expect(() => {
+      insertEdgeRow(db, makeEdge("e1", "a", "missing", "supersedes"));
+    }).toThrow();
     db.close();
   });
 });

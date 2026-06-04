@@ -206,10 +206,64 @@ export interface MemoryRowWrite {
   readonly updated_at: number;
 }
 
+type ProvenanceRowFields = Pick<
+  MemoryRowWrite,
+  | "sensitivity"
+  | "confidence"
+  | "source_kind"
+  | "source_conversation_id"
+  | "source_workflow_run_id"
+  | "source_evidence_manifest_id"
+  | "captured_at"
+  | "capture_rationale"
+  | "model_provider"
+  | "model_id"
+  | "model_revision"
+>;
+
+type ModelIdentityRowFields = Pick<
+  MemoryRowWrite,
+  "model_provider" | "model_id" | "model_revision"
+>;
+
+function modelIdentityFieldsToRow(
+  identity: MemoryRecord["provenance"]["modelIdentity"],
+): ModelIdentityRowFields {
+  return {
+    model_provider: identity?.provider ?? null,
+    model_id: identity?.modelId ?? null,
+    model_revision: identity?.modelRevision ?? null,
+  };
+}
+
+function provenanceFieldsToRow(prov: MemoryRecord["provenance"]): ProvenanceRowFields {
+  return {
+    sensitivity: prov.sensitivity,
+    confidence: prov.confidence,
+    source_kind: prov.sourceKind,
+    source_conversation_id: prov.sourceConversationId ?? null,
+    source_workflow_run_id: prov.sourceWorkflowRunId ?? null,
+    source_evidence_manifest_id: prov.sourceEvidenceManifestId ?? null,
+    captured_at: prov.capturedAt,
+    capture_rationale: prov.captureRationale ?? null,
+    ...modelIdentityFieldsToRow(prov.modelIdentity),
+  };
+}
+
+type RetentionRowFields = Pick<
+  MemoryRowWrite,
+  "retention_policy_key" | "retention_retain_until" | "retention_notes"
+>;
+
+function retentionFieldsToRow(hint: MemoryRecord["retentionHint"]): RetentionRowFields {
+  return {
+    retention_policy_key: hint?.policyKey ?? null,
+    retention_retain_until: hint?.retainUntil ?? null,
+    retention_notes: hint?.notes ?? null,
+  };
+}
+
 export function memoryRecordToRow(record: MemoryRecord): MemoryRowWrite {
-  const prov = record.provenance;
-  const validity = record.validity;
-  const hint = record.retentionHint;
   return {
     id: record.id,
     schema_version: record.schemaVersion,
@@ -219,25 +273,13 @@ export function memoryRecordToRow(record: MemoryRecord): MemoryRowWrite {
     body: record.body,
     payload_json: record.payload === undefined ? null : JSON.stringify(record.payload),
     status: record.status,
-    sensitivity: prov.sensitivity,
     pinned: record.pinned ? 1 : 0,
-    confidence: prov.confidence,
-    valid_from: validity.validFrom,
-    valid_until: validity.validUntil ?? null,
+    valid_from: record.validity.validFrom,
+    valid_until: record.validity.validUntil ?? null,
     stale_reason: record.staleReason ?? null,
     tags_json: JSON.stringify(record.tags),
-    source_kind: prov.sourceKind,
-    source_conversation_id: prov.sourceConversationId ?? null,
-    source_workflow_run_id: prov.sourceWorkflowRunId ?? null,
-    source_evidence_manifest_id: prov.sourceEvidenceManifestId ?? null,
-    captured_at: prov.capturedAt,
-    capture_rationale: prov.captureRationale ?? null,
-    model_provider: prov.modelIdentity?.provider ?? null,
-    model_id: prov.modelIdentity?.modelId ?? null,
-    model_revision: prov.modelIdentity?.modelRevision ?? null,
-    retention_policy_key: hint?.policyKey ?? null,
-    retention_retain_until: hint?.retainUntil ?? null,
-    retention_notes: hint?.notes ?? null,
+    ...provenanceFieldsToRow(record.provenance),
+    ...retentionFieldsToRow(record.retentionHint),
     created_at: record.createdAt,
     updated_at: record.updatedAt,
   };

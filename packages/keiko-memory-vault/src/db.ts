@@ -41,36 +41,25 @@ export interface SidecarSnapshot {
   readonly hadShm: boolean;
 }
 
-export function quarantineCorruptDb(target: string, snapshot?: SidecarSnapshot): void {
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  if (existsSync(target)) {
-    renameSync(target, `${target}.corrupt.${ts}`);
+// Rotate a single sidecar path to its .corrupt.<ts> form. If `hadAtSnapshot` is true, the
+// caller observed the file before SQLite's close() may have unlinked it; in that case we still
+// write a zero-byte marker so the audit trail shows the sidecar existed at the time the parent
+// file was found corrupt. Returns silently when there's nothing to rotate.
+function rotateSidecar(sourcePath: string, stampedPath: string, hadAtSnapshot: boolean): void {
+  if (existsSync(sourcePath)) {
+    renameSync(sourcePath, stampedPath);
+    return;
   }
-  // If a snapshot was passed, the caller knew the sidecar existed before SQLite's close()
-  // had a chance to unlink it. Trust the snapshot over the live FS check.
-  if (snapshot?.hadWal === true && !existsSync(`${target}-wal.corrupt.${ts}`)) {
-    if (existsSync(`${target}-wal`)) renameSync(`${target}-wal`, `${target}-wal.corrupt.${ts}`);
-    else writeMarker(`${target}-wal.corrupt.${ts}`);
-  }
-  if (snapshot?.hadShm === true && !existsSync(`${target}-shm.corrupt.${ts}`)) {
-    if (existsSync(`${target}-shm`)) renameSync(`${target}-shm`, `${target}-shm.corrupt.${ts}`);
-    else writeMarker(`${target}-shm.corrupt.${ts}`);
-  }
-  if (snapshot === undefined) {
-    for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
-      if (existsSync(sidecar)) {
-        renameSync(sidecar, `${sidecar}.corrupt.${ts}`);
-      }
-    }
+  if (hadAtSnapshot && !existsSync(stampedPath)) {
+    writeFileSync(stampedPath, "");
   }
 }
 
-function writeMarker(path: string): void {
-  // The sidecar was unlinked by SQLite before quarantine could rename it; we write a tiny
-  // marker so the audit trail still shows the sidecar existed at the time the parent file
-  // was found corrupt. The marker contains no payload data — it is a tombstone for the
-  // unrecoverable bytes.
-  writeFileSync(path, "");
+export function quarantineCorruptDb(target: string, snapshot?: SidecarSnapshot): void {
+  const ts = new Date().toISOString().replace(/[:.]/g, "-");
+  rotateSidecar(target, `${target}.corrupt.${ts}`, false);
+  rotateSidecar(`${target}-wal`, `${target}-wal.corrupt.${ts}`, snapshot?.hadWal === true);
+  rotateSidecar(`${target}-shm`, `${target}-shm.corrupt.${ts}`, snapshot?.hadShm === true);
 }
 
 export function openMemoryDatabase(dbPath: string): DatabaseSync {

@@ -42,7 +42,7 @@ describe("runMigrations", () => {
     runMigrations(db);
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-      .all() as readonly { name: string }[];
+      .all() as unknown as readonly { name: string }[];
     expect(tables.map((t) => t.name)).toEqual([
       "memories",
       "memory_edges",
@@ -59,7 +59,7 @@ describe("runMigrations", () => {
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%' ORDER BY name",
       )
-      .all() as readonly { name: string }[];
+      .all() as unknown as readonly { name: string }[];
     expect(idx.map((i) => i.name)).toEqual([
       "idx_edges_from",
       "idx_edges_to",

@@ -9,8 +9,6 @@ import type {
   MemoryRecord,
   MemoryScope,
   MemoryScopeKind,
-  MemoryStatus,
-  MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { memoryRecordToRow, rowToMemoryRecord, type MemoryRow } from "./serialize.js";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
@@ -198,8 +196,8 @@ export function listMemoriesByScopeRows(
   const params: (string | number)[] = [kind, coordinate];
   const where: string[] = ["scope_kind = ?", "scope_coordinate = ?"];
   for (const built of [
-    buildEnumClause("type", options.type as readonly MemoryType[] | undefined),
-    buildEnumClause("status", options.status as readonly MemoryStatus[] | undefined),
+    buildEnumClause("type", options.type),
+    buildEnumClause("status", options.status),
     buildPinnedClause(options.pinned),
     buildExpiryClause(options.includeExpired, nowMs),
   ]) {

@@ -73,7 +73,9 @@ describe("quarantineCorruptDb", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
     writeFileSync(dbPath, "garbage");
-    expect(() => quarantineCorruptDb(dbPath)).not.toThrow();
+    expect(() => {
+      quarantineCorruptDb(dbPath);
+    }).not.toThrow();
     expect(existsSync(dbPath)).toBe(false);
   });
 });
@@ -95,7 +97,9 @@ describe("openMemoryDatabase corruption path", () => {
 describe("chmodIfPresent", () => {
   it("is a no-op for non-existent paths", () => {
     const dir = freshDir();
-    expect(() => chmodIfPresent(join(dir, "no-such-file"), 0o600)).not.toThrow();
+    expect(() => {
+      chmodIfPresent(join(dir, "no-such-file"), 0o600);
+    }).not.toThrow();
   });
 
   it("applies the mode when the file exists (POSIX)", () => {

@@ -137,106 +137,108 @@ function runDelete(
   return { tombstone };
 }
 
-function buildStore(db: DatabaseSync, opts: ResolvedOptions): MemoryVaultStore {
-  const insertMemory = (record: MemoryRecord): MemoryRecord => {
-    const ready = preparedForWrite(record, opts);
-    insertMemoryRow(db, ready);
-    opts.emit({ kind: "memory:inserted", record: ready });
-    return ready;
-  };
+type MemoryMutators = Pick<
+  MemoryVaultStore,
+  "insertMemory" | "updateMemory" | "deleteMemory" | "getMemory" | "listMemoriesByScope"
+>;
 
-  const updateMemory = (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number): MemoryRecord => {
-    const existing = getMemoryRow(db, id);
-    if (existing === undefined) {
-      throw new MemoryStorageError("not-found", "Memory not found.");
-    }
-    const merged = mergePatch(existing, patch, nowMs);
-    const ready = preparedForWrite(merged, opts);
-    updateMemoryRow(db, ready);
-    opts.emit({ kind: "memory:updated", record: ready });
-    return ready;
-  };
-
-  const getMemory = (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id);
-
-  const deleteMemory = (id: MemoryId, options: DeleteMemoryOptions): void => {
-    const { tombstone } = runDelete(db, id, options, opts);
-    opts.emit({ kind: "memory:deleted", memoryId: id, tombstoned: tombstone !== undefined });
-    if (tombstone !== undefined) {
-      opts.emit({ kind: "memory:tombstoned", tombstone });
-    }
-  };
-
-  const listMemoriesByScope = (
-    scope: MemoryScope,
-    options?: ListMemoriesOptions,
-  ): readonly MemoryRecord[] => {
-    gateMemoryScope(scope);
-    const effective = options ?? {};
-    const nowMs = effective.nowMs ?? opts.now();
-    return listMemoriesByScopeRows(db, scope, effective, nowMs);
-  };
-
-  const insertEdge = (edge: MemoryEdge): MemoryEdge => {
-    const ready = preparedEdgeForWrite(edge, opts);
-    insertEdgeRow(db, ready);
-    opts.emit({ kind: "edge:inserted", edge: ready });
-    return ready;
-  };
-
-  const listOutgoingEdges = (memoryId: MemoryId): readonly MemoryEdge[] =>
-    listOutgoingEdgeRows(db, memoryId);
-
-  const listIncomingEdges = (memoryId: MemoryId): readonly MemoryEdge[] =>
-    listIncomingEdgeRows(db, memoryId);
-
-  const deleteEdge = (edgeId: MemoryEdgeId): void => {
-    const removed = deleteEdgeRow(db, edgeId);
-    if (!removed) {
-      throw new MemoryStorageError("not-found", "Edge not found.");
-    }
-    opts.emit({ kind: "edge:deleted", edgeId });
-  };
-
-  const upsertEmbedding = (memoryId: MemoryId, embedding: MemoryEmbeddingInput): void => {
-    if (getMemoryRow(db, memoryId) === undefined) {
-      throw new MemoryStorageError("not-found", "Memory not found.");
-    }
-    upsertEmbeddingRow(db, memoryId, embedding, opts.now());
-    opts.emit({
-      kind: "embedding:upserted",
-      memoryId,
-      provider: embedding.provider,
-      modelId: embedding.modelId,
-    });
-  };
-
-  const getEmbedding = (memoryId: MemoryId): MemoryEmbeddingRow | undefined =>
-    getEmbeddingRow(db, memoryId);
-
-  const listTombstonesByScope = (scope: MemoryScope): readonly MemoryTombstone[] => {
-    gateMemoryScope(scope);
-    return listTombstonesByScopeRows(db, scope);
-  };
-
-  const close = (): void => {
-    db.close();
-  };
-
+function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMutators {
   return {
-    insertMemory,
-    updateMemory,
-    getMemory,
-    deleteMemory,
-    listMemoriesByScope,
-    insertEdge,
-    listOutgoingEdges,
-    listIncomingEdges,
-    deleteEdge,
-    upsertEmbedding,
-    getEmbedding,
-    listTombstonesByScope,
-    close,
+    insertMemory: (record: MemoryRecord): MemoryRecord => {
+      const ready = preparedForWrite(record, opts);
+      insertMemoryRow(db, ready);
+      opts.emit({ kind: "memory:inserted", record: ready });
+      return ready;
+    },
+    updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number): MemoryRecord => {
+      const existing = getMemoryRow(db, id);
+      if (existing === undefined) {
+        throw new MemoryStorageError("not-found", "Memory not found.");
+      }
+      const merged = mergePatch(existing, patch, nowMs);
+      const ready = preparedForWrite(merged, opts);
+      updateMemoryRow(db, ready);
+      opts.emit({ kind: "memory:updated", record: ready });
+      return ready;
+    },
+    deleteMemory: (id: MemoryId, options: DeleteMemoryOptions): void => {
+      const { tombstone } = runDelete(db, id, options, opts);
+      opts.emit({ kind: "memory:deleted", memoryId: id, tombstoned: tombstone !== undefined });
+      if (tombstone !== undefined) {
+        opts.emit({ kind: "memory:tombstoned", tombstone });
+      }
+    },
+    getMemory: (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id),
+    listMemoriesByScope: (
+      scope: MemoryScope,
+      options?: ListMemoriesOptions,
+    ): readonly MemoryRecord[] => {
+      gateMemoryScope(scope);
+      const effective = options ?? {};
+      const nowMs = effective.nowMs ?? opts.now();
+      return listMemoriesByScopeRows(db, scope, effective, nowMs);
+    },
+  };
+}
+
+type EdgeAndEmbeddingOps = Pick<
+  MemoryVaultStore,
+  | "insertEdge"
+  | "listOutgoingEdges"
+  | "listIncomingEdges"
+  | "deleteEdge"
+  | "upsertEmbedding"
+  | "getEmbedding"
+  | "listTombstonesByScope"
+>;
+
+function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EdgeAndEmbeddingOps {
+  return {
+    insertEdge: (edge: MemoryEdge): MemoryEdge => {
+      const ready = preparedEdgeForWrite(edge, opts);
+      insertEdgeRow(db, ready);
+      opts.emit({ kind: "edge:inserted", edge: ready });
+      return ready;
+    },
+    listOutgoingEdges: (memoryId: MemoryId): readonly MemoryEdge[] =>
+      listOutgoingEdgeRows(db, memoryId),
+    listIncomingEdges: (memoryId: MemoryId): readonly MemoryEdge[] =>
+      listIncomingEdgeRows(db, memoryId),
+    deleteEdge: (edgeId: MemoryEdgeId): void => {
+      const removed = deleteEdgeRow(db, edgeId);
+      if (!removed) {
+        throw new MemoryStorageError("not-found", "Edge not found.");
+      }
+      opts.emit({ kind: "edge:deleted", edgeId });
+    },
+    upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput): void => {
+      if (getMemoryRow(db, memoryId) === undefined) {
+        throw new MemoryStorageError("not-found", "Memory not found.");
+      }
+      upsertEmbeddingRow(db, memoryId, embedding, opts.now());
+      opts.emit({
+        kind: "embedding:upserted",
+        memoryId,
+        provider: embedding.provider,
+        modelId: embedding.modelId,
+      });
+    },
+    getEmbedding: (memoryId: MemoryId): MemoryEmbeddingRow | undefined =>
+      getEmbeddingRow(db, memoryId),
+    listTombstonesByScope: (scope: MemoryScope): readonly MemoryTombstone[] => {
+      gateMemoryScope(scope);
+      return listTombstonesByScopeRows(db, scope);
+    },
+  };
+}
+
+function buildStore(db: DatabaseSync, opts: ResolvedOptions): MemoryVaultStore {
+  return {
+    ...buildMemoryMutators(db, opts),
+    ...buildEdgeAndEmbeddingOps(db, opts),
+    close: (): void => {
+      db.close();
+    },
   };
 }
 
