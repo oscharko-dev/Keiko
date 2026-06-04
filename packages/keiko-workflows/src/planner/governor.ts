@@ -127,5 +127,5 @@ export function advanceRing(state: GovernorState): GovernorState {
 }
 
 export function complete(state: GovernorState): GovernorState {
-  return { ...state, status: "completed", stopReason: state.stopReason ?? "completed" };
+  return { ...state, status: "completed" };
 }

@@ -12,3 +12,6 @@ export type { WorkflowDescriptor, WorkflowInputSpec } from "./descriptor.js";
 
 export * from "./unit-tests/index.js";
 export * from "./bug-investigation/index.js";
+
+// ─── Exploration planner & budget governor (Issue #181 / Epic #177) ──────────
+export * from "./planner/index.js";
