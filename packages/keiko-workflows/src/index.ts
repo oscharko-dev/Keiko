@@ -15,3 +15,6 @@ export * from "./bug-investigation/index.js";
 
 // ─── Exploration planner & budget governor (Issue #181 / Epic #177) ──────────
 export * from "./planner/index.js";
+
+// ─── Candidate ranking & negative context filter (Issue #182 / Epic #177) ────
+export * from "./ranking/index.js";
