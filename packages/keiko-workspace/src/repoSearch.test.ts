@@ -188,6 +188,28 @@ describe("searchText (memFs)", () => {
     ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
   });
 
+  it("rejects a regex with group-then-quantifier as a ReDoS guard", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "anything\n" });
+    await expect(
+      searchText(scope, rxq("(a+)+"), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
+  });
+
+  it("rejects a regex with character-class-then-quantifier as a ReDoS guard", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "anything\n" });
+    await expect(
+      searchText(scope, rxq("[abc]+{2,}"), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
+  });
+
+  it("rejects a regex longer than the safety cap", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "anything\n" });
+    const tooLong = "x".repeat(201);
+    await expect(
+      searchText(scope, rxq(tooLong), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
+  });
+
   it("supports a valid regex query and scores monotonically with hit count", async () => {
     const { scope, fs } = memScope({
       "src/a.ts": "abc\nabcabc\nabcabcabc\n",
@@ -399,6 +421,20 @@ describe("searchText (memFs)", () => {
       nowMs: FIXED_NOW,
     });
     expect(r.atoms.map((a) => a.scopePath)).toEqual(["src/a.ts"]);
+  });
+
+  it("rejects scope.relativePaths containing a parent-traversal entry", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "match\n" }, { relativePaths: ["../escape"] });
+    await expect(
+      searchText(scope, nlq("match"), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
+  });
+
+  it("rejects scope.relativePaths containing a Windows drive prefix", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "match\n" }, { relativePaths: ["C:/etc/passwd"] });
+    await expect(
+      searchText(scope, nlq("match"), DEFAULT_SEARCH_LIMITS, { fs, nowMs: FIXED_NOW }),
+    ).rejects.toBeInstanceOf(RepoSearchInvalidQueryError);
   });
 
   it("rejects an unknown query kind", async () => {

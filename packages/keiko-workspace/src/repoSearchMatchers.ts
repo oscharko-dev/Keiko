@@ -54,7 +54,24 @@ function buildExactSymbolMatcher(query: RetrievalQuery): LineMatcher {
   };
 }
 
+// Cap regex source length and refuse the classical catastrophic-backtracking shapes — any
+// group `(...)` or character class `[...]` followed by a `+` / `*` / `{n,}` quantifier. The
+// per-call elapsedMsMax cannot interrupt a synchronous `RegExp.exec` once it has entered a
+// pathological backtrack, so the only safe defense is to refuse the pattern at compile time.
+const MAX_REGEX_LENGTH = 200;
+const DANGEROUS_REGEX_STRUCTURE = /\([^)]*\)[+*{]|\[[^\]]*\][+*{]/;
+
 function buildRegexMatcher(query: RetrievalQuery): LineMatcher {
+  if (query.text.length > MAX_REGEX_LENGTH) {
+    throw new RepoSearchInvalidQueryError(
+      `regex too long: ${String(query.text.length)} > ${String(MAX_REGEX_LENGTH)}`,
+    );
+  }
+  if (DANGEROUS_REGEX_STRUCTURE.test(query.text)) {
+    throw new RepoSearchInvalidQueryError(
+      "regex contains repetition over a group or character class (potential catastrophic backtracking)",
+    );
+  }
   let regex: RegExp;
   try {
     regex = new RegExp(query.text, query.caseSensitive ? "g" : "gi");

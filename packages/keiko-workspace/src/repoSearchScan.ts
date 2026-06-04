@@ -10,9 +10,12 @@ import type {
   EvidenceAtom,
   EvidenceAtomProvenanceKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  CONNECTED_CONTEXT_SCHEMA_VERSION,
+  isValidScopePath,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 import { discoverFiles, readWorkspaceFile } from "./discovery.js";
-import { FileTooLargeError } from "./errors.js";
+import { FileTooLargeError, RepoSearchInvalidQueryError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import { isDenied, isIgnored, type IgnoreMatcher } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
@@ -134,6 +137,16 @@ export function gatherCandidates(
   limits: LimitsShape,
   fs: WorkspaceFs,
 ): readonly DiscoveredFile[] {
+  // Defense in depth alongside the realpath gate: validate scope.relativePaths against the
+  // contracts-layer shape rules (no absolute paths, no `..`, no drive letters, no backslashes).
+  // resolveWithinWorkspace + assertContainedRealPath already provide a complete barrier; this
+  // pre-check rejects shape-invalid inputs at the API boundary with a typed error rather than
+  // letting a normalization quirk slip past unnoticed.
+  for (const entry of scope.relativePaths) {
+    if (!isValidScopePath(entry, { mustBeRelative: true })) {
+      throw new RepoSearchInvalidQueryError(`invalid scope.relativePaths entry: ${entry}`);
+    }
+  }
   const files =
     scope.relativePaths.length === 0
       ? collectFromDirectory(scope, limits, fs)
