@@ -183,11 +183,11 @@ describe("searchText (memFs)", () => {
 
   // Issue #188 Case 2: exact-symbol question across a two-file scope where the named
   // symbol appears in both the defining file and a call site. exact-symbol is a substring
-  // matcher (per repoSearchMatchers) so both files are expected to match; the regression
-  // asserts the defining file survives ranking and the call-site file's atom (when present)
-  // never escapes the workspace. Mutation guard: if the matcher drops the defining file —
-  // e.g. by misordering candidate gathering or rejecting first-occurrence atoms — the
-  // `definingAtom` assertion below fails.
+  // matcher (per repoSearchMatchers), so this regression locks two properties:
+  //   1. the defining file still appears in the result set, and
+  //   2. the caller file is not silently dropped from a multi-file match.
+  // Mutation guard: if cross-file gathering collapses to a single atom or ranking drops one
+  // file, the length / path assertions fail.
   it("returns the symbol-defining file when an exact-symbol query targets a named function", async () => {
     const { scope, fs } = memScope({
       "src/foo.ts": "export function foo(): void { return; }\n",
@@ -198,9 +198,11 @@ describe("searchText (memFs)", () => {
       nowMs: FIXED_NOW,
     });
     // Both files contain the substring "foo", but the defining declaration is in src/foo.ts.
-    // exact-symbol is a substring search so both match — we assert the defining file is present
-    // and ranked alongside any callers, and that no atoms escape the workspace.
-    expect(r.atoms.length).toBeGreaterThanOrEqual(1);
+    // exact-symbol is a substring search so both should match.
+    expect(r.atoms.length).toBeGreaterThanOrEqual(2);
+    expect(r.atoms.map((atom) => atom.scopePath)).toEqual(
+      expect.arrayContaining(["src/foo.ts", "src/bar.ts"]),
+    );
     const definingAtom = r.atoms.find((a) => a.scopePath === "src/foo.ts");
     expect(definingAtom).toBeDefined();
     expect(definingAtom?.score).toBe(1);
