@@ -43,6 +43,9 @@ const ALLOWED_CHATS_COLUMNS = new Set([
   "selected_model",
   "branch_label",
   "status",
+  // V3 adds connected_scope_paths + connected_scope_at (issue #184 additive migration).
+  "connected_scope_paths",
+  "connected_scope_at",
   "created_at",
   "updated_at",
 ]);

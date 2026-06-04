@@ -559,6 +559,118 @@ describe("PATCH /api/chats", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  // Issue #184 — PATCH route binds a workspace-relative scope from the Files window onto a
+  // chat. The path validator is shared with the connected-context surface from issue #178.
+  it("sets connectedScope on a chat (happy path)", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { relativePaths: ["src/lib", "src/app/page.tsx"], connectedAtMs: 42 },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chat: {
+        connectedScope: { relativePaths: string[]; connectedAtMs: number } | undefined;
+      };
+    };
+    expect(body.chat.connectedScope).toEqual({
+      relativePaths: ["src/lib", "src/app/page.tsx"],
+      connectedAtMs: 42,
+    });
+  });
+
+  it("clears connectedScope when patched with null", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { relativePaths: ["src/x"], connectedAtMs: 1 },
+      }),
+    });
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ connectedScope: null }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chat: { connectedScope: unknown };
+    };
+    expect(body.chat.connectedScope).toBeUndefined();
+  });
+
+  it("rejects connectedScope with a traversal path", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { relativePaths: ["../escape"], connectedAtMs: 1 },
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects connectedScope with an absolute path", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { relativePaths: ["/etc/passwd"], connectedAtMs: 1 },
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects an empty connectedScope.relativePaths array", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { relativePaths: [], connectedAtMs: 1 },
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects connectedScope.relativePaths exceeding the 50-entry cap", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const tooMany = Array.from({ length: 51 }, (_, i) => `src/f${String(i)}.ts`);
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { relativePaths: tooMany, connectedAtMs: 1 },
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a non-integer connectedScope.connectedAtMs", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { relativePaths: ["src/x"], connectedAtMs: 1.5 },
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
 });
 
 // ─── Route 20: DELETE /api/chats ─────────────────────────────────────────────

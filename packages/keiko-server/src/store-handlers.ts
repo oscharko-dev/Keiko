@@ -13,6 +13,7 @@ import {
   assertUiDbOutsideProject,
   isProjectAvailable,
   validateProjectPath,
+  type ChatConnectedScope,
   type ChatRole,
   type NewChatMessage,
   type Project,
@@ -21,6 +22,10 @@ import {
   type UpdateProjectPatch,
   type WorkflowStatus,
 } from "./store/index.js";
+// Issue #184 — workspace-relative path gate. isValidScopePath is the canonical validator from
+// @oscharko-dev/keiko-contracts/connected-context (issue #178). Reusing it here keeps the BFF
+// boundary aligned with the rest of the connected-repo surface and avoids regex drift.
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
 
 const MAX_STORE_BODY_BYTES = 256_000;
 
@@ -385,15 +390,71 @@ export async function handleCreateChat(
 // Route 19 — PATCH /api/chats?id=...
 // ──────────────────────────────────────────────────────────────────────────
 
+// Issue #184 — bound the number of paths the BFF will accept on one binding. Higher than the
+// realistic ad-hoc selection size (Files window selection caps at a handful) but low enough to
+// prevent JSON-blob inflation in connected_scope_paths. The store enforces the same cap as a
+// defense-in-depth subset of this gate.
+const MAX_CONNECTED_SCOPE_PATHS = 50;
+
+// Issue #184 — three return states: undefined → field absent (leave unchanged); null →
+// explicit clear (forward through to the store); ChatConnectedScope → fully validated value.
+// All input has crossed the wire and is `unknown` until proven otherwise.
+function optionalConnectedScope(
+  body: Record<string, unknown>,
+): ChatConnectedScope | null | undefined {
+  if (!("connectedScope" in body)) return undefined;
+  const raw = body.connectedScope;
+  if (raw === null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new InvalidRequest('Field "connectedScope" must be an object or null.');
+  }
+  const scope = raw as Record<string, unknown>;
+  const paths = scope.relativePaths;
+  if (!Array.isArray(paths)) {
+    throw new InvalidRequest('Field "connectedScope.relativePaths" must be an array.');
+  }
+  if (paths.length === 0) {
+    throw new InvalidRequest('Field "connectedScope.relativePaths" must not be empty.');
+  }
+  if (paths.length > MAX_CONNECTED_SCOPE_PATHS) {
+    throw new InvalidRequest(
+      `Field "connectedScope.relativePaths" must have at most ${String(
+        MAX_CONNECTED_SCOPE_PATHS,
+      )} entries.`,
+    );
+  }
+  const validated: string[] = [];
+  for (const entry of paths) {
+    if (typeof entry !== "string") {
+      throw new InvalidRequest('Field "connectedScope.relativePaths" entries must be strings.');
+    }
+    if (!isValidScopePath(entry, { mustBeRelative: true })) {
+      throw new InvalidRequest(
+        'Field "connectedScope.relativePaths" entry is not a valid workspace-relative path.',
+      );
+    }
+    validated.push(entry);
+  }
+  const connectedAtMs = scope.connectedAtMs;
+  if (typeof connectedAtMs !== "number" || !Number.isInteger(connectedAtMs) || connectedAtMs < 0) {
+    throw new InvalidRequest(
+      'Field "connectedScope.connectedAtMs" must be a finite non-negative integer.',
+    );
+  }
+  return { relativePaths: validated, connectedAtMs };
+}
+
 function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): UpdateChatPatch {
   const title = optionalString(body, "title");
   const selectedModel = optionalChatModelId(deps, body, "selectedModel");
   const branchLabel = optionalString(body, "branchLabel");
   const statusRaw = body.status;
+  const connectedScope = optionalConnectedScope(body);
   const patch: UpdateChatPatch = {
     ...(title !== undefined ? { title } : {}),
     ...(selectedModel !== undefined ? { selectedModel } : {}),
     ...(branchLabel !== undefined ? { branchLabel } : {}),
+    ...(connectedScope !== undefined ? { connectedScope } : {}),
   };
   if (statusRaw === undefined) return patch;
   if (statusRaw !== "open" && statusRaw !== "closed") {
