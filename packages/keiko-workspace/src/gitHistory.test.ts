@@ -118,3 +118,100 @@ describe("gitHistoryAdapter.lookup", () => {
     expect(source).not.toMatch(/\bexecSync\s*\(/);
   });
 });
+
+
+describe("gitHistoryAdapter.isAvailable — scope.relativePaths (Finding 8)", () => {
+  it("returns false when scope.relativePaths is non-empty", async () => {
+    const { scope: base, fs } = makeScope({
+      ".git/HEAD": "ref: refs/heads/main\n",
+      ".git/logs/HEAD": SAMPLE_REFLOG,
+    });
+    const scopeRestricted = { ...base, relativePaths: ["src"] };
+    await expect(gitHistoryAdapter.isAvailable(scopeRestricted, fs)).resolves.toBe(false);
+  });
+
+  it("returns [] from lookup when scope.relativePaths is non-empty", async () => {
+    const { scope: base, fs } = makeScope({
+      ".git/HEAD": "ref: refs/heads/main\n",
+      ".git/logs/HEAD": SAMPLE_REFLOG,
+    });
+    const scopeRestricted = { ...base, relativePaths: ["src"] };
+    const atoms = await gitHistoryAdapter.lookup(scopeRestricted, nlq("recent"), DEFAULT_SEARCH_LIMITS, fs, {
+      nowMs: FIXED_NOW,
+    });
+    expect(atoms).toEqual([]);
+  });
+});
+
+describe("gitHistoryAdapter — worktree pointer support (Finding 7)", () => {
+  it("reads HEAD from .git/HEAD in a standard directory layout", async () => {
+    // .git is a directory (simulated by memFs key prefix ".git/")
+    const { scope, fs } = makeScope({
+      ".git/HEAD": "ref: refs/heads/main\n",
+      ".git/logs/HEAD": SAMPLE_REFLOG,
+    });
+    await expect(gitHistoryAdapter.isAvailable(scope, fs)).resolves.toBe(true);
+    const atoms = await gitHistoryAdapter.lookup(scope, nlq("recent"), DEFAULT_SEARCH_LIMITS, fs, {
+      nowMs: FIXED_NOW,
+    });
+    expect(atoms.length).toBe(1);
+  });
+
+  it("resolves HEAD via a valid worktree pointer and returns an atom", async () => {
+    // .git is a file containing "gitdir: .git-real"
+    // .git-real/ is the real gitdir that contains HEAD and logs/HEAD
+    const { scope, fs } = makeScope({
+      ".git": "gitdir: .git-real",
+      ".git-real/HEAD": "ref: refs/heads/feat\n",
+      ".git-real/logs/HEAD": SAMPLE_REFLOG,
+    });
+    await expect(gitHistoryAdapter.isAvailable(scope, fs)).resolves.toBe(true);
+    const atoms = await gitHistoryAdapter.lookup(scope, nlq("recent"), DEFAULT_SEARCH_LIMITS, fs, {
+      nowMs: FIXED_NOW,
+    });
+    expect(atoms.length).toBe(1);
+    expect(atoms[0]?.provenance.tool).toBe("git-reflog");
+  });
+
+  it("returns isAvailable=false when worktree pointer target is outside workspace", async () => {
+    // memFs realPath is identity, so a path like /outside is truly outside /ws
+    const { scope, fs } = makeScope({
+      ".git": "gitdir: /outside/.git-real",
+    });
+    await expect(gitHistoryAdapter.isAvailable(scope, fs)).resolves.toBe(false);
+  });
+});
+
+describe("gitHistoryAdapter — size cap before read (Finding 6)", () => {
+  it("returns [] when .git/logs/HEAD exceeds REFLOG_MAX_BYTES and readFileBytes is absent", async () => {
+    // Craft a memFs where the reflog stat reports a very large size but the FS has no readFileBytes.
+    // We achieve this by using a custom WorkspaceFs whose stat reports size > REFLOG_MAX_BYTES.
+    // REFLOG_MAX_BYTES is 1_048_576 (1 MiB).
+    const { scope, fs: baseFs } = makeScope({
+      ".git/HEAD": "ref: refs/heads/main\n",
+      ".git/logs/HEAD": SAMPLE_REFLOG,
+    });
+    // Override stat to inflate size for logs/HEAD only; omit readFileBytes to force fallback path
+    // (exactOptionalPropertyTypes forbids `readFileBytes: undefined`; destructure-to-exclude instead).
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { readFileBytes: _dropped, ...baseWithoutBytes } = baseFs;
+    const hugeStatFs: typeof baseWithoutBytes & { stat: (abs: string) => ReturnType<typeof baseFs.stat> } = {
+      ...baseWithoutBytes,
+      stat: (abs: string) => {
+        const s = baseFs.stat(abs);
+        if (abs.includes("logs/HEAD")) {
+          return { ...s, size: 2_000_000 };
+        }
+        return s;
+      },
+    };
+    const atoms = await gitHistoryAdapter.lookup(
+      scope,
+      nlq("recent"),
+      DEFAULT_SEARCH_LIMITS,
+      hugeStatFs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms).toEqual([]);
+  });
+});

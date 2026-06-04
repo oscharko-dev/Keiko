@@ -166,6 +166,40 @@ describe("testSourcePairingAdapter", () => {
   });
 });
 
+
+  it("respects scope.relativePaths when scanning by symbol (pathsForSymbol)", async () => {
+    // When scope.relativePaths restricts to ["src"], pathsForSymbol must only scan src/.
+    // A file "tests/only-in-tests.ts" that matches the symbol "only-in-tests" must NOT be
+    // surfaced as an input path (and therefore must not produce a pairing atom), because it
+    // lives outside the restricted scope. Only files discovered within src/ feed pathsForSymbol.
+    const workspace: WorkspaceInfo = {
+      root: MEM_ROOT,
+      name: "demo",
+      version: "1.0.0",
+      testFramework: "vitest",
+      sourceDirs: ["src"],
+      testDirs: ["tests"],
+      languages: ["typescript", "javascript"],
+      ignoreLines: [],
+    };
+    const fs = memFs(MEM_ROOT, {
+      // "only-in-tests" exists only in tests/ — outside the restricted scope.
+      "tests/only-in-tests.ts": "x",
+      // Its pair would be src/only-in-tests.ts — but since pathsForSymbol is scoped to src/
+      // and tests/only-in-tests.ts is not visited, no atom is produced.
+    });
+    const scopeRestricted: SearchScope = { workspace, scopeId: "scope-r2", relativePaths: ["src"] };
+    const atoms = await testSourcePairingAdapter.lookup(
+      scopeRestricted,
+      exq("only-in-tests"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    // pathsForSymbol only scans src/ — no match found — no atom returned.
+    expect(atoms).toEqual([]);
+  });
+
 describe("testSourcePairingAdapter (real fs symlink containment)", () => {
   let root: string;
   let outside: string;

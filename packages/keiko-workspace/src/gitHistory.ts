@@ -4,8 +4,10 @@
 // paths and therefore goes through the lower-level `fs.readFileUtf8` after `assertContainedRealPath`,
 // applies an explicit stat-based size cap, and redacts the contents. v1 surfaces the presence
 // of a reflog as a single EvidenceAtom referencing `.git/HEAD`; per-file granularity deferred.
-// Worktree pointer files (`.git: gitdir: <path>`) are validated through the same realpath gate
-// and rejected if they escape the workspace boundary.
+// Stays within ADR-0019 rule 3b: imports only @oscharko-dev/keiko-contracts, sibling workspace
+// modules, and Node stdlib (node:crypto). Limitation: unavailable when scope.relativePaths is
+// non-empty because git-history is a repo-level signal that cannot meaningfully scope to a
+// sub-folder.
 
 import { createHash } from "node:crypto";
 import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
@@ -27,12 +29,12 @@ const HEAD_MAX_BYTES = 256;
 const REFLOG_MAX_BYTES = 1_048_576;
 const REFLOG_MAX_LINES = 10_000;
 
-function readGuarded(
+async function readGuarded(
   fs: WorkspaceFs,
   root: string,
   relativePath: string,
   maxBytes: number,
-): string | undefined {
+): Promise<string | undefined> {
   const abs = resolveWithinWorkspace(root, relativePath);
   try {
     assertContainedRealPath(fs, root, abs, relativePath);
@@ -46,14 +48,27 @@ function readGuarded(
   if (!stat.isFile) {
     return undefined;
   }
+  // Enforce the size cap BEFORE reading to avoid loading multi-megabyte files into memory
+  // (matches the probeBinary pattern from repoSearchScan.ts).
+  if (stat.size > maxBytes) {
+    if (fs.readFileBytes !== undefined) {
+      let bytes: Uint8Array;
+      try {
+        bytes = await fs.readFileBytes(abs, maxBytes);
+      } catch {
+        return undefined;
+      }
+      return redact(new TextDecoder("utf-8", { fatal: false }).decode(bytes));
+    }
+    return undefined;
+  }
   let raw: string;
   try {
     raw = fs.readFileUtf8(abs);
   } catch {
     return undefined;
   }
-  const capped = raw.length > maxBytes ? raw.slice(0, maxBytes) : raw;
-  return redact(capped);
+  return redact(raw);
 }
 
 function statOrUndefined(
@@ -93,33 +108,6 @@ function isContainedAndPresent(fs: WorkspaceFs, root: string, abs: string, label
     return false;
   }
   return fs.exists(abs);
-}
-
-function isWorktreePointerValid(fs: WorkspaceFs, root: string, dotGit: string): boolean {
-  const target = readWorktreePointerTarget(fs, dotGit);
-  if (target === undefined) {
-    return false;
-  }
-  const candidate = target.startsWith("/") ? target : resolveWithinWorkspace(root, target);
-  return isContainedAndPresent(fs, root, candidate, ".git pointer");
-}
-
-function isGitDirPresent(fs: WorkspaceFs, root: string): boolean {
-  const dotGit = resolveWithinWorkspace(root, ".git");
-  if (!isContainedAndPresent(fs, root, dotGit, ".git")) {
-    return false;
-  }
-  const stat = statOrUndefined(fs, dotGit);
-  if (stat === undefined) {
-    return false;
-  }
-  if (stat.isDirectory) {
-    return true;
-  }
-  if (!stat.isFile) {
-    return false;
-  }
-  return isWorktreePointerValid(fs, root, dotGit);
 }
 
 // Find the first 10-digit run that is not preceded by '<'. Avoids regex backtracking.
@@ -179,16 +167,63 @@ function gitHeadAtom(scope: SearchScope, fingerprint: string, nowMs: number): Ev
   });
 }
 
-function isAvailableForScope(scope: SearchScope, fs: WorkspaceFs): boolean {
-  // Direct check on .git/HEAD comes FIRST. Some FS implementations (notably the test memFs)
-  // do not surface implicit parent directories via fs.exists(); checking the leaf file is
-  // both stricter (we need HEAD anyway) and more portable across port implementations.
-  const head = resolveWithinWorkspace(scope.workspace.root, ".git/HEAD");
-  if (isContainedAndPresent(fs, scope.workspace.root, head, ".git/HEAD")) {
-    return true;
+// Resolve the gitdir root: for a plain repo it is `workspace.root/.git/`; for a worktree
+// it is the path pointed at by the `.git` pointer file. Returns undefined when unavailable.
+// Strategy: check whether HEAD lives directly at `.git/HEAD` first (covers the normal case AND
+// the memFs directory simulation where only child keys are recorded); fall back to treating
+// `.git` as a worktree-pointer file only when that leaf check fails.
+function resolveGitdir(fs: WorkspaceFs, root: string): string | undefined {
+  const dotGit = resolveWithinWorkspace(root, ".git");
+  const headDirect = `${dotGit}/HEAD`;
+  // Fast path: HEAD exists directly under .git — this is the standard directory layout.
+  // We do NOT require .git itself to appear as a stat entry (some WorkspaceFs impls, notably
+  // the test memFs, only record leaf file paths, not implicit parent directories).
+  if (isContainedAndPresent(fs, root, headDirect, ".git/HEAD")) {
+    return dotGit;
   }
-  // Fallback: validate .git as a directory or as a valid worktree-pointer file.
-  return isGitDirPresent(fs, scope.workspace.root);
+  // Slow path: .git must be a regular file (worktree pointer). It must exist AND be readable.
+  if (!isContainedAndPresent(fs, root, dotGit, ".git")) {
+    return undefined;
+  }
+  const s = statOrUndefined(fs, dotGit);
+  if (!s?.isFile) {
+    return undefined;
+  }
+  // Worktree-pointer: read the `gitdir: <path>` value, validate containment once.
+  const target = readWorktreePointerTarget(fs, dotGit);
+  if (target === undefined) {
+    return undefined;
+  }
+  const candidate = target.startsWith("/") ? target : resolveWithinWorkspace(root, target);
+  // Validate: the pointer must not escape the workspace, and HEAD must exist inside the
+  // pointed-at gitdir. We check HEAD rather than the gitdir itself because some WorkspaceFs
+  // impls (notably memFs) do not surface implicit directory entries.
+  try {
+    assertContainedRealPath(fs, root, candidate, ".git pointer");
+  } catch {
+    return undefined;
+  }
+  const pointedHead = `${candidate}/HEAD`;
+  if (!isContainedAndPresent(fs, root, pointedHead, ".git-pointer/HEAD")) {
+    return undefined;
+  }
+  return candidate;
+}
+
+function isAvailableForScope(scope: SearchScope, fs: WorkspaceFs): boolean {
+  // Finding 8: git-history is a repo-level signal; sub-folder scoping is meaningless and
+  // would require reading outside the user-selected boundary.
+  if (scope.relativePaths.length > 0) {
+    return false;
+  }
+  const root = scope.workspace.root;
+  const gitdir = resolveGitdir(fs, root);
+  if (gitdir === undefined) {
+    return false;
+  }
+  // HEAD must exist inside the resolved gitdir.
+  const headAbs = `${gitdir}/HEAD`;
+  return isContainedAndPresent(fs, root, headAbs, ".git/HEAD");
 }
 
 export const gitHistoryAdapter: StructuralAdapter = {
@@ -200,7 +235,7 @@ export const gitHistoryAdapter: StructuralAdapter = {
       return Promise.resolve(false);
     }
   },
-  lookup: (
+  lookup: async (
     scope: SearchScope,
     query: RetrievalQuery,
     limits: SearchLimits,
@@ -209,18 +244,29 @@ export const gitHistoryAdapter: StructuralAdapter = {
   ): Promise<readonly EvidenceAtom[]> => {
     void limits;
     const nowMs = deps?.nowMs ?? Date.now;
-    const head = readGuarded(fs, scope.workspace.root, ".git/HEAD", HEAD_MAX_BYTES);
-    if (head === undefined) {
-      return Promise.resolve([]);
+    // Finding 8: early-out when scope has sub-paths (matches isAvailable contract).
+    if (scope.relativePaths.length > 0) {
+      return [];
     }
-    const reflog = readGuarded(fs, scope.workspace.root, ".git/logs/HEAD", REFLOG_MAX_BYTES);
+    const root = scope.workspace.root;
+    // Finding 7: resolve the real gitdir so worktree-pointer layouts work end-to-end.
+    const gitdir = resolveGitdir(fs, root);
+    if (gitdir === undefined) {
+      return [];
+    }
+    const gitdirRel = gitdir.startsWith(root) ? gitdir.slice(root.length + 1) : gitdir;
+    const head = await readGuarded(fs, root, `${gitdirRel}/HEAD`, HEAD_MAX_BYTES);
+    if (head === undefined) {
+      return [];
+    }
+    const reflog = await readGuarded(fs, root, `${gitdirRel}/logs/HEAD`, REFLOG_MAX_BYTES);
     if (reflog === undefined || reflog.length === 0) {
-      return Promise.resolve([]);
+      return [];
     }
     const timestamps = extractTimestamps(reflog);
     if (timestamps.length === 0) {
-      return Promise.resolve([]);
+      return [];
     }
-    return Promise.resolve([gitHeadAtom(scope, queryFingerprint(query), nowMs())]);
+    return [gitHeadAtom(scope, queryFingerprint(query), nowMs())];
   },
 };

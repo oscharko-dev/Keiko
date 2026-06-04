@@ -190,4 +190,30 @@ describe("runStructuralAdapters", () => {
     );
     expect(result.elapsedMs).toBeGreaterThanOrEqual(25);
   });
+
+  it("caps atoms at min(limits.maxMatchesReturned, query.maxResults), honoring the tighter bound", async () => {
+    const { scope, fs } = makeScope();
+    const atoms = [
+      fakeAtom("a.ts", "fp-1"),
+      fakeAtom("b.ts", "fp-1"),
+      fakeAtom("c.ts", "fp-1"),
+      fakeAtom("d.ts", "fp-1"),
+    ];
+    const registry: StructuralAdapterRegistry = { adapters: [fakeAdapter("alpha", atoms)] };
+    // limits.maxMatchesReturned = 3, query.maxResults = 2 → effective cap = 2
+    const limitsWide: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 3 };
+    const queryNarrow = { kind: "natural-language" as const, text: "x", caseSensitive: false, maxResults: 2, emittedAtMs: 0 };
+    const result = await runStructuralAdapters(registry, scope, queryNarrow, limitsWide, fs, {
+      nowMs: FIXED_NOW,
+    });
+    expect(result.atoms.length).toBe(2);
+    // Also verify the reverse: limits.maxMatchesReturned = 2, query.maxResults = 5 → cap = 2
+    const limitsNarrow: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 2 };
+    const queryWide = { ...queryNarrow, maxResults: 5 };
+    const result2 = await runStructuralAdapters(registry, scope, queryWide, limitsNarrow, fs, {
+      nowMs: FIXED_NOW,
+    });
+    expect(result2.atoms.length).toBe(2);
+  });
+
 });

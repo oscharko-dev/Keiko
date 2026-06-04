@@ -2,17 +2,18 @@
 // files for ESM imports/re-exports and CJS requires, emits an EvidenceAtom for each file
 // whose specifier matches the query text. Fixed, anchored, non-nested-quantifier regexes
 // keep the scan ReDoS-safe; the binary probe and read cap come from the shared workspace
-// primitives. Stays within ADR-0019 rule 3b.
+// primitives. Stays within ADR-0019 rule 3b: imports only @oscharko-dev/keiko-contracts,
+// sibling workspace modules, and Node stdlib (node:crypto).
 
 import { createHash } from "node:crypto";
 import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { looksBinary } from "./binaryDetect.js";
-import { discoverFiles, readWorkspaceFile } from "./discovery.js";
+import { readWorkspaceFile } from "./discovery.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { assertContainedRealPath } from "./realpath.js";
-import { buildAtom } from "./repoSearchScan.js";
+import { buildAtom, gatherCandidates } from "./repoSearchScan.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import type { StructuralAdapter, StructuralAdapterDeps } from "./structuralAdapters.js";
 
@@ -22,7 +23,9 @@ function queryFingerprint(query: RetrievalQuery): string {
 }
 
 // ESM static imports: import X from "y"; import * as X from "y"; import "y"; import { X } from "y".
-const ESM_IMPORT = /^\s*import(?:\s+[\w*{},\s]+\s+from)?\s+["']([^"'\n]+)["']/gm;
+// [ \t]+\S+ tokens in the import clause avoid ReDoS: [ \t] and \S are complementary so the engine
+// never tries alternative splits. [ \t] (not \s) prevents the clause from crossing newlines.
+const ESM_IMPORT = /^\s*import(?:[ \t]+\S+(?:[ \t]+\S+)*[ \t]+from)?\s+["']([^"'\n]+)["']/gm;
 // ESM re-exports: export * from "y"; export { X } from "y".
 const ESM_REEXPORT = /^\s*export\s+(?:\*|\{[^}]*\})\s+from\s+["']([^"'\n]+)["']/gm;
 // CommonJS: require("y").
@@ -160,13 +163,9 @@ export const importGraphAdapter: StructuralAdapter = {
       startMs: (deps?.nowMs ?? Date.now)(),
       nowMs: deps?.nowMs ?? Date.now,
     };
-    const files = discoverFiles(
-      scope.workspace,
-      { maxDepth: 12, maxFiles: limits.maxFilesScanned, applyGitignore: true },
-      fs,
-    );
+    const candidateSet = gatherCandidates(scope, limits, fs);
     const atoms: EvidenceAtom[] = [];
-    for (const file of files) {
+    for (const file of candidateSet.files) {
       if (atoms.length >= limits.maxMatchesReturned || elapsedOver(ctx)) {
         break;
       }

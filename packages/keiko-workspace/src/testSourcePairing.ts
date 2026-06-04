@@ -1,16 +1,15 @@
 // Test/source pairing adapter (Epic #177, Issue #180). Deterministic, pure-JS mapper that,
 // given a workspace-relative path or a bare symbol name, locates the paired test (or paired
 // source) file using fixed name conventions. Output normalized to EvidenceAtom via the shared
-// buildAtom helper. Stays within ADR-0019 rule 3b: imports only @oscharko-dev/keiko-contracts
-// and sibling workspace modules.
+// buildAtom helper. Stays within ADR-0019 rule 3b: imports only @oscharko-dev/keiko-contracts,
+// sibling workspace modules, and Node stdlib (node:crypto).
 
 import { createHash } from "node:crypto";
 import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
-import { discoverFiles } from "./discovery.js";
 import type { WorkspaceFs } from "./fs.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { assertContainedRealPath } from "./realpath.js";
-import { buildAtom } from "./repoSearchScan.js";
+import { buildAtom, gatherCandidates } from "./repoSearchScan.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import type { StructuralAdapter, StructuralAdapterDeps } from "./structuralAdapters.js";
 
@@ -125,11 +124,8 @@ function pairForPath(ctx: PairContext, path: string): EvidenceAtom | undefined {
 }
 
 function pathsForSymbol(ctx: PairContext, symbol: string, limits: SearchLimits): readonly string[] {
-  const files = discoverFiles(
-    ctx.scope.workspace,
-    { maxDepth: 12, maxFiles: limits.maxFilesScanned, applyGitignore: true },
-    ctx.fs,
-  );
+  const candidateSet = gatherCandidates(ctx.scope, limits, ctx.fs);
+  const files = candidateSet.files;
   const lowered = symbol.toLowerCase();
   const out: string[] = [];
   for (const file of files) {

@@ -160,7 +160,8 @@ export async function runStructuralAdapters(
   const errored = outcomes
     .map((outcome) => outcome.error)
     .filter((error): error is AdapterError => error !== undefined);
-  const atoms = mergeAtoms(outcomes, limits.maxMatchesReturned);
+  const cap = Math.min(limits.maxMatchesReturned, query.maxResults);
+  const atoms = mergeAtoms(outcomes, cap);
   return {
     atoms,
     unavailable,
