@@ -5341,11 +5341,23 @@ select.dlg-input {
   white-space: pre-wrap;
   word-break: break-word;
 }
+.grounded-citations-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
 .grounded-citations {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-top: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.grounded-citations-item {
+  display: inline-flex;
+  margin: 0;
 }
 .grounded-citations-label {
   font-size: 10px;
@@ -5353,7 +5365,6 @@ select.dlg-input {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--fg-faint);
-  width: 100%;
 }
 .grounded-citation {
   display: inline-flex;

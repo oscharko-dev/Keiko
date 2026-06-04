@@ -20,10 +20,13 @@ function formatRange(citation: GroundedEvidenceCitation): string {
 }
 
 function citationAriaLabel(citation: GroundedEvidenceCitation): string {
+  // Copilot PR #258 finding: citations promised "Open citation…" but onClick is a no-op
+  // until the Files-window preview wiring lands. The label now describes the citation
+  // honestly without promising an action that doesn't happen.
   if (citation.lineRange === undefined) {
-    return `Open citation for ${citation.scopePath}`;
+    return `Evidence citation in ${citation.scopePath}`;
   }
-  return `Open citation for ${citation.scopePath} at lines ${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
+  return `Evidence citation in ${citation.scopePath} at lines ${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
 }
 
 function CitationButton({ citation }: { readonly citation: GroundedEvidenceCitation }): ReactNode {
@@ -48,14 +51,19 @@ function CitationList({
   readonly citations: readonly GroundedEvidenceCitation[];
 }): ReactNode {
   if (citations.length === 0) return null;
+  // Copilot PR #258 finding: the prior "Evidence" label was a direct child of role="list"
+  // which is invalid (only listitem children allowed). Lift the label OUT of the list and
+  // use real <ul>/<li> elements.
   return (
-    <div className="grounded-citations" role="list" aria-label="Evidence citations">
+    <div className="grounded-citations-wrap">
       <span className="grounded-citations-label">Evidence</span>
-      {citations.map((citation) => (
-        <span key={citation.stableId} role="listitem">
-          <CitationButton citation={citation} />
-        </span>
-      ))}
+      <ul className="grounded-citations" aria-label="Evidence citations">
+        {citations.map((citation) => (
+          <li key={citation.stableId} className="grounded-citations-item">
+            <CitationButton citation={citation} />
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

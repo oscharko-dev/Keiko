@@ -315,15 +315,26 @@ export function useChatSession(): UseChatSessionResult {
   // refetches the message log on success so the bubbles reflect the canonical store state.
   const sendGrounded = useCallback(
     async (chat: Chat, project: ProjectWithAvailability, content: string, optimisticId: string) => {
+      // Copilot PR #258 finding: clear the previous answer at the START of a new send so a
+      // stale citation block doesn't briefly flash next to the new question.
+      setLatestGrounded(undefined);
       const controller = new AbortController();
       groundedControllerRef.current = controller;
       try {
         const result = await askGrounded({ chatId: chat.id, content }, controller.signal);
         setLatestGrounded(result);
-        const messagePayload = await fetchChatMessages(chat.id, project.path);
+        // Refresh BOTH messages AND chats so the sidebar reflects the new updated_at and
+        // re-sorts the active chat to the top after the assistant reply lands.
+        const [messagePayload, chatsPayload] = await Promise.all([
+          fetchChatMessages(chat.id, project.path),
+          fetchChats(project.path),
+        ]);
+        const refreshedActive = chatsPayload.chats.find((c) => c.id === chat.id);
         setState((previous) => ({
           ...previous,
           messages: Array.from(messagePayload.messages),
+          chats: Array.from(chatsPayload.chats),
+          activeChat: refreshedActive ?? previous.activeChat,
         }));
       } catch (caught) {
         // Aborted requests are not errors from the user's perspective — clear state silently.

@@ -22,7 +22,7 @@ import type {
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import type { Chat } from "./store/index.js";
+import type { Chat, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
   echoAnswerer,
@@ -143,15 +143,16 @@ function deriveScopeId(chat: Chat): string {
 function buildSelectedScope(chat: Chat): SelectedScope | undefined {
   const cs = chat.connectedScope;
   if (cs === undefined) return undefined;
-  // relativePaths is non-empty per the #184 BFF gate; kind reflects whether the user picked
-  // exactly one entry (directory) or several (files). workspace-root is unreachable here
-  // because the connector requires at least one path.
-  const kind: SelectedScope["kind"] = cs.relativePaths.length === 1 ? "directory" : "files";
+  // The #184 Files-window connector allows individual files OR a single folder. At this
+  // layer we cannot reliably distinguish without a fs stat, so "files" is the safe
+  // superset — every downstream consumer treats individual path entries identically
+  // regardless. Previously a single entry was labelled "directory" which would
+  // misrepresent a single-file binding (Copilot PR #258 finding).
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     scopeId: deriveScopeId(chat),
     workspaceRoot: chat.projectPath,
-    kind,
+    kind: "files",
     relativePaths: cs.relativePaths,
     conversationId: chat.id,
     connectedAtMs: cs.connectedAtMs,
@@ -222,6 +223,34 @@ interface AskWorkerCtx {
   readonly runner: GroundedRunner;
 }
 
+// Atomic insert via the existing createMessages batch (wraps BEGIN/COMMIT) so a transient
+// failure on the assistant insert rolls back the user insert. Returns both rows.
+function persistGroundedExchange(
+  deps: UiHandlerDeps,
+  chatId: string,
+  userContent: string,
+  assistantContent: string,
+): readonly [ChatMessage, ChatMessage] {
+  const now = Date.now();
+  const base = {
+    chatId,
+    timestamp: now,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  } as const;
+  const [user, assistant] = deps.store.createMessages([
+    { ...base, role: "user", content: userContent },
+    { ...base, role: "assistant", content: assistantContent },
+  ]);
+  if (user === undefined || assistant === undefined) {
+    throw new Error("createMessages returned fewer rows than expected");
+  }
+  return [user, assistant];
+}
+
 async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   const { chat, scope, content, deps, runner } = workerCtx;
   const query = buildQuery(content, () => Date.now());
@@ -234,28 +263,12 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
     }
     throw error;
   }
-  const userMessage = deps.store.createMessage({
-    chatId: chat.id,
-    role: "user",
+  const [userMessage, assistantMessage] = persistGroundedExchange(
+    deps,
+    chat.id,
     content,
-    timestamp: Date.now(),
-    runId: undefined,
-    workflowId: undefined,
-    workflowStatus: undefined,
-    shortResult: undefined,
-    taskType: undefined,
-  });
-  const assistantMessage = deps.store.createMessage({
-    chatId: chat.id,
-    role: "assistant",
-    content: output.assistantContent,
-    timestamp: Date.now(),
-    runId: undefined,
-    workflowId: undefined,
-    workflowStatus: undefined,
-    shortResult: undefined,
-    taskType: undefined,
-  });
+    output.assistantContent,
+  );
   const answer: GroundedAnswer = {
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
