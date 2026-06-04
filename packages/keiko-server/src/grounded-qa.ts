@@ -32,6 +32,7 @@ import {
   type OrchestratorInput,
   type OrchestratorOutput,
 } from "./grounded-orchestrator.js";
+import { microIndexForGroundedScope } from "./grounded-context-index.js";
 
 // ─── Body parsing (mirrors store-handlers' bounded reader) ────────────────────
 
@@ -185,15 +186,22 @@ function buildQuery(content: string, nowMs: () => number): RetrievalQuery {
 
 // ─── Citation projection ──────────────────────────────────────────────────────
 
-function buildCitations(pack: ConnectedContextPack): readonly GroundedEvidenceCitation[] {
+function redactString(redactor: Redactor, value: string): string {
+  return redactor(value) as string;
+}
+
+function buildCitations(
+  pack: ConnectedContextPack,
+  redactor: Redactor,
+): readonly GroundedEvidenceCitation[] {
   const citations: GroundedEvidenceCitation[] = [];
   for (const file of pack.files) {
     for (const excerpt of file.excerpts) {
       citations.push({
-        scopePath: excerpt.atom.scopePath,
+        scopePath: redactString(redactor, excerpt.atom.scopePath),
         lineRange: excerpt.atom.lineRange,
         score: excerpt.atom.score,
-        stableId: excerpt.atom.stableId,
+        stableId: redactString(redactor, excerpt.atom.stableId),
       });
     }
   }
@@ -224,7 +232,12 @@ function buildUncertainty(
 export type GroundedRunner = (input: OrchestratorInput) => Promise<OrchestratorOutput>;
 
 function defaultRunner(input: OrchestratorInput): Promise<OrchestratorOutput> {
-  return runGroundedExploration(input, { answerer: echoAnswerer });
+  const nowMs = Date.now;
+  return runGroundedExploration(input, {
+    answerer: echoAnswerer,
+    nowMs,
+    microIndex: microIndexForGroundedScope(input.scope, nowMs),
+  });
 }
 
 // ─── Lookup helpers ───────────────────────────────────────────────────────────
@@ -291,13 +304,14 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   if (!isValidGroundedPack(output.pack)) {
     return internalError("Grounded answer context pack failed validation.");
   }
+  const assistantContent = redactString(deps.redactor, output.assistantContent);
   const [userMessage, assistantMessage] = persistGroundedExchange(
     deps,
     chat.id,
     content,
-    output.assistantContent,
+    assistantContent,
   );
-  const citations = buildCitations(output.pack);
+  const citations = buildCitations(output.pack, deps.redactor);
   const contextPack = buildGroundedAnswerContextPackSummary(
     output.pack,
     citations.length,
@@ -306,7 +320,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   const answer: GroundedAnswer = {
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
-    content: output.assistantContent,
+    content: assistantContent,
     citations,
     uncertainty: buildUncertainty(output.pack, deps.redactor),
     omittedCount: output.pack.omitted.length,

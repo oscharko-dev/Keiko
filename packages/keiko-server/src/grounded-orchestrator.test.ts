@@ -19,8 +19,10 @@ import {
   gitHistoryAdapter,
   importGraphAdapter,
   testSourcePairingAdapter,
+  type WorkspaceFs,
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
+import type { MicroIndex } from "@oscharko-dev/keiko-workflows";
 
 import {
   ClarificationNeededError,
@@ -102,6 +104,51 @@ function input(overrides: Partial<OrchestratorInput> = {}): OrchestratorInput {
     query: happyQuery(),
     workspaceRoot: ROOT,
     ...overrides,
+  };
+}
+
+function throwingReadFs(): WorkspaceFs {
+  return {
+    readFileUtf8: (): never => {
+      throw new Error("readFileUtf8 should not be called");
+    },
+    stat: (): never => {
+      throw new Error("stat should not be called");
+    },
+    readDir: (): never => {
+      throw new Error("readDir should not be called");
+    },
+    realPath: (path): string => path,
+    exists: (): boolean => true,
+    readFileBytes: (): Promise<Uint8Array> =>
+      Promise.reject(new Error("readFileBytes should not be called")),
+  };
+}
+
+function recordingMicroIndex(): { index: MicroIndex; gets: () => number; sets: () => number } {
+  const entries = new Map<string, ConnectedContextPack>();
+  let getCalls = 0;
+  let setCalls = 0;
+  return {
+    index: {
+      get: (key): ConnectedContextPack | undefined => {
+        getCalls += 1;
+        return entries.get(key);
+      },
+      set: (key, pack): void => {
+        setCalls += 1;
+        entries.set(key, pack);
+      },
+      delete: (key): void => {
+        entries.delete(key);
+      },
+      clear: (): void => {
+        entries.clear();
+      },
+      size: (): number => entries.size,
+    },
+    gets: (): number => getCalls,
+    sets: (): number => setCalls,
   };
 }
 
@@ -300,6 +347,43 @@ describe("runGroundedExploration", () => {
       lateFile?.excerpts.some((excerpt) => excerpt.content.includes("MyClass late target")),
     ).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("reuses an injected micro-index for repeated context-pack assembly", async () => {
+    const microIndex = recordingMicroIndex();
+    const first = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+      microIndex: microIndex.index,
+    });
+    const second = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW + 1_000,
+      detectWorkspace: () => fakeWorkspace(),
+      microIndex: microIndex.index,
+    });
+    expect(microIndex.sets()).toBe(1);
+    expect(microIndex.gets()).toBe(2);
+    expect(second.pack).toBe(first.pack);
+  });
+
+  it("does not touch workspace file IO when read budgets are zero", async () => {
+    const out = await runGroundedExploration(
+      input({
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 0, excerptBytesMax: 0 },
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        fs: throwingReadFs(),
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(out.pack.files).toEqual([]);
+    expect(out.pack.usage.filesRead).toBe(0);
+    expect(out.pack.usage.excerptBytes).toBe(0);
+    expect(out.pack.uncertainty.some((u) => u.claim.includes("filesRead"))).toBe(true);
   });
 });
 

@@ -33,6 +33,7 @@ import {
   type ExcerptWindow,
   type ExplorationPlan,
   type GovernorState,
+  type MicroIndex,
   type RetrievalRing,
 } from "@oscharko-dev/keiko-workflows";
 import {
@@ -76,6 +77,8 @@ export interface OrchestratorDeps {
   readonly detectWorkspace?: (root: string, fs: WorkspaceFs) => WorkspaceInfo;
   // Called after a ready plan exists and before any workspace detection or repository IO starts.
   readonly recordPlan?: (plan: ExplorationPlan) => void;
+  // Ephemeral #183 context-pack cache for one connected scope/session.
+  readonly microIndex?: MicroIndex;
 }
 
 export interface OrchestratorOutput {
@@ -165,6 +168,17 @@ function budgetClipped(stopReason: string, nowMs: number): UncertaintyMarker {
   };
 }
 
+function readBudgetStopReason(budget: ExplorationBudget): string | undefined {
+  const exhausted = [
+    ...(budget.filesReadMax <= 0 ? ["filesRead"] : []),
+    ...(budget.excerptBytesMax <= 0 ? ["excerptBytes"] : []),
+  ];
+  if (exhausted.length === 0) {
+    return undefined;
+  }
+  return `budget-exhausted on ${exhausted.join(", ")}`;
+}
+
 function omittedFromSearchCandidates(
   candidates: readonly CandidateFile[],
   nowMs: number,
@@ -233,6 +247,15 @@ async function runAllRings(
   inputs: SearchInputs,
   initialGovernor: GovernorState,
 ): Promise<RingRunSummary> {
+  const blockedByReadBudget = readBudgetStopReason(initialGovernor.plan.budget);
+  if (blockedByReadBudget !== undefined) {
+    return {
+      atoms: [],
+      omitted: [],
+      governor: complete(initialGovernor),
+      uncertainty: [budgetClipped(blockedByReadBudget, inputs.nowMs())],
+    };
+  }
   const atoms: EvidenceAtom[] = [];
   const omitted: OmittedContextEntry[] = [];
   const uncertainty: UncertaintyMarker[] = [];
@@ -487,6 +510,8 @@ export async function runGroundedExploration(
     ranking.kept.map((c) => c.scopePath),
     { searchScope, fs, budget: plan.budget, initialUsage, atomsByPath, nowMs },
   );
+  const assembleOptions =
+    deps.microIndex === undefined ? { nowMs } : { nowMs, microIndex: deps.microIndex };
 
   const assemble = await assembleContextPack(
     {
@@ -500,7 +525,7 @@ export async function runGroundedExploration(
       initialUsage,
       initialUncertainty: [...rings.uncertainty, ...excerptReads.uncertainty],
     },
-    { nowMs },
+    assembleOptions,
   );
 
   const assistantContent = await deps.answerer.answer(input.query.text, assemble.pack);

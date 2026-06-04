@@ -12,6 +12,11 @@ import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import {
+  clearAllGroundedContextIndexes,
+  groundedContextIndexRegistry,
+  microIndexForGroundedScope,
+} from "./grounded-context-index.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
@@ -100,7 +105,23 @@ async function restartWithDeps(overrides: Partial<UiHandlerDeps>): Promise<void>
   await new Promise<void>((res) => server.listen(port, UI_HOST, res));
 }
 
+function openGroundedIndex(chatId: string): void {
+  microIndexForGroundedScope(
+    {
+      schemaVersion: "1",
+      scopeId: `scope-${chatId}`,
+      workspaceRoot: projDir,
+      kind: "files",
+      relativePaths: ["src"],
+      conversationId: chatId,
+      connectedAtMs: 1,
+    },
+    () => 1,
+  );
+}
+
 beforeEach(async () => {
+  clearAllGroundedContextIndexes();
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-ui-static-"));
   tmp = mkdtempSync(join(tmpdir(), "keiko-store-handlers-"));
   projDir = join(tmp, "proj");
@@ -121,6 +142,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeServer();
+  clearAllGroundedContextIndexes();
   store.close();
   rmSync(tmp, { recursive: true, force: true });
   rmSync(staticRoot, { recursive: true, force: true });
@@ -339,6 +361,19 @@ describe("DELETE /api/projects", () => {
     expect(store.listMessages(chat.id)).toHaveLength(0);
   });
 
+  it("clears grounded context indexes when a project is deleted", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    openGroundedIndex(chat.id);
+    expect(groundedContextIndexRegistry.size()).toBe(1);
+    const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
+      method: "DELETE",
+      headers: DELETE_HEADERS,
+    });
+    expect(res.status).toBe(204);
+    expect(groundedContextIndexRegistry.size()).toBe(0);
+  });
+
   it("returns 404 for unknown project", async () => {
     const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
       method: "DELETE",
@@ -501,6 +536,20 @@ describe("PATCH /api/chats", () => {
     expect(body.chat.status).toBe("closed");
   });
 
+  it("clears grounded context indexes when a chat is closed", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    openGroundedIndex(c.id);
+    expect(groundedContextIndexRegistry.size()).toBe(1);
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ status: "closed" }),
+    });
+    expect(res.status).toBe(200);
+    expect(groundedContextIndexRegistry.size()).toBe(0);
+  });
+
   it("updates selectedModel when it is a chat registry id", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "example-chat-model");
@@ -606,6 +655,22 @@ describe("PATCH /api/chats", () => {
     expect(body.chat.connectedScope).toBeUndefined();
   });
 
+  it("clears grounded context indexes when connectedScope is replaced", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    openGroundedIndex(c.id);
+    expect(groundedContextIndexRegistry.size()).toBe(1);
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { relativePaths: ["src/next"], connectedAtMs: 2 },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(groundedContextIndexRegistry.size()).toBe(0);
+  });
+
   it("rejects connectedScope with a traversal path", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
@@ -696,6 +761,19 @@ describe("DELETE /api/chats", () => {
     expect(res.status).toBe(204);
     expect(store.listChats(projDir)).toHaveLength(0);
     expect(store.listMessages(c.id)).toHaveLength(0);
+  });
+
+  it("clears grounded context indexes when a chat is deleted", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    openGroundedIndex(c.id);
+    expect(groundedContextIndexRegistry.size()).toBe(1);
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "DELETE",
+      headers: DELETE_HEADERS,
+    });
+    expect(res.status).toBe(204);
+    expect(groundedContextIndexRegistry.size()).toBe(0);
   });
 
   it("returns 404 for unknown id", async () => {

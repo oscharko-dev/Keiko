@@ -245,6 +245,93 @@ describe("assembleContextPack", () => {
     expect(r2.pack.budget.excerptBytesMax).toBe(1);
   });
 
+  it("micro-index key is sensitive to excerpt content so commit-state changes are not stale", async () => {
+    const idx = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
+    const first = await assembleContextPack(baseInput(), { nowMs: fixedNow, microIndex: idx });
+    const updated: AssembleInput = {
+      ...baseInput(),
+      excerpts: new Map([
+        ["a.ts", "export const a = 42;"],
+        ["b.ts", "export const b = 2;"],
+      ]),
+    };
+    const second = await assembleContextPack(updated, { nowMs: fixedNow, microIndex: idx });
+    expect(first.fromIndex).toBe(false);
+    expect(second.fromIndex).toBe(false);
+    expect(second.pack.files[0]?.excerpts[0]?.content).toBe("export const a = 42;");
+  });
+
+  it("micro-index key is sensitive to candidate and omitted metadata", async () => {
+    const idx = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
+    const first: AssembleInput = {
+      ...baseInput(),
+      ranked: [
+        {
+          scopePath: "a.ts",
+          score: 0.9,
+          signals: [{ name: "first-signal", value: 1 }],
+          omitted: undefined,
+        },
+      ],
+    };
+    const second: AssembleInput = {
+      ...baseInput(),
+      ranked: [
+        {
+          scopePath: "a.ts",
+          score: 0.9,
+          signals: [{ name: "second-signal", value: 1 }],
+          omitted: undefined,
+        },
+      ],
+      omittedFromRanking: [{ scopePath: "b.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW }],
+    };
+    await assembleContextPack(first, { nowMs: fixedNow, microIndex: idx });
+    const result = await assembleContextPack(second, { nowMs: fixedNow, microIndex: idx });
+    expect(result.fromIndex).toBe(false);
+    expect(result.pack.files[0]?.selectionReason).toBe("ranked by second-signal");
+    expect(result.pack.omitted).toEqual([
+      { scopePath: "b.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW },
+    ]);
+  });
+
+  it("micro-index key still reuses live repeated questions with fresh emitted timestamps", async () => {
+    const idx = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
+    const first: AssembleInput = {
+      ...baseInput(),
+      query: { ...query(), emittedAtMs: FIXED_NOW },
+      atoms: baseInput().atoms.map((entry) => ({ ...entry, emittedAtMs: FIXED_NOW })),
+      initialUsage: {
+        searchCalls: 1,
+        filesRead: 2,
+        excerptBytes: 0,
+        modelInputTokens: 0,
+        modelOutputTokens: 0,
+        elapsedMs: 7,
+        rerankCalls: 0,
+      },
+    };
+    const second: AssembleInput = {
+      ...first,
+      query: { ...query(), emittedAtMs: FIXED_NOW + 1_000 },
+      atoms: first.atoms.map((entry) => ({ ...entry, emittedAtMs: FIXED_NOW + 1_000 })),
+      initialUsage: {
+        searchCalls: 1,
+        filesRead: 2,
+        excerptBytes: 0,
+        modelInputTokens: 0,
+        modelOutputTokens: 0,
+        elapsedMs: 99,
+        rerankCalls: 0,
+      },
+    };
+    const r1 = await assembleContextPack(first, { nowMs: fixedNow, microIndex: idx });
+    const r2 = await assembleContextPack(second, { nowMs: fixedNow, microIndex: idx });
+    expect(r1.fromIndex).toBe(false);
+    expect(r2.fromIndex).toBe(true);
+    expect(r2.pack).toBe(r1.pack);
+  });
+
   it("produces an empty pack when there are no atoms or candidates", async () => {
     const input: AssembleInput = {
       scope: scope(),

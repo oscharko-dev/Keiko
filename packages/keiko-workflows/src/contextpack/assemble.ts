@@ -4,6 +4,8 @@
 // seam + optional micro-index. No IO. The audit ledger (#187) owns persistence and
 // `ledgerRef` is therefore always undefined here.
 
+import { createHash } from "node:crypto";
+
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateFile,
@@ -414,18 +416,121 @@ function buildPack(input: AssembleInput, plan: BuildPlan, nowMs: number): Connec
 // different budgets, per-excerpt caps, editable-file sets, or reranker MUST hash to
 // different keys — otherwise we could serve a cached pack that violates the new budget or
 // carries the wrong file roles/order.
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function cacheLineRange(range: EvidenceAtom["lineRange"]): object | undefined {
+  if (range === undefined) {
+    return undefined;
+  }
+  return { startLine: range.startLine, endLine: range.endLine };
+}
+
+function cacheScope(scope: SelectedScope): object {
+  return {
+    schemaVersion: scope.schemaVersion,
+    scopeId: scope.scopeId,
+    workspaceRoot: scope.workspaceRoot,
+    kind: scope.kind,
+    relativePaths: scope.relativePaths,
+    conversationId: scope.conversationId,
+    connectedAtMs: scope.connectedAtMs,
+  };
+}
+
+function cacheQuery(query: RetrievalQuery): object {
+  return {
+    kind: query.kind,
+    text: query.text,
+    caseSensitive: query.caseSensitive,
+    maxResults: query.maxResults,
+  };
+}
+
+function cacheAtom(atom: EvidenceAtom): object {
+  return {
+    stableId: atom.stableId,
+    scopePath: atom.scopePath,
+    lineRange: cacheLineRange(atom.lineRange),
+    score: atom.score,
+    provenance: atom.provenance,
+    redactionState: atom.redactionState,
+    ledgerRef: atom.ledgerRef,
+  };
+}
+
+function cacheUsage(usage: ExplorationUsage | undefined): object | undefined {
+  if (usage === undefined) {
+    return undefined;
+  }
+  return {
+    searchCalls: usage.searchCalls,
+    filesRead: usage.filesRead,
+    excerptBytes: usage.excerptBytes,
+    modelInputTokens: usage.modelInputTokens,
+    modelOutputTokens: usage.modelOutputTokens,
+    rerankCalls: usage.rerankCalls,
+  };
+}
+
+function cacheUncertainty(marker: UncertaintyMarker): object {
+  return {
+    kind: marker.kind,
+    claim: marker.claim,
+    impactedAtomIds: marker.impactedAtomIds,
+  };
+}
+
+function cacheCandidate(candidate: CandidateFile): object {
+  return {
+    scopePath: candidate.scopePath,
+    score: candidate.score,
+    signals: candidate.signals.map((signal) => ({ name: signal.name, value: signal.value })),
+    omitted: candidate.omitted,
+  };
+}
+
+function cacheOmitted(entry: OmittedContextEntry): object {
+  return {
+    scopePath: entry.scopePath,
+    reason: entry.reason,
+  };
+}
+
+function cacheExcerptWindow(window: ExcerptWindow): object {
+  return {
+    startLine: window.startLine,
+    endLine: window.endLine,
+    contentHash: sha256Hex(window.content),
+  };
+}
+
+function cacheExcerpts(excerpts: ReadonlyMap<string, ExcerptSource>): readonly object[] {
+  return [...excerpts.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([scopePath, source]) => ({
+      scopePath,
+      windows: normalizeExcerptWindows(source).map(cacheExcerptWindow),
+    }));
+}
+
 function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): readonly string[] {
-  const fingerprint = JSON.stringify({
-    atoms: input.atoms.map((a) => a.stableId),
+  const fingerprintSource = JSON.stringify({
+    scope: cacheScope(input.scope),
+    query: cacheQuery(input.query),
+    atoms: input.atoms.map(cacheAtom),
     budget: input.budget,
-    initialUsage: input.initialUsage,
-    initialUncertainty: input.initialUncertainty,
-    ranked: input.ranked.map((c) => c.scopePath),
+    initialUsage: cacheUsage(input.initialUsage),
+    initialUncertainty: input.initialUncertainty?.map(cacheUncertainty),
+    ranked: input.ranked.map(cacheCandidate),
+    omittedFromRanking: input.omittedFromRanking.map(cacheOmitted),
+    excerpts: cacheExcerpts(input.excerpts),
     maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
     editablePaths: [...resolved.editablePaths].sort(),
     rerankerName: resolved.reranker.name,
   });
-  return [fingerprint];
+  return [`fp-${sha256Hex(fingerprintSource)}`];
 }
 
 export async function assembleContextPack(
