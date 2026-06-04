@@ -107,11 +107,15 @@ function truncateAtNul(value: string): string {
 }
 
 function replaceHomePrefix(value: string, homePrefix: string): string {
-  if (homePrefix.length === 0) return value;
+  // Strip trailing forward and backward slashes so callers that pass either form (e.g.
+  // `/Users/foo` vs `/Users/foo/` vs `C:\\Users\\foo\\`) get the same rewrite. The
+  // empty-prefix gate then short-circuits a caller-supplied `"/"`.
+  const trimmed = homePrefix.replace(/[\\/]+$/, "");
+  if (trimmed.length === 0) return value;
   // Match either the prefix exactly or the prefix followed by a separator; this prevents
   // `/Users/foobar` from being misread as `/Users/foo` + `bar`.
-  if (value === homePrefix) return "~";
-  if (value.startsWith(`${homePrefix}/`)) return `~${value.slice(homePrefix.length)}`;
+  if (value === trimmed) return "~";
+  if (value.startsWith(`${trimmed}/`)) return `~${value.slice(trimmed.length)}`;
   return value;
 }
 

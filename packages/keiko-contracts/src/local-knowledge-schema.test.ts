@@ -103,6 +103,18 @@ function seedFullLineage(db: DatabaseSync): SeedHandles {
     `INSERT INTO parsed_units (id, capsule_id, document_id, kind) VALUES (?, ?, ?, ?)`,
   ).run(parsedUnitId, capsuleId, documentId, "section");
   db.prepare(
+    `INSERT INTO pages (capsule_id, document_id, page_number, character_start, character_end) VALUES (?, ?, ?, ?, ?)`,
+  ).run(capsuleId, documentId, 1, 0, 100);
+  db.prepare(
+    `INSERT INTO sections (capsule_id, document_id, section_path_json, character_start, character_end) VALUES (?, ?, ?, ?, ?)`,
+  ).run(capsuleId, documentId, '["Chapter 1"]', 0, 100);
+  db.prepare(
+    `INSERT INTO parser_diagnostics (id, capsule_id, document_id, severity, code, message, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run("diag-1", capsuleId, documentId, "warning", "WARN_FOO", "msg", 1000);
+  db.prepare(
+    `INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, status, total_documents, processed_documents, failed_documents, skipped_documents) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run("job-1", capsuleId, '["src-1"]', 1000, "succeeded", 1, 1, 0, 0);
+  db.prepare(
     `INSERT INTO chunks (
        id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count,
        safe_excerpt_hash
@@ -250,20 +262,26 @@ describe("lineage enforcement", () => {
     const db = openSchemaDb();
     try {
       const handles = seedFullLineage(db);
-      // Confirm every table has the seeded row before the cascade.
-      expect(countRows(db, "capsule_sources")).toBe(1);
-      expect(countRows(db, "documents")).toBe(1);
-      expect(countRows(db, "parsed_units")).toBe(1);
-      expect(countRows(db, "chunks")).toBe(1);
-      expect(countRows(db, "vectors")).toBe(1);
+      const dependents = [
+        "capsule_sources",
+        "documents",
+        "pages",
+        "sections",
+        "parsed_units",
+        "chunks",
+        "vectors",
+        "parser_diagnostics",
+        "indexing_jobs",
+      ];
+      for (const table of dependents) {
+        expect(countRows(db, table)).toBe(1);
+      }
       db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: handles.capsuleId });
       // Cascade reaches every dependent table; the capsule row itself is gone too.
       expect(countRows(db, "capsules")).toBe(0);
-      expect(countRows(db, "capsule_sources")).toBe(0);
-      expect(countRows(db, "documents")).toBe(0);
-      expect(countRows(db, "parsed_units")).toBe(0);
-      expect(countRows(db, "chunks")).toBe(0);
-      expect(countRows(db, "vectors")).toBe(0);
+      for (const table of dependents) {
+        expect(countRows(db, table)).toBe(0);
+      }
     } finally {
       db.close();
     }
@@ -333,6 +351,12 @@ describe("redactPathInDiagnostic", () => {
 
   it("returns just `~` when the path equals the HOME prefix", () => {
     expect(redactPathInDiagnostic("/Users/foo", { homePrefix: "/Users/foo" })).toBe("~");
+  });
+
+  it("tolerates a HOME prefix passed with a trailing separator", () => {
+    expect(redactPathInDiagnostic("/Users/foo/secret", { homePrefix: "/Users/foo/" })).toBe(
+      "~/secret",
+    );
   });
 
   it("does not collapse `/Users/foobar` into `/Users/foo` (prefix-with-separator gate)", () => {
