@@ -8,8 +8,11 @@
 // structural convention. We surface only the workflow event UNION types here; the harness member
 // names own the bare identifiers. Callers narrow on the union to reach the member shapes — the
 // same pattern src/index.ts already uses.
+//
+// Issue #178 adds the connected repository context surface (Epic #177): pure type contracts plus
+// pure validation helpers for the upcoming Files window → Conversation Center handoff.
 
-export const KEIKO_CONTRACTS_VERSION = "0.1.0" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.2.0" as const;
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -256,3 +259,53 @@ export type {
   NewChatMessage,
   UpdateChatMessagePatch,
 } from "./bff-wire.js";
+
+// ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
+export type {
+  SelectedScopeKind,
+  SelectedScope,
+  EvidenceLedgerRef,
+  EvidenceAtomProvenanceKind,
+  EvidenceAtomProvenance,
+  EvidenceAtomRedactionState,
+  LineRange,
+  EvidenceAtom,
+  ExplorationBudget,
+  ExplorationUsage,
+  RetrievalQueryKind,
+  RetrievalQuery,
+  CandidateOmissionReason,
+  CandidateSignal,
+  CandidateFile,
+  ContextExcerpt,
+  ConnectedFileRole,
+  ConnectedFileEntry,
+  UncertaintyMarkerKind,
+  UncertaintyMarker,
+  OmittedContextEntry,
+  ConnectedContextPack,
+  ConnectedContextPackSummary,
+  ConversationAttachmentContextLink,
+  ValidationResult,
+  IsValidScopePathOptions,
+  EvidenceAtomStableIdInput,
+  ConnectedContextPackStableIdInput,
+} from "./connected-context.js";
+export {
+  CONNECTED_CONTEXT_SCHEMA_VERSION,
+  SELECTED_SCOPE_KINDS,
+  EVIDENCE_ATOM_PROVENANCE_KINDS,
+  EVIDENCE_ATOM_REDACTION_STATES,
+  RETRIEVAL_QUERY_KINDS,
+  CANDIDATE_OMISSION_REASONS,
+  UNCERTAINTY_MARKER_KINDS,
+  CONNECTED_FILE_ROLES,
+  DEFAULT_EXPLORATION_BUDGET,
+  isValidScopePath,
+  isValidLineRange,
+  isWithinBudget,
+  validateSelectedScope,
+  validateEvidenceAtom,
+  validateRetrievalQuery,
+  validateConnectedContextPack,
+} from "./connected-context.js";

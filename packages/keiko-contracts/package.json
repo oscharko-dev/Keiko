@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-contracts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -19,6 +19,10 @@
     "./bug-investigation-events": {
       "types": "./dist/bug-investigation-events.d.ts",
       "import": "./dist/bug-investigation-events.js"
+    },
+    "./connected-context": {
+      "types": "./dist/connected-context.d.ts",
+      "import": "./dist/connected-context.js"
     },
     "./verification-summary": {
       "types": "./dist/verification-summary.d.ts",
