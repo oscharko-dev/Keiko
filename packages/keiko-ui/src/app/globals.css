@@ -3,6 +3,12 @@
    Brand: #4EBA87 (orca green) · #333333 · #ffffff
    ============================================================ */
 :root {
+  /* Tell the user agent the app paints on a dark surface by default. Without
+     this hint the browser fills the empty document with its own white "blank"
+     state between document swap and CSS variable resolution during F5 reloads,
+     producing a visible white flash before the shader/background paints (#302). */
+  color-scheme: dark;
+
   /* surfaces — warm-neutral near-black, derived in oklch from #333 */
   --bg: oklch(0.17 0.004 160); /* app background */
   --surface: oklch(0.205 0.004 160); /* sidebar / panels */
@@ -166,6 +172,7 @@ button {
    LIGHT THEME — warm-neutral, same orca-green accent
    ============================================================ */
 [data-theme="light"] {
+  color-scheme: light;
   --bg: oklch(0.955 0.004 160);
   --surface: oklch(0.978 0.003 160);
   --card: oklch(1 0 0);
