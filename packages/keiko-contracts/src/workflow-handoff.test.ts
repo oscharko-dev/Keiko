@@ -552,6 +552,129 @@ describe("checkPatchAgainstScope", () => {
     expect(kinds.has("exceeds-max-new-files")).toBe(true);
     expect(kinds.has("no-expected-checks")).toBe(true);
   });
+
+  // ── invalid-patch-entry (C1 fail-closed) ──────────────────────────────────
+
+  it("flags an entry with NaN patchBytes as invalid-patch-entry", () => {
+    const proposed = [
+      { path: "src/index.ts", newFile: false, patchBytes: Number.NaN },
+    ] as unknown as readonly ProposedPatchEntry[];
+    const result = checkPatchAgainstScope(happyPatchScope(), proposed);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(findViolation(result.violations, "invalid-patch-entry")).toBeDefined();
+  });
+
+  it("flags an entry with Infinity patchBytes as invalid-patch-entry", () => {
+    const proposed = [
+      { path: "src/index.ts", newFile: false, patchBytes: Number.POSITIVE_INFINITY },
+    ] as unknown as readonly ProposedPatchEntry[];
+    const result = checkPatchAgainstScope(happyPatchScope(), proposed);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(findViolation(result.violations, "invalid-patch-entry")).toBeDefined();
+  });
+
+  it("flags an entry with negative patchBytes as invalid-patch-entry", () => {
+    const proposed = [
+      { path: "src/index.ts", newFile: false, patchBytes: -1 },
+    ] as unknown as readonly ProposedPatchEntry[];
+    const result = checkPatchAgainstScope(happyPatchScope(), proposed);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(findViolation(result.violations, "invalid-patch-entry")).toBeDefined();
+  });
+
+  it("flags an entry with non-number patchBytes as invalid-patch-entry", () => {
+    const proposed = [
+      { path: "src/index.ts", newFile: false, patchBytes: "big" as unknown as number },
+    ] as unknown as readonly ProposedPatchEntry[];
+    const result = checkPatchAgainstScope(happyPatchScope(), proposed);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(findViolation(result.violations, "invalid-patch-entry")).toBeDefined();
+  });
+
+  it("flags an entry with non-boolean newFile as invalid-patch-entry", () => {
+    const proposed = [
+      { path: "src/index.ts", newFile: 1 as unknown as boolean, patchBytes: 10 },
+    ] as unknown as readonly ProposedPatchEntry[];
+    const result = checkPatchAgainstScope(happyPatchScope(), proposed);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(findViolation(result.violations, "invalid-patch-entry")).toBeDefined();
+  });
+
+  it("does not bypass the scope check when one NaN entry is paired with a valid under-limit entry", () => {
+    // NaN is dropped from accumulation; valid entry stays. The NaN itself produces
+    // invalid-patch-entry, so the result must still be !ok regardless of the limit.
+    const scope: PatchScope = {
+      ...happyPatchScope(),
+      editablePaths: ["src/index.ts", "src/other.ts"],
+      limits: { ...DEFAULT_PATCH_SCOPE_LIMITS, maxPatchBytes: 1_000 },
+    };
+    const proposed = [
+      { path: "src/index.ts", newFile: false, patchBytes: Number.NaN },
+      { path: "src/other.ts", newFile: false, patchBytes: 50 },
+    ] as unknown as readonly ProposedPatchEntry[];
+    const result = checkPatchAgainstScope(scope, proposed);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(findViolation(result.violations, "invalid-patch-entry")).toBeDefined();
+  });
+
+  // ── exact-boundary tests (M2 mutation gap) ────────────────────────────────
+
+  it("accepts proposed.length === limits.maxFileCount as ok", () => {
+    const scope: PatchScope = {
+      ...happyPatchScope(),
+      editablePaths: ["a", "b"],
+      limits: { ...DEFAULT_PATCH_SCOPE_LIMITS, maxFileCount: 2 },
+    };
+    const proposed: readonly ProposedPatchEntry[] = [
+      { path: "a", newFile: false, patchBytes: 1 },
+      { path: "b", newFile: false, patchBytes: 1 },
+    ];
+    expect(checkPatchAgainstScope(scope, proposed)).toEqual({ ok: true });
+  });
+
+  it("accepts totalBytes === limits.maxPatchBytes as ok", () => {
+    const scope: PatchScope = {
+      ...happyPatchScope(),
+      editablePaths: ["a", "b"],
+      limits: { ...DEFAULT_PATCH_SCOPE_LIMITS, maxPatchBytes: 100 },
+    };
+    const proposed: readonly ProposedPatchEntry[] = [
+      { path: "a", newFile: false, patchBytes: 50 },
+      { path: "b", newFile: false, patchBytes: 50 },
+    ];
+    expect(checkPatchAgainstScope(scope, proposed)).toEqual({ ok: true });
+  });
+
+  it("accepts newFiles === limits.maxNewFiles as ok", () => {
+    const scope: PatchScope = {
+      ...happyPatchScope(),
+      editablePaths: ["a", "b"],
+      limits: { ...DEFAULT_PATCH_SCOPE_LIMITS, maxNewFiles: 2 },
+    };
+    const proposed: readonly ProposedPatchEntry[] = [
+      { path: "a", newFile: true, patchBytes: 10 },
+      { path: "b", newFile: true, patchBytes: 10 },
+    ];
+    expect(checkPatchAgainstScope(scope, proposed)).toEqual({ ok: true });
+  });
 });
 
 // ─── UserApprovalTokenInput type pin ──────────────────────────────────────────

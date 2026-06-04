@@ -96,7 +96,8 @@ export type PatchScopeViolationKind =
   | "exceeds-max-file-count"
   | "exceeds-max-patch-bytes"
   | "exceeds-max-new-files"
-  | "no-expected-checks";
+  | "no-expected-checks"
+  | "invalid-patch-entry";
 
 export interface PatchScopeViolation {
   readonly kind: PatchScopeViolationKind;
@@ -329,7 +330,7 @@ function violationOutsideSet(path: string): PatchScopeViolation {
 }
 
 function violationBound(
-  kind: Exclude<PatchScopeViolationKind, "outside-editable-set" | "no-expected-checks">,
+  kind: Exclude<PatchScopeViolationKind, "outside-editable-set" | "no-expected-checks" | "invalid-patch-entry">,
   observed: number,
   limit: number,
   field: string,
@@ -350,6 +351,16 @@ function violationNoChecks(): PatchScopeViolation {
     observed: undefined,
     limit: undefined,
     message: "patchScope.expectedChecks is empty",
+  };
+}
+
+function violationInvalidEntry(path: string, reason: string): PatchScopeViolation {
+  return {
+    kind: "invalid-patch-entry",
+    path,
+    observed: undefined,
+    limit: undefined,
+    message: `path "${path}" invalid: ${reason}`,
   };
 }
 
@@ -384,8 +395,15 @@ function collectAggregateBounds(
   let totalBytes = 0;
   let newFiles = 0;
   for (const entry of proposed) {
-    totalBytes += entry.patchBytes;
-    if (entry.newFile) {
+    // JSON.parse can produce NaN/Infinity/negative — fail closed rather than bypass the limit.
+    if (!Number.isFinite(entry.patchBytes) || entry.patchBytes < 0) {
+      violations.push(violationInvalidEntry(entry.path, "patchBytes must be a finite non-negative number"));
+    } else {
+      totalBytes += entry.patchBytes;
+    }
+    if (typeof entry.newFile !== "boolean") {
+      violations.push(violationInvalidEntry(entry.path, "newFile must be a boolean"));
+    } else if (entry.newFile) {
       newFiles += 1;
     }
   }
