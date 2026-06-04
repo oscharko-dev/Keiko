@@ -4,3 +4,11 @@
 // boundary: storage (#206) and audit (#214) treat the body as already-policy-gated.
 
 export { KEIKO_MEMORY_CAPTURE_VERSION } from "./version.js";
+export { CaptureRejection, type RejectionReason } from "./errors.js";
+export type {
+  CaptureContext,
+  CaptureMemoryResolver,
+  CaptureOutcome,
+  CapturePolicyOptions,
+  WorkflowOutcomeInput,
+} from "./types.js";
