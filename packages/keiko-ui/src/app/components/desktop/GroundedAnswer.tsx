@@ -5,11 +5,91 @@
 // PR; a future change wires them to the Files-window preview at the cited line range.
 
 import type { ReactNode } from "react";
-import type { GroundedAnswer, GroundedEvidenceCitation, GroundedUncertainty } from "@/lib/types";
+import type {
+  GroundedAnswer,
+  GroundedAnswerContextPackSummary,
+  GroundedEvidenceCitation,
+  GroundedUncertainty,
+} from "@/lib/types";
 
 interface GroundedAnswerProps {
   readonly answer: GroundedAnswer | undefined;
   readonly busy: boolean;
+}
+
+// Display "—" for Infinity / non-finite caps (the default budget uses Number.POSITIVE_INFINITY
+// for unbounded dimensions like rerankCallsMax when the orchestrator is disabled).
+function formatCap(value: number): string {
+  return Number.isFinite(value) ? String(value) : "—";
+}
+
+function formatScopeLabel(summary: GroundedAnswerContextPackSummary): string {
+  if (summary.scopeKind === "workspace-root") {
+    return "workspace root";
+  }
+  // The opaque scopeId is BFF-internal (a sha256 prefix). Truncating to 8 hex chars keeps
+  // it short enough to read but still distinguishable across binding sessions.
+  const idTail = summary.scopeId.slice(-8);
+  if (summary.scopeKind === "directory") {
+    return `directory (${idTail})`;
+  }
+  return `files (${String(summary.fileCount)} files)`;
+}
+
+function MetricRow({
+  label,
+  value,
+}: {
+  readonly label: string;
+  readonly value: string;
+}): ReactNode {
+  return (
+    <>
+      <dt className="grounded-context-pack-dt">{label}</dt>
+      <dd className="grounded-context-pack-dd">{value}</dd>
+    </>
+  );
+}
+
+function ContextPackSummary({
+  contextPack,
+}: {
+  readonly contextPack: GroundedAnswerContextPackSummary;
+}): ReactNode {
+  const { usage, budget } = contextPack;
+  const scope = formatScopeLabel(contextPack);
+  const headline =
+    contextPack.scopeKind === "workspace-root"
+      ? `Scope: ${scope}`
+      : `Scope: ${String(contextPack.fileCount)} file${contextPack.fileCount === 1 ? "" : "s"} in ${scope}`;
+  return (
+    <section
+      className="grounded-context-pack"
+      role="region"
+      aria-label="Context inspection summary"
+    >
+      <div className="grounded-context-pack-headline">{headline}</div>
+      <dl className="grounded-context-pack-dl">
+        <MetricRow
+          label="Searched"
+          value={`${String(usage.searchCalls)}× / ${formatCap(budget.searchCallsMax)}`}
+        />
+        <MetricRow
+          label="Read"
+          value={`${String(usage.filesRead)} / ${formatCap(budget.filesReadMax)} files`}
+        />
+        <MetricRow
+          label="Bytes"
+          value={`${String(usage.excerptBytes)} / ${formatCap(budget.excerptBytesMax)} B`}
+        />
+        <MetricRow
+          label="Time"
+          value={`${String(contextPack.elapsedMs)} / ${formatCap(budget.elapsedMsMax)} ms`}
+        />
+        <MetricRow label="Query" value={contextPack.queryKind} />
+      </dl>
+    </section>
+  );
 }
 
 function formatRange(citation: GroundedEvidenceCitation): string {
@@ -97,6 +177,7 @@ export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode
       <CitationList citations={answer.citations} />
       <UncertaintyLine markers={answer.uncertainty} />
       <OmittedLine omittedCount={answer.omittedCount} />
+      <ContextPackSummary contextPack={answer.contextPack} />
     </div>
   );
 }

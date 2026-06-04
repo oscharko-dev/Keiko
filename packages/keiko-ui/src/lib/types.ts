@@ -71,6 +71,7 @@ export type {
   GroundedEvidenceCitation,
   GroundedUncertainty,
   GroundedAnswer,
+  GroundedAnswerContextPackSummary,
   ProjectsResponse,
   ProjectResponse,
   ChatsResponse,

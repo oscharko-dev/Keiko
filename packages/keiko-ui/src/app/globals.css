@@ -5403,6 +5403,38 @@ select.dlg-input {
   font-family: var(--font-mono);
 }
 
+/* Issue #187 — context inspection summary on every grounded answer. Counts/enums only;
+   never raw paths, query text, or excerpt content. Uses --fg-muted (>= 4.5:1 on chrome) for
+   labels, --fg for values so the metric reads as the primary information. */
+.grounded-context-pack {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle, color-mix(in oklab, var(--fg) 12%, transparent));
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.grounded-context-pack-headline {
+  color: var(--fg);
+  margin-bottom: 4px;
+}
+.grounded-context-pack-dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 12px;
+  row-gap: 2px;
+  margin: 0;
+}
+.grounded-context-pack-dt {
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+.grounded-context-pack-dd {
+  color: var(--fg);
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Issue #185 AC3 — typing row wraps the TypingBubble and the cancel button side-by-side. */
 .chatw-typing-row {
   display: flex;
