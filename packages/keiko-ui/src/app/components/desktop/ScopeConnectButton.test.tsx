@@ -32,7 +32,10 @@ describe("ScopeConnectButton", () => {
       />,
     );
     const btn = screen.getByRole("button");
-    expect(btn).toBeDisabled();
+    // PR #254 Copilot fix: empty-state uses aria-disabled rather than native disabled so the
+    // button stays in the focus order and keyboard users can reach the tooltip hint.
+    expect(btn).toHaveAttribute("aria-disabled", "true");
+    expect(btn).not.toBeDisabled();
     expect(btn).toHaveAttribute("title", "Select a folder or file first");
   });
 
