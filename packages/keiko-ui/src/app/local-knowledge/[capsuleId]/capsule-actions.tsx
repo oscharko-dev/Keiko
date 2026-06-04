@@ -142,7 +142,17 @@ function ConfirmModal({
   onCancel,
 }: ConfirmModalProps): ReactNode {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const confirmInputRef = useRef<HTMLInputElement>(null);
   useFocusTrap(dialogRef, true, onCancel);
+
+  // Auto-focus the confirmation input when the modal opens. Done via ref + effect (not
+  // autoFocus) so the focus only fires when the dialog mounts and not on every re-render —
+  // satisfies jsx-a11y/no-autofocus while preserving the "type the capsule name" flow.
+  useEffect(() => {
+    if (kind === "delete" && confirmInputRef.current !== null) {
+      confirmInputRef.current.focus();
+    }
+  }, [kind]);
 
   const requiresTypedName = kind === "delete";
   const confirmEnabled = !busy && (!requiresTypedName || nameInput === capsuleDisplayName);
@@ -189,7 +199,7 @@ function ConfirmModal({
                 className="dlg-input"
                 value={nameInput}
                 autoComplete="off"
-                autoFocus
+                ref={confirmInputRef}
                 disabled={busy}
                 placeholder={capsuleDisplayName}
                 aria-label={`Type "${capsuleDisplayName}" to confirm deletion`}

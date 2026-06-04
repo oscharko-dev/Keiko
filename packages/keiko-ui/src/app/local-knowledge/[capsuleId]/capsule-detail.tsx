@@ -292,12 +292,18 @@ function IndexingJobsSection({ jobs }: { jobs: readonly IndexingJobRecord[] }): 
 // CapsuleDetail — root export
 // ---------------------------------------------------------------------------
 
-export function CapsuleDetail(): ReactNode {
+export interface CapsuleDetailProps {
+  // Injectable fetch seam — defaults to the real BFF helper. Tests pass a mock
+  // so they never hit the network, following the ConnectorGraph seam pattern.
+  readonly fetchDetailImpl?: typeof import("@/lib/local-knowledge-api").fetchCapsuleDetail;
+}
+
+export function CapsuleDetail({ fetchDetailImpl }: CapsuleDetailProps = {}): ReactNode {
   const params = useParams();
   const rawId = Array.isArray(params["capsuleId"]) ? params["capsuleId"][0] : params["capsuleId"];
   const capsuleId = (rawId ?? "") as KnowledgeCapsuleId;
 
-  const { data, loadStatus, loadError, reload } = useCapsuleDetail(capsuleId);
+  const { data, loadStatus, loadError, reload } = useCapsuleDetail(capsuleId, fetchDetailImpl);
 
   if (loadStatus === "loading") {
     return (
