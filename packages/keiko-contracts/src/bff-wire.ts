@@ -274,6 +274,40 @@ export interface AgentBugInvestigationInput {
   readonly targetFiles?: readonly string[];
 }
 
+// ─── Grounded Q&A (BFF POST /api/chats/messages/grounded — issue #185) ───────────
+// Wire shapes for the grounded repository-aware Q&A pipeline. The server composes the
+// connected-context layers (#179 search, #180 structural, #181 planner, #182 ranker,
+// #183 assembler) into a single response that carries both the persisted message ids
+// and a redacted citation list. The citation list is the UI-safe projection of the
+// underlying ConnectedContextPack — never the raw excerpts.
+
+export interface GroundedAskRequest {
+  readonly chatId: string;
+  readonly content: string;
+}
+
+export interface GroundedEvidenceCitation {
+  readonly scopePath: string;
+  readonly lineRange: { readonly startLine: number; readonly endLine: number } | undefined;
+  readonly score: number;
+  readonly stableId: string;
+}
+
+export interface GroundedUncertainty {
+  readonly kind: string;
+  readonly claim: string;
+}
+
+export interface GroundedAnswer {
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
+  readonly content: string;
+  readonly citations: readonly GroundedEvidenceCitation[];
+  readonly uncertainty: readonly GroundedUncertainty[];
+  readonly omittedCount: number;
+  readonly elapsedMs: number;
+}
+
 // ─── BFF error envelope ───────────────────────────────────────────────────────────
 
 export type BffErrorCode =
