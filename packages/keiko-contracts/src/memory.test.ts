@@ -1005,7 +1005,7 @@ describe("validateMemoryAuditRecord", () => {
     expect(
       validateMemoryAuditRecord({
         ...happyAuditRecord(),
-        summary: "leak: sk-ABCDEF0123456789ABCDEF",
+        summary: "leak: sk-" + "ABCDEF0123456789ABCDEF",
       }).ok,
     ).toBe(false);
   });
@@ -1140,6 +1140,24 @@ describe("type-level scope coordinate invariants", () => {
     };
     // @ts-expect-error — MemoryRecord requires `scope`; the structural omission is rejected.
     const assigned: MemoryRecord = recordWithoutScope;
+    expect(assigned.id).toBe(mem("m-1"));
+  });
+
+  it("MemoryRecord requires provenance at the type level", () => {
+    const recordWithoutProvenance = {
+      schemaVersion: "1" as const,
+      id: mem("m-1"),
+      type: "preference" as const,
+      scope: { kind: "user" as const, userId: user("u-1") },
+      validity: { validFrom: 0 },
+      status: "accepted" as const,
+      pinned: false,
+      tags: [],
+      createdAt: 0,
+      updatedAt: 0,
+    };
+    // @ts-expect-error — MemoryRecord requires `provenance`; the structural omission is rejected.
+    const assigned: MemoryRecord = recordWithoutProvenance;
     expect(assigned.id).toBe(mem("m-1"));
   });
 

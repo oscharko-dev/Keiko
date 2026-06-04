@@ -53,14 +53,24 @@ export interface MemoryValidationFail {
 export type MemoryValidation<T> = MemoryValidationOk<T> | MemoryValidationFail;
 
 // ─── Unsafe-content heuristics (secret-shape only, no allow/block list) ──────
-// REJECT payloads whose body or payload obviously carries a credential. The capture layer
-// (#207) is the primary owner of secret-prevention; this is a defence in depth so a
-// contract-boundary cannot silently persist a high-entropy secret. Shape-based: we test
-// the SHAPE of the string, not a list of providers, so the heuristic stays useful across
-// vendor changes.
+// Audit-record defence-in-depth: rejects credential-shaped strings on the AUDIT SUMMARY
+// path (validateMemoryAuditRecord). The PRIMARY secret-prevention gate is the capture
+// layer (#207), which scans candidate memory body/payload before construction. This
+// helper is intentionally NOT applied to record.body or proposal.body — body scanning is
+// owned end-to-end by the capture layer so callers cannot route around the policy by
+// constructing records directly. Shape-based: we test the SHAPE of the string, not a
+// list of providers, so the heuristic stays useful across vendor changes.
 //
-// Patterns intentionally narrow — high-precision over high-recall — because a
-// false-positive here blocks a legitimate memory; the capture policy adds the wider net.
+// Pattern coverage — intentionally narrow (high precision over high recall):
+//   COVERED:  sk- (OpenAI-style), AKIA (AWS), gh[pousr]_ (GitHub tokens),
+//             xox[abporsu]- (Slack), three-part JWTs, PEM private keys,
+//             long contiguous digit runs (PAN/IBAN-shape).
+//   EXCLUDED: opaque "Bearer <token>" (catches only JWT-encoded bearers),
+//             URL-embedded credentials (https://user:pass@host),
+//             generic password=, secret=, key= form-encoded values.
+//             These classes are intentionally deferred to the capture layer
+//             (#207), where context-aware redaction can avoid false positives
+//             on legitimate non-secret strings.
 const SECRET_SHAPE_PATTERNS: readonly RegExp[] = [
   /\bsk-[A-Za-z0-9_-]{20,}\b/,
   /\bAKIA[0-9A-Z]{16}\b/,
