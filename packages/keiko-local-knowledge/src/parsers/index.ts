@@ -29,8 +29,9 @@ export { jsonParser } from "./json-parser.js";
 export { csvParser } from "./csv-parser.js";
 export { htmlParser } from "./html-parser.js";
 
-// Convenience: a registry pre-populated with every shipped adapter in the order the spec
-// requires. Resolution order is markdown/text → JSON → CSV/TSV → HTML → unsupported.
+// Convenience: a registry pre-populated with every shipped adapter. Resolution order is
+// JSON → CSV/TSV → HTML → text. Text registers last because its `matches` predicate is
+// the most permissive (accepts any `text/*`); registering it first would shadow CSV and HTML.
 import { csvParser } from "./csv-parser.js";
 import { htmlParser } from "./html-parser.js";
 import { jsonParser } from "./json-parser.js";

@@ -63,7 +63,17 @@ describe("jsonParser", () => {
       selectionFromText(obj, { extension: "json" }),
       buildParserOptions({ now: () => 0 }),
     );
-    expect(pointers(result.units)).toEqual(["/a~1b", "/c~01d"]);
+    expect(pointers(result.units)).toEqual(["/a~1b", "/c~0d"]);
+  });
+
+  it("escapes keys that contain both ~ and / per RFC 6901", () => {
+    // Key "a~/b" must become "a~0~1b" — tilde escaped first, slash second.
+    const obj = JSON.stringify({ "a~/b": 1 });
+    const result = jsonParser.parse(
+      selectionFromText(obj, { extension: "json" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect(pointers(result.units)).toEqual(["/a~0~1b"]);
   });
 
   it("emits a single root-pointer leaf for a primitive root", () => {

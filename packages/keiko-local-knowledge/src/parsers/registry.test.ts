@@ -195,4 +195,14 @@ describe("unsupportedParser", () => {
   it("does not match arbitrary text", () => {
     expect(unsupportedParser.capability.matches(selectionFromText("plain text"))).toBe(false);
   });
+
+  it(".docx with ZIP magic bytes reports docx-not-implemented (extension wins over magic bytes)", () => {
+    // .docx files are ZIPs, so without extension precedence they would fall through to
+    // the magic-byte path and return "archive-not-decompressed" instead of "docx-not-implemented".
+    const result = unsupportedParser.parse(
+      selectionFromBytes(ZIP_MAGIC, { extension: "docx" }),
+      options(),
+    );
+    expect(expectUnsupported(result.units[0]).reason).toBe("docx-not-implemented");
+  });
 });

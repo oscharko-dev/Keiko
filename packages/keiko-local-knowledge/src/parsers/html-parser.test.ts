@@ -157,4 +157,17 @@ describe("htmlParser", () => {
     );
     expect(asBlock(result.units[0]).path).toEqual(["Title"]);
   });
+
+  it("completes a 1 MB HTML with 200 <script> tags within 500 ms (no O(n²) toLowerCase)", () => {
+    // Each script block adds ~5 KB of content so the document approaches 1 MB.
+    const scriptBlock = `<script>${"x".repeat(5_000)}</script>`;
+    const html = `<html><body><h1>Title</h1>${scriptBlock.repeat(200)}<p>end</p></body></html>`;
+    const bytes = encode(html);
+    const start = Date.now();
+    htmlParser.parse(
+      selectionFromBytes(bytes, { extension: "html" }),
+      buildParserOptions({ now: () => start }),
+    );
+    expect(Date.now() - start).toBeLessThan(500);
+  });
 });

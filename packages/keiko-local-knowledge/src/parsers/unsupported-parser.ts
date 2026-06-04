@@ -79,13 +79,14 @@ function magicByteReason(bytes: Uint8Array): string | undefined {
 }
 
 export function classifyUnsupported(input: ParserSelectionInput): string | undefined {
-  const fromBytes = magicByteReason(input.bytes);
-  if (fromBytes !== undefined) return fromBytes;
+  // Extension table is checked first so that known formats (e.g. .docx, which IS a ZIP) get
+  // the specific reason string rather than the generic magic-byte fallback.
   const lower = input.extension.toLowerCase();
   if (lower in UNSUPPORTED_EXTENSIONS) {
     return UNSUPPORTED_EXTENSIONS[lower];
   }
-  return undefined;
+  // Fall back to magic-byte sniffing for files with unknown/absent extensions.
+  return magicByteReason(input.bytes);
 }
 
 export const unsupportedParser: ParserAdapter = Object.freeze({

@@ -126,10 +126,12 @@ function nextEvent(text: string, from: number): ScanEvent {
 
 // For a raw-text tag we MUST skip until the matching close tag with the same name, without
 // interpreting the inner bytes. This is what neutralises `<script>...</script>` payloads.
-function skipRawText(text: string, tagName: string, from: number): number {
+// `textLower` is a precomputed lowercase view threaded from `emitHtml` to avoid recomputing
+// it on every raw-text tag — without this, a document with N script/style tags would call
+// text.toLowerCase() N times, making the function O(n²) in document size.
+function skipRawText(text: string, textLower: string, tagName: string, from: number): number {
   const target = `</${tagName}`;
-  const lower = text.toLowerCase();
-  const close = lower.indexOf(target, from);
+  const close = textLower.indexOf(target, from);
   if (close === -1) return text.length;
   const gt = text.indexOf(">", close);
   return gt === -1 ? text.length : gt + 1;
@@ -162,6 +164,7 @@ interface Emission {
 
 interface ScanState {
   readonly text: string;
+  readonly textLower: string; // precomputed once to avoid O(n²) re-lowering in skipRawText
   readonly input: ParserSelectionInput;
   readonly options: ParserOptions;
   readonly startedAt: number;
@@ -246,7 +249,7 @@ function handleTag(state: ScanState, tag: Tag): number {
     // Terminate any in-progress block at the tag boundary so the raw bytes never appear in
     // the unit stream. Skip past `</script>` (etc.); the next text run reopens a block.
     flushBlock(state, tag.start);
-    return skipRawText(state.text, tag.name, tag.end);
+    return skipRawText(state.text, state.textLower, tag.name, tag.end);
   }
   const level = headingLevel(tag.name);
   if (level > 0 && tag.kind === "open") return handleHeadingOpen(state, tag, level);
@@ -271,6 +274,7 @@ function step(state: ScanState, cursor: number): number {
 function emitHtml(text: string, input: ParserSelectionInput, options: ParserOptions): Emission {
   const state: ScanState = {
     text,
+    textLower: text.toLowerCase(),
     input,
     options,
     startedAt: options.now(),

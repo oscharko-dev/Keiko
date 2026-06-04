@@ -6,10 +6,10 @@
 // callers see one unit per traversal step so duplicate keys (which `JSON.parse` itself
 // resolves by last-wins) collapse the same way they do in the parsed object.
 //
-// Character offsets are sourced from a single re-scan of the original text that walks
-// matching brackets — `JSON.parse` discards positions, so we run an O(n) tokeniser that
-// records each value's [start, end). Both halves use the SAME parser (the standard library
-// one) so the unit set always matches the in-memory value.
+// Character offsets: every leaf is emitted with a whole-document span [0, text.length) because
+// `JSON.parse` discards positions and we have not yet wired a per-leaf re-scanner. The
+// JSON Pointer (not the character span) is what downstream layers (#195 chunker, #196 indexer)
+// use for citation. Precise per-leaf offsets are deferred to a follow-up issue.
 
 import {
   decodeUtf8,
@@ -35,7 +35,7 @@ function isJson(input: ParserSelectionInput): boolean {
 
 function encodePointerSegment(key: string): string {
   // RFC 6901: `~` -> `~0`, `/` -> `~1`. Order matters: replace `~` first.
-  return key.replace(/~/g, "~01").replace(/\//g, "~1");
+  return key.replace(/~/g, "~0").replace(/\//g, "~1");
 }
 
 function joinPointer(parent: string, segment: string): string {
