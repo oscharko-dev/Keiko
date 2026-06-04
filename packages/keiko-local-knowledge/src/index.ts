@@ -89,3 +89,4 @@ export {
 } from "./discovery/index.js";
 export * from "./indexing/index.js";
 export * from "./retrieval/index.js";
+export * from "./evaluations/index.js";
