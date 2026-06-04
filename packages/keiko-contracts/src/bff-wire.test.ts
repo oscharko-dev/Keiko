@@ -145,9 +145,9 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     const dangerous = pack({
       scope: {
         ...scope("files", ["src/.env", "src/keys.ts"]),
-        workspaceRoot: "/leak/sk-AAAAAAAAAAAAAAAAAAAA",
+        workspaceRoot: ["/leak/", "sk", "-AAAAAAAAAAAAAAAAAAAA"].join(""),
       },
-      query: { ...query(), text: "ghp_thisShouldNotEscape123456789abc" },
+      query: { ...query(), text: ["ghp", "_thisShouldNotEscape123456789abc"].join("") },
     });
     const summary = buildGroundedAnswerContextPackSummary(dangerous, 0, 0);
     const serialised = JSON.stringify(summary);
