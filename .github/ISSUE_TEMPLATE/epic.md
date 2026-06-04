@@ -2,7 +2,7 @@
 name: Epic
 about: Plan a coordinated delivery wave with child issues
 title: 'Epic: '
-labels: ['type: epic', 'status: ready']
+labels: ['type: epic', 'status: new']
 assignees: ''
 ---
 
@@ -47,6 +47,17 @@ Child issues will be linked after creation.
 - [ ] Final closure evidence is recorded in the epic or final child issue.
 - [ ] Known limitations and follow-ups are documented.
 
+## Delivery Board Workflow
+
+- [ ] Add this epic and all executable child issues to the public `Keiko Product Delivery` project.
+- [ ] Set project `Status` to `Open Epics` for the epic and `Open Issues` for executable child issues that have not started.
+- [ ] Keep `Workflow State` current: `New`, `Triaged`, `In Progress`, `PR Open`, `Ready for Human Review`, `Blocked`, `Waiting for User`, or `Done`.
+- [ ] When an agent starts work, set the issue label to `status: in progress`, set project `Status` and `Workflow State` to `In Progress`, and fill `Owner / Agent`.
+- [ ] When implementation starts, fill the `Branch` field with the active branch name.
+- [ ] When a PR is opened, set `Workflow State` to `PR Open`, fill `Pull Request`, and keep `Human Review Required` set to `Yes`.
+- [ ] When the PR is ready for maintainer review, set `Workflow State` to `Ready for Human Review` and replace the issue label with `status: ready for human review`.
+- [ ] Only after merge and closure evidence, set the issue label to `status: done`, project `Status` to `Done`, and project `Workflow State` to `Done`.
+
 ## Agent Execution Mode
 
 - [ ] Single-agent
@@ -79,6 +90,7 @@ This epic is a planning and coordination container. Do not implement the full ep
 - [ ] Implementation PRs wait for required GitHub checks before merge.
 - [ ] All actionable review findings are fixed or explicitly dispositioned before merge.
 - [ ] Child issue Acceptance Criteria and Expected Verification checkboxes are updated only when evidence exists.
+- [ ] Delivery board fields are updated before handoff, including `Owner / Agent`, `Branch`, `Pull Request`, and `Human Review Required`.
 - [ ] The epic remains open until all child issues are closed and final closure evidence is recorded.
 
 ## Stop Conditions
