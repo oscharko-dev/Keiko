@@ -5474,3 +5474,280 @@ select.dlg-input {
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* ============================================================
+   Issue #197 — Local Knowledge connector graph
+   ============================================================ */
+
+/* Page shell */
+.lk-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 24px 28px;
+  gap: 24px;
+  max-width: 900px;
+  margin: 0 auto;
+  width: 100%;
+}
+.lk-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.lk-title {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  margin: 0;
+  flex: 1;
+}
+
+/* Alert banner */
+.lk-alert {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  border: 1px solid color-mix(in oklch, var(--danger) 45%, transparent);
+  color: var(--danger);
+  font-size: 13px;
+}
+.lk-alert-retry {
+  margin-left: 12px;
+  font-size: 12px;
+  color: var(--danger);
+  text-decoration: underline;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* Pipeline diagram */
+.lk-pipeline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Pipeline node */
+.lk-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-card);
+  min-width: 110px;
+  text-align: center;
+}
+.lk-node[data-connected="true"] {
+  border-color: var(--accent-line);
+}
+.lk-node-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--inset);
+  border: 1px solid var(--line-soft);
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+}
+.lk-node-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.lk-node-sub {
+  font-size: 11px;
+  color: var(--fg-dim);
+  margin-top: 2px;
+}
+
+/* Capsule section heading */
+.lk-section-head {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  margin: 0 0 10px;
+}
+
+/* Capsule row */
+.lk-capsule-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-card);
+}
+.lk-capsule-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--inset);
+  border: 1px solid var(--line-soft);
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  flex-shrink: 0;
+  font-size: 14px;
+}
+.lk-capsule-info {
+  flex: 1;
+  min-width: 0;
+}
+.lk-capsule-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lk-capsule-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* Status badge */
+.lk-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-top: 3px;
+}
+.lk-badge[data-state="ready"] {
+  background: var(--accent-dim);
+  color: var(--fg);
+  border: 1px solid var(--accent-line);
+}
+.lk-badge[data-state="indexing"] {
+  background: color-mix(in oklch, var(--warn) 22%, transparent);
+  color: oklch(0.26 0.012 75);
+  border: 1px solid color-mix(in oklch, var(--warn) 55%, transparent);
+}
+.lk-badge[data-state="stale"] {
+  background: color-mix(in oklch, var(--warn) 16%, transparent);
+  color: var(--fg-muted);
+  border: 1px solid color-mix(in oklch, var(--warn) 40%, transparent);
+}
+.lk-badge[data-state="error"] {
+  background: color-mix(in oklch, var(--danger) 18%, transparent);
+  color: var(--danger);
+  border: 1px solid color-mix(in oklch, var(--danger) 45%, transparent);
+}
+.lk-badge[data-state="draft"],
+.lk-badge[data-state="deleting"] {
+  background: var(--inset);
+  color: var(--fg-dim);
+  border: 1px solid var(--line-soft);
+}
+
+/* Action buttons — min 30×30 (WCAG 2.5.8 ≥ 24×24) */
+.lk-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  min-width: 30px;
+  padding: 0 11px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+.lk-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.lk-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.lk-btn-primary {
+  background: var(--accent);
+  color: #06281b;
+  border: 1px solid var(--accent);
+}
+.lk-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.lk-btn-ghost {
+  background: var(--card);
+  color: var(--fg-muted);
+  border: 1px solid var(--line-soft);
+}
+.lk-btn-ghost:hover:not(:disabled) {
+  background: var(--card-2);
+  color: var(--fg);
+}
+.lk-btn-danger {
+  background: var(--inset);
+  color: var(--danger);
+  border: 1px solid color-mix(in oklch, var(--danger) 40%, transparent);
+}
+.lk-btn-danger:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--danger) 14%, var(--inset));
+}
+.lk-btn-lg {
+  height: 34px;
+  padding: 0 16px;
+  font-size: 13px;
+}
+.lk-btn-xl {
+  height: 36px;
+  padding: 0 20px;
+  font-size: 13.5px;
+}
+
+/* Empty state */
+.lk-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 48px 24px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--line);
+  text-align: center;
+}
+.lk-empty-icon {
+  font-size: 36px;
+}
+.lk-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0 0 6px;
+}
+.lk-empty-body {
+  font-size: 13px;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+/* Loading status */
+.lk-loading {
+  font-size: 13px;
+  color: var(--fg-dim);
+  margin: 0;
+}
