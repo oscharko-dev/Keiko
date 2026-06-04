@@ -101,6 +101,14 @@ function normalizeSeparators(value: string): string {
   return value.replace(/\\/g, "/");
 }
 
+function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 47) {
+    end -= 1;
+  }
+  return end === value.length ? value : value.slice(0, end);
+}
+
 function truncateAtNul(value: string): string {
   const nulAt = value.indexOf("\0");
   return nulAt === -1 ? value : value.slice(0, nulAt);
@@ -110,7 +118,7 @@ function replaceHomePrefix(value: string, homePrefix: string): string {
   // Normalize the homePrefix to forward-slash form first so the comparison succeeds whether
   // the caller supplies `/Users/foo`, `C:\\Users\\foo`, or any mix. Strip trailing slashes so
   // callers can pass either form. The empty-prefix gate short-circuits a caller-supplied "/".
-  const normalizedPrefix = normalizeSeparators(homePrefix).replace(/\/+$/, "");
+  const normalizedPrefix = trimTrailingSlashes(normalizeSeparators(homePrefix));
   if (normalizedPrefix.length === 0) return value;
   if (value === normalizedPrefix) return "~";
   // Match the prefix followed by a separator; prevents `/Users/foobar` being misread as
