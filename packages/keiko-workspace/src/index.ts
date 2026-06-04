@@ -91,4 +91,17 @@ export { looksBinary, DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
 export type { BinaryProbeOptions } from "./binaryDetect.js";
 export { evidenceAtomStableId, connectedContextPackStableId } from "./stableId.js";
 
+// ─── Structural adapters (Issue #180 / Epic #177) ──────────────────────────
+export type {
+  AdapterError,
+  RunAllResult,
+  StructuralAdapter,
+  StructuralAdapterDeps,
+  StructuralAdapterRegistry,
+} from "./structuralAdapters.js";
+export { createDefaultStructuralRegistry, runStructuralAdapters } from "./structuralAdapters.js";
+export { testSourcePairingAdapter } from "./testSourcePairing.js";
+export { importGraphAdapter } from "./importGraph.js";
+export { gitHistoryAdapter } from "./gitHistory.js";
+
 export { KEIKO_WORKSPACE_VERSION } from "./version.js";
