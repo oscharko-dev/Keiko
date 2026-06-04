@@ -63,7 +63,7 @@ describe("mapChunkToCitation", () => {
     const wrong = mapChunkToCitation(
       fixture.store,
       "different-capsule" as KnowledgeCapsuleId,
-      result.chunkIds[0]!,
+      result.chunkIds[0] ?? ("" as never),
     );
     expect(wrong).toBeNull();
   });
@@ -84,7 +84,7 @@ describe("mapChunkToCitation", () => {
       documentId: "doc-1" as never,
       sourceText: text,
     });
-    const chunkId = result.chunkIds[0]!;
+    const chunkId = result.chunkIds[0] ?? ("" as never);
     const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
     expect(citation).not.toBeNull();
     expect(citation?.pageNumber).toBe(7);
@@ -132,7 +132,7 @@ describe("mapChunkToCitation", () => {
       documentId: "doc-1" as never,
       sourceText: text,
     });
-    const chunkId = result.chunkIds[0]!;
+    const chunkId = result.chunkIds[0] ?? ("" as never);
     const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
 
     expect(citation?.sectionPath).toEqual(["Chapter 1", "1.2 Risks"]);
@@ -158,7 +158,7 @@ describe("mapChunkToCitation", () => {
       documentId: "doc-1" as never,
       sourceText: "x".repeat(200),
     });
-    const chunkId = result.chunkIds[0]!;
+    const chunkId = result.chunkIds[0] ?? ("" as never);
     const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
     expect(citation).not.toBeNull();
     expect(citation?.pageNumber).toBeUndefined();
@@ -180,7 +180,7 @@ describe("mapChunkToCitation", () => {
       documentId: "doc-1" as never,
       sourceText: "0123456789",
     });
-    const chunkId = result.chunkIds[0]!;
+    const chunkId = result.chunkIds[0] ?? ("" as never);
     const citation = mapChunkToCitation(fixture.store, fixture.capsuleId, chunkId);
     expect(citation?.sectionPath).toEqual(["h1", "h2"]);
   });

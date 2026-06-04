@@ -56,61 +56,80 @@ function parseStringArrayField(
   return parsed;
 }
 
+function rowToPageUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit {
+  return {
+    kind: "page",
+    documentId,
+    pageNumber: expectNumber(row.page_number, "page_number", row.id),
+    ...(row.page_label !== null ? { pageLabel: row.page_label } : {}),
+    characterStart: expectNumber(row.character_start, "character_start", row.id),
+    characterEnd: expectNumber(row.character_end, "character_end", row.id),
+  };
+}
+
+function rowToSectionUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit {
+  return {
+    kind: "section",
+    documentId,
+    sectionPath: parseStringArrayField(row.section_path_json, "section_path_json", row.id),
+    characterStart: expectNumber(row.character_start, "character_start", row.id),
+    characterEnd: expectNumber(row.character_end, "character_end", row.id),
+  };
+}
+
+function rowToJsonPathUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit {
+  if (row.json_pointer === null) {
+    throw new ChunkingError(`parsed_unit ${row.id} missing json_pointer`);
+  }
+  return {
+    kind: "json-path",
+    documentId,
+    jsonPointer: row.json_pointer,
+    characterStart: expectNumber(row.character_start, "character_start", row.id),
+    characterEnd: expectNumber(row.character_end, "character_end", row.id),
+  };
+}
+
+function rowToCsvRowUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit {
+  if (row.table_name === null) {
+    throw new ChunkingError(`parsed_unit ${row.id} missing table_name`);
+  }
+  return {
+    kind: "csv-row",
+    documentId,
+    tableName: row.table_name,
+    rowIndex: expectNumber(row.row_index, "row_index", row.id),
+    characterStart: expectNumber(row.character_start, "character_start", row.id),
+    characterEnd: expectNumber(row.character_end, "character_end", row.id),
+  };
+}
+
+function rowToHtmlBlockUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit {
+  const heading =
+    row.heading_path_json === null
+      ? undefined
+      : parseStringArrayField(row.heading_path_json, "heading_path_json", row.id);
+  return {
+    kind: "html-block",
+    documentId,
+    ...(heading !== undefined ? { headingPath: heading } : {}),
+    characterStart: expectNumber(row.character_start, "character_start", row.id),
+    characterEnd: expectNumber(row.character_end, "character_end", row.id),
+  };
+}
+
 function rowToParsedUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit {
   switch (row.kind) {
     case "page":
-      return {
-        kind: "page",
-        documentId,
-        pageNumber: expectNumber(row.page_number, "page_number", row.id),
-        ...(row.page_label !== null ? { pageLabel: row.page_label } : {}),
-        characterStart: expectNumber(row.character_start, "character_start", row.id),
-        characterEnd: expectNumber(row.character_end, "character_end", row.id),
-      };
+      return rowToPageUnit(row, documentId);
     case "section":
-      return {
-        kind: "section",
-        documentId,
-        sectionPath: parseStringArrayField(row.section_path_json, "section_path_json", row.id),
-        characterStart: expectNumber(row.character_start, "character_start", row.id),
-        characterEnd: expectNumber(row.character_end, "character_end", row.id),
-      };
+      return rowToSectionUnit(row, documentId);
     case "json-path":
-      if (row.json_pointer === null) {
-        throw new ChunkingError(`parsed_unit ${row.id} missing json_pointer`);
-      }
-      return {
-        kind: "json-path",
-        documentId,
-        jsonPointer: row.json_pointer,
-        characterStart: expectNumber(row.character_start, "character_start", row.id),
-        characterEnd: expectNumber(row.character_end, "character_end", row.id),
-      };
+      return rowToJsonPathUnit(row, documentId);
     case "csv-row":
-      if (row.table_name === null) {
-        throw new ChunkingError(`parsed_unit ${row.id} missing table_name`);
-      }
-      return {
-        kind: "csv-row",
-        documentId,
-        tableName: row.table_name,
-        rowIndex: expectNumber(row.row_index, "row_index", row.id),
-        characterStart: expectNumber(row.character_start, "character_start", row.id),
-        characterEnd: expectNumber(row.character_end, "character_end", row.id),
-      };
-    case "html-block": {
-      const heading =
-        row.heading_path_json === null
-          ? undefined
-          : parseStringArrayField(row.heading_path_json, "heading_path_json", row.id);
-      return {
-        kind: "html-block",
-        documentId,
-        ...(heading !== undefined ? { headingPath: heading } : {}),
-        characterStart: expectNumber(row.character_start, "character_start", row.id),
-        characterEnd: expectNumber(row.character_end, "character_end", row.id),
-      };
-    }
+      return rowToCsvRowUnit(row, documentId);
+    case "html-block":
+      return rowToHtmlBlockUnit(row, documentId);
     case "unsupported-media":
       return {
         kind: "unsupported-media",
@@ -124,7 +143,7 @@ function rowToParsedUnit(row: ParsedUnitRow, documentId: DocumentId): ParsedUnit
 
 // ─── Cancellation helper ─────────────────────────────────────────────────────
 function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (signal !== undefined && signal.aborted) {
+  if (signal?.aborted === true) {
     throw new ChunkingError("chunkDocument aborted via AbortSignal");
   }
 }

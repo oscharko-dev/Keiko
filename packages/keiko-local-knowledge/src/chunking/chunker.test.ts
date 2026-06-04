@@ -86,7 +86,8 @@ describe("chunkParsedUnit — pure", () => {
       expect(prev).toBeDefined();
       expect(curr).toBeDefined();
       // Disjoint = next chunk starts at or after the previous chunk's end.
-      expect(curr!.characterStart).toBeGreaterThanOrEqual(prev!.characterEnd);
+      if (curr === undefined || prev === undefined) continue;
+      expect(curr.characterStart).toBeGreaterThanOrEqual(prev.characterEnd);
     }
   });
 
@@ -141,7 +142,8 @@ describe("chunkParsedUnit — pure", () => {
     for (let i = 1; i < chunks.length; i++) {
       const prev = chunks[i - 1];
       const curr = chunks[i];
-      expect(curr!.characterStart).toBeGreaterThan(prev!.characterStart);
+      if (curr === undefined || prev === undefined) continue;
+      expect(curr.characterStart).toBeGreaterThan(prev.characterStart);
     }
   });
 
