@@ -10,7 +10,7 @@ Accepted
 
 ## Version
 
-1.0
+1.1
 
 ## Context
 
@@ -30,23 +30,28 @@ Two pieces are missing as of `df3c336d` (dev, 2026-06-04):
    evidence ledger persists separately; users have no committed promise about which
    surface is ephemeral vs. durable, or what travels to the model provider.
 
-Issue #187 closes both gaps with a thin wire surface plus this ADR. It is purposely a
-projection of work already done in #178/#185, not new orchestration.
+Issue #187 closes both gaps with a thin wire surface, a metadata-only evidence record,
+and this ADR. It is purposely a projection of work already done in #178/#185, not new
+orchestration.
 
 ## Decision
 
-### D1 — Packs are ephemeral
+### D1 — Packs are not persisted to disk
 
-`ConnectedContextPack` lifecycle is the duration of one BFF request. There is no
-`ConnectedContextPackStore`, no `packs` table, no pack ledger. The orchestrator builds
-the pack in `src/grounded-orchestrator.ts`, the route projects it through
-`buildGroundedAnswerContextPackSummary` and `buildCitations`, and the original pack
-goes out of scope when `runAsk` returns. The runtime garbage collector reclaims it.
+There is no `ConnectedContextPackStore`, no `packs` table, no pack ledger, and no file
+containing full connected-context packs. The orchestrator builds the pack in
+`src/grounded-orchestrator.ts`, and the route projects it through
+`buildGroundedAnswerContextPackSummary` and `buildCitations`.
+
+The pack can live beyond one BFF request only inside the process-local micro-index
+described in D3.1. That cache stores assembled `ConnectedContextPack` objects, including
+excerpt content, so its retention contract is explicit: bounded TTL, bounded size, no
+disk persistence, and deterministic cleanup hooks on chat/project lifecycle changes.
 
 Why: the pack carries the full excerpt content (with the raw scope-relative paths and
-file bytes). Persisting it would create a second redaction surface co-equal with the
-evidence ledger, with no offsetting benefit — the evidence ledger already records the
-audited subset.
+file bytes). Persisting it to disk would create a second redaction surface co-equal
+with the evidence ledger, with no offsetting benefit. The evidence ledger records the
+audited subset as metadata and hashes, not as a full pack.
 
 ### D2 — Per-answer summary is wire-only
 
@@ -54,15 +59,16 @@ The wire response carries `contextPack: GroundedAnswerContextPackSummary` on eve
 `GroundedAnswer` (REQUIRED, non-optional). The summary is structurally
 counts-only-plus-enums:
 
-- `schemaVersion`, `scopeId` (opaque BFF-internal id), `scopeKind` (enum), `fileCount`
-  (number; `-1` sentinel for `workspace-root`), `queryKind` (enum)
+- `schemaVersion`, `scopeId` (deterministic display fingerprint, not the raw
+  `SelectedScope.scopeId`), `scopeKind` (enum), `fileCount` (number; `-1` sentinel for
+  `workspace-root`), `queryKind` (enum)
 - `usage` (full ExplorationUsage — all numbers)
 - `budget` (full ExplorationBudget — all numbers)
 - `citationCount`, `omittedCount`, `uncertaintyCount`, `elapsedMs` (numbers)
 
-There is no field that can carry raw file paths, query text, excerpt content, or
-credentials. The builder is a pure function with no IO and no redaction step — the
-type itself is the redaction contract.
+There is no field that can carry raw scope ids, raw file paths, query text, excerpt
+content, or credentials. The builder is a pure function with no IO and no redaction
+step — the type itself is the redaction contract.
 
 The spec for #187 originally named this `ConnectedContextPackSummary`. That name was
 already taken by a dormant 13-field declaration in `connected-context.ts` shipped in
@@ -82,7 +88,36 @@ Why: evidence is for audit. A user who deletes a chat is signalling "I no longer
 to see this conversation," not "this run never happened." Cascading deletes would
 let a user (or an attacker who took over a session) erase their audit trail by
 deleting chats. Users who want to remove evidence remove the run manifest directly via
-`KEIKO_EVIDENCE_DIR` (or via a future `keiko evidence rm` command tracked in #154).
+`KEIKO_EVIDENCE_DIR` until a first-class evidence deletion control exists.
+
+### D3.1 — Micro-index state is process-local and explicitly cleared
+
+The grounded-answer path may reuse a small `MicroIndex` per connected chat scope. This
+index stores full `ConnectedContextPack` values in memory, including query metadata,
+selected files, and excerpt content. The server registry is in-memory only and bounded:
+entries use the workflow micro-index TTL and per-index entry cap, the server keeps at
+most 128 scoped indexes, expired entries are swept before reuse, and evicted entries
+call `index.clear()`.
+
+Chat/project lifecycle hooks clear this state deterministically: deleting a project
+clears indexes for that workspace root, deleting or closing a chat clears indexes for
+that conversation, and replacing or clearing a chat's connected scope also clears the
+conversation indexes. This gives #187 explicit cleanup behavior without adding a
+persistent context-pack or index store.
+
+### D3.2 — Grounded answers write a metadata-only evidence record
+
+Every successful grounded answer writes an `EvidenceManifest` with
+`run.taskType = "connected-context"` and a `connectedContext` section. That section
+records selected-scope shape, redacted scope-relative paths, query kind plus query text
+hash/byte count, tools/provenance used, citation line ranges, omitted reasons,
+uncertainty counts, budget/usage, excerpt byte counts, and hashes of redacted excerpt
+content.
+
+It deliberately does not persist query text, excerpt text, model prompts, provider
+configuration, credentials, or full `ConnectedContextPack` objects. The BFF returns the
+manifest run id on `GroundedAnswer.evidenceRunId`, and the UI links to the local evidence
+detail route for reviewers who need the durable audit record.
 
 ### D4 — The summary is structurally redaction-free, and we prove it
 
@@ -91,14 +126,20 @@ pack with secret-shaped strings (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `Be
 blocks) in every string field flows through `runAsk`, and the test asserts:
 
 1. The `contextPack` summary contains none of those shapes (structural — every key is a
-   count, enum, or opaque scope id).
+   count, enum, or display fingerprint).
 2. The `answer.content` and `citations` carry none of those shapes (citations have no
    `content` field; assistant content is sourced from the user's own prompt and the
-   orchestrator's content-production rules, not pack strings).
+   orchestrator's content-production rules, not raw pack strings).
 3. The one wire-visible string sourced from the pack today — `uncertainty[].claim` — is
-   surfaced verbatim. The pack's upstream layer is responsible for redacting `claim`
-   before emitting it. The test documents this contract in-line; any future redaction
-   added at the BFF boundary will flip the assertion and trigger an ADR update.
+   redacted at the BFF boundary before it reaches the wire.
+
+The same route also redacts the user question before constructing the model prompt,
+redacts citation path metadata before returning it to the browser, and redacts
+assistant content before persisting/displaying it. The context-pack summary remains a
+structural redaction contract; the rest of the grounded-answer wire surface is protected
+by the BFF redactor as defense in depth. The evidence manifest is deep-redacted before
+write, and the connected-context audit section stores hashes instead of raw query/excerpt
+text.
 
 If a future change adds a new field to `GroundedAnswer` or
 `GroundedAnswerContextPackSummary` that can carry a string sourced from the pack, this
@@ -112,19 +153,21 @@ test will catch it.
   on every grounded answer. They can verify that Keiko did not exfiltrate the whole
   workspace.
 - The wire shape is small (well under 600 bytes serialised — pinned in test).
-- Redaction is enforced by the type system, not by a runtime scrubber.
-- No new persistent surface, no new redaction family, no new DB migration.
+- The summary's privacy contract is enforced by the type system; string-bearing
+  grounded-answer fields are additionally scrubbed by the BFF redactor.
+- No new persistent context-pack or micro-index surface, no new redaction family, no
+  new DB migration. The new persistent surface is metadata-only evidence in the existing
+  ledger.
 
 **Negative**
 
 - The `GroundedAnswerContextPackSummary` name is one character longer than the spec's
   `ConnectedContextPackSummary`. We accept the verbosity in exchange for keeping the
   #178 contract surface stable.
-- `uncertainty[].claim` is the documented soft edge. It is the responsibility of
-  upstream layers (the assembler / planner) to scrub `claim` text before emitting an
-  uncertainty marker. If that contract ever drifts, the redaction test will not catch
-  it (only the test for documented leak field flip will), so a future change adding a
-  BFF-side `redact(claim)` is the recommended cleanup.
+- The BFF redactor only covers known credential-shaped patterns and explicit path/string
+  metadata at the grounded-answer boundary. It is not a semantic privacy classifier for
+  arbitrary private prose, so users must still avoid putting customer data or credentials
+  in chat text.
 
 ## References
 
@@ -139,6 +182,12 @@ test will catch it.
 - `packages/keiko-contracts/src/bff-wire.ts` — `GroundedAnswerContextPackSummary` +
   `buildGroundedAnswerContextPackSummary` (D2)
 - `packages/keiko-server/src/grounded-qa.ts` — `runAsk` wires the summary (D1, D2)
+- `packages/keiko-evidence/src/connected-context-evidence.ts` — metadata-only evidence
+  manifest builder/persistence (D3.2)
+- `packages/keiko-server/src/grounded-context-index.ts` — process-local micro-index
+  registry and cleanup helpers (D3.1)
+- `packages/keiko-server/src/store-handlers.ts` — chat/project lifecycle cleanup hooks
+  (D3.1)
 - `packages/keiko-server/src/grounded-qa.redaction.test.ts` — D4 enforcement
 - `packages/keiko-ui/src/app/components/desktop/GroundedAnswer.tsx` — `ContextPackSummary`
   presentation

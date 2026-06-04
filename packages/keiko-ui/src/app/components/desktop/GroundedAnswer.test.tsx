@@ -256,4 +256,11 @@ describe("GroundedAnswer", () => {
     expect(region.textContent).toContain("Query");
     expect(region.textContent).toContain("natural-language");
   });
+
+  it("links to the local connected-context audit evidence when a run id is present", () => {
+    render(<GroundedAnswer answer={answer({ evidenceRunId: "grounded-run-1" })} busy={false} />);
+    expect(
+      screen.getByRole("link", { name: "View connected-context audit evidence" }),
+    ).toHaveAttribute("href", "/api/evidence/grounded-run-1");
+  });
 });

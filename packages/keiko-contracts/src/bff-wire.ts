@@ -319,11 +319,12 @@ export interface GroundedUncertainty {
 
 // Counts-only projection of a ConnectedContextPack used to display "what was inspected" on
 // every grounded answer (Issue #187 / ADR-0022). Structurally redaction-free by construction:
-// no scope path, no workspace root, no excerpt content, no query text. The sentinel
-// `fileCount === -1` distinguishes the workspace-root scope (no enumerable file set) from
-// directory/files scopes that always report `relativePaths.length` (>= 1).
+// no raw scope id, no scope path, no workspace root, no excerpt content, no query text. The
+// sentinel `fileCount === -1` distinguishes the workspace-root scope (no enumerable file set)
+// from directory/files scopes that always report `relativePaths.length` (>= 1).
 export interface GroundedAnswerContextPackSummary {
   readonly schemaVersion: typeof CONNECTED_CONTEXT_SCHEMA_VERSION;
+  // Deterministic display fingerprint, not the raw SelectedScope.scopeId.
   readonly scopeId: string;
   readonly scopeKind: SelectedScopeKind;
   readonly fileCount: number;
@@ -350,9 +351,22 @@ function buildOmittedCounts(
   return counts;
 }
 
+function hashString32(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function displayScopeId(scopeId: string): string {
+  return `scope-${hashString32(scopeId)}`;
+}
+
 // Pure builder: derives a GroundedAnswerContextPackSummary from the source pack plus the
 // BFF-computed citation count and total elapsed wall time. No IO, no redaction (the only
-// scope-derived string carried is the opaque `scopeId`); allocates one fresh object.
+// scope-derived string carried is a deterministic display fingerprint); allocates one fresh object.
 export function buildGroundedAnswerContextPackSummary(
   pack: ConnectedContextPack,
   citationCount: number,
@@ -360,7 +374,7 @@ export function buildGroundedAnswerContextPackSummary(
 ): GroundedAnswerContextPackSummary {
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-    scopeId: pack.scope.scopeId,
+    scopeId: displayScopeId(pack.scope.scopeId),
     scopeKind: pack.scope.kind,
     fileCount: pack.scope.kind === "workspace-root" ? -1 : pack.scope.relativePaths.length,
     queryKind: pack.query.kind,
@@ -377,6 +391,7 @@ export function buildGroundedAnswerContextPackSummary(
 export interface GroundedAnswer {
   readonly userMessageId: string;
   readonly assistantMessageId: string;
+  readonly evidenceRunId?: string | undefined;
   readonly content: string;
   readonly citations: readonly GroundedEvidenceCitation[];
   readonly uncertainty: readonly GroundedUncertainty[];

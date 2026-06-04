@@ -30,6 +30,13 @@ import type {
   ToolCallMetadata,
   SideFileWriteResult,
   EvidenceDeps,
+  EvidenceConnectedContextAudit,
+  EvidenceConnectedContextExcerpt,
+  EvidenceConnectedContextFile,
+  EvidenceConnectedContextOmitted,
+  EvidenceConnectedContextQuery,
+  EvidenceConnectedContextScope,
+  EvidenceConnectedContextUncertainty,
   PatchScope,
   PatchScopeLimits,
   PatchScopeViolation,
@@ -132,6 +139,14 @@ describe("keiko-contracts package surface", () => {
     expect(deps.costClassResolver?.("any")).toBe("unknown");
     const empty: EvidenceDeps = {};
     expect(empty.costClassResolver).toBeUndefined();
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<EvidenceConnectedContextAudit>();
+    pin<EvidenceConnectedContextExcerpt>();
+    pin<EvidenceConnectedContextFile>();
+    pin<EvidenceConnectedContextOmitted>();
+    pin<EvidenceConnectedContextQuery>();
+    pin<EvidenceConnectedContextScope>();
+    pin<EvidenceConnectedContextUncertainty>();
   });
 
   it("connected-context barrel exports are reachable through the root surface (#178)", () => {

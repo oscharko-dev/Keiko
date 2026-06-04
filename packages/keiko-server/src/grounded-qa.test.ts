@@ -24,6 +24,7 @@ import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-evidence";
 import {
   CancelledError,
   type GatewayConfig,
@@ -366,7 +367,7 @@ describe("handleGroundedAsk", () => {
       captureRunner,
     );
 
-    expect(result.status).toBe(200);
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
     expect(captured?.scope.kind).toBe("workspace-root");
     expect(captured?.scope.relativePaths).toEqual([]);
   });
@@ -386,7 +387,7 @@ describe("handleGroundedAsk", () => {
       deps(fakeModel("Grounded answer [src/foo.ts:1-3]", seenRequests)),
     );
 
-    expect(result.status).toBe(200);
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
     expect(seenRequests).toHaveLength(1);
     expectGroundedGatewayRequest(firstGatewayRequest(seenRequests));
     const answer = result.body as GroundedAnswer;
@@ -394,6 +395,29 @@ describe("handleGroundedAsk", () => {
     expect(store.listMessages(chatId).map((message) => message.content)).toContain(
       "Grounded answer [src/foo.ts:1-3]",
     );
+  });
+
+  it("production path redacts secret-shaped user text before building the gateway prompt", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    seedScopedRepo(projectPath);
+    const secret = ["sk", "-fakeGatewayPromptSecret1234567890abcdef"].join("");
+    const seenRequests: GatewayRequest[] = [];
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: `${GROUNDED_FIXTURE_QUESTION} ${secret}`,
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      deps(fakeModel("Grounded answer [src/foo.ts:1-3]", seenRequests), {
+        OPENAI_API_KEY: secret,
+      }),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    expect(JSON.stringify(firstGatewayRequest(seenRequests))).not.toContain(secret);
   });
 
   it("rejects an unconfigured grounded model before calling a provider", async () => {
@@ -610,6 +634,29 @@ describe("handleGroundedAsk", () => {
     expect(answer.contextPack.uncertaintyCount).toBe(answer.uncertainty.length);
   });
 
+  it("persists a connected-context audit evidence manifest for the grounded answer", async () => {
+    const { chatId } = await setupChatWithScope();
+    const evidenceStore = createInMemoryEvidenceStore();
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "How does MyClass work?" })),
+      { ...deps(), evidenceStore },
+      runner(packWithCitations(), "ok"),
+    );
+    expect(result.status).toBe(200);
+    const answer = result.body as GroundedAnswer;
+    expect(answer.evidenceRunId).toMatch(/^grounded-/);
+    const manifest = loadEvidence(evidenceStore, answer.evidenceRunId ?? "");
+    expect(manifest?.run.taskType).toBe("connected-context");
+    expect(manifest?.connectedContext?.scope.scopeKind).toBe("directory");
+    expect(manifest?.connectedContext?.summary).toMatchObject({
+      citationCount: answer.citations.length,
+      omittedCount: answer.omittedCount,
+      elapsedMs: answer.elapsedMs,
+    });
+    expect(manifest?.connectedContext?.modelRequest.excerptContentPersisted).toBe(false);
+    expect(JSON.stringify(manifest)).not.toContain("function MyClass");
+  });
+
   it("contextPack.fileCount mirrors scope.relativePaths.length (files-scope = 3)", async () => {
     const project = store.createProject(tmp, "demo");
     const chat = store.createChat(project.path, "Three files", CHAT_MODEL);
@@ -644,7 +691,8 @@ describe("handleGroundedAsk", () => {
     const answer = result.body as GroundedAnswer;
     expect(answer.contextPack.usage).toEqual(pack.usage);
     expect(answer.contextPack.budget).toEqual(pack.budget);
-    expect(answer.contextPack.scopeId).toBe(pack.scope.scopeId);
+    expect(answer.contextPack.scopeId).toMatch(/^scope-[0-9a-f]{8}$/);
+    expect(answer.contextPack.scopeId).not.toBe(pack.scope.scopeId);
   });
 
   // ─── Issue #188 regression fixtures ──────────────────────────────────────────

@@ -1,7 +1,7 @@
 // Unit tests for the GroundedAnswerContextPackSummary builder (Issue #187 / ADR-0022).
 // Each test mutates one field of a known-good fixture so failures point precisely at the
-// broken invariant; tests assert structural absence of leak vectors (workspaceRoot, query
-// text, excerpt content) and the documented `-1` sentinel for workspace-root scope.
+// broken invariant; tests assert structural absence of leak vectors (scopeId, workspaceRoot,
+// query text, excerpt content) and the documented `-1` sentinel for workspace-root scope.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -80,9 +80,10 @@ function pack(overrides: Partial<ConnectedContextPack> = {}): ConnectedContextPa
 describe("buildGroundedAnswerContextPackSummary", () => {
   it("produces a complete summary from a 2-file files-scope pack", () => {
     const summary = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812);
+    expect(summary.scopeId).toMatch(/^scope-[0-9a-f]{8}$/);
     const expected: GroundedAnswerContextPackSummary = {
       schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-      scopeId: "cs-deadbeefcafef00d",
+      scopeId: summary.scopeId,
       scopeKind: "files",
       fileCount: 2,
       queryKind: "natural-language",
@@ -162,10 +163,11 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     expect(summary.elapsedMs).toBe(9_999);
   });
 
-  it("never carries scope.workspaceRoot, scope.relativePaths, or query.text on the summary", () => {
+  it("never carries scope.scopeId, workspaceRoot, relativePaths, or query.text on the summary", () => {
     const dangerous = pack({
       scope: {
         ...scope("files", ["src/.env", "src/keys.ts"]),
+        scopeId: ["sk", "-scopeidsecret1234567890abcdef"].join(""),
         workspaceRoot: ["/leak/", "sk", "-AAAAAAAAAAAAAAAAAAAA"].join(""),
       },
       query: { ...query(), text: ["ghp", "_thisShouldNotEscape123456789abc"].join("") },
@@ -174,6 +176,7 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     const serialised = JSON.stringify(summary);
     expect(serialised).not.toContain("workspaceRoot");
     expect(serialised).not.toContain("relativePaths");
+    expect(serialised).not.toContain("scopeidsecret");
     expect(serialised).not.toContain("src/.env");
     expect(serialised).not.toContain("ghp_");
     expect(serialised).not.toContain("/leak/");

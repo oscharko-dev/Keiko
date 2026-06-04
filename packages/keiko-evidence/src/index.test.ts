@@ -11,6 +11,9 @@ import type {
   AuditCode,
   AuditRedactionConfig,
   BuildOptions,
+  ConnectedContextEvidenceContext,
+  ConnectedContextEvidenceInput,
+  ConnectedContextEvidencePersistResult,
   EvidenceBrowserCapture,
   EvidenceBrowserContentCapture,
   EvidenceBrowserEvent,
@@ -19,6 +22,13 @@ import type {
   EvidenceBrowserViewportPx,
   EvidenceBuildInput,
   EvidenceCommandExecution,
+  EvidenceConnectedContextAudit,
+  EvidenceConnectedContextExcerpt,
+  EvidenceConnectedContextFile,
+  EvidenceConnectedContextOmitted,
+  EvidenceConnectedContextQuery,
+  EvidenceConnectedContextScope,
+  EvidenceConnectedContextUncertainty,
   EvidenceDeps,
   EvidenceFailure,
   EvidenceListEntry,
@@ -62,6 +72,7 @@ describe("keiko-evidence public surface", () => {
     expect(typeof evidence.buildWorkflowManifest).toBe("function");
     expect(typeof evidence.foldWorkflowUsage).toBe("function");
     expect(typeof evidence.persistWorkflowEvidence).toBe("function");
+    expect(typeof evidence.persistConnectedContextEvidence).toBe("function");
     // Store port + adapters:
     expect(typeof evidence.createInMemoryEvidenceStore).toBe("function");
     expect(typeof evidence.createNodeEvidenceStore).toBe("function");
@@ -94,6 +105,9 @@ describe("keiko-evidence public surface", () => {
     pin<AuditCode>();
     pin<AuditRedactionConfig>();
     pin<BuildOptions>();
+    pin<ConnectedContextEvidenceContext>();
+    pin<ConnectedContextEvidenceInput>();
+    pin<ConnectedContextEvidencePersistResult>();
     pin<EvidenceBrowserCapture>();
     pin<EvidenceBrowserContentCapture>();
     pin<EvidenceBrowserEvent>();
@@ -102,6 +116,13 @@ describe("keiko-evidence public surface", () => {
     pin<EvidenceBrowserViewportPx>();
     pin<EvidenceBuildInput>();
     pin<EvidenceCommandExecution>();
+    pin<EvidenceConnectedContextAudit>();
+    pin<EvidenceConnectedContextExcerpt>();
+    pin<EvidenceConnectedContextFile>();
+    pin<EvidenceConnectedContextOmitted>();
+    pin<EvidenceConnectedContextQuery>();
+    pin<EvidenceConnectedContextScope>();
+    pin<EvidenceConnectedContextUncertainty>();
     pin<EvidenceDeps>();
     pin<EvidenceFailure>();
     pin<EvidenceListEntry>();

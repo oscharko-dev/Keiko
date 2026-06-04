@@ -24,6 +24,12 @@ export {
   type WorkflowTerminalStatus,
 } from "./workflow-evidence.js";
 export {
+  persistConnectedContextEvidence,
+  type ConnectedContextEvidenceContext,
+  type ConnectedContextEvidenceInput,
+  type ConnectedContextEvidencePersistResult,
+} from "./connected-context-evidence.js";
+export {
   createInMemoryEvidenceStore,
   createNodeEvidenceStore,
   DEFAULT_EVIDENCE_DIR,
@@ -61,6 +67,13 @@ export {
   type EvidenceBrowserEventType,
   type EvidenceBrowserScreenshot,
   type EvidenceBrowserViewportPx,
+  type EvidenceConnectedContextAudit,
+  type EvidenceConnectedContextExcerpt,
+  type EvidenceConnectedContextFile,
+  type EvidenceConnectedContextOmitted,
+  type EvidenceConnectedContextQuery,
+  type EvidenceConnectedContextScope,
+  type EvidenceConnectedContextUncertainty,
   type EvidencePatch,
   type EvidenceReasoningEntry,
   type EvidenceRunIdentity,

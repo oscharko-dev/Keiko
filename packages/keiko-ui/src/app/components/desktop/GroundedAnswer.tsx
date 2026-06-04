@@ -196,6 +196,17 @@ function OmittedLine({
   );
 }
 
+function AuditEvidenceLink({ runId }: { readonly runId: string | undefined }): ReactNode {
+  if (runId === undefined) return null;
+  return (
+    <div className="grounded-meta">
+      <a href={`/api/evidence/${encodeURIComponent(runId)}`}>
+        View connected-context audit evidence
+      </a>
+    </div>
+  );
+}
+
 export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode {
   if (answer === undefined) {
     return busy ? (
@@ -211,6 +222,7 @@ export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode
         omittedCount={answer.omittedCount}
         omittedCounts={answer.contextPack.omittedCounts}
       />
+      <AuditEvidenceLink runId={answer.evidenceRunId} />
       <ContextPackSummary contextPack={answer.contextPack} />
     </div>
   );

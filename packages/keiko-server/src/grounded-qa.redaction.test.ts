@@ -100,9 +100,9 @@ function attackerPack(): ConnectedContextPack {
     stableId: "pack-attacker",
     scope: {
       schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-      // scopeId is BFF-internal; this test uses a deliberately ugly opaque id to prove
-      // even a poisoned scopeId never reaches the wire via a query/path field.
-      scopeId: "cs-deadbeefcafef00d",
+      // scopeId is BFF-internal but the contract only validates it as non-empty; a poisoned
+      // scopeId must still be fingerprinted before it reaches the browser wire.
+      scopeId: `cs-${SK_FAKE}`,
       workspaceRoot: `/tmp/${SK_FAKE}-leak`,
       kind: "files",
       relativePaths: [SECRET_SCOPE_PATH],

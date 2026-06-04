@@ -5,16 +5,18 @@
 // inputs (chatId + content) and enforces that the chat carries a connected scope.
 
 import type { IncomingMessage } from "node:http";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   CancelledError,
   GatewayError,
   findCapability,
   findConfiguredCapability,
+  resolveCostClass,
   type ChatMessage as GatewayChatMessage,
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -460,6 +462,7 @@ interface AskWorkerCtx {
   readonly chat: Chat;
   readonly scope: SelectedScope;
   readonly content: string;
+  readonly modelId: string;
   readonly deps: UiHandlerDeps;
   readonly runner: GroundedRunner;
   readonly signal: AbortSignal;
@@ -493,6 +496,36 @@ function persistGroundedExchange(
   return [user, assistant];
 }
 
+function persistGroundedAuditEvidence(
+  workerCtx: AskWorkerCtx,
+  output: OrchestratorOutput,
+  citationCount: number,
+): string {
+  const finishedAt = Date.now();
+  const startedAt = Math.max(0, finishedAt - output.elapsedMs);
+  const runId = `grounded-${randomUUID()}`;
+  persistConnectedContextEvidence(
+    {
+      runId,
+      modelId: workerCtx.modelId,
+      workspaceRoot: workerCtx.chat.projectPath,
+      chatId: workerCtx.chat.id,
+      pack: output.pack,
+      citationCount,
+      elapsedMs: output.elapsedMs,
+      startedAt,
+      finishedAt,
+    },
+    {
+      store: workerCtx.deps.evidenceStore,
+      env: workerCtx.deps.env,
+      additionalSecrets: workerCtx.deps.redactionSecrets,
+      costClassResolver: resolveCostClass,
+    },
+  );
+  return runId;
+}
+
 async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   const { chat, content, deps } = workerCtx;
   const query = buildQuery(content, () => Date.now());
@@ -505,13 +538,14 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   if (cancelResult !== undefined) return cancelResult;
   const userContent = redactString(deps.redactor, content);
   const assistantContent = redactString(deps.redactor, output.assistantContent);
+  const citations = buildCitations(output.pack, deps.redactor);
+  const evidenceRunId = persistGroundedAuditEvidence(workerCtx, output, citations.length);
   const [userMessage, assistantMessage] = persistGroundedExchange(
     deps,
     chat.id,
     userContent,
     assistantContent,
   );
-  const citations = buildCitations(output.pack, deps.redactor);
   const contextPack = buildGroundedAnswerContextPackSummary(
     output.pack,
     citations.length,
@@ -520,6 +554,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   const answer: GroundedAnswer = {
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
+    evidenceRunId,
     content: assistantContent,
     citations,
     uncertainty: buildUncertainty(output.pack, deps.redactor),
@@ -589,10 +624,12 @@ export async function handleGroundedAsk(
     return badRequest("Chat has no connected scope.");
   }
   let groundedRunner = runner;
+  let modelId = parsed.value.modelId ?? chat.selectedModel;
   if (groundedRunner === undefined) {
-    const modelId = resolveGroundedModelId(deps, chat, parsed.value.modelId);
-    if (typeof modelId !== "string") return modelId;
-    const builtRunner = defaultRunner(deps, modelId, signal);
+    const resolvedModelId = resolveGroundedModelId(deps, chat, parsed.value.modelId);
+    if (typeof resolvedModelId !== "string") return resolvedModelId;
+    modelId = resolvedModelId;
+    const builtRunner = defaultRunner(deps, resolvedModelId, signal);
     if (typeof builtRunner !== "function") return builtRunner;
     groundedRunner = builtRunner;
   }
@@ -600,6 +637,7 @@ export async function handleGroundedAsk(
     chat,
     scope,
     content: parsed.value.content,
+    modelId,
     deps,
     runner: groundedRunner,
     signal,

@@ -127,7 +127,11 @@ export interface EvidenceFailure {
   readonly message: string;
 }
 
-export type EvidenceTaskType = TaskType | "browser-capture" | "terminal-execution";
+export type EvidenceTaskType =
+  | TaskType
+  | "browser-capture"
+  | "terminal-execution"
+  | "connected-context";
 
 export interface EvidenceBrowserViewportPx {
   readonly width: number;
@@ -194,6 +198,81 @@ export interface EvidenceBrowserCapture {
   readonly contentCaptures?: readonly EvidenceBrowserContentCapture[] | undefined;
 }
 
+export interface EvidenceConnectedContextScope {
+  readonly schemaVersion: "1";
+  readonly scopeIdHash: string;
+  readonly scopeKind: string;
+  readonly selectedPathCount: number;
+  readonly selectedPaths: readonly string[];
+}
+
+export interface EvidenceConnectedContextQuery {
+  readonly kind: string;
+  readonly queryTextHash: string;
+  readonly queryTextBytes: number;
+  readonly maxResults: number;
+  readonly caseSensitive: boolean;
+}
+
+export interface EvidenceConnectedContextExcerpt {
+  readonly atomStableId: string;
+  readonly scopePath: string;
+  readonly lineRange?: { readonly startLine: number; readonly endLine: number } | undefined;
+  readonly score: number;
+  readonly provenanceKind: string;
+  readonly tool: string;
+  readonly queryFingerprint: string;
+  readonly redactionState: string;
+  readonly contentBytes: number;
+  readonly contentSha256: string;
+}
+
+export interface EvidenceConnectedContextFile {
+  readonly scopePath: string;
+  readonly role: string;
+  readonly selectionReason: string;
+  readonly excerptCount: number;
+  readonly excerptBytes: number;
+  readonly excerpts: readonly EvidenceConnectedContextExcerpt[];
+}
+
+export interface EvidenceConnectedContextOmitted {
+  readonly scopePath: string;
+  readonly reason: string;
+}
+
+export interface EvidenceConnectedContextUncertainty {
+  readonly kind: string;
+  readonly impactedAtomCount: number;
+}
+
+export interface EvidenceConnectedContextAudit {
+  readonly packSchemaVersion: "1";
+  readonly packStableIdHash: string;
+  readonly chatIdHash: string | undefined;
+  readonly modelRequest: {
+    readonly sentToModel: true;
+    readonly excerptContentPersisted: false;
+  };
+  readonly scope: EvidenceConnectedContextScope;
+  readonly query: EvidenceConnectedContextQuery;
+  readonly budget: {
+    readonly usage: Record<string, number>;
+    readonly limits: Record<string, number>;
+  };
+  readonly files: readonly EvidenceConnectedContextFile[];
+  readonly omitted: readonly EvidenceConnectedContextOmitted[];
+  readonly uncertainty: readonly EvidenceConnectedContextUncertainty[];
+  readonly toolsUsed: readonly string[];
+  readonly summary: {
+    readonly fileCount: number;
+    readonly citationCount: number;
+    readonly omittedCount: number;
+    readonly uncertaintyCount: number;
+    readonly elapsedMs: number;
+  };
+}
+
 export interface EvidenceManifest {
   readonly evidenceSchemaVersion: "1";
   readonly run: EvidenceRunIdentity;
@@ -210,6 +289,7 @@ export interface EvidenceManifest {
   readonly failure?: EvidenceFailure | undefined;
   readonly reasoning?: readonly EvidenceReasoningEntry[] | undefined;
   readonly browser?: EvidenceBrowserCapture | undefined;
+  readonly connectedContext?: EvidenceConnectedContextAudit | undefined;
 }
 
 // ─── Redaction config (D3) ──────────────────────────────────────────────────────
