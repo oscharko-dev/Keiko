@@ -10,6 +10,7 @@ Keiko is human-controlled by design. It does not commit, push, open pull request
 
 If you find a bug or defect while using Keiko, open a GitHub issue with the
 [User Finding template](https://github.com/oscharko-dev/Keiko/issues/new?template=user_finding.yml).
+Do not open a blank issue for this workflow.
 
 The template adds the `User Findings` label automatically and asks for the
 Keiko version, platform, reproduction steps, expected result, actual result,

@@ -2,7 +2,7 @@ name: User Finding
 description: Report a bug or defect found while using Keiko.
 title: "[User Finding]: "
 labels: ["User Findings", "bug", "status: ready"]
-assignees: ""
+assignees: []
 body:
   - type: markdown
     attributes:
