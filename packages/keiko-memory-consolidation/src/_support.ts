@@ -43,27 +43,55 @@ export interface RecordOverrides {
   readonly capturedAt?: number;
 }
 
-export function makeRecord(overrides: RecordOverrides = {}): MemoryRecord {
-  const createdAt = overrides.createdAt ?? FIXED_NOW_MS;
+function buildProvenance(
+  overrides: RecordOverrides,
+  createdAt: number,
+): MemoryRecord["provenance"] {
+  return {
+    sourceKind: "explicit-user-instruction",
+    capturedAt: overrides.capturedAt ?? createdAt,
+    confidence: overrides.confidence ?? 0.9,
+    sensitivity: "confidential",
+  };
+}
+
+function buildValidity(overrides: RecordOverrides, createdAt: number): MemoryRecord["validity"] {
+  const validFrom = overrides.validFrom ?? createdAt;
+  return overrides.validUntil === undefined
+    ? { validFrom }
+    : { validFrom, validUntil: overrides.validUntil };
+}
+
+interface CoreFields {
+  readonly id: MemoryId;
+  readonly scope: MemoryScope;
+  readonly type: MemoryRecord["type"];
+  readonly body: string;
+  readonly status: MemoryRecord["status"];
+  readonly pinned: boolean;
+  readonly tags: readonly string[];
+}
+
+function buildCoreFields(overrides: RecordOverrides): CoreFields {
   return {
     id: (overrides.id ?? "m-1") as MemoryId,
-    schemaVersion: "1",
     scope: overrides.scope ?? userScope("u-1"),
     type: overrides.type ?? "preference",
     body: overrides.body ?? "prefers dark mode",
-    provenance: {
-      sourceKind: "explicit-user-instruction",
-      capturedAt: overrides.capturedAt ?? createdAt,
-      confidence: overrides.confidence ?? 0.9,
-      sensitivity: "confidential",
-    },
-    validity:
-      overrides.validUntil === undefined
-        ? { validFrom: overrides.validFrom ?? createdAt }
-        : { validFrom: overrides.validFrom ?? createdAt, validUntil: overrides.validUntil },
     status: overrides.status ?? "accepted",
     pinned: overrides.pinned ?? false,
     tags: overrides.tags ?? [],
+  };
+}
+
+export function makeRecord(overrides: RecordOverrides = {}): MemoryRecord {
+  const createdAt = overrides.createdAt ?? FIXED_NOW_MS;
+  const core = buildCoreFields(overrides);
+  return {
+    ...core,
+    schemaVersion: "1",
+    provenance: buildProvenance(overrides, createdAt),
+    validity: buildValidity(overrides, createdAt),
     createdAt,
     updatedAt: overrides.updatedAt ?? createdAt,
   };

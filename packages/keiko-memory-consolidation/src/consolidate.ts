@@ -47,24 +47,39 @@ function isFiniteNonNegative(n: number): boolean {
   return Number.isFinite(n) && n >= 0;
 }
 
+function neverCancel(): boolean {
+  return false;
+}
+
+interface NumericKnobs {
+  readonly jaccardThreshold: number;
+  readonly staleConfidenceThreshold: number;
+  readonly maxAgeMs: number;
+  readonly maxClustersPerRun: number;
+}
+
+function validateNumericKnobs(knobs: NumericKnobs): boolean {
+  if (!isFiniteInRange(knobs.jaccardThreshold, 0, 1)) return false;
+  if (!isFiniteInRange(knobs.staleConfidenceThreshold, 0, 1)) return false;
+  if (!isFiniteNonNegative(knobs.maxAgeMs)) return false;
+  if (!isFiniteNonNegative(knobs.maxClustersPerRun)) return false;
+  return Number.isInteger(knobs.maxClustersPerRun);
+}
+
 function resolveOptions(options: ConsolidationOptions): ResolvedOptions | null {
-  const jaccardThreshold = options.jaccardThreshold ?? JACCARD_DEFAULT;
-  const staleConfidenceThreshold = options.staleConfidenceThreshold ?? STALE_CONFIDENCE_DEFAULT;
-  const maxAgeMs = options.maxAgeMs ?? MAX_AGE_MS_DEFAULT;
-  const maxClustersPerRun = options.maxClustersPerRun ?? MAX_CLUSTERS_PER_RUN_DEFAULT;
-  if (!isFiniteInRange(jaccardThreshold, 0, 1)) return null;
-  if (!isFiniteInRange(staleConfidenceThreshold, 0, 1)) return null;
-  if (!isFiniteNonNegative(maxAgeMs)) return null;
-  if (!isFiniteNonNegative(maxClustersPerRun) || !Number.isInteger(maxClustersPerRun)) return null;
+  const knobs: NumericKnobs = {
+    jaccardThreshold: options.jaccardThreshold ?? JACCARD_DEFAULT,
+    staleConfidenceThreshold: options.staleConfidenceThreshold ?? STALE_CONFIDENCE_DEFAULT,
+    maxAgeMs: options.maxAgeMs ?? MAX_AGE_MS_DEFAULT,
+    maxClustersPerRun: options.maxClustersPerRun ?? MAX_CLUSTERS_PER_RUN_DEFAULT,
+  };
+  if (!validateNumericKnobs(knobs)) return null;
   return {
     nowMs: options.nowMs,
     newEdgeId: options.newEdgeId,
     newReviewItemId: options.newReviewItemId,
-    jaccardThreshold,
-    staleConfidenceThreshold,
-    maxAgeMs,
-    maxClustersPerRun,
-    cancellationSignal: options.cancellationSignal ?? (() => false),
+    ...knobs,
+    cancellationSignal: options.cancellationSignal ?? neverCancel,
   };
 }
 
