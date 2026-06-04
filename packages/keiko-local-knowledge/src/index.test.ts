@@ -28,6 +28,14 @@ const PUBLIC_EXPORTS = [
   "deleteCapsuleSet",
   "getCapsuleSet",
   "listCapsuleSets",
+  // Discovery + extraction (#194)
+  "discoverAndExtract",
+  "documentIdFor",
+  "extensionOf",
+  "extractDocument",
+  "mediaTypeFor",
+  "walkSource",
+  "DEFAULT_DISCOVERY_OPTIONS",
 ] as const;
 
 describe("barrel surface", () => {
