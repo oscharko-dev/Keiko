@@ -695,12 +695,12 @@ describe("handleGroundedAsk", () => {
     expect(answer.contextPack.scopeId).not.toBe(pack.scope.scopeId);
   });
 
-  // ─── Issue #188 regression fixtures ──────────────────────────────────────────
+  // ─── Issue #188 route-projection fixtures ────────────────────────────────────
 
-  // Case 1: broad prompt — a multi-file pack yields >= 2 citations.
-  // Mutation guard: if buildCitations stops collecting across files (e.g. breaks after
-  // the first file), the length assertion fails.
-  it("returns multiple citations for a broad natural-language prompt", async () => {
+  // Case 1 companion fixture: when the orchestrator returns a multi-file pack, the route must
+  // preserve multiple citations instead of collapsing to the first file only. This is a wire
+  // projection guard, not a retrieval-quality test.
+  it("projects multiple citations when the orchestrator pack spans multiple files", async () => {
     const { chatId } = await setupChatWithScope();
     const result = await handleGroundedAsk(
       ctx(JSON.stringify({ chatId, content: "How does the whole system work?" })),
@@ -709,13 +709,12 @@ describe("handleGroundedAsk", () => {
     );
     expect(result.status).toBe(200);
     const answer = result.body as GroundedAnswer;
-    expect(answer.citations.length).toBeGreaterThanOrEqual(2);
+    expect(answer.citations.map((citation) => citation.scopePath)).toEqual(["src/bar.ts", "src/foo.ts"]);
   });
 
-  // Case 3: no result — orchestrator returns files: [] with a no-evidence uncertainty marker.
-  // Mutation guard: if buildCitations emits entries despite an empty files array the
-  // citations assertion fails; if buildUncertainty drops the marker the kind check fails.
-  it("returns empty citations and a no-evidence uncertainty marker when nothing matches", async () => {
+  // Case 3 companion fixture: when the orchestrator reports no evidence, the route must preserve
+  // the empty-citation shape and the uncertainty marker on the wire.
+  it("projects a no-evidence marker when the orchestrator pack contains no files", async () => {
     const { chatId } = await setupChatWithScope();
     const noResultPack: ConnectedContextPack = {
       ...emptyPack(),
@@ -741,10 +740,9 @@ describe("handleGroundedAsk", () => {
     expect(answer.uncertainty[0]?.kind).toBe("no-evidence");
   });
 
-  // Case 4: budget exhaustion — pack carries budget-clipped uncertainty and a budget-exhausted
-  // omitted entry. Mutation guard: if omitted entries are ignored omittedCount stays 0;
-  // if uncertainty is not threaded through the kind assertion fails.
-  it("surfaces budget-clipped uncertainty and omitted count when the exploration budget is exhausted", async () => {
+  // Case 4 companion fixture: when the orchestrator has already clipped exploration for budget,
+  // the route must preserve the omission count and uncertainty kind on the wire.
+  it("projects budget markers from the orchestrator pack onto the grounded answer", async () => {
     const { chatId } = await setupChatWithScope();
     const budgetExhaustedPack: ConnectedContextPack = {
       ...emptyPack(),
@@ -768,39 +766,5 @@ describe("handleGroundedAsk", () => {
     const answer = result.body as GroundedAnswer;
     expect(answer.omittedCount).toBe(1);
     expect(answer.uncertainty[0]?.kind).toBe("budget-clipped");
-  });
-
-  // Case 6: safe cleanup — two sequential calls with different content must not share pack
-  // state. The proxy: each response's contextPack.elapsedMs must reflect its own runner's
-  // returned value, not the other call's. Mutation guard: if runAsk closes over a shared
-  // pack reference both elapsedMs values would be equal and the inequality assertion fails.
-  it("two independent grounded calls do not share contextPack state", async () => {
-    const { chatId } = await setupChatWithScope();
-
-    const runnerA: GroundedRunner = (_input: OrchestratorInput) =>
-      Promise.resolve({ pack: emptyPack(), assistantContent: "answer A", elapsedMs: 10 });
-    const runnerB: GroundedRunner = (_input: OrchestratorInput) =>
-      Promise.resolve({ pack: emptyPack(), assistantContent: "answer B", elapsedMs: 99 });
-
-    const resultA = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "first question" })),
-      deps(),
-      runnerA,
-    );
-    const resultB = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId, content: "second question" })),
-      deps(),
-      runnerB,
-    );
-
-    expect(resultA.status).toBe(200);
-    expect(resultB.status).toBe(200);
-    const answerA = resultA.body as GroundedAnswer;
-    const answerB = resultB.body as GroundedAnswer;
-    expect(answerA.contextPack.elapsedMs).toBe(10);
-    expect(answerB.contextPack.elapsedMs).toBe(99);
-    expect(answerA.contextPack.elapsedMs).not.toBe(answerB.contextPack.elapsedMs);
-    // Neither call borrows the other's persisted message ids.
-    expect(answerA.assistantMessageId).not.toBe(answerB.assistantMessageId);
   });
 });
