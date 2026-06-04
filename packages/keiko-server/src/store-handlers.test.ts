@@ -2,7 +2,7 @@
 // happy and error paths goes through routeRequest dispatch and the SECURITY_HEADERS surface via the
 // real createUiServer. Every test injects an in-memory UiStore so the FS is never touched.
 
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -126,6 +126,12 @@ beforeEach(async () => {
   tmp = mkdtempSync(join(tmpdir(), "keiko-store-handlers-"));
   projDir = join(tmp, "proj");
   mkdirSync(projDir);
+  mkdirSync(join(projDir, "src", "lib"), { recursive: true });
+  mkdirSync(join(projDir, "src", "app"), { recursive: true });
+  writeFileSync(join(projDir, "src", "app", "page.tsx"), "export default null;\n");
+  writeFileSync(join(projDir, "src", "x"), "x\n");
+  writeFileSync(join(projDir, "src", "next"), "next\n");
+  writeFileSync(join(projDir, ".env"), "SECRET=1\n");
   store = createInMemoryUiStore();
   // Two-phase bind so Host check matches the actual port.
   server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0 });
@@ -618,17 +624,70 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: ["src/lib", "src/app/page.tsx"], connectedAtMs: 42 },
+        connectedScope: {
+          kind: "files",
+          relativePaths: ["src/lib", "src/app/page.tsx"],
+          connectedAtMs: 42,
+        },
       }),
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       chat: {
-        connectedScope: { relativePaths: string[]; connectedAtMs: number } | undefined;
+        connectedScope:
+          | { kind: string; relativePaths: string[]; connectedAtMs: number }
+          | undefined;
       };
     };
     expect(body.chat.connectedScope).toEqual({
+      kind: "files",
       relativePaths: ["src/lib", "src/app/page.tsx"],
+      connectedAtMs: 42,
+    });
+  });
+
+  it("sets a repository-root connectedScope on a chat", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 42 },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chat: {
+        connectedScope: { kind: string; relativePaths: string[]; connectedAtMs: number };
+      };
+    };
+    expect(body.chat.connectedScope).toEqual({
+      kind: "workspace-root",
+      relativePaths: [],
+      connectedAtMs: 42,
+    });
+  });
+
+  it("sets a folder connectedScope on a chat", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "directory", relativePaths: ["src/lib"], connectedAtMs: 42 },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chat: {
+        connectedScope: { kind: string; relativePaths: string[]; connectedAtMs: number };
+      };
+    };
+    expect(body.chat.connectedScope).toEqual({
+      kind: "directory",
+      relativePaths: ["src/lib"],
       connectedAtMs: 42,
     });
   });
@@ -640,7 +699,7 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: ["src/x"], connectedAtMs: 1 },
+        connectedScope: { kind: "files", relativePaths: ["src/x"], connectedAtMs: 1 },
       }),
     });
     const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
@@ -664,7 +723,7 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: ["src/next"], connectedAtMs: 2 },
+        connectedScope: { kind: "files", relativePaths: ["src/next"], connectedAtMs: 2 },
       }),
     });
     expect(res.status).toBe(200);
@@ -678,7 +737,7 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: ["../escape"], connectedAtMs: 1 },
+        connectedScope: { kind: "files", relativePaths: ["../escape"], connectedAtMs: 1 },
       }),
     });
     expect(res.status).toBe(400);
@@ -691,10 +750,60 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: ["/etc/passwd"], connectedAtMs: 1 },
+        connectedScope: { kind: "files", relativePaths: ["/etc/passwd"], connectedAtMs: 1 },
       }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it("rejects connectedScope for a missing path with a safe error", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "files", relativePaths: ["src/missing.ts"], connectedAtMs: 1 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const bodyText = await res.text();
+    expect(bodyText).not.toContain("src/missing.ts");
+    expect(bodyText).toContain("Connected scope path is not accessible");
+  });
+
+  it("rejects connectedScope for a deny-listed path without exposing the path", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "files", relativePaths: [".env"], connectedAtMs: 1 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const bodyText = await res.text();
+    expect(bodyText).not.toContain(".env");
+    expect(bodyText).toContain("safe read surface");
+  });
+
+  it("rejects connectedScope for secret-shaped path metadata", async () => {
+    const secretShapedName = `sk-${"a".repeat(20)}`;
+    writeFileSync(join(projDir, secretShapedName), "not a real token\n");
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "files", relativePaths: [secretShapedName], connectedAtMs: 1 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const bodyText = await res.text();
+    expect(bodyText).not.toContain(secretShapedName);
+    expect(bodyText).toContain("credential-shaped metadata");
   });
 
   it("rejects an empty connectedScope.relativePaths array", async () => {
@@ -704,7 +813,7 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: [], connectedAtMs: 1 },
+        connectedScope: { kind: "files", relativePaths: [], connectedAtMs: 1 },
       }),
     });
     expect(res.status).toBe(400);
@@ -718,7 +827,7 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: tooMany, connectedAtMs: 1 },
+        connectedScope: { kind: "files", relativePaths: tooMany, connectedAtMs: 1 },
       }),
     });
     expect(res.status).toBe(400);
@@ -731,7 +840,7 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: ["src/x"], connectedAtMs: 1.5 },
+        connectedScope: { kind: "files", relativePaths: ["src/x"], connectedAtMs: 1.5 },
       }),
     });
     expect(res.status).toBe(400);

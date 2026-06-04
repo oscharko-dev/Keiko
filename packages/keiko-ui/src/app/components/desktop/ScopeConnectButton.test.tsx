@@ -26,7 +26,8 @@ describe("ScopeConnectButton", () => {
     render(
       <ScopeConnectButton
         chatId="chat-1"
-        currentScopePaths={[]}
+        scopeKind="files"
+        currentScopeKind={undefined}
         candidateRelativePaths={[]}
         updateScope={vi.fn()}
       />,
@@ -36,6 +37,7 @@ describe("ScopeConnectButton", () => {
     // button stays in the focus order and keyboard users can reach the tooltip hint.
     expect(btn).toHaveAttribute("aria-disabled", "true");
     expect(btn).not.toBeDisabled();
+    expect(btn).toHaveAccessibleDescription("Select a folder or file first.");
     expect(btn).toHaveAttribute("title", "Select a folder or file first");
   });
 
@@ -43,7 +45,8 @@ describe("ScopeConnectButton", () => {
     render(
       <ScopeConnectButton
         chatId="chat-1"
-        currentScopePaths={[]}
+        scopeKind="files"
+        currentScopeKind={undefined}
         candidateRelativePaths={["src/a.ts"]}
         updateScope={vi.fn()}
       />,
@@ -55,7 +58,8 @@ describe("ScopeConnectButton", () => {
     render(
       <ScopeConnectButton
         chatId="chat-1"
-        currentScopePaths={["src/old.ts"]}
+        scopeKind="files"
+        currentScopeKind="files"
         candidateRelativePaths={["src/new.ts"]}
         updateScope={vi.fn()}
       />,
@@ -63,9 +67,37 @@ describe("ScopeConnectButton", () => {
     expect(screen.getByRole("button")).toHaveTextContent("Update connected scope");
   });
 
+  it("allows repository scope with an empty relativePaths array", async () => {
+    const updated = makeChat({
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 100 },
+    });
+    const updateScope = vi.fn().mockResolvedValue({ chat: updated } satisfies ChatResponse);
+    const user = userEvent.setup();
+    render(
+      <ScopeConnectButton
+        chatId="chat-1"
+        scopeKind="workspace-root"
+        currentScopeKind={undefined}
+        candidateRelativePaths={[]}
+        updateScope={updateScope}
+        now={() => 100}
+      />,
+    );
+    const button = screen.getByRole("button", { name: "Connect repository" });
+    expect(button).toHaveAttribute("aria-disabled", "false");
+    await user.click(button);
+    await waitFor(() => {
+      expect(updateScope).toHaveBeenCalledWith("chat-1", {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: 100,
+      });
+    });
+  });
+
   it("calls updateScope with the candidate paths and a clock value on click", async () => {
     const updated = makeChat({
-      connectedScope: { relativePaths: ["src/a.ts"], connectedAtMs: 100 },
+      connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 100 },
     });
     const updateScope = vi.fn().mockResolvedValue({ chat: updated } satisfies ChatResponse);
     const onConnected = vi.fn();
@@ -73,7 +105,8 @@ describe("ScopeConnectButton", () => {
     render(
       <ScopeConnectButton
         chatId="chat-1"
-        currentScopePaths={[]}
+        scopeKind="files"
+        currentScopeKind={undefined}
         candidateRelativePaths={["src/a.ts"]}
         updateScope={updateScope}
         now={() => 100}
@@ -83,6 +116,7 @@ describe("ScopeConnectButton", () => {
     await user.click(screen.getByRole("button"));
     await waitFor(() => {
       expect(updateScope).toHaveBeenCalledWith("chat-1", {
+        kind: "files",
         relativePaths: ["src/a.ts"],
         connectedAtMs: 100,
       });
@@ -96,7 +130,8 @@ describe("ScopeConnectButton", () => {
     render(
       <ScopeConnectButton
         chatId="chat-1"
-        currentScopePaths={[]}
+        scopeKind="files"
+        currentScopeKind={undefined}
         candidateRelativePaths={["src/a.ts"]}
         updateScope={updateScope}
       />,

@@ -5251,6 +5251,7 @@ select.dlg-input {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .scope-pill {
@@ -5290,6 +5291,13 @@ select.dlg-input {
   cursor: not-allowed;
 }
 
+.scope-pill-detail {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--fg-muted);
+  max-width: min(560px, 100%);
+}
+
 .scope-pill-disconnect:focus-visible,
 .scope-connect-btn:focus-visible {
   outline: 2px solid var(--accent);
@@ -5321,11 +5329,43 @@ select.dlg-input {
   cursor: not-allowed;
 }
 
+.scope-connect-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--fg-faint);
+  margin-top: 4px;
+}
+
 .scope-connect-error {
   display: block;
   font-size: 11px;
   color: var(--danger);
   margin-top: 4px;
+}
+
+.files-scope-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 30px 8px 4px;
+}
+
+.files-scope-label {
+  font-size: 11px;
+  color: var(--fg-faint);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tr-row-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.tr-connect {
+  display: flex;
+  padding-top: 2px;
+  padding-bottom: 4px;
 }
 
 /* Issue #185 — grounded repository-aware Q&A answer rendering. Lives inside an assistant

@@ -201,7 +201,7 @@ async function setupChatWithScope(): Promise<{ chatId: string; projectPath: stri
   const project = store.createProject(tmp, "demo");
   const chat = store.createChat(project.path, "Investigation", CHAT_MODEL);
   store.updateChat(chat.id, {
-    connectedScope: { relativePaths: ["src"], connectedAtMs: NOW },
+    connectedScope: { kind: "files", relativePaths: ["src"], connectedAtMs: NOW },
   });
   return Promise.resolve({ chatId: chat.id, projectPath: project.path });
 }
@@ -243,6 +243,28 @@ describe("handleGroundedAsk", () => {
     expect(body.error.message).toContain("connected scope");
   });
 
+  it("passes repository-root connectedScope kind through to the grounded runner", async () => {
+    const project = store.createProject(tmp, "demo");
+    const chat = store.createChat(project.path, "Repository scope", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: NOW },
+    });
+    let captured: OrchestratorInput | undefined;
+    const captureRunner: GroundedRunner = (input): Promise<OrchestratorOutput> => {
+      captured = input;
+      return Promise.resolve({ pack: emptyPack(), assistantContent: "ok", elapsedMs: 1 });
+    };
+
+    const result = await runHandler(
+      JSON.stringify({ chatId: chat.id, content: "hello" }),
+      captureRunner,
+    );
+
+    expect(result.status).toBe(200);
+    expect(captured?.scope.kind).toBe("workspace-root");
+    expect(captured?.scope.relativePaths).toEqual([]);
+  });
+
   it("fails closed when the runner returns an invalid context pack", async () => {
     const { chatId } = await setupChatWithScope();
     const invalidPack: ConnectedContextPack = {
@@ -272,10 +294,7 @@ describe("handleGroundedAsk", () => {
         assistantContent: "hello",
         elapsedMs: 1,
       } satisfies OrchestratorOutput);
-    const result = await runHandler(
-      JSON.stringify({ chatId, content: "hello" }),
-      malformedRunner,
-    );
+    const result = await runHandler(JSON.stringify({ chatId, content: "hello" }), malformedRunner);
     expect(result.status).toBe(500);
     expect(store.listMessages(chatId)).toEqual([]);
   });
@@ -370,6 +389,7 @@ describe("handleGroundedAsk", () => {
     const chat = store.createChat(project.path, "Three files", CHAT_MODEL);
     store.updateChat(chat.id, {
       connectedScope: {
+        kind: "files",
         relativePaths: ["src/a.ts", "src/b.ts", "src/c.ts"],
         connectedAtMs: NOW,
       },

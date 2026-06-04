@@ -9,15 +9,16 @@
 // visible ring (focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent), min
 // 24×24 target via min-w/min-h utilities, disabled state announced via aria-disabled.
 
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { ApiError, updateChatConnectedScope } from "@/lib/api";
-import type { Chat } from "@/lib/types";
+import type { Chat, SelectedScopeKind } from "@/lib/types";
 
 export interface ScopeConnectButtonProps {
   readonly chatId: string;
-  // The chat's currently-bound paths (used to render the "Update connected scope" label when
-  // the chat already has a binding). An empty array means "no binding yet".
-  readonly currentScopePaths: readonly string[];
+  readonly scopeKind: SelectedScopeKind;
+  // The chat's currently-bound kind (used to render the "Update connected scope" label when the
+  // chat already has a binding). Repository-root bindings intentionally have an empty path array.
+  readonly currentScopeKind: SelectedScopeKind | undefined;
   // The Files-window selection the button will bind on click. The empty case disables the
   // button: the spec calls out "Select a folder or file first" so the user has a hint.
   readonly candidateRelativePaths: readonly string[];
@@ -28,8 +29,14 @@ export interface ScopeConnectButtonProps {
   readonly now?: () => number;
 }
 
-function actionLabel(currentScopePaths: readonly string[]): string {
-  return currentScopePaths.length > 0 ? "Update connected scope" : "Connect to chat";
+function actionLabel(
+  scopeKind: SelectedScopeKind,
+  currentScopeKind: SelectedScopeKind | undefined,
+): string {
+  if (currentScopeKind !== undefined) return "Update connected scope";
+  if (scopeKind === "workspace-root") return "Connect repository";
+  if (scopeKind === "directory") return "Connect folder";
+  return "Connect to chat";
 }
 
 function formatErrorMessage(error: unknown): string {
@@ -40,17 +47,19 @@ function formatErrorMessage(error: unknown): string {
 
 export function ScopeConnectButton({
   chatId,
-  currentScopePaths,
+  scopeKind,
+  currentScopeKind,
   candidateRelativePaths,
   onConnected,
   updateScope = updateChatConnectedScope,
   now = Date.now,
 }: ScopeConnectButtonProps): ReactNode {
+  const hintId = useId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const empty = candidateRelativePaths.length === 0;
+  const empty = scopeKind !== "workspace-root" && candidateRelativePaths.length === 0;
   const disabled = empty || busy;
-  const label = actionLabel(currentScopePaths);
+  const label = actionLabel(scopeKind, currentScopeKind);
   const tooltip = empty ? "Select a folder or file first" : label;
 
   async function handleClick(): Promise<void> {
@@ -59,6 +68,7 @@ export function ScopeConnectButton({
     setBusy(true);
     try {
       const response = await updateScope(chatId, {
+        kind: scopeKind,
         relativePaths: candidateRelativePaths,
         connectedAtMs: now(),
       });
@@ -86,6 +96,7 @@ export function ScopeConnectButton({
         disabled={busy}
         aria-disabled={ariaDisabled}
         aria-label={empty ? "Connect to chat (no selection)" : label}
+        aria-describedby={empty ? hintId : undefined}
         title={tooltip}
         onClick={() => {
           if (ariaDisabled) {
@@ -96,6 +107,11 @@ export function ScopeConnectButton({
       >
         {busy ? "Connecting…" : label}
       </button>
+      {empty ? (
+        <span id={hintId} className="scope-connect-hint">
+          Select a folder or file first.
+        </span>
+      ) : null}
       {error !== null ? (
         <span role="alert" className="scope-connect-error">
           {error}

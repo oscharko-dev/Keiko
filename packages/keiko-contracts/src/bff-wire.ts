@@ -32,12 +32,15 @@ export interface Project {
   readonly lastOpenedAt: number;
 }
 
-// Issue #184 — the workspace-relative scope binding a Files window selection to a chat. The
-// patch shape distinguishes "no change" (field absent) from "clear" (field set to null) using
-// the standard JSON-patch convention; the stored entity surface carries `undefined` when no
-// scope is bound. Path validation happens at the BFF boundary via isValidScopePath from
-// @oscharko-dev/keiko-contracts/connected-context; this shape carries already-validated paths.
+// Issue #184 — the workspace-relative scope binding a Files window selection to a chat. `kind`
+// mirrors SelectedScope so the binding can represent the repository root, one folder, or one or
+// more file paths. The patch shape distinguishes "no change" (field absent) from "clear" (field
+// set to null) using the standard JSON-patch convention; the stored entity surface carries
+// `undefined` when no scope is bound. Path validation happens at the BFF boundary via
+// isValidScopePath from @oscharko-dev/keiko-contracts/connected-context; this shape carries
+// already-validated paths.
 export interface ChatConnectedScope {
+  readonly kind: SelectedScopeKind;
   readonly relativePaths: readonly string[];
   readonly connectedAtMs: number;
 }

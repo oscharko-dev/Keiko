@@ -61,7 +61,7 @@ function renderWindow(session: ChatSessionApi): void {
 describe("ChatWindow cancel button", () => {
   it("does not render the cancel button when not sending", () => {
     const chat = makeChat({
-      connectedScope: { relativePaths: ["src/a.ts"], connectedAtMs: 1 },
+      connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
     });
     renderWindow(makeSession({ activeChat: chat, sending: false }));
     expect(screen.queryByRole("button", { name: "Cancel grounded request" })).toBeNull();
@@ -75,7 +75,7 @@ describe("ChatWindow cancel button", () => {
 
   it("renders the cancel button while sending with a connectedScope", () => {
     const chat = makeChat({
-      connectedScope: { relativePaths: ["src/a.ts"], connectedAtMs: 1 },
+      connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
     });
     // Provide at least one visible message so the chatw-log branch is rendered
     renderWindow(
@@ -104,7 +104,7 @@ describe("ChatWindow cancel button", () => {
   it("calls cancelGrounded when the cancel button is clicked", async () => {
     const cancelGrounded = vi.fn();
     const chat = makeChat({
-      connectedScope: { relativePaths: ["src/a.ts"], connectedAtMs: 1 },
+      connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
     });
     const user = userEvent.setup();
     renderWindow(

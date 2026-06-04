@@ -158,16 +158,11 @@ function deriveScopeId(chat: Chat): string {
 function buildSelectedScope(chat: Chat): SelectedScope | undefined {
   const cs = chat.connectedScope;
   if (cs === undefined) return undefined;
-  // The #184 Files-window connector allows individual files OR a single folder. At this
-  // layer we cannot reliably distinguish without a fs stat, so "files" is the safe
-  // superset — every downstream consumer treats individual path entries identically
-  // regardless. Previously a single entry was labelled "directory" which would
-  // misrepresent a single-file binding (Copilot PR #258 finding).
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     scopeId: deriveScopeId(chat),
     workspaceRoot: chat.projectPath,
-    kind: "files",
+    kind: cs.kind,
     relativePaths: cs.relativePaths,
     conversationId: chat.id,
     connectedAtMs: cs.connectedAtMs,

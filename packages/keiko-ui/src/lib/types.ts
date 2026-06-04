@@ -19,6 +19,7 @@ export type {
 
 // ─── Workspace summary + context pack ──────────────────────────────────────────────
 export type {
+  SelectedScopeKind,
   WorkspaceLanguage,
   TestFramework,
   DiscoveryStats,

@@ -195,7 +195,7 @@ async function setupChat(): Promise<string> {
   const project = store.createProject(tmp, "demo");
   const chat = store.createChat(project.path, "Redaction test", CHAT_MODEL);
   store.updateChat(chat.id, {
-    connectedScope: { relativePaths: [SECRET_SCOPE_PATH], connectedAtMs: NOW },
+    connectedScope: { kind: "files", relativePaths: [SECRET_SCOPE_PATH], connectedAtMs: NOW },
   });
   return Promise.resolve(chat.id);
 }

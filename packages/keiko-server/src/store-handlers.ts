@@ -3,6 +3,8 @@
 // applied uniformly by the server layer. JSON body reading is bounded by MAX_STORE_BODY_BYTES.
 
 import type { IncomingMessage } from "node:http";
+import { realpathSync, statSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -13,6 +15,7 @@ import {
   assertUiDbOutsideProject,
   isProjectAvailable,
   validateProjectPath,
+  type Chat,
   type ChatConnectedScope,
   type ChatRole,
   type NewChatMessage,
@@ -22,6 +25,7 @@ import {
   type UpdateProjectPatch,
   type WorkflowStatus,
 } from "./store/index.js";
+import { pathIsDenied } from "./files-deny.js";
 import {
   clearGroundedContextIndexesForConversation,
   clearGroundedContextIndexesForWorkspace,
@@ -29,9 +33,14 @@ import {
 // Issue #184 — workspace-relative path gate. isValidScopePath is the canonical validator from
 // @oscharko-dev/keiko-contracts/connected-context (issue #178). Reusing it here keeps the BFF
 // boundary aligned with the rest of the connected-repo surface and avoids regex drift.
-import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  SELECTED_SCOPE_KINDS,
+  isValidScopePath,
+  type SelectedScopeKind,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 
 const MAX_STORE_BODY_BYTES = 256_000;
+const SELECTED_SCOPE_KIND_SET: ReadonlySet<SelectedScopeKind> = new Set(SELECTED_SCOPE_KINDS);
 
 class BodyTooLargeError extends Error {
   public constructor() {
@@ -274,6 +283,14 @@ function chatBelongsToProject(deps: UiHandlerDeps, projectPath: string, chatId: 
   return deps.store.listChats(projectPath).some((chat) => chat.id === chatId);
 }
 
+function findChatById(deps: UiHandlerDeps, chatId: string): Chat | undefined {
+  for (const project of deps.store.listProjects()) {
+    const chat = deps.store.listChats(project.path).find((candidate) => candidate.id === chatId);
+    if (chat !== undefined) return chat;
+  }
+  return undefined;
+}
+
 function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: string): boolean {
   return deps.store.listMessages(chatId).some((message) => message.id === messageId);
 }
@@ -402,22 +419,53 @@ export async function handleCreateChat(
 // defense-in-depth subset of this gate.
 const MAX_CONNECTED_SCOPE_PATHS = 50;
 
-// Issue #184 — validates the relativePaths sub-array. Pulled out of optionalConnectedScope so
-// the outer function's cyclomatic complexity stays within the project's ≤10 bound.
-function validateScopeRelativePaths(paths: unknown): readonly string[] {
-  if (!Array.isArray(paths)) {
-    throw new InvalidRequest('Field "connectedScope.relativePaths" must be an array.');
+function isSelectedScopeKind(value: unknown): value is SelectedScopeKind {
+  return typeof value === "string" && SELECTED_SCOPE_KIND_SET.has(value as SelectedScopeKind);
+}
+
+function validateScopeKind(value: unknown): SelectedScopeKind {
+  if (!isSelectedScopeKind(value)) {
+    throw new InvalidRequest('Field "connectedScope.kind" must be a recognized scope kind.');
   }
-  if (paths.length === 0) {
+  return value;
+}
+
+function assertScopePathCount(kind: SelectedScopeKind, count: number): void {
+  if (kind === "workspace-root") {
+    if (count !== 0) {
+      throw new InvalidRequest(
+        'Field "connectedScope.relativePaths" must be empty for repository scope.',
+      );
+    }
+    return;
+  }
+  if (kind === "directory") {
+    if (count !== 1) {
+      throw new InvalidRequest(
+        'Field "connectedScope.relativePaths" must contain exactly one folder path.',
+      );
+    }
+    return;
+  }
+  if (count === 0) {
     throw new InvalidRequest('Field "connectedScope.relativePaths" must not be empty.');
   }
-  if (paths.length > MAX_CONNECTED_SCOPE_PATHS) {
+  if (count > MAX_CONNECTED_SCOPE_PATHS) {
     throw new InvalidRequest(
       `Field "connectedScope.relativePaths" must have at most ${String(
         MAX_CONNECTED_SCOPE_PATHS,
       )} entries.`,
     );
   }
+}
+
+// Issue #184 — validates the relativePaths sub-array. Pulled out of optionalConnectedScope so
+// the outer function's cyclomatic complexity stays within the project's ≤10 bound.
+function validateScopeRelativePaths(kind: SelectedScopeKind, paths: unknown): readonly string[] {
+  if (!Array.isArray(paths)) {
+    throw new InvalidRequest('Field "connectedScope.relativePaths" must be an array.');
+  }
+  assertScopePathCount(kind, paths.length);
   const validated: string[] = [];
   for (const entry of paths) {
     if (typeof entry !== "string") {
@@ -431,6 +479,77 @@ function validateScopeRelativePaths(paths: unknown): readonly string[] {
     validated.push(entry);
   }
   return validated;
+}
+
+function isContainedPath(root: string, target: string): boolean {
+  const rootCmp = process.platform === "win32" ? root.toLowerCase() : root;
+  const targetCmp = process.platform === "win32" ? target.toLowerCase() : target;
+  const rel = relative(rootCmp, targetCmp);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function scopeTargetPath(realProjectRoot: string, relativePath: string): string {
+  if (relativePath.length === 0) return realProjectRoot;
+  return resolve(realProjectRoot, ...relativePath.split("/").filter((part) => part.length > 0));
+}
+
+function assertScopePathMetadataSafe(deps: UiHandlerDeps, relativePath: string): void {
+  if (pathIsDenied(relativePath)) {
+    throw new InvalidRequest("Connected scope is excluded from Keiko's safe read surface.");
+  }
+  const redacted = deps.redactor(relativePath);
+  if (typeof redacted === "string" && redacted !== relativePath) {
+    throw new InvalidRequest("Connected scope path contains credential-shaped metadata.");
+  }
+}
+
+function validateScopePathAccess(
+  deps: UiHandlerDeps,
+  realProjectRoot: string,
+  kind: SelectedScopeKind,
+  entry: string,
+): void {
+  assertScopePathMetadataSafe(deps, entry);
+  const candidate = scopeTargetPath(realProjectRoot, entry);
+  let targetReal: string;
+  try {
+    targetReal = realpathSync(candidate);
+  } catch {
+    throw new InvalidRequest("Connected scope path is not accessible from the selected project.");
+  }
+  if (!isContainedPath(realProjectRoot, targetReal)) {
+    throw new InvalidRequest("Connected scope path must stay inside the selected project.");
+  }
+  let info: ReturnType<typeof statSync>;
+  try {
+    info = statSync(targetReal);
+  } catch {
+    throw new InvalidRequest("Connected scope path is not accessible from the selected project.");
+  }
+  if (kind === "directory" && !info.isDirectory()) {
+    throw new InvalidRequest("Connected folder scope must reference a folder.");
+  }
+  if (!info.isDirectory() && !info.isFile()) {
+    throw new InvalidRequest("Connected scope path must reference a file or folder.");
+  }
+}
+
+function validateConnectedScopeAccess(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  scope: ChatConnectedScope,
+): void {
+  const projectRoot = validateProjectPath(chat.projectPath, { mustExist: true });
+  let realProjectRoot: string;
+  try {
+    realProjectRoot = realpathSync(projectRoot);
+  } catch {
+    throw new InvalidRequest("Selected project is not accessible.");
+  }
+  if (scope.kind === "workspace-root") return;
+  for (const entry of scope.relativePaths) {
+    validateScopePathAccess(deps, realProjectRoot, scope.kind, entry);
+  }
 }
 
 function validateScopeConnectedAtMs(value: unknown): number {
@@ -455,9 +574,10 @@ function optionalConnectedScope(
     throw new InvalidRequest('Field "connectedScope" must be an object or null.');
   }
   const scope = raw as Record<string, unknown>;
-  const relativePaths = validateScopeRelativePaths(scope.relativePaths);
+  const kind = validateScopeKind(scope.kind);
+  const relativePaths = validateScopeRelativePaths(kind, scope.relativePaths);
   const connectedAtMs = validateScopeConnectedAtMs(scope.connectedAtMs);
-  return { relativePaths, connectedAtMs };
+  return { kind, relativePaths, connectedAtMs };
 }
 
 function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): UpdateChatPatch {
@@ -487,6 +607,11 @@ export async function handleUpdateChat(
     const id = requireQuery(ctx, "id");
     const body = await readJsonObject(ctx.req);
     const patch = buildChatPatch(deps, body);
+    if (patch.connectedScope !== undefined && patch.connectedScope !== null) {
+      const existing = findChatById(deps, id);
+      if (existing === undefined) return notFoundResult("Chat not found.");
+      validateConnectedScopeAccess(deps, existing, patch.connectedScope);
+    }
     const chat = deps.store.updateChat(id, patch);
     if (patch.connectedScope !== undefined || patch.status === "closed") {
       clearGroundedContextIndexesForConversation(id);

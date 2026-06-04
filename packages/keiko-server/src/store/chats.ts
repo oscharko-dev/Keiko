@@ -1,11 +1,16 @@
 // ADR-0013 — chats CRUD scoped to a project. Parameterized SQL only.
 
 import type { DatabaseSync } from "node:sqlite";
-import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  SELECTED_SCOPE_KINDS,
+  isValidScopePath,
+  type SelectedScopeKind,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 import type { Chat, ChatConnectedScope, CreateChatOptions, UpdateChatPatch } from "./types.js";
 import { invalidRequest, notFound } from "./errors.js";
 
 const MAX_CONNECTED_SCOPE_PATHS = 50;
+const SELECTED_SCOPE_KIND_SET: ReadonlySet<SelectedScopeKind> = new Set(SELECTED_SCOPE_KINDS);
 
 const MAX_SELECTED_MODEL_LEN = 160;
 const SELECTED_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._/\- ]*$/;
@@ -35,26 +40,57 @@ interface ChatRow {
   readonly updated_at: number;
 }
 
-// Issue #184 — defensive parse of a persisted JSON scope-paths column. The column is only
-// ever written via JSON.stringify on a validated string[]; any row that fails to parse to a
-// non-empty string array is treated as a cleared binding rather than throwing, so a corrupted
-// row never bricks the chat list. Validation at write time is enforced at the BFF boundary.
-function validateDecodedPaths(parsed: unknown): readonly string[] | undefined {
+interface DecodedScopePayload {
+  readonly kind: SelectedScopeKind;
+  readonly relativePaths: readonly string[];
+}
+
+function isSelectedScopeKind(value: unknown): value is SelectedScopeKind {
+  return typeof value === "string" && SELECTED_SCOPE_KIND_SET.has(value as SelectedScopeKind);
+}
+
+function hasValidPathCount(kind: SelectedScopeKind, count: number): boolean {
+  if (kind === "workspace-root") return count === 0;
+  if (kind === "directory") return count === 1;
+  return count > 0 && count <= MAX_CONNECTED_SCOPE_PATHS;
+}
+
+// Issue #184 — validates scope-path cardinality and path shape against SelectedScope semantics.
+// Repository-root scopes intentionally carry an empty path array; directory scopes carry exactly
+// one relative path; files scopes carry one or more workspace-relative entries.
+function validateScopePathsForKind(
+  kind: SelectedScopeKind,
+  paths: readonly unknown[],
+): readonly string[] | undefined {
   // Defense-in-depth (Copilot PR #254 finding): even though the BFF boundary validates every
   // entry via isValidScopePath before writing, a corrupted or tampered DB row must not be
   // able to re-introduce an absolute or traversal path on read. The same range cap also
   // applies — a corrupted row carrying 10_000 entries collapses to undefined.
-  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > MAX_CONNECTED_SCOPE_PATHS) {
+  if (!hasValidPathCount(kind, paths.length)) {
     return undefined;
   }
   const items: string[] = [];
-  for (const entry of parsed) {
+  for (const entry of paths) {
     if (typeof entry !== "string" || !isValidScopePath(entry, { mustBeRelative: true })) {
       return undefined;
     }
     items.push(entry);
   }
   return items;
+}
+
+function decodeConnectedScopePayload(parsed: unknown): DecodedScopePayload | undefined {
+  // PR #254 wrote legacy JSON arrays. Treat them as files scopes so existing rows survive the
+  // Issue #184 audit fix that adds explicit scope kind support.
+  if (Array.isArray(parsed)) {
+    const relativePaths = validateScopePathsForKind("files", parsed);
+    return relativePaths === undefined ? undefined : { kind: "files", relativePaths };
+  }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const raw = parsed as Record<string, unknown>;
+  if (!isSelectedScopeKind(raw.kind) || !Array.isArray(raw.relativePaths)) return undefined;
+  const relativePaths = validateScopePathsForKind(raw.kind, raw.relativePaths);
+  return relativePaths === undefined ? undefined : { kind: raw.kind, relativePaths };
 }
 
 function decodeConnectedScope(
@@ -68,14 +104,14 @@ function decodeConnectedScope(
   } catch {
     return undefined;
   }
-  const items = validateDecodedPaths(parsed);
-  if (items === undefined) {
+  const payload = decodeConnectedScopePayload(parsed);
+  if (payload === undefined) {
     return undefined;
   }
   if (!Number.isInteger(connectedAt) || connectedAt < 0) {
     return undefined;
   }
-  return { relativePaths: items, connectedAtMs: connectedAt };
+  return { kind: payload.kind, relativePaths: payload.relativePaths, connectedAtMs: connectedAt };
 }
 
 function rowToChat(row: ChatRow): Chat {
@@ -184,20 +220,16 @@ const VALID_CHAT_STATUSES: ReadonlySet<string> = new Set(["open", "closed"]);
 // `unknown`. They must never weaken the BFF rules: the criteria here are strict-subset.
 
 function validateConnectedScopeShape(scope: ChatConnectedScope): void {
+  if (!isSelectedScopeKind(scope.kind)) {
+    throw invalidRequest("connectedScope.kind must be a recognized scope kind.");
+  }
   if (!Array.isArray(scope.relativePaths)) {
     throw invalidRequest("connectedScope.relativePaths must be an array.");
   }
-  if (scope.relativePaths.length === 0 || scope.relativePaths.length > MAX_CONNECTED_SCOPE_PATHS) {
+  if (validateScopePathsForKind(scope.kind, scope.relativePaths) === undefined) {
     throw invalidRequest(
-      `connectedScope.relativePaths length out of range (1..${String(MAX_CONNECTED_SCOPE_PATHS)}).`,
+      "connectedScope.relativePaths must match connectedScope.kind and contain valid workspace-relative paths.",
     );
-  }
-  for (const entry of scope.relativePaths) {
-    if (typeof entry !== "string" || !isValidScopePath(entry, { mustBeRelative: true })) {
-      throw invalidRequest(
-        "connectedScope.relativePaths must contain valid workspace-relative paths.",
-      );
-    }
   }
   if (
     typeof scope.connectedAtMs !== "number" ||
@@ -236,7 +268,7 @@ function scopeUpdateParams(value: ChatConnectedScope | null | undefined): ScopeU
   if (value === null) return { apply: 1, pathsJson: null, connectedAtMs: null };
   return {
     apply: 1,
-    pathsJson: JSON.stringify(value.relativePaths),
+    pathsJson: JSON.stringify({ kind: value.kind, relativePaths: value.relativePaths }),
     connectedAtMs: value.connectedAtMs,
   };
 }

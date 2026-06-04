@@ -264,7 +264,7 @@ describe("updateChatConnectedScope", () => {
         selectedModel: "example-chat-model",
         branchLabel: undefined,
         status: undefined,
-        connectedScope: { relativePaths: ["src/a.ts"], connectedAtMs: 100 },
+        connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 100 },
         createdAt: 1,
         updatedAt: 2,
       },
@@ -273,6 +273,7 @@ describe("updateChatConnectedScope", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await updateChatConnectedScope("chat-1", {
+      kind: "files",
       relativePaths: ["src/a.ts"],
       connectedAtMs: 100,
     });
@@ -282,7 +283,7 @@ describe("updateChatConnectedScope", () => {
       expect.objectContaining({
         method: "PATCH",
         body: JSON.stringify({
-          connectedScope: { relativePaths: ["src/a.ts"], connectedAtMs: 100 },
+          connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 100 },
         }),
         headers: expect.objectContaining({
           Accept: "application/json",
