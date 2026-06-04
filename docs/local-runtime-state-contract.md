@@ -16,7 +16,7 @@ than by an in-process read.
 
 ## Scope
 
-Eight categories of locally-resident state:
+Nine categories of locally-resident state:
 
 1. Gateway configuration file (`keiko.config.json`).
 2. Credentials supplied via environment variables (`KEIKO_*_API_KEY`, `KEIKO_*_BASE_URL`).
@@ -26,6 +26,7 @@ Eight categories of locally-resident state:
 6. CLI scripts registered in the consumer's `package.json` (`keiko:start`, `keiko:stop`).
 7. Lifecycle state (`.keiko/ui.pid`, `.keiko/ui.log`).
 8. Local `.env` discovery for `KEIKO_*` keys.
+9. Enterprise Memory Vault SQLite database (`keiko-memory.db`).
 
 ## Non-goals
 
@@ -36,38 +37,48 @@ Eight categories of locally-resident state:
 
 ## Verdict
 
-Every category is **no-op (read-compat evidence only)** for the 0.1.x upgrade. No shim, migration,
+Categories 1-8 are **no-op (read-compat evidence only)** for the 0.1.x upgrade. No shim, migration,
 or per-package source change is required. Paths, environment-variable names, SQLite schema, and
 package-script contents are byte-identical pre- and post-extraction.
 
+Category 9 (Enterprise Memory Vault DB) is **new state introduced by epic #204**. It did not
+exist in `0.1.x`, so no upgrade fixture is required: a `0.1.x` install upgrading past epic #204
+finds no pre-existing `keiko-memory.db` and the vault writes a fresh V1 file on first open. The
+upgrade-smoke fixture under `tests/upgrade-smoke/fixture/pre-modular-0.1.x/` is intentionally NOT
+extended for category 9 because there is no `0.1.x` artifact to assert read-compat against.
+
 ## Inventory
 
-| #   | Path or identifier                                                               | File:Line (post-modular owner)                                                                                           | Format             | Secrets                  | R/W        | Verdict |
-| --- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------ | ------------------------ | ---------- | ------- |
-| 1   | `--config PATH` ∥ `$KEIKO_CONFIG_FILE` ∥ `dirname(uiDbPath)/keiko.config.json`   | `packages/keiko-server/src/deps.ts:180-213`, `packages/keiko-cli/src/ui.ts:164`                                          | JSON               | yes (apiKey)             | R          | no-op   |
-| 2   | `KEIKO_DEFAULT_API_KEY`, `KEIKO_MODEL_<id>_API_KEY`, `KEIKO_MODEL_<id>_BASE_URL` | `packages/keiko-security/src/secrets.ts:24-25`, `packages/keiko-server/src/deps.ts:144-146`                              | env                | yes (apiKey)             | R          | no-op   |
-| 3   | `--ui-db PATH` ∥ `$KEIKO_UI_DATA_DIR/keiko-ui.db` ∥ `~/.keiko/keiko-ui.db`       | `packages/keiko-server/src/store/paths.ts:53-65`                                                                         | SQLite             | no                       | R/W        | no-op   |
-| 4   | `projects`, `chats`, `chat_messages` rows in the UI DB                           | `packages/keiko-server/src/store/schema.ts:14-56` (V1+V2)                                                                | SQLite STRICT      | no                       | R/W        | no-op   |
-| 5   | `--evidence-dir PATH` ∥ `$KEIKO_EVIDENCE_DIR` ∥ `./.keiko/evidence/`             | `packages/keiko-evidence/src/store.ts:35-45`; `EVIDENCE_SCHEMA_VERSION` at `packages/keiko-contracts/src/evidence.ts:21` | JSON               | redacted by construction | R/W        | no-op   |
-| 6   | `"keiko:start": "keiko start"`, `"keiko:stop": "keiko stop"`                     | `packages/keiko-cli/src/init.ts:7-8,46-49`                                                                               | JSON               | no                       | R/W (init) | no-op   |
-| 7   | `$KEIKO_STATE_DIR/ui.pid`, `$KEIKO_STATE_DIR/ui.log` (default `.keiko/`)         | `packages/keiko-cli/src/lifecycle.ts:165-167,182-186`                                                                    | text/PID, text/log | no                       | R/W        | no-op   |
-| 8   | KEIKO\_\* keys in cwd `.env`                                                     | `packages/keiko-cli/src/ui.ts:144-162`                                                                                   | dotenv             | yes (apiKey)             | R          | no-op   |
+| #   | Path or identifier                                                                                                    | File:Line (post-modular owner)                                                                                                                                           | Format              | Secrets                  | R/W        | Verdict                                                                      |
+| --- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------- | ------------------------ | ---------- | ---------------------------------------------------------------------------- |
+| 1   | `--config PATH` ∥ `$KEIKO_CONFIG_FILE` ∥ `dirname(uiDbPath)/keiko.config.json`                                        | `packages/keiko-server/src/deps.ts:180-213`, `packages/keiko-cli/src/ui.ts:164`                                                                                          | JSON                | yes (apiKey)             | R          | no-op                                                                        |
+| 2   | `KEIKO_DEFAULT_API_KEY`, `KEIKO_MODEL_<id>_API_KEY`, `KEIKO_MODEL_<id>_BASE_URL`                                      | `packages/keiko-security/src/secrets.ts:24-25`, `packages/keiko-server/src/deps.ts:144-146`                                                                              | env                 | yes (apiKey)             | R          | no-op                                                                        |
+| 3   | `--ui-db PATH` ∥ `$KEIKO_UI_DATA_DIR/keiko-ui.db` ∥ `~/.keiko/keiko-ui.db`                                            | `packages/keiko-server/src/store/paths.ts:53-65`                                                                                                                         | SQLite              | no                       | R/W        | no-op                                                                        |
+| 4   | `projects`, `chats`, `chat_messages` rows in the UI DB                                                                | `packages/keiko-server/src/store/schema.ts:14-56` (V1+V2)                                                                                                                | SQLite STRICT       | no                       | R/W        | no-op                                                                        |
+| 5   | `--evidence-dir PATH` ∥ `$KEIKO_EVIDENCE_DIR` ∥ `./.keiko/evidence/`                                                  | `packages/keiko-evidence/src/store.ts:35-45`; `EVIDENCE_SCHEMA_VERSION` at `packages/keiko-contracts/src/evidence.ts:21`                                                 | JSON                | redacted by construction | R/W        | no-op                                                                        |
+| 6   | `"keiko:start": "keiko start"`, `"keiko:stop": "keiko stop"`                                                          | `packages/keiko-cli/src/init.ts:7-8,46-49`                                                                                                                               | JSON                | no                       | R/W (init) | no-op                                                                        |
+| 7   | `$KEIKO_STATE_DIR/ui.pid`, `$KEIKO_STATE_DIR/ui.log` (default `.keiko/`)                                              | `packages/keiko-cli/src/lifecycle.ts:165-167,182-186`                                                                                                                    | text/PID, text/log  | no                       | R/W        | no-op                                                                        |
+| 8   | KEIKO\_\* keys in cwd `.env`                                                                                          | `packages/keiko-cli/src/ui.ts:144-162`                                                                                                                                   | dotenv              | yes (apiKey)             | R          | no-op                                                                        |
+| 9   | `memoryDir` opt ∥ `$KEIKO_MEMORY_DIR` ∥ `$KEIKO_STATE_DIR/memory/keiko-memory.db` ∥ `~/.keiko/memory/keiko-memory.db` | `packages/keiko-memory-vault/src/paths.ts:64-83` (resolveMemoryDir/resolveMemoryDbPath); `MEMORY_VAULT_SCHEMA_VERSION` at `packages/keiko-memory-vault/src/schema.ts:23` | SQLite STRICT (WAL) | redacted at boundary     | R/W        | new — no 0.1.x fixture required (state did not exist pre-modular; epic #204) |
 
 ## Precedence rules
 
 The four categories that resolve a configurable path follow an explicit-flag → env → default ladder:
 
-| Category        | Precedence ladder                                                                   | Resolver                                                                                                                                                 |
-| --------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Gateway config  | `--config` → `$KEIKO_CONFIG_FILE` → `dirname(uiDbPath)/keiko.config.json`           | `packages/keiko-cli/src/ui.ts:164` (CLI), `packages/keiko-server/src/deps.ts:186-213` (resolveConfig), `packages/keiko-server/src/deps.ts:180` (sibling) |
-| UI DB           | explicit option → `$KEIKO_UI_DATA_DIR/keiko-ui.db` → `homedir()/.keiko/keiko-ui.db` | `packages/keiko-server/src/store/paths.ts:53-65` (resolveUiDbPath)                                                                                       |
-| Evidence dir    | `--evidence-dir` → `$KEIKO_EVIDENCE_DIR` → `./.keiko/evidence`                      | `packages/keiko-evidence/src/store.ts:40-45` (resolveEvidenceDir)                                                                                        |
-| Lifecycle state | `--state-dir` → `$KEIKO_STATE_DIR` → `.keiko` (cwd-relative)                        | `packages/keiko-cli/src/lifecycle.ts:140-167` (buildLifecycleOptions)                                                                                    |
+| Category        | Precedence ladder                                                                               | Resolver                                                                                                                                                 |
+| --------------- | ----------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Gateway config  | `--config` → `$KEIKO_CONFIG_FILE` → `dirname(uiDbPath)/keiko.config.json`                       | `packages/keiko-cli/src/ui.ts:164` (CLI), `packages/keiko-server/src/deps.ts:186-213` (resolveConfig), `packages/keiko-server/src/deps.ts:180` (sibling) |
+| UI DB           | explicit option → `$KEIKO_UI_DATA_DIR/keiko-ui.db` → `homedir()/.keiko/keiko-ui.db`             | `packages/keiko-server/src/store/paths.ts:53-65` (resolveUiDbPath)                                                                                       |
+| Evidence dir    | `--evidence-dir` → `$KEIKO_EVIDENCE_DIR` → `./.keiko/evidence`                                  | `packages/keiko-evidence/src/store.ts:40-45` (resolveEvidenceDir)                                                                                        |
+| Lifecycle state | `--state-dir` → `$KEIKO_STATE_DIR` → `.keiko` (cwd-relative)                                    | `packages/keiko-cli/src/lifecycle.ts:140-167` (buildLifecycleOptions)                                                                                    |
+| Memory vault    | `memoryDir` opt → `$KEIKO_MEMORY_DIR` → `$KEIKO_STATE_DIR/memory/` → `homedir()/.keiko/memory/` | `packages/keiko-memory-vault/src/paths.ts:64-83` (resolveMemoryDir)                                                                                      |
 
 For the UI-DB path, the configured-path branch additionally enforces four fail-closed rules
 (absolute, not-inside-cwd, not-symlink, no-symlink-ancestor) and normalizes the result at
 `packages/keiko-server/src/store/paths.ts:30-44`. The same containment rules apply to a value
-supplied via `$KEIKO_UI_DATA_DIR`.
+supplied via `$KEIKO_UI_DATA_DIR`. The Memory Vault path resolver enforces the identical
+four fail-closed rules at `packages/keiko-memory-vault/src/paths.ts:42-55` against both the
+explicit option and any value supplied via `$KEIKO_MEMORY_DIR` or `$KEIKO_STATE_DIR`.
 
 ## Risk register
 
