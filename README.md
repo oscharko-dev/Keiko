@@ -165,7 +165,7 @@ Known limits:
 
 | Symptom                | Check                                                                                                    |
 | ---------------------- | -------------------------------------------------------------------------------------------------------- |
-| UI does not open       | Run `npm run keiko:status`, then inspect `.keiko/ui.log`.                                                |
+| UI does not open       | Run `npx keiko status`, then inspect `.keiko/ui.log`.                                                    |
 | Port is busy           | Start with `KEIKO_UI_PORT=1984 npm run keiko:start` or stop the process using the port.                  |
 | No model appears       | Reopen Settings, verify the base URL and token, then run the credential test again.                      |
 | Credential test fails  | Confirm the gateway accepts OpenAI-compatible chat-completions requests at the configured base URL.      |

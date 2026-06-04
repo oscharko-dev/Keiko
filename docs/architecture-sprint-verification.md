@@ -166,7 +166,9 @@ called out below.
   connectors and persistent knowledge capsules" depends on the connector boundary
   established in this sprint.
 - Issue [#221](https://github.com/oscharko-dev/Keiko/issues/221) "Add Troubleshooting Guide"
-  is an open documentation follow-up.
+  was consolidated under issue
+  [#257](https://github.com/oscharko-dev/Keiko/issues/257) and is now addressed by the
+  [Troubleshooting Guide](troubleshooting/README.md).
 
 ## Closure note
 
