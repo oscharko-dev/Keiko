@@ -299,4 +299,63 @@ describe("handleGroundedAsk", () => {
     const body = result.body as { error: { code: string; message: string } };
     expect(body.error.message).toContain("clarification");
   });
+
+  // ─── Issue #187: contextPack summary on the wire ─────────────────────────────
+
+  it("surfaces a contextPack summary with citation count, omitted count, and elapsedMs", async () => {
+    const { chatId } = await setupChatWithScope();
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "How does MyClass work?" })),
+      deps(),
+      runner(packWithCitations(), "ok"),
+    );
+    expect(result.status).toBe(200);
+    const answer = result.body as GroundedAnswer;
+    expect(answer.contextPack).toBeDefined();
+    expect(answer.contextPack.schemaVersion).toBe(CONNECTED_CONTEXT_SCHEMA_VERSION);
+    // The summary mirrors the orchestrator pack's scope, not the chat-binding scope —
+    // the BFF is a thin projection of the in-process pack.
+    expect(answer.contextPack.scopeKind).toBe("directory");
+    expect(answer.contextPack.queryKind).toBe("natural-language");
+    expect(answer.contextPack.citationCount).toBe(answer.citations.length);
+    expect(answer.contextPack.omittedCount).toBe(answer.omittedCount);
+    expect(answer.contextPack.elapsedMs).toBe(answer.elapsedMs);
+    expect(answer.contextPack.uncertaintyCount).toBe(answer.uncertainty.length);
+  });
+
+  it("contextPack.fileCount mirrors scope.relativePaths.length (files-scope = 3)", async () => {
+    const project = store.createProject(tmp, "demo");
+    const chat = store.createChat(project.path, "Three files", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScope: {
+        relativePaths: ["src/a.ts", "src/b.ts", "src/c.ts"],
+        connectedAtMs: NOW,
+      },
+    });
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: chat.id, content: "explain" })),
+      deps(),
+      runner(packWithCitations(), "ok"),
+    );
+    const answer = result.body as GroundedAnswer;
+    // The orchestrator-supplied pack in this test carries its own scope (kind: "directory"
+    // with one path), which is what wires through. We assert the summary mirrors that pack —
+    // never the chat-binding — so the BFF stays a thin projection.
+    expect(answer.contextPack.scopeKind).toBe("directory");
+    expect(answer.contextPack.fileCount).toBe(1);
+  });
+
+  it("contextPack carries usage and budget verbatim from the orchestrator pack", async () => {
+    const { chatId } = await setupChatWithScope();
+    const pack = packWithCitations();
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain" })),
+      deps(),
+      runner(pack, "ok"),
+    );
+    const answer = result.body as GroundedAnswer;
+    expect(answer.contextPack.usage).toEqual(pack.usage);
+    expect(answer.contextPack.budget).toEqual(pack.budget);
+    expect(answer.contextPack.scopeId).toBe(pack.scope.scopeId);
+  });
 });

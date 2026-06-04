@@ -13,10 +13,11 @@ import {
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type {
-  GroundedAnswer,
-  GroundedEvidenceCitation,
-  GroundedUncertainty,
+import {
+  buildGroundedAnswerContextPackSummary,
+  type GroundedAnswer,
+  type GroundedEvidenceCitation,
+  type GroundedUncertainty,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -269,14 +270,21 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
     content,
     output.assistantContent,
   );
+  const citations = buildCitations(output.pack);
+  const contextPack = buildGroundedAnswerContextPackSummary(
+    output.pack,
+    citations.length,
+    output.elapsedMs,
+  );
   const answer: GroundedAnswer = {
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
     content: output.assistantContent,
-    citations: buildCitations(output.pack),
+    citations,
     uncertainty: buildUncertainty(output.pack),
     omittedCount: output.pack.omitted.length,
     elapsedMs: output.elapsedMs,
+    contextPack,
   };
   return { status: 200, body: answer };
 }
