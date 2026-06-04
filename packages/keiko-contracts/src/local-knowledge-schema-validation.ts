@@ -1,0 +1,140 @@
+// Pure helpers for the Local Knowledge Connector persistent schema (Epic #189, Issue
+// #265). Split out from `local-knowledge-schema.ts` to keep both files under the 400-LOC
+// budget. No `node:sqlite`, no fs, no clock — these helpers only inspect or rewrite
+// strings the runtime (#193) reads from disk or surfaces to diagnostics.
+
+import type { LocalKnowledgeValidation } from "./local-knowledge-validation.js";
+
+// ─── Read-back row shape validator ───────────────────────────────────────────────
+// Applied when loading a capsule row from sqlite. The shape mirrors the `capsules` table
+// but uses the JS-side field names the runtime exposes (camelCase). Intentionally narrow
+// — it pins the fields downstream consumers depend on, not every column.
+
+export interface CapsuleRowShape {
+  readonly id: string;
+  readonly displayName: string;
+  readonly vectorDimensions: number;
+  readonly vectorMetric: string;
+  readonly embeddingModelProvider: string;
+  readonly embeddingModelId: string;
+  readonly lifecycleState: string;
+  readonly storageReference: string;
+  readonly createdAt: number;
+  readonly updatedAt: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function isFinitePositiveInt(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
+}
+
+function isFiniteNonNegative(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+export function validateCapsuleRowShape(input: unknown): LocalKnowledgeValidation<CapsuleRowShape> {
+  if (!isRecord(input)) {
+    return { ok: false, errors: ["capsuleRow must be an object"] };
+  }
+  const errors: string[] = [];
+  if (!isNonEmptyString(input.id)) errors.push("capsuleRow.id must be a non-empty string");
+  if (!isNonEmptyString(input.displayName)) {
+    errors.push("capsuleRow.displayName must be a non-empty string");
+  }
+  if (!isFinitePositiveInt(input.vectorDimensions)) {
+    errors.push("capsuleRow.vectorDimensions must be a positive integer");
+  }
+  if (!isNonEmptyString(input.vectorMetric)) {
+    errors.push("capsuleRow.vectorMetric must be a non-empty string");
+  }
+  if (!isNonEmptyString(input.embeddingModelProvider)) {
+    errors.push("capsuleRow.embeddingModelProvider must be a non-empty string");
+  }
+  if (!isNonEmptyString(input.embeddingModelId)) {
+    errors.push("capsuleRow.embeddingModelId must be a non-empty string");
+  }
+  if (!isNonEmptyString(input.lifecycleState)) {
+    errors.push("capsuleRow.lifecycleState must be a non-empty string");
+  }
+  if (!isNonEmptyString(input.storageReference)) {
+    errors.push("capsuleRow.storageReference must be a non-empty string");
+  }
+  if (!isFiniteNonNegative(input.createdAt)) {
+    errors.push("capsuleRow.createdAt must be a finite non-negative number");
+  }
+  if (!isFiniteNonNegative(input.updatedAt)) {
+    errors.push("capsuleRow.updatedAt must be a finite non-negative number");
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  return { ok: true, value: input as unknown as CapsuleRowShape };
+}
+
+// ─── Diagnostic path redaction ───────────────────────────────────────────────────
+// Used by parser-diagnostic and indexing-job error construction so raw filesystem paths
+// cannot land in audit logs or UI surfaces. Pure: reads no environment, no fs, no clock.
+// The HOME prefix is supplied by the caller (the runtime in #193 resolves it once at
+// boot) so this helper stays deterministic and trivially testable.
+
+const REDACTED_MAX_CHARS = 1024;
+
+// Matches the ASCII control range; control chars in filenames are pathological and must
+// not flow into UI strings unredacted. Disable the lint rule because the regex IS the
+// gate.
+// eslint-disable-next-line no-control-regex
+const CONTROL_RE = /[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g;
+
+function stripControls(value: string): string {
+  return value.replace(CONTROL_RE, "");
+}
+
+function normalizeSeparators(value: string): string {
+  return value.replace(/\\/g, "/");
+}
+
+function truncateAtNul(value: string): string {
+  const nulAt = value.indexOf("\0");
+  return nulAt === -1 ? value : value.slice(0, nulAt);
+}
+
+function replaceHomePrefix(value: string, homePrefix: string): string {
+  if (homePrefix.length === 0) return value;
+  // Match either the prefix exactly or the prefix followed by a separator; this prevents
+  // `/Users/foobar` from being misread as `/Users/foo` + `bar`.
+  if (value === homePrefix) return "~";
+  if (value.startsWith(`${homePrefix}/`)) return `~${value.slice(homePrefix.length)}`;
+  return value;
+}
+
+const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/](.*)$/;
+
+function replaceDrivePrefix(value: string): string {
+  const match = WINDOWS_DRIVE_RE.exec(value);
+  if (match === null) return value;
+  return `<drive>/${match[1] ?? ""}`;
+}
+
+export interface RedactPathOptions {
+  readonly homePrefix?: string;
+}
+
+// Public boundary helper. Order: NUL truncation → control strip → drive-letter rewrite →
+// HOME-prefix rewrite → separator normalisation → length cap. Each step is idempotent so
+// repeated calls on already-redacted input return the same string.
+export function redactPathInDiagnostic(rawPath: string, options: RedactPathOptions = {}): string {
+  if (typeof rawPath !== "string") return "";
+  const homePrefix = options.homePrefix ?? "";
+  const afterNul = truncateAtNul(rawPath);
+  const noControls = stripControls(afterNul);
+  const driveRewritten = replaceDrivePrefix(noControls);
+  const homeRewritten = replaceHomePrefix(driveRewritten, homePrefix);
+  const normalized = normalizeSeparators(homeRewritten);
+  if (normalized.length <= REDACTED_MAX_CHARS) return normalized;
+  return `${normalized.slice(0, REDACTED_MAX_CHARS)}…`;
+}

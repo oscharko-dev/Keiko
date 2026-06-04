@@ -38,6 +38,15 @@ import {
   validateKnowledgeCapsule,
   validateCapsuleSet,
   validateConnectorGraphState,
+  LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
+  KNOWLEDGE_CAPSULE_DDL,
+  KNOWLEDGE_CAPSULE_INDEXES,
+  KNOWLEDGE_CAPSULE_MIGRATIONS,
+  KNOWLEDGE_CAPSULE_TABLES,
+  KNOWLEDGE_CAPSULE_INDEX_NAMES,
+  DELETE_CAPSULE_SQL,
+  validateCapsuleRowShape,
+  redactPathInDiagnostic,
 } from "./index.js";
 import type {
   ToolPort,
@@ -87,11 +96,14 @@ import type {
   LocalKnowledgeValidation,
   LocalKnowledgeValidationOk,
   LocalKnowledgeValidationFail,
+  KnowledgeCapsuleMigration,
+  CapsuleRowShape,
+  RedactPathOptions,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
-  it("exposes the version constant pinned at 0.5.0", () => {
-    expect(KEIKO_CONTRACTS_VERSION).toBe("0.5.0");
+  it("exposes the version constant pinned at 0.6.0", () => {
+    expect(KEIKO_CONTRACTS_VERSION).toBe("0.6.0");
   });
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {
@@ -234,6 +246,30 @@ describe("keiko-contracts package surface", () => {
     pin<LocalKnowledgeValidation<KnowledgeCapsule>>();
     pin<LocalKnowledgeValidationOk<KnowledgeCapsule>>();
     pin<LocalKnowledgeValidationFail>();
+  });
+
+  it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(1);
+    // The string contract version and the integer DB version must remain distinct so the
+    // contract surface and the on-disk DDL can evolve independently.
+    expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
+    expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
+    expect(KNOWLEDGE_CAPSULE_DDL[0]).toBe("PRAGMA foreign_keys = ON;");
+    expect(KNOWLEDGE_CAPSULE_TABLES).toContain("capsules");
+    expect(KNOWLEDGE_CAPSULE_TABLES).toContain("vectors");
+    expect(KNOWLEDGE_CAPSULE_INDEXES.length).toBeGreaterThan(0);
+    expect(KNOWLEDGE_CAPSULE_INDEX_NAMES).toContain("idx_vectors_capsule_identity");
+    expect(KNOWLEDGE_CAPSULE_MIGRATIONS[0]?.version).toBe(1);
+    expect(DELETE_CAPSULE_SQL).toContain("DELETE FROM capsules");
+    expect(typeof validateCapsuleRowShape).toBe("function");
+    expect(typeof redactPathInDiagnostic).toBe("function");
+  });
+
+  it("knowledge-capsule schema type re-exports are reachable through the barrel (#265)", () => {
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<KnowledgeCapsuleMigration>();
+    pin<CapsuleRowShape>();
+    pin<RedactPathOptions>();
   });
 
   it("EvidenceDeps.costClassResolver (#163) is an optional injection port shape", () => {
