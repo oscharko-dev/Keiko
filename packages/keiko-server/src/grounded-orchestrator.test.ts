@@ -13,7 +13,12 @@ import {
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import {
+  gitHistoryAdapter,
+  importGraphAdapter,
+  testSourcePairingAdapter,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 
 import {
   ClarificationNeededError,
@@ -165,6 +170,56 @@ describe("runGroundedExploration", () => {
       }),
     ).rejects.toBeInstanceOf(ClarificationNeededError);
     expect(answererCalls).toBe(0);
+  });
+
+  it("does not rerun structural adapters through the git-history ring", async () => {
+    mkdirSync(join(ROOT, ".git", "logs"), { recursive: true });
+    writeFileSync(join(ROOT, ".git", "HEAD"), "ref: refs/heads/main\n");
+    writeFileSync(
+      join(ROOT, ".git", "logs", "HEAD"),
+      "0000000000000000000000000000000000000000 abc123def456 Alice <alice@example.com> 1700000000 +0000\tcommit: seed\n",
+    );
+    const pairAdapter = testSourcePairingAdapter as { lookup: typeof testSourcePairingAdapter.lookup };
+    const importAdapter = importGraphAdapter as { lookup: typeof importGraphAdapter.lookup };
+    const gitAdapter = gitHistoryAdapter as { lookup: typeof gitHistoryAdapter.lookup };
+    const originalPairLookup = pairAdapter.lookup;
+    const originalImportLookup = importAdapter.lookup;
+    const originalGitLookup = gitAdapter.lookup;
+    let pairCalls = 0;
+    let importCalls = 0;
+    let gitCalls = 0;
+    pairAdapter.lookup = (...args): ReturnType<typeof originalPairLookup> => {
+      pairCalls += 1;
+      return originalPairLookup(...args);
+    };
+    importAdapter.lookup = (...args): ReturnType<typeof originalImportLookup> => {
+      importCalls += 1;
+      return originalImportLookup(...args);
+    };
+    gitAdapter.lookup = (...args): ReturnType<typeof originalGitLookup> => {
+      gitCalls += 1;
+      return originalGitLookup(...args);
+    };
+    try {
+      await runGroundedExploration(
+        input({
+          scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+          query: happyQuery({ text: "Investigate src/foo.ts and tests/foo.test.ts" }),
+        }),
+        {
+          answerer: echoAnswerer,
+          nowMs: () => NOW,
+          detectWorkspace: () => fakeWorkspace(),
+        },
+      );
+    } finally {
+      pairAdapter.lookup = originalPairLookup;
+      importAdapter.lookup = originalImportLookup;
+      gitAdapter.lookup = originalGitLookup;
+    }
+    expect(pairCalls).toBe(1);
+    expect(importCalls).toBe(1);
+    expect(gitCalls).toBe(1);
   });
 });
 

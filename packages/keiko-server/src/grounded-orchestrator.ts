@@ -24,12 +24,15 @@ import {
 import {
   DEFAULT_SEARCH_LIMITS,
   RepoSearchUnsupportedFileError,
-  createDefaultStructuralRegistry,
   detectWorkspace,
+  gitHistoryAdapter,
+  importGraphAdapter,
   readExcerpt,
   runStructuralAdapters,
   searchText,
   type SearchScope,
+  type StructuralAdapterRegistry,
+  testSourcePairingAdapter,
   type WorkspaceFs,
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
@@ -108,10 +111,14 @@ async function runRing(
     });
     return result.atoms;
   }
-  // Structural and git-history rings both run through the structural registry; the git-history
-  // adapter is part of the default registry. The registry's runner gates each adapter by its
-  // own availability probe, so one unavailable adapter never blocks the other ring's atoms.
-  const registry = createDefaultStructuralRegistry();
+  // Keep the planner's ring split authoritative: the structural ring should only run the
+  // structural adapters, while the git-history ring should only run the repo-level history
+  // adapter. Reusing the full default registry for both rings duplicates atoms and inflates
+  // downstream ranking signals whenever a workspace-root query plans both rings.
+  const registry: StructuralAdapterRegistry =
+    ring.kind === "structural"
+      ? { adapters: [testSourcePairingAdapter, importGraphAdapter] }
+      : { adapters: [gitHistoryAdapter] };
   const result = await runStructuralAdapters(
     registry,
     inputs.searchScope,

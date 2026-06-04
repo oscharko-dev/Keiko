@@ -164,8 +164,6 @@ describe("testSourcePairingAdapter", () => {
     );
     expect(atoms).toEqual([]);
   });
-});
-
 
   it("respects scope.relativePaths when scanning by symbol (pathsForSymbol)", async () => {
     // When scope.relativePaths restricts to ["src"], pathsForSymbol must only scan src/.
@@ -199,6 +197,39 @@ describe("testSourcePairingAdapter", () => {
     // pathsForSymbol only scans src/ — no match found — no atom returned.
     expect(atoms).toEqual([]);
   });
+
+  it("does not emit a paired file outside scope.relativePaths for a direct path query", async () => {
+    const { scope: base, fs } = makeScope({
+      "src/foo.ts": "src",
+      "tests/foo.test.ts": "test",
+    });
+    const scopeRestricted: SearchScope = { ...base, relativePaths: ["src"] };
+    const atoms = await testSourcePairingAdapter.lookup(
+      scopeRestricted,
+      nlq("src/foo.ts"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms).toEqual([]);
+  });
+
+  it("does not emit a paired file outside scope.relativePaths for a symbol query", async () => {
+    const { scope: base, fs } = makeScope({
+      "src/foo.ts": "src",
+      "tests/foo.test.ts": "test",
+    });
+    const scopeRestricted: SearchScope = { ...base, relativePaths: ["src"] };
+    const atoms = await testSourcePairingAdapter.lookup(
+      scopeRestricted,
+      exq("foo"),
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms).toEqual([]);
+  });
+});
 
 describe("testSourcePairingAdapter (real fs symlink containment)", () => {
   let root: string;
