@@ -93,27 +93,40 @@ function metaToCapsuleSet(
   return payload.description === null ? base : { ...base, description: payload.description };
 }
 
-export function createCapsuleSet(store: KnowledgeStore, input: CreateCapsuleSetInput): CapsuleSet {
+// Inserts the schema_meta row and all member rows WITHOUT bracketing a BEGIN/COMMIT.
+// Must be called from within an already-open transaction. Used by createCapsuleSet (which
+// wraps it in its own transaction) and by runComposeTransaction (which needs to combine the
+// set creation and audit writes in one atomic outer transaction).
+export function createCapsuleSetWithinTxn(
+  store: KnowledgeStore,
+  input: CreateCapsuleSetInput,
+  now: number,
+): void {
   const db = store._internal.db;
-  const now = store._internal.now();
   const payload: SetMetaPayload = {
     displayName: input.displayName,
     description: input.description ?? null,
     tags: input.tags,
     composedAt: now,
   };
+  db.prepare("INSERT INTO schema_meta (key, value) VALUES (:k, :v)").run({
+    k: metaKey(input.id),
+    v: JSON.stringify(payload),
+  });
+  const insertMember = db.prepare(
+    "INSERT INTO capsule_set_members (set_id, capsule_id, ordinal, composed_at) VALUES (:s, :c, :o, :now)",
+  );
+  input.capsuleIds.forEach((capsuleId, index) => {
+    insertMember.run({ s: input.id, c: capsuleId, o: index, now });
+  });
+}
+
+export function createCapsuleSet(store: KnowledgeStore, input: CreateCapsuleSetInput): CapsuleSet {
+  const db = store._internal.db;
+  const now = store._internal.now();
   db.exec("BEGIN");
   try {
-    db.prepare("INSERT INTO schema_meta (key, value) VALUES (:k, :v)").run({
-      k: metaKey(input.id),
-      v: JSON.stringify(payload),
-    });
-    const insertMember = db.prepare(
-      "INSERT INTO capsule_set_members (set_id, capsule_id, ordinal, composed_at) VALUES (:s, :c, :o, :now)",
-    );
-    input.capsuleIds.forEach((capsuleId, index) => {
-      insertMember.run({ s: input.id, c: capsuleId, o: index, now });
-    });
+    createCapsuleSetWithinTxn(store, input, now);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");

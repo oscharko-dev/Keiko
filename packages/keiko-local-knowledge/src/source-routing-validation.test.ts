@@ -149,7 +149,7 @@ describe("validateRoutingInstructionsScope", () => {
     }, "unknown-source-token");
   });
 
-  it("rejects undefined instructions when explicitly required (defensive caller)", () => {
+  it("accepts undefined instructions as a no-op (validator is permissive on absence)", () => {
     // The validator is permissive on undefined — caller decides whether instructions are
     // mandatory. We assert the permissive default here so the no-op case is documented.
     expect(() => {
@@ -259,6 +259,47 @@ describe("validateGlobPatterns", () => {
         includeGlobs: ["/etc/passwd"],
       });
     }, "absolute-glob");
+  });
+
+  it("rejects Windows drive-absolute patterns (C:\\** and C:/** both caught)", () => {
+    expectRejection(() => {
+      validateGlobPatterns({
+        kind: "folder",
+        rootPath: "/srv/docs",
+        recursive: true,
+        includeGlobs: ["C:\\**"],
+      });
+    }, "absolute-glob");
+    expectRejection(() => {
+      validateGlobPatterns({
+        kind: "folder",
+        rootPath: "/srv/docs",
+        recursive: true,
+        includeGlobs: ["D:/**"],
+      });
+    }, "absolute-glob");
+  });
+
+  it("rejects UNC paths (\\\\server\\share\\** caught)", () => {
+    expectRejection(() => {
+      validateGlobPatterns({
+        kind: "folder",
+        rootPath: "/srv/docs",
+        recursive: true,
+        includeGlobs: ["\\\\server\\share\\**"],
+      });
+    }, "absolute-glob");
+  });
+
+  it("rejects backslash-separated .. traversal (Windows path escape)", () => {
+    expectRejection(() => {
+      validateGlobPatterns({
+        kind: "folder",
+        rootPath: "/srv/docs",
+        recursive: true,
+        includeGlobs: ["sub\\..\\other"],
+      });
+    }, "glob-path-escape");
   });
 
   it("applies the same rules to the 'repository' scope variant", () => {

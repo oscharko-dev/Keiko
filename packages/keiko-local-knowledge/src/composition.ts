@@ -6,12 +6,14 @@
 // existing capsule, source, and CapsuleSet primitives; no new vectors, no SQL joins
 // across capsules.
 //
-// Operations:
-//   * buildComposedRetrievalScope(store, setId) → in-memory {capsuleIds, sourceIds, …}
-//   * describeRetrievalScope(scope, store)      → UI-safe disclosure for the future #198
-//   * addSourcesToCapsule(store, capsuleId, ..) → multi-source link + audit + updated_at
-//   * composeCapsules(store, opts)              → createCapsuleSet wrapper + audit
-//   * listCapsuleMembershipChanges(store, id)   → audit reader for capsule history view
+// Exports:
+//   * buildComposedRetrievalScope(store, setId)  → in-memory {capsuleIds, sourceIds, …}
+//   * describeRetrievalScope(scope, store)        → UI-safe disclosure for the future #198
+//   * addSourcesToCapsule(store, capsuleId, …)   → multi-source link + audit + updated_at
+//   * composeCapsules(store, opts)                → createCapsuleSet + audit in one transaction
+//   * listCapsuleMembershipChanges(store, id)     → audit reader for capsule history view
+//   * CompositionError / CompositionErrorCode     → typed error surface
+//   * ComposedRetrievalScope / RetrievalScopeDisclosure / CapsuleMembershipChange / …
 //
 // All multi-row writes wrap in BEGIN/COMMIT/ROLLBACK so a partial batch never lands.
 
@@ -28,7 +30,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import { getCapsule } from "./capsule-lifecycle.js";
-import { getCapsuleSet, createCapsuleSet } from "./capsule-set-lifecycle.js";
+import { getCapsuleSet, createCapsuleSet, createCapsuleSetWithinTxn } from "./capsule-set-lifecycle.js";
 import { KnowledgeNotFoundError } from "./errors.js";
 import { listCapsuleSources, type AddCapsuleSourceInput } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
@@ -358,41 +360,18 @@ function assertNoDuplicateCapsuleIds(ids: readonly KnowledgeCapsuleId[]): void {
 }
 
 function runComposeTransaction(store: KnowledgeStore, opts: ComposeCapsulesOptions): CapsuleSet {
-  // We cannot nest BEGIN inside `createCapsuleSet`'s own transaction, so call it first
-  // then append audit rows in a separate transaction. If audit fails after the set
-  // exists we surface the error AFTER persisting the set; the audit table is an
-  // additive append-only ledger and the next mutation will retry from a clean state.
+  // A single BEGIN/COMMIT wraps both the CapsuleSet write and the audit rows so a crash
+  // between them cannot leave a set with no audit trail. `createCapsuleSetWithinTxn` skips
+  // its own BEGIN/COMMIT to make this nesting possible (SQLite forbids nested transactions).
   const setInput = buildCreateCapsuleSetInput(opts);
-  const set = createCapsuleSet(store, setInput);
-  writeComposeAuditRows(store, opts.capsuleIds, set.id);
-  return set;
-}
-
-function buildCreateCapsuleSetInput(
-  opts: ComposeCapsulesOptions,
-): Parameters<typeof createCapsuleSet>[1] {
-  const id = randomUUID() as CapsuleSetId;
-  const base: Parameters<typeof createCapsuleSet>[1] = {
-    id,
-    displayName: opts.displayName,
-    tags: opts.tags ?? [],
-    capsuleIds: opts.capsuleIds,
-  };
-  return opts.description !== undefined ? { ...base, description: opts.description } : base;
-}
-
-function writeComposeAuditRows(
-  store: KnowledgeStore,
-  capsuleIds: readonly KnowledgeCapsuleId[],
-  setId: CapsuleSetId,
-): void {
   const db = store._internal.db;
   const now = store._internal.now();
-  const details = JSON.stringify({ setId: String(setId) });
   db.exec("BEGIN");
   try {
+    createCapsuleSetWithinTxn(store, setInput, now);
+    const details = JSON.stringify({ setId: String(setInput.id) });
     const stmt = db.prepare(INSERT_AUDIT_SQL);
-    for (const capsuleId of capsuleIds) {
+    for (const capsuleId of opts.capsuleIds) {
       stmt.run({
         id: randomUUID(),
         capsule_id: capsuleId,
@@ -407,6 +386,24 @@ function writeComposeAuditRows(
     db.exec("ROLLBACK");
     throw error;
   }
+  const set = getCapsuleSet(store, setInput.id);
+  if (set === undefined) {
+    throw new Error(`runComposeTransaction: row not found after commit for ${String(setInput.id)}`);
+  }
+  return set;
+}
+
+function buildCreateCapsuleSetInput(
+  opts: ComposeCapsulesOptions,
+): Parameters<typeof createCapsuleSet>[1] {
+  const id = randomUUID() as CapsuleSetId;
+  const base: Parameters<typeof createCapsuleSet>[1] = {
+    id,
+    displayName: opts.displayName,
+    tags: opts.tags ?? [],
+    capsuleIds: opts.capsuleIds,
+  };
+  return opts.description !== undefined ? { ...base, description: opts.description } : base;
 }
 
 // ─── listCapsuleMembershipChanges ───────────────────────────────────────────────

@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import {
+  KNOWLEDGE_CAPSULE_MIGRATIONS,
   KNOWLEDGE_CAPSULE_TABLES,
   LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts";
@@ -174,6 +175,51 @@ describe("openKnowledgeStore — migration runner", () => {
     } finally {
       store.close();
     }
+  });
+});
+
+describe("openKnowledgeStore — upgrade path from v1", () => {
+  it("migrates a v1-only database to v2 without quarantining it", () => {
+    // Regression for Copilot finding: KNOWLEDGE_CAPSULE_TABLES includes the v2
+    // capsule_membership_changes table, so a v1 database would fail expectedTablesPresent
+    // before migrations ran and be quarantined. The fix: use KNOWLEDGE_CAPSULE_V1_TABLES for
+    // the pre-migration check so v1 databases pass the guard and get migrated normally.
+    const dbPath = join(tmp, "capsules.db");
+    const v1 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 1);
+    if (v1 === undefined) throw new Error("v1 migration not found");
+
+    // Manually create a v1-state database (schema applied, user_version = 1, no v2 table).
+    const seed = new DatabaseSync(dbPath);
+    try {
+      for (const stmt of v1.up) {
+        seed.exec(stmt);
+      }
+      seed.exec("PRAGMA user_version = 1");
+    } finally {
+      seed.close();
+    }
+
+    // Open through the store — it must NOT quarantine the file.
+    const store = openKnowledgeStore({ dbPath });
+    try {
+      // Verify migration to v2 applied: capsule_membership_changes now exists.
+      const row = store._internal.db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='capsule_membership_changes'",
+        )
+        .get() as unknown as CountRow;
+      expect(row.n).toBe(1);
+      // Verify we reached the final schema version.
+      const ver = store._internal.db.prepare("PRAGMA user_version").get() as unknown as VersionRow;
+      expect(ver.user_version).toBe(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION);
+    } finally {
+      store.close();
+    }
+
+    // The original file must still be there (not quarantined).
+    const entries = readdirSync(tmp);
+    const quarantined = entries.find((name) => name.includes(".corrupt."));
+    expect(quarantined).toBeUndefined();
   });
 });
 

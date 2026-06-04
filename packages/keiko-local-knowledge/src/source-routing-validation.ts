@@ -163,6 +163,16 @@ function validateGlobList(
   }
 }
 
+function isWindowsDriveAbsolute(pattern: string): boolean {
+  // Matches C:\ or C:/ — a single drive letter followed by colon and a separator.
+  return (
+    pattern.length >= 3 &&
+    /[A-Za-z]/.test(pattern[0] ?? "") &&
+    pattern[1] === ":" &&
+    (pattern[2] === "/" || pattern[2] === "\\")
+  );
+}
+
 function assertGlobShape(pattern: string): void {
   if (pattern.startsWith("/")) {
     fail(
@@ -170,9 +180,16 @@ function assertGlobShape(pattern: string): void {
       `Glob pattern "${pattern}" is absolute; patterns must be source-root-relative.`,
     );
   }
-  // Reject any `..` segment. Match component-bounded so substrings like "abc..def" inside
-  // a filename are allowed; only path-segment traversal is refused.
-  const segments = pattern.split("/");
+  if (isWindowsDriveAbsolute(pattern) || pattern.startsWith("\\\\")) {
+    fail(
+      "absolute-glob",
+      `Glob pattern "${pattern}" is an absolute Windows path; patterns must be source-root-relative.`,
+    );
+  }
+  // Reject any `..` segment. Split on EITHER separator so Windows-style backslash paths
+  // are also caught (e.g. "sub\..\other"). Match component-bounded so substrings like
+  // "abc..def" inside a filename are allowed; only path-segment traversal is refused.
+  const segments = pattern.split(/[/\\]/);
   for (const segment of segments) {
     if (segment === "..") {
       fail("glob-path-escape", `Glob pattern "${pattern}" contains a parent-directory segment.`);

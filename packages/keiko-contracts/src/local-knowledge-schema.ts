@@ -358,7 +358,12 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
 // the DDL strings. Mirrors the order of KNOWLEDGE_CAPSULE_DDL after the leading PRAGMA.
-export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
+//
+// `KNOWLEDGE_CAPSULE_V1_TABLES` lists only the tables that exist after a v1-only migration
+// (i.e. the original 12 tables without the v2 audit table). The store uses this narrower
+// set for the pre-migration check so that an existing v1 database is not falsely treated
+// as corrupt before migrations run.
+export const KNOWLEDGE_CAPSULE_V1_TABLES: readonly string[] = [
   "capsules",
   "capsule_sources",
   "capsule_set_members",
@@ -371,6 +376,10 @@ export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   "parser_diagnostics",
   "indexing_jobs",
   "schema_meta",
+] as const;
+
+export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
+  ...KNOWLEDGE_CAPSULE_V1_TABLES,
   "capsule_membership_changes",
 ] as const;
 

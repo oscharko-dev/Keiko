@@ -74,7 +74,7 @@ describe("buildComposedRetrievalScope", () => {
   });
 
   it("contains zero sources from capsules NOT in the set (Foundry-IQ no-global-pool)", () => {
-    const { aId, bId, aSources } = seedTwoCapsulesWithSources();
+    const { aId, aSources, bSources } = seedTwoCapsulesWithSources();
     // Build the set with capsule A only — capsule B's sources must not appear.
     const setId = createCapsuleSet(store, {
       id: "set-only-a" as CapsuleSetId,
@@ -85,7 +85,9 @@ describe("buildComposedRetrievalScope", () => {
     const scope = buildComposedRetrievalScope(store, setId);
     expect(scope.capsuleIds).toStrictEqual([aId]);
     expect([...scope.sourceIds].sort()).toStrictEqual([...aSources].sort());
-    expect(scope.sourceIds).not.toContain(bId);
+    for (const bSource of bSources) {
+      expect(scope.sourceIds).not.toContain(bSource);
+    }
   });
 
   it("marks alwaysQuery=true capsules separately", () => {
@@ -327,5 +329,47 @@ describe("composeCapsules", () => {
     expect(() =>
       composeCapsules(store, { displayName: "Combined", capsuleIds: [aId, aId] }),
     ).toThrow(CompositionError);
+  });
+
+  it("rolls back the CapsuleSet if the audit-row write fails (atomicity)", () => {
+    // Simulate failure during audit insert by monkey-patching prepare to throw on the
+    // INSERT INTO capsule_membership_changes statement. A failure mid-transaction must not
+    // leave a CapsuleSet row visible — both the schema_meta entry and the members must be
+    // absent after the error.
+    const { aId, bId } = seedTwoCapsulesWithSources();
+    const db = store._internal.db;
+    const originalPrepare = db.prepare.bind(db);
+    let callCount = 0;
+    // db.prepare is not reassignable on DatabaseSync; use Object.defineProperty instead.
+    Object.defineProperty(db, "prepare", {
+      configurable: true,
+      value: (sql: string) => {
+        if (sql.includes("capsule_membership_changes")) {
+          callCount++;
+          if (callCount === 1) {
+            throw new Error("simulated audit failure");
+          }
+        }
+        return originalPrepare(sql);
+      },
+    });
+
+    expect(() =>
+      composeCapsules(store, { displayName: "Atomic", capsuleIds: [aId, bId] }),
+    ).toThrow("simulated audit failure");
+
+    // Restore prepare so subsequent queries work.
+    Object.defineProperty(db, "prepare", { configurable: true, value: originalPrepare });
+
+    // No CapsuleSet row should exist.
+    const sets = store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM schema_meta WHERE key LIKE 'capsule_set:%'")
+      .get() as unknown as { readonly n: number };
+    expect(sets.n).toBe(0);
+    // No member rows either.
+    const members = store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM capsule_set_members")
+      .get() as unknown as { readonly n: number };
+    expect(members.n).toBe(0);
   });
 });
