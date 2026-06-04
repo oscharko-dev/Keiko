@@ -114,8 +114,8 @@ import type {
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
-  it("exposes the version constant pinned at 0.7.0", () => {
-    expect(KEIKO_CONTRACTS_VERSION).toBe("0.7.0");
+  it("exposes the version constant pinned at 0.8.0", () => {
+    expect(KEIKO_CONTRACTS_VERSION).toBe("0.8.0");
   });
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {
@@ -301,6 +301,91 @@ describe("keiko-contracts package surface", () => {
     pin<EvidenceConnectedContextQuery>();
     pin<EvidenceConnectedContextScope>();
     pin<EvidenceConnectedContextUncertainty>();
+  });
+
+  it("memory contract value re-exports are reachable through the barrel (#205)", async () => {
+    const mod = await import("./index.js");
+    expect(mod.MEMORY_SCHEMA_VERSION).toBe("1");
+    expect(mod.MEMORY_SCOPE_KINDS).toContain("user");
+    expect(mod.MEMORY_SCOPE_KINDS).toContain("global");
+    expect(mod.MEMORY_TYPES).toContain("preference");
+    expect(mod.MEMORY_TYPES).toContain("correction");
+    expect(mod.MEMORY_SENSITIVITIES).toEqual(["public", "confidential", "restricted"]);
+    expect(mod.MEMORY_STATUSES).toContain("proposed");
+    expect(mod.MEMORY_STATUSES).toContain("forgotten");
+    expect(mod.MEMORY_SOURCE_KINDS).toContain("accepted-correction");
+    expect(mod.MEMORY_EDGE_KINDS).toContain("supersedes");
+    expect(mod.MEMORY_AUDIT_ACTION_KINDS).toContain("retrieved");
+    expect(mod.MEMORY_AUDIT_INITIATOR_SURFACES).toContain("memory-center");
+    expect(mod.MEMORY_UPDATE_FIELDS).toContain("body");
+    expect(mod.MEMORY_STRUCTURED_PAYLOAD_KINDS).toContain("string-list");
+    expect(mod.MEMORY_STATUS_TRANSITIONS.proposed).toContain("accepted");
+    expect(typeof mod.checkStatusTransition).toBe("function");
+    expect(typeof mod.validateMemoryRecord).toBe("function");
+    expect(typeof mod.validateMemoryProposal).toBe("function");
+    expect(typeof mod.validateMemoryAuditRecord).toBe("function");
+    expect(typeof mod.isMemoryRecord).toBe("function");
+    expect(typeof mod.isMemoryEdge).toBe("function");
+    expect(typeof mod.isScopeReachable).toBe("function");
+    expect(typeof mod.assertNeverMemoryType).toBe("function");
+    expect(typeof mod.looksLikeSecretShape).toBe("function");
+    expect(typeof mod.hasStaleModelMetadata).toBe("function");
+  });
+
+  it("memory contract type re-exports are reachable through the barrel (#205)", async () => {
+    type Mod = typeof import("./index.js");
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<Mod["MEMORY_SCOPE_KINDS"]>();
+    // Phantom imports to pin the type-only surface added by #205. A future refactor that
+    // drops one of these names stops this test compiling.
+    type _MemoryRecord = import("./index.js").MemoryRecord;
+    type _MemoryEdge = import("./index.js").MemoryEdge;
+    type _MemoryProposal = import("./index.js").MemoryProposal;
+    type _MemoryAcceptance = import("./index.js").MemoryAcceptance;
+    type _MemoryRejection = import("./index.js").MemoryRejection;
+    type _MemoryUpdate = import("./index.js").MemoryUpdate;
+    type _MemorySupersession = import("./index.js").MemorySupersession;
+    type _MemoryPin = import("./index.js").MemoryPin;
+    type _MemoryUnpin = import("./index.js").MemoryUnpin;
+    type _MemoryArchive = import("./index.js").MemoryArchive;
+    type _MemoryForget = import("./index.js").MemoryForget;
+    type _MemoryRetrievalRequest = import("./index.js").MemoryRetrievalRequest;
+    type _MemoryAuditRecord = import("./index.js").MemoryAuditRecord;
+    type _MemoryScope = import("./index.js").MemoryScope;
+    type _MemoryProvenance = import("./index.js").MemoryProvenance;
+    type _MemoryValidityInterval = import("./index.js").MemoryValidityInterval;
+    type _MemoryRetentionHint = import("./index.js").MemoryRetentionHint;
+    type _MemoryModelIdentity = import("./index.js").MemoryModelIdentity;
+    type _MemoryStructuredPayload = import("./index.js").MemoryStructuredPayload;
+    type _MemoryValidation = import("./index.js").MemoryValidation<_MemoryRecord>;
+    pin<_MemoryRecord>();
+    pin<_MemoryEdge>();
+    pin<_MemoryProposal>();
+    pin<_MemoryAcceptance>();
+    pin<_MemoryRejection>();
+    pin<_MemoryUpdate>();
+    pin<_MemorySupersession>();
+    pin<_MemoryPin>();
+    pin<_MemoryUnpin>();
+    pin<_MemoryArchive>();
+    pin<_MemoryForget>();
+    pin<_MemoryRetrievalRequest>();
+    pin<_MemoryAuditRecord>();
+    pin<_MemoryScope>();
+    pin<_MemoryProvenance>();
+    pin<_MemoryValidityInterval>();
+    pin<_MemoryRetentionHint>();
+    pin<_MemoryModelIdentity>();
+    pin<_MemoryStructuredPayload>();
+    pin<_MemoryValidation>();
+    expect(true).toBe(true);
+  });
+
+  it("memory subpath barrel is importable as @oscharko-dev/keiko-contracts/memory (#205)", async () => {
+    const subpath = await import("./memory-barrel.js");
+    expect(subpath.MEMORY_SCHEMA_VERSION).toBe("1");
+    expect(typeof subpath.validateMemoryRecord).toBe("function");
+    expect(typeof subpath.isScopeReachable).toBe("function");
   });
 
   it("connected-context barrel exports are reachable through the root surface (#178)", () => {

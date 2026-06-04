@@ -39,6 +39,10 @@
     "./bff-wire": {
       "types": "./dist/bff-wire.d.ts",
       "import": "./dist/bff-wire.js"
+    },
+    "./memory": {
+      "types": "./dist/memory-barrel.d.ts",
+      "import": "./dist/memory-barrel.js"
     }
   },
   "scripts": {
