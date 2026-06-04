@@ -12,10 +12,26 @@ import {
   summarizeForAudit,
 } from "../../src/sdk/index.js";
 import * as root from "../../src/index.js";
-import { memFs } from "../workspace/_memfs.js";
+import { memFs } from "../../packages/keiko-workspace/src/_memfs.js";
 import { DryRunToolPort, MemoryEventSink } from "../../src/harness/index.js";
 import type { ModelPort } from "../../src/harness/ports.js";
 import type { NormalizedResponse } from "../../src/gateway/types.js";
+
+const HIDDEN_ROOT_EXPORTS = [
+  "nodeWorkspaceFs",
+  "nodeWorkspaceWriter",
+  "nodeHomeProvider",
+  "nodeSpawnFn",
+  "OpenAiAdapter",
+  "gatewayFetch",
+  "gatewayTrustedCaCertificates",
+  "readJsonCapped",
+  "MAX_RESPONSE_BYTES",
+  "CircuitBreaker",
+  "executeWithRetry",
+  "systemClock",
+  "normalizeChatResponse",
+] as const;
 
 describe("SDK surface", () => {
   it("exposes a semver SDK_VERSION", () => {
@@ -27,6 +43,12 @@ describe("SDK surface", () => {
     expect(root.runAgent).toBe(runAgent);
   });
 
+  it("does not leak low-level adapters or transport helpers through the root barrel", () => {
+    for (const name of HIDDEN_ROOT_EXPORTS) {
+      expect(root).not.toHaveProperty(name);
+    }
+  });
+
   it("exposes the safe workspace summary API through the SDK and root barrels", () => {
     expect(typeof detectWorkspace).toBe("function");
     expect(typeof buildWorkspaceSummary).toBe("function");
@@ -34,7 +56,6 @@ describe("SDK surface", () => {
     expect(root.detectWorkspace).toBe(detectWorkspace);
     expect(root.buildWorkspaceSummary).toBe(buildWorkspaceSummary);
     expect(root.summarizeForAudit).toBe(summarizeForAudit);
-    expect(root).not.toHaveProperty("nodeWorkspaceFs");
   });
 });
 

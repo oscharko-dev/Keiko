@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Enterprise model-agnostic developer-assist coding agent for regulated engineering workflows.",
   "type": "module",
   "license": "Apache-2.0",
@@ -8,6 +8,9 @@
     "node": ">=22"
   },
   "packageManager": "npm@10.9.8",
+  "workspaces": [
+    "packages/*"
+  ],
   "bin": {
     "keiko": "dist/cli/index.js"
   },
@@ -26,26 +29,35 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build:packages": "npm --workspace @oscharko-dev/keiko-contracts run build && npm --workspace @oscharko-dev/keiko-security run build && npm --workspace @oscharko-dev/keiko-model-gateway run build && npm --workspace @oscharko-dev/keiko-workspace run build && npm --workspace @oscharko-dev/keiko-tools run build && npm --workspace @oscharko-dev/keiko-evidence run build && npm --workspace @oscharko-dev/keiko-harness run build && npm --workspace @oscharko-dev/keiko-workflows run build && npm --workspace @oscharko-dev/keiko-server run build && npm --workspace @oscharko-dev/keiko-cli run build",
+    "build": "npm run build:packages && tsc -p tsconfig.build.json",
+    "typecheck": "npm run build:packages && tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run",
-    "test:coverage": "vitest run --coverage",
-    "ui:ci": "npm --prefix ui ci --ignore-scripts",
+    "test": "npm run build:packages && vitest run",
+    "test:coverage": "npm run build:packages && vitest run --coverage",
     "prepare:bin": "node scripts/ensure-bin-mode.mjs",
     "build:ui": "node scripts/build-ui.mjs",
     "check:package-surface": "node scripts/check-package-surface.mjs",
-    "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run ui:ci && npm run build:ui && npm run check:package-surface",
-    "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run ui:ci && npm run build:ui && npm run check:package-surface",
-    "clean": "rm -rf dist coverage"
+    "smoke:install": "node scripts/installable-package-smoke.mjs",
+    "check:workspace-supply-chain": "node scripts/check-workspace-supply-chain.mjs",
+    "arch:check": "depcruise --validate .dependency-cruiser.cjs src packages",
+    "arch:check:negative": "node scripts/arch-check-negative.mjs",
+    "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:package-surface",
+    "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:package-surface",
+    "clean": "rm -rf dist coverage packages/keiko-contracts/dist packages/keiko-security/dist packages/keiko-model-gateway/dist packages/keiko-workspace/dist packages/keiko-tools/dist packages/keiko-evidence/dist packages/keiko-harness/dist packages/keiko-workflows/dist packages/keiko-server/dist packages/keiko-cli/dist packages/keiko-ui/.next packages/keiko-ui/out"
+  },
+  "overrides": {
+    "postcss": "8.5.15",
+    "sharp": "npm:empty-npm-package@1.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.9.1",
     "@types/ws": "^8.18.1",
     "@vitest/coverage-v8": "^4.1.7",
+    "dependency-cruiser": "^17.4.3",
     "eslint": "^10.4.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.0.0",
@@ -54,6 +66,28 @@
     "vitest": "^4.1.7"
   },
   "dependencies": {
+    "@oscharko-dev/keiko-cli": "*",
+    "@oscharko-dev/keiko-contracts": "*",
+    "@oscharko-dev/keiko-evidence": "*",
+    "@oscharko-dev/keiko-harness": "*",
+    "@oscharko-dev/keiko-model-gateway": "*",
+    "@oscharko-dev/keiko-security": "*",
+    "@oscharko-dev/keiko-server": "*",
+    "@oscharko-dev/keiko-tools": "*",
+    "@oscharko-dev/keiko-workflows": "*",
+    "@oscharko-dev/keiko-workspace": "*",
     "ws": "^8.21.0"
-  }
+  },
+  "bundleDependencies": [
+    "@oscharko-dev/keiko-contracts",
+    "@oscharko-dev/keiko-security",
+    "@oscharko-dev/keiko-model-gateway",
+    "@oscharko-dev/keiko-workspace",
+    "@oscharko-dev/keiko-tools",
+    "@oscharko-dev/keiko-evidence",
+    "@oscharko-dev/keiko-harness",
+    "@oscharko-dev/keiko-workflows",
+    "@oscharko-dev/keiko-server",
+    "@oscharko-dev/keiko-cli"
+  ]
 }

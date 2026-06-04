@@ -1,14 +1,76 @@
-// Public barrel for the reviewable developer-assist workflows layer (ADR-0008/0009). Re-exports
-// the unit-test generation workflow (#8) and the bug-investigation workflow (#9) surfaces.
-//
-// The shared descriptor interfaces (WorkflowDescriptor/WorkflowInputSpec, ADR-0009 D12) are
-// re-exported HERE EXACTLY ONCE from ./descriptor.js. The unit-tests sub-barrel ALSO re-exports
-// them (its #8 surface), so a plain `export *` on it would otherwise surface the names a second
-// time; the bug-investigation sub-barrel deliberately does NOT re-export them. An explicit
-// re-export here takes precedence over `export *` and resolves the ambiguity so the
-// `WorkflowDescriptor` import in src/index.ts and src/sdk/index.ts keeps resolving (same pattern
-// the package root uses for the two `summarizeForAudit`s).
-export type { WorkflowDescriptor, WorkflowInputSpec } from "./descriptor.js";
+// Re-export shim: the workflows layer now lives in @oscharko-dev/keiko-workflows
+// (issue #165, ADR-0019). Existing consumers (`src/cli`, `src/sdk`, `src/evaluations`,
+// `src/ui`) import from the legacy path; this shim preserves those import paths.
+// Explicit-named re-exports (no `export *`) keep the surface auditable.
 
-export * from "./unit-tests/index.js";
-export * from "./bug-investigation/index.js";
+export {
+  generateUnitTests,
+  investigateBug,
+  renderMarkdownReport,
+  renderBugMarkdownReport,
+  assembleReport,
+  assembleBugReport,
+  detectConventions,
+  isTestPath,
+  isSensitivePath,
+  isElevatedReviewPath,
+  parseFailureEvidence,
+  MAX_FRAMES,
+  UNIT_TEST_WORKFLOW_DESCRIPTOR,
+  BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
+  DEFAULT_WORKFLOW_LIMITS,
+  DEFAULT_BUG_WORKFLOW_LIMITS,
+} from "@oscharko-dev/keiko-workflows";
+
+export type {
+  WorkflowDescriptor,
+  WorkflowInputSpec,
+  ReportParts,
+  BugReportParts,
+  AddedTestFile,
+  FileNamingStyle,
+  TestConventions,
+  UnitTestTarget,
+  UnitTestWorkflowDeps,
+  UnitTestWorkflowInput,
+  UnitTestWorkflowReport,
+  WorkflowLimits,
+  WorkflowStatus,
+  BugInvestigationInput,
+  BugInvestigationDeps,
+  BugInvestigationReport,
+  BugReportInput,
+  BugWorkflowLimits,
+  BugWorkflowStatus,
+  ChangedFile,
+  FailureEvidence,
+  FailureFrame,
+  Hypothesis,
+  ParsedBugOutput,
+  VerifiedFindings,
+  ConventionsDetectedEvent,
+  ContextSelectedEvent,
+  ModelCallCompletedEvent,
+  ModelCallStartedEvent,
+  PatchAppliedEvent,
+  PatchValidatedEvent,
+  VerificationResultEvent,
+  WorkflowCompletedEvent,
+  WorkflowEvent,
+  WorkflowEventSink,
+  WorkflowFailedEvent,
+  WorkflowStartedEvent,
+  BugContextSelectedEvent,
+  BugInvestigationCompletedEvent,
+  BugInvestigationEvent,
+  BugInvestigationFailedEvent,
+  BugInvestigationStartedEvent,
+  BugModelCallCompletedEvent,
+  BugModelCallStartedEvent,
+  BugPatchAppliedEvent,
+  BugPatchValidatedEvent,
+  BugVerificationResultEvent,
+  BugWorkflowEventSink,
+  FailureParsedEvent,
+  RootCauseProposedEvent,
+} from "@oscharko-dev/keiko-workflows";

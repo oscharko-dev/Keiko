@@ -1,15 +1,18 @@
-// Browser tool barrel — re-exports the public surface that BFF handlers and tests compose.
-// ADR-0017. No runtime side effects.
+// Re-export shim: the browser CDP sub-surface lives in @oscharko-dev/keiko-tools (issue #162,
+// ADR-0019). All existing import sites (`from "../tools/browser/index.js"`) keep resolving
+// unchanged via this barrel. Mirrors the pre-move surface of src/tools/browser/index.ts.
 
-export { BROWSER_ERROR_CODES, BrowserToolError, type BrowserErrorCode } from "./errors.js";
-
+export {
+  BROWSER_ERROR_CODES,
+  BrowserToolError,
+  type BrowserErrorCode,
+} from "@oscharko-dev/keiko-tools";
 export {
   isLoopbackHost,
   isLoopbackUrl,
   normalizeCdpPort,
   normalizeNavigateUrl,
-} from "./validators.js";
-
+} from "@oscharko-dev/keiko-tools";
 export type {
   BrowserContentResult,
   BrowserNavigateResult,
@@ -21,16 +24,14 @@ export type {
   BrowserViewportPx,
   CdpReachability,
   NormalizedNavigateUrl,
-} from "./types.js";
-
+} from "@oscharko-dev/keiko-tools";
 export {
   CdpClient,
   PERMITTED_CDP_METHODS,
   type CdpCloseListener,
   type CdpClientOptions,
   type CdpEventListener,
-} from "./cdp-client.js";
-
+} from "@oscharko-dev/keiko-tools";
 export {
   createBrowserSessionManager,
   type BrowserEventEmitter,
@@ -38,4 +39,4 @@ export {
   type BrowserEventKind,
   type BrowserSessionManager,
   type BrowserSessionManagerOptions,
-} from "./session.js";
+} from "@oscharko-dev/keiko-tools";

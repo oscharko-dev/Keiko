@@ -27,7 +27,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22.x"
@@ -35,6 +35,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
+      - run: npm run arch:check
+      - run: npm run arch:check:negative
       - run: npm test
 
   actionlint:
@@ -43,7 +45,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Download and verify actionlint
         run: |
           curl -sSfL "https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz" -o actionlint.tar.gz
@@ -59,7 +61,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Assert all action references are pinned to 40-hex SHAs
         run: |
           set -euo pipefail
@@ -80,7 +82,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22.x"
@@ -88,12 +90,16 @@ jobs:
       - run: npm ci
       - name: Build
         run: npm run build
+      - name: Installable-package smoke (Issue #169 AC2)
+        run: npm run smoke:install
       - name: Smoke - offline evaluate exits 0
         run: KEIKO_EVIDENCE_DIR="$(mktemp -d)" node dist/cli/index.js evaluate --suite all
       - name: Security audit (high and above)
         run: npm audit --audit-level=high
       - name: Generate CycloneDX SBOM
         run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
+      - name: Workspace SBOM and license gate (Issue #169 AC4)
+        run: npm run check:workspace-supply-chain
       - name: Smoke - help exits 0
         run: node dist/cli/index.js --help
       - name: Smoke - version exits 0
@@ -111,6 +117,12 @@ jobs:
           name: sbom-cyclonedx
           path: sbom.cdx.json
           retention-days: 90
+      - name: Upload workspace SBOMs (Issue #169 AC4)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workspace-sboms-cyclonedx
+          path: sbom/
+          retention-days: 90
 
   ui:
     name: ui
@@ -118,28 +130,27 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22.x"
           cache: "npm"
-          cache-dependency-path: ui/package-lock.json
-      - name: Install UI dependencies
-        run: npm --prefix ui ci --ignore-scripts
-      - name: Security audit UI dependencies (moderate and above)
-        run: npm --prefix ui audit --audit-level=moderate
-      - name: Lint UI
-        run: npm --prefix ui run lint
-      - name: Typecheck UI
-        run: npm --prefix ui run typecheck
-      - name: Build UI (static export)
-        run: npm --prefix ui run build
-      - name: Generate UI CycloneDX SBOM
-        run: npm --prefix ui sbom --sbom-format cyclonedx --omit dev > ui-sbom.cdx.json
-      - name: Test UI (jsdom + axe a11y)
-        run: npm --prefix ui run test
-      - name: Install root dependencies
+      - name: Install workspaces (single root lockfile after #167)
         run: npm ci
+      - name: Build internal packages so contracts dist resolves for UI tsc
+        run: npm run build:packages
+      - name: Security audit UI dependencies (moderate and above)
+        run: npm audit --audit-level=moderate --workspace @oscharko-dev/keiko-ui
+      - name: Lint UI
+        run: npm run lint --workspace @oscharko-dev/keiko-ui
+      - name: Typecheck UI
+        run: npm run typecheck --workspace @oscharko-dev/keiko-ui
+      - name: Build UI (static export)
+        run: npm run build --workspace @oscharko-dev/keiko-ui
+      - name: Generate UI CycloneDX SBOM
+        run: npm sbom --sbom-format cyclonedx --omit dev --workspace @oscharko-dev/keiko-ui > ui-sbom.cdx.json
+      - name: Test UI (jsdom + axe a11y)
+        run: npm run test --workspace @oscharko-dev/keiko-ui
       - name: Build package and UI assets
         run: |
           npm run build

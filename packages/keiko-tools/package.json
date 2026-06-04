@@ -1,0 +1,42 @@
+{
+  "name": "@oscharko-dev/keiko-tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Internal tools package: Keiko safe tool-execution layer — terminal-policy command allowlist, env-isolated no-shell spawn, atomic patch workflow, browser CDP adapter, and the WorkspaceWriter boundary (ADR-0006 / ADR-0017). Not published independently.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./internal/exec": {
+      "types": "./dist/exec.d.ts",
+      "import": "./dist/exec.js"
+    },
+    "./internal/writer": {
+      "types": "./dist/writer.d.ts",
+      "import": "./dist/writer.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@oscharko-dev/keiko-contracts": "*",
+    "@oscharko-dev/keiko-security": "*",
+    "@oscharko-dev/keiko-workspace": "*",
+    "ws": "^8.21.0"
+  }
+}

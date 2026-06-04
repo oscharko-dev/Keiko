@@ -11,11 +11,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, sep } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import type { SpawnFn, WorkspaceWriter } from "../tools/index.js";
-import type { UnitTestTarget, UnitTestWorkflowInput } from "../workflows/unit-tests/types.js";
-import type {
-  BugInvestigationInput,
-  BugReportInput,
-} from "../workflows/bug-investigation/types.js";
+import type { UnitTestTarget, UnitTestWorkflowInput } from "@oscharko-dev/keiko-workflows";
+import type { BugInvestigationInput, BugReportInput } from "@oscharko-dev/keiko-workflows";
 import type { ScoringInput } from "./scorer.js";
 import type { EvaluationFixture } from "./types.js";
 

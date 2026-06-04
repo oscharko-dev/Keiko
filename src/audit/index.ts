@@ -1,17 +1,20 @@
-// Audit ledger barrel (ADR-0010 D12). Re-exports the public surface of the audit layer: the builder,
-// the persist orchestration, the redactor, the store port + adapters, aggregation, the index/list
-// API, retention, the report, and runId validation, plus the schema/types. None of these names
-// collides with an existing layer export (D9) — in particular the layer does NOT export a bare
-// `summarizeForAudit` or `redact` (it composes them internally).
+// Re-export shim: the evidence layer now lives in @oscharko-dev/keiko-evidence (issue #163,
+// ADR-0019). All existing import sites (`from "../audit/index.js"`) keep resolving unchanged via
+// this barrel. Symbols enumerated explicitly to match the PRE-MOVE surface of src/audit/index.ts
+// (per the keiko-tools / keiko-workspace precedent — never `export *` in a legacy shim).
 
-export { buildEvidenceManifest } from "./build.js";
-export { persistEvidence, type PersistResult } from "./persist.js";
-export { createAuditRedactor, deepRedactStrings } from "./redaction.js";
-export { aggregateUsage, resolveCostClass } from "./aggregate.js";
-export { listEvidence, loadEvidence, type EvidenceListEntry } from "./index-api.js";
-export { applyRetention } from "./retention.js";
-export { buildEvidenceReport, renderEvidenceReport, type EvidenceReport } from "./report.js";
-export { assertValidRunId } from "./runid.js";
+export { buildEvidenceManifest } from "@oscharko-dev/keiko-evidence";
+export { persistEvidence, type PersistResult } from "@oscharko-dev/keiko-evidence";
+export { createAuditRedactor, deepRedactStrings } from "@oscharko-dev/keiko-evidence";
+export { aggregateUsage } from "@oscharko-dev/keiko-evidence";
+export { listEvidence, loadEvidence, type EvidenceListEntry } from "@oscharko-dev/keiko-evidence";
+export { applyRetention } from "@oscharko-dev/keiko-evidence";
+export {
+  buildEvidenceReport,
+  renderEvidenceReport,
+  type EvidenceReport,
+} from "@oscharko-dev/keiko-evidence";
+export { assertValidRunId } from "@oscharko-dev/keiko-evidence";
 export {
   buildWorkflowManifest,
   foldWorkflowUsage,
@@ -21,13 +24,13 @@ export {
   type WorkflowRunIdentity,
   type WorkflowRunKind,
   type WorkflowTerminalStatus,
-} from "./workflow-evidence.js";
+} from "@oscharko-dev/keiko-evidence";
 export {
   createInMemoryEvidenceStore,
   createNodeEvidenceStore,
   resolveEvidenceDir,
   type EvidenceStore,
-} from "./store.js";
+} from "@oscharko-dev/keiko-evidence";
 export {
   AUDIT_CODES,
   AuditError,
@@ -36,7 +39,7 @@ export {
   EvidenceWriteError,
   InvalidRunIdError,
   type AuditCode,
-} from "./errors.js";
+} from "@oscharko-dev/keiko-evidence";
 export {
   EVIDENCE_SCHEMA_VERSION,
   DEFAULT_RETENTION,
@@ -63,4 +66,4 @@ export {
   type EvidenceUsageTotals,
   type EvidenceVerificationResult,
   type RetentionPolicy,
-} from "./types.js";
+} from "@oscharko-dev/keiko-evidence";

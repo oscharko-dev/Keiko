@@ -6,5 +6,5 @@
     "sourceMap": false
   },
   "include": ["src"],
-  "exclude": ["tests", "**/*.test.ts"]
+  "exclude": ["tests", "tests/architecture/fixtures/**", "**/*.test.ts"]
 }

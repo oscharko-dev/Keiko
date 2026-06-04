@@ -17,7 +17,6 @@ const PACKAGE_SURFACE_CHAIN = [
   "npm run clean",
   "npm run build",
   "npm run prepare:bin",
-  "npm run ui:ci",
   "npm run build:ui",
   "npm run check:package-surface",
 ].join(" && ");
@@ -81,8 +80,8 @@ describe("Issue #12 docs drift", () => {
   it("keeps UI host documentation aligned with the loopback bind implementation", () => {
     const readme = readText("README.md");
     const uiRunbook = readText("docs/ui-runbook.md");
-    const uiCli = readText("src/cli/ui.ts");
-    const uiServer = readText("src/ui/server.ts");
+    const uiCli = readText("packages/keiko-cli/src/ui.ts");
+    const uiServer = readText("packages/keiko-server/src/server.ts");
     const hostContract = /validate a loopback host value.*server always binds `127\.0\.0\.1`/i;
 
     expect(readme).toMatch(hostContract);
@@ -94,7 +93,7 @@ describe("Issue #12 docs drift", () => {
   it("keeps the shipped default UI port aligned", () => {
     const readme = readText("README.md");
     const uiRunbook = readText("docs/ui-runbook.md");
-    const uiServer = readText("src/ui/server.ts");
+    const uiServer = readText("packages/keiko-server/src/server.ts");
 
     expect(uiServer).toContain("export const DEFAULT_UI_PORT = 1983");
     expect(readme).toContain("Port to bind (default: 1983)");
@@ -108,7 +107,7 @@ describe("Issue #12 docs drift", () => {
       readText("docs/pilot/runbook.md"),
       readText("docs/security-and-audit-boundaries.md"),
       readText("docs/ui-runbook.md"),
-      readText("ui/app/components/desktop/widgets/panels/SettingsPanel.tsx"),
+      readText("packages/keiko-ui/src/app/components/desktop/widgets/panels/SettingsPanel.tsx"),
     ].join("\n");
     const forbiddenPhrases = [
       ["customer", "model"],

@@ -22,7 +22,7 @@ import {
   type RunResult,
   type TaskInput,
 } from "../harness/index.js";
-import type { EnvSource } from "../gateway/index.js";
+import { resolveCostClass, type EnvSource } from "../gateway/index.js";
 
 export interface SdkEvidenceOptions {
   // Defaults true. Set false for callers that need the legacy no-artifact session behavior.
@@ -80,6 +80,9 @@ function evidenceDeps(evidence: SdkEvidenceOptions | undefined): EvidenceDeps {
   return {
     ...(evidence?.store === undefined ? {} : { store: evidence.store }),
     ...(evidence?.env === undefined ? {} : { env: evidence.env }),
+    // Wire the default cost-class resolver from the gateway capability registry (#163). The
+    // evidence package stays leaf-clean against ADR-0019 rule 3d; the SDK is the runtime composer.
+    costClassResolver: resolveCostClass,
   };
 }
 

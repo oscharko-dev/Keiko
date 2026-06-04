@@ -1,5 +1,6 @@
-// Public barrel for the model gateway: all types, the Gateway orchestrator, the
-// capability registry helpers, config loaders, and the typed error taxonomy.
+// Re-export shim: the gateway barrel now lives in @oscharko-dev/keiko-model-gateway (issue #160,
+// ADR-0019). All existing import sites (`from "../gateway/index.js"`) keep resolving unchanged via
+// this barrel. The full public surface of the original src/gateway/index.ts is preserved.
 
 export type {
   CircuitBreakerConfig,
@@ -23,16 +24,17 @@ export type {
   StreamEvent,
   ToolDefinition,
   UsageMetadata,
-} from "./types.js";
+} from "@oscharko-dev/keiko-model-gateway";
 
 export {
   CAPABILITY_REGISTRY,
   createDefaultChatCapability,
   findCapability,
   listCapabilities,
+  resolveCostClass,
   selectCheapest,
-  type CapabilityQuery,
-} from "./capabilities.js";
+} from "@oscharko-dev/keiko-model-gateway";
+export type { CapabilityQuery } from "@oscharko-dev/keiko-model-gateway";
 
 export {
   apiKeyHeaderValue,
@@ -42,28 +44,25 @@ export {
   parseGatewayConfig,
   toSafeObject,
   validateBaseUrl,
-  type EnvSource,
-  type SafeGatewayConfig,
-  type SafeProviderConfig,
-} from "./config.js";
+} from "@oscharko-dev/keiko-model-gateway";
+export type {
+  EnvSource,
+  SafeGatewayConfig,
+  SafeProviderConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 
-export { Gateway, type GatewayDeps } from "./gateway.js";
-
-export { OpenAiAdapter, type AdapterDeps } from "./openai-adapter.js";
+export { Gateway } from "@oscharko-dev/keiko-model-gateway";
+export type { GatewayDeps } from "@oscharko-dev/keiko-model-gateway";
 
 export {
   assertConfiguredModel,
   findConfiguredCapability,
   listConfiguredCapabilities,
   selectConfiguredModel,
-  type ModelSelectionQuery,
-} from "./model-selection.js";
+} from "@oscharko-dev/keiko-model-gateway";
+export type { ModelSelectionQuery } from "@oscharko-dev/keiko-model-gateway";
 
-export { CircuitBreaker, executeWithRetry, systemClock, type RetryConfig } from "./resilience.js";
-
-export { normalizeChatResponse, type UsageSeed } from "./normalize.js";
-
-export { redact } from "./redaction.js";
+export { redact } from "@oscharko-dev/keiko-model-gateway";
 
 export {
   AuthenticationError,
@@ -80,5 +79,5 @@ export {
   TimeoutError,
   TransportError,
   UnknownModelError,
-  type ErrorCode,
-} from "./errors.js";
+} from "@oscharko-dev/keiko-model-gateway";
+export type { ErrorCode } from "@oscharko-dev/keiko-model-gateway";

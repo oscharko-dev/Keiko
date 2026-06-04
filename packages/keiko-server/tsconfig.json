@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "rootDir": "../..",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "include": [
+    "src",
+    "../../src/verification/**/*.ts",
+    "../../src/workspace/**/*.ts",
+    "../../src/gateway/**/*.ts",
+    "../../src/tools/**/*.ts",
+    "../../src/harness/**/*.ts",
+    "../../src/workflows/**/*.ts",
+    "../../src/audit/**/*.ts"
+  ],
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_support.ts"]
+}

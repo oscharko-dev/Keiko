@@ -1,0 +1,492 @@
+"use client";
+
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type Dispatch,
+  type MutableRefObject,
+  type RefObject,
+  type SetStateAction,
+} from "react";
+import { defaultLayout } from "../windows/connectionUtils";
+import type { SnapZone } from "../windows/connectionUtils";
+import { WIN_TYPES } from "../windows/WindowsRegistry";
+import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
+import type { UseWorkspaceResult, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
+import {
+  makeConnectActions,
+  makeLayoutActions,
+  makeMutations,
+  makeSnapActions,
+} from "./workspaceActions";
+
+export type { AppWindow, Connection, ConnectingState, SnapPrev, View };
+export type { SnapZone } from "../windows/connectionUtils";
+export type { UseWorkspaceResult, ViewportWorld, WorkspaceApi };
+
+const WS_LS = "keiko.workspace.v4";
+const CONN_LS = "keiko.conns.v1";
+const VIEW_LS = "keiko.view";
+const MIN_ZOOM = 0.3;
+const MAX_ZOOM = 2.5;
+const CONTENT_MIN_ZOOM = 0.5;
+const CONTENT_MAX_ZOOM = 2;
+
+function readView(): View {
+  if (typeof window === "undefined") return { zoom: 1, x: 0, y: 0 };
+  try {
+    const raw = window.localStorage.getItem(VIEW_LS);
+    if (raw === null) return { zoom: 1, x: 0, y: 0 };
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === "object" &&
+      parsed !== null &&
+      "zoom" in parsed &&
+      typeof (parsed as { zoom: unknown }).zoom === "number"
+    ) {
+      const p = parsed as { zoom: number; x?: number; y?: number };
+      return {
+        zoom: p.zoom,
+        x: typeof p.x === "number" ? p.x : 0,
+        y: typeof p.y === "number" ? p.y : 0,
+      };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { zoom: 1, x: 0, y: 0 };
+}
+
+function clampViewZoom(z: number): number {
+  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
+}
+
+function clampContentZoom(z: number): number {
+  return Math.max(CONTENT_MIN_ZOOM, Math.min(CONTENT_MAX_ZOOM, Math.round(z * 10) / 10));
+}
+
+function isFormField(el: Element | null): boolean {
+  if (el === null) return false;
+  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT";
+}
+
+function topZ(ws: readonly AppWindow[]): AppWindow {
+  // Safe: callers gate on ws.length > 0.
+  let best = ws[0] as AppWindow;
+  for (let i = 1; i < ws.length; i++) {
+    const next = ws[i] as AppWindow;
+    if (next.z > best.z) best = next;
+  }
+  return best;
+}
+
+function persistList<T>(key: string, value: T): void {
+  try {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* ignore */
+  }
+}
+
+function parseWinArray(raw: string | null): AppWindow[] | null {
+  if (raw === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed as AppWindow[];
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function parseConns(raw: string | null): Connection[] {
+  if (raw === null) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as Connection[];
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+interface ArrowState {
+  readonly key: string;
+  readonly shift: boolean;
+}
+
+function applyArrowMove(
+  win: AppWindow,
+  rect: DOMRect,
+  state: ArrowState,
+): { x: number; y: number; w: number; h: number } {
+  const step = state.shift ? 1 : 16;
+  let x = win.x;
+  let y = win.y;
+  if (state.key === "ArrowRight") x += step;
+  else if (state.key === "ArrowLeft") x -= step;
+  else if (state.key === "ArrowDown") y += step;
+  else if (state.key === "ArrowUp") y -= step;
+  x = Math.max(-(win.w - 120), Math.min(rect.width - 120, x));
+  y = Math.max(0, Math.min(rect.height - 38, y));
+  return { x, y, w: win.w, h: win.h };
+}
+
+function applyArrowResize(
+  win: AppWindow,
+  rect: DOMRect,
+  state: ArrowState,
+): { x: number; y: number; w: number; h: number } {
+  const step = state.shift ? 1 : 16;
+  let w = win.w;
+  let h = win.h;
+  if (state.key === "ArrowRight") w += step;
+  else if (state.key === "ArrowLeft") w -= step;
+  else if (state.key === "ArrowDown") h += step;
+  else if (state.key === "ArrowUp") h -= step;
+  const mn = WIN_TYPES[win.type].min;
+  w = Math.max(mn.w, Math.min(rect.width, w));
+  h = Math.max(mn.h, Math.min(rect.height, h));
+  return { x: win.x, y: win.y, w, h };
+}
+
+function nextContentZoom(current: number, key: string): number {
+  if (key === "0") return 1;
+  if (key === "-" || key === "_") return clampContentZoom(current - 0.1);
+  return clampContentZoom(current + 0.1);
+}
+
+interface UsePanZoomArgs {
+  readonly wsRef: RefObject<HTMLElement | null>;
+  readonly view: View;
+  readonly setView: Dispatch<SetStateAction<View>>;
+}
+
+interface PanZoomResult {
+  readonly viewRef: MutableRefObject<View>;
+  readonly worldVP: () => ViewportWorld | null;
+  readonly zoomTo: (z: number) => void;
+  readonly resetView: () => void;
+  readonly panBy: (dx: number, dy: number) => void;
+  readonly rect: () => DOMRect | null;
+}
+
+function usePanZoom({ wsRef, view, setView }: UsePanZoomArgs): PanZoomResult {
+  const viewRef = useRef<View>(view);
+  viewRef.current = view;
+
+  useEffect(() => {
+    persistList(VIEW_LS, view);
+  }, [view]);
+
+  useEffect(() => {
+    const el = wsRef.current;
+    if (el === null) return;
+    const onWheel = (e: WheelEvent): void => {
+      if (e.metaKey || e.ctrlKey) {
+        e.preventDefault();
+        const r = el.getBoundingClientRect();
+        const v = viewRef.current;
+        const z2 = clampViewZoom(v.zoom * Math.exp(-e.deltaY * 0.0015));
+        const wx = (e.clientX - r.left - v.x) / v.zoom;
+        const wy = (e.clientY - r.top - v.y) / v.zoom;
+        setView({ zoom: z2, x: e.clientX - r.left - wx * z2, y: e.clientY - r.top - wy * z2 });
+        return;
+      }
+      const target = e.target;
+      if (target instanceof Element && target.closest(".window") !== null) return;
+      e.preventDefault();
+      setView((v) => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, [wsRef, setView]);
+
+  const rect = useCallback(
+    (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
+    [wsRef],
+  );
+
+  const worldVP = useCallback((): ViewportWorld | null => {
+    const r = rect();
+    if (r === null) return null;
+    const v = viewRef.current;
+    return { x: -v.x / v.zoom, y: -v.y / v.zoom, w: r.width / v.zoom, h: r.height / v.zoom };
+  }, [rect]);
+
+  const zoomTo = useCallback(
+    (z: number): void => {
+      const r = rect();
+      if (r === null) return;
+      const v = viewRef.current;
+      const cx = r.width / 2;
+      const cy = r.height / 2;
+      const wx = (cx - v.x) / v.zoom;
+      const wy = (cy - v.y) / v.zoom;
+      const z2 = clampViewZoom(z);
+      setView({ zoom: z2, x: cx - wx * z2, y: cy - wy * z2 });
+    },
+    [rect, setView],
+  );
+
+  const resetView = useCallback((): void => setView({ zoom: 1, x: 0, y: 0 }), [setView]);
+  const panBy = useCallback(
+    (dx: number, dy: number): void => setView((v) => ({ ...v, x: v.x + dx, y: v.y + dy })),
+    [setView],
+  );
+
+  return { viewRef, worldVP, zoomTo, resetView, panBy, rect };
+}
+
+interface UseHydrateArgs {
+  readonly wsRef: RefObject<HTMLElement | null>;
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+  readonly setConns: Dispatch<SetStateAction<Connection[]>>;
+  readonly zc: MutableRefObject<number>;
+}
+
+function useHydrate({ wsRef, setWins, setConns, zc }: UseHydrateArgs): void {
+  useLayoutEffect(() => {
+    const el = wsRef.current;
+    if (el === null) return;
+    const r = el.getBoundingClientRect();
+    let init: AppWindow[] | null = null;
+    try {
+      init = parseWinArray(window.localStorage.getItem(WS_LS));
+    } catch {
+      init = null;
+    }
+    if (init === null) init = defaultLayout(r.width, r.height) as unknown as AppWindow[];
+    zc.current = Math.max(1, ...init.map((w) => w.z));
+    setWins(init);
+    try {
+      setConns(parseConns(window.localStorage.getItem(CONN_LS)));
+    } catch {
+      /* ignore */
+    }
+  }, [wsRef, setWins, setConns, zc]);
+}
+
+interface UseKeyboardArgs {
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+  readonly rect: () => DOMRect | null;
+  readonly cancelConnectRef: MutableRefObject<() => void>;
+}
+
+function handleContentZoomKey(
+  setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
+  key: string,
+): void {
+  setWins((ws) => {
+    if (ws === null || ws.length === 0) return ws;
+    const top = topZ(ws);
+    const z = nextContentZoom(top.zoom ?? 1, key);
+    return ws.map((w) => (w.id === top.id ? { ...w, zoom: z } : w));
+  });
+}
+
+function handleArrowKey(
+  setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
+  rect: DOMRect,
+  arrow: ArrowState,
+  size: boolean,
+): void {
+  setWins((ws) => {
+    if (ws === null || ws.length === 0) return ws;
+    const top = topZ(ws);
+    const next = size ? applyArrowResize(top, rect, arrow) : applyArrowMove(top, rect, arrow);
+    return ws.map((w) => (w.id === top.id ? { ...w, ...next, max: false } : w));
+  });
+}
+
+function useKeyboardCtrls({ setWins, rect, cancelConnectRef }: UseKeyboardArgs): void {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (isFormField(document.activeElement)) return;
+      if (e.key === "Escape") {
+        cancelConnectRef.current();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && ["=", "+", "-", "_", "0"].includes(e.key)) {
+        e.preventDefault();
+        handleContentZoomKey(setWins, e.key);
+        return;
+      }
+      if (!/^Arrow/.test(e.key)) return;
+      const move = e.metaKey || e.ctrlKey;
+      const size = e.altKey;
+      if (!move && !size) return;
+      e.preventDefault();
+      const r = rect();
+      if (r === null) return;
+      handleArrowKey(setWins, r, { key: e.key, shift: e.shiftKey }, size);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [setWins, rect, cancelConnectRef]);
+}
+
+interface UseFitMaximizedArgs {
+  readonly wsRef: RefObject<HTMLElement | null>;
+  readonly viewRef: MutableRefObject<View>;
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+}
+
+function useFitMaximized({ wsRef, viewRef, setWins }: UseFitMaximizedArgs): void {
+  useEffect(() => {
+    const el = wsRef.current;
+    if (el === null || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect();
+      const v = viewRef.current;
+      const vp: ViewportWorld = {
+        x: -v.x / v.zoom,
+        y: -v.y / v.zoom,
+        w: r.width / v.zoom,
+        h: r.height / v.zoom,
+      };
+      setWins((ws) =>
+        ws === null
+          ? ws
+          : ws.map((w) => (w.max ? { ...w, x: vp.x, y: vp.y, w: vp.w, h: vp.h } : w)),
+      );
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+    };
+  }, [wsRef, viewRef, setWins]);
+}
+
+function useConnectionPrune(
+  wins: AppWindow[] | null,
+  setConns: Dispatch<SetStateAction<Connection[]>>,
+): void {
+  useEffect(() => {
+    if (wins === null) return;
+    setConns((cs) => {
+      const filtered = cs.filter(
+        (c) =>
+          wins.find((w) => w.id === c.a) !== undefined &&
+          wins.find((w) => w.id === c.b) !== undefined,
+      );
+      return filtered.length === cs.length ? cs : filtered;
+    });
+  }, [wins, setConns]);
+}
+
+export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspaceResult {
+  const [wins, setWins] = useState<AppWindow[] | null>(null);
+  const [snapPrev, setSnapPrev] = useState<SnapPrev | null>(null);
+  const [palOpen, setPalOpen] = useState(false);
+  const [conns, setConns] = useState<Connection[]>([]);
+  const [connecting, setConnecting] = useState<ConnectingState | null>(null);
+  const [view, setView] = useState<View>(readView);
+  const zc = useRef<number>(3);
+  const snapZone = useRef<SnapZone | null>(null);
+
+  const winsRef = useRef<AppWindow[]>([]);
+  winsRef.current = wins ?? [];
+  const connsRef = useRef<Connection[]>([]);
+  connsRef.current = conns;
+  // Refs for the click-to-connect flow. connectingRef is a synchronous view of
+  // the `connecting` state for handlers fired from child components (confirm).
+  // connectCleanupRef stores the global pointermove listener disposer so we
+  // can tear it down from cancel/confirm without re-attaching effects.
+  const connectingRef = useRef<ConnectingState | null>(null);
+  connectingRef.current = connecting;
+  const connectCleanupRef = useRef<(() => void) | null>(null);
+  const cancelConnectRef = useRef<() => void>(() => undefined);
+
+  const { viewRef, worldVP, zoomTo, resetView, panBy, rect } = usePanZoom({ wsRef, view, setView });
+
+  useHydrate({ wsRef, setWins, setConns, zc });
+
+  useEffect(() => {
+    persistList(CONN_LS, conns);
+  }, [conns]);
+
+  useConnectionPrune(wins, setConns);
+
+  useEffect(() => {
+    if (wins !== null) persistList(WS_LS, wins);
+  }, [wins]);
+
+  useKeyboardCtrls({ setWins, rect, cancelConnectRef });
+  useFitMaximized({ wsRef, viewRef, setWins });
+
+  const { update, focus, close, maximize, add, toggleTool } = makeMutations({
+    setWins,
+    zc,
+    worldVP,
+  });
+  const { tileAll, splitFront, cascade } = makeLayoutActions({ setWins, worldVP });
+  const { setSnap, commitSnap } = makeSnapActions({ setSnapPrev, snapZone, worldVP, update });
+  const {
+    startConnect,
+    confirmConnect,
+    cancelConnect,
+    removeConn,
+    connect,
+    linkedFilesRoot,
+    linkedFilesContext,
+    currentFilesContext,
+  } = makeConnectActions({
+    wsRef,
+    viewRef,
+    winsRef,
+    connsRef,
+    connectingRef,
+    connectCleanupRef,
+    focus,
+    setConns,
+    setConnecting,
+  });
+  cancelConnectRef.current = cancelConnect;
+
+  // Component unmount must also drop the global listener.
+  useEffect(
+    () => () => {
+      if (connectCleanupRef.current !== null) {
+        connectCleanupRef.current();
+        connectCleanupRef.current = null;
+      }
+    },
+    [],
+  );
+
+  const api: WorkspaceApi = {
+    add,
+    toggleTool,
+    focus,
+    close,
+    maximize,
+    update,
+    setSnap,
+    commitSnap,
+    tileAll,
+    splitFront,
+    cascade,
+    startConnect,
+    confirmConnect,
+    cancelConnect,
+    removeConn,
+    connect,
+    linkedFilesRoot,
+    linkedFilesContext,
+    currentFilesContext,
+    zoomTo,
+    resetView,
+    panBy,
+    rect,
+  };
+
+  return { wins, snapPrev, palOpen, setPalOpen, conns, connecting, view, api };
+}

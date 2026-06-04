@@ -127,6 +127,10 @@ keiko-live-start.png
 # state, and evidence from manual release verification; never commit it.
 /sandbox/
 
+# Generated CycloneDX SBOMs (root + per-workspace), emitted by
+# scripts/check-workspace-supply-chain.mjs. CI uploads them as a workflow artifact.
+/sbom/
+
 # Per-run tmp copy of the unit-test-generation integration fixture (ADR-0008 D11). Created under
 # the repo root so `npx vitest` resolves vitest from the repo's node_modules; cleaned up per test.
 .keiko-itest-*/
@@ -135,15 +139,19 @@ keiko-live-start.png
 # workspace-relative default base dir by default; never commit it.
 .keiko/
 
-# Wave 1 UI build artifacts (ADR-0011 D3). The nested `ui/` package builds a static export; only
-# its source + package.json + package-lock.json are committed. Build outputs, the Next typegen
-# file, and incremental tsbuildinfo are generated and must never be committed.
-ui/.next/
-ui/out/
-ui/next-env.d.ts
-ui/*.tsbuildinfo
+# Wave 1 UI build artifacts (ADR-0011 D3; relocated to packages/keiko-ui by issue #167). Only
+# the package's source + package.json are committed. Build outputs, the Next typegen file, and
+# the incremental tsbuildinfo are generated and must never be committed.
+packages/keiko-ui/.next/
+packages/keiko-ui/out/
+packages/keiko-ui/next-env.d.ts
+
+# TypeScript project-references incremental cache (ADR-0020 D3). Generated when `tsc -b` or
+# `tsc --build` runs in any workspace package; never commit it.
+*.tsbuildinfo
 
 # Customer/internal material. Contains photos, extracted model inventories, API endpoints,
 # local customer credentials, and derived notes. Never commit this folder.
 /only-for-internal-use/
 /Only for Internal Use/
+ui/

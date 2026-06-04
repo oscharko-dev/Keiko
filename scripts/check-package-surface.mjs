@@ -1,12 +1,15 @@
 // Package-surface verification (ADR-0011 D6). Asserts the publish tarball ships the UI assets,
 // exposes an executable CLI bin, and includes nothing it must not: no source maps, no `.env`,
-// no `ui/` source, and no absolute local paths in the file list. Run from `prepack`/`prepublishOnly`
+// no workspace `packages/keiko-ui/` source, and no absolute local paths. Run from `prepack`/`prepublishOnly`
 // after the build steps.
 
 import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { extractInlineScriptHashes } from "../dist/ui/csp.js";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+// `extractInlineScriptHashes` lives in `@oscharko-dev/keiko-server` after issue #166; the legacy
+// `dist/ui/index.js` shim re-exports it without changing the runtime contract.
+import { extractInlineScriptHashes } from "../dist/ui/index.js";
 
 function packFiles() {
   // `--ignore-scripts` prevents the prepack hook from re-running this check recursively (npm runs
@@ -64,6 +67,71 @@ function assertCspHashesMatchStaticHtml() {
   }
 }
 
+// The SDK sentinel — a single named export the README documents — proves the SDK root barrel
+// did not regress to an empty re-export shell. Chosen because `runVerification` is the canonical
+// entry point per tests/sdk/ and any breakage of the verification surface would surface here.
+const SDK_SENTINEL_TOKEN = "runVerification";
+
+function assertServerRuntimeSurface(paths) {
+  for (const required of ["dist/ui/index.js", "dist/ui/index.d.ts", "dist/ui/csp-hashes.json"]) {
+    if (!paths.includes(required)) {
+      fail(
+        `the tarball does not include ${required} ` +
+          "(keiko-server runtime surface — run `npm run build && npm run build:ui`).",
+      );
+    }
+  }
+}
+
+async function assertSdkRootExport(paths) {
+  for (const required of ["dist/index.js", "dist/index.d.ts"]) {
+    if (!paths.includes(required)) {
+      fail(`the tarball does not include ${required} (SDK root export — run \`npm run build\`).`);
+    }
+  }
+  const source = readFileSync("dist/index.js", "utf8");
+  if (
+    !/\b(export\s*\{|export\s*\*|export\s+const\b|export\s+function\b|export\s+class\b)/.test(
+      source,
+    )
+  ) {
+    fail(
+      "dist/index.js has no top-level `export` declarations (empty barrel). " +
+        "Re-run `npm run build` and verify src/index.ts re-exports the SDK surface.",
+    );
+  }
+  // The sentinel is re-exported via `export *` from a sub-barrel, so a literal grep of
+  // dist/index.js does not see it. Resolve it by importing the barrel and checking the named
+  // export resolves — this is structurally robust to refactors that move the function between
+  // sub-barrels.
+  const url = pathToFileURL(resolve("dist/index.js")).href;
+  const mod = await import(url);
+  if (typeof mod[SDK_SENTINEL_TOKEN] !== "function") {
+    fail(
+      `SDK root export does not expose \`${SDK_SENTINEL_TOKEN}\` as a function ` +
+        "— the SDK root barrel may have dropped the verification surface.",
+    );
+  }
+}
+
+function assertBundledPayload(paths) {
+  const manifest = JSON.parse(readFileSync("package.json", "utf8"));
+  const bundled = Array.isArray(manifest.bundleDependencies) ? manifest.bundleDependencies : [];
+  if (bundled.length === 0) {
+    fail("package.json declares no bundleDependencies — the workspace bundle would be empty.");
+  }
+  for (const name of bundled) {
+    const shortName = name.replace(/^@oscharko-dev\//, "");
+    const distPrefix = `node_modules/@oscharko-dev/${shortName}/dist/`;
+    if (!paths.some((p) => p.startsWith(distPrefix))) {
+      fail(
+        `bundleDependencies entry ${name} ships no files under ${distPrefix} ` +
+          "— the workspace bundle is incomplete (run `npm run build:packages`).",
+      );
+    }
+  }
+}
+
 const files = packFiles();
 const paths = files.map((f) => f.path);
 
@@ -93,9 +161,15 @@ if ((cliBin.mode & 0o111) === 0) {
 }
 
 const forbidden = [
-  { test: (p) => p.endsWith(".map"), label: "a source map" },
+  // `.js.map` is the runtime source-map artifact (can leak absolute paths from the original
+  // sources). `.d.ts.map` is a declaration map — relative-only and used by editors to resolve
+  // "go to definition" across bundled workspace packages, so it stays.
+  { test: (p) => p.endsWith(".js.map"), label: "a JS source map" },
   { test: (p) => p === ".env" || p.startsWith(".env."), label: "an environment file" },
-  { test: (p) => p === "ui" || p.startsWith("ui/"), label: "ui/ source" },
+  {
+    test: (p) => p === "packages/keiko-ui" || p.startsWith("packages/keiko-ui/"),
+    label: "keiko-ui workspace source",
+  },
   { test: (p) => p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p), label: "an absolute local path" },
 ];
 
@@ -108,5 +182,8 @@ for (const path of paths) {
 }
 
 assertCspHashesMatchStaticHtml();
+assertServerRuntimeSurface(paths);
+await assertSdkRootExport(paths);
+assertBundledPayload(paths);
 
 console.log(`package-surface check passed: ${String(paths.length)} files, dist/ui/static present.`);

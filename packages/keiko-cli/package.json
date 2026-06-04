@@ -1,0 +1,39 @@
+{
+  "name": "@oscharko-dev/keiko-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Internal CLI package: command modules for the `keiko` binary shipped via the root product package (ADR-0019). Not published independently.",
+  "main": "./dist/packages/keiko-cli/src/index.js",
+  "types": "./dist/packages/keiko-cli/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/packages/keiko-cli/src/index.d.ts",
+      "import": "./dist/packages/keiko-cli/src/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@oscharko-dev/keiko-contracts": "*",
+    "@oscharko-dev/keiko-security": "*",
+    "@oscharko-dev/keiko-model-gateway": "*",
+    "@oscharko-dev/keiko-workspace": "*",
+    "@oscharko-dev/keiko-tools": "*",
+    "@oscharko-dev/keiko-evidence": "*",
+    "@oscharko-dev/keiko-harness": "*",
+    "@oscharko-dev/keiko-workflows": "*",
+    "@oscharko-dev/keiko-server": "*"
+  }
+}

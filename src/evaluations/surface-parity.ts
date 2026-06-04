@@ -4,9 +4,7 @@
 // has its own scorecard section and its own test file. A parity failure is a hard blocker that causes
 // `keiko evaluate` to exit 1 regardless of dimension scores.
 
-import { runGenTestsCli } from "../cli/gen-tests.js";
-import { runInvestigateCli } from "../cli/investigate.js";
-import type { CliIo } from "../cli/runner.js";
+import { runGenTestsCli, runInvestigateCli, type CliIo } from "@oscharko-dev/keiko-cli";
 import {
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
   UNIT_TEST_WORKFLOW_DESCRIPTOR,
@@ -200,7 +198,7 @@ async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
 // time guarantee is enforced by the TypeScript check; this is the runtime shape assertion (D7 d).
 // Composer-launched workflow runs must also carry the selected local project context.
 async function checkRunRequestShapes(): Promise<readonly SurfaceParityCheckResult[]> {
-  const { parseRunRequest } = await import("../ui/run-request.js");
+  const { parseRunRequest } = await import("../ui/index.js");
   return RUN_REQUEST_EXPECTATIONS.map((expectation) => {
     const parsed = parseRunRequest(
       JSON.stringify({

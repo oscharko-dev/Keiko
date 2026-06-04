@@ -16,5 +16,8 @@ This page keeps only the product decisions needed by reviewers. It is not an imp
 | Evidence | Supported surfaces write redacted local evidence for human review. |
 | Credentials | API tokens are local secrets and are never logged, serialized, or returned to the browser. |
 | Evaluation | Pilot decisions require offline thresholds plus human-reviewed live model runs. |
+| Package architecture | [ADR-0019](ADR-0019-modular-package-architecture.md) defines the modular workspace package architecture while preserving one customer-facing npm product package. |
+| Workspace tooling | [ADR-0020](ADR-0020-workspace-tooling-and-architecture-gate.md) operationalises ADR-0019: npm workspaces under `packages/*`, shared TypeScript project references, dependency-cruiser architecture gate, and a `keiko-contracts` stub. `ui/` integration is deferred to Issue #167. |
+| Publish strategy | [ADR-0021](ADR-0021-publish-strategy-bundled-monorepo-product.md) resolves ADR-0020 deferred D7: workspace packages remain `private`; the root tarball is self-contained via `bundleDependencies`; installable-smoke and per-workspace SBOM gates enforce the invariant in CI. |
 
 For operational details, use the README, the local UI guide, the security boundaries, and the pilot guide.

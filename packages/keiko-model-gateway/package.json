@@ -1,0 +1,48 @@
+{
+  "name": "@oscharko-dev/keiko-model-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Internal workspace package: Keiko model gateway — provider abstraction, OpenAI-compatible adapter, capability registry, routing, resilience, TLS handling. Not published independently.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./internal/http": {
+      "types": "./dist/http.d.ts",
+      "import": "./dist/http.js"
+    },
+    "./internal/normalize": {
+      "types": "./dist/normalize.d.ts",
+      "import": "./dist/normalize.js"
+    },
+    "./internal/openai-adapter": {
+      "types": "./dist/openai-adapter.d.ts",
+      "import": "./dist/openai-adapter.js"
+    },
+    "./internal/resilience": {
+      "types": "./dist/resilience.d.ts",
+      "import": "./dist/resilience.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@oscharko-dev/keiko-contracts": "*",
+    "@oscharko-dev/keiko-security": "*"
+  }
+}

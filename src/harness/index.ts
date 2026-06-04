@@ -1,18 +1,17 @@
-// Public barrel for the agent harness: the session API, all ports/adapters/sinks, the
-// task types, the event schema, the limit/error taxonomy, and the deterministic ID and
-// fingerprint sources. Downstream issues (#6 tools, #10 audit, #13 UI) depend only on
-// these typed seams (ADR-0004 D2).
+// Re-export shim: the harness now lives in @oscharko-dev/keiko-harness (issue #164,
+// ADR-0019). All existing import sites (`from "../harness/index.js"`) keep resolving
+// unchanged via this barrel. Symbols enumerated explicitly to match the PRE-MOVE surface
+// of src/harness/index.ts (per the keiko-tools / keiko-workspace / keiko-evidence
+// precedent — never `export *` in a legacy shim).
 
 export {
   createSession,
   HARNESS_VERSION,
+  runAgent,
   type AgentConfig,
   type AgentSession,
   type HarnessDeps,
-} from "./session.js";
-
-// runAgent is the ergonomic SDK alias of createSession; both start a bounded run.
-export { createSession as runAgent } from "./session.js";
+} from "@oscharko-dev/keiko-harness";
 
 export {
   DEFAULT_LIMITS,
@@ -48,7 +47,7 @@ export {
   type ToolCallFailedEvent,
   type ToolCallStartedEvent,
   type VerificationResultEvent,
-} from "./types.js";
+} from "@oscharko-dev/keiko-harness";
 
 export {
   HarnessError,
@@ -57,7 +56,7 @@ export {
   HarnessToolError,
   LimitExceededError,
   toFailure,
-} from "./errors.js";
+} from "@oscharko-dev/keiko-harness";
 
 export type {
   EventSink,
@@ -68,16 +67,21 @@ export type {
   ToolCallRequest,
   ToolCallResult,
   ToolPort,
-} from "./ports.js";
+} from "@oscharko-dev/keiko-harness";
 
 export {
   DryRunToolPort,
   GatewayModelPort,
   type ChatModel,
   type RecordedToolCall,
-} from "./adapters.js";
+} from "@oscharko-dev/keiko-harness";
 
-export { CliEventSink, MemoryEventSink, type EventWriter, type ManifestSeed } from "./sinks.js";
+export {
+  CliEventSink,
+  MemoryEventSink,
+  type EventWriter,
+  type ManifestSeed,
+} from "@oscharko-dev/keiko-harness";
 
 export {
   canonicalise,
@@ -85,6 +89,6 @@ export {
   counterIdSource,
   defaultFingerprinter,
   defaultIdSource,
-} from "./fingerprint.js";
+} from "@oscharko-dev/keiko-harness";
 
-export { resolveTaskPlan, type TaskPlan } from "./tasks/policy.js";
+export { resolveTaskPlan, type TaskPlan } from "@oscharko-dev/keiko-harness";

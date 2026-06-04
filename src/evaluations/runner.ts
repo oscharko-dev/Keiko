@@ -7,8 +7,8 @@
 // network or live-model call is made in offline mode; no Date.now / Math.random touches a scored path.
 
 import { createHash, randomUUID } from "node:crypto";
-import { generateUnitTests } from "../workflows/unit-tests/workflow.js";
-import { investigateBug } from "../workflows/bug-investigation/workflow.js";
+import { generateUnitTests } from "@oscharko-dev/keiko-workflows";
+import { investigateBug } from "@oscharko-dev/keiko-workflows";
 import {
   createNodeEvidenceStore,
   persistWorkflowEvidence,
@@ -19,6 +19,7 @@ import {
 import type { ModelPort } from "../harness/ports.js";
 import { canonicalise, HARNESS_VERSION, type TaskType } from "../harness/index.js";
 import type { EnvSource } from "../gateway/config.js";
+import { resolveCostClass } from "../gateway/index.js";
 import type { SpawnFn } from "../tools/index.js";
 import { createEvaluationModelProvider } from "./model-provider.js";
 import { aggregateScorecard, scoreFixture, summarizeScorecard } from "./scorer.js";
@@ -160,7 +161,7 @@ function persistAndCheck(
     },
     report,
     events,
-    { store, env },
+    { store, env, costClassResolver: resolveCostClass },
   );
   const raw = store.get(runId);
   return {

@@ -1,0 +1,10 @@
+{
+  "name": "keiko-pre-modular-fixture",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Frozen snapshot of a representative 0.1.x customer install. DO NOT INSTALL. Read-only target tree used by tests/upgrade-smoke/upgrade-compatibility.test.ts to prove that the post-modular packages still consume pre-modular paths, env names, scripts, and schemas without migration.",
+  "scripts": {
+    "keiko:start": "keiko start",
+    "keiko:stop": "keiko stop"
+  }
+}

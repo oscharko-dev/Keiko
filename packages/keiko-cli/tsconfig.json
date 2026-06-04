@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "rootDir": "../..",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "paths": {
+      "@oscharko-dev/keiko-cli": ["./src/index.ts"]
+    }
+  },
+  "include": [
+    "src",
+    "../../src/verification/**/*.ts",
+    "../../src/evaluations/**/*.ts",
+    "../../src/workspace/**/*.ts",
+    "../../src/gateway/**/*.ts",
+    "../../src/tools/**/*.ts",
+    "../../src/harness/**/*.ts",
+    "../../src/workflows/**/*.ts",
+    "../../src/audit/**/*.ts",
+    "../../src/sdk/**/*.ts",
+    "../../src/ui/**/*.ts"
+  ],
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_support.ts"]
+}

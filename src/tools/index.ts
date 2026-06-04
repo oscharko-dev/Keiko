@@ -1,7 +1,13 @@
-// Public barrel for the safe tool-execution layer (ADR-0006). The tool host is the trust
-// boundary between model output and developer repositories: deny-by-default command allowlist,
-// env-isolated no-shell spawn, and a fail-closed, atomic patch workflow. Explicit named
-// re-exports, `type` keyword for type-only, double quotes, `.js`.
+// Re-export shim: the safe tool-execution layer lives in @oscharko-dev/keiko-tools
+// (issue #162, ADR-0019). All existing import sites (`from "../tools/index.js"`) keep
+// resolving unchanged via this barrel.
+//
+// Explicitly enumerated to match the PRE-MOVE surface of `src/tools/index.ts`. Browser CDP
+// symbols (CdpClient, validators, BrowserToolError, BrowserSessionManager, etc.) are
+// deliberately ABSENT from this barrel — they were only ever accessible via
+// `src/tools/browser/index.ts` before the extraction, and the legacy shim there preserves
+// that surface. Mirrors the workspace shim asymmetry pattern (`nodeWorkspaceFs` not exposed
+// on the legacy workspace barrel) so a future SDK-leak test can pin this invariant.
 
 export type {
   CommandResult,
@@ -20,7 +26,7 @@ export type {
   SandboxPolicy,
   ToolHostConfig,
   ToolHostConfigInput,
-} from "./types.js";
+} from "@oscharko-dev/keiko-tools";
 
 export {
   DEFAULT_COMMAND_RULES,
@@ -29,7 +35,7 @@ export {
   DEFAULT_SANDBOX_POLICY,
   DEFAULT_TOOL_HOST_CONFIG,
   resolveToolHostConfig,
-} from "./types.js";
+} from "@oscharko-dev/keiko-tools";
 
 export {
   CommandCancelledError,
@@ -44,19 +50,21 @@ export {
   ToolError,
   UnknownToolError,
   type ToolCode,
-} from "./errors.js";
+} from "@oscharko-dev/keiko-tools";
 
 export {
   buildSandboxEnv,
   collectSensitiveEnvValues,
   isCommandAllowed,
   type CommandDecision,
-} from "./sandbox.js";
+} from "@oscharko-dev/keiko-tools";
 
-export { nodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
+export { nodeWorkspaceWriter } from "@oscharko-dev/keiko-tools/internal/writer";
+export type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
+
+export { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 
 export {
-  nodeSpawnFn,
   runCommand,
   type RunCommandDeps,
   type RunCommandInput,
@@ -64,7 +72,7 @@ export {
   type ExecutableResolverDeps,
   type SpawnFn,
   type SpawnOptions,
-} from "./exec.js";
+} from "@oscharko-dev/keiko-tools";
 
 export {
   applyPatch,
@@ -72,11 +80,11 @@ export {
   validatePatch,
   type ApplyDeps,
   type ValidateDeps,
-} from "./patch.js";
+} from "@oscharko-dev/keiko-tools";
 
-export { normalizeUnifiedDiffHunks } from "./patch-normalize.js";
-export { parseUnifiedDiff, type ParsedPatch } from "./patch-parse.js";
+export { normalizeUnifiedDiffHunks } from "@oscharko-dev/keiko-tools";
+export { parseUnifiedDiff, type ParsedPatch } from "@oscharko-dev/keiko-tools";
 
-export { TOOL_DEFINITIONS } from "./schemas.js";
+export { TOOL_DEFINITIONS } from "@oscharko-dev/keiko-tools";
 
-export { WorkspaceToolHost } from "./registry.js";
+export { WorkspaceToolHost } from "@oscharko-dev/keiko-tools";

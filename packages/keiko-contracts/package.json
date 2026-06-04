@@ -1,0 +1,48 @@
+{
+  "name": "@oscharko-dev/keiko-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Internal workspace package: shared Keiko contracts. Not published independently.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./unit-test-events": {
+      "types": "./dist/unit-test-events.d.ts",
+      "import": "./dist/unit-test-events.js"
+    },
+    "./bug-investigation-events": {
+      "types": "./dist/bug-investigation-events.d.ts",
+      "import": "./dist/bug-investigation-events.js"
+    },
+    "./verification-summary": {
+      "types": "./dist/verification-summary.d.ts",
+      "import": "./dist/verification-summary.js"
+    },
+    "./evidence": {
+      "types": "./dist/evidence.d.ts",
+      "import": "./dist/evidence.js"
+    },
+    "./bff-wire": {
+      "types": "./dist/bff-wire.d.ts",
+      "import": "./dist/bff-wire.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  }
+}
