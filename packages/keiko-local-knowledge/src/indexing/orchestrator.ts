@@ -349,7 +349,7 @@ function chunkPersistedDocument(
   state: RunState,
   result: ExtractionResult,
 ): {
-  readonly events: IndexingEvent[];
+  readonly events: readonly IndexingEvent[];
   readonly documentId: DocumentId;
   readonly chunkCount: number;
 } {
@@ -360,18 +360,19 @@ function chunkPersistedDocument(
     );
   }
   const documentId = result.outcome.document.id;
+  const sourceText = resolveChunkSourceText(
+    state,
+    documentId,
+    sourceForResult(state, result),
+    result.relativePath,
+  );
   const chunkResult = chunkDocument(
     state.options.store,
     {
       capsuleId: state.capsule.id,
       sourceId: result.sourceId,
       documentId,
-      sourceText: resolveChunkSourceText(
-        state,
-        documentId,
-        sourceForResult(state, result),
-        result.relativePath,
-      ),
+      sourceText,
       force: state.options.force === true,
       ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
     },
@@ -379,23 +380,22 @@ function chunkPersistedDocument(
   );
   const chunkCount = resolveChunkCount(state, documentId, chunkResult.skippedExisting, chunkResult.chunkIds);
   return {
-    events: [
-      {
-        kind: "document-extracted",
-        jobId: state.jobId,
-        documentId,
-        relativePath: result.relativePath,
-      },
-      {
-        kind: "document-chunked",
-        jobId: state.jobId,
-        documentId,
-        chunkCount,
-      },
-    ],
+    events: chunkedDocumentEvents(state.jobId, documentId, result.relativePath, chunkCount),
     documentId,
     chunkCount,
   };
+}
+
+function chunkedDocumentEvents(
+  jobId: string,
+  documentId: DocumentId,
+  relativePath: string,
+  chunkCount: number,
+): readonly IndexingEvent[] {
+  return [
+    { kind: "document-extracted", jobId, documentId, relativePath },
+    { kind: "document-chunked", jobId, documentId, chunkCount },
+  ];
 }
 
 function sourceForResult(state: RunState, result: ExtractionResult): KnowledgeSource {
