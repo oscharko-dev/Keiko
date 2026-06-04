@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ApiError,
+  askGrounded,
   createDesktopChat,
   createProject,
   fetchChatMessages,
@@ -11,7 +12,13 @@ import {
   fetchProjects,
   sendDesktopChat,
 } from "@/lib/api";
-import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
+import type {
+  Chat,
+  ChatMessage,
+  GroundedAnswer as GroundedAnswerWire,
+  ModelCapability,
+  ProjectWithAvailability,
+} from "@/lib/types";
 
 export const DEFAULT_MODEL_ID = "example-chat-model";
 export const DEFAULT_CHAT_TITLE = "New chat";
@@ -56,6 +63,10 @@ export interface UseChatSessionResult {
   // The caller is the API client wrapper; the hook only owns the local cache update so the
   // chat header re-renders with the new state without a full refetch.
   replaceChat: (chat: Chat) => void;
+  // Issue #185 — the most recent grounded answer (citations + uncertainty) the ChatWindow
+  // renders alongside the assistant message bubble. undefined when the active chat has no
+  // connectedScope or no grounded turn has happened yet.
+  latestGrounded: GroundedAnswerWire | undefined;
 }
 
 interface SessionState {
@@ -128,6 +139,9 @@ export function useChatSession(): UseChatSessionResult {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  // Issue #185 — most recent grounded answer for the active chat. Cleared when the active
+  // chat changes (see openChat) so a stale answer never overhangs into another conversation.
+  const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
 
   useEffect(() => {
     let cancelled = false;
@@ -209,6 +223,9 @@ export function useChatSession(): UseChatSessionResult {
 
   const openChat = useCallback(async (chat: Chat): Promise<void> => {
     setError(undefined);
+    // Issue #185 — clear any prior grounded answer so the new chat doesn't render stale
+    // citations from a previous conversation's last grounded turn.
+    setLatestGrounded(undefined);
     try {
       const messagePayload = await fetchChatMessages(chat.id, chat.projectPath);
       setState((previous) => {
@@ -243,6 +260,68 @@ export function useChatSession(): UseChatSessionResult {
     [openNewChat],
   );
 
+  const sendUngrounded = useCallback(
+    async (chat: Chat, project: ProjectWithAvailability, content: string, optimisticId: string) => {
+      try {
+        const result = await sendDesktopChat({
+          chatId: chat.id,
+          projectPath: project.path,
+          content,
+          modelId: state.selectedModel,
+        });
+        setState((previous) => ({
+          ...previous,
+          activeChat: result.chat,
+          chats: sortChats([
+            result.chat,
+            ...previous.chats.filter((existing) => existing.id !== result.chat.id),
+          ]),
+          messages: [
+            ...previous.messages.filter((message) => message.id !== optimisticId),
+            ...Array.from(result.messages),
+          ],
+        }));
+      } catch (caught) {
+        setError(errorMessage(caught));
+        try {
+          const messagePayload = await fetchChatMessages(chat.id, project.path);
+          setState((previous) => ({ ...previous, messages: Array.from(messagePayload.messages) }));
+        } catch {
+          setState((previous) => ({
+            ...previous,
+            messages: previous.messages.filter((message) => message.id !== optimisticId),
+          }));
+        }
+      }
+    },
+    [state.selectedModel],
+  );
+
+  // Issue #185 — when the active chat carries a connectedScope binding the composer routes the
+  // submission through the grounded BFF orchestrator instead of the gateway-backed chat path.
+  // The route persists both messages and returns the redacted citation projection; the hook
+  // refetches the message log on success so the bubbles reflect the canonical store state.
+  const sendGrounded = useCallback(
+    async (chat: Chat, project: ProjectWithAvailability, content: string, optimisticId: string) => {
+      try {
+        const result = await askGrounded({ chatId: chat.id, content });
+        setLatestGrounded(result);
+        const messagePayload = await fetchChatMessages(chat.id, project.path);
+        setState((previous) => ({
+          ...previous,
+          messages: Array.from(messagePayload.messages),
+        }));
+      } catch (caught) {
+        setError(errorMessage(caught));
+        setState((previous) => ({
+          ...previous,
+          messages: previous.messages.filter((message) => message.id !== optimisticId),
+        }));
+      }
+    },
+    [],
+  );
+
   const sendMessage = useCallback(async (): Promise<void> => {
     const content = draft.trim();
     const chat = state.activeChat;
@@ -265,39 +344,15 @@ export function useChatSession(): UseChatSessionResult {
     setError(undefined);
     setState((previous) => ({ ...previous, messages: [...previous.messages, optimistic] }));
     try {
-      const result = await sendDesktopChat({
-        chatId: chat.id,
-        projectPath: project.path,
-        content,
-        modelId: state.selectedModel,
-      });
-      setState((previous) => ({
-        ...previous,
-        activeChat: result.chat,
-        chats: sortChats([
-          result.chat,
-          ...previous.chats.filter((existing) => existing.id !== result.chat.id),
-        ]),
-        messages: [
-          ...previous.messages.filter((message) => message.id !== optimistic.id),
-          ...Array.from(result.messages),
-        ],
-      }));
-    } catch (caught) {
-      setError(errorMessage(caught));
-      try {
-        const messagePayload = await fetchChatMessages(chat.id, project.path);
-        setState((previous) => ({ ...previous, messages: Array.from(messagePayload.messages) }));
-      } catch {
-        setState((previous) => ({
-          ...previous,
-          messages: previous.messages.filter((message) => message.id !== optimistic.id),
-        }));
+      if (chat.connectedScope !== undefined) {
+        await sendGrounded(chat, project, content, optimistic.id);
+      } else {
+        await sendUngrounded(chat, project, content, optimistic.id);
       }
     } finally {
       setSending(false);
     }
-  }, [draft, state.activeChat, state.activeProject, state.selectedModel]);
+  }, [draft, state.activeChat, state.activeProject, sendGrounded, sendUngrounded]);
 
   // Issue #184 — local cache update after a connected-scope PATCH (or any other surgical wire
   // mutation on the active Chat). Only the matched id is updated; the chat list keeps its
@@ -331,5 +386,6 @@ export function useChatSession(): UseChatSessionResult {
     addProject,
     sendMessage,
     replaceChat,
+    latestGrounded,
   };
 }

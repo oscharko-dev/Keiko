@@ -5327,3 +5327,67 @@ select.dlg-input {
   color: var(--danger);
   margin-top: 4px;
 }
+
+/* Issue #185 — grounded repository-aware Q&A answer rendering. Lives inside an assistant
+   chat bubble (see .chat-msg-bubble); the wrapper just stacks content + citations + meta. */
+.grounded-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.grounded-answer-body {
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.grounded-citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+.grounded-citations-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  width: 100%;
+}
+.grounded-citation {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  min-width: 24px;
+  padding: 4px 8px;
+  border: 1px solid var(--accent-line);
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+.grounded-citation:hover {
+  background: var(--accent-glow);
+}
+.grounded-citation:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.grounded-citation-score {
+  margin-left: 6px;
+  color: var(--fg-faint);
+  font-size: 10px;
+}
+.grounded-uncertainty {
+  font-size: 11px;
+  color: var(--ink-muted);
+  font-style: italic;
+}
+.grounded-meta {
+  font-size: 10px;
+  color: var(--fg-faint);
+  font-family: var(--font-mono);
+}

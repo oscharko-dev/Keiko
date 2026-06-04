@@ -2,7 +2,10 @@
 // composition of the connected-context layers, the clarification-needed escape hatch, and
 // the budget-exhaustion → uncertainty-marker propagation produced by #183.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -10,8 +13,7 @@ import {
   type RetrievalQuery,
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { memFs } from "../../keiko-workspace/src/_memfs.js";
-import type { WorkspaceInfo, WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 import {
   ClarificationNeededError,
@@ -21,8 +23,8 @@ import {
   type OrchestratorInput,
 } from "./grounded-orchestrator.js";
 
-const ROOT = "/repo";
 const NOW = 1_700_000_000_000;
+let ROOT = "";
 
 function fakeWorkspace(): WorkspaceInfo {
   return {
@@ -37,15 +39,31 @@ function fakeWorkspace(): WorkspaceInfo {
   };
 }
 
-function makeFs(): WorkspaceFs {
-  return memFs(ROOT, {
-    "src/foo.ts":
-      "export function MyClass() {\n  return 'foo body';\n}\n// MyClass call site here\n",
-    "src/bar.ts": "// unrelated content with no MyClass anchor\nexport const bar = 1;\n",
-    "tests/foo.test.ts":
-      "import { MyClass } from '../src/foo';\nMyClass();\nMyClass();\nMyClass();\n",
-  });
+function seedRepo(): void {
+  mkdirSync(join(ROOT, "src"), { recursive: true });
+  mkdirSync(join(ROOT, "tests"), { recursive: true });
+  writeFileSync(
+    join(ROOT, "src/foo.ts"),
+    "export function MyClass() {\n  return 'foo body';\n}\n// MyClass call site here\n",
+  );
+  writeFileSync(
+    join(ROOT, "src/bar.ts"),
+    "// unrelated content with no MyClass anchor\nexport const bar = 1;\n",
+  );
+  writeFileSync(
+    join(ROOT, "tests/foo.test.ts"),
+    "import { MyClass } from '../src/foo';\nMyClass();\nMyClass();\nMyClass();\n",
+  );
 }
+
+beforeEach(() => {
+  ROOT = mkdtempSync(join(tmpdir(), "keiko-grounded-orch-"));
+  seedRepo();
+});
+
+afterEach(() => {
+  rmSync(ROOT, { recursive: true, force: true });
+});
 
 function happyScope(overrides: Partial<SelectedScope> = {}): SelectedScope {
   return {
@@ -82,11 +100,9 @@ function input(overrides: Partial<OrchestratorInput> = {}): OrchestratorInput {
 
 describe("runGroundedExploration", () => {
   it("composes plan → search → rank → excerpts → assemble → answer deterministically", async () => {
-    const fs = makeFs();
     const out = await runGroundedExploration(input(), {
       answerer: echoAnswerer,
       nowMs: () => NOW,
-      fs,
       detectWorkspace: () => fakeWorkspace(),
     });
     expect(out.pack.schemaVersion).toBe(CONNECTED_CONTEXT_SCHEMA_VERSION);
@@ -100,7 +116,6 @@ describe("runGroundedExploration", () => {
   });
 
   it("passes the question and the full pack to the injected answerer", async () => {
-    const fs = makeFs();
     let observedQuestion = "";
     let observedPack: ConnectedContextPack | undefined;
     const recordingAnswerer: GroundedAnswerer = {
@@ -113,7 +128,6 @@ describe("runGroundedExploration", () => {
     const out = await runGroundedExploration(input(), {
       answerer: recordingAnswerer,
       nowMs: () => NOW,
-      fs,
       detectWorkspace: () => fakeWorkspace(),
     });
     expect(observedQuestion).toBe("Investigate src/foo.ts behaviour of `MyClass`");
@@ -125,20 +139,17 @@ describe("runGroundedExploration", () => {
     // A vague single-word query yields zero/low-weight anchors and trips the planner's
     // "no-anchors" / "too-generic" branches. The orchestrator MUST refuse to run any
     // retrieval before the user resolves the prompt.
-    const fs = makeFs();
     const tooGeneric = happyQuery({ text: "help" });
     await expect(
       runGroundedExploration(input({ query: tooGeneric }), {
         answerer: echoAnswerer,
         nowMs: () => NOW,
-        fs,
         detectWorkspace: () => fakeWorkspace(),
       }),
     ).rejects.toBeInstanceOf(ClarificationNeededError);
   });
 
   it("never invokes the answerer when clarification is needed", async () => {
-    const fs = makeFs();
     let answererCalls = 0;
     const tracking: GroundedAnswerer = {
       answer: () => {
@@ -150,7 +161,6 @@ describe("runGroundedExploration", () => {
       runGroundedExploration(input({ query: happyQuery({ text: "help" }) }), {
         answerer: tracking,
         nowMs: () => NOW,
-        fs,
         detectWorkspace: () => fakeWorkspace(),
       }),
     ).rejects.toBeInstanceOf(ClarificationNeededError);
