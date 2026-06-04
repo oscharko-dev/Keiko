@@ -12,7 +12,7 @@
 // Issue #178 adds the connected repository context surface (Epic #177): pure type contracts plus
 // pure validation helpers for the upcoming Files window → Conversation Center handoff.
 
-export const KEIKO_CONTRACTS_VERSION = "0.3.0" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.4.0" as const;
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -258,7 +258,9 @@ export type {
   UpdateChatPatch,
   NewChatMessage,
   UpdateChatMessagePatch,
+  GroundedAnswerContextPackSummary,
 } from "./bff-wire.js";
+export { buildGroundedAnswerContextPackSummary } from "./bff-wire.js";
 
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {
