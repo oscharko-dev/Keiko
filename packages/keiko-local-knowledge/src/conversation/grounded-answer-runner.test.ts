@@ -103,7 +103,7 @@ describe("runGroundedAnswer — happy path", () => {
 describe("runGroundedAnswer — no-evidence short-circuit", () => {
   it("does not call the generator when query has no scope", async () => {
     const { store } = getFixture();
-    const generator = vi.fn(async (): Promise<string> => "should not be called");
+    const generator = vi.fn((): Promise<string> => Promise.resolve("should not be called"));
     const result = await runGroundedAnswer(
       {
         retrieval: { store, embeddingAdapter: scriptedAdapter() },
@@ -121,7 +121,7 @@ describe("runGroundedAnswer — no-evidence short-circuit", () => {
   it("does not call the generator on empty-query path", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-c" });
-    const generator = vi.fn(async (): Promise<string> => "should not be called");
+    const generator = vi.fn((): Promise<string> => Promise.resolve("should not be called"));
     const result = await runGroundedAnswer(
       {
         retrieval: { store, embeddingAdapter: scriptedAdapter() },

@@ -52,7 +52,7 @@ function fakeGateway(content: string): {
       promptTokens: 1,
       completionTokens: 1,
       latencyMs: 1,
-      costClass: "standard",
+      costClass: "low",
     },
   };
   return {
@@ -72,6 +72,15 @@ const query: ConversationGroundedQuery = {
   text: "what is alpha?",
 };
 
+function assertUserPromptContains(
+  content: string | undefined,
+  substrings: readonly string[],
+): void {
+  for (const substring of substrings) {
+    expect(content).toContain(substring);
+  }
+}
+
 describe("ModelGatewayAnswerGenerator", () => {
   it("calls the gateway with deterministic prompt messages and returns content", async () => {
     const refs = [reference("ch-1", "alpha.txt"), reference("ch-2", "beta.txt")];
@@ -88,16 +97,18 @@ describe("ModelGatewayAnswerGenerator", () => {
     const sent = gw.calls[0];
     expect(sent?.modelId).toBe("test-model");
     expect(sent?.messages[0]?.role).toBe("system");
-    expect(sent?.messages[1]?.content).toContain("Question: what is alpha?");
-    expect(sent?.messages[1]?.content).toContain("Context (2 citations)");
-    expect(sent?.messages[1]?.content).toContain("[1] alpha.txt");
-    expect(sent?.messages[1]?.content).toContain("[2] beta.txt");
+    assertUserPromptContains(sent?.messages[1]?.content, [
+      "Question: what is alpha?",
+      "Context (2 citations)",
+      "[1] alpha.txt",
+      "[2] beta.txt",
+    ]);
   });
 
   it("refuses to call the gateway when grounding rejects (require-citations + empty refs)", async () => {
     const pack = assembleGroundedContext([]);
-    const gatewayCalled = vi.fn(async (): Promise<NormalizedResponse> => {
-      throw new Error("must not call gateway");
+    const gatewayCalled = vi.fn((): Promise<NormalizedResponse> => {
+      return Promise.reject(new Error("must not call gateway"));
     });
     const generator = new ModelGatewayAnswerGenerator({
       chatGateway: { chat: gatewayCalled },
