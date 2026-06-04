@@ -64,6 +64,24 @@ export {
   type ModelSelectionQuery,
 } from "./model-selection.js";
 
+export {
+  assertCompatibleEmbeddingIdentity,
+  verifyEmbeddingCapability,
+  type EmbeddingCapabilityCheck,
+  type EmbeddingFailureReason,
+  type EmbeddingIdentityWarning,
+  type EmbeddingProbeOptions,
+  type OpenAIEmbeddingAdapter,
+} from "./embedding.js";
+
+export {
+  requestOpenAIEmbedding,
+  type OpenAIEmbeddingErrorKind,
+  type OpenAIEmbeddingOutcome,
+  type OpenAIEmbeddingRequest,
+  type OpenAIEmbeddingSuccess,
+} from "./openai-embedding-adapter.js";
+
 export { redact } from "@oscharko-dev/keiko-security";
 
 export {

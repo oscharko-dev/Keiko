@@ -33,10 +33,10 @@ export type OpenAIEmbeddingErrorKind =
   | "transport"
   | "invalid-response";
 
-interface EmbeddingResponseShape {
-  readonly data: ReadonlyArray<{ readonly embedding: readonly number[] }>;
+interface ParsedEmbedding {
+  readonly embedding: readonly number[];
   readonly model?: string;
-  readonly model_revision?: string;
+  readonly modelRevision?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -47,25 +47,37 @@ function isNumberArray(value: unknown): value is readonly number[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "number");
 }
 
-function parseEmbeddingShape(payload: unknown): EmbeddingResponseShape | null {
-  if (!isRecord(payload)) {
-    return null;
-  }
-  const { data } = payload;
+function extractFirstEmbedding(payload: Record<string, unknown>): readonly number[] | null {
+  const data: unknown = payload.data;
   if (!Array.isArray(data) || data.length === 0) {
     return null;
   }
-  const first = data[0];
-  if (!isRecord(first) || !isNumberArray(first.embedding) || first.embedding.length === 0) {
+  const first: unknown = data[0];
+  if (!isRecord(first)) {
+    return null;
+  }
+  const embedding: unknown = first.embedding;
+  if (!isNumberArray(embedding) || embedding.length === 0) {
+    return null;
+  }
+  return embedding;
+}
+
+function parseEmbeddingShape(payload: unknown): ParsedEmbedding | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+  const embedding = extractFirstEmbedding(payload);
+  if (embedding === null) {
     return null;
   }
   const model = typeof payload.model === "string" ? payload.model : undefined;
   const modelRevision =
     typeof payload.model_revision === "string" ? payload.model_revision : undefined;
   return {
-    data: [{ embedding: first.embedding }],
+    embedding,
     ...(model !== undefined ? { model } : {}),
-    ...(modelRevision !== undefined ? { model_revision: modelRevision } : {}),
+    ...(modelRevision !== undefined ? { modelRevision } : {}),
   };
 }
 
@@ -100,43 +112,56 @@ function classifyDispatchError(error: unknown, timeout: AbortSignal): OpenAIEmbe
   return "transport";
 }
 
-export async function requestOpenAIEmbedding(
-  request: OpenAIEmbeddingRequest,
-): Promise<OpenAIEmbeddingOutcome> {
+interface BuiltRequest {
+  readonly url: string;
+  readonly headers: Record<string, string>;
+  readonly body: string;
+  readonly signal: AbortSignal;
+  readonly timeoutSignal: AbortSignal;
+}
+
+function buildRequest(request: OpenAIEmbeddingRequest): BuiltRequest {
   const name = headerName(request.apiKeyHeaderName);
   const headers: Record<string, string> = {
     "content-type": "application/json",
     [name]: headerValue(name, request.apiKey),
   };
   const body = JSON.stringify({ model: request.modelId, input: request.input });
-  const timeoutMs = request.timeoutMs ?? 30_000;
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
+  return { url: joinUrl(request.endpoint), headers, body, signal, timeoutSignal };
+}
 
-  let response: Response;
+async function discardBody(response: Response): Promise<void> {
   try {
-    response = await gatewayFetch(joinUrl(request.endpoint), {
+    await readJsonCapped(response);
+  } catch {
+    // ignore — body discarded intentionally
+  }
+}
+
+async function dispatch(
+  request: OpenAIEmbeddingRequest,
+  built: BuiltRequest,
+): Promise<Response | OpenAIEmbeddingErrorKind> {
+  try {
+    return await gatewayFetch(built.url, {
       method: "POST",
-      headers,
-      body,
-      signal,
+      headers: built.headers,
+      body: built.body,
+      signal: built.signal,
       ...(request.fetchImpl !== undefined ? { fetchImpl: request.fetchImpl } : {}),
     });
   } catch (error) {
-    return { ok: false, kind: classifyDispatchError(error, timeoutSignal) };
+    return classifyDispatchError(error, built.timeoutSignal);
   }
+}
 
-  if (!response.ok) {
-    const kind = classifyStatus(response.status) ?? "transport";
-    try {
-      await readJsonCapped(response);
-    } catch {
-      // ignore — body discarded intentionally
-    }
-    return { ok: false, kind };
-  }
-
+async function decodeSuccess(
+  response: Response,
+  request: OpenAIEmbeddingRequest,
+): Promise<OpenAIEmbeddingOutcome> {
   let payload: unknown;
   try {
     payload = await readJsonCapped(response);
@@ -147,17 +172,27 @@ export async function requestOpenAIEmbedding(
   if (shape === null) {
     return { ok: false, kind: "invalid-response" };
   }
-  const first = shape.data[0];
-  if (first === undefined) {
-    return { ok: false, kind: "invalid-response" };
-  }
-  const vector = Float32Array.from(first.embedding);
+  const vector = Float32Array.from(shape.embedding);
   const modelId = shape.model ?? request.modelId;
-  return {
-    ok: true,
-    value:
-      shape.model_revision !== undefined
-        ? { vector, modelId, modelRevision: shape.model_revision }
-        : { vector, modelId },
-  };
+  const value: OpenAIEmbeddingSuccess =
+    shape.modelRevision !== undefined
+      ? { vector, modelId, modelRevision: shape.modelRevision }
+      : { vector, modelId };
+  return { ok: true, value };
+}
+
+export async function requestOpenAIEmbedding(
+  request: OpenAIEmbeddingRequest,
+): Promise<OpenAIEmbeddingOutcome> {
+  const built = buildRequest(request);
+  const dispatched = await dispatch(request, built);
+  if (typeof dispatched === "string") {
+    return { ok: false, kind: dispatched };
+  }
+  if (!dispatched.ok) {
+    const kind = classifyStatus(dispatched.status) ?? "transport";
+    await discardBody(dispatched);
+    return { ok: false, kind };
+  }
+  return decodeSuccess(dispatched, request);
 }
