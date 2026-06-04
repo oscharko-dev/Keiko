@@ -224,7 +224,7 @@ interface AskWorkerCtx {
 
 async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   const { chat, scope, content, deps, runner } = workerCtx;
-  const query = buildQuery(content, Date.now);
+  const query = buildQuery(content, () => Date.now());
   let output: OrchestratorOutput;
   try {
     output = await runner({ scope, query, workspaceRoot: chat.projectPath });

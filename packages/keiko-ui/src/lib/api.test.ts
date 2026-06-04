@@ -364,4 +364,22 @@ describe("askGrounded", () => {
       }),
     );
   });
+
+  it("rejects with an AbortError when the signal is aborted before the fetch resolves", async () => {
+    const controller = new AbortController();
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Promise<Response>((_resolve, reject) => {
+          controller.signal.addEventListener("abort", () => {
+            reject(new DOMException("The user aborted a request.", "AbortError"));
+          });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const pending = askGrounded({ chatId: "chat-1", content: "q" }, controller.signal);
+    controller.abort();
+
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
 });

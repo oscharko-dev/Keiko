@@ -537,9 +537,13 @@ export async function fetchFilesPreview(root: string, path: string): Promise<Fil
 // redacted citation projection. The CSRF header is supplied by `fetchJson` for all non-GET
 // methods; the caller never sets it directly.
 
-export async function askGrounded(req: GroundedAskRequest): Promise<GroundedAnswer> {
+export async function askGrounded(
+  req: GroundedAskRequest,
+  signal?: AbortSignal,
+): Promise<GroundedAnswer> {
   return fetchJson("/api/chats/messages/grounded", {
     method: "POST",
     body: JSON.stringify(req),
+    signal,
   });
 }

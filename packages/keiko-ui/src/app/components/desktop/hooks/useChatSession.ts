@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
   askGrounded,
@@ -67,6 +67,9 @@ export interface UseChatSessionResult {
   // renders alongside the assistant message bubble. undefined when the active chat has no
   // connectedScope or no grounded turn has happened yet.
   latestGrounded: GroundedAnswerWire | undefined;
+  // Issue #185 AC3 — aborts the in-flight grounded request and clears the sending state.
+  // No-op when no grounded request is in flight.
+  cancelGrounded: () => void;
 }
 
 interface SessionState {
@@ -142,6 +145,9 @@ export function useChatSession(): UseChatSessionResult {
   // Issue #185 — most recent grounded answer for the active chat. Cleared when the active
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
   const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
+  // Issue #185 AC3 — holds the AbortController for the current grounded request so the UI
+  // can cancel in-flight requests. null when no grounded request is in flight.
+  const groundedControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -160,6 +166,12 @@ export function useChatSession(): UseChatSessionResult {
     void run();
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      groundedControllerRef.current?.abort();
     };
   }, []);
 
@@ -303,8 +315,10 @@ export function useChatSession(): UseChatSessionResult {
   // refetches the message log on success so the bubbles reflect the canonical store state.
   const sendGrounded = useCallback(
     async (chat: Chat, project: ProjectWithAvailability, content: string, optimisticId: string) => {
+      const controller = new AbortController();
+      groundedControllerRef.current = controller;
       try {
-        const result = await askGrounded({ chatId: chat.id, content });
+        const result = await askGrounded({ chatId: chat.id, content }, controller.signal);
         setLatestGrounded(result);
         const messagePayload = await fetchChatMessages(chat.id, project.path);
         setState((previous) => ({
@@ -312,15 +326,27 @@ export function useChatSession(): UseChatSessionResult {
           messages: Array.from(messagePayload.messages),
         }));
       } catch (caught) {
+        // Aborted requests are not errors from the user's perspective — clear state silently.
+        if (caught instanceof DOMException && caught.name === "AbortError") return;
         setError(errorMessage(caught));
         setState((previous) => ({
           ...previous,
           messages: previous.messages.filter((message) => message.id !== optimisticId),
         }));
+      } finally {
+        groundedControllerRef.current = null;
       }
     },
     [],
   );
+
+  // Issue #185 AC3 — exposed to the UI so the cancel button can abort in-flight grounded
+  // requests. Sets sending=false without persisting anything.
+  const cancelGrounded = useCallback(() => {
+    groundedControllerRef.current?.abort();
+    groundedControllerRef.current = null;
+    setSending(false);
+  }, []);
 
   const sendMessage = useCallback(async (): Promise<void> => {
     const content = draft.trim();
@@ -387,5 +413,6 @@ export function useChatSession(): UseChatSessionResult {
     sendMessage,
     replaceChat,
     latestGrounded,
+    cancelGrounded,
   };
 }

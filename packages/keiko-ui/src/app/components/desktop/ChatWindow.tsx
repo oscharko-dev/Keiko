@@ -302,6 +302,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
     sending,
     error,
     sendMessage,
+    cancelGrounded,
     activeChat,
     replaceChat,
     latestGrounded,
@@ -341,7 +342,21 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
             {visible.map((message) => (
               <ChatBubble key={message.id} message={message} />
             ))}
-            {sending ? <TypingBubble /> : null}
+            {sending ? (
+              <div className="chatw-typing-row">
+                <TypingBubble />
+                {activeChat?.connectedScope !== undefined ? (
+                  <button
+                    type="button"
+                    className="grounded-cancel-btn"
+                    aria-label="Cancel grounded request"
+                    onClick={cancelGrounded}
+                  >
+                    Cancel
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             <GroundedAnswerPanel chat={activeChat} answer={latestGrounded} busy={sending} />
           </div>
         )}

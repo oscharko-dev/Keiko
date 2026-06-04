@@ -5391,3 +5391,40 @@ select.dlg-input {
   color: var(--fg-faint);
   font-family: var(--font-mono);
 }
+
+/* Issue #185 AC3 — typing row wraps the TypingBubble and the cancel button side-by-side. */
+.chatw-typing-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Cancel button rendered next to the TypingBubble during an in-flight grounded request.
+   Min 24×24 per WCAG 2.2 AA (2.5.8 target size). Uses accent palette matching connector btns. */
+.grounded-cancel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--ink-inverse);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  border: 1px solid color-mix(in oklab, var(--accent) 70%, #000 30%);
+  cursor: pointer;
+}
+.grounded-cancel-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.grounded-cancel-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.grounded-cancel-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
