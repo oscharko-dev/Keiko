@@ -753,24 +753,24 @@ describe("Foundry IQ lineage invariants", () => {
 // ─── CapsuleSet purity ────────────────────────────────────────────────────────
 describe("CapsuleSet purity", () => {
   it("type cannot carry vector, chunk, document, or source fields", () => {
-    // @ts-expect-error — vectorIds is not a property of CapsuleSet
     const withVectors: CapsuleSet = {
       id: "set-1" as unknown as CapsuleSet["id"],
       displayName: "ok",
       tags: [],
       capsuleIds: [cap("c-1")],
       composedAt: 0,
+      // @ts-expect-error — vectorIds is not a property of CapsuleSet; sets reference capsule IDs only.
       vectorIds: ["v-1"],
     };
     expect(withVectors.id).toBeDefined();
 
-    // @ts-expect-error — chunks is not a property of CapsuleSet
     const withChunks: CapsuleSet = {
       id: "set-2" as unknown as CapsuleSet["id"],
       displayName: "ok",
       tags: [],
       capsuleIds: [cap("c-1")],
       composedAt: 0,
+      // @ts-expect-error — chunks is not a property of CapsuleSet; Foundry IQ composition is logical only.
       chunks: [],
     };
     expect(withChunks.id).toBeDefined();
@@ -789,10 +789,10 @@ describe("CapsuleDeleteRequest", () => {
   });
 
   it("type-rejects deleteSources: true", () => {
-    // @ts-expect-error — deleteSources is pinned to the literal false
     const req: CapsuleDeleteRequest = {
       capsuleId: cap("c-1"),
       deleteIndex: true,
+      // @ts-expect-error — deleteSources is pinned to the literal false; sources are user files outside Keiko.
       deleteSources: true,
     };
     expect(req.deleteSources).toBeDefined();
