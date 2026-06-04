@@ -6,13 +6,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { GatewayConfig, GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayConfig,
+  GatewayRequest,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
@@ -230,5 +234,36 @@ describe("desktop chat routes", () => {
     const persistedRoles = store.listMessages(created.chat.id).map((message) => message.role);
     expect(persistedRoles).toHaveLength(2);
     expect(persistedRoles).toEqual(expect.arrayContaining(["user", "assistant"]));
+  });
+
+  // Issue #174 — on native Windows the desktop bootstrap calls validateProjectPath(process.cwd()),
+  // and process.cwd() returns a drive-letter form such as `C:\Users\Example\Project`. The previous
+  // validator rejected any Windows drive shape regardless of host, returning `invalid_path` even
+  // when the directory existed. This test pins the shape-acceptance contract: when no projectPath
+  // is supplied and no stored project is available, the bootstrap must not reject solely because
+  // the working directory uses a Windows drive letter. On POSIX hosts the validator still reports
+  // `path_not_found` (the drive path does not exist), which is the correct host-conditional
+  // outcome; on Windows hosts the existing directory passes and a 201 is returned. Either way the
+  // failure mode is not `invalid_path`.
+  it("does not reject the desktop bootstrap with invalid_path when process.cwd is a Windows drive path", async () => {
+    store.deleteProject(projectDir);
+    const windowsCwd = "C:\\Users\\Example\\Project";
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(windowsCwd);
+    try {
+      const res = await fetch(`${base()}/api/desktop/chats`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({ modelId: CHAT_MODEL }),
+      });
+      if (process.platform === "win32") {
+        expect(res.status).toBe(201);
+      } else {
+        expect(res.status).toBe(400);
+        const body = (await res.json()) as { error?: { code?: string } };
+        expect(body.error?.code).toBe("path_not_found");
+      }
+    } finally {
+      cwdSpy.mockRestore();
+    }
   });
 });

@@ -4,7 +4,7 @@
 // reason when neither resolves or the framework is unknown. Verification reuses the #7 orchestrator
 // unchanged; this stage only wires the plan and projects an output-text-free audit summary.
 
-import { nodeSpawnFn } from "@oscharko-dev/keiko-tools";
+import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import { type WorkspaceFs, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   buildVerificationPlan,

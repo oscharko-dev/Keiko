@@ -24,7 +24,12 @@ export {
   pathNotFound,
   projectExists,
 } from "./errors.js";
-export { validateProjectPath, type ValidateProjectPathOptions } from "./validation.js";
+export {
+  classifyPathShape,
+  validateProjectPath,
+  type PathShape,
+  type ValidateProjectPathOptions,
+} from "./validation.js";
 export {
   assertUiDbOutsideProject,
   resolveUiDbPath,

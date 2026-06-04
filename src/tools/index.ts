@@ -59,10 +59,14 @@ export {
   type CommandDecision,
 } from "@oscharko-dev/keiko-tools";
 
-export { nodeWorkspaceWriter, type WorkspaceWriter } from "@oscharko-dev/keiko-tools";
+export { nodeWorkspaceWriter } from "@oscharko-dev/keiko-tools/internal/writer";
+export type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 
 export {
   nodeSpawnFn,
+} from "@oscharko-dev/keiko-tools/internal/exec";
+
+export {
   runCommand,
   type RunCommandDeps,
   type RunCommandInput,

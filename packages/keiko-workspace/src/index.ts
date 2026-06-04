@@ -1,11 +1,8 @@
 // Public barrel for the repository-context & workspace-access layer (ADR-0005). The only
 // boundary-checked file-read seam is `readWorkspaceFile` (lexical containment + symlink
-// realpath gate + size cap + redaction). `nodeWorkspaceFs` is the `WorkspaceFs` IO port
-// that consumers inject INTO the security primitives (`readWorkspaceFile`,
-// `assertContainedRealPath`, `containedRealPathInfo`); it is not a parallel read path —
-// ADR-0019 trust rule 4 forbids raw `node:fs` in tools/harness/workflows precisely so
-// every workspace-rooted read routes through this port and the primitives that consume
-// it. Explicit named re-exports, `type` keyword for type-only, double quotes, `.js`.
+// realpath gate + size cap + redaction). The Node-backed `nodeWorkspaceFs` adapter is kept on
+// the package's internal subpath so the public barrel exposes safe operations and injectable port
+// types, not a parallel raw read path.
 
 export type {
   AuditEntry,
@@ -46,7 +43,6 @@ export {
 } from "./errors.js";
 
 export {
-  nodeWorkspaceFs,
   type WorkspaceDirEntry,
   type WorkspaceFs,
   type WorkspaceStat,

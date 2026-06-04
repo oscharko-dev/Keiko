@@ -5,6 +5,7 @@
 // only direct provider-SDK egress) makes the "stable public surface" guarantee load-bearing.
 
 import { describe, it, expect } from "vitest";
+import * as gateway from "./index.js";
 import {
   KEIKO_MODEL_GATEWAY_VERSION,
   CAPABILITY_REGISTRY,
@@ -22,21 +23,10 @@ import {
   toSafeObject,
   validateBaseUrl,
   Gateway,
-  OpenAiAdapter,
   assertConfiguredModel,
   findConfiguredCapability,
   listConfiguredCapabilities,
   selectConfiguredModel,
-  CircuitBreaker,
-  executeWithRetry,
-  systemClock,
-  normalizeChatResponse,
-  gatewayFetch,
-  gatewayTrustedCaCertificates,
-  isMissingIssuerError,
-  isRecoverableTlsTrustError,
-  MAX_RESPONSE_BYTES,
-  readJsonCapped,
   redact,
   AuthenticationError,
   CancelledError,
@@ -59,11 +49,7 @@ import type {
   SafeGatewayConfig,
   SafeProviderConfig,
   GatewayDeps,
-  AdapterDeps,
   ModelSelectionQuery,
-  RetryConfig,
-  UsageSeed,
-  GatewayFetchOptions,
   ErrorCode,
   CircuitBreakerConfig,
   CircuitBreakerStatus,
@@ -119,9 +105,20 @@ describe("keiko-model-gateway package surface", () => {
     expect(DEFAULT_API_KEY_HEADER_NAME).toBe("authorization");
   });
 
-  it("exposes Gateway and OpenAiAdapter as constructors", () => {
+  it("exposes Gateway as a constructor", () => {
     expect(typeof Gateway).toBe("function");
-    expect(typeof OpenAiAdapter).toBe("function");
+  });
+
+  it("does not expose the low-level provider adapter or transport helpers on the package barrel", () => {
+    expect(gateway).not.toHaveProperty("OpenAiAdapter");
+    expect(gateway).not.toHaveProperty("gatewayFetch");
+    expect(gateway).not.toHaveProperty("gatewayTrustedCaCertificates");
+    expect(gateway).not.toHaveProperty("readJsonCapped");
+    expect(gateway).not.toHaveProperty("MAX_RESPONSE_BYTES");
+    expect(gateway).not.toHaveProperty("CircuitBreaker");
+    expect(gateway).not.toHaveProperty("executeWithRetry");
+    expect(gateway).not.toHaveProperty("systemClock");
+    expect(gateway).not.toHaveProperty("normalizeChatResponse");
   });
 
   it("exposes the model-selection helpers as callable functions", () => {
@@ -129,28 +126,6 @@ describe("keiko-model-gateway package surface", () => {
     expect(typeof findConfiguredCapability).toBe("function");
     expect(typeof listConfiguredCapabilities).toBe("function");
     expect(typeof selectConfiguredModel).toBe("function");
-  });
-
-  it("exposes the resilience primitives as constructors, functions, and a clock object", () => {
-    expect(typeof CircuitBreaker).toBe("function");
-    expect(typeof executeWithRetry).toBe("function");
-    expect(typeof systemClock).toBe("object");
-    expect(typeof systemClock.now).toBe("function");
-    expect(typeof systemClock.sleep).toBe("function");
-  });
-
-  it("exposes the normalize helper as a callable function", () => {
-    expect(typeof normalizeChatResponse).toBe("function");
-  });
-
-  it("exposes the http primitives with the correct value/type position", () => {
-    expect(typeof gatewayFetch).toBe("function");
-    expect(typeof gatewayTrustedCaCertificates).toBe("function");
-    expect(typeof isMissingIssuerError).toBe("function");
-    expect(typeof isRecoverableTlsTrustError).toBe("function");
-    expect(typeof readJsonCapped).toBe("function");
-    expect(typeof MAX_RESPONSE_BYTES).toBe("number");
-    expect(MAX_RESPONSE_BYTES).toBeGreaterThan(0);
   });
 
   it("re-exposes the redaction primitive from keiko-security as a callable function", () => {
@@ -194,11 +169,7 @@ describe("keiko-model-gateway package surface", () => {
     pin<SafeGatewayConfig>();
     pin<SafeProviderConfig>();
     pin<GatewayDeps>();
-    pin<AdapterDeps>();
     pin<ModelSelectionQuery>();
-    pin<RetryConfig>();
-    pin<UsageSeed>();
-    pin<GatewayFetchOptions>();
     pin<ErrorCode>();
     pin<CircuitBreakerConfig>();
     pin<CircuitBreakerStatus>();

@@ -15,7 +15,7 @@ import {
   createNodeEvidenceStore,
   resolveEvidenceDir,
 } from "./store.js";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   EvidenceReadError,
   EvidenceWriteError,

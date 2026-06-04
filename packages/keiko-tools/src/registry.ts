@@ -14,11 +14,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   discoverWithStats,
-  nodeWorkspaceFs,
   readWorkspaceFile,
   type WorkspaceFs,
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { nodeSpawnFn, runCommand, type ExecutableResolver, type SpawnFn } from "./exec.js";
 import { CommandCancelledError, ToolArgumentError, UnknownToolError } from "./errors.js";
 import { applyPatch, renderDryRun, validatePatch } from "./patch.js";

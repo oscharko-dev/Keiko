@@ -1,11 +1,13 @@
-// ADR-0013 D6 — Path validation policy (fail-closed). Seven rules; each maps to a stable error code.
-// These tests pin every branch so a single-line mutation in validateProjectPath is caught.
+// ADR-0013 D6 — Path validation policy (fail-closed). Structural rules; each maps to a stable
+// error code. These tests pin every branch so a single-line mutation in validateProjectPath is
+// caught. Issue #174 — Windows drive paths are now accepted as local project roots; unsafe
+// Windows shapes (UNC, device, traversal, null-byte, remote URL) remain rejected on any host OS.
 
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateProjectPath, UiStoreError } from "./index.js";
+import { classifyPathShape, validateProjectPath, UiStoreError } from "./index.js";
 
 let tmpDir: string;
 let realDir: string;
@@ -54,10 +56,7 @@ describe("validateProjectPath — happy path", () => {
 
 describe("validateProjectPath — fail-closed", () => {
   it("rejects a null-byte → invalid_path", () => {
-    expectCode(
-      () => validateProjectPath("/tmp/has\0null", { mustExist: false }),
-      "invalid_path",
-    );
+    expectCode(() => validateProjectPath("/tmp/has\0null", { mustExist: false }), "invalid_path");
   });
 
   it("rejects a non-absolute path → invalid_path", () => {
@@ -82,13 +81,6 @@ describe("validateProjectPath — fail-closed", () => {
     );
   });
 
-  it("rejects Windows drive paths → invalid_path", () => {
-    expectCode(
-      () => validateProjectPath("C:\\Users\\dev\\repo", { mustExist: false }),
-      "invalid_path",
-    );
-  });
-
   it("rejects Windows UNC paths → invalid_path", () => {
     expectCode(
       () => validateProjectPath("\\\\server\\share\\repo", { mustExist: false }),
@@ -99,6 +91,27 @@ describe("validateProjectPath — fail-closed", () => {
   it("rejects forward-slash UNC paths → invalid_path", () => {
     expectCode(
       () => validateProjectPath("//server/share/repo", { mustExist: false }),
+      "invalid_path",
+    );
+  });
+
+  it("rejects backslash Windows device paths → invalid_path", () => {
+    expectCode(
+      () => validateProjectPath("\\\\?\\C:\\Users\\dev\\repo", { mustExist: false }),
+      "invalid_path",
+    );
+  });
+
+  it("rejects forward-slash Windows device paths → invalid_path", () => {
+    expectCode(
+      () => validateProjectPath("//?/C:/Users/dev/repo", { mustExist: false }),
+      "invalid_path",
+    );
+  });
+
+  it("rejects DOS device paths (\\\\.\\PhysicalDrive0) → invalid_path", () => {
+    expectCode(
+      () => validateProjectPath("\\\\.\\PhysicalDrive0", { mustExist: false }),
       "invalid_path",
     );
   });
@@ -130,5 +143,89 @@ describe("validateProjectPath — fail-closed", () => {
   it("rejects a missing path → path_not_found", () => {
     const missing = join(tmpDir, "nope-" + String(Date.now()));
     expectCode(() => validateProjectPath(missing, { mustExist: true }), "path_not_found");
+  });
+});
+
+// Issue #174 — Windows-shaped path validation is host-independent so these branches are pinned on
+// Linux, macOS, and Windows hosts alike. `mustExist: false` skips the OS-specific stat step.
+describe("validateProjectPath — Windows drive paths (cross-platform, mustExist: false)", () => {
+  it("accepts a backslash Windows drive path", () => {
+    const out = validateProjectPath("C:\\Users\\Example\\Project", { mustExist: false });
+    expect(out).toBe("C:\\Users\\Example\\Project");
+  });
+
+  it("accepts a forward-slash Windows drive path and normalizes to backslashes", () => {
+    const out = validateProjectPath("C:/Users/Example/Project", { mustExist: false });
+    expect(out).toBe("C:\\Users\\Example\\Project");
+  });
+
+  it("accepts a lowercase drive letter", () => {
+    const out = validateProjectPath("d:\\workspace\\repo", { mustExist: false });
+    expect(out).toBe("d:\\workspace\\repo");
+  });
+
+  it("accepts a drive root", () => {
+    const out = validateProjectPath("C:\\", { mustExist: false });
+    expect(out).toBe("C:\\");
+  });
+
+  it("normalizes redundant separators in a Windows drive path", () => {
+    const out = validateProjectPath("C:\\\\Users\\\\Example", { mustExist: false });
+    expect(out).toBe("C:\\Users\\Example");
+  });
+
+  it("accepts a Windows drive path with redundant forward slashes (looks like a URL scheme prefix)", () => {
+    const out = validateProjectPath("C://Users/Example/Project", { mustExist: false });
+    expect(out).toBe("C:\\Users\\Example\\Project");
+  });
+
+  it("rejects a Windows drive path with a traversal segment", () => {
+    expectCode(
+      () => validateProjectPath("C:\\Users\\..\\Windows", { mustExist: false }),
+      "invalid_path",
+    );
+  });
+
+  it("rejects a Windows drive path containing a null byte", () => {
+    expectCode(
+      () => validateProjectPath("C:\\Users\\evil\0name", { mustExist: false }),
+      "invalid_path",
+    );
+  });
+});
+
+// Issue #174 — Shape classifier is pure and host-independent; assert every branch is reachable
+// from any host so cross-platform path coverage does not rely on the runner OS.
+describe("classifyPathShape", () => {
+  it("classifies a POSIX absolute path", () => {
+    expect(classifyPathShape("/home/example/repo")).toBe("posix-absolute");
+  });
+
+  it("classifies a Windows drive path with backslashes", () => {
+    expect(classifyPathShape("C:\\Users\\Example")).toBe("windows-drive");
+  });
+
+  it("classifies a Windows drive path with forward slashes", () => {
+    expect(classifyPathShape("D:/workspace")).toBe("windows-drive");
+  });
+
+  it("classifies a Windows UNC path", () => {
+    expect(classifyPathShape("\\\\server\\share")).toBe("windows-unc");
+  });
+
+  it("classifies a forward-slash UNC path", () => {
+    expect(classifyPathShape("//server/share")).toBe("windows-unc");
+  });
+
+  it("classifies a Windows device path (\\\\?\\)", () => {
+    expect(classifyPathShape("\\\\?\\C:\\Users\\dev")).toBe("windows-device");
+  });
+
+  it("classifies a Windows device path (\\\\.\\)", () => {
+    expect(classifyPathShape("\\\\.\\COM1")).toBe("windows-device");
+  });
+
+  it("classifies a relative path", () => {
+    expect(classifyPathShape("relative/path")).toBe("relative");
   });
 });

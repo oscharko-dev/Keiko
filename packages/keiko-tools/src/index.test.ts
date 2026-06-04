@@ -87,10 +87,10 @@ describe("keiko-tools public surface", () => {
     expect(typeof tools.buildSandboxEnv).toBe("function");
     expect(typeof tools.collectSensitiveEnvValues).toBe("function");
     expect(typeof tools.isCommandAllowed).toBe("function");
-    expect(typeof tools.nodeWorkspaceWriter).toBe("object");
+    expect(tools).not.toHaveProperty("nodeWorkspaceWriter");
     // Exec:
-    expect(typeof tools.nodeHomeProvider).toBe("object");
-    expect(typeof tools.nodeSpawnFn).toBe("function");
+    expect(tools).not.toHaveProperty("nodeHomeProvider");
+    expect(tools).not.toHaveProperty("nodeSpawnFn");
     expect(typeof tools.runCommand).toBe("function");
     // Patch:
     expect(typeof tools.applyPatch).toBe("function");

@@ -17,12 +17,12 @@ import {
   containedRealPathInfo,
   isDenied,
   isWithinWorkspace,
-  nodeWorkspaceFs,
   PathDeniedError,
   resolveWithinWorkspace,
   type WorkspaceFs,
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { buildSandboxEnv, collectSensitiveEnvValues, isCommandAllowed } from "./sandbox.js";
 import type { CommandResult, CommandRule, SandboxPolicy } from "./types.js";

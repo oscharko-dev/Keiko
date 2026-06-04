@@ -5,7 +5,7 @@
 // model call is the one IO boundary here; its failure propagates to the workflow catch boundary.
 
 import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { ContextPack, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { validatePatch, type PatchValidation } from "@oscharko-dev/keiko-tools";
 import { isTestPath } from "./conventions.js";

@@ -405,10 +405,16 @@ module.exports = {
     {
       name: "adr-0019-direction-8-ui-not-node-domain-values",
       comment:
-        "ADR-0019 direction rule 8: keiko-ui must not import Node-only domain packages as value " +
-        "imports. Type-only exceptions require an explicit gate override with justification.",
-      severity: "warn",
-      from: { path: "^(packages/keiko-ui/src/|src/ui/)", pathNot: "\\.test\\.ts$" },
+        "ADR-0019 direction rule 8: the browser-tier keiko-ui package must not import Node-only " +
+        "domain packages as value imports. Type-only imports are allowed for shared wire shapes. " +
+        "src/ui/ is intentionally excluded because after issue #166 it is the Node-side BFF, not " +
+        "the browser tier. Also fires on tests/architecture/fixtures/ui-browser/ so the gate can be " +
+        "proven live by scripts/arch-check-negative.mjs.",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-ui/src/|tests/architecture/fixtures/ui-browser/)",
+        pathNot: "\\.test\\.ts$",
+      },
       to: {
         path:
           "^(packages/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|server)/|" +
@@ -421,17 +427,19 @@ module.exports = {
       name: "adr-0019-direction-9-root-product-composition-only",
       comment:
         "ADR-0019 direction rule 9: the root product package may compose and re-export internal " +
-        "packages but must not add new domain logic. After extraction, packages/keiko/src/ is " +
-        "restricted to composition imports.",
-      severity: "warn",
-      from: { path: "^packages/keiko/src/" },
+        "packages but must not add new domain logic or deep-import package source. The actual " +
+        "root facade in this repository is repo-root src/index.ts. Also fires on " +
+        "tests/architecture/fixtures/root/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs.",
+      severity: "error",
+      from: { path: "^(src/index\\.ts$|tests/architecture/fixtures/root/)" },
       to: {
         // Composition is allowed via the package surface (node_modules/@oscharko-dev/keiko-*).
         // Reaching directly into another workspace package's source files bypasses the public
         // surface and re-introduces domain coupling at the product layer. The pattern matches
         // any sibling whose directory begins with `keiko-` — naturally excluding the root
         // `packages/keiko/src/` itself (which has no trailing hyphen).
-        path: "^packages/keiko-[^/]+/src/",
+        path: "^((\\.\\./)*packages/keiko-[^/]+/src/|packages/keiko-[^/]+/src/)",
       },
     },
 
@@ -461,7 +469,7 @@ module.exports = {
         "src/ui/ from from.path eliminates a false-positive that would otherwise drift the " +
         "53-warning baseline. The browser-tier scope is preserved by keeping " +
         "^packages/keiko-ui/src/ — that is the Next.js frontend in `ui/`, not the BFF.",
-      severity: "warn",
+      severity: "error",
       from: { path: "^packages/keiko-ui/src/" },
       to: {
         path:
@@ -478,7 +486,7 @@ module.exports = {
         "be in from.path — the BFF is the legitimate consumer of gateway internals it then " +
         "redacts before returning to the browser. Same reasoning as trust-2; keeps the rule " +
         "tight on the actual browser tier (keiko-ui/) without drifting the warning baseline.",
-      severity: "warn",
+      severity: "error",
       from: { path: "^packages/keiko-ui/src/" },
       to: {
         path: "^(packages/keiko-model-gateway/src/|src/gateway/)",
@@ -503,7 +511,7 @@ module.exports = {
         "ADR-0019 trust rule 5: patch application must route through keiko-tools. Direct node:fs " +
         "write imports in keiko-harness and keiko-workflows are forbidden so patch writes cannot " +
         "bypass the tools boundary.",
-      severity: "warn",
+      severity: "error",
       from: {
         path: "^(packages/keiko-(harness|workflows)/src/|src/(harness|workflows)/)",
         pathNot: "\\.test\\.ts$",
@@ -514,12 +522,14 @@ module.exports = {
       name: "adr-0019-trust-6-evidence-allowed-callers",
       comment:
         "ADR-0019 trust rule 6: keiko-evidence is an allowed dependency only from harness, " +
-        "workflows, server, and cli. Other domain packages must not import it.",
-      severity: "warn",
+        "workflows, server, cli, and the ADR-0012 evaluation harness that scores audit-" +
+        "completeness by persisting and validating evidence manifests. Other domain packages " +
+        "must not import it.",
+      severity: "error",
       from: {
         path:
           "^(packages/keiko-(contracts|security|model-gateway|workspace|tools)/src/|" +
-          "src/(gateway|workspace|tools|verification|evaluations)/)",
+          "src/(gateway|workspace|tools|verification)/)",
       },
       to: {
         path: "^(packages/keiko-evidence/|node_modules/@oscharko-dev/keiko-evidence|src/audit/)",
@@ -546,7 +556,7 @@ module.exports = {
         "exceptions; production source must not. This rule encodes the structural variant: " +
         "production source must not import test-only helpers (a common precursor to abusing " +
         "test-only exceptions in production code).",
-      severity: "warn",
+      severity: "error",
       from: {
         path: "^(packages/keiko-[^/]+/src/|src/)",
         pathNot: "\\.test\\.ts$",
