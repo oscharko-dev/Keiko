@@ -12,3 +12,9 @@ export type {
   CapturePolicyOptions,
   WorkflowOutcomeInput,
 } from "./types.js";
+export { extractCandidatesFromUserText, extractCandidatesFromWorkflowOutcome } from "./capture.js";
+// Individual extractors are NOT re-exported: callers must go through the top-level capture
+// surface so the pre-flight (empty / length / restricted-default) and priority order are
+// enforced uniformly. The internal modules (intent-explicit, intent-workflow, policy,
+// secret-patterns, scope-inference, _envelopes, _constants) stay package-private per
+// ADR-0019 trust rule 7.
