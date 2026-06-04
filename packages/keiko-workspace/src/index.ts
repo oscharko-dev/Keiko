@@ -35,6 +35,9 @@ export {
   FileTooLargeError,
   PathDeniedError,
   PathEscapeError,
+  RepoSearchInvalidQueryError,
+  RepoSearchInvalidRangeError,
+  RepoSearchUnsupportedFileError,
   WORKSPACE_CODES,
   WorkspaceError,
   WorkspaceNotFoundError,
@@ -74,5 +77,18 @@ export {
 } from "./contextPack.js";
 
 export { buildWorkspaceSummary, summarizeForAudit } from "./summary.js";
+
+// ─── Repository search facade (Issue #179 / Epic #177) ──────────────────────
+export type {
+  SearchScope,
+  SearchLimits,
+  SearchResult,
+  ReadExcerptRequest,
+  ReadExcerptResult,
+} from "./repoSearch.js";
+export { DEFAULT_SEARCH_LIMITS, searchText, findFiles, readExcerpt } from "./repoSearch.js";
+export { looksBinary, DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
+export type { BinaryProbeOptions } from "./binaryDetect.js";
+export { evidenceAtomStableId, connectedContextPackStableId } from "./stableId.js";
 
 export { KEIKO_WORKSPACE_VERSION } from "./version.js";

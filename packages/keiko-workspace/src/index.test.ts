@@ -9,7 +9,7 @@ import * as workspace from "./index.js";
 
 describe("keiko-workspace public surface", () => {
   it("exposes the documented barrel members", () => {
-    expect(workspace.KEIKO_WORKSPACE_VERSION).toBe("0.1.0");
+    expect(workspace.KEIKO_WORKSPACE_VERSION).toBe("0.2.0");
     expect(typeof workspace.detectWorkspace).toBe("function");
     expect(typeof workspace.discoverFiles).toBe("function");
     expect(typeof workspace.discoverWithStats).toBe("function");
