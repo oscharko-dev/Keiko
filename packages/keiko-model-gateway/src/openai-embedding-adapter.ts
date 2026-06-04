@@ -116,7 +116,9 @@ function classifyDispatchError(
   if (timeoutSignal.aborted) return "timeout";
   if (callerSignal?.aborted === true) return "cancelled";
   if (error instanceof DOMException && error.name === "TimeoutError") return "timeout";
-  if (error instanceof DOMException && error.name === "AbortError") return "cancelled";
+  // A bare AbortError without either of our signals being aborted is a transport error
+  // (e.g. the fetch impl tore down its own internal controller). Mapping it to `cancelled`
+  // would misattribute the failure to the caller — #192 Copilot follow-up finding.
   return "transport";
 }
 
