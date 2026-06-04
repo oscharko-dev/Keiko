@@ -38,7 +38,6 @@ function annotated(
 ): AnnotatedCandidate {
   return {
     candidate: candidate(scopePath, score),
-    score,
     generatedHint,
     duplicate,
   };
@@ -73,7 +72,6 @@ describe("filterCandidates", () => {
   it("respects a pre-set omitted reason on the candidate", () => {
     const preset: AnnotatedCandidate = {
       candidate: { scopePath: "src/a.ts", score: 0.9, signals: [], omitted: "binary" },
-      score: 0.9,
       generatedHint: false,
       duplicate: false,
     };

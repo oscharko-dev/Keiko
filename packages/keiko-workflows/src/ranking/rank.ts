@@ -107,7 +107,6 @@ function buildAnnotated(
     };
     annotated.push({
       candidate,
-      score,
       generatedHint: signals.generatedHint,
       duplicate: hints.duplicateOf.has(scopePath),
     });
@@ -155,14 +154,18 @@ function mergeOmitted(
 
 export function rankCandidates(input: RankingInput, options: RankingOptions = {}): RankingResult {
   const clock = options.nowMs ?? Date.now;
+  // Capture a single emission timestamp so every OmittedContextEntry created by this call
+  // (filter outputs AND outside-scope entries) carries the same omittedAtMs. The end-of-run
+  // clock read below is the elapsed-time measurement only and never feeds an entry.
   const startMs = clock();
+  const frozenStartMs: () => number = () => startMs;
   const hints = resolveHints(input.hints);
   const weights = options.weights ?? DEFAULT_SCORING_WEIGHTS;
   const { valid, invalidPaths } = groupAtomsByPath(input.atoms);
   const annotated = buildAnnotated(valid, input, hints, weights);
-  const filterOptions = resolveFilterOptions(options.filter, clock);
+  const filterOptions = resolveFilterOptions(options.filter, frozenStartMs);
   const filterResult = filterCandidates(annotated, filterOptions);
-  const outsideEntries = buildOutsideScopeEntries(invalidPaths, clock());
+  const outsideEntries = buildOutsideScopeEntries(invalidPaths, startMs);
   const omitted = mergeOmitted(filterResult.omitted, outsideEntries);
   const omittedCounts = tallyOmittedCounts(omitted);
   const elapsedMs = Math.max(0, clock() - startMs);

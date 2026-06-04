@@ -1,7 +1,8 @@
 // Per-candidate signal extraction for the deterministic hybrid ranker (Epic #177, Issue #182).
-// Pure JS — no IO, no clock, no randomness. The signal name list is fixed so the scoring
-// layer can rely on positional weights. Penalties are emitted alongside positive signals so
-// the scorer treats them uniformly; downstream code interprets values via signal names only.
+// Pure JS — no IO, no clock, no randomness. The signal name list is fixed; the scoring layer
+// maps weights to signals by NAME (see SIGNAL_WEIGHT_KEYS in scoring.ts), not by position.
+// Penalties are emitted alongside positive signals so the scorer treats them uniformly;
+// downstream code interprets values via signal names only.
 
 import type {
   CandidateSignal,
@@ -47,10 +48,21 @@ function clampUnit(value: number): number {
 }
 
 function detectGenerated(scopePath: string, patterns: readonly string[]): boolean {
+  // Scope paths are workspace-relative (no leading "/"), so a pattern like "/dist/" would
+  // miss a root-level "dist/foo.js". Match leading "<pattern-without-slash>/" against the
+  // path start AND the original "/<pattern>/" anywhere inside the path. .min.js / .bundle.js
+  // / .d.ts.map patterns (no leading "/") use a plain substring match.
   const lower = scopePath.toLowerCase();
   for (const pattern of patterns) {
-    if (lower.includes(pattern.toLowerCase())) {
+    const p = pattern.toLowerCase();
+    if (lower.includes(p)) {
       return true;
+    }
+    if (p.startsWith("/") && p.endsWith("/")) {
+      const stripped = p.slice(1);
+      if (lower.startsWith(stripped)) {
+        return true;
+      }
     }
   }
   return false;
@@ -116,12 +128,17 @@ function computeStacktracePositionBonus(
   if (scopePath.length === 0) {
     return 0;
   }
+  // The planner lowercases anchor terms, so we compare case-insensitively here too. A
+  // direct equality on the captured path would miss legitimate matches whose source file
+  // name has uppercase characters (and would also be inconsistent on case-insensitive
+  // filesystems like macOS/Windows).
+  const lowerScopePath = scopePath.toLowerCase();
   for (const anc of anchors) {
     if (anc.kind !== "quoted") {
       continue;
     }
     const match = STACK_FRAME_RE.exec(anc.term);
-    if (match !== null && match[1] === scopePath) {
+    if (match !== null && match[1]?.toLowerCase() === lowerScopePath) {
       return 1;
     }
   }

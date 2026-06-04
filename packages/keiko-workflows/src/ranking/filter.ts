@@ -8,9 +8,11 @@ import type {
   OmittedContextEntry,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 
+// AnnotatedCandidate carries only annotation flags; the score is read from candidate.score
+// so classification (low-relevance threshold) and ordering (compareKept) always use the
+// same value. Storing a separate score risked divergence — see PR #251 Copilot finding.
 export interface AnnotatedCandidate {
   readonly candidate: CandidateFile;
-  readonly score: number;
   readonly generatedHint: boolean;
   readonly duplicate: boolean;
 }
@@ -46,7 +48,7 @@ function classifyReason(
   if (entry.generatedHint && options.omitGenerated) {
     return "generated";
   }
-  if (entry.score < options.minScore) {
+  if (entry.candidate.score < options.minScore) {
     return "low-relevance";
   }
   if (entry.duplicate && options.omitNearDuplicates) {

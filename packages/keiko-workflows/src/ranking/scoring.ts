@@ -1,7 +1,10 @@
 // Weighted scoring composition for ranked candidates (Epic #177, Issue #182).
-// Pure function: signal vector × weight vector → clamped unit score. Defaults sum to 1.25
-// so the penalty can out-subtract a fully-positive generated file; callers may override the
-// weights to tune ring-specific behaviour. Never uses parseFloat or .toFixed.
+// Pure function: signal vector × weight vector → clamped unit score. The default positive
+// weights sum to 0.95 and the generated penalty weight is 0.30; the filter layer's
+// `omitGenerated` default keeps generated files OUT of the kept set regardless of score,
+// so the scoring penalty is a secondary defence (a fully-positive generated file scores
+// 0.65). Callers may override weights to tune ring-specific behaviour; never uses
+// parseFloat or .toFixed.
 
 import type { ExtractedSignals } from "./signals.js";
 
