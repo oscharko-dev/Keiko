@@ -64,6 +64,11 @@ function validateOptions(options: MicroIndexOptions): void {
   if (!Number.isInteger(options.maxEntries) || options.maxEntries <= 0) {
     throw new RangeError("createMicroIndex: maxEntries must be a positive integer");
   }
+  // Validate eagerly so the failure mode is a TypeError at construction rather than a
+  // less actionable "options.nowMs is not a function" the next time get/set is called.
+  if (typeof options.nowMs !== "function") {
+    throw new TypeError("createMicroIndex: nowMs must be a function");
+  }
 }
 
 function evictExpired(store: Map<string, IndexEntry>, nowMs: number): void {

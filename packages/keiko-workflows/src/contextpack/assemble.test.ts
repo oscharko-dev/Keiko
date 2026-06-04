@@ -105,7 +105,28 @@ describe("assembleContextPack", () => {
     expect(r2.pack).toBe(r1.pack);
   });
 
-  it("respects a reranker that reverses the candidate order", async () => {
+  it("respects a reranker that reverses the candidate order when budget allows", async () => {
+    const reverse: RerankerSeam = {
+      name: "reverse-fake",
+      isAvailable: () => Promise.resolve({ available: true, modelLabel: "fake" }),
+      rerank: (cs) => Promise.resolve([...cs].reverse()),
+    };
+    // DEFAULT_EXPLORATION_BUDGET.rerankCallsMax = 0 (disabled). Allow exactly one rerank
+    // call so the seam fires.
+    const input: AssembleInput = {
+      ...baseInput(),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, rerankCallsMax: 1 },
+    };
+    const result = await assembleContextPack(input, {
+      nowMs: fixedNow,
+      reranker: reverse,
+    });
+    const paths = result.pack.files.map((f) => f.scopePath);
+    expect(paths).toEqual(["b.ts", "a.ts"]);
+    expect(result.pack.usage.rerankCalls).toBe(1);
+  });
+
+  it("skips reranking when budget.rerankCallsMax is zero (default)", async () => {
     const reverse: RerankerSeam = {
       name: "reverse-fake",
       isAvailable: () => Promise.resolve({ available: true, modelLabel: "fake" }),
@@ -116,7 +137,8 @@ describe("assembleContextPack", () => {
       reranker: reverse,
     });
     const paths = result.pack.files.map((f) => f.scopePath);
-    expect(paths).toEqual(["b.ts", "a.ts"]);
+    expect(paths).toEqual(["a.ts", "b.ts"]);
+    expect(result.pack.usage.rerankCalls).toBe(0);
   });
 
   it("emits a budget-clipped uncertainty marker when the excerpt budget is tiny", async () => {
@@ -154,6 +176,40 @@ describe("assembleContextPack", () => {
     const byPath = new Map(result.pack.files.map((f) => [f.scopePath, f.role]));
     expect(byPath.get("a.ts")).toBe("editable");
     expect(byPath.get("b.ts")).toBe("read-only");
+  });
+
+  it("respects CandidateFile.omitted and excludes the file from pack.files", async () => {
+    // Copilot review on PR #252: the ranker can pre-mark candidates as omitted (e.g.
+    // "generated"); the assembler must not put them in pack.files even when an excerpt
+    // is available.
+    const input: AssembleInput = {
+      ...baseInput(),
+      ranked: [
+        { scopePath: "a.ts", score: 0.9, signals: [], omitted: "generated" },
+        { scopePath: "b.ts", score: 0.8, signals: [], omitted: undefined },
+      ],
+    };
+    const result = await assembleContextPack(input, { nowMs: fixedNow });
+    expect(result.pack.files.map((f) => f.scopePath)).toEqual(["b.ts"]);
+    expect(
+      result.pack.omitted.some((o) => o.scopePath === "a.ts" && o.reason === "generated"),
+    ).toBe(true);
+  });
+
+  it("micro-index key is sensitive to budget so cached packs cannot violate a new budget", async () => {
+    // Copilot review on PR #252: a cached pack assembled for budget A would otherwise be
+    // returned for a request with budget B, even if usage would exceed B.excerptBytesMax.
+    // The cache key now includes budget, so the second call is a miss and the produced
+    // pack carries the new budget.
+    const idx = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
+    const r1 = await assembleContextPack(baseInput(), { nowMs: fixedNow, microIndex: idx });
+    const r2 = await assembleContextPack(
+      { ...baseInput(), budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 1 } },
+      { nowMs: fixedNow, microIndex: idx },
+    );
+    expect(r1.fromIndex).toBe(false);
+    expect(r2.fromIndex).toBe(false);
+    expect(r2.pack.budget.excerptBytesMax).toBe(1);
   });
 
   it("produces an empty pack when there are no atoms or candidates", async () => {

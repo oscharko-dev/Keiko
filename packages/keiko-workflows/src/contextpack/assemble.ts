@@ -113,16 +113,29 @@ function resolveRole(scopePath: string, editablePaths: ReadonlySet<string>): Con
   return editablePaths.has(scopePath) ? "editable" : "read-only";
 }
 
+interface RerankerOutcome {
+  readonly ordered: readonly CandidateFile[];
+  readonly reranked: boolean;
+}
+
 async function applyReranker(
   reranker: RerankerSeam,
   ranked: readonly CandidateFile[],
   atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>,
-): Promise<readonly CandidateFile[]> {
+  budget: ExplorationBudget,
+): Promise<RerankerOutcome> {
+  // The seam is only invoked when the budget actually allows rerank calls. This keeps
+  // ExplorationBudget.rerankCallsMax authoritative even when a custom reranker is supplied
+  // and avoids billing a rerank call against a run whose budget set rerankCallsMax=0.
+  if (budget.rerankCallsMax <= 0) {
+    return { ordered: ranked, reranked: false };
+  }
   const availability = await reranker.isAvailable();
   if (!availability.available) {
-    return ranked;
+    return { ordered: ranked, reranked: false };
   }
-  return reranker.rerank(ranked, atomsByPath, ranked.length);
+  const reordered = await reranker.rerank(ranked, atomsByPath, ranked.length);
+  return { ordered: reordered, reranked: true };
 }
 
 interface BuildPlan {
@@ -199,6 +212,18 @@ function processCandidate(
   candidate: CandidateFile,
   ctx: ProcessContext,
 ): ProcessOutcome {
+  // Respect a pre-set omission reason from the ranker (e.g. "generated", "ignored").
+  // The candidate's atoms may still exist in input.atoms (the ranker only drops them from
+  // its kept list), but they must not enter pack.files — that would contradict the
+  // omission semantics of CandidateFile.omitted.
+  if (candidate.omitted !== undefined) {
+    plan.extraOmitted.push({
+      scopePath: candidate.scopePath,
+      reason: candidate.omitted,
+      omittedAtMs: ctx.nowMs,
+    });
+    return "continue";
+  }
   const rawContent = ctx.excerpts.get(candidate.scopePath);
   if (rawContent === undefined) {
     plan.uncertainty.push({
@@ -279,6 +304,22 @@ function buildPack(input: AssembleInput, plan: BuildPlan, nowMs: number): Connec
 
 // ─── Public facade ────────────────────────────────────────────────────────────
 
+// Cache-key contributors that change the produced pack. Two runs with the same atoms but
+// different budgets, per-excerpt caps, editable-file sets, or reranker MUST hash to
+// different keys — otherwise we could serve a cached pack that violates the new budget or
+// carries the wrong file roles/order.
+function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): readonly string[] {
+  const fingerprint = JSON.stringify({
+    atoms: input.atoms.map((a) => a.stableId),
+    budget: input.budget,
+    ranked: input.ranked.map((c) => c.scopePath),
+    maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
+    editablePaths: [...resolved.editablePaths].sort(),
+    rerankerName: resolved.reranker.name,
+  });
+  return [fingerprint];
+}
+
 export async function assembleContextPack(
   input: AssembleInput,
   options?: AssembleOptions,
@@ -288,16 +329,21 @@ export async function assembleContextPack(
     scopeId: input.scope.scopeId,
     queryKind: input.query.kind,
     queryText: input.query.text,
-    atomStableIds: input.atoms.map((a) => a.stableId),
+    atomStableIds: buildCacheAtomIds(input, resolved),
   });
   const cached = resolved.microIndex?.get(key);
   if (cached !== undefined) {
     return { pack: cached, fromIndex: true };
   }
   const atomsByPath = groupAtomsByPath(input.atoms);
-  const ordered = await applyReranker(resolved.reranker, input.ranked, atomsByPath);
+  const rerankerOutcome = await applyReranker(
+    resolved.reranker,
+    input.ranked,
+    atomsByPath,
+    input.budget,
+  );
   const now = resolved.nowMs();
-  const plan = buildPlan(ordered, {
+  const plan = buildPlan(rerankerOutcome.ordered, {
     atomsByPath,
     excerpts: input.excerpts,
     budget: input.budget,
@@ -305,6 +351,9 @@ export async function assembleContextPack(
     editablePaths: resolved.editablePaths,
     nowMs: now,
   });
+  if (rerankerOutcome.reranked) {
+    plan.usage = { ...plan.usage, rerankCalls: plan.usage.rerankCalls + 1 };
+  }
   const pack = buildPack(input, plan, now);
   resolved.microIndex?.set(key, pack);
   return { pack, fromIndex: false };

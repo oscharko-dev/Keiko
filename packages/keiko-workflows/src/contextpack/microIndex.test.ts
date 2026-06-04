@@ -179,6 +179,13 @@ describe("createMicroIndex", () => {
   it("rejects non-positive maxEntries", () => {
     expect(() => createMicroIndex(options(() => 0, { maxEntries: 0 }))).toThrow(RangeError);
   });
+
+  it("rejects a non-function nowMs at construction time", () => {
+    // Copilot review on PR #252: a missing nowMs would otherwise surface as a less
+    // actionable "options.nowMs is not a function" the next time get/set is called.
+    const bad = { ttlMs: 1000, maxEntries: 8, nowMs: null as unknown as () => number };
+    expect(() => createMicroIndex(bad)).toThrow(TypeError);
+  });
 });
 
 describe("makeIndexKey", () => {
