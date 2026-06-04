@@ -2,9 +2,6 @@
 // Keeping this file the SOLE entry point prevents downstream packages from reaching into
 // private modules (ADR-0019 trust rule 7). Internal modules (dedupe, stale, conflicts,
 // similarity, _ordering, _constants) are package-private.
-//
-// Bootstrap surface only — runtime exports land in subsequent tasks (#208 M3..M8). The shape of
-// the surface is pinned here so the package compiles and the version smoke-test runs.
 
 export { KEIKO_MEMORY_CONSOLIDATION_VERSION } from "./version.js";
 export type {
@@ -18,3 +15,10 @@ export type {
   StaleFlag,
   StaleReason,
 } from "./types.js";
+export { runConsolidation } from "./consolidate.js";
+export {
+  buildConsolidationJob,
+  ConsolidationJobError,
+  transitionJob,
+  type ConsolidationJobErrorCode,
+} from "./job.js";
