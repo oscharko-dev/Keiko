@@ -192,7 +192,7 @@ describe("isValidScopePath", () => {
     expect(isValidScopePath("foo/../bar", REL)).toBe(false);
   });
 
-  it("rejects a space-only segment", () => {
+  it("accepts a path with a space-only segment", () => {
     expect(isValidScopePath("foo/ /bar", REL)).toBe(true);
   });
 

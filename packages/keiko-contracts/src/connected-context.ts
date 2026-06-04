@@ -79,6 +79,8 @@ export interface LineRange {
 export interface EvidenceAtom {
   readonly schemaVersion: typeof CONNECTED_CONTEXT_SCHEMA_VERSION;
   readonly stableId: string;
+  // Path relative to the connected scope root. Never absolute; never carries Windows drive
+  // letters or UNC prefixes. Enforced at validation time by isValidScopePath.
   readonly scopePath: string;
   readonly lineRange: LineRange | undefined;
   readonly score: number;
