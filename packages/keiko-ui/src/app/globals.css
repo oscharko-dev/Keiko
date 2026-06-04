@@ -5404,8 +5404,11 @@ select.dlg-input {
 }
 
 /* Issue #187 — context inspection summary on every grounded answer. Counts/enums only;
-   never raw paths, query text, or excerpt content. Uses --fg-muted (>= 4.5:1 on chrome) for
-   labels, --fg for values so the metric reads as the primary information. */
+   never raw paths, query text, or excerpt content. Both --dt and --dd use --fg: in the dark
+   theme --fg-muted on --card is 3.67:1 which fails WCAG 1.4.3 normal-text 4.5:1 — labels
+   are primary information (they identify each metric) not incidental UI chrome, so they
+   need the full --fg (16.96:1 on --card). Weight + horizontal layout maintain the
+   label-vs-value distinction. */
 .grounded-context-pack {
   margin-top: 8px;
   padding: 8px 10px;
@@ -5425,7 +5428,7 @@ select.dlg-input {
   margin: 0;
 }
 .grounded-context-pack-dt {
-  color: var(--fg-muted);
+  color: var(--fg);
   font-weight: 500;
 }
 .grounded-context-pack-dd {
