@@ -32,16 +32,17 @@ const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
 
 // Attacker-controlled secret shapes — one of each family the keiko-security redactor knows.
-// Constructed at runtime via concatenation so the literal sequences never appear in source
-// (GitHub push-protection scans source files; this keeps the test fixtures green on push).
+// Built via array-join so the literal sequences never appear contiguously in source
+// (GitHub push-protection scans source files; array-join also keeps the typescript-eslint
+// no-unnecessary-template-expression rule happy unlike a template-with-string-interpolation).
 // If any of these survives to the wire boundary, the redaction test must fail.
-const SK_FAKE = `${"sk"}-fakeapikey1234567890abcdef`;
-const GHP_FAKE = `${"ghp"}_fakeGithubToken12345678901234567890`;
-const AKIA_FAKE = `AKI${"A"}IOSFODNN7EXAMPLE`;
-const XOXB_FAKE = `${"xoxb"}-1234567890-abcdef1234567890`;
-const AIZA_FAKE = `${"AIza"}SyD-faKeGoogleAPIKey1234567890abcd`;
-const BEARER_FAKE = `Bear${"er"} abc123def456ghi789`;
-const PEM_FAKE = `-----${"BEGIN"} PRIVATE KEY-----faketokenbody-----END PRIVATE KEY-----`;
+const SK_FAKE = ["sk", "-fakeapikey1234567890abcdef"].join("");
+const GHP_FAKE = ["ghp", "_fakeGithubToken12345678901234567890"].join("");
+const AKIA_FAKE = ["AKI", "AIOSFODNN7EXAMPLE"].join("");
+const XOXB_FAKE = ["xoxb", "-1234567890-abcdef1234567890"].join("");
+const AIZA_FAKE = ["AIza", "SyD-faKeGoogleAPIKey1234567890abcd"].join("");
+const BEARER_FAKE = ["Bear", "er abc123def456ghi789"].join("");
+const PEM_FAKE = ["-----", "BEGIN PRIVATE KEY-----faketokenbody-----END PRIVATE KEY-----"].join("");
 
 const SECRET_SHAPES: readonly string[] = [
   SK_FAKE,
