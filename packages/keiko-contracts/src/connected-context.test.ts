@@ -223,6 +223,14 @@ describe("isValidScopePath", () => {
   it("rejects when mustBeRelative is false", () => {
     expect(isValidScopePath("src/index.ts", { mustBeRelative: false })).toBe(false);
   });
+
+  it("rejects a path containing a backslash", () => {
+    expect(isValidScopePath("src\\file.ts", REL)).toBe(false);
+  });
+
+  it("rejects backslash-separated traversal", () => {
+    expect(isValidScopePath("foo\\..\\bar", REL)).toBe(false);
+  });
 });
 
 // ─── isValidLineRange ─────────────────────────────────────────────────────────
@@ -532,6 +540,14 @@ describe("validateEvidenceAtom", () => {
     };
     expectInvalidWithReason(validateEvidenceAtom(atom), "runId");
   });
+
+  it("rejects an atom whose ledgerRef.atomId is the empty string", () => {
+    const atom: EvidenceAtom = {
+      ...happyAtom(),
+      ledgerRef: { evidenceSchemaVersion: "1", runId: "run-1", atomId: "" },
+    };
+    expectInvalidWithReason(validateEvidenceAtom(atom), "atomId");
+  });
 });
 
 // ─── validateRetrievalQuery ───────────────────────────────────────────────────
@@ -741,6 +757,86 @@ describe("validateConnectedContextPack", () => {
       ledgerRef: { evidenceSchemaVersion: "1", runId: "", atomId: undefined },
     };
     expectInvalidWithReason(validateConnectedContextPack(pack), "runId");
+  });
+
+  it("rejects a pack whose ledgerRef.atomId is the empty string", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      ledgerRef: { evidenceSchemaVersion: "1", runId: "run-1", atomId: "" },
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "atomId");
+  });
+
+  it("rejects omitted entry with absolute scopePath", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      omitted: [{ scopePath: "/abs/escape", reason: "outside-scope", omittedAtMs: 1 }],
+    };
+    const r = validateConnectedContextPack(pack);
+    expect(r.ok).toBe(false);
+    expect(
+      !r.ok &&
+        r.reasons.some((reason) => reason.includes("omitted") && reason.includes("scopePath")),
+    ).toBe(true);
+  });
+
+  it("rejects omitted entry with traversal scopePath", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      omitted: [{ scopePath: "../escape", reason: "outside-scope", omittedAtMs: 1 }],
+    };
+    const r = validateConnectedContextPack(pack);
+    expect(r.ok).toBe(false);
+    expect(
+      !r.ok &&
+        r.reasons.some((reason) => reason.includes("omitted") && reason.includes("scopePath")),
+    ).toBe(true);
+  });
+
+  it("rejects a pack whose budget has a NaN cap", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, searchCallsMax: Number.NaN },
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "searchCallsMax");
+  });
+
+  it("rejects a pack whose budget has a negative cap", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: -1 },
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "filesReadMax");
+  });
+
+  it("rejects a pack whose budget has an Infinity cap", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: Number.POSITIVE_INFINITY },
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "excerptBytesMax");
+  });
+
+  it("rejects a pack with empty selectionReason", () => {
+    const entry: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "read-only",
+      selectionReason: "",
+      excerpts: [],
+    };
+    const pack: ConnectedContextPack = { ...happyPack(), files: [entry] };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "selectionReason");
+  });
+
+  it("rejects a pack with whitespace-only selectionReason", () => {
+    const entry: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "read-only",
+      selectionReason: "   ",
+      excerpts: [],
+    };
+    const pack: ConnectedContextPack = { ...happyPack(), files: [entry] };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "selectionReason");
   });
 
   it("rejects negative pack.emittedAtMs", () => {

@@ -360,6 +360,11 @@ export function isValidScopePath(path: string, options: IsValidScopePathOptions)
   if (path.includes("\0")) {
     return false;
   }
+  // Backslashes are not valid path separators in POSIX workspace-relative paths; reject
+  // them before segment analysis so Windows-style traversals cannot slip through.
+  if (path.includes("\\")) {
+    return false;
+  }
   if (hasInvalidPathPrefix(path)) {
     return false;
   }
@@ -455,6 +460,9 @@ function validateLedgerRef(ref: EvidenceLedgerRef, reasons: string[], prefix: st
   if (!isNonEmptyTrimmed(ref.runId)) {
     reasons.push(`${prefix}.ledgerRef.runId empty`);
   }
+  if (ref.atomId?.trim().length === 0) {
+    reasons.push(`${prefix}.ledgerRef.atomId empty`);
+  }
 }
 
 function isScoreInUnitInterval(score: number): boolean {
@@ -526,6 +534,9 @@ function validatePackFiles(files: readonly ConnectedFileEntry[], reasons: string
     if (!isValidScopePath(entry.scopePath, { mustBeRelative: true })) {
       reasons.push("pack.files entry has invalid scopePath");
     }
+    if (!isNonEmptyTrimmed(entry.selectionReason)) {
+      reasons.push("pack.files entry has empty selectionReason");
+    }
     for (const excerpt of entry.excerpts) {
       const atomResult = validateEvidenceAtom(excerpt.atom);
       if (!atomResult.ok) {
@@ -541,9 +552,12 @@ function validatePackFiles(files: readonly ConnectedFileEntry[], reasons: string
 }
 
 function validatePackOmitted(entries: readonly OmittedContextEntry[], reasons: string[]): void {
-  for (const entry of entries) {
+  for (const [i, entry] of entries.entries()) {
     if (!CANDIDATE_OMISSION_REASONS.includes(entry.reason)) {
       reasons.push("pack.omitted has invalid reason");
+    }
+    if (!isValidScopePath(entry.scopePath, { mustBeRelative: true })) {
+      reasons.push(`omitted[${i.toString()}].scopePath invalid`);
     }
     if (!isFiniteNonNegativeInteger(entry.omittedAtMs)) {
       reasons.push("pack.omitted has invalid omittedAtMs");
@@ -568,6 +582,10 @@ function checkBudgetDimension(
   dimension: string,
   reasons: string[],
 ): void {
+  if (!isFiniteNonNegativeInteger(cap)) {
+    reasons.push(`budget.${dimension}Max not a finite non-negative integer`);
+    return;
+  }
   if (!Number.isFinite(used) || used < 0) {
     reasons.push(`pack.usage.${dimension} invalid`);
     return;
