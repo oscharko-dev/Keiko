@@ -114,6 +114,42 @@ describe("Workspace card connections", () => {
     );
   });
 
+  it("scales the scene with CSS zoom so widget content re-rasterizes (#305)", () => {
+    // `transform: scale()` would rasterize the scene once at its natural size
+    // and upscale the bitmap, blurring text/SVG inside widgets at zoom > 1.
+    // The scene must use CSS `zoom` to trigger a layout pass and re-rasterize.
+    const { container } = render(
+      <Workspace
+        ws={workspace({ view: { x: 12, y: 34, zoom: 1.75 } })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const scene = container.querySelector(".ws-scene");
+    expect(scene).not.toBeNull();
+    const style = (scene as HTMLElement).style;
+    expect(style.zoom).toBe("1.75");
+    expect(style.transform).toBe("translate(12px, 34px)");
+    expect(style.transform).not.toContain("scale(");
+  });
+
+  it("emits zoom 1 at the default view without a scale() transform (#305)", () => {
+    const { container } = render(
+      <Workspace
+        ws={workspace({ view: { x: 0, y: 0, zoom: 1 } })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const scene = container.querySelector(".ws-scene");
+    expect(scene).not.toBeNull();
+    const style = (scene as HTMLElement).style;
+    expect(style.zoom).toBe("1");
+    expect(style.transform).not.toContain("scale(");
+  });
+
   it("starts a connection from a port with Enter key activation", async () => {
     const startConnect = vi.fn();
     const workspaceApi = api({ startConnect });
