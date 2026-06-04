@@ -17,7 +17,7 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.5.0" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.6.0" as const;
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -427,3 +427,24 @@ export {
   validateCapsuleSet,
   validateConnectorGraphState,
 } from "./local-knowledge-validation.js";
+
+// ─── Local Knowledge Capsule persistent schema (Issue #265 / Epic #189) ─────────
+// Static SQL DDL manifest + scoped indexes + migration manifest for the on-disk capsule
+// store. The runtime that *applies* the DDL ships in #193; this package only carries the
+// pure constants and pure helpers (validateCapsuleRowShape, redactPathInDiagnostic) so
+// every other package can reference the schema without pulling `node:sqlite`.
+export type { KnowledgeCapsuleMigration } from "./local-knowledge-schema.js";
+export {
+  LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
+  KNOWLEDGE_CAPSULE_DDL,
+  KNOWLEDGE_CAPSULE_INDEXES,
+  KNOWLEDGE_CAPSULE_MIGRATIONS,
+  KNOWLEDGE_CAPSULE_TABLES,
+  KNOWLEDGE_CAPSULE_INDEX_NAMES,
+  DELETE_CAPSULE_SQL,
+} from "./local-knowledge-schema.js";
+export type { CapsuleRowShape, RedactPathOptions } from "./local-knowledge-schema-validation.js";
+export {
+  validateCapsuleRowShape,
+  redactPathInDiagnostic,
+} from "./local-knowledge-schema-validation.js";
