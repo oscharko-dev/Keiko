@@ -24,16 +24,14 @@ import { folderScope, memoryFs } from "../discovery/test-support.js";
 
 import { runIndexingJob } from "./orchestrator.js";
 import { selectJobById, rowToIndexingJobRecord } from "./job-persist.js";
-import { countVectorsForCapsule, countVectorsForDocument } from "./vector-persist.js";
+import { countVectorsForCapsule } from "./vector-persist.js";
 import { deterministicVector, happyAdapter, scriptedAdapter } from "./_support.js";
 import type { IndexingEvent, IndexingOptions } from "./types.js";
 import type { KnowledgeStore } from "../store.js";
 
 const ROOT = "/srv/orchestrator";
 
-interface FixtureFiles {
-  readonly [relativePath: string]: string;
-}
+type FixtureFiles = Record<string, string>;
 
 interface Fixture {
   readonly store: KnowledgeStore;
@@ -373,7 +371,7 @@ describe("runIndexingJob — concurrency clamp", () => {
     const adapter = happyAdapter();
     const wrapped = {
       ...adapter,
-      request: async (req: Parameters<typeof adapter.request>[0]) => {
+      request: async (req: Parameters<typeof adapter.request>[0]): Promise<Awaited<ReturnType<typeof adapter.request>>> => {
         live += 1;
         if (live > peak) peak = live;
         await new Promise((r) => setImmediate(r));

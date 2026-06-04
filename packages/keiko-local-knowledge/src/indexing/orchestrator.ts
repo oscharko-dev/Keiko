@@ -29,7 +29,6 @@ import { randomUUID } from "node:crypto";
 import type {
   ChunkId,
   DocumentId,
-  EmbeddingModelIdentity,
   IndexingJobError,
   KnowledgeCapsule,
   KnowledgeSource,
@@ -315,6 +314,19 @@ interface PersistedHandling {
   readonly identityFailure?: IndexingJobError;
 }
 
+function resolveChunkCount(
+  state: RunState,
+  documentId: DocumentId,
+  skippedExisting: boolean,
+  freshChunkIds: readonly ChunkId[],
+): number {
+  if (!skippedExisting) return freshChunkIds.length;
+  // When skippedExisting, the chunks table already holds the rows from a prior run; count
+  // them so the chunked event still reports an accurate number.
+  return selectChunksForDocument(state.options.store._internal.db, state.capsule.id, documentId)
+    .length;
+}
+
 function chunkPersistedDocument(
   state: RunState,
   result: ExtractionResult,
@@ -342,14 +354,7 @@ function chunkPersistedDocument(
     },
     state.options.chunkingOptions,
   );
-  // When skippedExisting, the chunks table already holds the rows from a prior run; count
-  // them so the chunked event still reports an accurate number.
-  const chunkRows = selectChunksForDocument(
-    state.options.store._internal.db,
-    state.capsule.id,
-    documentId,
-  );
-  const chunkCount = chunkResult.skippedExisting ? chunkRows.length : chunkResult.chunkIds.length;
+  const chunkCount = resolveChunkCount(state, documentId, chunkResult.skippedExisting, chunkResult.chunkIds);
   return {
     events: [
       {
@@ -384,20 +389,16 @@ function sourceForResult(state: RunState, result: ExtractionResult): KnowledgeSo
   return match;
 }
 
-// Wraps the chunk-then-embed pipeline for a single persisted document.
-async function handlePersistedDocument(
+// Incremental fast-path: skips embedding when vectors already exist (non-force run), or
+// deletes prior vectors to prepare for a forced re-embed.
+// Returns a PersistedHandling to short-circuit when already-embedded, undefined to continue.
+function applyIncrementalFastPath(
   state: RunState,
-  result: ExtractionResult,
-): Promise<PersistedHandling> {
-  const documentId = result.outcome.kind === "persisted" ? result.outcome.document.id : null;
-  if (documentId === null) {
-    return { events: [] };
-  }
-  // Incremental fast-path #2: if vectors already exist for this document AND not in force
-  // mode, skip the embedding step entirely. The chunker is also a no-op in this case (it
-  // observed existing chunks) — emit document-skipped(already-embedded) and bump the
-  // skipped counter rather than processed.
+  documentId: DocumentId,
+): PersistedHandling | undefined {
   if (state.options.force !== true) {
+    // Incremental fast-path #2: if vectors already exist for this document AND not in force
+    // mode, skip the embedding step entirely. The chunker is also a no-op in this case.
     const existing = countVectorsForDocument(
       state.options.store._internal.db,
       state.capsule.id,
@@ -405,26 +406,23 @@ async function handlePersistedDocument(
     );
     if (existing > 0) {
       state.skippedDocuments += 1;
-      return {
-        events: [
-          {
-            kind: "document-skipped",
-            jobId: state.jobId,
-            documentId,
-            reason: "already-embedded",
-          },
-        ],
-      };
+      return { events: [{ kind: "document-skipped", jobId: state.jobId, documentId, reason: "already-embedded" }] };
     }
-  } else {
-    // Force mode: tear down prior vectors for this document so the re-embed is the only
-    // surviving set. Chunks are re-emitted by chunkDocument(force=true).
-    deleteVectorsForDocument(state.options.store._internal.db, state.capsule.id, documentId);
+    return undefined;
   }
+  // Force mode: tear down prior vectors so the re-embed is the only surviving set.
+  deleteVectorsForDocument(state.options.store._internal.db, state.capsule.id, documentId);
+  return undefined;
+}
 
-  let chunked: ReturnType<typeof chunkPersistedDocument>;
+// Runs the chunker and returns its result, or a PersistedHandling failure event on throw.
+function tryChunkDocument(
+  state: RunState,
+  result: ExtractionResult,
+  documentId: DocumentId,
+): { readonly chunked: ReturnType<typeof chunkPersistedDocument> } | PersistedHandling {
   try {
-    chunked = chunkPersistedDocument(state, result);
+    return { chunked: chunkPersistedDocument(state, result) };
   } catch (cause) {
     state.failedDocuments += 1;
     const error: IndexingJobError = {
@@ -432,62 +430,36 @@ async function handlePersistedDocument(
       message: cause instanceof Error ? cause.message : String(cause),
     };
     state.lastError = error;
-    return {
-      events: [
-        {
-          kind: "document-failed",
-          jobId: state.jobId,
-          documentId,
-          relativePath: result.relativePath,
-          error,
-        },
-      ],
-    };
+    return { events: [{ kind: "document-failed", jobId: state.jobId, documentId, relativePath: result.relativePath, error }] };
   }
+}
 
-  const embedResult = await embedDocumentChunks(
-    state,
-    documentId,
-    sourceForResult(state, result),
-    result.relativePath,
-  );
-
-  const events: IndexingEvent[] = [...chunked.events];
+// Maps an EmbedDocumentResult into PersistedHandling events, mutating run-state counters.
+function applyEmbedResult(
+  state: RunState,
+  documentId: DocumentId,
+  relativePath: string,
+  priorEvents: readonly IndexingEvent[],
+  embedResult: EmbedDocumentResult,
+): PersistedHandling {
+  const events: IndexingEvent[] = [...priorEvents];
   const identityErr = embedResult.errors.find((e) => e.code === "INCOMPATIBLE_EMBEDDING_IDENTITY");
   if (identityErr !== undefined) {
     state.failedDocuments += 1;
     state.lastError = identityErr;
-    events.push({
-      kind: "document-failed",
-      jobId: state.jobId,
-      documentId,
-      relativePath: result.relativePath,
-      error: identityErr,
-    });
+    events.push({ kind: "document-failed", jobId: state.jobId, documentId, relativePath, error: identityErr });
     return { events, identityFailure: identityErr };
   }
   if (embedResult.errors.length > 0) {
     state.failedDocuments += 1;
-    const firstErr = embedResult.errors[0] ?? {
-      code: "EMBEDDING_ADAPTER_FAILED",
-      message: "embedding adapter failed",
-    };
+    const firstErr = embedResult.errors[0] ?? { code: "EMBEDDING_ADAPTER_FAILED", message: "embedding adapter failed" };
     state.lastError = firstErr;
-    events.push({
-      kind: "document-failed",
-      jobId: state.jobId,
-      documentId,
-      relativePath: result.relativePath,
-      error: firstErr,
-    });
+    events.push({ kind: "document-failed", jobId: state.jobId, documentId, relativePath, error: firstErr });
     return { events };
   }
-
   state.processedDocuments += 1;
   state.vectorsPersisted += embedResult.vectorCount;
-  if (embedResult.lastChunkId !== null) {
-    state.lastResumeToken = embedResult.lastChunkId;
-  }
+  if (embedResult.lastChunkId !== null) state.lastResumeToken = embedResult.lastChunkId;
   events.push({
     kind: "document-embedded",
     jobId: state.jobId,
@@ -496,6 +468,29 @@ async function handlePersistedDocument(
     resumeToken: embedResult.lastChunkId ?? (`${String(documentId)}#empty` as ChunkId),
   });
   return { events };
+}
+
+// Wraps the chunk-then-embed pipeline for a single persisted document.
+async function handlePersistedDocument(
+  state: RunState,
+  result: ExtractionResult,
+): Promise<PersistedHandling> {
+  const documentId = result.outcome.kind === "persisted" ? result.outcome.document.id : null;
+  if (documentId === null) return { events: [] };
+
+  const fastPath = applyIncrementalFastPath(state, documentId);
+  if (fastPath !== undefined) return fastPath;
+
+  const chunkStep = tryChunkDocument(state, result, documentId);
+  if (!("chunked" in chunkStep)) return chunkStep;
+
+  const embedResult = await embedDocumentChunks(
+    state,
+    documentId,
+    sourceForResult(state, result),
+    result.relativePath,
+  );
+  return applyEmbedResult(state, documentId, result.relativePath, chunkStep.chunked.events, embedResult);
 }
 
 // ─── Per-source pipeline ──────────────────────────────────────────────────────
@@ -543,42 +538,12 @@ async function* runOneSource(
   if (cancelled) return;
 }
 
-async function handleDiscoveryEvent(
+// Routes a file-extracted event: force-skipped docs are re-shaped to persisted so the
+// standard chunk-and-embed pipeline runs on them.
+async function handleFileExtracted(
   state: RunState,
-  evt: ExtractionEvent,
+  result: ExtractionResult,
 ): Promise<readonly IndexingEvent[]> {
-  if (evt.kind === "file-discovered") {
-    state.totalDocuments += 1;
-    return [
-      {
-        kind: "document-discovered",
-        jobId: state.jobId,
-        relativePath: evt.relativePath,
-        sizeBytes: evt.sizeBytes,
-      },
-    ];
-  }
-  if (evt.kind === "scope-error") {
-    state.failedDocuments += 1;
-    const err: IndexingJobError = {
-      code: `DISCOVERY_FAILED:${evt.error.code}`,
-      message: evt.error.message,
-    };
-    state.lastError = err;
-    const failed: IndexingEvent = {
-      kind: "document-failed",
-      jobId: state.jobId,
-      ...(evt.error.relativePath !== undefined ? { relativePath: evt.error.relativePath } : {}),
-      error: err,
-    };
-    return [failed];
-  }
-  if (evt.kind === "cancelled" || evt.kind === "completed") {
-    // No-op at this level: the outer loop drives terminal events.
-    return [];
-  }
-  // evt.kind === "file-extracted"
-  const result = evt.result;
   if (result.outcome.kind === "skipped") {
     // In force mode, an "unchanged" document still needs chunk-and-embed because the
     // orchestrator deleted the vector rows at job-started. Re-shape the skipped outcome
@@ -602,6 +567,34 @@ async function handleDiscoveryEvent(
   }
   const handled = await handlePersistedDocument(state, result);
   return handled.events;
+}
+
+async function handleDiscoveryEvent(
+  state: RunState,
+  evt: ExtractionEvent,
+): Promise<readonly IndexingEvent[]> {
+  if (evt.kind === "file-discovered") {
+    state.totalDocuments += 1;
+    return [{ kind: "document-discovered", jobId: state.jobId, relativePath: evt.relativePath, sizeBytes: evt.sizeBytes }];
+  }
+  if (evt.kind === "scope-error") {
+    state.failedDocuments += 1;
+    const err: IndexingJobError = { code: `DISCOVERY_FAILED:${evt.error.code}`, message: evt.error.message };
+    state.lastError = err;
+    const failed: IndexingEvent = {
+      kind: "document-failed",
+      jobId: state.jobId,
+      ...(evt.error.relativePath !== undefined ? { relativePath: evt.error.relativePath } : {}),
+      error: err,
+    };
+    return [failed];
+  }
+  if (evt.kind === "cancelled" || evt.kind === "completed") {
+    // No-op at this level: the outer loop drives terminal events.
+    return [];
+  }
+  // evt.kind === "file-extracted"
+  return handleFileExtracted(state, evt.result);
 }
 
 // ─── Capsule resolution + job lifecycle ───────────────────────────────────────
@@ -703,17 +696,26 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
   for (const source of sources) {
     if (aborted(options.signal)) break;
     if (identityFailure !== undefined) break;
-    for await (const evt of runOneSource(state, source)) {
-      yield emit(state, evt);
-      if (evt.kind === "document-failed" && evt.error.code === "INCOMPATIBLE_EMBEDDING_IDENTITY") {
-        identityFailure = evt.error;
-        break;
-      }
-    }
+    identityFailure = yield* iterateSourceEvents(state, source);
     updateJobCounters(state.options.store._internal.db, jobId, buildCounters(state));
   }
 
   yield* finalize(state, identityFailure);
+}
+
+// Drains one source's event stream, yielding each event to the outer generator.
+// Returns the identity-failure error if encountered, undefined otherwise.
+async function* iterateSourceEvents(
+  state: RunState,
+  source: KnowledgeSource,
+): AsyncGenerator<IndexingEvent, IndexingJobError | undefined> {
+  for await (const evt of runOneSource(state, source)) {
+    yield emit(state, evt);
+    if (evt.kind === "document-failed" && evt.error.code === "INCOMPATIBLE_EMBEDDING_IDENTITY") {
+      return evt.error;
+    }
+  }
+  return undefined;
 }
 
 function emit(state: RunState, event: IndexingEvent): IndexingEvent {
@@ -721,22 +723,25 @@ function emit(state: RunState, event: IndexingEvent): IndexingEvent {
   return event;
 }
 
-async function* finalize(
+function resolveJobStatus(
   state: RunState,
   identityFailure: IndexingJobError | undefined,
-): AsyncGenerator<IndexingEvent> {
-  const finishedAt = state.now();
-  let status: "succeeded" | "failed" | "cancelled";
+): "succeeded" | "failed" | "cancelled" {
   if (identityFailure !== undefined) {
-    status = "failed";
     state.lastError = identityFailure;
-  } else if (aborted(state.options.signal)) {
-    status = "cancelled";
-  } else if (state.failedDocuments > 0 && state.processedDocuments === 0) {
-    status = "failed";
-  } else {
-    status = "succeeded";
+    return "failed";
   }
+  if (aborted(state.options.signal)) return "cancelled";
+  if (state.failedDocuments > 0 && state.processedDocuments === 0) return "failed";
+  return "succeeded";
+}
+
+function* finalize(
+  state: RunState,
+  identityFailure: IndexingJobError | undefined,
+): Generator<IndexingEvent> {
+  const finishedAt = state.now();
+  const status = resolveJobStatus(state, identityFailure);
 
   finalizeJobRow(state.options.store._internal.db, {
     id: state.jobId,
