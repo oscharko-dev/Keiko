@@ -77,8 +77,9 @@ describe("runMigrations", () => {
 
   it("v3 adds connected_scope columns to chats, existing rows null", () => {
     // Issue #184 — additive migration: connected_scope_paths (TEXT) + connected_scope_at (INTEGER)
-    // on the chats table. Validates the columns are present and that existing rows materialise
-    // NULL for both. The forward-compatibility path is exercised by the next test.
+    // on the chats table. Validates the columns are present AND that an existing row inserted
+    // before the migration materialises NULL for both. The forward-compatibility path (from a
+    // user_version=2 seed) is exercised by the next test.
     const db = openMem();
     db.exec("PRAGMA foreign_keys = ON");
     runMigrations(db);
@@ -87,6 +88,23 @@ describe("runMigrations", () => {
     const names = cols.map((c) => c.name);
     expect(names).toContain("connected_scope_paths");
     expect(names).toContain("connected_scope_at");
+    // Copilot PR #254 finding: the assertion of NULL materialisation was missing. Insert a row
+    // and confirm both new columns are NULL.
+    db.exec(
+      "INSERT INTO projects (path, name, favorite, created_at, last_opened_at)" +
+        " VALUES ('/p', 'p', 0, 1, 1)",
+    );
+    db.exec(
+      "INSERT INTO chats (id, project_path, title, selected_model, created_at, updated_at)" +
+        " VALUES ('c-null-check', '/p', 't', 'm', 1, 1)",
+    );
+    const row = db
+      .prepare(
+        "SELECT connected_scope_paths, connected_scope_at FROM chats WHERE id = 'c-null-check'",
+      )
+      .get() as { connected_scope_paths: string | null; connected_scope_at: number | null };
+    expect(row.connected_scope_paths).toBeNull();
+    expect(row.connected_scope_at).toBeNull();
   });
 
   it("v3 migration is forward-compatible from v2 state", () => {

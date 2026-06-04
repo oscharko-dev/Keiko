@@ -70,15 +70,27 @@ export function ScopeConnectButton({
     }
   }
 
+  // Use aria-disabled + onClick guard rather than the native `disabled` attribute when the
+  // button is empty-state. Native `disabled` removes the button from the focus order, so the
+  // hint text ("Select a folder or file first") becomes unreachable for keyboard users
+  // (Copilot PR #254 finding). aria-disabled keeps the button focusable so the screen reader
+  // announces the action AND the disabled state, while the onClick guard short-circuits
+  // activation. Loading (`busy`) is still a native disabled because the same button is the
+  // one in flight — activation while a request is in flight is genuinely incoherent.
+  const ariaDisabled = empty;
   return (
     <>
       <button
         type="button"
         className="scope-connect-btn"
-        disabled={disabled}
+        disabled={busy}
+        aria-disabled={ariaDisabled}
         aria-label={empty ? "Connect to chat (no selection)" : label}
         title={tooltip}
         onClick={() => {
+          if (ariaDisabled) {
+            return;
+          }
           void handleClick();
         }}
       >

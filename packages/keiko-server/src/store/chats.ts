@@ -1,8 +1,11 @@
 // ADR-0013 — chats CRUD scoped to a project. Parameterized SQL only.
 
 import type { DatabaseSync } from "node:sqlite";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { Chat, ChatConnectedScope, CreateChatOptions, UpdateChatPatch } from "./types.js";
 import { invalidRequest, notFound } from "./errors.js";
+
+const MAX_CONNECTED_SCOPE_PATHS = 50;
 
 const MAX_SELECTED_MODEL_LEN = 160;
 const SELECTED_MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._/\- ]*$/;
@@ -36,6 +39,24 @@ interface ChatRow {
 // ever written via JSON.stringify on a validated string[]; any row that fails to parse to a
 // non-empty string array is treated as a cleared binding rather than throwing, so a corrupted
 // row never bricks the chat list. Validation at write time is enforced at the BFF boundary.
+function validateDecodedPaths(parsed: unknown): readonly string[] | undefined {
+  // Defense-in-depth (Copilot PR #254 finding): even though the BFF boundary validates every
+  // entry via isValidScopePath before writing, a corrupted or tampered DB row must not be
+  // able to re-introduce an absolute or traversal path on read. The same range cap also
+  // applies — a corrupted row carrying 10_000 entries collapses to undefined.
+  if (!Array.isArray(parsed) || parsed.length === 0 || parsed.length > MAX_CONNECTED_SCOPE_PATHS) {
+    return undefined;
+  }
+  const items: string[] = [];
+  for (const entry of parsed) {
+    if (typeof entry !== "string" || !isValidScopePath(entry, { mustBeRelative: true })) {
+      return undefined;
+    }
+    items.push(entry);
+  }
+  return items;
+}
+
 function decodeConnectedScope(
   paths: string | null,
   connectedAt: number | null,
@@ -47,11 +68,12 @@ function decodeConnectedScope(
   } catch {
     return undefined;
   }
-  if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
-  const items: string[] = [];
-  for (const entry of parsed) {
-    if (typeof entry !== "string" || entry.length === 0) return undefined;
-    items.push(entry);
+  const items = validateDecodedPaths(parsed);
+  if (items === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(connectedAt) || connectedAt < 0) {
+    return undefined;
   }
   return { relativePaths: items, connectedAtMs: connectedAt };
 }
@@ -86,8 +108,9 @@ RETURNING ${SELECT_COLUMNS}
 // states without polluting the existing four COALESCE columns: apply_scope = 0 → leave both
 // scope columns untouched (patch.connectedScope === undefined); apply_scope = 1 → write the two
 // scope parameters verbatim (writing NULL into both clears the binding when patch.connectedScope
-// === null; writing JSON+ms sets it). Parameter order: title, model, branch, status, updated_at,
-// apply_scope, scope_paths, scope_at, id.
+// === null; writing JSON+ms sets it). The statement contains TWO separate `CASE WHEN ? = 1`
+// guards (one per column) so the same apply_scope value is passed twice. Parameter order:
+// title, model, branch, status, updated_at, apply_scope, scope_paths, apply_scope, scope_at, id.
 const SQL_UPDATE = `
 UPDATE chats SET
   title = COALESCE(?, title),
@@ -159,18 +182,21 @@ const VALID_CHAT_STATUSES: ReadonlySet<string> = new Set(["open", "closed"]);
 // gate (path validation via isValidScopePath, range guard, finite-integer guard); these checks
 // are a runtime safety net for in-process callers that bypass HTTP, and for the cast from
 // `unknown`. They must never weaken the BFF rules: the criteria here are strict-subset.
-const MAX_CONNECTED_SCOPE_PATHS = 50;
 
 function validateConnectedScopeShape(scope: ChatConnectedScope): void {
   if (!Array.isArray(scope.relativePaths)) {
     throw invalidRequest("connectedScope.relativePaths must be an array.");
   }
   if (scope.relativePaths.length === 0 || scope.relativePaths.length > MAX_CONNECTED_SCOPE_PATHS) {
-    throw invalidRequest("connectedScope.relativePaths length out of range.");
+    throw invalidRequest(
+      `connectedScope.relativePaths length out of range (1..${String(MAX_CONNECTED_SCOPE_PATHS)}).`,
+    );
   }
   for (const entry of scope.relativePaths) {
-    if (typeof entry !== "string" || entry.length === 0) {
-      throw invalidRequest("connectedScope.relativePaths entries must be non-empty strings.");
+    if (typeof entry !== "string" || !isValidScopePath(entry, { mustBeRelative: true })) {
+      throw invalidRequest(
+        "connectedScope.relativePaths must contain valid workspace-relative paths.",
+      );
     }
   }
   if (

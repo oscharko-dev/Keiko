@@ -67,11 +67,16 @@ export function ConnectedScopePill({
     }
   }
 
+  // The status/live region is text-only (Copilot PR #254 finding: interactive controls inside
+  // a status region produce inconsistent screen-reader announcements). The disconnect button
+  // sits as a SIBLING of the live region so its native disabled/onClick behaviour stays clean.
   return (
     <span className="scope-pill-wrap">
-      <span className="scope-pill" role="status" aria-live="polite">
+      <span className="scope-pill">
         <span aria-hidden="true">●</span>
-        <span>{label}</span>
+        <span role="status" aria-live="polite">
+          {label}
+        </span>
         <button
           type="button"
           className="scope-pill-disconnect"
