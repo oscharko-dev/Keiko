@@ -34,3 +34,27 @@ export {
   listCapsuleSets,
   type CreateCapsuleSetInput,
 } from "./capsule-set-lifecycle.js";
+
+export {
+  DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_UNITS,
+  DEFAULT_TIMEOUT_MS,
+  PARSER_ERROR_CODES,
+  buildParserOptions,
+  createDefaultParserRegistry,
+  createParserRegistry,
+  csvParser,
+  htmlParser,
+  jsonParser,
+  registerParser,
+  resolveParser,
+  textParser,
+  unsupportedParser,
+  type ParserAdapter,
+  type ParserCapability,
+  type ParserErrorCode,
+  type ParserOptions,
+  type ParserRegistry,
+  type ParserResolution,
+  type ParserSelectionInput,
+} from "./parsers/index.js";
