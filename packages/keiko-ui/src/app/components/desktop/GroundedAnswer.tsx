@@ -63,11 +63,7 @@ function ContextPackSummary({
       ? `Scope: ${scope}`
       : `Scope: ${String(contextPack.fileCount)} file${contextPack.fileCount === 1 ? "" : "s"} in ${scope}`;
   return (
-    <section
-      className="grounded-context-pack"
-      role="region"
-      aria-label="Context inspection summary"
-    >
+    <section className="grounded-context-pack" aria-label="Context inspection summary">
       <div className="grounded-context-pack-headline">{headline}</div>
       <dl className="grounded-context-pack-dl">
         <MetricRow
