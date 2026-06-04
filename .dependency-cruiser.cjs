@@ -195,6 +195,37 @@ module.exports = {
       },
     },
     {
+      name: "adr-0019-direction-3e-local-knowledge-only-contracts",
+      comment:
+        "ADR-0019 direction rule 3 (local-knowledge strict variant): keiko-local-knowledge " +
+        "may depend only on keiko-contracts. The layer is a deeper leaf than 3a (no " +
+        "keiko-security dependency) because the on-disk capsule store performs pure " +
+        "node:sqlite + path arithmetic and never touches a redactor — redaction lives in " +
+        "the consumers that compose this package (workflows, server). Added at error " +
+        "severity by issue #193 because the local-knowledge package physically exists. " +
+        "Also fires on the negative-test fixture under " +
+        "tests/architecture/fixtures/local-knowledge/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs. The to.path forbids both non-allow-listed " +
+        "packages AND every sibling `src/` shim domain (gateway|workspace|tools|harness|" +
+        "workflows|audit|ui|verification|evaluations) so a future deep-import is caught " +
+        "(boundary-weakening gap pattern from issues #160 and #165). pathNot only filters " +
+        "self-references; it must NOT silently exclude sibling-but-still-in-src/ domains.",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-local-knowledge/src/|" +
+          "tests/architecture/fixtures/local-knowledge/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|local-knowledge)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|local-knowledge)|" +
+          "@oscharko-dev/keiko-(?!contracts|local-knowledge)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+        pathNot: "^packages/keiko-local-knowledge/src/",
+      },
+    },
+    {
       name: "adr-0019-direction-4-harness-scope",
       comment:
         "ADR-0019 direction rule 4 (base safety net): keiko-harness may depend only on " +
