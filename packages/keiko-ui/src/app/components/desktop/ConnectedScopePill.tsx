@@ -21,18 +21,6 @@ export interface ConnectedScopePillProps {
   readonly updateScope?: typeof updateChatConnectedScope;
 }
 
-const PILL_CLASS =
-  "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs " +
-  "bg-[var(--accent)] text-[var(--ink-inverse)] " +
-  "ring-1 ring-inset ring-[color-mix(in_oklab,var(--accent)_70%,#000_30%)]";
-
-const DISCONNECT_BUTTON_CLASS =
-  "inline-flex items-center justify-center min-w-[24px] min-h-[24px] " +
-  "rounded-full p-0.5 text-[var(--ink-inverse)] hover:bg-black/15 " +
-  "disabled:opacity-50 disabled:cursor-not-allowed " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset " +
-  "focus-visible:ring-[var(--ink-inverse)]";
-
 function lastSegment(path: string): string {
   const trimmed = path.replace(/\/+$/, "");
   const slash = trimmed.lastIndexOf("/");
@@ -80,15 +68,14 @@ export function ConnectedScopePill({
   }
 
   return (
-    <span className="inline-flex items-center gap-2">
-      <span className={PILL_CLASS} role="status" aria-live="polite">
+    <span className="scope-pill-wrap">
+      <span className="scope-pill" role="status" aria-live="polite">
         <span aria-hidden="true">●</span>
         <span>{label}</span>
         <button
           type="button"
-          className={DISCONNECT_BUTTON_CLASS}
+          className="scope-pill-disconnect"
           disabled={busy}
-          aria-disabled={busy}
           aria-label="Disconnect scope from chat"
           title="Disconnect scope from chat"
           onClick={() => {
@@ -100,7 +87,7 @@ export function ConnectedScopePill({
         </button>
       </span>
       {error !== null ? (
-        <span role="alert" className="text-xs text-red-500">
+        <span role="alert" className="scope-connect-error">
           {error}
         </span>
       ) : null}

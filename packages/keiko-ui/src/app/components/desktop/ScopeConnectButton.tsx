@@ -28,14 +28,6 @@ export interface ScopeConnectButtonProps {
   readonly now?: () => number;
 }
 
-const BUTTON_BASE_CLASS =
-  "inline-flex items-center justify-center gap-1.5 min-w-[24px] min-h-[24px] " +
-  "rounded-md px-2.5 py-1 text-xs font-medium border border-[var(--accent)] " +
-  "bg-[var(--accent)] text-[var(--ink-inverse)] " +
-  "hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed " +
-  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset " +
-  "focus-visible:ring-[var(--accent)]";
-
 function actionLabel(currentScopePaths: readonly string[]): string {
   return currentScopePaths.length > 0 ? "Update connected scope" : "Connect to chat";
 }
@@ -82,9 +74,8 @@ export function ScopeConnectButton({
     <>
       <button
         type="button"
-        className={BUTTON_BASE_CLASS}
+        className="scope-connect-btn"
         disabled={disabled}
-        aria-disabled={disabled}
         aria-label={empty ? "Connect to chat (no selection)" : label}
         title={tooltip}
         onClick={() => {
@@ -94,7 +85,7 @@ export function ScopeConnectButton({
         {busy ? "Connecting…" : label}
       </button>
       {error !== null ? (
-        <span role="alert" className="ml-2 text-xs text-red-500">
+        <span role="alert" className="scope-connect-error">
           {error}
         </span>
       ) : null}

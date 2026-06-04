@@ -21,6 +21,10 @@
   --fg-dim: oklch(0.58 0.004 160);
   --fg-faint: oklch(0.46 0.004 160);
 
+  /* dark text token for use on light/accent backgrounds (Issue #184) */
+  --ink-inverse: oklch(0.18 0.005 160);
+  --ink-muted: oklch(0.58 0.004 160);
+
   /* brand */
   --accent: #4eba87;
   --accent-bright: oklch(0.78 0.13 160);
@@ -5239,3 +5243,87 @@ select.dlg-input {
 }
 
 /* collapsed sidebar adjust */
+
+/* ============================================================
+   Connector UI (Issue #184) — Files window -> chat scope binding
+   ============================================================ */
+.scope-pill-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.scope-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--ink-inverse);
+  font-size: 12px;
+  line-height: 1.2;
+  border: 1px solid color-mix(in oklab, var(--accent) 70%, #000 30%);
+  min-height: 24px;
+}
+
+.scope-pill-disconnect {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-inverse);
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.scope-pill-disconnect:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--ink-inverse) 15%, transparent);
+}
+
+.scope-pill-disconnect:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.scope-pill-disconnect:focus-visible,
+.scope-connect-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.scope-connect-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--ink-inverse);
+  font-size: 12px;
+  line-height: 1.2;
+  border: 1px solid color-mix(in oklab, var(--accent) 70%, #000 30%);
+  cursor: pointer;
+}
+
+.scope-connect-btn:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.scope-connect-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.scope-connect-error {
+  display: block;
+  font-size: 11px;
+  color: var(--danger);
+  margin-top: 4px;
+}
