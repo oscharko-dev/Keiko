@@ -7,3 +7,9 @@
 
 export { KEIKO_LOCAL_KNOWLEDGE_VERSION } from "./version.js";
 export { KnowledgeStoreError, KnowledgePathError, KnowledgeNotFoundError } from "./errors.js";
+export { resolveKnowledgeStorePath, type ResolveKnowledgeStorePathOptions } from "./store-paths.js";
+export {
+  openKnowledgeStore,
+  type KnowledgeStore,
+  type OpenKnowledgeStoreOptions,
+} from "./store.js";
