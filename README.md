@@ -6,6 +6,16 @@ The current npm release starts with local developer-assist workflows for regulat
 
 Keiko is human-controlled by design. It does not commit, push, open pull requests, merge code, or apply changes without an explicit local action. The manifest-producing surfaces emit redacted evidence for audit.
 
+## Report User Findings
+
+If you find a bug or defect while using Keiko, open a GitHub issue with the
+[User Finding template](https://github.com/oscharko-dev/Keiko/issues/new?template=user_finding.yml).
+
+The template adds the `User Findings` label automatically and asks for the
+Keiko version, platform, reproduction steps, expected result, actual result,
+and redacted evidence. Do not include API keys, customer data, private
+endpoints, internal screenshots, private logs, or other secrets.
+
 ## Vision
 
 Keiko's long-term direction is a governed workspace where people can delegate knowledge work to learning agents without giving up control, oversight, or accountability.
