@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { fetchFilesTree, fetchProjects } from "../../../../../lib/api";
-import type { FilesTreeEntry } from "../../../../../lib/types";
+import type { FilesTreeEntry, SelectedScopeKind } from "../../../../../lib/types";
+import { useOptionalChatSessionContext } from "../../context/ChatSessionContext";
 import { Icons } from "../../Icons";
+import { ScopeConnectButton } from "../../ScopeConnectButton";
 import { FileIcon } from "../shared/projectTree";
 import { FilePreview } from "./FilePreview";
 
@@ -38,6 +40,8 @@ function formatBytes(bytes: number): string {
 }
 
 export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): ReactNode {
+  const session = useOptionalChatSessionContext();
+  const activeChat = session?.activeChat;
   const trimmedRoot = root?.trim();
   const configuredRoot = trimmedRoot !== undefined && trimmedRoot.length > 0 ? trimmedRoot : null;
   const [fallbackRoot, setFallbackRoot] = useState<string | null>(null);
@@ -147,13 +151,39 @@ export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): Rea
     void loadDirectory(path);
   };
 
+  const renderScopeConnector = (scopeKind: SelectedScopeKind, relativePath: string): ReactNode => {
+    if (session === null || activeChat === undefined) return null;
+    if (apiRoot.length === 0) return null;
+    if (scopeKind !== "workspace-root" && relativePath.length === 0) return null;
+    return (
+      <ScopeConnectButton
+        chatId={activeChat.id}
+        scopeKind={scopeKind}
+        currentScopeKind={activeChat.connectedScope?.kind}
+        candidateRelativePaths={scopeKind === "workspace-root" ? [] : [relativePath]}
+        onConnected={session.replaceChat}
+      />
+    );
+  };
+
+  const renderRootConnector = (): ReactNode => {
+    const connector = renderScopeConnector("workspace-root", "");
+    if (connector === null) return null;
+    return (
+      <div className="files-scope-bar" role="group" aria-label="Repository scope connector">
+        <span className="files-scope-label">Repository scope</span>
+        {connector}
+      </div>
+    );
+  };
+
   const renderEntry = (entry: FilesTreeEntry, depth: number): ReactNode => {
     const pad = 8 + depth * 13;
     const open = expanded.has(entry.path);
     if (entry.kind === "directory") {
       const state = directories[entry.path];
       return (
-        <div key={entry.path}>
+        <div className="tr-row-wrap" key={entry.path}>
           <button
             className="tr-row"
             data-readable={entry.readable}
@@ -173,6 +203,11 @@ export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): Rea
             <span className="tr-name tr-folder">{entry.name}</span>
             {entry.symlink ? <span className="tr-badge">link</span> : null}
           </button>
+          {entry.readable ? (
+            <div className="tr-connect" style={{ paddingLeft: pad + 20 }}>
+              {renderScopeConnector("directory", entry.path)}
+            </div>
+          ) : null}
           {open ? renderDirectory(entry.path, depth + 1, state) : null}
         </div>
       );
@@ -257,6 +292,7 @@ export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): Rea
       >
         <Icons.reset size={13} />
       </button>
+      {renderRootConnector()}
       <div className="tr files-tree">{renderDirectory("", 0)}</div>
     </div>
   );

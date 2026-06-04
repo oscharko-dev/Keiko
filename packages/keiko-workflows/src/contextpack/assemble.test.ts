@@ -10,6 +10,7 @@ import {
   validateConnectedContextPack,
   type CandidateFile,
   type EvidenceAtom,
+  type LineRange,
   type OmittedContextEntry,
   type RetrievalQuery,
   type SelectedScope,
@@ -47,12 +48,12 @@ function query(): RetrievalQuery {
   };
 }
 
-function atom(scopePath: string, stableId: string): EvidenceAtom {
+function atom(scopePath: string, stableId: string, lineRange?: LineRange): EvidenceAtom {
   return {
     schemaVersion: "1",
     stableId,
     scopePath,
-    lineRange: undefined,
+    lineRange,
     score: 0.7,
     provenance: { kind: "lexical-search", tool: "ripgrep", queryFingerprint: "fp" },
     redactionState: "redacted",
@@ -149,10 +150,42 @@ describe("assembleContextPack", () => {
     const result = await assembleContextPack(input, { nowMs: fixedNow });
     const clipped = result.pack.uncertainty.find((u) => u.kind === "budget-clipped");
     expect(clipped).toBeDefined();
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
     // The first candidate exceeds 5 bytes, so processing stops immediately and the second
     // file is never added.
     expect(result.pack.files.length).toBe(0);
     expect(result.pack.omitted.some((o) => o.reason === "budget-exhausted")).toBe(true);
+  });
+
+  it("starts from caller-supplied usage and skips reranking when that budget is already spent", async () => {
+    let rerankCalls = 0;
+    const reverse: RerankerSeam = {
+      name: "reverse-fake",
+      isAvailable: () => Promise.resolve({ available: true, modelLabel: "fake" }),
+      rerank: (cs) => {
+        rerankCalls += 1;
+        return Promise.resolve([...cs].reverse());
+      },
+    };
+    const input: AssembleInput = {
+      ...baseInput(),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, rerankCallsMax: 1 },
+      initialUsage: {
+        searchCalls: 1,
+        filesRead: 0,
+        excerptBytes: 0,
+        modelInputTokens: 0,
+        modelOutputTokens: 0,
+        elapsedMs: 0,
+        rerankCalls: 1,
+      },
+    };
+    const result = await assembleContextPack(input, { nowMs: fixedNow, reranker: reverse });
+    expect(rerankCalls).toBe(0);
+    expect(result.pack.files.map((f) => f.scopePath)).toEqual(["a.ts", "b.ts"]);
+    expect(result.pack.usage.searchCalls).toBe(1);
+    expect(result.pack.usage.rerankCalls).toBe(1);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
   });
 
   it("emits a no-evidence marker when an excerpt is missing for a candidate path", async () => {
@@ -212,6 +245,93 @@ describe("assembleContextPack", () => {
     expect(r2.pack.budget.excerptBytesMax).toBe(1);
   });
 
+  it("micro-index key is sensitive to excerpt content so commit-state changes are not stale", async () => {
+    const idx = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
+    const first = await assembleContextPack(baseInput(), { nowMs: fixedNow, microIndex: idx });
+    const updated: AssembleInput = {
+      ...baseInput(),
+      excerpts: new Map([
+        ["a.ts", "export const a = 42;"],
+        ["b.ts", "export const b = 2;"],
+      ]),
+    };
+    const second = await assembleContextPack(updated, { nowMs: fixedNow, microIndex: idx });
+    expect(first.fromIndex).toBe(false);
+    expect(second.fromIndex).toBe(false);
+    expect(second.pack.files[0]?.excerpts[0]?.content).toBe("export const a = 42;");
+  });
+
+  it("micro-index key is sensitive to candidate and omitted metadata", async () => {
+    const idx = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
+    const first: AssembleInput = {
+      ...baseInput(),
+      ranked: [
+        {
+          scopePath: "a.ts",
+          score: 0.9,
+          signals: [{ name: "first-signal", value: 1 }],
+          omitted: undefined,
+        },
+      ],
+    };
+    const second: AssembleInput = {
+      ...baseInput(),
+      ranked: [
+        {
+          scopePath: "a.ts",
+          score: 0.9,
+          signals: [{ name: "second-signal", value: 1 }],
+          omitted: undefined,
+        },
+      ],
+      omittedFromRanking: [{ scopePath: "b.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW }],
+    };
+    await assembleContextPack(first, { nowMs: fixedNow, microIndex: idx });
+    const result = await assembleContextPack(second, { nowMs: fixedNow, microIndex: idx });
+    expect(result.fromIndex).toBe(false);
+    expect(result.pack.files[0]?.selectionReason).toBe("ranked by second-signal");
+    expect(result.pack.omitted).toEqual([
+      { scopePath: "b.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW },
+    ]);
+  });
+
+  it("micro-index key still reuses live repeated questions with fresh emitted timestamps", async () => {
+    const idx = createMicroIndex({ ttlMs: 60_000, maxEntries: 8, nowMs: fixedNow });
+    const first: AssembleInput = {
+      ...baseInput(),
+      query: { ...query(), emittedAtMs: FIXED_NOW },
+      atoms: baseInput().atoms.map((entry) => ({ ...entry, emittedAtMs: FIXED_NOW })),
+      initialUsage: {
+        searchCalls: 1,
+        filesRead: 2,
+        excerptBytes: 0,
+        modelInputTokens: 0,
+        modelOutputTokens: 0,
+        elapsedMs: 7,
+        rerankCalls: 0,
+      },
+    };
+    const second: AssembleInput = {
+      ...first,
+      query: { ...query(), emittedAtMs: FIXED_NOW + 1_000 },
+      atoms: first.atoms.map((entry) => ({ ...entry, emittedAtMs: FIXED_NOW + 1_000 })),
+      initialUsage: {
+        searchCalls: 1,
+        filesRead: 2,
+        excerptBytes: 0,
+        modelInputTokens: 0,
+        modelOutputTokens: 0,
+        elapsedMs: 99,
+        rerankCalls: 0,
+      },
+    };
+    const r1 = await assembleContextPack(first, { nowMs: fixedNow, microIndex: idx });
+    const r2 = await assembleContextPack(second, { nowMs: fixedNow, microIndex: idx });
+    expect(r1.fromIndex).toBe(false);
+    expect(r2.fromIndex).toBe(true);
+    expect(r2.pack).toBe(r1.pack);
+  });
+
   it("produces an empty pack when there are no atoms or candidates", async () => {
     const input: AssembleInput = {
       scope: scope(),
@@ -263,5 +383,32 @@ describe("assembleContextPack", () => {
     const result = await assembleContextPack(input, { nowMs: fixedNow });
     const entry = result.pack.files.find((f) => f.scopePath === "a.ts");
     expect(entry?.selectionReason).toBe("ranked by path-bonus");
+  });
+
+  it("slices excerpt windows to each cited atom range instead of duplicating the whole window", async () => {
+    const first = atom("a.ts", "atom-a-10", { startLine: 10, endLine: 10 });
+    const second = atom("a.ts", "atom-a-12", { startLine: 12, endLine: 12 });
+    const input: AssembleInput = {
+      ...baseInput(),
+      atoms: [first, second],
+      ranked: [candidate("a.ts", 0.9)],
+      excerpts: new Map([
+        [
+          "a.ts",
+          [
+            {
+              startLine: 9,
+              endLine: 12,
+              content: "context before\nfirst target\ncontext between\nsecond target",
+            },
+          ],
+        ],
+      ]),
+    };
+    const result = await assembleContextPack(input, { nowMs: fixedNow });
+    const excerpts = result.pack.files[0]?.excerpts;
+    expect(excerpts?.map((excerpt) => excerpt.content)).toEqual(["first target", "second target"]);
+    expect(result.pack.usage.excerptBytes).toBe("first targetsecond target".length);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
   });
 });

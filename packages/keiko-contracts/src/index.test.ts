@@ -14,8 +14,11 @@ import {
   DEFAULT_PATCH_SCOPE_LIMITS,
   EXPECTED_CHECKS,
   WORKFLOW_KINDS,
+  CONNECTED_CONTEXT_SCHEMA_VERSION,
+  SELECTED_SCOPE_KINDS,
   isApprovalTokenShape,
   checkPatchAgainstScope,
+  validateSelectedScope,
   validatePatchScope,
   validateWorkflowHandoffRequest,
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
@@ -49,12 +52,20 @@ import {
   redactPathInDiagnostic,
 } from "./index.js";
 import type {
+  ConnectedContextPack,
   ToolPort,
   ToolCallRequest,
   ToolCallResult,
   ToolCallMetadata,
   SideFileWriteResult,
   EvidenceDeps,
+  EvidenceConnectedContextAudit,
+  EvidenceConnectedContextExcerpt,
+  EvidenceConnectedContextFile,
+  EvidenceConnectedContextOmitted,
+  EvidenceConnectedContextQuery,
+  EvidenceConnectedContextScope,
+  EvidenceConnectedContextUncertainty,
   PatchScope,
   PatchScopeLimits,
   PatchScopeViolation,
@@ -99,6 +110,7 @@ import type {
   KnowledgeCapsuleMigration,
   CapsuleRowShape,
   RedactPathOptions,
+  SelectedScope,
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
@@ -281,5 +293,30 @@ describe("keiko-contracts package surface", () => {
     expect(deps.costClassResolver?.("any")).toBe("unknown");
     const empty: EvidenceDeps = {};
     expect(empty.costClassResolver).toBeUndefined();
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<EvidenceConnectedContextAudit>();
+    pin<EvidenceConnectedContextExcerpt>();
+    pin<EvidenceConnectedContextFile>();
+    pin<EvidenceConnectedContextOmitted>();
+    pin<EvidenceConnectedContextQuery>();
+    pin<EvidenceConnectedContextScope>();
+    pin<EvidenceConnectedContextUncertainty>();
+  });
+
+  it("connected-context barrel exports are reachable through the root surface (#178)", () => {
+    expect(CONNECTED_CONTEXT_SCHEMA_VERSION).toBe("1");
+    expect(SELECTED_SCOPE_KINDS).toContain("files");
+    const scope: SelectedScope = {
+      schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+      scopeId: "scope-1",
+      workspaceRoot: "/repo",
+      kind: "workspace-root",
+      relativePaths: [],
+      conversationId: undefined,
+      connectedAtMs: 1,
+    };
+    expect(validateSelectedScope(scope)).toEqual({ ok: true });
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<ConnectedContextPack>();
   });
 });

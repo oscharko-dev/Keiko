@@ -9,6 +9,7 @@
 // that lets one of these strings escape will break this test.
 
 import { Readable } from "node:stream";
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -53,15 +54,22 @@ const SECRET_SHAPES: readonly string[] = [
   BEARER_FAKE,
   PEM_FAKE,
 ];
+const SECRET_SCOPE_PATH = ["src/", SK_FAKE, ".ts"].join("");
 
 function fakeReq(body: string): IncomingMessage {
   return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
 }
 
+function fakeRes(): RouteContext["res"] {
+  const res = new EventEmitter() as RouteContext["res"] & { writableEnded: boolean };
+  res.writableEnded = false;
+  return res;
+}
+
 function ctx(body: string): RouteContext {
   return {
     req: fakeReq(body),
-    res: {} as RouteContext["res"],
+    res: fakeRes(),
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
   };
@@ -92,12 +100,12 @@ function attackerPack(): ConnectedContextPack {
     stableId: "pack-attacker",
     scope: {
       schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-      // scopeId is BFF-internal; this test uses a deliberately ugly opaque id to prove
-      // even a poisoned scopeId never reaches the wire via a query/path field.
-      scopeId: "cs-deadbeefcafef00d",
+      // scopeId is BFF-internal but the contract only validates it as non-empty; a poisoned
+      // scopeId must still be fingerprinted before it reaches the browser wire.
+      scopeId: `cs-${SK_FAKE}`,
       workspaceRoot: `/tmp/${SK_FAKE}-leak`,
       kind: "files",
-      relativePaths: ["src/poison.ts"],
+      relativePaths: [SECRET_SCOPE_PATH],
       conversationId: "chat-1",
       connectedAtMs: NOW,
     },
@@ -121,7 +129,7 @@ function attackerPack(): ConnectedContextPack {
     usage: {
       searchCalls: 0,
       filesRead: 1,
-      excerptBytes: 32,
+      excerptBytes: PEM_FAKE.length,
       modelInputTokens: 0,
       modelOutputTokens: 0,
       elapsedMs: 0,
@@ -129,7 +137,7 @@ function attackerPack(): ConnectedContextPack {
     },
     files: [
       {
-        scopePath: "src/poison.ts",
+        scopePath: SECRET_SCOPE_PATH,
         role: "read-only",
         selectionReason: "test selection",
         excerpts: [
@@ -137,7 +145,7 @@ function attackerPack(): ConnectedContextPack {
             atom: {
               schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
               stableId: "atom-poison",
-              scopePath: "src/poison.ts",
+              scopePath: SECRET_SCOPE_PATH,
               lineRange: { startLine: 1, endLine: 3 },
               score: 0.9,
               provenance: {
@@ -194,7 +202,7 @@ async function setupChat(): Promise<string> {
   const project = store.createProject(tmp, "demo");
   const chat = store.createChat(project.path, "Redaction test", CHAT_MODEL);
   store.updateChat(chat.id, {
-    connectedScope: { relativePaths: ["src/poison.ts"], connectedAtMs: NOW },
+    connectedScope: { kind: "files", relativePaths: [SECRET_SCOPE_PATH], connectedAtMs: NOW },
   });
   return Promise.resolve(chat.id);
 }
@@ -236,7 +244,7 @@ describe("grounded-qa redaction guard (Issue #187 / ADR-0022 D4)", () => {
       // it sees only the user's content arg plus structural counts. Using a known-safe
       // assistantContent here proves the wire surface is the contract boundary, not the
       // orchestrator's content production rules.
-      runner(attackerPack(), "Inspected 1 file(s) for the query."),
+      runner(attackerPack(), `Inspected ${SK_FAKE} in one selected path.`),
     );
     const answer = result.body as GroundedAnswer;
     assertNoSecretShape(answer.content, "answer.content");
@@ -257,8 +265,8 @@ describe("grounded-qa redaction guard (Issue #187 / ADR-0022 D4)", () => {
     // no `content` field by construction. The keys check guards against a future drift.
     const keys = Object.keys(citation ?? {}).sort();
     expect(keys).toEqual(["lineRange", "scopePath", "score", "stableId"]);
-    // The scopePath in this fixture is just 'src/poison.ts' — no secret shapes. We assert
-    // that the entire serialised citation still passes the redaction shape check.
+    // The source scopePath carries a secret-shaped filename. The BFF must redact it before
+    // the citation crosses the browser wire.
     const serialised = JSON.stringify(citation);
     assertNoSecretShape(serialised, "citation JSON");
     // Excerpt content (PEM block) and query text never leak through citations.

@@ -118,15 +118,33 @@ describe("updateChat — connectedScope round-trip (#184)", () => {
   it("sets a connectedScope and round-trips it through SELECT", () => {
     const c = store.createChat(proj, "t", "m");
     const updated = store.updateChat(c.id, {
-      connectedScope: { relativePaths: ["src/lib", "src/app/page.tsx"], connectedAtMs: 42 },
+      connectedScope: {
+        kind: "files",
+        relativePaths: ["src/lib", "src/app/page.tsx"],
+        connectedAtMs: 42,
+      },
     });
     expect(updated.connectedScope).toEqual({
+      kind: "files",
       relativePaths: ["src/lib", "src/app/page.tsx"],
       connectedAtMs: 42,
     });
     const fetched = store.listChats(proj).find((x) => x.id === c.id);
     expect(fetched?.connectedScope).toEqual({
+      kind: "files",
       relativePaths: ["src/lib", "src/app/page.tsx"],
+      connectedAtMs: 42,
+    });
+  });
+
+  it("sets a repository-root connectedScope with empty relativePaths", () => {
+    const c = store.createChat(proj, "t", "m");
+    const updated = store.updateChat(c.id, {
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 42 },
+    });
+    expect(updated.connectedScope).toEqual({
+      kind: "workspace-root",
+      relativePaths: [],
       connectedAtMs: 42,
     });
   });
@@ -134,7 +152,7 @@ describe("updateChat — connectedScope round-trip (#184)", () => {
   it("clears connectedScope when patched with null", () => {
     const c = store.createChat(proj, "t", "m");
     store.updateChat(c.id, {
-      connectedScope: { relativePaths: ["src/a"], connectedAtMs: 1 },
+      connectedScope: { kind: "files", relativePaths: ["src/a"], connectedAtMs: 1 },
     });
     const cleared = store.updateChat(c.id, { connectedScope: null });
     expect(cleared.connectedScope).toBeUndefined();
@@ -145,11 +163,12 @@ describe("updateChat — connectedScope round-trip (#184)", () => {
   it("leaves connectedScope untouched when the field is omitted from the patch", () => {
     const c = store.createChat(proj, "t", "m");
     store.updateChat(c.id, {
-      connectedScope: { relativePaths: ["src/keep"], connectedAtMs: 7 },
+      connectedScope: { kind: "files", relativePaths: ["src/keep"], connectedAtMs: 7 },
     });
     const renamed = store.updateChat(c.id, { title: "renamed" });
     expect(renamed.title).toBe("renamed");
     expect(renamed.connectedScope).toEqual({
+      kind: "files",
       relativePaths: ["src/keep"],
       connectedAtMs: 7,
     });
@@ -158,12 +177,13 @@ describe("updateChat — connectedScope round-trip (#184)", () => {
   it("supports replacement: a second scope patch overwrites the prior binding", () => {
     const c = store.createChat(proj, "t", "m");
     store.updateChat(c.id, {
-      connectedScope: { relativePaths: ["src/a"], connectedAtMs: 1 },
+      connectedScope: { kind: "files", relativePaths: ["src/a"], connectedAtMs: 1 },
     });
     const replaced = store.updateChat(c.id, {
-      connectedScope: { relativePaths: ["src/b", "src/c"], connectedAtMs: 2 },
+      connectedScope: { kind: "files", relativePaths: ["src/b", "src/c"], connectedAtMs: 2 },
     });
     expect(replaced.connectedScope).toEqual({
+      kind: "files",
       relativePaths: ["src/b", "src/c"],
       connectedAtMs: 2,
     });
@@ -172,7 +192,9 @@ describe("updateChat — connectedScope round-trip (#184)", () => {
   it("rejects an empty relativePaths array", () => {
     const c = store.createChat(proj, "t", "m");
     expect(() =>
-      store.updateChat(c.id, { connectedScope: { relativePaths: [], connectedAtMs: 1 } }),
+      store.updateChat(c.id, {
+        connectedScope: { kind: "files", relativePaths: [], connectedAtMs: 1 },
+      }),
     ).toThrow(UiStoreError);
   });
 
@@ -180,7 +202,7 @@ describe("updateChat — connectedScope round-trip (#184)", () => {
     const c = store.createChat(proj, "t", "m");
     expect(() =>
       store.updateChat(c.id, {
-        connectedScope: { relativePaths: ["src/a"], connectedAtMs: 1.5 },
+        connectedScope: { kind: "files", relativePaths: ["src/a"], connectedAtMs: 1.5 },
       }),
     ).toThrow(UiStoreError);
   });

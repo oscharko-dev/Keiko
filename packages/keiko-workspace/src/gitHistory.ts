@@ -29,23 +29,30 @@ const HEAD_MAX_BYTES = 256;
 const REFLOG_MAX_BYTES = 1_048_576;
 const REFLOG_MAX_LINES = 10_000;
 
-async function readGuarded(
+function isAllowedExternalGitdir(candidate: string): boolean {
+  return candidate.replace(/\\/g, "/").includes("/.git/worktrees/");
+}
+
+async function readGuardedAbsolute(
   fs: WorkspaceFs,
-  root: string,
-  relativePath: string,
+  base: string,
+  absolutePath: string,
+  label: string,
   maxBytes: number,
 ): Promise<string | undefined> {
-  const abs = resolveWithinWorkspace(root, relativePath);
   try {
-    assertContainedRealPath(fs, root, abs, relativePath);
+    assertContainedRealPath(fs, base, absolutePath, label);
   } catch {
     return undefined;
   }
-  if (!fs.exists(abs)) {
+  if (!fs.exists(absolutePath)) {
     return undefined;
   }
-  const stat = fs.stat(abs);
+  const stat = fs.stat(absolutePath);
   if (!stat.isFile) {
+    return undefined;
+  }
+  if (stat.hardLinkCount !== undefined && stat.hardLinkCount > 1) {
     return undefined;
   }
   // Enforce the size cap BEFORE reading to avoid loading multi-megabyte files into memory
@@ -54,7 +61,7 @@ async function readGuarded(
     if (fs.readFileBytes !== undefined) {
       let bytes: Uint8Array;
       try {
-        bytes = await fs.readFileBytes(abs, maxBytes);
+        bytes = await fs.readFileBytes(absolutePath, maxBytes);
       } catch {
         return undefined;
       }
@@ -64,7 +71,7 @@ async function readGuarded(
   }
   let raw: string;
   try {
-    raw = fs.readFileUtf8(abs);
+    raw = fs.readFileUtf8(absolutePath);
   } catch {
     return undefined;
   }
@@ -101,13 +108,28 @@ function readWorktreePointerTarget(fs: WorkspaceFs, dotGit: string): string | un
   return target;
 }
 
-function isContainedAndPresent(fs: WorkspaceFs, root: string, abs: string, label: string): boolean {
+function isContainedAndPresent(fs: WorkspaceFs, base: string, abs: string, label: string): boolean {
   try {
-    assertContainedRealPath(fs, root, abs, label);
+    assertContainedRealPath(fs, base, abs, label);
   } catch {
     return false;
   }
   return fs.exists(abs);
+}
+
+function acceptsPointedGitdir(
+  fs: WorkspaceFs,
+  root: string,
+  target: string,
+  candidate: string,
+): boolean {
+  if (!target.startsWith("/")) {
+    return true;
+  }
+  if (isContainedAndPresent(fs, root, candidate, ".git pointer")) {
+    return true;
+  }
+  return isAllowedExternalGitdir(candidate);
 }
 
 // Find the first 10-digit run that is not preceded by '<'. Avoids regex backtracking.
@@ -195,16 +217,14 @@ function resolveGitdir(fs: WorkspaceFs, root: string): string | undefined {
     return undefined;
   }
   const candidate = target.startsWith("/") ? target : resolveWithinWorkspace(root, target);
-  // Validate: the pointer must not escape the workspace, and HEAD must exist inside the
-  // pointed-at gitdir. We check HEAD rather than the gitdir itself because some WorkspaceFs
-  // impls (notably memFs) do not surface implicit directory entries.
-  try {
-    assertContainedRealPath(fs, root, candidate, ".git pointer");
-  } catch {
+  // Real git worktrees usually point outside the checkout root to `.git/worktrees/<name>`.
+  // Allow that one narrow shape, but still constrain the actual reads to files whose realpaths
+  // stay inside the resolved gitdir itself.
+  if (!acceptsPointedGitdir(fs, root, target, candidate)) {
     return undefined;
   }
   const pointedHead = `${candidate}/HEAD`;
-  if (!isContainedAndPresent(fs, root, pointedHead, ".git-pointer/HEAD")) {
+  if (!isContainedAndPresent(fs, candidate, pointedHead, ".git-pointer/HEAD")) {
     return undefined;
   }
   return candidate;
@@ -223,7 +243,7 @@ function isAvailableForScope(scope: SearchScope, fs: WorkspaceFs): boolean {
   }
   // HEAD must exist inside the resolved gitdir.
   const headAbs = `${gitdir}/HEAD`;
-  return isContainedAndPresent(fs, root, headAbs, ".git/HEAD");
+  return isContainedAndPresent(fs, gitdir, headAbs, ".git/HEAD");
 }
 
 export const gitHistoryAdapter: StructuralAdapter = {
@@ -254,12 +274,17 @@ export const gitHistoryAdapter: StructuralAdapter = {
     if (gitdir === undefined) {
       return [];
     }
-    const gitdirRel = gitdir.startsWith(root) ? gitdir.slice(root.length + 1) : gitdir;
-    const head = await readGuarded(fs, root, `${gitdirRel}/HEAD`, HEAD_MAX_BYTES);
+    const head = await readGuardedAbsolute(fs, gitdir, `${gitdir}/HEAD`, ".git/HEAD", HEAD_MAX_BYTES);
     if (head === undefined) {
       return [];
     }
-    const reflog = await readGuarded(fs, root, `${gitdirRel}/logs/HEAD`, REFLOG_MAX_BYTES);
+    const reflog = await readGuardedAbsolute(
+      fs,
+      gitdir,
+      `${gitdir}/logs/HEAD`,
+      ".git/logs/HEAD",
+      REFLOG_MAX_BYTES,
+    );
     if (reflog === undefined || reflog.length === 0) {
       return [];
     }

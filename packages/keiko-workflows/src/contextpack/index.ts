@@ -17,5 +17,11 @@ export { disabledReranker } from "./reranker.js";
 export type { IndexEntry, IndexKeyInput, MicroIndex, MicroIndexOptions } from "./microIndex.js";
 export { createMicroIndex, DEFAULT_MICRO_INDEX, makeIndexKey } from "./microIndex.js";
 
-export type { AssembleInput, AssembleOptions, AssembleResult } from "./assemble.js";
+export type {
+  AssembleInput,
+  AssembleOptions,
+  AssembleResult,
+  ExcerptSource,
+  ExcerptWindow,
+} from "./assemble.js";
 export { assembleContextPack } from "./assemble.js";

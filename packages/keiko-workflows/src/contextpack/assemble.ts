@@ -4,6 +4,8 @@
 // seam + optional micro-index. No IO. The audit ledger (#187) owns persistence and
 // `ledgerRef` is therefore always undefined here.
 
+import { createHash } from "node:crypto";
+
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type CandidateFile,
@@ -34,8 +36,18 @@ export interface AssembleInput {
   readonly atoms: readonly EvidenceAtom[];
   readonly ranked: readonly CandidateFile[];
   readonly omittedFromRanking: readonly OmittedContextEntry[];
-  readonly excerpts: ReadonlyMap<string, string>;
+  readonly excerpts: ReadonlyMap<string, ExcerptSource>;
+  readonly initialUsage?: ExplorationUsage;
+  readonly initialUncertainty?: readonly UncertaintyMarker[];
 }
+
+export interface ExcerptWindow {
+  readonly startLine: number;
+  readonly endLine: number;
+  readonly content: string;
+}
+
+export type ExcerptSource = string | ExcerptWindow | readonly ExcerptWindow[];
 
 export interface AssembleOptions {
   readonly maxBytesPerExcerpt?: number;
@@ -123,11 +135,12 @@ async function applyReranker(
   ranked: readonly CandidateFile[],
   atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>,
   budget: ExplorationBudget,
+  usage: ExplorationUsage,
 ): Promise<RerankerOutcome> {
   // The seam is only invoked when the budget actually allows rerank calls. This keeps
   // ExplorationBudget.rerankCallsMax authoritative even when a custom reranker is supplied
   // and avoids billing a rerank call against a run whose budget set rerankCallsMax=0.
-  if (budget.rerankCallsMax <= 0) {
+  if (usage.rerankCalls >= budget.rerankCallsMax) {
     return { ordered: ranked, reranked: false };
   }
   const availability = await reranker.isAvailable();
@@ -145,28 +158,93 @@ interface BuildPlan {
   readonly extraOmitted: OmittedContextEntry[];
 }
 
-function emptyBuildPlan(): BuildPlan {
+function cloneUsage(usage: ExplorationUsage | undefined): ExplorationUsage {
+  if (usage === undefined) {
+    return zeroUsage();
+  }
+  return { ...usage };
+}
+
+function emptyBuildPlan(
+  initialUsage: ExplorationUsage | undefined,
+  initialUncertainty: readonly UncertaintyMarker[] | undefined,
+): BuildPlan {
   return {
     files: [],
-    usage: zeroUsage(),
-    uncertainty: [],
+    usage: cloneUsage(initialUsage),
+    uncertainty: [...(initialUncertainty ?? [])],
     extraOmitted: [],
   };
 }
 
 function compactAtomsForCandidate(
   atomsForPath: readonly EvidenceAtom[],
-  rawContent: string,
+  source: ExcerptSource,
   maxBytesPerExcerpt: number,
 ): { readonly excerpts: ContextExcerpt[]; readonly totalBytes: number } {
   const excerpts: ContextExcerpt[] = [];
   let totalBytes = 0;
   for (const atom of atomsForPath) {
+    const rawContent = contentForAtom(atom, source);
+    if (rawContent === undefined) {
+      continue;
+    }
     const result = compactExcerpt({ atom, rawContent, maxBytes: maxBytesPerExcerpt });
     excerpts.push(result.excerpt);
     totalBytes += result.bytesConsumed;
   }
   return { excerpts, totalBytes };
+}
+
+function lineCount(content: string): number {
+  if (content.length === 0) {
+    return 0;
+  }
+  return content.split("\n").length;
+}
+
+function isExcerptWindowArray(source: ExcerptSource): source is readonly ExcerptWindow[] {
+  return Array.isArray(source);
+}
+
+function normalizeExcerptWindows(source: ExcerptSource): readonly ExcerptWindow[] {
+  if (typeof source === "string") {
+    return [{ startLine: 1, endLine: lineCount(source), content: source }];
+  }
+  if (isExcerptWindowArray(source)) {
+    return source;
+  }
+  return [source];
+}
+
+function coversAtom(window: ExcerptWindow, atom: EvidenceAtom): boolean {
+  const range = atom.lineRange;
+  return (
+    range === undefined || (window.startLine <= range.startLine && window.endLine >= range.endLine)
+  );
+}
+
+function sliceWindowForAtom(window: ExcerptWindow, atom: EvidenceAtom): string {
+  const range = atom.lineRange;
+  if (range === undefined) {
+    return window.content;
+  }
+  const lines = window.content.split("\n");
+  const startIndex = Math.max(0, range.startLine - window.startLine);
+  const endIndex = Math.min(lines.length, range.endLine - window.startLine + 1);
+  if (startIndex >= endIndex) {
+    return "";
+  }
+  return lines.slice(startIndex, endIndex).join("\n");
+}
+
+function contentForAtom(atom: EvidenceAtom, source: ExcerptSource): string | undefined {
+  const windows = normalizeExcerptWindows(source);
+  const selected = windows.find((window) => coversAtom(window, atom));
+  if (selected === undefined) {
+    return undefined;
+  }
+  return sliceWindowForAtom(selected, atom);
 }
 
 function appendUsage(usage: ExplorationUsage, addedBytes: number): ExplorationUsage {
@@ -179,7 +257,7 @@ function appendUsage(usage: ExplorationUsage, addedBytes: number): ExplorationUs
 
 interface ProcessContext {
   readonly atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>;
-  readonly excerpts: ReadonlyMap<string, string>;
+  readonly excerpts: ReadonlyMap<string, ExcerptSource>;
   readonly budget: ExplorationBudget;
   readonly maxBytesPerExcerpt: number;
   readonly editablePaths: ReadonlySet<string>;
@@ -197,7 +275,9 @@ function recordBudgetClip(
   plan.uncertainty.push({
     kind: "budget-clipped",
     claim: `context pack truncated at ${candidate.scopePath}`,
-    impactedAtomIds: atomsForPath.map((a) => a.stableId),
+    // The clipped candidate is omitted from pack.files, so its atoms are not valid
+    // uncertainty references under the connected-context contract.
+    impactedAtomIds: [],
     emittedAtMs: nowMs,
   });
   plan.extraOmitted.push({
@@ -205,6 +285,31 @@ function recordBudgetClip(
     reason: "budget-exhausted",
     omittedAtMs: nowMs,
   });
+}
+
+function recordNoEvidence(plan: BuildPlan, claim: string, nowMs: number): void {
+  plan.uncertainty.push({
+    kind: "no-evidence",
+    claim,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  });
+}
+
+function recordPreMarkedOmission(
+  plan: BuildPlan,
+  candidate: CandidateFile,
+  nowMs: number,
+): boolean {
+  if (candidate.omitted === undefined) {
+    return false;
+  }
+  plan.extraOmitted.push({
+    scopePath: candidate.scopePath,
+    reason: candidate.omitted,
+    omittedAtMs: nowMs,
+  });
+  return true;
 }
 
 function processCandidate(
@@ -216,22 +321,12 @@ function processCandidate(
   // The candidate's atoms may still exist in input.atoms (the ranker only drops them from
   // its kept list), but they must not enter pack.files — that would contradict the
   // omission semantics of CandidateFile.omitted.
-  if (candidate.omitted !== undefined) {
-    plan.extraOmitted.push({
-      scopePath: candidate.scopePath,
-      reason: candidate.omitted,
-      omittedAtMs: ctx.nowMs,
-    });
+  if (recordPreMarkedOmission(plan, candidate, ctx.nowMs)) {
     return "continue";
   }
-  const rawContent = ctx.excerpts.get(candidate.scopePath);
-  if (rawContent === undefined) {
-    plan.uncertainty.push({
-      kind: "no-evidence",
-      claim: `excerpt unavailable for ${candidate.scopePath}`,
-      impactedAtomIds: [],
-      emittedAtMs: ctx.nowMs,
-    });
+  const excerptSource = ctx.excerpts.get(candidate.scopePath);
+  if (excerptSource === undefined) {
+    recordNoEvidence(plan, `excerpt unavailable for ${candidate.scopePath}`, ctx.nowMs);
     return "continue";
   }
   const atomsForPath = ctx.atomsByPath.get(candidate.scopePath) ?? [];
@@ -240,9 +335,17 @@ function processCandidate(
   }
   const { excerpts, totalBytes } = compactAtomsForCandidate(
     atomsForPath,
-    rawContent,
+    excerptSource,
     ctx.maxBytesPerExcerpt,
   );
+  if (excerpts.length === 0) {
+    recordNoEvidence(
+      plan,
+      `excerpt unavailable for cited ranges in ${candidate.scopePath}`,
+      ctx.nowMs,
+    );
+    return "continue";
+  }
   const checkpoint: BudgetCheckpoint = {
     atoms: atomsForPath,
     budget: ctx.budget,
@@ -262,8 +365,13 @@ function processCandidate(
   return "continue";
 }
 
-function buildPlan(ordered: readonly CandidateFile[], ctx: ProcessContext): BuildPlan {
-  const plan = emptyBuildPlan();
+function buildPlan(
+  ordered: readonly CandidateFile[],
+  ctx: ProcessContext,
+  initialUsage: ExplorationUsage | undefined,
+  initialUncertainty: readonly UncertaintyMarker[] | undefined,
+): BuildPlan {
+  const plan = emptyBuildPlan(initialUsage, initialUncertainty);
   for (const candidate of ordered) {
     const outcome = processCandidate(plan, candidate, ctx);
     if (outcome === "budget-clipped") {
@@ -308,16 +416,121 @@ function buildPack(input: AssembleInput, plan: BuildPlan, nowMs: number): Connec
 // different budgets, per-excerpt caps, editable-file sets, or reranker MUST hash to
 // different keys — otherwise we could serve a cached pack that violates the new budget or
 // carries the wrong file roles/order.
+function sha256Hex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function cacheLineRange(range: EvidenceAtom["lineRange"]): object | undefined {
+  if (range === undefined) {
+    return undefined;
+  }
+  return { startLine: range.startLine, endLine: range.endLine };
+}
+
+function cacheScope(scope: SelectedScope): object {
+  return {
+    schemaVersion: scope.schemaVersion,
+    scopeId: scope.scopeId,
+    workspaceRoot: scope.workspaceRoot,
+    kind: scope.kind,
+    relativePaths: scope.relativePaths,
+    conversationId: scope.conversationId,
+    connectedAtMs: scope.connectedAtMs,
+  };
+}
+
+function cacheQuery(query: RetrievalQuery): object {
+  return {
+    kind: query.kind,
+    text: query.text,
+    caseSensitive: query.caseSensitive,
+    maxResults: query.maxResults,
+  };
+}
+
+function cacheAtom(atom: EvidenceAtom): object {
+  return {
+    stableId: atom.stableId,
+    scopePath: atom.scopePath,
+    lineRange: cacheLineRange(atom.lineRange),
+    score: atom.score,
+    provenance: atom.provenance,
+    redactionState: atom.redactionState,
+    ledgerRef: atom.ledgerRef,
+  };
+}
+
+function cacheUsage(usage: ExplorationUsage | undefined): object | undefined {
+  if (usage === undefined) {
+    return undefined;
+  }
+  return {
+    searchCalls: usage.searchCalls,
+    filesRead: usage.filesRead,
+    excerptBytes: usage.excerptBytes,
+    modelInputTokens: usage.modelInputTokens,
+    modelOutputTokens: usage.modelOutputTokens,
+    rerankCalls: usage.rerankCalls,
+  };
+}
+
+function cacheUncertainty(marker: UncertaintyMarker): object {
+  return {
+    kind: marker.kind,
+    claim: marker.claim,
+    impactedAtomIds: marker.impactedAtomIds,
+  };
+}
+
+function cacheCandidate(candidate: CandidateFile): object {
+  return {
+    scopePath: candidate.scopePath,
+    score: candidate.score,
+    signals: candidate.signals.map((signal) => ({ name: signal.name, value: signal.value })),
+    omitted: candidate.omitted,
+  };
+}
+
+function cacheOmitted(entry: OmittedContextEntry): object {
+  return {
+    scopePath: entry.scopePath,
+    reason: entry.reason,
+  };
+}
+
+function cacheExcerptWindow(window: ExcerptWindow): object {
+  return {
+    startLine: window.startLine,
+    endLine: window.endLine,
+    contentHash: sha256Hex(window.content),
+  };
+}
+
+function cacheExcerpts(excerpts: ReadonlyMap<string, ExcerptSource>): readonly object[] {
+  return [...excerpts.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([scopePath, source]) => ({
+      scopePath,
+      windows: normalizeExcerptWindows(source).map(cacheExcerptWindow),
+    }));
+}
+
 function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): readonly string[] {
-  const fingerprint = JSON.stringify({
-    atoms: input.atoms.map((a) => a.stableId),
+  const fingerprintSource = JSON.stringify({
+    scope: cacheScope(input.scope),
+    query: cacheQuery(input.query),
+    atoms: input.atoms.map(cacheAtom),
     budget: input.budget,
-    ranked: input.ranked.map((c) => c.scopePath),
+    initialUsage: cacheUsage(input.initialUsage),
+    initialUncertainty: input.initialUncertainty?.map(cacheUncertainty),
+    ranked: input.ranked.map(cacheCandidate),
+    omittedFromRanking: input.omittedFromRanking.map(cacheOmitted),
+    excerpts: cacheExcerpts(input.excerpts),
     maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
     editablePaths: [...resolved.editablePaths].sort(),
     rerankerName: resolved.reranker.name,
   });
-  return [fingerprint];
+  return [`fp-${sha256Hex(fingerprintSource)}`];
 }
 
 export async function assembleContextPack(
@@ -336,21 +549,28 @@ export async function assembleContextPack(
     return { pack: cached, fromIndex: true };
   }
   const atomsByPath = groupAtomsByPath(input.atoms);
+  const initialUsage = cloneUsage(input.initialUsage);
   const rerankerOutcome = await applyReranker(
     resolved.reranker,
     input.ranked,
     atomsByPath,
     input.budget,
+    initialUsage,
   );
   const now = resolved.nowMs();
-  const plan = buildPlan(rerankerOutcome.ordered, {
-    atomsByPath,
-    excerpts: input.excerpts,
-    budget: input.budget,
-    maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
-    editablePaths: resolved.editablePaths,
-    nowMs: now,
-  });
+  const plan = buildPlan(
+    rerankerOutcome.ordered,
+    {
+      atomsByPath,
+      excerpts: input.excerpts,
+      budget: input.budget,
+      maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
+      editablePaths: resolved.editablePaths,
+      nowMs: now,
+    },
+    initialUsage,
+    input.initialUncertainty,
+  );
   if (rerankerOutcome.reranked) {
     plan.usage = { ...plan.usage, rerankCalls: plan.usage.rerankCalls + 1 };
   }

@@ -106,11 +106,10 @@ describe("rankCandidates", () => {
     expect(result.kept.length).toBe(1);
   });
 
-  it("drops paths that fail isValidScopePath with reason outside-scope", () => {
+  it("counts invalid scope paths without exposing them as omitted entries", () => {
     const bad: EvidenceAtom = { ...atom("../escape.ts", 0.9), scopePath: "../escape.ts" };
     const result = rankCandidates({ atoms: [bad], anchors: [] }, BASE_OPTIONS);
-    const reasons = result.omitted.map((o) => o.reason);
-    expect(reasons.includes("outside-scope")).toBe(true);
+    expect(result.omitted).toEqual([]);
     expect(result.diagnostics.omittedCounts["outside-scope"]).toBe(1);
   });
 

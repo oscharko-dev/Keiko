@@ -90,6 +90,7 @@ function toOmittedEntry(
 
 interface Partitioned {
   readonly kept: CandidateFile[];
+  readonly lowRelevance: CandidateFile[];
   readonly omittedEntries: OmittedContextEntry[];
 }
 
@@ -99,16 +100,36 @@ function partition(
   nowMs: number,
 ): Partitioned {
   const kept: CandidateFile[] = [];
+  const lowRelevance: CandidateFile[] = [];
   const omittedEntries: OmittedContextEntry[] = [];
   for (const entry of entries) {
     const reason = classifyReason(entry, options);
     if (reason === undefined) {
       kept.push(entry.candidate);
+    } else if (reason === "low-relevance") {
+      lowRelevance.push(entry.candidate);
     } else {
       omittedEntries.push(toOmittedEntry(entry.candidate.scopePath, reason, nowMs));
     }
   }
-  return { kept, omittedEntries };
+  return { kept, lowRelevance, omittedEntries };
+}
+
+function normalizeMaxKept(maxKept: number): number {
+  if (!Number.isFinite(maxKept)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(maxKept));
+}
+
+function appendLowRelevanceOmissions(
+  omittedEntries: OmittedContextEntry[],
+  candidates: readonly CandidateFile[],
+  nowMs: number,
+): void {
+  for (const candidate of candidates) {
+    omittedEntries.push(toOmittedEntry(candidate.scopePath, "low-relevance", nowMs));
+  }
 }
 
 export function filterCandidates(
@@ -116,9 +137,18 @@ export function filterCandidates(
   options: FilterOptions,
 ): FilterResult {
   const nowMs = options.nowMs();
-  const { kept, omittedEntries } = partition(entries, options, nowMs);
+  const { kept, lowRelevance, omittedEntries } = partition(entries, options, nowMs);
+  const maxKept = normalizeMaxKept(options.maxKept);
+  lowRelevance.sort(compareKept);
+  if (kept.length === 0 && maxKept > 0) {
+    const fallback = lowRelevance.shift();
+    if (fallback !== undefined) {
+      kept.push(fallback);
+    }
+  }
+  appendLowRelevanceOmissions(omittedEntries, lowRelevance, nowMs);
   kept.sort(compareKept);
-  const overflow = kept.splice(options.maxKept);
+  const overflow = kept.splice(maxKept);
   for (const overflowed of overflow) {
     omittedEntries.push(toOmittedEntry(overflowed.scopePath, "budget-exhausted", nowMs));
   }

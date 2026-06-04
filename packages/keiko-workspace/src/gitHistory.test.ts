@@ -1,8 +1,11 @@
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 import { memFs } from "./_memfs.js";
+import { nodeWorkspaceFs } from "./fs.js";
 import { gitHistoryAdapter } from "./gitHistory.js";
 import { DEFAULT_SEARCH_LIMITS, type SearchScope } from "./repoSearch.js";
 import type { WorkspaceInfo } from "./types.js";
@@ -37,6 +40,14 @@ const SAMPLE_REFLOG =
 function nlq(text: string): RetrievalQuery {
   return { kind: "natural-language", text, caseSensitive: false, maxResults: 100, emittedAtMs: 0 };
 }
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe("gitHistoryAdapter.isAvailable", () => {
   it("is false when there is no .git in the workspace", async () => {
@@ -179,6 +190,38 @@ describe("gitHistoryAdapter — worktree pointer support (Finding 7)", () => {
       ".git": "gitdir: /outside/.git-real",
     });
     await expect(gitHistoryAdapter.isAvailable(scope, fs)).resolves.toBe(false);
+  });
+
+  it("accepts a real git worktree pointer to an external .git/worktrees directory", async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), "keiko-git-worktree-"));
+    const repoRoot = mkdtempSync(join(tmpdir(), "keiko-git-repo-"));
+    tempDirs.push(workspaceRoot, repoRoot);
+    const gitdir = join(repoRoot, ".git", "worktrees", "demo");
+    mkdirSync(join(gitdir, "logs"), { recursive: true });
+    writeFileSync(join(workspaceRoot, ".git"), `gitdir: ${gitdir}\n`, "utf8");
+    writeFileSync(join(gitdir, "HEAD"), "ref: refs/heads/main\n", "utf8");
+    writeFileSync(join(gitdir, "logs", "HEAD"), SAMPLE_REFLOG, "utf8");
+    const workspace: WorkspaceInfo = {
+      root: workspaceRoot,
+      name: "demo",
+      version: "1.0.0",
+      testFramework: "vitest",
+      sourceDirs: ["src"],
+      testDirs: ["tests"],
+      languages: ["typescript", "javascript"],
+      ignoreLines: [],
+    };
+    const scope: SearchScope = { workspace, scopeId: "scope-real-worktree", relativePaths: [] };
+    await expect(gitHistoryAdapter.isAvailable(scope, nodeWorkspaceFs)).resolves.toBe(true);
+    const atoms = await gitHistoryAdapter.lookup(
+      scope,
+      nlq("recent"),
+      DEFAULT_SEARCH_LIMITS,
+      nodeWorkspaceFs,
+      { nowMs: FIXED_NOW },
+    );
+    expect(atoms.length).toBe(1);
+    expect(atoms[0]?.scopePath).toBe(".git/HEAD");
   });
 });
 

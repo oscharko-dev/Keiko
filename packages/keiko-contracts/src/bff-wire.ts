@@ -14,7 +14,9 @@ import type { ModelCapability } from "./gateway.js";
 // browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
 // peer; importing it does not pull in any IO or redaction code.
 import {
+  CANDIDATE_OMISSION_REASONS,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  type CandidateOmissionReason,
   type ConnectedContextPack,
   type ExplorationBudget,
   type ExplorationUsage,
@@ -30,12 +32,15 @@ export interface Project {
   readonly lastOpenedAt: number;
 }
 
-// Issue #184 — the workspace-relative scope binding a Files window selection to a chat. The
-// patch shape distinguishes "no change" (field absent) from "clear" (field set to null) using
-// the standard JSON-patch convention; the stored entity surface carries `undefined` when no
-// scope is bound. Path validation happens at the BFF boundary via isValidScopePath from
-// @oscharko-dev/keiko-contracts/connected-context; this shape carries already-validated paths.
+// Issue #184 — the workspace-relative scope binding a Files window selection to a chat. `kind`
+// mirrors SelectedScope so the binding can represent the repository root, one folder, or one or
+// more file paths. The patch shape distinguishes "no change" (field absent) from "clear" (field
+// set to null) using the standard JSON-patch convention; the stored entity surface carries
+// `undefined` when no scope is bound. Path validation happens at the BFF boundary via
+// isValidScopePath from @oscharko-dev/keiko-contracts/connected-context; this shape carries
+// already-validated paths.
 export interface ChatConnectedScope {
+  readonly kind: SelectedScopeKind;
   readonly relativePaths: readonly string[];
   readonly connectedAtMs: number;
 }
@@ -295,6 +300,9 @@ export interface AgentBugInvestigationInput {
 export interface GroundedAskRequest {
   readonly chatId: string;
   readonly content: string;
+  // The browser sends the selected registry model id so grounded Q&A preserves the Conversation
+  // Center model-selection guardrails instead of silently falling back to the chat's stored model.
+  readonly modelId?: string | undefined;
 }
 
 export interface GroundedEvidenceCitation {
@@ -311,11 +319,12 @@ export interface GroundedUncertainty {
 
 // Counts-only projection of a ConnectedContextPack used to display "what was inspected" on
 // every grounded answer (Issue #187 / ADR-0022). Structurally redaction-free by construction:
-// no scope path, no workspace root, no excerpt content, no query text. The sentinel
-// `fileCount === -1` distinguishes the workspace-root scope (no enumerable file set) from
-// directory/files scopes that always report `relativePaths.length` (>= 1).
+// no raw scope id, no scope path, no workspace root, no excerpt content, no query text. The
+// sentinel `fileCount === -1` distinguishes the workspace-root scope (no enumerable file set)
+// from directory/files scopes that always report `relativePaths.length` (>= 1).
 export interface GroundedAnswerContextPackSummary {
   readonly schemaVersion: typeof CONNECTED_CONTEXT_SCHEMA_VERSION;
+  // Deterministic display fingerprint, not the raw SelectedScope.scopeId.
   readonly scopeId: string;
   readonly scopeKind: SelectedScopeKind;
   readonly fileCount: number;
@@ -324,13 +333,40 @@ export interface GroundedAnswerContextPackSummary {
   readonly budget: ExplorationBudget;
   readonly citationCount: number;
   readonly omittedCount: number;
+  readonly omittedCounts: Readonly<Record<CandidateOmissionReason, number>>;
   readonly uncertaintyCount: number;
   readonly elapsedMs: number;
 }
 
+function buildOmittedCounts(
+  pack: ConnectedContextPack,
+): Readonly<Record<CandidateOmissionReason, number>> {
+  const counts = {} as Record<CandidateOmissionReason, number>;
+  for (const reason of CANDIDATE_OMISSION_REASONS) {
+    counts[reason] = 0;
+  }
+  for (const entry of pack.omitted) {
+    counts[entry.reason] += 1;
+  }
+  return counts;
+}
+
+function hashString32(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function displayScopeId(scopeId: string): string {
+  return `scope-${hashString32(scopeId)}`;
+}
+
 // Pure builder: derives a GroundedAnswerContextPackSummary from the source pack plus the
 // BFF-computed citation count and total elapsed wall time. No IO, no redaction (the only
-// scope-derived string carried is the opaque `scopeId`); allocates one fresh object.
+// scope-derived string carried is a deterministic display fingerprint); allocates one fresh object.
 export function buildGroundedAnswerContextPackSummary(
   pack: ConnectedContextPack,
   citationCount: number,
@@ -338,7 +374,7 @@ export function buildGroundedAnswerContextPackSummary(
 ): GroundedAnswerContextPackSummary {
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-    scopeId: pack.scope.scopeId,
+    scopeId: displayScopeId(pack.scope.scopeId),
     scopeKind: pack.scope.kind,
     fileCount: pack.scope.kind === "workspace-root" ? -1 : pack.scope.relativePaths.length,
     queryKind: pack.query.kind,
@@ -346,6 +382,7 @@ export function buildGroundedAnswerContextPackSummary(
     budget: pack.budget,
     citationCount,
     omittedCount: pack.omitted.length,
+    omittedCounts: buildOmittedCounts(pack),
     uncertaintyCount: pack.uncertainty.length,
     elapsedMs,
   };
@@ -354,6 +391,7 @@ export function buildGroundedAnswerContextPackSummary(
 export interface GroundedAnswer {
   readonly userMessageId: string;
   readonly assistantMessageId: string;
+  readonly evidenceRunId?: string | undefined;
   readonly content: string;
   readonly citations: readonly GroundedEvidenceCitation[];
   readonly uncertainty: readonly GroundedUncertainty[];

@@ -25,6 +25,19 @@ function uncertainty(overrides: Partial<GroundedUncertainty> = {}): GroundedUnce
   return { kind: "no-evidence", claim: "excerpt unavailable for src/baz.ts", ...overrides };
 }
 
+const OMITTED_COUNTS_ZERO = {
+  "outside-scope": 0,
+  binary: 0,
+  generated: 0,
+  ignored: 0,
+  "size-exceeded": 0,
+  "near-duplicate": 0,
+  "low-relevance": 0,
+  "redacted-only": 0,
+  "budget-exhausted": 0,
+  "tool-unavailable": 0,
+} as const;
+
 function contextPack(
   overrides: Partial<GroundedAnswerContextPackSummary> = {},
 ): GroundedAnswerContextPackSummary {
@@ -54,6 +67,7 @@ function contextPack(
     },
     citationCount: 1,
     omittedCount: 0,
+    omittedCounts: OMITTED_COUNTS_ZERO,
     uncertaintyCount: 0,
     elapsedMs: 1_812,
     ...overrides,
@@ -82,7 +96,7 @@ describe("GroundedAnswer", () => {
 
   it("renders the busy placeholder when answer is undefined and busy", () => {
     render(<GroundedAnswer answer={undefined} busy={true} />);
-    expect(screen.getByText(/Asking Keiko/)).toBeInTheDocument();
+    expect(screen.getByText(/Exploring repository context/)).toBeInTheDocument();
   });
 
   it("renders the assistant content", () => {
@@ -90,7 +104,7 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText(/Inspected 1 file/)).toBeInTheDocument();
   });
 
-  it("renders one button per citation with the path:start-end label", () => {
+  it("renders one static evidence reference per citation with the path:start-end label", () => {
     const a = answer({
       citations: [
         citation({
@@ -107,12 +121,13 @@ describe("GroundedAnswer", () => {
       ],
     });
     render(<GroundedAnswer answer={a} busy={false} />);
-    const buttons = screen.getAllByRole("button");
-    expect(buttons).toHaveLength(2);
-    expect(buttons[0]?.textContent).toContain("src/foo.ts:1-4");
-    expect(buttons[1]?.textContent).toContain("src/bar.ts:10-12");
-    expect(buttons[0]?.getAttribute("aria-label")).toContain("src/foo.ts");
-    expect(buttons[0]?.getAttribute("aria-label")).toContain("lines 1-4");
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    expect(screen.getByText("src/foo.ts:1-4")).toBeInTheDocument();
+    expect(screen.getByText("src/bar.ts:10-12")).toBeInTheDocument();
+    expect(screen.getByText("src/foo.ts:1-4").closest(".grounded-citation")).toHaveAttribute(
+      "title",
+      "Evidence citation in src/foo.ts at lines 1-4",
+    );
   });
 
   it("renders the scopePath alone when the citation has no lineRange", () => {
@@ -120,12 +135,14 @@ describe("GroundedAnswer", () => {
       citations: [citation({ lineRange: undefined, scopePath: "src/qux.ts", stableId: "q" })],
     });
     render(<GroundedAnswer answer={a} busy={false} />);
-    const button = screen.getByRole("button");
-    expect(button.textContent).toContain("src/qux.ts");
-    expect(button.getAttribute("aria-label")).toBe("Evidence citation in src/qux.ts");
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
+    expect(screen.getByText("src/qux.ts").closest(".grounded-citation")).toHaveAttribute(
+      "title",
+      "Evidence citation in src/qux.ts",
+    );
   });
 
-  it("renders the uncertainty marker count + deduped kinds", () => {
+  it("renders the uncertainty marker count, deduped kinds, and claims", () => {
     const a = answer({
       uncertainty: [
         uncertainty({ kind: "no-evidence" }),
@@ -134,7 +151,12 @@ describe("GroundedAnswer", () => {
       ],
     });
     render(<GroundedAnswer answer={a} busy={false} />);
-    expect(screen.getByText("(3 markers — no-evidence, budget-clipped)")).toBeInTheDocument();
+    expect(
+      screen.getByText("Uncertainty (3 markers — no-evidence, budget-clipped)"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("no-evidence: excerpt unavailable for src/baz.ts")).toBeInTheDocument();
+    expect(screen.getByText("no-evidence: other")).toBeInTheDocument();
+    expect(screen.getByText("budget-clipped: clipped at foo")).toBeInTheDocument();
   });
 
   it("does not render an uncertainty line when there are no markers", () => {
@@ -143,8 +165,21 @@ describe("GroundedAnswer", () => {
   });
 
   it("renders the omitted count when > 0", () => {
-    render(<GroundedAnswer answer={answer({ omittedCount: 3 })} busy={false} />);
-    expect(screen.getByText("Omitted: 3 evidence atoms")).toBeInTheDocument();
+    render(
+      <GroundedAnswer
+        answer={answer({
+          omittedCount: 3,
+          contextPack: contextPack({
+            omittedCount: 3,
+            omittedCounts: { ...OMITTED_COUNTS_ZERO, binary: 1, "low-relevance": 2 },
+          }),
+        })}
+        busy={false}
+      />,
+    );
+    expect(
+      screen.getByText("Omitted: 3 evidence atoms (binary: 1, low relevance: 2)"),
+    ).toBeInTheDocument();
   });
 
   it("does not render an omitted line when count is 0", () => {
@@ -201,7 +236,7 @@ describe("GroundedAnswer", () => {
     expect(region.textContent).toContain("—");
   });
 
-  it("surfaces searchCalls, filesRead, excerptBytes, elapsedMs, and queryKind as metric rows", () => {
+  it("surfaces every context-pack usage and budget dimension as metric rows", () => {
     render(<GroundedAnswer answer={answer()} busy={false} />);
     const region = screen.getByRole("region", { name: "Context inspection summary" });
     expect(region.textContent).toContain("Searched");
@@ -210,9 +245,22 @@ describe("GroundedAnswer", () => {
     expect(region.textContent).toContain("5 / 32 files");
     expect(region.textContent).toContain("Bytes");
     expect(region.textContent).toContain("12400 / 131072 B");
+    expect(region.textContent).toContain("Input");
+    expect(region.textContent).toContain("1500 / 32000 tokens");
+    expect(region.textContent).toContain("Output");
+    expect(region.textContent).toContain("400 / 4096 tokens");
+    expect(region.textContent).toContain("Rerank");
+    expect(region.textContent).toContain("0 / 0 calls");
     expect(region.textContent).toContain("Time");
     expect(region.textContent).toContain("1812 / 30000 ms");
     expect(region.textContent).toContain("Query");
     expect(region.textContent).toContain("natural-language");
+  });
+
+  it("links to the local connected-context audit evidence when a run id is present", () => {
+    render(<GroundedAnswer answer={answer({ evidenceRunId: "grounded-run-1" })} busy={false} />);
+    expect(
+      screen.getByRole("link", { name: "View connected-context audit evidence" }),
+    ).toHaveAttribute("href", "/api/evidence/grounded-run-1");
   });
 });

@@ -2,7 +2,7 @@
 name: Feature / Task
 about: Propose a new feature, implementation task, or chore
 title: ''
-labels: ['type: task', 'status: ready']
+labels: ['type: task', 'status: new']
 assignees: ''
 ---
 
@@ -29,6 +29,17 @@ Describe the goal of this issue and the user, developer, platform, or governance
 - Primary area label: `area:...`.
 - Expected write ownership: list files/modules that may be edited, or say `TBD by coordinator`.
 
+## Delivery Board Workflow
+
+- [ ] Add this issue to the public `Keiko Product Delivery` project before work starts.
+- [ ] Set project `Status` to `Open Issues` while the issue is open and unclaimed.
+- [ ] Keep `Workflow State` current: `New`, `Triaged`, `In Progress`, `PR Open`, `Ready for Human Review`, `Blocked`, `Waiting for User`, or `Done`.
+- [ ] When an agent starts work, set the issue label to `status: in progress`, set project `Status` and `Workflow State` to `In Progress`, and fill `Owner / Agent`.
+- [ ] When implementation starts, fill the `Branch` field with the active branch name.
+- [ ] When a PR is opened, set `Workflow State` to `PR Open`, fill `Pull Request`, and keep `Human Review Required` set to `Yes`.
+- [ ] When the PR is ready for maintainer review, set `Workflow State` to `Ready for Human Review` and replace the issue label with `status: ready for human review`.
+- [ ] Do not mark `Done` until the PR is merged, closure evidence exists, the issue is closed, and project `Status` is set to `Done`.
+
 ## Expected Verification
 
 - [ ] Required GitHub check: `ci`.
@@ -46,6 +57,7 @@ Describe the goal of this issue and the user, developer, platform, or governance
 - [ ] The implementation PR waits for required GitHub checks before merge.
 - [ ] All actionable review findings are fixed or explicitly dispositioned in the PR before merge.
 - [ ] Acceptance Criteria and Expected Verification checkboxes are updated only when evidence exists.
+- [ ] Delivery board fields are updated before handoff, including `Owner / Agent`, `Branch`, `Pull Request`, and `Human Review Required`.
 - [ ] Required documentation, PR evidence, issue comments, migration notes, screenshots, logs, or follow-up issues are completed when requested by this issue.
 - [ ] The issue remains open until implementation is merged, review findings are settled, and closure evidence is recorded.
 

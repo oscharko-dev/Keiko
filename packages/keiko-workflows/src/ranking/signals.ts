@@ -113,8 +113,9 @@ function computeTestPairBonus(scopePath: string, anchors: readonly SearchAnchor[
     return 0;
   }
   const sourcePath = scopePath.replace(/\.test\.ts$/, ".ts").replace(/\.spec\.ts$/, ".ts");
+  const lowerSourcePath = sourcePath.toLowerCase();
   for (const anc of anchors) {
-    if (anc.kind === "path" && anc.term === sourcePath) {
+    if (anc.kind === "path" && anc.term.toLowerCase() === lowerSourcePath) {
       return 1;
     }
   }

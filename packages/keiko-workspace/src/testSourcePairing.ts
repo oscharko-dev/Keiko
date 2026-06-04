@@ -90,10 +90,18 @@ interface PairContext {
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
   readonly fingerprint: string;
+  readonly allowedPaths: ReadonlySet<string> | undefined;
+}
+
+function isAllowedPath(ctx: PairContext, relativePath: string): boolean {
+  return ctx.allowedPaths === undefined || ctx.allowedPaths.has(relativePath);
 }
 
 function firstExistingPair(ctx: PairContext, candidates: readonly string[]): string | undefined {
   for (const candidate of candidates) {
+    if (!isAllowedPath(ctx, candidate)) {
+      continue;
+    }
     const abs = resolveWithinWorkspace(ctx.scope.workspace.root, candidate);
     assertContainedRealPath(ctx.fs, ctx.scope.workspace.root, abs, "scope");
     if (ctx.fs.exists(abs)) {
@@ -124,21 +132,45 @@ function pairForPath(ctx: PairContext, path: string): EvidenceAtom | undefined {
 }
 
 function pathsForSymbol(ctx: PairContext, symbol: string, limits: SearchLimits): readonly string[] {
-  const candidateSet = gatherCandidates(ctx.scope, limits, ctx.fs);
-  const files = candidateSet.files;
   const lowered = symbol.toLowerCase();
   const out: string[] = [];
-  for (const file of files) {
-    const parts = extractExtension(file.relativePath);
+  const files =
+    ctx.allowedPaths === undefined
+      ? gatherCandidates(ctx.scope, limits, ctx.fs).files.map((file) => file.relativePath)
+      : [...ctx.allowedPaths];
+  for (const relativePath of files) {
+    const parts = extractExtension(relativePath);
     if (parts === undefined) {
       continue;
     }
     const base = basenameOf(parts.stem).base.replace(/\.(?:test|spec)$/, "");
     if (base.toLowerCase() === lowered) {
-      out.push(file.relativePath);
+      out.push(relativePath);
     }
   }
   return out;
+}
+
+function allowedPathsForScope(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+): ReadonlySet<string> | undefined {
+  if (scope.relativePaths.length === 0) {
+    return undefined;
+  }
+  return new Set(gatherCandidates(scope, limits, fs).files.map((file) => file.relativePath));
+}
+
+function inputsForQuery(
+  ctx: PairContext,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+): readonly string[] {
+  if (!looksLikePath(query.text)) {
+    return pathsForSymbol(ctx, query.text, limits);
+  }
+  return isAllowedPath(ctx, query.text) ? [query.text] : [];
 }
 
 export const testSourcePairingAdapter: StructuralAdapter = {
@@ -178,8 +210,9 @@ function runLookup(
     fs,
     nowMs: deps?.nowMs ?? Date.now,
     fingerprint: queryFingerprint(query),
+    allowedPaths: allowedPathsForScope(scope, limits, fs),
   };
-  const inputs = looksLikePath(query.text) ? [query.text] : pathsForSymbol(ctx, query.text, limits);
+  const inputs = inputsForQuery(ctx, query, limits);
   const atoms: EvidenceAtom[] = [];
   for (const input of inputs) {
     if (atoms.length >= limits.maxMatchesReturned) {

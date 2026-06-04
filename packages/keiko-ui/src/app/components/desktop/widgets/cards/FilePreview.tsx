@@ -156,7 +156,8 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
         {activeChat !== undefined && session !== null ? (
           <ScopeConnectButton
             chatId={activeChat.id}
-            currentScopePaths={activeChat.connectedScope?.relativePaths ?? []}
+            scopeKind="files"
+            currentScopeKind={activeChat.connectedScope?.kind}
             candidateRelativePaths={candidatePaths}
             onConnected={session.replaceChat}
           />

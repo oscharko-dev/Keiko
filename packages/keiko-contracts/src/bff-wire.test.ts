@@ -1,7 +1,7 @@
 // Unit tests for the GroundedAnswerContextPackSummary builder (Issue #187 / ADR-0022).
 // Each test mutates one field of a known-good fixture so failures point precisely at the
-// broken invariant; tests assert structural absence of leak vectors (workspaceRoot, query
-// text, excerpt content) and the documented `-1` sentinel for workspace-root scope.
+// broken invariant; tests assert structural absence of leak vectors (scopeId, workspaceRoot,
+// query text, excerpt content) and the documented `-1` sentinel for workspace-root scope.
 
 import { describe, expect, it } from "vitest";
 import {
@@ -9,8 +9,10 @@ import {
   type GroundedAnswerContextPackSummary,
 } from "./bff-wire.js";
 import {
+  CANDIDATE_OMISSION_REASONS,
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
+  type CandidateOmissionReason,
   type ConnectedContextPack,
   type ExplorationUsage,
   type RetrievalQuery,
@@ -27,6 +29,14 @@ const USAGE_FIXTURE: ExplorationUsage = {
   elapsedMs: 1_800,
   rerankCalls: 0,
 };
+
+function emptyOmittedCounts(): Record<CandidateOmissionReason, number> {
+  const counts = {} as Record<CandidateOmissionReason, number>;
+  for (const reason of CANDIDATE_OMISSION_REASONS) {
+    counts[reason] = 0;
+  }
+  return counts;
+}
 
 function scope(kind: SelectedScopeKind, relativePaths: readonly string[]): SelectedScope {
   return {
@@ -70,9 +80,10 @@ function pack(overrides: Partial<ConnectedContextPack> = {}): ConnectedContextPa
 describe("buildGroundedAnswerContextPackSummary", () => {
   it("produces a complete summary from a 2-file files-scope pack", () => {
     const summary = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812);
+    expect(summary.scopeId).toMatch(/^scope-[0-9a-f]{8}$/);
     const expected: GroundedAnswerContextPackSummary = {
       schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
-      scopeId: "cs-deadbeefcafef00d",
+      scopeId: summary.scopeId,
       scopeKind: "files",
       fileCount: 2,
       queryKind: "natural-language",
@@ -80,6 +91,7 @@ describe("buildGroundedAnswerContextPackSummary", () => {
       budget: DEFAULT_EXPLORATION_BUDGET,
       citationCount: 4,
       omittedCount: 0,
+      omittedCounts: emptyOmittedCounts(),
       uncertaintyCount: 0,
       elapsedMs: 1_812,
     };
@@ -125,7 +137,17 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     });
     const summary = buildGroundedAnswerContextPackSummary(p, 0, 0);
     expect(summary.omittedCount).toBe(2);
+    expect(summary.omittedCounts.binary).toBe(1);
+    expect(summary.omittedCounts["size-exceeded"]).toBe(1);
+    expect(summary.omittedCounts.generated).toBe(0);
     expect(summary.uncertaintyCount).toBe(1);
+  });
+
+  it("initialises every omitted reason count to zero", () => {
+    const summary = buildGroundedAnswerContextPackSummary(pack(), 0, 0);
+    for (const reason of CANDIDATE_OMISSION_REASONS) {
+      expect(summary.omittedCounts[reason]).toBe(0);
+    }
   });
 
   it("surfaces usage and budget identity-equal to the source pack fields", () => {
@@ -141,10 +163,11 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     expect(summary.elapsedMs).toBe(9_999);
   });
 
-  it("never carries scope.workspaceRoot, scope.relativePaths, or query.text on the summary", () => {
+  it("never carries scope.scopeId, workspaceRoot, relativePaths, or query.text on the summary", () => {
     const dangerous = pack({
       scope: {
         ...scope("files", ["src/.env", "src/keys.ts"]),
+        scopeId: ["sk", "-scopeidsecret1234567890abcdef"].join(""),
         workspaceRoot: ["/leak/", "sk", "-AAAAAAAAAAAAAAAAAAAA"].join(""),
       },
       query: { ...query(), text: ["ghp", "_thisShouldNotEscape123456789abc"].join("") },
@@ -153,6 +176,7 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     const serialised = JSON.stringify(summary);
     expect(serialised).not.toContain("workspaceRoot");
     expect(serialised).not.toContain("relativePaths");
+    expect(serialised).not.toContain("scopeidsecret");
     expect(serialised).not.toContain("src/.env");
     expect(serialised).not.toContain("ghp_");
     expect(serialised).not.toContain("/leak/");
@@ -171,8 +195,8 @@ describe("buildGroundedAnswerContextPackSummary", () => {
     expect(summary.budget.searchCallsMax).toBe(Number.POSITIVE_INFINITY);
   });
 
-  it("structural test: summary JSON is bounded (well below the 600-byte review target)", () => {
+  it("structural test: summary JSON is bounded (well below the 1KB review target)", () => {
     const summary = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812);
-    expect(JSON.stringify(summary).length).toBeLessThan(600);
+    expect(JSON.stringify(summary).length).toBeLessThan(1_000);
   });
 });

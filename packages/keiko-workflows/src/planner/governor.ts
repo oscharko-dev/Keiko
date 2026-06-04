@@ -120,6 +120,9 @@ export function canContinue(state: GovernorState): boolean {
 }
 
 export function advanceRing(state: GovernorState): GovernorState {
+  if (state.status !== "running") {
+    return state;
+  }
   if (state.currentRingIndex >= state.plan.rings.length) {
     return state;
   }
@@ -127,5 +130,8 @@ export function advanceRing(state: GovernorState): GovernorState {
 }
 
 export function complete(state: GovernorState): GovernorState {
+  if (state.status === "budget-exhausted") {
+    return state;
+  }
   return { ...state, status: "completed" };
 }

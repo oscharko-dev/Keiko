@@ -77,7 +77,7 @@ export interface WorkflowHandoffRequest {
 }
 
 // ─── Hashing input DTO (no crypto here; sibling impl hashes this) ─────────────
-// Producers MUST sort the three string-array fields lexically ascending and order
+// Producers MUST sort the four string-array fields lexically ascending and order
 // expectedChecks by EXPECTED_CHECKS index before serializing the seed. The contracts layer
 // names the shape so the hash producer in #187+ has a single source of truth.
 export interface UserApprovalTokenInput {
@@ -88,6 +88,7 @@ export interface UserApprovalTokenInput {
   readonly evidenceAtomIds: readonly string[];
   readonly limits: PatchScopeLimits;
   readonly expectedChecks: readonly ExpectedCheck[];
+  readonly unknowns: readonly string[];
 }
 
 // ─── Patch-scope violation ────────────────────────────────────────────────────
@@ -97,6 +98,7 @@ export type PatchScopeViolationKind =
   | "exceeds-max-patch-bytes"
   | "exceeds-max-new-files"
   | "no-expected-checks"
+  | "invalid-patch-scope"
   | "invalid-patch-entry";
 
 export interface PatchScopeViolation {
@@ -131,12 +133,12 @@ const CONTEXT_PACK_ID_RE = /^(pl-[0-9a-f]{16}|p-[0-9a-f]{64})$/;
 // keeps the validator honest against runtime inputs that bypass the type system — e.g.,
 // objects materialized from JSON.parse or cross-version manifests. Same posture as
 // connected-context.ts schemaMismatch.
-function schemaMismatch(actual: string, expected: string): boolean {
+function schemaMismatch(actual: unknown, expected: string): boolean {
   return actual !== expected;
 }
 
-function isFiniteNonNegativeInteger(value: number): boolean {
-  return Number.isInteger(value) && value >= 0;
+function isFiniteNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 function isNonEmptyTrimmed(value: string): boolean {
@@ -170,6 +172,31 @@ function buildResult(reasons: readonly string[]): ValidationResult {
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readArrayField(
+  source: Record<string, unknown>,
+  field: keyof PatchScope,
+  reasons: string[],
+): readonly unknown[] | undefined {
+  const value = source[field];
+  if (!Array.isArray(value)) {
+    reasons.push(`patchScope.${field} must be an array`);
+    return undefined;
+  }
+  return value as readonly unknown[];
+}
+
+function isExpectedCheck(value: unknown): value is ExpectedCheck {
+  return typeof value === "string" && (EXPECTED_CHECKS as readonly string[]).includes(value);
+}
+
+function isWorkflowKind(value: unknown): value is WorkflowKind {
+  return typeof value === "string" && (WORKFLOW_KINDS as readonly string[]).includes(value);
+}
+
 // ─── Approval-token shape ─────────────────────────────────────────────────────
 export function isApprovalTokenShape(token: string): boolean {
   return APPROVAL_TOKEN_RE.test(token);
@@ -177,23 +204,30 @@ export function isApprovalTokenShape(token: string): boolean {
 
 // ─── PatchScope validation ────────────────────────────────────────────────────
 function validateScopePathArray(
-  values: readonly string[],
+  values: readonly unknown[],
   field: "editablePaths" | "readOnlyPaths",
   reasons: string[],
-): void {
+): readonly string[] | undefined {
+  const parsed: string[] = [];
   for (const value of values) {
     if (typeof value !== "string" || !isNonEmptyTrimmed(value)) {
       reasons.push(`patchScope.${field} contains empty entry`);
-      return;
+      return undefined;
     }
     if (!isValidScopePath(value, { mustBeRelative: true })) {
       reasons.push(`patchScope.${field} contains invalid path`);
-      return;
+      return undefined;
     }
+    parsed.push(value);
   }
+  return parsed;
 }
 
-function validatePatchScopeLimits(limits: PatchScopeLimits, reasons: string[]): void {
+function validatePatchScopeLimits(limits: unknown, reasons: string[]): void {
+  if (!isRecord(limits)) {
+    reasons.push("patchScope.limits must be an object");
+    return;
+  }
   pushIf(
     reasons,
     !isFiniteNonNegativeInteger(limits.maxFileCount),
@@ -216,89 +250,142 @@ function validatePatchScopeLimits(limits: PatchScopeLimits, reasons: string[]): 
   );
 }
 
-function validateExpectedChecks(checks: readonly ExpectedCheck[], reasons: string[]): void {
+function validateExpectedChecks(checks: readonly unknown[], reasons: string[]): void {
   if (checks.length === 0) {
     reasons.push("patchScope.expectedChecks empty");
     return;
   }
   for (const check of checks) {
-    if (!EXPECTED_CHECKS.includes(check)) {
+    if (!isExpectedCheck(check)) {
       reasons.push("patchScope.expectedChecks contains invalid value");
       return;
     }
   }
 }
 
-function validateEvidenceAtomIds(ids: readonly string[], reasons: string[]): void {
+function validateEvidenceAtomIds(
+  ids: readonly unknown[],
+  reasons: string[],
+): readonly string[] | undefined {
   if (ids.length === 0) {
     reasons.push("patchScope.evidenceAtomIds empty");
-    return;
+    return undefined;
   }
+  const parsed: string[] = [];
   for (const id of ids) {
     if (typeof id !== "string" || !isNonEmptyTrimmed(id)) {
       reasons.push("patchScope.evidenceAtomIds contains empty entry");
-      return;
+      return undefined;
     }
+    parsed.push(id);
   }
-  if (hasDuplicates(ids)) {
+  if (hasDuplicates(parsed)) {
     reasons.push("patchScope.evidenceAtomIds contains duplicates");
   }
+  return parsed;
 }
 
-function validateUnknowns(unknowns: readonly string[], reasons: string[]): void {
+function validateUnknowns(unknowns: readonly unknown[], reasons: string[]): void {
   for (const entry of unknowns) {
     if (typeof entry !== "string") {
       reasons.push("patchScope.unknowns contains non-string entry");
       return;
     }
+    if (!isNonEmptyTrimmed(entry)) {
+      reasons.push("patchScope.unknowns contains empty entry");
+      return;
+    }
   }
 }
 
-export function validatePatchScope(scope: PatchScope): ValidationResult {
+interface PatchScopeArrays {
+  readonly editablePaths: readonly unknown[] | undefined;
+  readonly readOnlyPaths: readonly unknown[] | undefined;
+  readonly evidenceAtomIds: readonly unknown[] | undefined;
+  readonly expectedChecks: readonly unknown[] | undefined;
+  readonly unknowns: readonly unknown[] | undefined;
+}
+
+function readPatchScopeArrays(scope: Record<string, unknown>, reasons: string[]): PatchScopeArrays {
+  return {
+    editablePaths: readArrayField(scope, "editablePaths", reasons),
+    readOnlyPaths: readArrayField(scope, "readOnlyPaths", reasons),
+    evidenceAtomIds: readArrayField(scope, "evidenceAtomIds", reasons),
+    expectedChecks: readArrayField(scope, "expectedChecks", reasons),
+    unknowns: readArrayField(scope, "unknowns", reasons),
+  };
+}
+
+function validatePatchScopePaths(arrays: PatchScopeArrays, reasons: string[]): void {
+  const editablePaths = arrays.editablePaths
+    ? validateScopePathArray(arrays.editablePaths, "editablePaths", reasons)
+    : undefined;
+  const readOnlyPaths = arrays.readOnlyPaths
+    ? validateScopePathArray(arrays.readOnlyPaths, "readOnlyPaths", reasons)
+    : undefined;
+  if (editablePaths) {
+    pushIf(reasons, hasDuplicates(editablePaths), "patchScope.editablePaths contains duplicates");
+  }
+  if (readOnlyPaths) {
+    pushIf(reasons, hasDuplicates(readOnlyPaths), "patchScope.readOnlyPaths contains duplicates");
+  }
+  if (editablePaths && readOnlyPaths) {
+    pushIf(
+      reasons,
+      hasIntersection(editablePaths, readOnlyPaths),
+      "patchScope.editablePaths overlaps readOnlyPaths",
+    );
+  }
+}
+
+function validatePatchScopeArrays(arrays: PatchScopeArrays, reasons: string[]): void {
+  validatePatchScopePaths(arrays, reasons);
+  if (arrays.evidenceAtomIds) {
+    validateEvidenceAtomIds(arrays.evidenceAtomIds, reasons);
+  }
+  if (arrays.expectedChecks) {
+    validateExpectedChecks(arrays.expectedChecks, reasons);
+  }
+  if (arrays.unknowns) {
+    validateUnknowns(arrays.unknowns, reasons);
+  }
+}
+
+export function validatePatchScope(scope: unknown): ValidationResult {
   const reasons: string[] = [];
+  if (!isRecord(scope)) {
+    return { ok: false, reasons: ["patchScope must be an object"] };
+  }
   pushIf(
     reasons,
     schemaMismatch(scope.schemaVersion, WORKFLOW_HANDOFF_SCHEMA_VERSION),
     "patchScope.schemaVersion mismatch",
   );
-  validateScopePathArray(scope.editablePaths, "editablePaths", reasons);
-  validateScopePathArray(scope.readOnlyPaths, "readOnlyPaths", reasons);
-  pushIf(
-    reasons,
-    hasDuplicates(scope.editablePaths),
-    "patchScope.editablePaths contains duplicates",
-  );
-  pushIf(
-    reasons,
-    hasDuplicates(scope.readOnlyPaths),
-    "patchScope.readOnlyPaths contains duplicates",
-  );
-  pushIf(
-    reasons,
-    hasIntersection(scope.editablePaths, scope.readOnlyPaths),
-    "patchScope.editablePaths overlaps readOnlyPaths",
-  );
-  validateEvidenceAtomIds(scope.evidenceAtomIds, reasons);
-  validateExpectedChecks(scope.expectedChecks, reasons);
+  validatePatchScopeArrays(readPatchScopeArrays(scope, reasons), reasons);
   validatePatchScopeLimits(scope.limits, reasons);
-  validateUnknowns(scope.unknowns, reasons);
   return buildResult(reasons);
 }
 
 // ─── WorkflowHandoffRequest validation ────────────────────────────────────────
-export function validateWorkflowHandoffRequest(request: WorkflowHandoffRequest): ValidationResult {
+export function validateWorkflowHandoffRequest(request: unknown): ValidationResult {
   const reasons: string[] = [];
+  if (!isRecord(request)) {
+    return { ok: false, reasons: ["request must be an object"] };
+  }
   pushIf(
     reasons,
     schemaMismatch(request.schemaVersion, WORKFLOW_HANDOFF_SCHEMA_VERSION),
     "request.schemaVersion mismatch",
   );
-  if (!isNonEmptyTrimmed(request.contextPackStableId)) {
+  if (
+    typeof request.contextPackStableId !== "string" ||
+    !isNonEmptyTrimmed(request.contextPackStableId)
+  ) {
     reasons.push("request.contextPackStableId empty");
   } else if (!CONTEXT_PACK_ID_RE.test(request.contextPackStableId)) {
     reasons.push("request.contextPackStableId malformed");
   }
-  pushIf(reasons, !WORKFLOW_KINDS.includes(request.workflowKind), "request.workflowKind invalid");
+  pushIf(reasons, !isWorkflowKind(request.workflowKind), "request.workflowKind invalid");
   pushIf(
     reasons,
     !isFiniteNonNegativeInteger(request.requestedAtMs),
@@ -306,7 +393,8 @@ export function validateWorkflowHandoffRequest(request: WorkflowHandoffRequest):
   );
   pushIf(
     reasons,
-    !isApprovalTokenShape(request.userApprovalToken),
+    typeof request.userApprovalToken !== "string" ||
+      !isApprovalTokenShape(request.userApprovalToken),
     "request.userApprovalToken malformed",
   );
   const scopeResult = validatePatchScope(request.patchScope);
@@ -330,7 +418,10 @@ function violationOutsideSet(path: string): PatchScopeViolation {
 }
 
 function violationBound(
-  kind: Exclude<PatchScopeViolationKind, "outside-editable-set" | "no-expected-checks" | "invalid-patch-entry">,
+  kind: Exclude<
+    PatchScopeViolationKind,
+    "outside-editable-set" | "no-expected-checks" | "invalid-patch-scope" | "invalid-patch-entry"
+  >,
   observed: number,
   limit: number,
   field: string,
@@ -354,14 +445,98 @@ function violationNoChecks(): PatchScopeViolation {
   };
 }
 
-function violationInvalidEntry(path: string, reason: string): PatchScopeViolation {
+function violationInvalidScope(reason: string): PatchScopeViolation {
+  return {
+    kind: "invalid-patch-scope",
+    path: undefined,
+    observed: undefined,
+    limit: undefined,
+    message: `patchScope invalid: ${reason}`,
+  };
+}
+
+function violationInvalidEntry(path: string | undefined, reason: string): PatchScopeViolation {
   return {
     kind: "invalid-patch-entry",
     path,
     observed: undefined,
     limit: undefined,
-    message: `path "${path}" invalid: ${reason}`,
+    message:
+      path === undefined ? `patch entry invalid: ${reason}` : `path "${path}" invalid: ${reason}`,
   };
+}
+
+function readProposedPath(
+  entry: Record<string, unknown>,
+  violations: PatchScopeViolation[],
+): string | undefined {
+  const path = typeof entry.path === "string" ? entry.path : undefined;
+  const valid =
+    path !== undefined &&
+    isNonEmptyTrimmed(path) &&
+    isValidScopePath(path, { mustBeRelative: true });
+  if (!valid) {
+    violations.push(violationInvalidEntry(path, "path must be a valid relative scope path"));
+    return undefined;
+  }
+  return path;
+}
+
+function readProposedPatchBytes(
+  entry: Record<string, unknown>,
+  path: string | undefined,
+  violations: PatchScopeViolation[],
+): number | undefined {
+  const patchBytes = entry.patchBytes;
+  if (typeof patchBytes !== "number" || !Number.isFinite(patchBytes) || patchBytes < 0) {
+    violations.push(violationInvalidEntry(path, "patchBytes must be a finite non-negative number"));
+    return undefined;
+  }
+  return patchBytes;
+}
+
+function readProposedNewFile(
+  entry: Record<string, unknown>,
+  path: string | undefined,
+  violations: PatchScopeViolation[],
+): boolean | undefined {
+  const newFile = entry.newFile;
+  if (typeof newFile !== "boolean") {
+    violations.push(violationInvalidEntry(path, "newFile must be a boolean"));
+    return undefined;
+  }
+  return newFile;
+}
+
+function normalizeProposedEntry(
+  entry: unknown,
+  violations: PatchScopeViolation[],
+): ProposedPatchEntry | undefined {
+  if (!isRecord(entry)) {
+    violations.push(violationInvalidEntry(undefined, "entry must be an object"));
+    return undefined;
+  }
+  const path = readProposedPath(entry, violations);
+  const patchBytes = readProposedPatchBytes(entry, path, violations);
+  const newFile = readProposedNewFile(entry, path, violations);
+  if (path === undefined || patchBytes === undefined || newFile === undefined) {
+    return undefined;
+  }
+  return { path, patchBytes, newFile };
+}
+
+function collectProposedEntries(
+  proposed: readonly unknown[],
+  violations: PatchScopeViolation[],
+): readonly ProposedPatchEntry[] {
+  const valid: ProposedPatchEntry[] = [];
+  for (const entry of proposed) {
+    const normalized = normalizeProposedEntry(entry, violations);
+    if (normalized) {
+      valid.push(normalized);
+    }
+  }
+  return valid;
 }
 
 function collectOutsideSet(
@@ -395,15 +570,8 @@ function collectAggregateBounds(
   let totalBytes = 0;
   let newFiles = 0;
   for (const entry of proposed) {
-    // JSON.parse can produce NaN/Infinity/negative — fail closed rather than bypass the limit.
-    if (!Number.isFinite(entry.patchBytes) || entry.patchBytes < 0) {
-      violations.push(violationInvalidEntry(entry.path, "patchBytes must be a finite non-negative number"));
-    } else {
-      totalBytes += entry.patchBytes;
-    }
-    if (typeof entry.newFile !== "boolean") {
-      violations.push(violationInvalidEntry(entry.path, "newFile must be a boolean"));
-    } else if (entry.newFile) {
+    totalBytes += entry.patchBytes;
+    if (entry.newFile) {
       newFiles += 1;
     }
   }
@@ -429,10 +597,27 @@ export function checkPatchAgainstScope(
   proposed: readonly ProposedPatchEntry[],
 ): PatchScopeCheck {
   const violations: PatchScopeViolation[] = [];
-  collectOutsideSet(scope, proposed, violations);
-  collectAggregateBounds(scope, proposed, violations);
-  if (scope.expectedChecks.length === 0) {
-    violations.push(violationNoChecks());
+  const scopeResult = validatePatchScope(scope);
+  let hasBlockingScopeViolation = false;
+  if (!scopeResult.ok) {
+    for (const reason of scopeResult.reasons) {
+      if (reason === "patchScope.expectedChecks empty") {
+        violations.push(violationNoChecks());
+      } else {
+        hasBlockingScopeViolation = true;
+        violations.push(violationInvalidScope(reason));
+      }
+    }
   }
+  if (hasBlockingScopeViolation) {
+    return { ok: false, violations };
+  }
+  if (!Array.isArray(proposed)) {
+    violations.push(violationInvalidEntry(undefined, "proposed patch list must be an array"));
+    return { ok: false, violations };
+  }
+  const validProposed = collectProposedEntries(proposed, violations);
+  collectOutsideSet(scope, validProposed, violations);
+  collectAggregateBounds(scope, validProposed, violations);
   return violations.length === 0 ? { ok: true } : { ok: false, violations };
 }

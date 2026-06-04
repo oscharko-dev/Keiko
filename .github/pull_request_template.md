@@ -9,6 +9,15 @@ Refs #<issue_number>
 - In scope:
 - Out of scope:
 
+## Delivery Board
+
+- [ ] Linked issue is in the public `Keiko Product Delivery` project.
+- [ ] Project `Status` is `In Progress` while work is active, or `Done` only after merge and closure evidence.
+- [ ] Project `Workflow State` is `PR Open` or `Ready for Human Review`.
+- [ ] `Owner / Agent`, `Branch`, `Pull Request`, and `Human Review Required` are filled.
+- [ ] Issue label reflects the current state: `status: in progress`, `status: ready for human review`, or `status: done` after merge.
+- [ ] Autonomous agents did not merge into `dev`, enable auto-merge, close the issue, or bypass human review unless explicitly authorized by the human maintainer.
+
 ## Product Impact
 
 - [ ] UI or user workflow
@@ -55,6 +64,7 @@ Not applicable rationale:
 - [ ] Unresolved review threads are resolved before merge.
 - [ ] Checks are repeated after the latest pushed fix.
 - [ ] Issue acceptance criteria and closure evidence are updated only where evidence exists.
+- [ ] Delivery board status is updated before requesting final maintainer review.
 - [ ] Use `Resolves #<issue_number>` only when this PR should close the issue.
 
 ## Risk Notes

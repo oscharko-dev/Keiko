@@ -1,8 +1,8 @@
 // Renders a grounded repository-aware assistant answer (Issue #185). Pure presentation:
 // content + a citation row + uncertainty markers + omitted count. The component is wire-shape
 // agnostic — it consumes `GroundedAnswer` from @oscharko-dev/keiko-contracts/bff-wire via the
-// UI's lib/types re-export. Click handlers on citation buttons are intentional no-ops in this
-// PR; a future change wires them to the Files-window preview at the cited line range.
+// UI's lib/types re-export. Citations are static evidence references until a future change wires
+// them to the Files-window preview at the cited line range.
 
 import type { ReactNode } from "react";
 import type {
@@ -83,6 +83,18 @@ function ContextPackSummary({
           value={`${String(usage.excerptBytes)} / ${formatCap(budget.excerptBytesMax)} B`}
         />
         <MetricRow
+          label="Input"
+          value={`${String(usage.modelInputTokens)} / ${formatCap(budget.modelInputTokensMax)} tokens`}
+        />
+        <MetricRow
+          label="Output"
+          value={`${String(usage.modelOutputTokens)} / ${formatCap(budget.modelOutputTokensMax)} tokens`}
+        />
+        <MetricRow
+          label="Rerank"
+          value={`${String(usage.rerankCalls)} / ${formatCap(budget.rerankCallsMax)} calls`}
+        />
+        <MetricRow
           label="Time"
           value={`${String(contextPack.elapsedMs)} / ${formatCap(budget.elapsedMsMax)} ms`}
         />
@@ -99,29 +111,23 @@ function formatRange(citation: GroundedEvidenceCitation): string {
   return `${citation.scopePath}:${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
 }
 
-function citationAriaLabel(citation: GroundedEvidenceCitation): string {
-  // Copilot PR #258 finding: citations promised "Open citation…" but onClick is a no-op
-  // until the Files-window preview wiring lands. The label now describes the citation
-  // honestly without promising an action that doesn't happen.
+function citationTitle(citation: GroundedEvidenceCitation): string {
   if (citation.lineRange === undefined) {
     return `Evidence citation in ${citation.scopePath}`;
   }
   return `Evidence citation in ${citation.scopePath} at lines ${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
 }
 
-function CitationButton({ citation }: { readonly citation: GroundedEvidenceCitation }): ReactNode {
+function CitationReference({
+  citation,
+}: {
+  readonly citation: GroundedEvidenceCitation;
+}): ReactNode {
   return (
-    <button
-      type="button"
-      className="grounded-citation"
-      aria-label={citationAriaLabel(citation)}
-      onClick={() => {
-        // Intentional no-op — future PR wires this to the Files window preview.
-      }}
-    >
+    <span className="grounded-citation" title={citationTitle(citation)}>
       <span>{formatRange(citation)}</span>
       <span className="grounded-citation-score">{citation.score.toFixed(2)}</span>
-    </button>
+    </span>
   );
 }
 
@@ -140,7 +146,7 @@ function CitationList({
       <ul className="grounded-citations" aria-label="Evidence citations">
         {citations.map((citation) => (
           <li key={citation.stableId} className="grounded-citations-item">
-            <CitationButton citation={citation} />
+            <CitationReference citation={citation} />
           </li>
         ))}
       </ul>
@@ -157,26 +163,66 @@ function UncertaintyLine({
   const kinds = Array.from(new Set(markers.map((m) => m.kind))).join(", ");
   return (
     <div className="grounded-uncertainty" role="note">
-      {`(${String(markers.length)} markers — ${kinds})`}
+      <div>{`Uncertainty (${String(markers.length)} markers — ${kinds})`}</div>
+      <ul className="grounded-uncertainty-list">
+        {markers.map((marker, index) => (
+          <li key={`${marker.kind}-${String(index)}`}>{`${marker.kind}: ${marker.claim}`}</li>
+        ))}
+      </ul>
     </div>
   );
 }
 
-function OmittedLine({ omittedCount }: { readonly omittedCount: number }): ReactNode {
+function formatOmissionReason(reason: string): string {
+  return reason.replaceAll("-", " ");
+}
+
+function OmittedLine({
+  omittedCount,
+  omittedCounts,
+}: {
+  readonly omittedCount: number;
+  readonly omittedCounts: GroundedAnswerContextPackSummary["omittedCounts"];
+}): ReactNode {
   if (omittedCount <= 0) return null;
-  return <div className="grounded-meta">{`Omitted: ${String(omittedCount)} evidence atoms`}</div>;
+  const reasonSummary = Object.entries(omittedCounts)
+    .filter(([, count]) => count > 0)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([reason, count]) => `${formatOmissionReason(reason)}: ${String(count)}`)
+    .join(", ");
+  const suffix = reasonSummary.length > 0 ? ` (${reasonSummary})` : "";
+  return (
+    <div className="grounded-meta">{`Omitted: ${String(omittedCount)} evidence atoms${suffix}`}</div>
+  );
+}
+
+function AuditEvidenceLink({ runId }: { readonly runId: string | undefined }): ReactNode {
+  if (runId === undefined) return null;
+  return (
+    <div className="grounded-meta">
+      <a href={`/api/evidence/${encodeURIComponent(runId)}`}>
+        View connected-context audit evidence
+      </a>
+    </div>
+  );
 }
 
 export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode {
   if (answer === undefined) {
-    return busy ? <div className="grounded-meta">Asking Keiko (grounded)…</div> : null;
+    return busy ? (
+      <div className="grounded-meta">Exploring repository context and asking Keiko…</div>
+    ) : null;
   }
   return (
     <div className="grounded-answer">
       <div className="grounded-answer-body">{answer.content}</div>
       <CitationList citations={answer.citations} />
       <UncertaintyLine markers={answer.uncertainty} />
-      <OmittedLine omittedCount={answer.omittedCount} />
+      <OmittedLine
+        omittedCount={answer.omittedCount}
+        omittedCounts={answer.contextPack.omittedCounts}
+      />
+      <AuditEvidenceLink runId={answer.evidenceRunId} />
       <ContextPackSummary contextPack={answer.contextPack} />
     </div>
   );

@@ -258,6 +258,25 @@ function buildExcerptFingerprint(request: ReadExcerptRequest): string {
   });
 }
 
+function isWithinSelectedScope(scope: SearchScope, scopePath: string): boolean {
+  if (scope.relativePaths.length === 0) {
+    return true;
+  }
+  return scope.relativePaths.some(
+    (selectedPath) => scopePath === selectedPath || scopePath.startsWith(`${selectedPath}/`),
+  );
+}
+
+function assertExcerptWithinSelectedScope(scope: SearchScope, scopePath: string): void {
+  if (isWithinSelectedScope(scope, scopePath)) {
+    return;
+  }
+  throw new RepoSearchUnsupportedFileError(
+    `cannot read excerpt outside selected scope: ${scopePath}`,
+    "outside-scope",
+  );
+}
+
 function assertExcerptRange(request: ReadExcerptRequest): void {
   if (
     !Number.isInteger(request.startLine) ||
@@ -290,6 +309,7 @@ export async function readExcerpt(
 ): Promise<ReadExcerptResult> {
   assertExcerptRange(request);
   assertWorkspaceRoot(scope.workspace);
+  assertExcerptWithinSelectedScope(scope, request.scopePath);
   const fs = deps.fs ?? nodeWorkspaceFs;
   const nowMs = deps.nowMs ?? Date.now;
   const abs = resolveWithinWorkspace(scope.workspace.root, request.scopePath);

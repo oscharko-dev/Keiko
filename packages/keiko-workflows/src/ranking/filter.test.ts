@@ -44,9 +44,20 @@ function annotated(
 }
 
 describe("filterCandidates", () => {
-  it("omits candidates below minScore with reason low-relevance", () => {
-    const result = filterCandidates([annotated("src/a.ts", 0.05)], options());
+  it("omits candidates below minScore with reason low-relevance when maxKept is exhausted", () => {
+    const result = filterCandidates([annotated("src/a.ts", 0.05)], options({ maxKept: 0 }));
     expect(result.kept).toEqual([]);
+    expect(result.omitted).toEqual([
+      { scopePath: "src/a.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW },
+    ]);
+  });
+
+  it("keeps the strongest low-relevance candidate instead of hiding all evidence", () => {
+    const result = filterCandidates(
+      [annotated("src/a.ts", 0.01), annotated("src/b.ts", 0.05)],
+      options(),
+    );
+    expect(result.kept.map((c) => c.scopePath)).toEqual(["src/b.ts"]);
     expect(result.omitted).toEqual([
       { scopePath: "src/a.ts", reason: "low-relevance", omittedAtMs: FIXED_NOW },
     ]);
@@ -96,6 +107,13 @@ describe("filterCandidates", () => {
     expect(result.omitted.length).toBe(3);
   });
 
+  it("treats a negative maxKept as zero so kept output remains bounded", () => {
+    const inputs = [annotated("src/a.ts", 0.9), annotated("src/b.ts", 0.8)];
+    const result = filterCandidates(inputs, options({ maxKept: -1 }));
+    expect(result.kept).toEqual([]);
+    expect(result.omitted.map((o) => o.reason)).toEqual(["budget-exhausted", "budget-exhausted"]);
+  });
+
   it("sorts kept by score desc with stable path tiebreak", () => {
     const inputs = [
       annotated("src/b.ts", 0.5),
@@ -112,12 +130,12 @@ describe("filterCandidates", () => {
       annotated("src/a.ts", 0.05),
       annotated("src/m.ts", 0.05),
     ];
-    const result = filterCandidates(inputs, options());
+    const result = filterCandidates(inputs, options({ maxKept: 0 }));
     expect(result.omitted.map((o) => o.scopePath)).toEqual(["src/a.ts", "src/m.ts", "src/z.ts"]);
   });
 
   it("uses the injected nowMs for omittedAtMs", () => {
-    const result = filterCandidates([annotated("src/a.ts", 0.01)], options());
+    const result = filterCandidates([annotated("src/a.ts", 0.01)], options({ maxKept: 0 }));
     expect(result.omitted[0]?.omittedAtMs).toBe(FIXED_NOW);
   });
 

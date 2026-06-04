@@ -2,7 +2,7 @@
 // happy and error paths goes through routeRequest dispatch and the SECURITY_HEADERS surface via the
 // real createUiServer. Every test injects an in-memory UiStore so the FS is never touched.
 
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -12,6 +12,11 @@ import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import {
+  clearAllGroundedContextIndexes,
+  groundedContextIndexRegistry,
+  microIndexForGroundedScope,
+} from "./grounded-context-index.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 
 const POST_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
@@ -100,11 +105,33 @@ async function restartWithDeps(overrides: Partial<UiHandlerDeps>): Promise<void>
   await new Promise<void>((res) => server.listen(port, UI_HOST, res));
 }
 
+function openGroundedIndex(chatId: string): void {
+  microIndexForGroundedScope(
+    {
+      schemaVersion: "1",
+      scopeId: `scope-${chatId}`,
+      workspaceRoot: projDir,
+      kind: "files",
+      relativePaths: ["src"],
+      conversationId: chatId,
+      connectedAtMs: 1,
+    },
+    () => 1,
+  );
+}
+
 beforeEach(async () => {
+  clearAllGroundedContextIndexes();
   staticRoot = mkdtempSync(join(tmpdir(), "keiko-ui-static-"));
   tmp = mkdtempSync(join(tmpdir(), "keiko-store-handlers-"));
   projDir = join(tmp, "proj");
   mkdirSync(projDir);
+  mkdirSync(join(projDir, "src", "lib"), { recursive: true });
+  mkdirSync(join(projDir, "src", "app"), { recursive: true });
+  writeFileSync(join(projDir, "src", "app", "page.tsx"), "export default null;\n");
+  writeFileSync(join(projDir, "src", "x"), "x\n");
+  writeFileSync(join(projDir, "src", "next"), "next\n");
+  writeFileSync(join(projDir, ".env"), "SECRET=1\n");
   store = createInMemoryUiStore();
   // Two-phase bind so Host check matches the actual port.
   server = createUiServer({ staticRoot, csp: buildCspHeader([]), port: 0 });
@@ -121,6 +148,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeServer();
+  clearAllGroundedContextIndexes();
   store.close();
   rmSync(tmp, { recursive: true, force: true });
   rmSync(staticRoot, { recursive: true, force: true });
@@ -339,6 +367,19 @@ describe("DELETE /api/projects", () => {
     expect(store.listMessages(chat.id)).toHaveLength(0);
   });
 
+  it("clears grounded context indexes when a project is deleted", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    openGroundedIndex(chat.id);
+    expect(groundedContextIndexRegistry.size()).toBe(1);
+    const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
+      method: "DELETE",
+      headers: DELETE_HEADERS,
+    });
+    expect(res.status).toBe(204);
+    expect(groundedContextIndexRegistry.size()).toBe(0);
+  });
+
   it("returns 404 for unknown project", async () => {
     const res = await fetch(url(`/api/projects?path=${encodeURIComponent(projDir)}`), {
       method: "DELETE",
@@ -501,6 +542,20 @@ describe("PATCH /api/chats", () => {
     expect(body.chat.status).toBe("closed");
   });
 
+  it("clears grounded context indexes when a chat is closed", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    openGroundedIndex(c.id);
+    expect(groundedContextIndexRegistry.size()).toBe(1);
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ status: "closed" }),
+    });
+    expect(res.status).toBe(200);
+    expect(groundedContextIndexRegistry.size()).toBe(0);
+  });
+
   it("updates selectedModel when it is a chat registry id", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "example-chat-model");
@@ -569,17 +624,70 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: ["src/lib", "src/app/page.tsx"], connectedAtMs: 42 },
+        connectedScope: {
+          kind: "files",
+          relativePaths: ["src/lib", "src/app/page.tsx"],
+          connectedAtMs: 42,
+        },
       }),
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       chat: {
-        connectedScope: { relativePaths: string[]; connectedAtMs: number } | undefined;
+        connectedScope:
+          | { kind: string; relativePaths: string[]; connectedAtMs: number }
+          | undefined;
       };
     };
     expect(body.chat.connectedScope).toEqual({
+      kind: "files",
       relativePaths: ["src/lib", "src/app/page.tsx"],
+      connectedAtMs: 42,
+    });
+  });
+
+  it("sets a repository-root connectedScope on a chat", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 42 },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chat: {
+        connectedScope: { kind: string; relativePaths: string[]; connectedAtMs: number };
+      };
+    };
+    expect(body.chat.connectedScope).toEqual({
+      kind: "workspace-root",
+      relativePaths: [],
+      connectedAtMs: 42,
+    });
+  });
+
+  it("sets a folder connectedScope on a chat", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "directory", relativePaths: ["src/lib"], connectedAtMs: 42 },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chat: {
+        connectedScope: { kind: string; relativePaths: string[]; connectedAtMs: number };
+      };
+    };
+    expect(body.chat.connectedScope).toEqual({
+      kind: "directory",
+      relativePaths: ["src/lib"],
       connectedAtMs: 42,
     });
   });
@@ -591,7 +699,7 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: ["src/x"], connectedAtMs: 1 },
+        connectedScope: { kind: "files", relativePaths: ["src/x"], connectedAtMs: 1 },
       }),
     });
     const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
@@ -606,6 +714,22 @@ describe("PATCH /api/chats", () => {
     expect(body.chat.connectedScope).toBeUndefined();
   });
 
+  it("clears grounded context indexes when connectedScope is replaced", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    openGroundedIndex(c.id);
+    expect(groundedContextIndexRegistry.size()).toBe(1);
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "files", relativePaths: ["src/next"], connectedAtMs: 2 },
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(groundedContextIndexRegistry.size()).toBe(0);
+  });
+
   it("rejects connectedScope with a traversal path", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");
@@ -613,7 +737,7 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: ["../escape"], connectedAtMs: 1 },
+        connectedScope: { kind: "files", relativePaths: ["../escape"], connectedAtMs: 1 },
       }),
     });
     expect(res.status).toBe(400);
@@ -626,10 +750,60 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: ["/etc/passwd"], connectedAtMs: 1 },
+        connectedScope: { kind: "files", relativePaths: ["/etc/passwd"], connectedAtMs: 1 },
       }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it("rejects connectedScope for a missing path with a safe error", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "files", relativePaths: ["src/missing.ts"], connectedAtMs: 1 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const bodyText = await res.text();
+    expect(bodyText).not.toContain("src/missing.ts");
+    expect(bodyText).toContain("Connected scope path is not accessible");
+  });
+
+  it("rejects connectedScope for a deny-listed path without exposing the path", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "files", relativePaths: [".env"], connectedAtMs: 1 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const bodyText = await res.text();
+    expect(bodyText).not.toContain(".env");
+    expect(bodyText).toContain("safe read surface");
+  });
+
+  it("rejects connectedScope for secret-shaped path metadata", async () => {
+    const secretShapedName = `sk-${"a".repeat(20)}`;
+    writeFileSync(join(projDir, secretShapedName), "not a real token\n");
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "files", relativePaths: [secretShapedName], connectedAtMs: 1 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const bodyText = await res.text();
+    expect(bodyText).not.toContain(secretShapedName);
+    expect(bodyText).toContain("credential-shaped metadata");
   });
 
   it("rejects an empty connectedScope.relativePaths array", async () => {
@@ -639,7 +813,7 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: [], connectedAtMs: 1 },
+        connectedScope: { kind: "files", relativePaths: [], connectedAtMs: 1 },
       }),
     });
     expect(res.status).toBe(400);
@@ -653,7 +827,7 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: tooMany, connectedAtMs: 1 },
+        connectedScope: { kind: "files", relativePaths: tooMany, connectedAtMs: 1 },
       }),
     });
     expect(res.status).toBe(400);
@@ -666,7 +840,7 @@ describe("PATCH /api/chats", () => {
       method: "PATCH",
       headers: PATCH_HEADERS,
       body: JSON.stringify({
-        connectedScope: { relativePaths: ["src/x"], connectedAtMs: 1.5 },
+        connectedScope: { kind: "files", relativePaths: ["src/x"], connectedAtMs: 1.5 },
       }),
     });
     expect(res.status).toBe(400);
@@ -696,6 +870,19 @@ describe("DELETE /api/chats", () => {
     expect(res.status).toBe(204);
     expect(store.listChats(projDir)).toHaveLength(0);
     expect(store.listMessages(c.id)).toHaveLength(0);
+  });
+
+  it("clears grounded context indexes when a chat is deleted", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    openGroundedIndex(c.id);
+    expect(groundedContextIndexRegistry.size()).toBe(1);
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "DELETE",
+      headers: DELETE_HEADERS,
+    });
+    expect(res.status).toBe(204);
+    expect(groundedContextIndexRegistry.size()).toBe(0);
   });
 
   it("returns 404 for unknown id", async () => {

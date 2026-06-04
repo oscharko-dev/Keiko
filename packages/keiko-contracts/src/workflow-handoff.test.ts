@@ -174,6 +174,40 @@ describe("validatePatchScope", () => {
     expectInvalidWithReason(validatePatchScope(scope), "schemaVersion");
   });
 
+  it("rejects non-object runtime inputs without throwing", () => {
+    expectInvalidWithReason(validatePatchScope("not-a-scope"), "patchScope must be an object");
+  });
+
+  it("rejects missing array fields without throwing", () => {
+    const scope = {
+      schemaVersion: WORKFLOW_HANDOFF_SCHEMA_VERSION,
+      limits: DEFAULT_PATCH_SCOPE_LIMITS,
+    };
+    const result = validatePatchScope(scope);
+    expectInvalidWithReason(result, "editablePaths must be an array");
+    expectInvalidWithReason(result, "readOnlyPaths must be an array");
+    expectInvalidWithReason(result, "evidenceAtomIds must be an array");
+    expectInvalidWithReason(result, "expectedChecks must be an array");
+    expectInvalidWithReason(result, "unknowns must be an array");
+  });
+
+  it("rejects scalar array fields without iterating them as strings", () => {
+    const scope = {
+      ...happyPatchScope(),
+      editablePaths: "src/index.ts",
+      readOnlyPaths: "README.md",
+      evidenceAtomIds: "atom-1",
+      expectedChecks: "verify",
+      unknowns: "not sure",
+    };
+    const result = validatePatchScope(scope);
+    expectInvalidWithReason(result, "editablePaths must be an array");
+    expectInvalidWithReason(result, "readOnlyPaths must be an array");
+    expectInvalidWithReason(result, "evidenceAtomIds must be an array");
+    expectInvalidWithReason(result, "expectedChecks must be an array");
+    expectInvalidWithReason(result, "unknowns must be an array");
+  });
+
   it("accepts a scope with no editable or read-only paths", () => {
     const scope: PatchScope = {
       ...happyPatchScope(),
@@ -309,6 +343,14 @@ describe("validatePatchScope", () => {
     expectInvalidWithReason(validatePatchScope(scope), "unknowns contains non-string entry");
   });
 
+  it("rejects an empty unknown entry", () => {
+    const scope: PatchScope = {
+      ...happyPatchScope(),
+      unknowns: ["   "],
+    };
+    expectInvalidWithReason(validatePatchScope(scope), "unknowns contains empty entry");
+  });
+
   it("accepts non-empty unknowns of strings", () => {
     const scope: PatchScope = {
       ...happyPatchScope(),
@@ -338,6 +380,24 @@ describe("validateWorkflowHandoffRequest", () => {
       schemaVersion: "2",
     } as unknown as WorkflowHandoffRequest;
     expectInvalidWithReason(validateWorkflowHandoffRequest(request), "schemaVersion");
+  });
+
+  it("rejects non-object runtime inputs without throwing", () => {
+    expectInvalidWithReason(validateWorkflowHandoffRequest(null), "request must be an object");
+  });
+
+  it("rejects missing patchScope without throwing", () => {
+    const request = {
+      schemaVersion: WORKFLOW_HANDOFF_SCHEMA_VERSION,
+      contextPackStableId: VALID_PACK_LEAF_ID,
+      workflowKind: "unit-test-generation",
+      requestedAtMs: 1_000,
+      userApprovalToken: VALID_TOKEN,
+    };
+    expectInvalidWithReason(
+      validateWorkflowHandoffRequest(request),
+      "request.patchScope must be an object",
+    );
   });
 
   it("rejects an empty contextPackStableId", () => {
@@ -521,6 +581,23 @@ describe("checkPatchAgainstScope", () => {
     expect(findViolation(result.violations, "no-expected-checks")).toBeDefined();
   });
 
+  it("flags invalid patch scope instead of approving a read-only overlap", () => {
+    const scope: PatchScope = {
+      ...happyPatchScope(),
+      editablePaths: ["src/index.ts"],
+      readOnlyPaths: ["src/index.ts"],
+    };
+    const proposed: readonly ProposedPatchEntry[] = [
+      { path: "src/index.ts", newFile: false, patchBytes: 1 },
+    ];
+    const result = checkPatchAgainstScope(scope, proposed);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(findViolation(result.violations, "invalid-patch-scope")).toBeDefined();
+  });
+
   it("accumulates multiple violations from one call", () => {
     const tightScope: PatchScope = {
       schemaVersion: WORKFLOW_HANDOFF_SCHEMA_VERSION,
@@ -615,6 +692,28 @@ describe("checkPatchAgainstScope", () => {
     expect(findViolation(result.violations, "invalid-patch-entry")).toBeDefined();
   });
 
+  it("flags an entry with non-string path as invalid-patch-entry", () => {
+    const proposed = [
+      { path: 123 as unknown as string, newFile: false, patchBytes: 10 },
+    ] as unknown as readonly ProposedPatchEntry[];
+    const result = checkPatchAgainstScope(happyPatchScope(), proposed);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(findViolation(result.violations, "invalid-patch-entry")).toBeDefined();
+  });
+
+  it("flags a non-array proposed patch list as invalid-patch-entry", () => {
+    const proposed = "src/index.ts" as unknown as readonly ProposedPatchEntry[];
+    const result = checkPatchAgainstScope(happyPatchScope(), proposed);
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(findViolation(result.violations, "invalid-patch-entry")).toBeDefined();
+  });
+
   it("does not bypass the scope check when one NaN entry is paired with a valid under-limit entry", () => {
     // NaN is dropped from accumulation; valid entry stays. The NaN itself produces
     // invalid-patch-entry, so the result must still be !ok regardless of the limit.
@@ -689,6 +788,7 @@ describe("UserApprovalTokenInput", () => {
       evidenceAtomIds: request.patchScope.evidenceAtomIds,
       limits: request.patchScope.limits,
       expectedChecks: request.patchScope.expectedChecks,
+      unknowns: request.patchScope.unknowns,
     };
     expect(hashable.workflowKind).toBe("unit-test-generation");
     expect(hashable.limits.maxFileCount).toBe(DEFAULT_PATCH_SCOPE_LIMITS.maxFileCount);

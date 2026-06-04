@@ -27,13 +27,28 @@ function lastSegment(path: string): string {
   return slash === -1 ? trimmed : trimmed.slice(slash + 1);
 }
 
-function pillLabel(relativePaths: readonly string[]): string {
-  if (relativePaths.length === 1) {
-    const first = relativePaths[0] ?? "";
-    const segment = lastSegment(first);
-    return segment.length === 0 ? "Connected scope" : segment;
+function pillLabel(scope: NonNullable<Chat["connectedScope"]>): string {
+  if (scope.kind === "workspace-root") return "Repository scope";
+  if (scope.kind === "directory") {
+    const segment = lastSegment(scope.relativePaths[0] ?? "");
+    return segment.length === 0 ? "Connected folder" : `Folder: ${segment}`;
   }
-  return `Connected to ${String(relativePaths.length)} paths`;
+  if (scope.relativePaths.length === 1) {
+    const first = scope.relativePaths[0] ?? "";
+    const segment = lastSegment(first);
+    return segment.length === 0 ? "Connected file" : `File: ${segment}`;
+  }
+  return `${String(scope.relativePaths.length)} files connected`;
+}
+
+function scopeBoundaryText(scope: NonNullable<Chat["connectedScope"]>): string {
+  const noun =
+    scope.kind === "workspace-root"
+      ? "the connected repository"
+      : scope.kind === "directory"
+        ? "the connected folder"
+        : "the connected file scope";
+  return `Keiko may inspect only ${noun}; safe-read exclusions and context budget limits apply before each answer.`;
 }
 
 function formatErrorMessage(error: unknown): string {
@@ -51,7 +66,8 @@ export function ConnectedScopePill({
   const [error, setError] = useState<string | null>(null);
   const scope = chat.connectedScope;
   if (scope === undefined) return null;
-  const label = pillLabel(scope.relativePaths);
+  const label = pillLabel(scope);
+  const boundary = scopeBoundaryText(scope);
 
   async function handleDisconnect(): Promise<void> {
     if (busy) return;
@@ -91,6 +107,7 @@ export function ConnectedScopePill({
           <span aria-hidden="true">×</span>
         </button>
       </span>
+      <span className="scope-pill-detail">{boundary}</span>
       {error !== null ? (
         <span role="alert" className="scope-connect-error">
           {error}

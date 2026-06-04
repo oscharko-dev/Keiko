@@ -71,6 +71,10 @@ function assertCspHashesMatchStaticHtml() {
 // did not regress to an empty re-export shell. Chosen because `runVerification` is the canonical
 // entry point per tests/sdk/ and any breakage of the verification surface would surface here.
 const SDK_SENTINEL_TOKEN = "runVerification";
+const WORKFLOW_HANDOFF_DIST_FILES = [
+  "node_modules/@oscharko-dev/keiko-contracts/dist/workflow-handoff.js",
+  "node_modules/@oscharko-dev/keiko-contracts/dist/workflow-handoff.d.ts",
+];
 
 function assertServerRuntimeSurface(paths) {
   for (const required of ["dist/ui/index.js", "dist/ui/index.d.ts", "dist/ui/csp-hashes.json"]) {
@@ -132,6 +136,17 @@ function assertBundledPayload(paths) {
   }
 }
 
+function assertWorkflowHandoffSubpath(paths) {
+  for (const required of WORKFLOW_HANDOFF_DIST_FILES) {
+    if (!paths.includes(required)) {
+      fail(
+        `workflow-handoff contract subpath is missing ${required} ` +
+          "— the #186 governed handoff contract is not publishable.",
+      );
+    }
+  }
+}
+
 const files = packFiles();
 const paths = files.map((f) => f.path);
 
@@ -185,5 +200,6 @@ assertCspHashesMatchStaticHtml();
 assertServerRuntimeSurface(paths);
 await assertSdkRootExport(paths);
 assertBundledPayload(paths);
+assertWorkflowHandoffSubpath(paths);
 
 console.log(`package-surface check passed: ${String(paths.length)} files, dist/ui/static present.`);

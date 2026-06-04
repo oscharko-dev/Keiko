@@ -3,6 +3,12 @@
    Brand: #4EBA87 (orca green) · #333333 · #ffffff
    ============================================================ */
 :root {
+  /* Tell the user agent the app paints on a dark surface by default. Without
+     this hint the browser fills the empty document with its own white "blank"
+     state between document swap and CSS variable resolution during F5 reloads,
+     producing a visible white flash before the shader/background paints (#302). */
+  color-scheme: dark;
+
   /* surfaces — warm-neutral near-black, derived in oklch from #333 */
   --bg: oklch(0.17 0.004 160); /* app background */
   --surface: oklch(0.205 0.004 160); /* sidebar / panels */
@@ -166,6 +172,7 @@ button {
    LIGHT THEME — warm-neutral, same orca-green accent
    ============================================================ */
 [data-theme="light"] {
+  color-scheme: light;
   --bg: oklch(0.955 0.004 160);
   --surface: oklch(0.978 0.003 160);
   --card: oklch(1 0 0);
@@ -5251,6 +5258,7 @@ select.dlg-input {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .scope-pill {
@@ -5290,6 +5298,13 @@ select.dlg-input {
   cursor: not-allowed;
 }
 
+.scope-pill-detail {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--fg-muted);
+  max-width: min(560px, 100%);
+}
+
 .scope-pill-disconnect:focus-visible,
 .scope-connect-btn:focus-visible {
   outline: 2px solid var(--accent);
@@ -5321,11 +5336,43 @@ select.dlg-input {
   cursor: not-allowed;
 }
 
+.scope-connect-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--fg-faint);
+  margin-top: 4px;
+}
+
 .scope-connect-error {
   display: block;
   font-size: 11px;
   color: var(--danger);
   margin-top: 4px;
+}
+
+.files-scope-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 30px 8px 4px;
+}
+
+.files-scope-label {
+  font-size: 11px;
+  color: var(--fg-faint);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tr-row-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.tr-connect {
+  display: flex;
+  padding-top: 2px;
+  padding-bottom: 4px;
 }
 
 /* Issue #185 — grounded repository-aware Q&A answer rendering. Lives inside an assistant
@@ -5378,14 +5425,7 @@ select.dlg-input {
   color: var(--fg);
   font-family: var(--font-mono);
   font-size: 11px;
-  cursor: pointer;
-}
-.grounded-citation:hover {
-  background: var(--accent-glow);
-}
-.grounded-citation:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  cursor: default;
 }
 .grounded-citation-score {
   margin-left: 6px;
@@ -5396,6 +5436,10 @@ select.dlg-input {
   font-size: 11px;
   color: var(--ink-muted);
   font-style: italic;
+}
+.grounded-uncertainty-list {
+  margin: 4px 0 0;
+  padding-left: 16px;
 }
 .grounded-meta {
   font-size: 10px;

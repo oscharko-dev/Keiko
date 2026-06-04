@@ -11,6 +11,19 @@ import type {
   GroundedAnswerContextPackSummary,
 } from "@/lib/types";
 
+const OMITTED_COUNTS_ZERO = {
+  "outside-scope": 0,
+  binary: 0,
+  generated: 0,
+  ignored: 0,
+  "size-exceeded": 0,
+  "near-duplicate": 0,
+  "low-relevance": 0,
+  "redacted-only": 0,
+  "budget-exhausted": 0,
+  "tool-unavailable": 0,
+} as const;
+
 function contextPack(): GroundedAnswerContextPackSummary {
   return {
     schemaVersion: "1",
@@ -38,6 +51,7 @@ function contextPack(): GroundedAnswerContextPackSummary {
     },
     citationCount: 2,
     omittedCount: 1,
+    omittedCounts: { ...OMITTED_COUNTS_ZERO, binary: 1 },
     uncertaintyCount: 1,
     elapsedMs: 1_812,
   };

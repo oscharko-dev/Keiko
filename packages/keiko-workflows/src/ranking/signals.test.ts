@@ -126,6 +126,16 @@ describe("extractSignals", () => {
     expect(bonus?.value).toBe(1);
   });
 
+  it("test-pair-bonus matches path anchors case-insensitively", () => {
+    const result = extractSignals(
+      [atom("src/MyClass.test.ts", 0.3)],
+      [anchor("src/myclass.ts", "path")],
+      REQUIRED_HINTS,
+    );
+    const bonus = result.signals.find((s) => s.name === "test-pair-bonus");
+    expect(bonus?.value).toBe(1);
+  });
+
   it("path-depth-affinity is higher for shallower paths", () => {
     const shallow = extractSignals([atom("src/foo.ts", 0.5)], [], REQUIRED_HINTS);
     const deep = extractSignals([atom("src/a/b/c/d/e/f/g.ts", 0.5)], [], REQUIRED_HINTS);

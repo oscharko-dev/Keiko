@@ -340,6 +340,26 @@ describe("validateSelectedScope", () => {
     expectInvalidWithReason(validateSelectedScope(scope), "workspaceRoot");
   });
 
+  it("rejects whitespace-only workspaceRoot", () => {
+    const scope = { ...happyScope(), workspaceRoot: "   " };
+    expectInvalidWithReason(validateSelectedScope(scope), "workspaceRoot");
+  });
+
+  it("rejects relative workspaceRoot", () => {
+    const scope = { ...happyScope(), workspaceRoot: "repo/root" };
+    expectInvalidWithReason(validateSelectedScope(scope), "workspaceRoot invalid");
+  });
+
+  it("rejects traversal-bearing workspaceRoot", () => {
+    const scope = { ...happyScope(), workspaceRoot: "/repo/../escape" };
+    expectInvalidWithReason(validateSelectedScope(scope), "workspaceRoot invalid");
+  });
+
+  it("accepts an absolute Windows-drive workspaceRoot", () => {
+    const scope = { ...happyScope(), workspaceRoot: "C:\\repo" };
+    expect(validateSelectedScope(scope)).toEqual({ ok: true });
+  });
+
   it("rejects workspace-root scope carrying relative paths", () => {
     const scope: SelectedScope = {
       ...happyScope(),
@@ -455,6 +475,14 @@ describe("validateEvidenceAtom", () => {
 
   it("rejects empty stableId", () => {
     expectInvalidWithReason(validateEvidenceAtom({ ...happyAtom(), stableId: "" }), "stableId");
+  });
+
+  it("rejects a missing provenance object without throwing", () => {
+    const atom = {
+      ...happyAtom(),
+      provenance: undefined as unknown as EvidenceAtom["provenance"],
+    };
+    expectInvalidWithReason(validateEvidenceAtom(atom), "provenance");
   });
 
   it("rejects invalid scopePath", () => {
@@ -704,7 +732,11 @@ describe("validateConnectedContextPack", () => {
       selectionReason: "exact-match",
       excerpts: [{ atom: happyAtom(), content, contentBytes: 3 }],
     };
-    const pack: ConnectedContextPack = { ...happyPack(), files: [entry] };
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      usage: { ...happyUsage(), excerptBytes: 3 },
+      files: [entry],
+    };
     expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
   });
 
@@ -716,8 +748,43 @@ describe("validateConnectedContextPack", () => {
       selectionReason: "exact-match",
       excerpts: [{ atom: happyAtom(), content, contentBytes: 2 }],
     };
-    const pack: ConnectedContextPack = { ...happyPack(), files: [entry] };
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      usage: { ...happyUsage(), excerptBytes: 2 },
+      files: [entry],
+    };
     expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+  });
+
+  it("rejects excerpts whose actual bytes exceed usage.excerptBytes", () => {
+    const entry: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "read-only",
+      selectionReason: "exact-match",
+      excerpts: [{ atom: happyAtom(), content: "abc", contentBytes: 3 }],
+    };
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      usage: { ...happyUsage(), excerptBytes: 0 },
+      files: [entry],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "usage.excerptBytes");
+  });
+
+  it("rejects excerpts whose actual bytes exceed budget.excerptBytesMax", () => {
+    const entry: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "read-only",
+      selectionReason: "exact-match",
+      excerpts: [{ atom: happyAtom(), content: "abc", contentBytes: 3 }],
+    };
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, excerptBytesMax: 2 },
+      usage: { ...happyUsage(), excerptBytes: 3 },
+      files: [entry],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "budget.excerptBytesMax");
   });
 
   it("surfaces a nested invalid atom inside an excerpt", () => {
@@ -735,6 +802,40 @@ describe("validateConnectedContextPack", () => {
     };
     const pack: ConnectedContextPack = { ...happyPack(), files: [entry] };
     expectInvalidWithReason(validateConnectedContextPack(pack), "score");
+  });
+
+  it("rejects an excerpt atom whose scopePath differs from its parent file", () => {
+    const entry: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "read-only",
+      selectionReason: "exact-match",
+      excerpts: [
+        {
+          atom: { ...happyAtom(), scopePath: "src/other.ts" },
+          content: "abc",
+          contentBytes: 3,
+        },
+      ],
+    };
+    const pack: ConnectedContextPack = { ...happyPack(), files: [entry] };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "does not match parent");
+  });
+
+  it("rejects an excerpt atom marked raw-internal", () => {
+    const entry: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "read-only",
+      selectionReason: "exact-match",
+      excerpts: [
+        {
+          atom: { ...happyAtom(), redactionState: "raw-internal" },
+          content: "abc",
+          contentBytes: 3,
+        },
+      ],
+    };
+    const pack: ConnectedContextPack = { ...happyPack(), files: [entry] };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "raw-internal");
   });
 
   it("rejects a connected file entry with an invalid role", () => {
@@ -757,6 +858,39 @@ describe("validateConnectedContextPack", () => {
     };
     const pack: ConnectedContextPack = { ...happyPack(), files: [entry] };
     expectInvalidWithReason(validateConnectedContextPack(pack), "scopePath");
+  });
+
+  it("rejects a connected file entry outside the selected scope", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      scope: { ...happyScope(), kind: "files", relativePaths: ["src/app.ts"] },
+      files: [
+        {
+          scopePath: ".env",
+          role: "read-only",
+          selectionReason: "exact-match",
+          excerpts: [],
+        },
+      ],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "outside selected scope");
+  });
+
+  it("rejects duplicate connected file scopePaths", () => {
+    const first: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "read-only",
+      selectionReason: "first",
+      excerpts: [],
+    };
+    const second: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "editable",
+      selectionReason: "second",
+      excerpts: [],
+    };
+    const pack: ConnectedContextPack = { ...happyPack(), files: [first, second] };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "duplicate scopePath");
   });
 
   it("rejects a ledgerRef on the pack with empty runId", () => {
@@ -799,6 +933,30 @@ describe("validateConnectedContextPack", () => {
       !r.ok &&
         r.reasons.some((reason) => reason.includes("omitted") && reason.includes("scopePath")),
     ).toBe(true);
+  });
+
+  it("rejects omitted entries that overlap selected file scopePaths", () => {
+    const file: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "read-only",
+      selectionReason: "exact-match",
+      excerpts: [],
+    };
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      files: [file],
+      omitted: [{ scopePath: "src/index.ts", reason: "ignored", omittedAtMs: 1 }],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "overlaps selected scopePath");
+  });
+
+  it("rejects omitted entries outside the selected scope", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      scope: { ...happyScope(), kind: "files", relativePaths: ["src/app.ts"] },
+      omitted: [{ scopePath: ".env", reason: "ignored", omittedAtMs: 1 }],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "outside selected scope");
   });
 
   it("rejects a pack whose budget has a NaN cap", () => {
@@ -868,6 +1026,52 @@ describe("validateConnectedContextPack", () => {
       uncertainty: [{ kind: "no-evidence", claim: "   ", impactedAtomIds: [], emittedAtMs: 1 }],
     };
     expectInvalidWithReason(validateConnectedContextPack(pack), "claim empty");
+  });
+
+  it("rejects a pack with an uncertainty marker carrying an empty impactedAtomId", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      uncertainty: [{ kind: "no-evidence", claim: "missing proof", impactedAtomIds: [""], emittedAtMs: 1 }],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "impactedAtomIds invalid");
+  });
+
+  it("rejects a pack with duplicate impactedAtomIds on one uncertainty marker", () => {
+    const file: ConnectedFileEntry = {
+      scopePath: "src/index.ts",
+      role: "read-only",
+      selectionReason: "exact-match",
+      excerpts: [{ atom: happyAtom(), content: "abc", contentBytes: 3 }],
+    };
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      usage: { ...happyUsage(), excerptBytes: 3 },
+      files: [file],
+      uncertainty: [
+        {
+          kind: "no-evidence",
+          claim: "missing proof",
+          impactedAtomIds: ["atom-1", "atom-1"],
+          emittedAtMs: 1,
+        },
+      ],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "impactedAtomIds duplicate");
+  });
+
+  it("rejects a pack with uncertainty impactedAtomIds that do not exist in pack excerpts", () => {
+    const pack: ConnectedContextPack = {
+      ...happyPack(),
+      uncertainty: [
+        {
+          kind: "no-evidence",
+          claim: "missing proof",
+          impactedAtomIds: ["atom-unknown"],
+          emittedAtMs: 1,
+        },
+      ],
+    };
+    expectInvalidWithReason(validateConnectedContextPack(pack), "impactedAtomIds unknown");
   });
 });
 
