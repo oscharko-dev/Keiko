@@ -10,6 +10,9 @@ export const WORKSPACE_CODES = {
   NOT_FOUND: "WORKSPACE_NOT_FOUND",
   FILE_TOO_LARGE: "WORKSPACE_FILE_TOO_LARGE",
   READ_FAILED: "WORKSPACE_READ_FAILED",
+  REPO_SEARCH_INVALID_QUERY: "WORKSPACE_REPO_SEARCH_INVALID_QUERY",
+  REPO_SEARCH_INVALID_RANGE: "WORKSPACE_REPO_SEARCH_INVALID_RANGE",
+  REPO_SEARCH_UNSUPPORTED_FILE: "WORKSPACE_REPO_SEARCH_UNSUPPORTED_FILE",
 } as const;
 
 export type WorkspaceCode = (typeof WORKSPACE_CODES)[keyof typeof WORKSPACE_CODES];
@@ -85,5 +88,37 @@ export class WorkspaceReadError extends WorkspaceError {
   constructor(message: string, requestedPath: string, secrets: readonly string[] = []) {
     super(message, secrets);
     this.requestedPath = requestedPath;
+  }
+}
+
+// Raised at the repo-search API boundary when the RetrievalQuery fails validation, has the
+// wrong `kind` for the entry point called, or carries a syntactically invalid regex.
+export class RepoSearchInvalidQueryError extends WorkspaceError {
+  readonly code = WORKSPACE_CODES.REPO_SEARCH_INVALID_QUERY;
+
+  constructor(message: string, secrets: readonly string[] = []) {
+    super(message, secrets);
+  }
+}
+
+// Raised when a readExcerpt request specifies a line range that is not a positive,
+// increasing pair of integers, or a scopePath that fails the contracts validator.
+export class RepoSearchInvalidRangeError extends WorkspaceError {
+  readonly code = WORKSPACE_CODES.REPO_SEARCH_INVALID_RANGE;
+
+  constructor(message: string, secrets: readonly string[] = []) {
+    super(message, secrets);
+  }
+}
+
+// Raised when readExcerpt is called on a file the facade refuses to interpret (currently:
+// binary content, detected by the NUL-byte heuristic).
+export class RepoSearchUnsupportedFileError extends WorkspaceError {
+  readonly code = WORKSPACE_CODES.REPO_SEARCH_UNSUPPORTED_FILE;
+  readonly reason: string;
+
+  constructor(message: string, reason: string, secrets: readonly string[] = []) {
+    super(message, secrets);
+    this.reason = reason;
   }
 }

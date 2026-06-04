@@ -10,5 +10,8 @@ export {
   WorkspaceNotFoundError,
   FileTooLargeError,
   WorkspaceReadError,
+  RepoSearchInvalidQueryError,
+  RepoSearchInvalidRangeError,
+  RepoSearchUnsupportedFileError,
 } from "@oscharko-dev/keiko-security/errors/workspace";
 export type { WorkspaceCode } from "@oscharko-dev/keiko-security/errors/workspace";

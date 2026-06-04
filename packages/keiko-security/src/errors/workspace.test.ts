@@ -3,6 +3,9 @@ import {
   FileTooLargeError,
   PathDeniedError,
   PathEscapeError,
+  RepoSearchInvalidQueryError,
+  RepoSearchInvalidRangeError,
+  RepoSearchUnsupportedFileError,
   WORKSPACE_CODES,
   WorkspaceError,
   WorkspaceNotFoundError,
@@ -52,5 +55,28 @@ describe("workspace errors", () => {
     const error = new PathDeniedError("m", "x");
     expect(error).toBeInstanceOf(WorkspaceError);
     expect(error).toBeInstanceOf(Error);
+  });
+
+  it("repo-search invalid-query carries the right code, name, and redaction", () => {
+    const error = new RepoSearchInvalidQueryError("contains sk-abcdef0123456789ABCDEF");
+    expect(error.code).toBe(WORKSPACE_CODES.REPO_SEARCH_INVALID_QUERY);
+    expect(error.name).toBe("RepoSearchInvalidQueryError");
+    expect(error).toBeInstanceOf(WorkspaceError);
+    expect(error.message).not.toContain("sk-abcdef0123456789ABCDEF");
+  });
+
+  it("repo-search invalid-range carries the right code and name", () => {
+    const error = new RepoSearchInvalidRangeError("range must be 1-based and increasing");
+    expect(error.code).toBe(WORKSPACE_CODES.REPO_SEARCH_INVALID_RANGE);
+    expect(error.name).toBe("RepoSearchInvalidRangeError");
+    expect(error).toBeInstanceOf(WorkspaceError);
+  });
+
+  it("repo-search unsupported-file carries reason and the right code", () => {
+    const error = new RepoSearchUnsupportedFileError("binary content", "binary");
+    expect(error.code).toBe(WORKSPACE_CODES.REPO_SEARCH_UNSUPPORTED_FILE);
+    expect(error.name).toBe("RepoSearchUnsupportedFileError");
+    expect(error.reason).toBe("binary");
+    expect(error).toBeInstanceOf(WorkspaceError);
   });
 });

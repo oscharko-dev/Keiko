@@ -133,6 +133,11 @@ const WORKSPACE_ERROR_MESSAGES: Record<WorkspaceCode, string> = {
   [WORKSPACE_CODES.NOT_FOUND]: "The workspace could not be found.",
   [WORKSPACE_CODES.FILE_TOO_LARGE]: "The workspace file is too large.",
   [WORKSPACE_CODES.READ_FAILED]: "The workspace could not be read.",
+  [WORKSPACE_CODES.REPO_SEARCH_INVALID_QUERY]: "The repository search query is invalid.",
+  [WORKSPACE_CODES.REPO_SEARCH_INVALID_RANGE]:
+    "The repository search range or scope path is invalid.",
+  [WORKSPACE_CODES.REPO_SEARCH_UNSUPPORTED_FILE]:
+    "The repository search does not support this file.",
 };
 
 function workspaceErrorMessage(code: WorkspaceCode): string {
