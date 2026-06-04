@@ -1,0 +1,294 @@
+// BFF route POST /api/chats/messages/grounded (Issue #185 / Epic #177). Composes the
+// orchestrator's pure pipeline with the UiStore so a single HTTP round trip persists both
+// the user question and the assistant answer alongside a redacted citation projection.
+// All path validation runs in the composed layers; this module only validates wire-shape
+// inputs (chatId + content) and enforces that the chat carries a connected scope.
+
+import type { IncomingMessage } from "node:http";
+import { createHash } from "node:crypto";
+
+import {
+  CONNECTED_CONTEXT_SCHEMA_VERSION,
+  type ConnectedContextPack,
+  type RetrievalQuery,
+  type SelectedScope,
+} from "@oscharko-dev/keiko-contracts/connected-context";
+import type {
+  GroundedAnswer,
+  GroundedEvidenceCitation,
+  GroundedUncertainty,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+
+import type { RouteContext, RouteResult } from "./routes.js";
+import { errorBody } from "./routes.js";
+import type { UiHandlerDeps } from "./deps.js";
+import type { Chat } from "./store/index.js";
+import {
+  ClarificationNeededError,
+  echoAnswerer,
+  runGroundedExploration,
+  type OrchestratorInput,
+  type OrchestratorOutput,
+} from "./grounded-orchestrator.js";
+
+// ─── Body parsing (mirrors store-handlers' bounded reader) ────────────────────
+
+const MAX_BODY_BYTES = 128_000;
+const MAX_CONTENT_CHARS = 16_000;
+
+class BodyTooLargeError extends Error {
+  public constructor() {
+    super("body too large");
+    this.name = "BodyTooLargeError";
+  }
+}
+
+function readBody(req: IncomingMessage): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let capped = false;
+    req.on("data", (chunk: Buffer) => {
+      total += chunk.length;
+      if (total > MAX_BODY_BYTES) {
+        if (!capped) {
+          capped = true;
+          chunks.length = 0;
+          reject(new BodyTooLargeError());
+          req.resume();
+        }
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => {
+      if (!capped) resolve(Buffer.concat(chunks).toString("utf8"));
+    });
+    req.on("error", reject);
+  });
+}
+
+function badRequest(message: string): RouteResult {
+  return { status: 400, body: errorBody("BAD_REQUEST", message) };
+}
+
+function notFound(message: string): RouteResult {
+  return { status: 404, body: errorBody("NOT_FOUND", message) };
+}
+
+function payloadTooLarge(): RouteResult {
+  return {
+    status: 413,
+    body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
+  };
+}
+
+interface AskInput {
+  readonly chatId: string;
+  readonly content: string;
+}
+
+type ParseResult<T> =
+  | { readonly kind: "ok"; readonly value: T }
+  | { readonly kind: "err"; readonly result: RouteResult };
+
+function parseJsonObject(raw: string): ParseResult<Record<string, unknown>> {
+  let parsed: unknown;
+  try {
+    parsed = raw.length === 0 ? {} : JSON.parse(raw);
+  } catch {
+    return { kind: "err", result: badRequest("Request body is not valid JSON.") };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { kind: "err", result: badRequest("Request body must be a JSON object.") };
+  }
+  return { kind: "ok", value: parsed as Record<string, unknown> };
+}
+
+function parseBody(raw: string): ParseResult<AskInput> {
+  const objResult = parseJsonObject(raw);
+  if (objResult.kind === "err") return objResult;
+  const obj = objResult.value;
+  const chatId = typeof obj.chatId === "string" ? obj.chatId : "";
+  const content = typeof obj.content === "string" ? obj.content.trim() : "";
+  if (chatId.length === 0) {
+    return { kind: "err", result: badRequest('Field "chatId" is required.') };
+  }
+  if (content.length === 0 || content.length > MAX_CONTENT_CHARS) {
+    return {
+      kind: "err",
+      result: badRequest(
+        `Field "content" must be between 1 and ${String(MAX_CONTENT_CHARS)} characters.`,
+      ),
+    };
+  }
+  return { kind: "ok", value: { chatId, content } };
+}
+
+// ─── Scope / query construction ───────────────────────────────────────────────
+
+// SHA-256(chatId + connectedAtMs) truncated to 16 hex chars — deterministic across calls so
+// the assembler's pack stableId is stable for a given chat-scope binding. The scopeId is
+// observable only inside the BFF; no client trust is placed on the value.
+function deriveScopeId(chat: Chat): string {
+  if (chat.connectedScope === undefined) {
+    return `chat-${chat.id}`;
+  }
+  const hash = createHash("sha256")
+    .update(`${chat.id}|${String(chat.connectedScope.connectedAtMs)}`)
+    .digest("hex");
+  return `cs-${hash.slice(0, 16)}`;
+}
+
+function buildSelectedScope(chat: Chat): SelectedScope | undefined {
+  const cs = chat.connectedScope;
+  if (cs === undefined) return undefined;
+  // relativePaths is non-empty per the #184 BFF gate; kind reflects whether the user picked
+  // exactly one entry (directory) or several (files). workspace-root is unreachable here
+  // because the connector requires at least one path.
+  const kind: SelectedScope["kind"] = cs.relativePaths.length === 1 ? "directory" : "files";
+  return {
+    schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+    scopeId: deriveScopeId(chat),
+    workspaceRoot: chat.projectPath,
+    kind,
+    relativePaths: cs.relativePaths,
+    conversationId: chat.id,
+    connectedAtMs: cs.connectedAtMs,
+  };
+}
+
+function buildQuery(content: string, nowMs: () => number): RetrievalQuery {
+  return {
+    kind: "natural-language",
+    text: content,
+    caseSensitive: false,
+    maxResults: 50,
+    emittedAtMs: nowMs(),
+  };
+}
+
+// ─── Citation projection ──────────────────────────────────────────────────────
+
+function buildCitations(pack: ConnectedContextPack): readonly GroundedEvidenceCitation[] {
+  const citations: GroundedEvidenceCitation[] = [];
+  for (const file of pack.files) {
+    for (const excerpt of file.excerpts) {
+      citations.push({
+        scopePath: excerpt.atom.scopePath,
+        lineRange: excerpt.atom.lineRange,
+        score: excerpt.atom.score,
+        stableId: excerpt.atom.stableId,
+      });
+    }
+  }
+  citations.sort((a, b) => b.score - a.score);
+  return citations;
+}
+
+function buildUncertainty(pack: ConnectedContextPack): readonly GroundedUncertainty[] {
+  return pack.uncertainty.map((u) => ({ kind: u.kind, claim: u.claim }));
+}
+
+// ─── Composition seam (test injection) ────────────────────────────────────────
+
+// The seam lets the route's tests substitute a deterministic orchestrator runner without
+// having to spin up a real workspace fixture for every wire-shape assertion. Production
+// callers pass `runGroundedExploration` directly so the route stays a thin wrapper.
+export type GroundedRunner = (input: OrchestratorInput) => Promise<OrchestratorOutput>;
+
+function defaultRunner(input: OrchestratorInput): Promise<OrchestratorOutput> {
+  return runGroundedExploration(input, { answerer: echoAnswerer });
+}
+
+// ─── Lookup helpers ───────────────────────────────────────────────────────────
+
+function findChatById(deps: UiHandlerDeps, chatId: string): Chat | undefined {
+  for (const project of deps.store.listProjects()) {
+    for (const chat of deps.store.listChats(project.path)) {
+      if (chat.id === chatId) return chat;
+    }
+  }
+  return undefined;
+}
+
+// ─── Route worker (extracted to keep handleGroundedAsk under the LOC bound) ───
+
+interface AskWorkerCtx {
+  readonly chat: Chat;
+  readonly scope: SelectedScope;
+  readonly content: string;
+  readonly deps: UiHandlerDeps;
+  readonly runner: GroundedRunner;
+}
+
+async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
+  const { chat, scope, content, deps, runner } = workerCtx;
+  const query = buildQuery(content, Date.now);
+  let output: OrchestratorOutput;
+  try {
+    output = await runner({ scope, query, workspaceRoot: chat.projectPath });
+  } catch (error) {
+    if (error instanceof ClarificationNeededError) {
+      return badRequest(error.message);
+    }
+    throw error;
+  }
+  const userMessage = deps.store.createMessage({
+    chatId: chat.id,
+    role: "user",
+    content,
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  const assistantMessage = deps.store.createMessage({
+    chatId: chat.id,
+    role: "assistant",
+    content: output.assistantContent,
+    timestamp: Date.now(),
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  });
+  const answer: GroundedAnswer = {
+    userMessageId: userMessage.id,
+    assistantMessageId: assistantMessage.id,
+    content: output.assistantContent,
+    citations: buildCitations(output.pack),
+    uncertainty: buildUncertainty(output.pack),
+    omittedCount: output.pack.omitted.length,
+    elapsedMs: output.elapsedMs,
+  };
+  return { status: 200, body: answer };
+}
+
+// ─── Public handler ───────────────────────────────────────────────────────────
+
+export async function handleGroundedAsk(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runner: GroundedRunner = defaultRunner,
+): Promise<RouteResult> {
+  let raw: string;
+  try {
+    raw = await readBody(ctx.req);
+  } catch (error) {
+    if (error instanceof BodyTooLargeError) return payloadTooLarge();
+    throw error;
+  }
+  const parsed = parseBody(raw);
+  if (parsed.kind === "err") return parsed.result;
+  const chat = findChatById(deps, parsed.value.chatId);
+  if (chat === undefined) return notFound("Chat not found.");
+  const scope = buildSelectedScope(chat);
+  if (scope === undefined) {
+    return badRequest("Chat has no connected scope.");
+  }
+  return runAsk({ chat, scope, content: parsed.value.content, deps, runner });
+}

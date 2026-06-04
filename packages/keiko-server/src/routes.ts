@@ -39,6 +39,7 @@ import {
   handleUpdateMessage,
 } from "./store-handlers.js";
 import { handleCreateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
+import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import {
   handleCreateTerminalExecution,
@@ -136,6 +137,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   },
   // Issue #66 — PATCH a run-summary message (status/shortResult/taskType).
   { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
+  // Issue #185 — grounded repository-aware Q&A. Composes #179-#183 behind the chat-scope binding.
+  { method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
