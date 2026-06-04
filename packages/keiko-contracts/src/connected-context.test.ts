@@ -312,6 +312,18 @@ describe("validateSelectedScope", () => {
     expect(validateSelectedScope(happyScope())).toEqual({ ok: true });
   });
 
+  // Issue #188 Case 5: unsupported scope kind — a kind that doesn't exist in
+  // SELECTED_SCOPE_KINDS must be rejected. Mutation guard: if the kind guard is
+  // removed or widened, the ok===false assertion fails.
+  it("rejects a scope whose kind is not a recognised SelectedScopeKind", () => {
+    const scope = { ...happyScope(), kind: "bogus" as unknown as SelectedScopeKind };
+    const result = validateSelectedScope(scope);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reasons.some((r) => r.includes("kind"))).toBe(true);
+    }
+  });
+
   it("rejects wrong schemaVersion", () => {
     const scope = { ...happyScope(), schemaVersion: "2" as unknown as "1" };
     expectInvalidWithReason(validateSelectedScope(scope), "schemaVersion");

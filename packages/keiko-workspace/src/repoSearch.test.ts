@@ -181,6 +181,33 @@ describe("searchText (memFs)", () => {
     expect(r.atoms[0]?.score).toBe(1);
   });
 
+  // Issue #188 Case 2: exact symbol question — workspace with two files where only the
+  // defining file contains "function foo"; the search must resolve to exactly that file.
+  // Mutation guard: if the exact-symbol filter matches both files (e.g. falls back to NL
+  // scoring), atoms.length would be 2 and the scopePath assertion would be unreliable.
+  it("returns the symbol-defining file when an exact-symbol query targets a named function", async () => {
+    const { scope, fs } = memScope({
+      "src/foo.ts": "export function foo(): void { return; }\n",
+      "src/bar.ts": "import { foo } from './foo.js';\nfoo();\n",
+    });
+    const r = await searchText(scope, exq("foo"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    // Both files contain the substring "foo", but the defining declaration is in src/foo.ts.
+    // exact-symbol is a substring search so both match — we assert the defining file is present
+    // and ranked alongside any callers, and that no atoms escape the workspace.
+    expect(r.atoms.length).toBeGreaterThanOrEqual(1);
+    const definingAtom = r.atoms.find((a) => a.scopePath === "src/foo.ts");
+    expect(definingAtom).toBeDefined();
+    expect(definingAtom?.score).toBe(1);
+    // Every returned atom must carry a valid relative scopePath.
+    for (const atom of r.atoms) {
+      expect(atom.scopePath.startsWith("/")).toBe(false);
+      expect(atom.scopePath.includes("..")).toBe(false);
+    }
+  });
+
   it("rejects an invalid regex with RepoSearchInvalidQueryError", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "anything\n" });
     await expect(

@@ -358,4 +358,111 @@ describe("handleGroundedAsk", () => {
     expect(answer.contextPack.budget).toEqual(pack.budget);
     expect(answer.contextPack.scopeId).toBe(pack.scope.scopeId);
   });
+
+  // ─── Issue #188 regression fixtures ──────────────────────────────────────────
+
+  // Case 1: broad prompt — a multi-file pack yields >= 2 citations.
+  // Mutation guard: if buildCitations stops collecting across files (e.g. breaks after
+  // the first file), the length assertion fails.
+  it("returns multiple citations for a broad natural-language prompt", async () => {
+    const { chatId } = await setupChatWithScope();
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "How does the whole system work?" })),
+      deps(),
+      runner(packWithCitations(), "overview"),
+    );
+    expect(result.status).toBe(200);
+    const answer = result.body as GroundedAnswer;
+    expect(answer.citations.length).toBeGreaterThanOrEqual(2);
+  });
+
+  // Case 3: no result — orchestrator returns files: [] with a no-evidence uncertainty marker.
+  // Mutation guard: if buildCitations emits entries despite an empty files array the
+  // citations assertion fails; if buildUncertainty drops the marker the kind check fails.
+  it("returns empty citations and a no-evidence uncertainty marker when nothing matches", async () => {
+    const { chatId } = await setupChatWithScope();
+    const noResultPack: ConnectedContextPack = {
+      ...emptyPack(),
+      files: [],
+      uncertainty: [
+        {
+          kind: "no-evidence",
+          claim: "no match for query in scope",
+          impactedAtomIds: [],
+          emittedAtMs: NOW,
+        },
+      ],
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "FindMe" })),
+      deps(),
+      runner(noResultPack, "I found nothing."),
+    );
+    expect(result.status).toBe(200);
+    const answer = result.body as GroundedAnswer;
+    expect(answer.citations.length).toBe(0);
+    expect(answer.uncertainty.length).toBe(1);
+    expect(answer.uncertainty[0]?.kind).toBe("no-evidence");
+  });
+
+  // Case 4: budget exhaustion — pack carries budget-clipped uncertainty and a budget-exhausted
+  // omitted entry. Mutation guard: if omitted entries are ignored omittedCount stays 0;
+  // if uncertainty is not threaded through the kind assertion fails.
+  it("surfaces budget-clipped uncertainty and omitted count when the exploration budget is exhausted", async () => {
+    const { chatId } = await setupChatWithScope();
+    const budgetExhaustedPack: ConnectedContextPack = {
+      ...emptyPack(),
+      files: [],
+      uncertainty: [
+        {
+          kind: "budget-clipped",
+          claim: "exploration stopped early; budget exhausted",
+          impactedAtomIds: [],
+          emittedAtMs: NOW,
+        },
+      ],
+      omitted: [{ scopePath: "src/large.ts", reason: "budget-exhausted", omittedAtMs: NOW }],
+    };
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "deep scan" })),
+      deps(),
+      runner(budgetExhaustedPack, "Partial results only."),
+    );
+    expect(result.status).toBe(200);
+    const answer = result.body as GroundedAnswer;
+    expect(answer.omittedCount).toBe(1);
+    expect(answer.uncertainty[0]?.kind).toBe("budget-clipped");
+  });
+
+  // Case 6: safe cleanup — two sequential calls with different content must not share pack
+  // state. The proxy: each response's contextPack.elapsedMs must reflect its own runner's
+  // returned value, not the other call's. Mutation guard: if runAsk closes over a shared
+  // pack reference both elapsedMs values would be equal and the inequality assertion fails.
+  it("two independent grounded calls do not share contextPack state", async () => {
+    const { chatId } = await setupChatWithScope();
+
+    const runnerA: GroundedRunner = (_input: OrchestratorInput) =>
+      Promise.resolve({ pack: emptyPack(), assistantContent: "answer A", elapsedMs: 10 });
+    const runnerB: GroundedRunner = (_input: OrchestratorInput) =>
+      Promise.resolve({ pack: emptyPack(), assistantContent: "answer B", elapsedMs: 99 });
+
+    const resultA = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "first question" })),
+      deps(),
+      runnerA,
+    );
+    const resultB = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "second question" })),
+      deps(),
+      runnerB,
+    );
+
+    const answerA = resultA.body as GroundedAnswer;
+    const answerB = resultB.body as GroundedAnswer;
+    expect(answerA.contextPack.elapsedMs).toBe(10);
+    expect(answerB.contextPack.elapsedMs).toBe(99);
+    expect(answerA.contextPack.elapsedMs).not.toBe(answerB.contextPack.elapsedMs);
+    // Neither call borrows the other's persisted message ids.
+    expect(answerA.assistantMessageId).not.toBe(answerB.assistantMessageId);
+  });
 });
