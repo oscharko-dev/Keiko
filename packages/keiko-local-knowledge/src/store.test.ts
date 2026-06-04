@@ -39,13 +39,13 @@ describe("openKnowledgeStore — fresh install", () => {
     const store = openKnowledgeStore({ dbPath: join(tmp, "capsules.db") });
     try {
       const db = store._internal.db;
-      const version = db.prepare("PRAGMA user_version").get() as VersionRow;
+      const version = db.prepare("PRAGMA user_version").get() as unknown as VersionRow;
       expect(version.user_version).toBe(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION);
 
       for (const table of KNOWLEDGE_CAPSULE_TABLES) {
         const row = db
           .prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name = :n")
-          .get({ n: table }) as CountRow;
+          .get({ n: table }) as unknown as CountRow;
         expect(row.n).toBe(1);
       }
     } finally {
@@ -57,9 +57,9 @@ describe("openKnowledgeStore — fresh install", () => {
     const store = openKnowledgeStore({ dbPath: join(tmp, "capsules.db") });
     try {
       const db = store._internal.db;
-      const journal = db.prepare("PRAGMA journal_mode").get() as JournalRow;
+      const journal = db.prepare("PRAGMA journal_mode").get() as unknown as JournalRow;
       expect(journal.journal_mode).toBe("wal");
-      const fk = db.prepare("PRAGMA foreign_keys").get() as { readonly foreign_keys: number };
+      const fk = db.prepare("PRAGMA foreign_keys").get() as unknown as { readonly foreign_keys: number };
       expect(fk.foreign_keys).toBe(1);
     } finally {
       store.close();
@@ -90,7 +90,7 @@ describe("openKnowledgeStore — restart safety", () => {
     try {
       const row = second._internal.db
         .prepare("SELECT id, display_name FROM capsules WHERE id = :id")
-        .get({ id: "cap-1" }) as { id: string; display_name: string };
+        .get({ id: "cap-1" }) as unknown as { id: string; display_name: string };
       expect(row.id).toBe("cap-1");
       expect(row.display_name).toBe("cap one");
     } finally {
@@ -109,7 +109,7 @@ describe("openKnowledgeStore — corrupted-DB quarantine", () => {
       // Fresh DB initialised: capsules table present, 0 rows.
       const row = store._internal.db
         .prepare("SELECT COUNT(*) AS n FROM capsules")
-        .get() as CountRow;
+        .get() as unknown as CountRow;
       expect(row.n).toBe(0);
     } finally {
       store.close();
@@ -137,7 +137,7 @@ describe("openKnowledgeStore — corrupted-DB quarantine", () => {
     const store = openKnowledgeStore({ dbPath });
     try {
       // Quarantined → fresh DB → capsules table present.
-      const ok = store._internal.db.prepare("SELECT COUNT(*) AS n FROM capsules").get() as CountRow;
+      const ok = store._internal.db.prepare("SELECT COUNT(*) AS n FROM capsules").get() as unknown as CountRow;
       expect(ok.n).toBe(0);
       // Quarantine file present alongside the new db.
       const moved = readdirSync(tmp).find((n) =>
@@ -165,11 +165,11 @@ describe("openKnowledgeStore — migration runner", () => {
 
     const store = openKnowledgeStore({ dbPath });
     try {
-      const version = store._internal.db.prepare("PRAGMA user_version").get() as VersionRow;
+      const version = store._internal.db.prepare("PRAGMA user_version").get() as unknown as VersionRow;
       expect(version.user_version).toBe(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION);
       const row = store._internal.db
         .prepare("SELECT COUNT(*) AS n FROM capsules")
-        .get() as CountRow;
+        .get() as unknown as CountRow;
       expect(row.n).toBe(0);
     } finally {
       store.close();
@@ -203,7 +203,7 @@ describe("openKnowledgeStore — sequential transactions", () => {
       tx("b", "sb");
       const count = store._internal.db
         .prepare("SELECT COUNT(*) AS n FROM capsules")
-        .get() as CountRow;
+        .get() as unknown as CountRow;
       expect(count.n).toBe(2);
     } finally {
       store.close();
@@ -220,9 +220,9 @@ describe("openKnowledgeStore — sidecar quarantine", () => {
     const store = openKnowledgeStore({ dbPath });
     store.close();
     const names = readdirSync(tmp);
-    const corruptMain = names.some((n) => /^capsules\.db\.corrupt\./.test(n));
-    const corruptWal = names.some((n) => /^capsules\.db-wal\.corrupt\./.test(n));
-    const corruptShm = names.some((n) => /^capsules\.db-shm\.corrupt\./.test(n));
+    const corruptMain = names.some((n) => n.startsWith("capsules.db.corrupt."));
+    const corruptWal = names.some((n) => n.startsWith("capsules.db-wal.corrupt."));
+    const corruptShm = names.some((n) => n.startsWith("capsules.db-shm.corrupt."));
     expect(corruptMain).toBe(true);
     expect(corruptWal).toBe(true);
     expect(corruptShm).toBe(true);

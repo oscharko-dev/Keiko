@@ -70,7 +70,7 @@ describe("createCapsule + getCapsule", () => {
 
   it("rejects duplicate capsule id with a typed error", () => {
     createCapsule(store, sampleCapsuleInput());
-    expect(() => createCapsule(store, sampleCapsuleInput())).toThrowError();
+    expect(() => createCapsule(store, sampleCapsuleInput())).toThrow();
   });
 });
 
@@ -125,7 +125,7 @@ describe("updateCapsuleState", () => {
   });
 
   it("raises KnowledgeNotFoundError for an unknown id", () => {
-    expect(() => updateCapsuleState(store, "ghost" as KnowledgeCapsuleId, "ready")).toThrowError(
+    expect(() => updateCapsuleState(store, "ghost" as KnowledgeCapsuleId, "ready")).toThrow(
       KnowledgeNotFoundError,
     );
   });
@@ -157,7 +157,7 @@ describe("deleteCapsule + cascade", () => {
     for (const table of ALL_DEPENDENT_TABLES) {
       const row = store._internal.db
         .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE capsule_id = :c`)
-        .get({ c: b.id }) as CountRow;
+        .get({ c: b.id }) as unknown as CountRow;
       expect(row.n).toBeGreaterThanOrEqual(1);
     }
 
@@ -165,13 +165,13 @@ describe("deleteCapsule + cascade", () => {
     for (const table of ALL_DEPENDENT_TABLES) {
       const row = store._internal.db
         .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE capsule_id = :c`)
-        .get({ c: a.id }) as CountRow;
+        .get({ c: a.id }) as unknown as CountRow;
       expect(row.n).toBe(0);
     }
   });
 
   it("raises KnowledgeNotFoundError when deleting a missing capsule", () => {
-    expect(() => deleteCapsule(store, "ghost" as KnowledgeCapsuleId)).toThrowError(
+    expect(() => { deleteCapsule(store, "ghost" as KnowledgeCapsuleId); }).toThrow(
       KnowledgeNotFoundError,
     );
   });
@@ -206,7 +206,7 @@ interface CountMap {
 
 function countAll(s: KnowledgeStore): CountMap {
   const c = (table: string): number =>
-    (s._internal.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as CountRow).n;
+    (s._internal.db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as unknown as CountRow).n;
   return {
     capsules: c("capsules"),
     capsule_sources: c("capsule_sources"),

@@ -10,7 +10,6 @@ import type {
   KnowledgeSource,
   KnowledgeSourceId,
   KnowledgeSourceScope,
-  KnowledgeSourceScopeKind,
 } from "@oscharko-dev/keiko-contracts";
 
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
@@ -58,7 +57,7 @@ function parseScope(kind: string, json: string): KnowledgeSourceScope {
     throw new KnowledgeStoreError(`Corrupt capsule_sources.scope_json (kind=${kind}).`);
   }
   // The contract validators in keiko-contracts shape these on write; we trust the row.
-  return { kind: kind as KnowledgeSourceScopeKind, ...(parsed as object) } as KnowledgeSourceScope;
+  return { kind, ...parsed } as KnowledgeSourceScope;
 }
 
 function rowToSource(row: CapsuleSourceRow): KnowledgeSource {
@@ -74,9 +73,15 @@ function rowToSource(row: CapsuleSourceRow): KnowledgeSource {
 }
 
 function scopeToJson(scope: KnowledgeSourceScope): string {
-  // We persist only the fields beyond `kind` (kind lives in its own column).
-  const { kind: _kind, ...rest } = scope;
-  return JSON.stringify(rest);
+  // We persist only the fields beyond `kind` (kind lives in its own column). Build a
+  // plain object copy without `kind` rather than destructuring + discarding, which the
+  // lint config flags as an unused binding.
+  const copy: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(scope)) {
+    if (key === "kind") continue;
+    copy[key] = value;
+  }
+  return JSON.stringify(copy);
 }
 
 export function addSourceToCapsule(

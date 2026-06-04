@@ -66,7 +66,7 @@ export function resolveKnowledgeStorePath(opts: ResolveKnowledgeStorePathOptions
   if (opts.runtimeStateDir.includes("\0")) {
     throw new KnowledgePathError("runtimeStateDir must not contain NUL bytes.");
   }
-  const namespace = opts.namespace === undefined ? DEFAULT_NAMESPACE : opts.namespace;
+  const namespace = opts.namespace ?? DEFAULT_NAMESPACE;
   if (opts.namespace !== undefined) {
     rejectInvalidNamespace(namespace);
   }

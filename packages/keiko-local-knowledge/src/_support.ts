@@ -52,29 +52,39 @@ export interface SampleCapsuleOverrides {
   readonly storageReference?: string;
 }
 
-export function sampleCapsuleInput(overrides: SampleCapsuleOverrides = {}): {
-  readonly id: KnowledgeCapsuleId;
-  readonly displayName: string;
+interface OptionalCapsuleFields {
   readonly description?: string;
-  readonly tags: readonly string[];
   readonly sourceRoutingInstructions?: string;
   readonly alwaysQuery?: boolean;
+}
+
+function optionalCapsuleFields(overrides: SampleCapsuleOverrides): OptionalCapsuleFields {
+  return {
+    ...(overrides.description !== undefined ? { description: overrides.description } : {}),
+    ...(overrides.sourceRoutingInstructions !== undefined
+      ? { sourceRoutingInstructions: overrides.sourceRoutingInstructions }
+      : {}),
+    ...(overrides.alwaysQuery !== undefined ? { alwaysQuery: overrides.alwaysQuery } : {}),
+  };
+}
+
+interface RequiredCapsuleFields {
+  readonly id: KnowledgeCapsuleId;
+  readonly displayName: string;
+  readonly tags: readonly string[];
   readonly retrievalEffort: CapsuleRetrievalEffort;
   readonly outputMode: CapsuleOutputMode;
   readonly answerGroundingPolicy: CapsuleAnswerGroundingPolicy;
   readonly embeddingModelIdentity: EmbeddingModelIdentity;
   readonly lifecycleState: CapsuleLifecycleState;
   readonly storageReference: string;
-} {
+}
+
+function requiredCapsuleFields(overrides: SampleCapsuleOverrides): RequiredCapsuleFields {
   return {
     id: (overrides.id ?? ("cap-1" as string)) as KnowledgeCapsuleId,
     displayName: overrides.displayName ?? "Engineering Capsule",
-    ...(overrides.description !== undefined ? { description: overrides.description } : {}),
     tags: overrides.tags ?? ["alpha", "beta"],
-    ...(overrides.sourceRoutingInstructions !== undefined
-      ? { sourceRoutingInstructions: overrides.sourceRoutingInstructions }
-      : {}),
-    ...(overrides.alwaysQuery !== undefined ? { alwaysQuery: overrides.alwaysQuery } : {}),
     retrievalEffort: overrides.retrievalEffort ?? "default",
     outputMode: overrides.outputMode ?? "answers",
     answerGroundingPolicy: overrides.answerGroundingPolicy ?? "require-citations",
@@ -82,6 +92,12 @@ export function sampleCapsuleInput(overrides: SampleCapsuleOverrides = {}): {
     lifecycleState: overrides.lifecycleState ?? "draft",
     storageReference: overrides.storageReference ?? "engineering/capsule-1",
   };
+}
+
+export function sampleCapsuleInput(
+  overrides: SampleCapsuleOverrides = {},
+): RequiredCapsuleFields & OptionalCapsuleFields {
+  return { ...requiredCapsuleFields(overrides), ...optionalCapsuleFields(overrides) };
 }
 
 export function sampleSourceInput(id: string): {

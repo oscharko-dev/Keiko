@@ -18,7 +18,6 @@ import { DatabaseSync } from "node:sqlite";
 import {
   KNOWLEDGE_CAPSULE_MIGRATIONS,
   KNOWLEDGE_CAPSULE_TABLES,
-  LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts";
 
 import { KnowledgeStoreError } from "./errors.js";

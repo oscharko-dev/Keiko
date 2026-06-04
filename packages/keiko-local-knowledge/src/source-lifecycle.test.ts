@@ -79,16 +79,16 @@ describe("removeSourceFromCapsule", () => {
   it("raises KnowledgeNotFoundError when the source does not belong to the capsule", () => {
     addSourceToCapsule(store, capsuleId, sampleSourceInput("src-y"));
     expect(() =>
-      removeSourceFromCapsule(store, "other" as KnowledgeCapsuleId, "src-y" as KnowledgeSourceId),
-    ).toThrowError(KnowledgeNotFoundError);
+      { removeSourceFromCapsule(store, "other" as KnowledgeCapsuleId, "src-y" as KnowledgeSourceId); },
+    ).toThrow(KnowledgeNotFoundError);
     // Source still present
     expect(listCapsuleSources(store, capsuleId)).toHaveLength(1);
   });
 
   it("raises KnowledgeNotFoundError on completely unknown source", () => {
     expect(() =>
-      removeSourceFromCapsule(store, capsuleId, "ghost" as KnowledgeSourceId),
-    ).toThrowError(KnowledgeNotFoundError);
+      { removeSourceFromCapsule(store, capsuleId, "ghost" as KnowledgeSourceId); },
+    ).toThrow(KnowledgeNotFoundError);
   });
 
   it("cascades to documents that referenced the source", () => {
@@ -101,7 +101,7 @@ describe("removeSourceFromCapsule", () => {
     removeSourceFromCapsule(store, capsuleId, "src-z" as KnowledgeSourceId);
     const row = store._internal.db
       .prepare("SELECT COUNT(*) AS n FROM documents WHERE source_id = 'src-z'")
-      .get() as CountRow;
+      .get() as unknown as CountRow;
     expect(row.n).toBe(0);
   });
 });

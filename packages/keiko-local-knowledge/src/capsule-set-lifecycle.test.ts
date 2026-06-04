@@ -109,7 +109,7 @@ describe("deleteCapsuleSet", () => {
   });
 
   it("raises KnowledgeNotFoundError on unknown set id", () => {
-    expect(() => deleteCapsuleSet(store, "ghost" as CapsuleSetId)).toThrowError(
+    expect(() => { deleteCapsuleSet(store, "ghost" as CapsuleSetId); }).toThrow(
       KnowledgeNotFoundError,
     );
   });
