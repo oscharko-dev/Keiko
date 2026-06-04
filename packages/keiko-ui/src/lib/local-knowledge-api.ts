@@ -1,4 +1,6 @@
 // Issue #197 — typed BFF helpers for the Local Knowledge connector graph surface.
+// Issue #198 — capsule detail, sources, health diagnostics, indexing job history, and
+//              destructive actions (delete, re-index, mark-stale).
 // All routes hit the same-origin BFF; the CSRF header is added for mutating methods.
 //
 // BFF stub: /api/local-knowledge/capsules is not yet wired in keiko-server — the server
@@ -9,7 +11,11 @@ import { ApiError } from "./api";
 import type {
   KnowledgeCapsule,
   KnowledgeCapsuleId,
+  KnowledgeSource,
   CapsuleLifecycleState,
+  CapsuleHealth,
+  ParserDiagnostic,
+  IndexingJobRecord,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -138,5 +144,82 @@ export async function disconnectCapsule(
   return fetchJson<CapsuleActionResponse>(
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/connection`,
     { method: "DELETE", body: JSON.stringify({ confirm: true }) },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #198 — CapsuleDetail wire shape
+// ---------------------------------------------------------------------------
+
+export interface SourceIndexStats {
+  readonly sourceId: string;
+  readonly displayName: string;
+  readonly scope: KnowledgeSource["scope"];
+  readonly indexedCount: number;
+  readonly failedCount: number;
+  readonly skippedCount: number;
+}
+
+export interface CapsuleDetail {
+  readonly capsule: KnowledgeCapsule;
+  readonly health: CapsuleHealth;
+  readonly sources: readonly SourceIndexStats[];
+  readonly parserDiagnostics: readonly ParserDiagnostic[];
+  readonly indexingJobs: readonly IndexingJobRecord[];
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/local-knowledge/capsules/:id — returns CapsuleDetail (mock)
+// ---------------------------------------------------------------------------
+
+export async function fetchCapsuleDetail(
+  capsuleId: KnowledgeCapsuleId,
+  fetchImpl: typeof fetch = fetch,
+): Promise<CapsuleDetail> {
+  const path = `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}`;
+  const res = await fetchImpl(path, {
+    headers: buildHeaders("GET", undefined),
+  });
+  if (!res.ok) {
+    const { code, message } = await parseError(res);
+    throw new ApiError(code, message, res.status);
+  }
+  return res.json() as Promise<CapsuleDetail>;
+}
+
+// ---------------------------------------------------------------------------
+// DELETE /api/local-knowledge/capsules/:id — delete capsule + index
+// ---------------------------------------------------------------------------
+
+export async function deleteCapsule(capsuleId: KnowledgeCapsuleId): Promise<CapsuleActionResponse> {
+  return fetchJson<CapsuleActionResponse>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}`,
+    { method: "DELETE", body: JSON.stringify({ deleteIndex: true, deleteSources: false }) },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/local-knowledge/capsules/:id/reindex — trigger full re-index
+// ---------------------------------------------------------------------------
+
+export async function reindexCapsule(
+  capsuleId: KnowledgeCapsuleId,
+): Promise<CapsuleActionResponse> {
+  return fetchJson<CapsuleActionResponse>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
+    { method: "POST", body: JSON.stringify({ confirm: true }) },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /api/local-knowledge/capsules/:id — mark capsule stale
+// ---------------------------------------------------------------------------
+
+export async function markCapsuleStale(
+  capsuleId: KnowledgeCapsuleId,
+): Promise<CapsuleActionResponse> {
+  return fetchJson<CapsuleActionResponse>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}`,
+    { method: "PATCH", body: JSON.stringify({ lifecycleState: "stale" }) },
   );
 }

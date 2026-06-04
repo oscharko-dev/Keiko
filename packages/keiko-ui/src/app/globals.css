@@ -5751,3 +5751,253 @@ select.dlg-input {
   color: var(--fg-dim);
   margin: 0;
 }
+
+/* ============================================================
+   LOCAL KNOWLEDGE — CAPSULE DETAIL PAGE (#198)
+   ============================================================ */
+
+/* Detail content wrapper */
+.lkd-content {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Definition list (Overview section) */
+.lkd-dl {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+}
+.lkd-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.lkd-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  min-width: 140px;
+  flex: none;
+}
+.lkd-value {
+  font-size: 13px;
+  color: var(--fg);
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Tag list */
+.lkd-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.lkd-tag {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-line);
+  color: var(--fg);
+}
+
+/* Stale reasons */
+.lkd-stale-reasons {
+  list-style: disc;
+  padding-left: 16px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
+/* Generic list (sources, jobs) */
+.lkd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* Source row */
+.lkd-source-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+}
+.lkd-source-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lkd-source-scope {
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+}
+.lkd-source-counts {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.lkd-count {
+  font-size: 11.5px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+}
+.lkd-count-ok {
+  color: var(--ok);
+}
+.lkd-count-fail {
+  color: var(--danger);
+}
+.lkd-count-skip {
+  color: var(--fg-dim);
+}
+
+/* Diagnostics list */
+.lkd-diag-list {
+  gap: 4px;
+}
+.lkd-diag-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.lkd-diag-row[data-severity="error"] {
+  border-color: color-mix(in oklch, var(--danger) 40%, transparent);
+  background: color-mix(in oklch, var(--danger) 6%, var(--card));
+}
+.lkd-diag-row[data-severity="warning"] {
+  border-color: color-mix(in oklch, var(--warn) 40%, transparent);
+}
+.lkd-diag-severity {
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 56px;
+  flex: none;
+}
+.lkd-diag-row[data-severity="error"] .lkd-diag-severity {
+  color: var(--danger);
+}
+.lkd-diag-row[data-severity="warning"] .lkd-diag-severity {
+  color: var(--warn);
+}
+.lkd-diag-row[data-severity="info"] .lkd-diag-severity {
+  color: var(--info);
+}
+.lkd-diag-code {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  min-width: 80px;
+  flex: none;
+}
+.lkd-diag-message {
+  font-size: 12.5px;
+  color: var(--fg);
+  flex: 1;
+  min-width: 0;
+}
+.lkd-diag-page {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg-faint);
+  flex: none;
+}
+
+/* Job row */
+.lkd-job-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+}
+.lkd-job-status {
+  font-size: 11.5px;
+  font-weight: 600;
+  min-width: 72px;
+  flex: none;
+}
+.lkd-job-status[data-status="succeeded"] {
+  color: var(--ok);
+}
+.lkd-job-status[data-status="failed"] {
+  color: var(--danger);
+}
+.lkd-job-status[data-status="running"] {
+  color: var(--warn);
+}
+.lkd-job-status[data-status="queued"],
+.lkd-job-status[data-status="cancelled"] {
+  color: var(--fg-dim);
+}
+.lkd-job-dates {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  flex: 1;
+}
+
+/* Empty note */
+.lkd-empty-note {
+  font-size: 13px;
+  color: var(--fg-dim);
+  margin: 0;
+  padding: 10px 0;
+}
+
+/* Actions group (header row) */
+.lkd-actions-group {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Destructive confirm button in modal — danger style */
+.lkd-btn-destructive {
+  color: var(--fg) !important;
+  background: var(--danger) !important;
+  border-color: var(--danger) !important;
+}
+.lkd-btn-destructive:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.lkd-btn-destructive:disabled,
+.lkd-btn-destructive[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
