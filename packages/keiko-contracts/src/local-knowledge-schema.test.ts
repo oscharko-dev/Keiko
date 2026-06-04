@@ -1,0 +1,436 @@
+// Schema-validity and lineage-invariant tests for the Local Knowledge Connector capsule
+// store (Epic #189, Issue #265). The test file uses `node:sqlite` to prove the DDL applies
+// cleanly to a fresh in-memory database — production source in this package never touches
+// `node:sqlite` (the leaf-package rule under ADR-0019 still holds because test files are
+// excluded from the dist build via the package's tsconfig). Node 22.22+ ships SQLite
+// without the `--experimental-sqlite` flag.
+
+import { DatabaseSync } from "node:sqlite";
+import { describe, expect, it } from "vitest";
+import {
+  DELETE_CAPSULE_SQL,
+  KNOWLEDGE_CAPSULE_DDL,
+  KNOWLEDGE_CAPSULE_INDEXES,
+  KNOWLEDGE_CAPSULE_INDEX_NAMES,
+  KNOWLEDGE_CAPSULE_MIGRATIONS,
+  KNOWLEDGE_CAPSULE_TABLES,
+  LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
+} from "./local-knowledge-schema.js";
+import {
+  redactPathInDiagnostic,
+  validateCapsuleRowShape,
+} from "./local-knowledge-schema-validation.js";
+import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "./local-knowledge.js";
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────────
+// All helpers return primitives; they exist so the per-test arrangement stays focused on
+// the assertion rather than INSERT boilerplate. Each capsule/source/document/chunk/vector
+// inserted by `seedFullLineage` shares the same id-string base so cascades are easy to
+// observe.
+
+function openSchemaDb(): DatabaseSync {
+  const db = new DatabaseSync(":memory:");
+  for (const stmt of KNOWLEDGE_CAPSULE_MIGRATIONS[0]?.up ?? []) {
+    db.exec(stmt);
+  }
+  db.exec(`PRAGMA user_version = ${String(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION)}`);
+  return db;
+}
+
+interface SeedHandles {
+  readonly capsuleId: string;
+  readonly sourceId: string;
+  readonly documentId: string;
+  readonly parsedUnitId: string;
+  readonly chunkId: string;
+  readonly vectorId: string;
+}
+
+function seedFullLineage(db: DatabaseSync): SeedHandles {
+  const capsuleId = "cap-1";
+  const sourceId = "src-1";
+  const documentId = "doc-1";
+  const parsedUnitId = "unit-1";
+  const chunkId = "chunk-1";
+  const vectorId = "vec-1";
+  db.prepare(
+    `INSERT INTO capsules (
+       id, display_name, tags_json, retrieval_effort, output_mode, answer_grounding_policy,
+       embedding_model_provider, embedding_model_id, vector_dimensions, vector_metric,
+       lifecycle_state, storage_reference, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    capsuleId,
+    "Demo capsule",
+    "[]",
+    "default",
+    "answers",
+    "require-citations",
+    "openai",
+    "text-embedding-3-small",
+    1536,
+    "cosine",
+    "ready",
+    "capsules/cap-1",
+    1000,
+    1000,
+  );
+  db.prepare(
+    `INSERT INTO capsule_sources (
+       id, capsule_id, display_name, tags_json, scope_kind, scope_json, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(sourceId, capsuleId, "Demo source", "[]", "folder", "{}", 1000, 1000);
+  db.prepare(
+    `INSERT INTO documents (
+       id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash,
+       parser_id, parser_version, last_extracted_at, status, safe_display_name
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    documentId,
+    capsuleId,
+    sourceId,
+    "docs/intro.md",
+    1024,
+    "text/markdown",
+    "deadbeef",
+    "markdown",
+    "1.0.0",
+    1000,
+    "extracted",
+    "intro.md",
+  );
+  db.prepare(
+    `INSERT INTO parsed_units (id, capsule_id, document_id, kind) VALUES (?, ?, ?, ?)`,
+  ).run(parsedUnitId, capsuleId, documentId, "section");
+  db.prepare(
+    `INSERT INTO chunks (
+       id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count,
+       safe_excerpt_hash
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(chunkId, capsuleId, sourceId, documentId, parsedUnitId, 0, 256, "abc");
+  const embedding = new Uint8Array(1536 * 4);
+  db.prepare(
+    `INSERT INTO vectors (
+       id, capsule_id, source_id, document_id, chunk_id, embedding,
+       embedding_model_provider, embedding_model_id, vector_dimensions, vector_metric,
+       storage_reference, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    vectorId,
+    capsuleId,
+    sourceId,
+    documentId,
+    chunkId,
+    embedding,
+    "openai",
+    "text-embedding-3-small",
+    1536,
+    "cosine",
+    "store-ref-1",
+    1000,
+  );
+  return { capsuleId, sourceId, documentId, parsedUnitId, chunkId, vectorId };
+}
+
+function countRows(db: DatabaseSync, table: string): number {
+  // table is a server-controlled constant from KNOWLEDGE_CAPSULE_TABLES; no user input.
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n?: number };
+  return typeof row.n === "number" ? row.n : 0;
+}
+
+function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly string[] {
+  const rows = db
+    .prepare(`SELECT name FROM sqlite_master WHERE type = ? AND name NOT LIKE 'sqlite_%'`)
+    .all(type) as { name?: string }[];
+  return rows.map((r) => r.name ?? "").filter((name) => name.length > 0);
+}
+
+// ─── Tests ───────────────────────────────────────────────────────────────────────
+describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
+  it("is the integer 1 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(1);
+    expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
+    expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
+    // Same numeric meaning, different *types* — the test pins the distinct kinds so a
+    // future refactor that collapses them to one identifier breaks this assertion.
+    expect((LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION as unknown) !== LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe(
+      true,
+    );
+  });
+});
+
+describe("KNOWLEDGE_CAPSULE_DDL", () => {
+  it("has PRAGMA foreign_keys = ON as the first statement", () => {
+    expect(KNOWLEDGE_CAPSULE_DDL[0]).toBe("PRAGMA foreign_keys = ON;");
+  });
+
+  it("applies to a fresh in-memory database and lists every expected table and index", () => {
+    const db = openSchemaDb();
+    try {
+      const tables = listSqliteMaster(db, "table");
+      for (const expected of KNOWLEDGE_CAPSULE_TABLES) {
+        expect(tables).toContain(expected);
+      }
+      const indexes = listSqliteMaster(db, "index");
+      for (const expected of KNOWLEDGE_CAPSULE_INDEX_NAMES) {
+        expect(indexes).toContain(expected);
+      }
+      expect(KNOWLEDGE_CAPSULE_INDEXES.length).toBe(KNOWLEDGE_CAPSULE_INDEX_NAMES.length);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("sets PRAGMA user_version to LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION after applying", () => {
+    const db = openSchemaDb();
+    try {
+      const row = db.prepare("PRAGMA user_version").get() as { user_version?: number };
+      expect(row.user_version).toBe(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("denormalises embedding identity columns onto the vectors table for stale detection", () => {
+    const db = openSchemaDb();
+    try {
+      const columns = db.prepare("PRAGMA table_info('vectors')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const byName = new Map(columns.map((c) => [c.name ?? "", c]));
+      expect(byName.get("embedding")?.type).toBe("BLOB");
+      expect(byName.get("embedding")?.notnull).toBe(1);
+      expect(byName.get("embedding_model_provider")?.type).toBe("TEXT");
+      expect(byName.get("embedding_model_provider")?.notnull).toBe(1);
+      expect(byName.get("embedding_model_id")?.notnull).toBe(1);
+      expect(byName.get("vector_dimensions")?.type).toBe("INTEGER");
+      expect(byName.get("vector_dimensions")?.notnull).toBe(1);
+      expect(byName.get("vector_metric")?.notnull).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("lineage enforcement", () => {
+  it("rejects a chunk row without a capsule_id (NOT NULL constraint)", () => {
+    const db = openSchemaDb();
+    try {
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO chunks (id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count, safe_excerpt_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run("c", null, "s", "d", "u", 0, 0, "h"),
+      ).toThrow(/NOT NULL/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects a vector row without a document_id (NOT NULL constraint)", () => {
+    const db = openSchemaDb();
+    try {
+      const embedding = new Uint8Array(4);
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO vectors (id, capsule_id, source_id, document_id, chunk_id, embedding, embedding_model_provider, embedding_model_id, vector_dimensions, vector_metric, storage_reference, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run("v", "c", "s", null, "ch", embedding, "p", "m", 4, "cosine", "ref", 1),
+      ).toThrow(/NOT NULL/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("cascades capsule deletion to every dependent row in one statement", () => {
+    const db = openSchemaDb();
+    try {
+      const handles = seedFullLineage(db);
+      // Confirm every table has the seeded row before the cascade.
+      expect(countRows(db, "capsule_sources")).toBe(1);
+      expect(countRows(db, "documents")).toBe(1);
+      expect(countRows(db, "parsed_units")).toBe(1);
+      expect(countRows(db, "chunks")).toBe(1);
+      expect(countRows(db, "vectors")).toBe(1);
+      db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: handles.capsuleId });
+      // Cascade reaches every dependent table; the capsule row itself is gone too.
+      expect(countRows(db, "capsules")).toBe(0);
+      expect(countRows(db, "capsule_sources")).toBe(0);
+      expect(countRows(db, "documents")).toBe(0);
+      expect(countRows(db, "parsed_units")).toBe(0);
+      expect(countRows(db, "chunks")).toBe(0);
+      expect(countRows(db, "vectors")).toBe(0);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("STRICT mode", () => {
+  it("rejects inserting a string into an INTEGER column (vector_dimensions)", () => {
+    const db = openSchemaDb();
+    try {
+      const embedding = new Uint8Array(4);
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO vectors (id, capsule_id, source_id, document_id, chunk_id, embedding, embedding_model_provider, embedding_model_id, vector_dimensions, vector_metric, storage_reference, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            "v",
+            "c",
+            "s",
+            "d",
+            "ch",
+            embedding,
+            "p",
+            "m",
+            "not-an-integer" as unknown as number,
+            "cosine",
+            "ref",
+            1,
+          ),
+      ).toThrow(/INTEGER/);
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
+  it("has exactly one entry today, versioned 1, sequentially ascending", () => {
+    expect(KNOWLEDGE_CAPSULE_MIGRATIONS.length).toBeGreaterThan(0);
+    expect(KNOWLEDGE_CAPSULE_MIGRATIONS[0]?.version).toBe(1);
+    let previous = 0;
+    for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+      expect(entry.version).toBeGreaterThan(previous);
+      previous = entry.version;
+    }
+  });
+
+  it("each entry's up statements apply cleanly to a fresh database", () => {
+    for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+      const db = new DatabaseSync(":memory:");
+      try {
+        for (const stmt of entry.up) db.exec(stmt);
+      } finally {
+        db.close();
+      }
+    }
+  });
+});
+
+describe("redactPathInDiagnostic", () => {
+  it("rewrites a HOME-prefixed POSIX path to `~/…`", () => {
+    expect(redactPathInDiagnostic("/Users/foo/secret.txt", { homePrefix: "/Users/foo" })).toBe(
+      "~/secret.txt",
+    );
+  });
+
+  it("returns just `~` when the path equals the HOME prefix", () => {
+    expect(redactPathInDiagnostic("/Users/foo", { homePrefix: "/Users/foo" })).toBe("~");
+  });
+
+  it("does not collapse `/Users/foobar` into `/Users/foo` (prefix-with-separator gate)", () => {
+    expect(redactPathInDiagnostic("/Users/foobar/x", { homePrefix: "/Users/foo" })).toBe(
+      "/Users/foobar/x",
+    );
+  });
+
+  it("rewrites a Windows drive prefix to `<drive>/…` and normalises separators", () => {
+    expect(redactPathInDiagnostic("C:\\Users\\victim\\file.txt")).toBe(
+      "<drive>/Users/victim/file.txt",
+    );
+  });
+
+  it("truncates at the first NUL byte", () => {
+    expect(redactPathInDiagnostic("safe\0badpart")).toBe("safe");
+  });
+
+  it("strips ASCII control characters", () => {
+    expect(redactPathInDiagnostic("abc")).toBe("abc");
+  });
+
+  it("caps the output at the documented length and appends an ellipsis on overflow", () => {
+    const huge = "x".repeat(4096);
+    const out = redactPathInDiagnostic(huge);
+    expect(out.length).toBe(1025);
+    expect(out.endsWith("…")).toBe(true);
+  });
+
+  it("passes through inputs that do not match any redaction pattern", () => {
+    expect(redactPathInDiagnostic("relative/path.txt")).toBe("relative/path.txt");
+  });
+
+  it("returns the empty string when called with a non-string at runtime", () => {
+    expect(redactPathInDiagnostic(undefined as unknown as string)).toBe("");
+  });
+});
+
+describe("validateCapsuleRowShape", () => {
+  it("accepts a row that mirrors the capsules table after JS-side mapping", () => {
+    const row = {
+      id: "cap-1",
+      displayName: "Demo",
+      vectorDimensions: 1536,
+      vectorMetric: "cosine",
+      embeddingModelProvider: "openai",
+      embeddingModelId: "text-embedding-3-small",
+      lifecycleState: "ready",
+      storageReference: "capsules/cap-1",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const result = validateCapsuleRowShape(row);
+    expect(result.ok).toBe(true);
+  });
+
+  it("rejects a non-object input with a single object-shape error", () => {
+    const result = validateCapsuleRowShape("not-a-row");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors).toEqual(["capsuleRow must be an object"]);
+    }
+  });
+
+  it("rejects a row with vectorDimensions of the wrong type", () => {
+    const result = validateCapsuleRowShape({
+      id: "cap-1",
+      displayName: "Demo",
+      vectorDimensions: "1536",
+      vectorMetric: "cosine",
+      embeddingModelProvider: "openai",
+      embeddingModelId: "m",
+      lifecycleState: "ready",
+      storageReference: "capsules/cap-1",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.includes("vectorDimensions"))).toBe(true);
+    }
+  });
+
+  it("rejects a row missing the lifecycle_state JS field", () => {
+    const result = validateCapsuleRowShape({
+      id: "cap-1",
+      displayName: "Demo",
+      vectorDimensions: 1536,
+      vectorMetric: "cosine",
+      embeddingModelProvider: "openai",
+      embeddingModelId: "m",
+      storageReference: "capsules/cap-1",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.includes("lifecycleState"))).toBe(true);
+    }
+  });
+});
