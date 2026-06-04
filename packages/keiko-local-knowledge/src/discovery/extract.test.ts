@@ -200,4 +200,44 @@ describe("documentIdFor", () => {
     });
     expect(a).toBe(b);
   });
+
+  it("encodes # in relativePath so a file named 'a#u0.md' does not collide with a parsed_unit suffix", () => {
+    // A file literally named 'a#u0.md' must produce a document ID that does NOT
+    // equal the parsed_unit id `<docId>#u0` derived from a different document 'a.md'.
+    const hashFile = documentIdFor({ capsuleId, sourceId: source.id, relativePath: "a#u0.md" });
+    const otherDoc = documentIdFor({ capsuleId, sourceId: source.id, relativePath: "a.md" });
+    const unitId = `${String(otherDoc)}#u0`;
+    expect(hashFile).not.toBe(unitId);
+    // Also verify the # is encoded in the id (not raw).
+    expect(String(hashFile)).toContain("%23");
+  });
+});
+
+describe("extractDocument — Windows separator normalisation", () => {
+  it("passes the realpath containment gate when WorkspaceFs.realPath returns Windows-style paths", async () => {
+    // realPathOverride simulates a Windows realPath that returns backslash paths.
+    const fs = memoryFs(ROOT, [
+      {
+        relativePath: "docs/guide.md",
+        content: "# Guide",
+        // Simulate Windows realPath returning backslash-normalised absolute path.
+        realPathOverride: ROOT.replace(/\//g, "\\") + "\\docs\\guide.md",
+      },
+    ]);
+    const registry = createDefaultParserRegistry();
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "docs/guide.md", sizeBytes: 7 },
+      },
+    );
+    // Must NOT be rejected as PATH_ESCAPE; containment check must pass after normalisation.
+    expect(result.outcome.kind).not.toBe("failed");
+    if (result.outcome.kind === "failed") {
+      // Provide diagnostic info if the test fails.
+      expect(result.outcome.error.code).not.toBe("PATH_ESCAPE");
+    }
+  });
 });

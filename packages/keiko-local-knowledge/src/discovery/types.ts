@@ -117,6 +117,11 @@ export interface DocumentIdSource {
 // Branded helper so callers (extract.ts) don't need to repeat the cast. The returned id is
 // deterministic in `(capsuleId, sourceId, relativePath)` so a re-walk of the same scope
 // targets the SAME `documents` row — that's the lineage anchor for incremental updates.
+//
+// The `#` character is encoded as `%23` before embedding so that a file literally named
+// `a#u0.md` cannot produce an id that collides with a parsed_unit suffix (`#u0`) or a
+// diagnostic suffix (`#d0`) derived from a different document.
 export function documentIdFor(input: DocumentIdSource): DocumentId {
-  return `doc:${String(input.capsuleId)}:${String(input.sourceId)}:${input.relativePath}` as DocumentId;
+  const encodedPath = input.relativePath.replace(/#/g, "%23");
+  return `doc:${String(input.capsuleId)}:${String(input.sourceId)}:${encodedPath}` as DocumentId;
 }

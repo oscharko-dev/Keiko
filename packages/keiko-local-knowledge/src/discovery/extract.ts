@@ -61,10 +61,19 @@ export interface ExtractDocumentDeps {
 }
 
 // ─── Path helpers (re-derived to keep extract.ts self-contained for the realpath gate) ──
+// On Windows, WorkspaceFs.realPath() may return backslash-separated paths
+// (e.g. C:\Users\workspace\file). Normalise both sides to forward slashes so
+// containment checks work cross-platform.
+function normaliseSep(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
 function isContained(absoluteRoot: string, absolutePath: string): boolean {
-  if (absolutePath === absoluteRoot) return true;
-  const prefix = absoluteRoot.endsWith("/") ? absoluteRoot : `${absoluteRoot}/`;
-  return absolutePath.startsWith(prefix);
+  const normRoot = normaliseSep(absoluteRoot);
+  const normPath = normaliseSep(absolutePath);
+  if (normPath === normRoot) return true;
+  const prefix = normRoot.endsWith("/") ? normRoot : `${normRoot}/`;
+  return normPath.startsWith(prefix);
 }
 
 function joinAbs(root: string, rel: string): string {
@@ -232,7 +241,9 @@ function resolveTargetPath(
       relativePath: params.file.relativePath,
     };
   }
-  return { absolutePath: real };
+  // Normalise to forward slashes so subsequent IO calls (readFileBytes, stat) receive
+  // a consistent path even when realPath returned a Windows backslash path.
+  return { absolutePath: normaliseSep(real) };
 }
 
 async function readBytes(

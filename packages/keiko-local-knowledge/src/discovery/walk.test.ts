@@ -71,6 +71,49 @@ describe("walkSource — folder scope", () => {
   });
 });
 
+describe("walkSource — Windows separator normalisation", () => {
+  it("passes containment when WorkspaceFs.realPath returns Windows-style backslash paths", () => {
+    // Simulate a Windows WorkspaceFs: root and realPath returns use backslash separators.
+    const winRoot = "C:\\Users\\workspace\\docs";
+    const fileContent = new TextEncoder().encode("content");
+    const winFs: import("@oscharko-dev/keiko-workspace").WorkspaceFs = {
+      readFileUtf8: () => "content",
+      stat: (p) => {
+        if (p === winRoot || p === "C:\\Users\\workspace\\docs\\notes\\report.md") {
+          return { size: fileContent.byteLength, isFile: p !== winRoot, isDirectory: p === winRoot, isSymbolicLink: false };
+        }
+        throw new Error(`ENOENT: ${p}`);
+      },
+      readDir: (p) => {
+        if (p === winRoot) {
+          return [{ name: "notes", isDirectory: true, isFile: false, isSymbolicLink: false }];
+        }
+        if (p === `${winRoot}/notes`) {
+          return [{ name: "report.md", isDirectory: false, isFile: true, isSymbolicLink: false }];
+        }
+        return [];
+      },
+      // realPath returns Windows-style backslash path — this is what the fix must handle.
+      realPath: (p) => p.replace(/\//g, "\\"),
+      exists: (p) => p === winRoot || p === "C:\\Users\\workspace\\docs\\notes\\report.md",
+      readFileBytes: (_p, _max) => Promise.resolve(fileContent),
+    };
+    const files: string[] = [];
+    const errors: string[] = [];
+    for (const yld of walkSource(winFs, {
+      kind: "folder",
+      rootPath: winRoot,
+      recursive: true,
+    })) {
+      if (yld.kind === "file") files.push(yld.file.relativePath);
+      if (yld.kind === "error" && yld.error.code === "PATH_ESCAPE") errors.push(yld.error.relativePath ?? "");
+    }
+    // The file must not be rejected as PATH_ESCAPE; containment must pass after normalisation.
+    expect(errors).toStrictEqual([]);
+    expect(files).toHaveLength(1);
+  });
+});
+
 describe("walkSource — path containment", () => {
   it("emits a PATH_ESCAPE error when a file's realPath escapes the scope root", () => {
     const fs = memoryFs(ROOT, [

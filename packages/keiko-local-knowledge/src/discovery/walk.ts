@@ -42,23 +42,34 @@ interface ScopeBounds {
   readonly excludeGlobs: readonly CompiledGlob[];
 }
 
+// On Windows, WorkspaceFs.realPath() may return backslash-separated paths
+// (e.g. C:\Users\workspace\file). Normalise both sides to forward slashes so
+// containment checks and relative-path derivation work cross-platform.
+function normaliseSep(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
 function toPosixRelative(absoluteRoot: string, absolutePath: string): string {
-  if (absolutePath === absoluteRoot) {
+  const normRoot = normaliseSep(absoluteRoot);
+  const normPath = normaliseSep(absolutePath);
+  if (normPath === normRoot) {
     return "";
   }
-  const prefix = absoluteRoot.endsWith("/") ? absoluteRoot : `${absoluteRoot}/`;
-  if (absolutePath.startsWith(prefix)) {
-    return absolutePath.slice(prefix.length);
+  const prefix = normRoot.endsWith("/") ? normRoot : `${normRoot}/`;
+  if (normPath.startsWith(prefix)) {
+    return normPath.slice(prefix.length);
   }
-  return absolutePath;
+  return normPath;
 }
 
 function isContained(absoluteRoot: string, absolutePath: string): boolean {
-  if (absolutePath === absoluteRoot) {
+  const normRoot = normaliseSep(absoluteRoot);
+  const normPath = normaliseSep(absolutePath);
+  if (normPath === normRoot) {
     return true;
   }
-  const prefix = absoluteRoot.endsWith("/") ? absoluteRoot : `${absoluteRoot}/`;
-  return absolutePath.startsWith(prefix);
+  const prefix = normRoot.endsWith("/") ? normRoot : `${normRoot}/`;
+  return normPath.startsWith(prefix);
 }
 
 function joinAbs(root: string, name: string): string {
