@@ -26,20 +26,20 @@ primitive already exists on `dev` and is exercised on every push by the `ci`,
 
 | Field          | Value                                                                         |
 | -------------- | ----------------------------------------------------------------------------- |
-| Tree SHA       | `1a1fd08503871c1498a70e3266d079a9c9209d50`                                    |
-| Branch         | `claude/issue-170-architecture-sprint-verification`                           |
-| Run timestamp  | 2026-06-03T22:42:00Z                                                          |
+| Tree SHA       | `b9e1d15a73322be67f7685ce38f81054b70faf41`                                    |
+| Branch         | `codex/release-0.1.7-architecture-audit`                                      |
+| Run timestamp  | 2026-06-04T05:47:45Z                                                          |
 | Node / npm     | v22.22.3 / 10.9.8                                                             |
-| Tarball        | `oscharko-dev-keiko-0.1.6.tgz` (948.7 kB packed, 3.7 MB unpacked, 1768 files) |
-| Tarball shasum | `89338592e70ce70fac4c04d6da65a2cd6c54869c`                                    |
+| Tarball        | `oscharko-dev-keiko-0.1.7.tgz` (949.2 kB packed, 3.7 MB unpacked, 1768 files) |
+| Tarball shasum | `ff9ebc5437c59484910864960276ff159603abae`                                    |
 
 ## Acceptance criteria verdict
 
 | #   | Acceptance criterion                                                                                                | Verification primitive (file:line or command)                                                                                                                                                                                                                                                                    | Evidence (run output / verdict)                                                                                                                                                                                                                                                                                                                                             | Verdict |
 | --- | ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
 | 1   | The packed artifact installs without private workspace symlink leakage.                                             | [`scripts/installable-package-smoke.mjs`](../scripts/installable-package-smoke.mjs) + [`scripts/check-package-surface.mjs`](../scripts/check-package-surface.mjs)                                                                                                                                                | `smoke:install` exit 0 in 18.8s: `installable-smoke ok: tarball installed, 10 bundled packages present, CLI + SDK reachable.` Every `@oscharko-dev/keiko-<name>` listed in the root `bundleDependencies` (the 10-entry array in [`package.json`](../package.json)) ships under `node_modules/@oscharko-dev/keiko/node_modules/<scope>/<name>/dist/`.                        | PASS    |
-| 2   | The CLI lifecycle and local UI work from a clean sandbox.                                                           | `smoke:install` (tmpdir tarball install + CLI bin + SDK root) + `node dist/cli/index.js ui --port N` + `curl http://127.0.0.1:N/api/health`                                                                                                                                                                      | CLI mode `-rwxr-xr-x`; `--version` → `keiko 0.1.6`; `--help` lists 14 subcommands; unknown command exits 2; UI returns body `{"status":"ok","version":"0.1.6"}`, exits clean on signal. SDK root export resolves 132 named keys and `runVerification` is a function.                                                                                                        | PASS    |
-| 3   | The existing gateway setup, model call, workspace access, workflow run, tool, and evidence behavior is preserved.   | `KEIKO_EVIDENCE_DIR=… node dist/cli/index.js evaluate --suite all` (CI-parity command that exercises the gateway, workflows, tools, and evidence surfaces in one) + the full vitest suite (`npm test`)                                                                                                           | `evaluate` exit 0 in 0.2s: `Verdict: GO — pilot ready (all Go/No-Go thresholds met).` 6 fixtures / 6 PASS, 7 scoring dimensions / 7 PASS, surface-parity 8 checks PASS. Vitest: 148 files / 2059 passed / 2 skipped.                                                                                                                                                        | PASS    |
+| 2   | The CLI lifecycle and local UI work from a clean sandbox.                                                           | `smoke:install` (tmpdir tarball install + CLI bin + SDK root) + `node dist/cli/index.js ui --port N` + `curl http://127.0.0.1:N/api/health`                                                                                                                                                                      | CLI mode `-rwxr-xr-x`; `--version` → `keiko 0.1.7`; `--help` lists 14 subcommands; unknown command exits 2; UI returns body `{"status":"ok","version":"0.1.7"}`, exits clean on signal. SDK root export resolves 132 named keys and `runVerification` is a function.                                                                                                        | PASS    |
+| 3   | The existing gateway setup, model call, workspace access, workflow run, tool, and evidence behavior is preserved.   | `KEIKO_EVIDENCE_DIR=… node dist/cli/index.js evaluate --suite all` (CI-parity command that exercises the gateway, workflows, tools, and evidence surfaces in one) + the full vitest suite (`npm test`)                                                                                                           | `evaluate` exit 0 in 0.03s: `Verdict: GO — pilot ready (all Go/No-Go thresholds met).` 6 fixtures / 6 PASS, 7 scoring dimensions / 7 PASS, surface-parity 8 checks PASS. Vitest: 148 files / 2068 passed / 1 skipped.                                                                                                                                                       | PASS    |
 | 4   | Pre-modular local state is read by the packed modular artifact without forced reconfiguration or silent state loss. | [`tests/upgrade-smoke/upgrade-compatibility.test.ts`](../tests/upgrade-smoke/upgrade-compatibility.test.ts) (10 tests against [`tests/upgrade-smoke/fixture/pre-modular-0.1.x/`](../tests/upgrade-smoke/fixture/pre-modular-0.1.x/)) + [`docs/local-runtime-state-contract.md`](local-runtime-state-contract.md) | Vitest 10/10 passing. The post-modular surfaces imported by the test (`@oscharko-dev/keiko-server`, `@oscharko-dev/keiko-evidence`, `@oscharko-dev/keiko-model-gateway`) are the same surfaces a tarball-installed consumer resolves. The 8-category verdict is recorded at [issue #170 comment](https://github.com/oscharko-dev/Keiko/issues/170#issuecomment-4616809868). | PASS    |
 | 5   | The Conversation Center and PWA epics can resume with the architecture prerequisite satisfied or documented.        | ADR-0019 §"Required Dependency Direction" (9 rules) + §"Trust-Boundary Rules" (8 rules), encoded in [`.dependency-cruiser.cjs`](../.dependency-cruiser.cjs); negative-test fixtures under [`tests/architecture/fixtures/`](../tests/architecture/fixtures/)                                                      | Epic #156 audit hardening reran the gate with `arch:check` exit 0: `no dependency violations found (523 modules, 1126 dependencies cruised)`. `arch:check:negative` exit 0: `PASS — gate fired on 12 fixture(s) as expected.` Epics #142 and #121 inherit these boundaries unchanged.                                                                                       | PASS    |
 
@@ -181,35 +181,35 @@ modular-architecture sprint complete.
 
 ### Full command log
 
-Captured 2026-06-03T22:42:00Z against tree SHA `1a1fd08503871c1498a70e3266d079a9c9209d50`,
+Captured 2026-06-04T05:47:45Z against tree SHA `b9e1d15a73322be67f7685ce38f81054b70faf41`,
 Node v22.22.3, npm 10.9.8.
 
-The table below preserves the original issue #170 closure run. The Epic #156 audit hardening
-run subsequently promoted the UI/root/trust gates, removed the two Trust-6 warnings, and reran
-`arch:check` / `arch:check:negative` with no warnings and 12 negative fixtures as recorded in
-the acceptance matrix above.
+The table below records the 0.1.7 release-audit run. The Epic #156 audit hardening promoted
+the UI/root/trust gates, removed the two Trust-6 warnings, and reran `arch:check` /
+`arch:check:negative` with no warnings and 12 negative fixtures as recorded in the
+acceptance matrix above.
 
 | #   | Command                                                            | Exit | Duration | Key output                                                                                       |
 | --- | ------------------------------------------------------------------ | ---- | -------- | ------------------------------------------------------------------------------------------------ |
 | 1   | `npm ci`                                                           | 0    | 3.0s     | `added 587 packages, audited 599 packages`                                                       |
-| 2   | `npm run typecheck`                                                | 0    | 8.0s     | 10 workspace packages built + `tsc --noEmit` clean                                               |
-| 3   | `npm run lint`                                                     | 0    | 7.4s     | `eslint . --max-warnings=0` clean                                                                |
-| 4   | `npm run arch:check`                                               | 0    | 1.0s     | `2 dependency violations (0 errors, 2 warnings). 523 modules, 1130 dependencies cruised.`        |
-| 5   | `npm run arch:check:negative`                                      | 0    | 0.8s     | `PASS — gate fired on 10 fixture(s) as expected.`                                                |
-| 6   | `npm test`                                                         | 0    | 15.7s    | `148 passed (148) / 2059 passed, 2 skipped (2061)`                                               |
-| 7   | `npm run build`                                                    | 0    | 5.1s     | 10 packages built + root `tsc` clean                                                             |
-| 8   | `npm run check:package-surface`                                    | 0    | 1.5s     | `package-surface check passed: 1768 files, dist/ui/static present.`                              |
+| 2   | `npm run typecheck`                                                | 0    | 7.3s     | 10 workspace packages built + `tsc --noEmit` clean                                               |
+| 3   | `npm run lint`                                                     | 0    | 6.8s     | `eslint . --max-warnings=0` clean                                                                |
+| 4   | `npm run arch:check`                                               | 0    | 0.7s     | `no dependency violations found (523 modules, 1126 dependencies cruised)`                        |
+| 5   | `npm run arch:check:negative`                                      | 0    | 0.7s     | `PASS — gate fired on 12 fixture(s) as expected.`                                                |
+| 6   | `npm test`                                                         | 0    | 20.4s    | `148 passed (148) / 2068 passed, 1 skipped (2069)`                                               |
+| 7   | `npm run prepack`                                                  | 0    | 15.5s    | `package-surface check passed: 1768 files, dist/ui/static present.`                              |
+| 8   | `npm pack --json --dry-run --ignore-scripts`                       | 0    | 1.3s     | `oscharko-dev-keiko-0.1.7.tgz`, 949185 bytes packed, 3716385 bytes unpacked, 1768 files          |
 | 9   | `npm run smoke:install`                                            | 0    | 18.8s    | `installable-smoke ok: tarball installed, 10 bundled packages present, CLI + SDK reachable.`     |
 | 10  | `npm run check:workspace-supply-chain`                             | 0    | 3.5s     | `workspace supply-chain ok: 11 per-workspace SBOMs emitted, all licenses within the allow-list.` |
-| 11  | `KEIKO_EVIDENCE_DIR=… node dist/cli/index.js evaluate --suite all` | 0    | 0.2s     | `Verdict: GO — pilot ready (all Go/No-Go thresholds met).`                                       |
-| 12  | `node dist/cli/index.js --version`                                 | 0    | —        | `keiko 0.1.6`                                                                                    |
+| 11  | `KEIKO_EVIDENCE_DIR=… node dist/cli/index.js evaluate --suite all` | 0    | 0.03s    | `Verdict: GO — pilot ready (all Go/No-Go thresholds met).`                                       |
+| 12  | `node dist/cli/index.js --version`                                 | 0    | —        | `keiko 0.1.7`                                                                                    |
 | 13  | `node dist/cli/index.js --help`                                    | 0    | —        | 14 subcommands listed                                                                            |
 | 14  | `node dist/cli/index.js definitely-not-a-command`                  | 2    | —        | unknown-command exit asserted                                                                    |
 
 Notable release-gate detail captured during step 9:
 
-- Tarball produced: `oscharko-dev-keiko-0.1.6.tgz` — 948.7 kB packed, 3.7 MB unpacked, 1768
-  files, shasum `89338592e70ce70fac4c04d6da65a2cd6c54869c`.
+- Tarball produced: `oscharko-dev-keiko-0.1.7.tgz` — 949.2 kB packed, 3.7 MB unpacked, 1768
+  files, shasum `ff9ebc5437c59484910864960276ff159603abae`.
 - 10 bundled workspace packages confirmed under
   `node_modules/@oscharko-dev/keiko/node_modules/@oscharko-dev/keiko-<name>/dist/`:
   contracts, security, model-gateway, workspace, tools, evidence, harness, workflows,
@@ -220,7 +220,7 @@ Notable release-gate detail captured during step 9:
 - `dist/ui/static` present; `dist/ui/csp-hashes.json` matches inline-script hashes.
 - 12 SBOMs emitted under `sbom/` (`root.cdx.json` plus 11 `workspace-keiko-*.cdx.json`).
 - UI smoke (separate verifier invocation): `node dist/cli/index.js ui --port 4399`, then
-  `curl http://127.0.0.1:4399/api/health` → body `{"status":"ok","version":"0.1.6"}`,
+  `curl http://127.0.0.1:4399/api/health` → body `{"status":"ok","version":"0.1.7"}`,
   terminated cleanly.
 - `evaluate` verdict `GO` across 6 fixtures, 7 dimensions; surface-parity 8 checks PASS.
 - [`tests/upgrade-smoke/upgrade-compatibility.test.ts`](../tests/upgrade-smoke/upgrade-compatibility.test.ts)
