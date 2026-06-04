@@ -57,17 +57,24 @@ CREATE TABLE capsules (
 ) STRICT;
 `.trim();
 
+// capsule_sources adds UNIQUE (capsule_id, id) so dependent tables can FK against the
+// composite (capsule_id, source_id) pair — that enforces the Foundry-IQ lineage invariant
+// at the database level: a chunk's source_id cannot belong to a different capsule than the
+// chunk itself. Independent single-column FKs would let mismatched capsule/source/document
+// IDs co-exist on the same chunk row.
 const CREATE_CAPSULE_SOURCES = `
 CREATE TABLE capsule_sources (
   id TEXT PRIMARY KEY NOT NULL,
-  capsule_id TEXT NOT NULL REFERENCES capsules(id) ON DELETE CASCADE,
+  capsule_id TEXT NOT NULL,
   display_name TEXT NOT NULL,
   description TEXT,
   tags_json TEXT NOT NULL,
   scope_kind TEXT NOT NULL,
   scope_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  UNIQUE (capsule_id, id)
 ) STRICT;
 `.trim();
 
@@ -81,11 +88,15 @@ CREATE TABLE capsule_set_members (
 ) STRICT;
 `.trim();
 
+// documents links to capsule_sources via the composite (capsule_id, source_id) so the
+// source is required to live in the same capsule as the document. UNIQUE (capsule_id, id)
+// exposes the same composite for downstream tables (chunks, vectors, pages, sections,
+// parsed_units, parser_diagnostics) to lock document_id to capsule_id.
 const CREATE_DOCUMENTS = `
 CREATE TABLE documents (
   id TEXT PRIMARY KEY NOT NULL,
-  capsule_id TEXT NOT NULL REFERENCES capsules(id) ON DELETE CASCADE,
-  source_id TEXT NOT NULL REFERENCES capsule_sources(id) ON DELETE CASCADE,
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
   document_path TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
   media_type TEXT NOT NULL,
@@ -94,14 +105,17 @@ CREATE TABLE documents (
   parser_version TEXT NOT NULL,
   last_extracted_at INTEGER NOT NULL,
   status TEXT NOT NULL,
-  safe_display_name TEXT NOT NULL
+  safe_display_name TEXT NOT NULL,
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
+  UNIQUE (capsule_id, id)
 ) STRICT;
 `.trim();
 
 const CREATE_PAGES = `
 CREATE TABLE pages (
-  capsule_id TEXT NOT NULL REFERENCES capsules(id) ON DELETE CASCADE,
-  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  capsule_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
   page_number INTEGER NOT NULL,
   page_label TEXT,
   character_start INTEGER NOT NULL,
@@ -110,26 +124,30 @@ CREATE TABLE pages (
   bbox_y REAL,
   bbox_w REAL,
   bbox_h REAL,
-  PRIMARY KEY (document_id, page_number)
+  PRIMARY KEY (document_id, page_number),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE
 ) STRICT;
 `.trim();
 
 const CREATE_SECTIONS = `
 CREATE TABLE sections (
-  capsule_id TEXT NOT NULL REFERENCES capsules(id) ON DELETE CASCADE,
-  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  capsule_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
   section_path_json TEXT NOT NULL,
   character_start INTEGER NOT NULL,
   character_end INTEGER NOT NULL,
-  PRIMARY KEY (document_id, section_path_json)
+  PRIMARY KEY (document_id, section_path_json),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE
 ) STRICT;
 `.trim();
 
 const CREATE_PARSED_UNITS = `
 CREATE TABLE parsed_units (
   id TEXT PRIMARY KEY NOT NULL,
-  capsule_id TEXT NOT NULL REFERENCES capsules(id) ON DELETE CASCADE,
-  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+  capsule_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
   kind TEXT NOT NULL,
   page_number INTEGER,
   page_label TEXT,
@@ -140,30 +158,38 @@ CREATE TABLE parsed_units (
   heading_path_json TEXT,
   unsupported_reason TEXT,
   character_start INTEGER,
-  character_end INTEGER
+  character_end INTEGER,
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE,
+  UNIQUE (capsule_id, id)
 ) STRICT;
 `.trim();
 
 const CREATE_CHUNKS = `
 CREATE TABLE chunks (
   id TEXT PRIMARY KEY NOT NULL,
-  capsule_id TEXT NOT NULL REFERENCES capsules(id) ON DELETE CASCADE,
-  source_id TEXT NOT NULL REFERENCES capsule_sources(id) ON DELETE CASCADE,
-  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-  parsed_unit_id TEXT NOT NULL REFERENCES parsed_units(id) ON DELETE CASCADE,
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  parsed_unit_id TEXT NOT NULL,
   order_index INTEGER NOT NULL,
   token_count INTEGER NOT NULL,
-  safe_excerpt_hash TEXT NOT NULL
+  safe_excerpt_hash TEXT NOT NULL,
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, parsed_unit_id) REFERENCES parsed_units(capsule_id, id) ON DELETE CASCADE,
+  UNIQUE (capsule_id, id)
 ) STRICT;
 `.trim();
 
 const CREATE_VECTORS = `
 CREATE TABLE vectors (
   id TEXT PRIMARY KEY NOT NULL,
-  capsule_id TEXT NOT NULL REFERENCES capsules(id) ON DELETE CASCADE,
-  source_id TEXT NOT NULL REFERENCES capsule_sources(id) ON DELETE CASCADE,
-  document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
-  chunk_id TEXT NOT NULL REFERENCES chunks(id) ON DELETE CASCADE,
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  chunk_id TEXT NOT NULL,
   embedding BLOB NOT NULL,
   embedding_model_provider TEXT NOT NULL,
   embedding_model_id TEXT NOT NULL,
@@ -171,20 +197,26 @@ CREATE TABLE vectors (
   vector_dimensions INTEGER NOT NULL,
   vector_metric TEXT NOT NULL,
   storage_reference TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, chunk_id) REFERENCES chunks(capsule_id, id) ON DELETE CASCADE
 ) STRICT;
 `.trim();
 
 const CREATE_PARSER_DIAGNOSTICS = `
 CREATE TABLE parser_diagnostics (
   id TEXT PRIMARY KEY NOT NULL,
-  capsule_id TEXT NOT NULL REFERENCES capsules(id) ON DELETE CASCADE,
-  document_id TEXT REFERENCES documents(id) ON DELETE CASCADE,
+  capsule_id TEXT NOT NULL,
+  document_id TEXT,
   severity TEXT NOT NULL,
   code TEXT NOT NULL,
   message TEXT NOT NULL,
   page_number INTEGER,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE
 ) STRICT;
 `.trim();
 

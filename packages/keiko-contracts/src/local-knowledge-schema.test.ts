@@ -46,13 +46,20 @@ interface SeedHandles {
   readonly vectorId: string;
 }
 
-function seedFullLineage(db: DatabaseSync): SeedHandles {
-  const capsuleId = "cap-1";
-  const sourceId = "src-1";
-  const documentId = "doc-1";
-  const parsedUnitId = "unit-1";
-  const chunkId = "chunk-1";
-  const vectorId = "vec-1";
+interface SeedOverrides {
+  readonly capsuleId?: string;
+  readonly sourceId?: string;
+  readonly documentId?: string;
+}
+
+function seedFullLineage(db: DatabaseSync, overrides: SeedOverrides = {}): SeedHandles {
+  const capsuleId = overrides.capsuleId ?? "cap-1";
+  const sourceId = overrides.sourceId ?? "src-1";
+  const documentId = overrides.documentId ?? "doc-1";
+  const suffix = capsuleId === "cap-1" ? "1" : capsuleId.replace(/^cap-/, "");
+  const parsedUnitId = `unit-${suffix}`;
+  const chunkId = `chunk-${suffix}`;
+  const vectorId = `vec-${suffix}`;
   db.prepare(
     `INSERT INTO capsules (
        id, display_name, tags_json, retrieval_effort, output_mode, answer_grounding_policy,
@@ -110,10 +117,10 @@ function seedFullLineage(db: DatabaseSync): SeedHandles {
   ).run(capsuleId, documentId, '["Chapter 1"]', 0, 100);
   db.prepare(
     `INSERT INTO parser_diagnostics (id, capsule_id, document_id, severity, code, message, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  ).run("diag-1", capsuleId, documentId, "warning", "WARN_FOO", "msg", 1000);
+  ).run(`diag-${suffix}`, capsuleId, documentId, "warning", "WARN_FOO", "msg", 1000);
   db.prepare(
     `INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, status, total_documents, processed_documents, failed_documents, skipped_documents) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run("job-1", capsuleId, '["src-1"]', 1000, "succeeded", 1, 1, 0, 0);
+  ).run(`job-${suffix}`, capsuleId, `["${sourceId}"]`, 1000, "succeeded", 1, 1, 0, 0);
   db.prepare(
     `INSERT INTO chunks (
        id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count,
@@ -253,6 +260,90 @@ describe("lineage enforcement", () => {
           )
           .run("v", "c", "s", null, "ch", embedding, "p", "m", 4, "cosine", "ref", 1),
       ).toThrow(/NOT NULL/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects a chunk that mixes capsule_id from one capsule with document_id from another (composite FK, #265 Copilot)", () => {
+    const db = openSchemaDb();
+    try {
+      // Seed capsule A with a complete lineage chain.
+      const a = seedFullLineage(db, { capsuleId: "cap-A", sourceId: "src-A", documentId: "doc-A" });
+      // Seed capsule B independently — different capsule, different document.
+      seedFullLineage(db, { capsuleId: "cap-B", sourceId: "src-B", documentId: "doc-B" });
+      // Attempting to insert a chunk that claims to belong to cap-A but references doc-B
+      // (which actually belongs to cap-B) must fail the composite (capsule_id, document_id)
+      // foreign key. Without the composite FK, this insert would silently succeed and the
+      // lineage invariant would be broken.
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO chunks (id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count, safe_excerpt_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run("chunk-x", "cap-A", a.sourceId, "doc-B", a.parsedUnitId, 0, 1, "h"),
+      ).toThrow(/FOREIGN KEY/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects a vector that mixes capsule_id with a chunk_id from another capsule (composite FK, #265 Copilot)", () => {
+    const db = openSchemaDb();
+    try {
+      const a = seedFullLineage(db, { capsuleId: "cap-A", sourceId: "src-A", documentId: "doc-A" });
+      const b = seedFullLineage(db, { capsuleId: "cap-B", sourceId: "src-B", documentId: "doc-B" });
+      const embedding = new Uint8Array(4);
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO vectors (id, capsule_id, source_id, document_id, chunk_id, embedding, embedding_model_provider, embedding_model_id, vector_dimensions, vector_metric, storage_reference, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            "vec-x",
+            "cap-A",
+            a.sourceId,
+            a.documentId,
+            b.chunkId,
+            embedding,
+            "p",
+            "m",
+            4,
+            "cosine",
+            "ref",
+            1,
+          ),
+      ).toThrow(/FOREIGN KEY/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("rejects a document whose source_id belongs to another capsule (composite FK, #265 Copilot)", () => {
+    const db = openSchemaDb();
+    try {
+      const a = seedFullLineage(db, { capsuleId: "cap-A", sourceId: "src-A", documentId: "doc-A" });
+      const b = seedFullLineage(db, { capsuleId: "cap-B", sourceId: "src-B", documentId: "doc-B" });
+      expect(() =>
+        db
+          .prepare(
+            `INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            "doc-x",
+            a.capsuleId,
+            b.sourceId,
+            "/some/path",
+            1,
+            "text/plain",
+            "deadbeef",
+            "p",
+            "1",
+            1,
+            "extracted",
+            "n",
+          ),
+      ).toThrow(/FOREIGN KEY/);
     } finally {
       db.close();
     }

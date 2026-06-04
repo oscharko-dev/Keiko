@@ -107,19 +107,21 @@ function truncateAtNul(value: string): string {
 }
 
 function replaceHomePrefix(value: string, homePrefix: string): string {
-  // Strip trailing forward and backward slashes so callers that pass either form (e.g.
-  // `/Users/foo` vs `/Users/foo/` vs `C:\\Users\\foo\\`) get the same rewrite. The
-  // empty-prefix gate then short-circuits a caller-supplied `"/"`.
-  const trimmed = homePrefix.replace(/[\\/]+$/, "");
-  if (trimmed.length === 0) return value;
-  // Match either the prefix exactly or the prefix followed by a separator; this prevents
-  // `/Users/foobar` from being misread as `/Users/foo` + `bar`.
-  if (value === trimmed) return "~";
-  if (value.startsWith(`${trimmed}/`)) return `~${value.slice(trimmed.length)}`;
+  // Normalize the homePrefix to forward-slash form first so the comparison succeeds whether
+  // the caller supplies `/Users/foo`, `C:\\Users\\foo`, or any mix. Strip trailing slashes so
+  // callers can pass either form. The empty-prefix gate short-circuits a caller-supplied "/".
+  const normalizedPrefix = normalizeSeparators(homePrefix).replace(/\/+$/, "");
+  if (normalizedPrefix.length === 0) return value;
+  if (value === normalizedPrefix) return "~";
+  // Match the prefix followed by a separator; prevents `/Users/foobar` being misread as
+  // `/Users/foo` + `bar`.
+  if (value.startsWith(`${normalizedPrefix}/`)) {
+    return `~${value.slice(normalizedPrefix.length)}`;
+  }
   return value;
 }
 
-const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/](.*)$/;
+const WINDOWS_DRIVE_RE = /^[A-Za-z]:\/(.*)$/;
 
 function replaceDrivePrefix(value: string): string {
   const match = WINDOWS_DRIVE_RE.exec(value);
@@ -131,17 +133,20 @@ export interface RedactPathOptions {
   readonly homePrefix?: string;
 }
 
-// Public boundary helper. Order: NUL truncation → control strip → drive-letter rewrite →
-// HOME-prefix rewrite → separator normalisation → length cap. Each step is idempotent so
-// repeated calls on already-redacted input return the same string.
+// Public boundary helper. Order matters: separator normalisation runs BEFORE home-prefix
+// rewriting so a Windows-style homePrefix (e.g. `C:\\Users\\foo`) compares cleanly against a
+// Windows-style input. Drive-letter masking runs LAST so it only applies to inputs that did
+// NOT match the user's home (otherwise a Windows home like `C:\\Users\\victim\\docs` would
+// be rewritten to `<drive>/Users/victim/docs` and the home-prefix could never match — the
+// #265 Copilot finding). Each step is idempotent so repeated calls return the same string.
 export function redactPathInDiagnostic(rawPath: string, options: RedactPathOptions = {}): string {
   if (typeof rawPath !== "string") return "";
   const homePrefix = options.homePrefix ?? "";
   const afterNul = truncateAtNul(rawPath);
   const noControls = stripControls(afterNul);
-  const driveRewritten = replaceDrivePrefix(noControls);
-  const homeRewritten = replaceHomePrefix(driveRewritten, homePrefix);
-  const normalized = normalizeSeparators(homeRewritten);
-  if (normalized.length <= REDACTED_MAX_CHARS) return normalized;
-  return `${normalized.slice(0, REDACTED_MAX_CHARS)}…`;
+  const normalized = normalizeSeparators(noControls);
+  const homeRewritten = replaceHomePrefix(normalized, homePrefix);
+  const driveRewritten = replaceDrivePrefix(homeRewritten);
+  if (driveRewritten.length <= REDACTED_MAX_CHARS) return driveRewritten;
+  return `${driveRewritten.slice(0, REDACTED_MAX_CHARS)}…`;
 }
