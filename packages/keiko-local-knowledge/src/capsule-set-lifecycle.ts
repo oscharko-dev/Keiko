@@ -39,10 +39,6 @@ interface MemberRow {
   readonly ordinal: number;
 }
 
-interface KeyRow {
-  readonly key: string;
-}
-
 const META_PREFIX = "capsule_set:";
 
 function metaKey(id: CapsuleSetId): string {
@@ -121,7 +117,11 @@ export function createCapsuleSet(store: KnowledgeStore, input: CreateCapsuleSetI
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
-    throw error;
+    const msg = error instanceof Error ? error.message : String(error);
+    if (/UNIQUE|PRIMARY KEY/i.test(msg)) {
+      throw new KnowledgeStoreError("capsule set already exists", { cause: error });
+    }
+    throw new KnowledgeStoreError("failed to create capsule set", { cause: error });
   }
   const fetched = getCapsuleSet(store, input.id);
   if (fetched === undefined) {
@@ -142,20 +142,25 @@ export function getCapsuleSet(store: KnowledgeStore, id: CapsuleSetId): CapsuleS
   return metaToCapsuleSet(id, payload, members);
 }
 
+interface KeyValueRow {
+  readonly key: string;
+  readonly value: string;
+}
+
 export function listCapsuleSets(store: KnowledgeStore): readonly CapsuleSet[] {
-  // Pull all set keys, sort by composed_at via the parsed payload so the order is stable
-  // and explicit instead of relying on schema_meta insertion order.
+  // Fetch (key, value) in one query so we avoid a getCapsuleSet re-query per row (N+1).
+  // Members still need a per-set query because capsule_set_members is a separate table.
   const rows = store._internal.db
-    .prepare("SELECT key FROM schema_meta WHERE key LIKE :prefix")
+    .prepare("SELECT key, value FROM schema_meta WHERE key LIKE :prefix")
     .all({ prefix: `${META_PREFIX}%` });
   const sets = rows
     .map((row) => {
-      const key = (row as unknown as KeyRow).key;
+      const { key, value } = row as unknown as KeyValueRow;
       const id = key.slice(META_PREFIX.length) as CapsuleSetId;
-      const fetched = getCapsuleSet(store, id);
-      return fetched;
-    })
-    .filter((entry): entry is CapsuleSet => entry !== undefined);
+      const payload = parseMeta(value, id);
+      const capsuleIds = readMembers(store, id);
+      return metaToCapsuleSet(id, payload, capsuleIds);
+    });
   return sets.slice().sort((a, b) => a.composedAt - b.composedAt);
 }
 

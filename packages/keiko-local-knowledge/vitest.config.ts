@@ -5,9 +5,9 @@ export default defineConfig({
     environment: "node",
     include: ["src/**/*.test.ts"],
     exclude: ["**/node_modules/**", "**/dist/**"],
-    // node:sqlite needs --experimental-sqlite on Node 22.0–22.11 and emits an
-    // ExperimentalWarning on 22.22+. The flag covers both; the warning suppressor
-    // keeps test output clean. Same pattern as packages/keiko-server/vitest.config.ts.
+    // node:sqlite requires --experimental-sqlite on Node 22.0–22.11 and emits
+    // ExperimentalWarning on 22.12+. The flag is a no-op once Node 24 stabilises the
+    // API; the warning suppressor keeps test output clean in the interim.
     execArgv: ["--experimental-sqlite", "--disable-warning=ExperimentalWarning"],
   },
 });

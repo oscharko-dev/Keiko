@@ -2,7 +2,7 @@
 // capsules intact, while deleting a member capsule removes the set's reference row.
 
 import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createCapsule, deleteCapsule, getCapsule } from "./capsule-lifecycle.js";
 import {
@@ -126,5 +126,33 @@ describe("capsule deletion cascades into set membership", () => {
     deleteCapsule(store, aId);
     const set = getCapsuleSet(store, "set-y" as CapsuleSetId);
     expect(set?.capsuleIds).toStrictEqual([bId]);
+  });
+});
+
+describe("listCapsuleSets — no N+1 queries", () => {
+  it("issues only one db.prepare call for schema_meta when listing 5 sets", () => {
+    // Regression guard for the N+1 fix: the old implementation called getCapsuleSet
+    // per row which re-queried schema_meta for each set. The fix fetches (key, value)
+    // in a single query; this test asserts prepare is called at most once for the
+    // schema_meta scan, regardless of how many sets exist.
+    const caps = [aId, bId];
+    for (let i = 1; i <= 5; i++) {
+      createCapsuleSet(store, {
+        id: `set-n${String(i)}` as CapsuleSetId,
+        displayName: `s${String(i)}`,
+        tags: [],
+        capsuleIds: caps,
+      });
+    }
+    const prepareSpy = vi.spyOn(store._internal.db, "prepare");
+    const sets = listCapsuleSets(store);
+    expect(sets).toHaveLength(5);
+    // One schema_meta query for all sets + one members query per set = 1 + 5 = 6 calls.
+    // The old N+1 path would issue 1 + 5*(1 schema_meta + 1 members) = 11 calls.
+    const schemaMeta = prepareSpy.mock.calls.filter(([sql]) =>
+      typeof sql === "string" && sql.includes("schema_meta"),
+    );
+    expect(schemaMeta).toHaveLength(1);
+    prepareSpy.mockRestore();
   });
 });

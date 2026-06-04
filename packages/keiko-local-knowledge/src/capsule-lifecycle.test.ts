@@ -10,7 +10,7 @@ import {
   listCapsules,
   updateCapsuleState,
 } from "./capsule-lifecycle.js";
-import { KnowledgeNotFoundError } from "./errors.js";
+import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import { freshStore, sampleCapsuleInput } from "./_support.js";
 import type { KnowledgeStore } from "./store.js";
 
@@ -70,7 +70,7 @@ describe("createCapsule + getCapsule", () => {
 
   it("rejects duplicate capsule id with a typed error", () => {
     createCapsule(store, sampleCapsuleInput());
-    expect(() => createCapsule(store, sampleCapsuleInput())).toThrow();
+    expect(() => createCapsule(store, sampleCapsuleInput())).toThrow(KnowledgeStoreError);
   });
 });
 

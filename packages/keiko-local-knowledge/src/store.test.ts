@@ -1,7 +1,7 @@
 // store.test.ts — integration coverage for openKnowledgeStore: schema apply, restart
 // safety, corrupted-DB quarantine, migration runner, durability pragmas.
 
-import { existsSync, mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -229,6 +229,3 @@ describe("openKnowledgeStore — sidecar quarantine", () => {
   });
 });
 
-// Use renameSync so prettier doesn't drop the import (it's referenced from imports only).
-void renameSync;
-void existsSync;

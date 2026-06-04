@@ -107,7 +107,11 @@ export function addSourceToCapsule(
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
-    throw error;
+    const msg = error instanceof Error ? error.message : String(error);
+    if (/UNIQUE|PRIMARY KEY/i.test(msg)) {
+      throw new KnowledgeStoreError("source already exists", { cause: error });
+    }
+    throw new KnowledgeStoreError("failed to add source", { cause: error });
   }
   const fetched = db.prepare(SELECT_BY_TUPLE_SQL).get({ c: capsuleId, s: input.id });
   if (fetched === undefined) {

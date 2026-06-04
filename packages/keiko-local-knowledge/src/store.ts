@@ -129,7 +129,7 @@ function quarantineFile(target: string): void {
   }
 }
 
-function tryOpenAndMigrate(dbPath: string): DatabaseSync | undefined {
+function tryOpenAndMigrate(dbPath: string, onError?: (cause: unknown) => void): DatabaseSync | undefined {
   // Returns the opened, migrated handle on success; undefined when the file is unusable
   // (open threw OR the post-migrate schema is missing expected tables OR the file held
   // foreign content that we refuse to coexist with). Callers handle quarantine + retry.
@@ -137,6 +137,7 @@ function tryOpenAndMigrate(dbPath: string): DatabaseSync | undefined {
   try {
     db = new DatabaseSync(dbPath);
   } catch {
+    // Cannot open at all (file missing permissions, OS error). Caller quarantines and retries.
     return undefined;
   }
   try {
@@ -152,7 +153,8 @@ function tryOpenAndMigrate(dbPath: string): DatabaseSync | undefined {
       return undefined;
     }
     return db;
-  } catch {
+  } catch (cause) {
+    onError?.(cause);
     try {
       db.close();
     } catch {
@@ -173,13 +175,17 @@ function ensureParentDir(dbPath: string): void {
 export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeStore {
   ensureParentDir(opts.dbPath);
   let db = tryOpenAndMigrate(opts.dbPath);
+  let lastError: unknown;
   if (db === undefined) {
     quarantineFile(opts.dbPath);
-    db = tryOpenAndMigrate(opts.dbPath);
+    db = tryOpenAndMigrate(opts.dbPath, (cause) => {
+      lastError = cause;
+    });
   }
   if (db === undefined) {
     throw new KnowledgeStoreError(
       `Failed to open knowledge-capsule store at ${opts.dbPath} even after quarantine.`,
+      lastError !== undefined ? { cause: lastError } : undefined,
     );
   }
   const now = opts.clock ?? defaultClock;

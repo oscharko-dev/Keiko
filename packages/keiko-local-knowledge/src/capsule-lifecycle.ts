@@ -2,7 +2,7 @@
 //
 // Invariants:
 //   * Every write runs inside `BEGIN`/`COMMIT` so partial state never lands on disk.
-//   * createCapsule rejects duplicate ids via the PRIMARY KEY (a wrapped sqlite error).
+//   * createCapsule rejects duplicate ids via the PRIMARY KEY — raised as KnowledgeStoreError.
 //   * Reads compose `sourceIds` from the live `capsule_sources` table — the capsule row
 //     does NOT denormalise the source list, so the reverse FK is the single truth.
 //   * deleteCapsule relies on the schema's ON DELETE CASCADE chain (#265). Removing the
@@ -22,7 +22,7 @@ import {
   type KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 
-import { KnowledgeNotFoundError } from "./errors.js";
+import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
 import type { KnowledgeStore } from "./store.js";
 
 export interface CreateCapsuleInput {
@@ -182,14 +182,18 @@ export function createCapsule(store: KnowledgeStore, input: CreateCapsuleInput):
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");
-    throw error;
+    const msg = error instanceof Error ? error.message : String(error);
+    if (/UNIQUE|PRIMARY KEY/i.test(msg)) {
+      throw new KnowledgeStoreError("capsule already exists", { cause: error });
+    }
+    throw new KnowledgeStoreError("failed to create capsule", { cause: error });
   }
   const capsule = getCapsule(store, input.id);
   if (capsule === undefined) {
     // Defensive: a successful INSERT must be readable. This branch indicates a serious
     // store-level inconsistency (e.g. concurrent DELETE) and the caller cannot continue
     // safely with a synthesised value.
-    throw new Error(`createCapsule: insert succeeded but row not found for ${String(input.id)}`);
+    throw new KnowledgeStoreError(`createCapsule: insert succeeded but row not found for ${String(input.id)}`);
   }
   return capsule;
 }
