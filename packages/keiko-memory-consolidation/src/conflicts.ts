@@ -19,10 +19,19 @@
 // Two-member non-conflicting clusters produce NO review item from this layer — the
 // orchestrator emits a `derived-from` edge instead.
 
-import { compareReviewItems, compareRecordsByAge } from "./_ordering.js";
+import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+
+import { compareRecordsByAge, compareReviewItems, scopeCoordinateKey } from "./_ordering.js";
 import type { DuplicateCluster } from "./dedupe.js";
-import { normalizeBody } from "./similarity.js";
+import { jaccardSimilarity, normalizeBody } from "./similarity.js";
 import type { ProposedAction, ReviewItem } from "./types.js";
+
+// Conflict-detection overlap threshold. Lower than the dedup Jaccard default (0.85) because a
+// polarity-flip pair like "we use tabs" vs "we do not use tabs" shares fewer bigrams than two
+// near-duplicate paraphrases: the negation token injects new bigrams without removing the
+// affirming material. 0.4 is empirically a good floor — high enough that "x is true" vs "y is
+// not false" does not fire, low enough that obvious polarity flips do.
+export const CONFLICT_OVERLAP_THRESHOLD = 0.4;
 
 export interface ConflictsOptions {
   readonly nowMs: number;
@@ -106,6 +115,108 @@ export function detectConflicts(
     }
     const pair = tryBuildPairConflict(cluster, options);
     if (pair !== null) items.push(pair);
+  }
+  return items.sort(compareReviewItems);
+}
+
+// Partition key used by both dedup and the conflict-pair sweep: scope + type. Cross-scope and
+// cross-type pairs never produce a conflict for the same reason they never produce a duplicate
+// cluster — the visibility invariant from #205 holds structurally.
+function conflictPartitionKey(record: MemoryRecord): string {
+  return `${scopeCoordinateKey(record.scope)}|type:${record.type}`;
+}
+
+function partitionForConflicts(
+  records: readonly MemoryRecord[],
+): readonly (readonly MemoryRecord[])[] {
+  const partitions = new Map<string, MemoryRecord[]>();
+  for (const record of records) {
+    const key = conflictPartitionKey(record);
+    const bucket = partitions.get(key);
+    if (bucket === undefined) {
+      partitions.set(key, [record]);
+    } else {
+      bucket.push(record);
+    }
+  }
+  return [...partitions.values()];
+}
+
+function pairKey(idA: string, idB: string): string {
+  return idA < idB ? `${idA}|${idB}` : `${idB}|${idA}`;
+}
+
+function buildExcludeSet(clusters: readonly DuplicateCluster[]): Set<string> {
+  const excluded = new Set<string>();
+  for (const cluster of clusters) {
+    const ids = cluster.members.map((m) => m.id);
+    for (let i = 0; i < ids.length; i += 1) {
+      for (let j = i + 1; j < ids.length; j += 1) {
+        const a = ids[i];
+        const b = ids[j];
+        if (a === undefined || b === undefined) continue;
+        excluded.add(pairKey(a, b));
+      }
+    }
+  }
+  return excluded;
+}
+
+function buildConflictPairItem(
+  older: MemoryRecord,
+  newer: MemoryRecord,
+  options: ConflictsOptions,
+): ReviewItem {
+  const action: ProposedAction = { kind: "supersede", newer: newer.id, older: older.id };
+  return {
+    id: options.newReviewItemId(),
+    reason: "potential-conflict",
+    relatedMemoryIds: [older.id, newer.id],
+    proposedAction: action,
+    detectedAt: options.nowMs,
+  };
+}
+
+function scanPartitionPairs(
+  partition: readonly MemoryRecord[],
+  excluded: ReadonlySet<string>,
+  overlapThreshold: number,
+  options: ConflictsOptions,
+): readonly ReviewItem[] {
+  const items: ReviewItem[] = [];
+  const sorted = [...partition].sort(compareRecordsByAge);
+  for (let i = 0; i < sorted.length; i += 1) {
+    for (let j = i + 1; j < sorted.length; j += 1) {
+      const older = sorted[i];
+      const newer = sorted[j];
+      if (older === undefined || newer === undefined) continue;
+      if (excluded.has(pairKey(older.id, newer.id))) continue;
+      if (!isPolarityConflict(older, newer)) continue;
+      if (jaccardSimilarity(older.body, newer.body) < overlapThreshold) continue;
+      items.push(buildConflictPairItem(older, newer, options));
+    }
+  }
+  return items;
+}
+
+// Conflict-pair sweep — finds polarity-flip pairs that did NOT surface as duplicate clusters
+// because their bigram overlap is below the dedup Jaccard threshold but at or above the
+// (looser) conflict overlap threshold. Pairs already represented in `excludeClusters` are
+// skipped so the same (older, newer) does not produce both a cluster review item and a pair
+// review item. Returns sorted output.
+export function findConflictPairs(
+  records: readonly MemoryRecord[],
+  excludeClusters: readonly DuplicateCluster[],
+  overlapThreshold: number,
+  options: ConflictsOptions,
+): readonly ReviewItem[] {
+  const excluded = buildExcludeSet(excludeClusters);
+  const partitions = partitionForConflicts(records);
+  const items: ReviewItem[] = [];
+  for (const partition of partitions) {
+    for (const item of scanPartitionPairs(partition, excluded, overlapThreshold, options)) {
+      items.push(item);
+    }
   }
   return items.sort(compareReviewItems);
 }
