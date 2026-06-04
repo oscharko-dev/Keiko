@@ -6,7 +6,11 @@ import {
   type EmbeddingProbeOptions,
   type OpenAIEmbeddingAdapter,
 } from "./embedding.js";
-import type { OpenAIEmbeddingOutcome, OpenAIEmbeddingRequest } from "./openai-embedding-adapter.js";
+import {
+  requestOpenAIEmbedding,
+  type OpenAIEmbeddingOutcome,
+  type OpenAIEmbeddingRequest,
+} from "./openai-embedding-adapter.js";
 
 const SECRET_API_KEY = "sk-test-keiko-embedding-1234567890abcdef";
 const PROVIDER_ENDPOINT = "https://internal.example.invalid/v1";
@@ -350,5 +354,174 @@ describe("assertCompatibleEmbeddingIdentity", () => {
       expect(result.warning?.previousRevision).toBeUndefined();
       expect(result.warning?.currentRevision).toBe("rev-1");
     }
+  });
+
+  it("returns the CURRENT identity (not stored) on a revision-only change (#192 Copilot)", () => {
+    const result = assertCompatibleEmbeddingIdentity(STORED, {
+      ...STORED,
+      modelRevision: "rev-NEW",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // Returning `current` allows callers to persist the new revision and avoid a
+      // permanent warning on every subsequent compatibility check.
+      expect(result.identity.modelRevision).toBe("rev-NEW");
+    }
+  });
+});
+
+// Direct transport tests for the OpenAI embeddings adapter. Verifies header formatting
+// (Bearer prefix reuse via apiKeyHeaderValue), status→kind classification, JSON shape
+// parsing, and timeout vs cancellation distinction. #192 Copilot finding #5 — extensive
+// transport coverage was missing for the new embeddings adapter.
+describe("requestOpenAIEmbedding (direct transport)", () => {
+  // gatewayFetch always passes a string URL as the first argument, so we can narrow to
+  // (string, RequestInit?). The narrowed function is structurally compatible with the
+  // wider `typeof fetch` signature accepted by `OpenAIEmbeddingRequest.fetchImpl`.
+  type NarrowFetch = (url: string, init?: RequestInit) => Promise<Response>;
+  function mockFetch(
+    handler: (url: string, init: RequestInit) => Promise<Response> | Response,
+  ): typeof fetch {
+    const f: NarrowFetch = async (url, init) => handler(url, init ?? {});
+    return f as unknown as typeof fetch;
+  }
+
+  function makeSuccessBody(vector: readonly number[] = [0.1, 0.2, 0.3]): string {
+    return JSON.stringify({
+      data: [{ embedding: vector }],
+      model: "text-embedding-3-small",
+      model_revision: "rev-1",
+    });
+  }
+
+  it("formats the authorization header as 'Bearer <key>' for the default header name", async () => {
+    let capturedAuth: string | null = null;
+    const fetchImpl = mockFetch((_url, init) => {
+      const headers = init.headers as Record<string, string>;
+      capturedAuth = headers.authorization ?? null;
+      return new Response(makeSuccessBody(), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const outcome = await requestOpenAIEmbedding({
+      endpoint: "https://example.test/v1",
+      apiKey: "sk-test",
+      modelId: "text-embedding-3-small",
+      input: "ping",
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(true);
+    expect(capturedAuth).toBe("Bearer sk-test");
+  });
+
+  it("does NOT double-prefix when the apiKey already includes 'Bearer ' (Copilot)", async () => {
+    let capturedAuth: string | null = null;
+    const fetchImpl = mockFetch((_url, init) => {
+      const headers = init.headers as Record<string, string>;
+      capturedAuth = headers.authorization ?? null;
+      return new Response(makeSuccessBody(), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    await requestOpenAIEmbedding({
+      endpoint: "https://example.test/v1",
+      apiKey: "Bearer already-prefixed",
+      modelId: "m",
+      input: "ping",
+      fetchImpl,
+    });
+    expect(capturedAuth).toBe("Bearer already-prefixed");
+  });
+
+  it("uses raw key value for non-Bearer header names (e.g. api-key)", async () => {
+    let capturedHeaderValue: string | null = null;
+    const fetchImpl = mockFetch((_url, init) => {
+      const headers = init.headers as Record<string, string>;
+      capturedHeaderValue = headers["api-key"] ?? null;
+      return new Response(makeSuccessBody(), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    await requestOpenAIEmbedding({
+      endpoint: "https://example.test/v1",
+      apiKey: "raw-key",
+      apiKeyHeaderName: "api-key",
+      modelId: "m",
+      input: "ping",
+      fetchImpl,
+    });
+    expect(capturedHeaderValue).toBe("raw-key");
+  });
+
+  it("classifies status codes deterministically (401→wrong-header, 429→rate-limited, 404→unsupported-model, 500→transport)", async () => {
+    const cases: [number, string][] = [
+      [401, "wrong-header"],
+      [403, "wrong-header"],
+      [429, "rate-limited"],
+      [404, "unsupported-model"],
+      [500, "transport"],
+      [502, "transport"],
+    ];
+    for (const [status, expectedKind] of cases) {
+      const fetchImpl = mockFetch(() => new Response("error body — never read", { status }));
+      const outcome = await requestOpenAIEmbedding({
+        endpoint: "https://example.test/v1",
+        apiKey: "k",
+        modelId: "m",
+        input: "ping",
+        fetchImpl,
+      });
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.kind).toBe(expectedKind);
+    }
+  });
+
+  it("returns invalid-response when the JSON shape is missing data[0].embedding", async () => {
+    const fetchImpl = mockFetch(
+      () =>
+        new Response(JSON.stringify({ data: [{}] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    const outcome = await requestOpenAIEmbedding({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      input: "ping",
+      fetchImpl,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.kind).toBe("invalid-response");
+  });
+
+  it("returns 'cancelled' when the caller's signal aborts (#192 Copilot)", async () => {
+    const controller = new AbortController();
+    const fetchImpl = mockFetch(
+      () =>
+        new Promise<Response>((_resolve, reject) => {
+          // Simulate fetch reacting to the abort. The classifier should treat caller-abort
+          // as cancellation, NOT a timeout.
+          controller.signal.addEventListener("abort", () => {
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        }),
+    );
+    const promise = requestOpenAIEmbedding({
+      endpoint: "https://example.test/v1",
+      apiKey: "k",
+      modelId: "m",
+      input: "ping",
+      signal: controller.signal,
+      timeoutMs: 60_000,
+      fetchImpl,
+    });
+    controller.abort();
+    const outcome = await promise;
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.kind).toBe("cancelled");
   });
 });

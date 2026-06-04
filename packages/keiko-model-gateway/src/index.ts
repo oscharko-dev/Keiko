@@ -1,7 +1,15 @@
 // Public barrel for the model gateway: wire/config types, the Gateway orchestrator,
 // capability helpers, config loaders, model selection, and the typed error taxonomy.
 // Low-level provider adapters, HTTP transport, response normalization, and retry primitives
-// are intentionally kept off this surface so productive calls cannot bypass Gateway routing.
+// for PRODUCTIVE chat calls are intentionally kept off this surface so productive calls
+// cannot bypass Gateway routing.
+//
+// Carve-out (#192): the OpenAI-compatible embeddings transport (`requestOpenAIEmbedding`)
+// IS exported as the default `OpenAIEmbeddingAdapter.request` implementation. This is the
+// `OpenAIEmbeddingAdapter` injection port for `verifyEmbeddingCapability` — an out-of-band
+// capability probe, not a productive model call. Productive embedding flows still compose
+// the adapter behind the Local Knowledge Connector orchestrator (#196), so the Gateway-
+// routing invariant is preserved.
 
 export { KEIKO_MODEL_GATEWAY_VERSION } from "./version.js";
 
