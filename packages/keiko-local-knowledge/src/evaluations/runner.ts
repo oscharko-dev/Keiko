@@ -13,9 +13,7 @@
 //   - The store path uses `mkdtempSync` (different per process) but the store contents are
 //     discarded at teardown; nothing about the temp path leaks into the scorecard.
 //
-// Topic salt: every chunk in the fixture is embedded with its declared `topic` marker, and
-// every query is embedded with the marker corresponding to `query.topic`. That is what makes
-// the ground-truth chunk become the deterministic top result.
+// Seeding is implemented in `runner-seed.ts` so each file stays under the 400-LOC budget.
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,34 +22,26 @@ import { join } from "node:path";
 import type {
   CapsuleSetId,
   ChunkId,
-  EmbeddingModelIdentity,
+  DocumentId,
   KnowledgeCapsuleId,
-  ParsedUnit,
+  KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
 
-import { createCapsule } from "../capsule-lifecycle.js";
-import { createCapsuleSet } from "../capsule-set-lifecycle.js";
-import { insertChunkRow } from "../chunking/chunker-persist.js";
-import { insertDocumentRow, insertParsedUnitRow } from "../discovery/persist.js";
 import { embedChunkBatch } from "../indexing/embedding-batcher.js";
 import { runLocalKnowledgeRetrieval } from "../retrieval/index.js";
-import { addSourceToCapsule } from "../source-lifecycle.js";
 import { openKnowledgeStore, type KnowledgeStore } from "../store.js";
 
 import {
-  citationRequirementForUnit,
   scoreCitationQuality,
   scoreNoEvidenceAccuracy,
   scorePrecision,
   scoreRecall,
   scoreSourceIsolation,
-  type CitationRequirementKey,
 } from "./dimensions.js";
+import { seedFixture, type SeededFixture } from "./runner-seed.js";
 import { createScriptedEmbeddingAdapter, withTopicMarker } from "./scripted-embedding-adapter.js";
 import type {
   EvalCapsuleSpec,
-  EvalSourceSpec,
-  EvalDocumentSpec,
   RetrievalEvalFixture,
   RetrievalEvalQuery,
   RetrievalEvalScorecard,
@@ -69,163 +59,6 @@ export interface RunRetrievalEvalDeps {
   readonly runId?: string;
 }
 
-// ─── Seeding ─────────────────────────────────────────────────────────────────
-// A fixture's topic-bearing chunk text is wrapped with `withTopicMarker` before the
-// scripted adapter sees it. The chunks table itself stores only the chunk row metadata
-// (the marker is an embedding-time signal); the marker never leaks into the persisted DB.
-
-interface SeededFixture {
-  readonly chunkUnitKinds: ReadonlyMap<string, CitationRequirementKey>;
-  // Aggregated topic boosts across all chunks in the fixture, ready to hand to the
-  // scripted adapter.
-  readonly topicBoosts: Readonly<Record<string, number>>;
-  // Pinned identity for the run. Every capsule in a fixture currently shares one identity
-  // (see fixtures.test.ts invariant). If a future fixture pins different identities per
-  // capsule the embedding step will produce dim mismatches and the per-query embed call
-  // would need a per-capsule adapter — out of scope until that fixture lands.
-  readonly identity: EmbeddingModelIdentity;
-}
-
-function chunkParsedUnitId(documentId: string): string {
-  return `unit-${documentId}`;
-}
-
-function seedCapsule(store: KnowledgeStore, capsule: EvalCapsuleSpec): void {
-  createCapsule(store, {
-    id: capsule.id,
-    displayName: capsule.displayName,
-    tags: [],
-    retrievalEffort: "default",
-    outputMode: "answers",
-    answerGroundingPolicy: capsule.answerGroundingPolicy,
-    embeddingModelIdentity: capsule.embeddingModelIdentity,
-    lifecycleState: "draft",
-    storageReference: `eval/${String(capsule.id)}`,
-  });
-}
-
-function seedSource(
-  store: KnowledgeStore,
-  capsuleId: KnowledgeCapsuleId,
-  source: EvalSourceSpec,
-): void {
-  addSourceToCapsule(store, capsuleId, {
-    id: source.id,
-    displayName: `Source ${String(source.id)}`,
-    tags: [],
-    scope: { kind: "folder", rootPath: "/srv/docs", recursive: true },
-  });
-}
-
-function seedDocument(
-  store: KnowledgeStore,
-  capsule: EvalCapsuleSpec,
-  source: EvalSourceSpec,
-  doc: EvalDocumentSpec,
-): void {
-  insertDocumentRow(store._internal.db, {
-    id: doc.id,
-    capsuleId: capsule.id,
-    sourceId: String(source.id),
-    documentPath: `docs/${doc.safeDisplayName}`,
-    sizeBytes: 1024,
-    mediaType: "text/plain",
-    contentHash: "a".repeat(64),
-    parserId: "text",
-    parserVersion: "1",
-    lastExtractedAt: 1_700_000_000_000,
-    status: "extracted",
-    safeDisplayName: doc.safeDisplayName,
-  });
-  const unitId = chunkParsedUnitId(String(doc.id));
-  const unit: ParsedUnit = { ...doc.parsedUnit.unit, documentId: doc.id };
-  insertParsedUnitRow(store._internal.db, capsule.id, unitId, unit);
-}
-
-function seedChunks(
-  store: KnowledgeStore,
-  capsule: EvalCapsuleSpec,
-  source: EvalSourceSpec,
-  doc: EvalDocumentSpec,
-  chunkUnitKinds: Map<string, CitationRequirementKey>,
-): void {
-  const unitId = chunkParsedUnitId(String(doc.id));
-  const unit: ParsedUnit = { ...doc.parsedUnit.unit, documentId: doc.id };
-  const requirement = citationRequirementForUnit(unit);
-  let orderIndex = 0;
-  for (const chunk of doc.chunks) {
-    insertChunkRow(store._internal.db, {
-      id: chunk.id,
-      capsuleId: capsule.id,
-      sourceId: source.id,
-      documentId: doc.id,
-      parsedUnitId: unitId,
-      orderIndex,
-      tokenCount: chunk.text.length,
-      // 64-hex placeholder — the schema requires a non-empty hash but the eval never
-      // validates content equivalence.
-      safeExcerptHash: "b".repeat(64),
-    });
-    chunkUnitKinds.set(String(chunk.id), requirement);
-    orderIndex += 1;
-  }
-}
-
-function collectTopicBoosts(fixture: RetrievalEvalFixture): Record<string, number> {
-  const boosts: Record<string, number> = {};
-  for (const capsule of fixture.capsules) {
-    for (const source of capsule.sources) {
-      for (const doc of source.documents) {
-        for (const chunk of doc.chunks) {
-          if (chunk.topic !== undefined) boosts[chunk.topic] = 1.0;
-        }
-      }
-    }
-  }
-  for (const query of fixture.queries) {
-    if (query.topic !== undefined) boosts[query.topic] = 1.0;
-  }
-  return boosts;
-}
-
-function seedFixture(store: KnowledgeStore, fixture: RetrievalEvalFixture): SeededFixture {
-  const chunkUnitKinds = new Map<string, CitationRequirementKey>();
-  for (const capsule of fixture.capsules) {
-    seedCapsule(store, capsule);
-    for (const source of capsule.sources) {
-      seedSource(store, capsule.id, source);
-      for (const doc of source.documents) {
-        seedDocument(store, capsule, source, doc);
-        seedChunks(store, capsule, source, doc, chunkUnitKinds);
-      }
-    }
-  }
-  // Materialise capsule-set rows so the runner can resolve a `capsuleSetId` scope.
-  for (const query of fixture.queries) {
-    if (query.scope.kind !== "capsule-set") continue;
-    // Create-if-absent: the same set id may appear on multiple queries.
-    try {
-      createCapsuleSet(store, {
-        id: query.scope.capsuleSetId as CapsuleSetId,
-        displayName: `Set ${query.scope.capsuleSetId}`,
-        tags: [],
-        capsuleIds: query.scope.capsuleIds,
-      });
-    } catch {
-      // Already created on a previous query — ignore.
-    }
-  }
-  const first = fixture.capsules[0];
-  if (first === undefined) {
-    throw new Error("fixture must declare at least one capsule");
-  }
-  return {
-    chunkUnitKinds,
-    topicBoosts: collectTopicBoosts(fixture),
-    identity: first.embeddingModelIdentity,
-  };
-}
-
 // ─── Vector embedding (post-seed) ────────────────────────────────────────────
 // After every chunk row exists, we run the embedding batcher once per capsule. The
 // batcher inserts vector rows keyed to the chunks. We feed the scripted adapter the
@@ -234,8 +67,8 @@ function seedFixture(store: KnowledgeStore, fixture: RetrievalEvalFixture): Seed
 interface EmbedChunk {
   readonly id: ChunkId;
   readonly capsuleId: KnowledgeCapsuleId;
-  readonly sourceId: EvalSourceSpec["id"];
-  readonly documentId: EvalDocumentSpec["id"];
+  readonly sourceId: KnowledgeSourceId;
+  readonly documentId: DocumentId;
   readonly text: string;
 }
 
@@ -307,9 +140,26 @@ function scopeCapsuleIds(query: RetrievalEvalQuery): readonly KnowledgeCapsuleId
   return query.scope.capsuleIds;
 }
 
+function buildRetrievalQuery(
+  query: RetrievalEvalQuery,
+  queryText: string,
+): Parameters<typeof runLocalKnowledgeRetrieval>[1] {
+  const baseQuery = {
+    text: queryText,
+    ...(query.topK !== undefined ? { topK: query.topK } : {}),
+    // For the no-evidence fixture we apply a very high minScore so unrelated chunks are
+    // dropped. The fixture's query carries no topic marker, so the cosine of its vector
+    // with any topic-boosted chunk is far below 0.99.
+    ...(query.expectedNoEvidence === true ? { minScore: 0.99 } : {}),
+  };
+  if (query.scope.kind === "capsule") {
+    return { ...baseQuery, capsuleId: query.scope.capsuleId };
+  }
+  return { ...baseQuery, capsuleSetId: query.scope.capsuleSetId as CapsuleSetId };
+}
+
 async function runOneQuery(
   store: KnowledgeStore,
-  fixture: RetrievalEvalFixture,
   query: RetrievalEvalQuery,
   seeded: SeededFixture,
   now: () => number,
@@ -322,26 +172,13 @@ async function runOneQuery(
     identity: seeded.identity,
     topicBoosts: seeded.topicBoosts,
   });
-  const baseQuery = {
-    text: queryText,
-    ...(query.topK !== undefined ? { topK: query.topK } : {}),
-    // For the no-evidence fixture we apply a very high minScore so unrelated chunks are
-    // dropped. The fixture's query carries no topic marker, so the cosine of its vector
-    // with any topic-boosted chunk is far below 0.99.
-    ...(query.expectedNoEvidence === true ? { minScore: 0.99 } : {}),
-  };
-  const retrievalQuery =
-    query.scope.kind === "capsule"
-      ? { ...baseQuery, capsuleId: query.scope.capsuleId }
-      : { ...baseQuery, capsuleSetId: query.scope.capsuleSetId as CapsuleSetId };
-
+  const retrievalQuery = buildRetrievalQuery(query, queryText);
   const start = now();
   const result = await runLocalKnowledgeRetrieval(
     { store, embeddingAdapter: adapter },
     retrievalQuery,
   );
   const end = now();
-
   const expected = query.expectedChunkIds ?? [];
   const expectedNoEvidence = query.expectedNoEvidence === true;
   return {
@@ -412,7 +249,7 @@ export async function runRetrievalEval(
     await embedAllChunks(store, fixture, seeded, now);
     const perQuery: QueryScores[] = [];
     for (const query of fixture.queries) {
-      perQuery.push(await runOneQuery(store, fixture, query, seeded, now));
+      perQuery.push(await runOneQuery(store, query, seeded, now));
     }
     return buildScorecard(fixture, runId, perQuery);
   } finally {
