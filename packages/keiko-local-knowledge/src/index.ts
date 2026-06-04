@@ -13,3 +13,11 @@ export {
   type KnowledgeStore,
   type OpenKnowledgeStoreOptions,
 } from "./store.js";
+export {
+  createCapsule,
+  deleteCapsule,
+  getCapsule,
+  listCapsules,
+  updateCapsuleState,
+  type CreateCapsuleInput,
+} from "./capsule-lifecycle.js";
