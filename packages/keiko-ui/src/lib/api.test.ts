@@ -10,6 +10,7 @@ import {
   fetchModels,
   fetchProjects,
   fetchWorkspaceSummary,
+  updateChatConnectedScope,
 } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -243,6 +244,80 @@ describe("delete helpers", () => {
       2,
       "/api/chats?id=chat-123",
       expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+});
+
+// Issue #184 — connector binds a Files-window selection to a chat via PATCH /api/chats.
+describe("updateChatConnectedScope", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("PATCHes /api/chats with a connectedScope body when a scope is supplied", async () => {
+    const updated = {
+      chat: {
+        id: "chat-1",
+        projectPath: "/p",
+        title: "t",
+        selectedModel: "example-chat-model",
+        branchLabel: undefined,
+        status: undefined,
+        connectedScope: { relativePaths: ["src/a.ts"], connectedAtMs: 100 },
+        createdAt: 1,
+        updatedAt: 2,
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(updated));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await updateChatConnectedScope("chat-1", {
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: 100,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/chats?id=chat-1",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({
+          connectedScope: { relativePaths: ["src/a.ts"], connectedAtMs: 100 },
+        }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
+  });
+
+  it("PATCHes /api/chats with a null connectedScope to clear the binding", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        chat: {
+          id: "chat-1",
+          projectPath: "/p",
+          title: "t",
+          selectedModel: "example-chat-model",
+          branchLabel: undefined,
+          status: undefined,
+          connectedScope: undefined,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await updateChatConnectedScope("chat-1", null);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/chats?id=chat-1",
+      expect.objectContaining({
+        method: "PATCH",
+        body: JSON.stringify({ connectedScope: null }),
+      }),
     );
   });
 });

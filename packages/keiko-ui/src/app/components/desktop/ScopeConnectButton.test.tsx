@@ -1,0 +1,106 @@
+// Issue #184 — unit tests for the Files → chat connector button.
+
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { ScopeConnectButton } from "./ScopeConnectButton";
+import type { Chat, ChatResponse } from "@/lib/types";
+
+function makeChat(overrides: Partial<Chat> = {}): Chat {
+  return {
+    id: "chat-1",
+    projectPath: "/proj",
+    title: "t",
+    selectedModel: "example-chat-model",
+    branchLabel: undefined,
+    status: undefined,
+    connectedScope: undefined,
+    createdAt: 1,
+    updatedAt: 2,
+    ...overrides,
+  };
+}
+
+describe("ScopeConnectButton", () => {
+  it("is disabled and tooltipped when there is no candidate selection", () => {
+    render(
+      <ScopeConnectButton
+        chatId="chat-1"
+        currentScopePaths={[]}
+        candidateRelativePaths={[]}
+        updateScope={vi.fn()}
+      />,
+    );
+    const btn = screen.getByRole("button");
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute("title", "Select a folder or file first");
+  });
+
+  it('labels "Connect to chat" when the chat has no existing binding', () => {
+    render(
+      <ScopeConnectButton
+        chatId="chat-1"
+        currentScopePaths={[]}
+        candidateRelativePaths={["src/a.ts"]}
+        updateScope={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button")).toHaveTextContent("Connect to chat");
+  });
+
+  it('labels "Update connected scope" when a binding already exists', () => {
+    render(
+      <ScopeConnectButton
+        chatId="chat-1"
+        currentScopePaths={["src/old.ts"]}
+        candidateRelativePaths={["src/new.ts"]}
+        updateScope={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button")).toHaveTextContent("Update connected scope");
+  });
+
+  it("calls updateScope with the candidate paths and a clock value on click", async () => {
+    const updated = makeChat({
+      connectedScope: { relativePaths: ["src/a.ts"], connectedAtMs: 100 },
+    });
+    const updateScope = vi.fn().mockResolvedValue({ chat: updated } satisfies ChatResponse);
+    const onConnected = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ScopeConnectButton
+        chatId="chat-1"
+        currentScopePaths={[]}
+        candidateRelativePaths={["src/a.ts"]}
+        updateScope={updateScope}
+        now={() => 100}
+        onConnected={onConnected}
+      />,
+    );
+    await user.click(screen.getByRole("button"));
+    await waitFor(() => {
+      expect(updateScope).toHaveBeenCalledWith("chat-1", {
+        relativePaths: ["src/a.ts"],
+        connectedAtMs: 100,
+      });
+    });
+    expect(onConnected).toHaveBeenCalledWith(updated);
+  });
+
+  it("surfaces wire-error messages via role=alert", async () => {
+    const updateScope = vi.fn().mockRejectedValue(new Error("network down"));
+    const user = userEvent.setup();
+    render(
+      <ScopeConnectButton
+        chatId="chat-1"
+        currentScopePaths={[]}
+        candidateRelativePaths={["src/a.ts"]}
+        updateScope={updateScope}
+      />,
+    );
+    await user.click(screen.getByRole("button"));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("network down");
+    });
+  });
+});

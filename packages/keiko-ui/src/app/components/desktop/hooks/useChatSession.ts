@@ -52,6 +52,10 @@ export interface UseChatSessionResult {
   openChat: (chat: Chat) => Promise<void>;
   addProject: (path: string) => Promise<void>;
   sendMessage: () => Promise<void>;
+  // Issue #184 — replaces the cached Chat after a wire mutation (e.g. connected-scope PATCH).
+  // The caller is the API client wrapper; the hook only owns the local cache update so the
+  // chat header re-renders with the new state without a full refetch.
+  replaceChat: (chat: Chat) => void;
 }
 
 interface SessionState {
@@ -295,6 +299,18 @@ export function useChatSession(): UseChatSessionResult {
     }
   }, [draft, state.activeChat, state.activeProject, state.selectedModel]);
 
+  // Issue #184 — local cache update after a connected-scope PATCH (or any other surgical wire
+  // mutation on the active Chat). Only the matched id is updated; the chat list keeps its
+  // existing sort order so the pill flip is non-disruptive. activeChat is rewritten when its
+  // id matches so the header re-renders with the new ChatConnectedScope.
+  const replaceChat = useCallback((chat: Chat) => {
+    setState((previous) => ({
+      ...previous,
+      chats: previous.chats.map((existing) => (existing.id === chat.id ? chat : existing)),
+      activeChat: previous.activeChat?.id === chat.id ? chat : previous.activeChat,
+    }));
+  }, []);
+
   return {
     projects: state.projects,
     chats: state.chats,
@@ -314,5 +330,6 @@ export function useChatSession(): UseChatSessionResult {
     openChat,
     addProject,
     sendMessage,
+    replaceChat,
   };
 }

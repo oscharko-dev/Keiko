@@ -143,7 +143,12 @@ describe("upgrade compatibility (issue #175)", () => {
     }
   });
 
-  it("UI sqlite: PRAGMA user_version is the pre-modular value and is preserved on open", () => {
+  it("UI sqlite: PRAGMA user_version is the pre-modular value and forward-migrates on open", () => {
+    // Issue #184 — opening the pre-modular v2 fixture exercises the forward-only migration
+    // contract (ADR-0013 D5). user_version advances to the current SCHEMA_VERSION (>=2) on
+    // open; the additive V3 ALTERs on the chats table do not drop seeded data, which is the
+    // load-bearing upgrade-compat guarantee (project, chat, and message remain readable —
+    // verified by the sibling test).
     const home = copyFixtureHomeKeiko(workdir);
     const dbPath = join(home, UI_DB_FILENAME);
 
@@ -154,7 +159,7 @@ describe("upgrade compatibility (issue #175)", () => {
     store.close();
 
     const after = readUserVersion(dbPath);
-    expect(after).toBe(before);
+    expect(after).toBeGreaterThanOrEqual(before);
   });
 
   it("evidence: lists pre-modular manifests via $KEIKO_EVIDENCE_DIR", () => {

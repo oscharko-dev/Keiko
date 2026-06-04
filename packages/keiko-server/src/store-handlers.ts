@@ -396,20 +396,9 @@ export async function handleCreateChat(
 // defense-in-depth subset of this gate.
 const MAX_CONNECTED_SCOPE_PATHS = 50;
 
-// Issue #184 — three return states: undefined → field absent (leave unchanged); null →
-// explicit clear (forward through to the store); ChatConnectedScope → fully validated value.
-// All input has crossed the wire and is `unknown` until proven otherwise.
-function optionalConnectedScope(
-  body: Record<string, unknown>,
-): ChatConnectedScope | null | undefined {
-  if (!("connectedScope" in body)) return undefined;
-  const raw = body.connectedScope;
-  if (raw === null) return null;
-  if (typeof raw !== "object" || Array.isArray(raw)) {
-    throw new InvalidRequest('Field "connectedScope" must be an object or null.');
-  }
-  const scope = raw as Record<string, unknown>;
-  const paths = scope.relativePaths;
+// Issue #184 — validates the relativePaths sub-array. Pulled out of optionalConnectedScope so
+// the outer function's cyclomatic complexity stays within the project's ≤10 bound.
+function validateScopeRelativePaths(paths: unknown): readonly string[] {
   if (!Array.isArray(paths)) {
     throw new InvalidRequest('Field "connectedScope.relativePaths" must be an array.');
   }
@@ -435,13 +424,34 @@ function optionalConnectedScope(
     }
     validated.push(entry);
   }
-  const connectedAtMs = scope.connectedAtMs;
-  if (typeof connectedAtMs !== "number" || !Number.isInteger(connectedAtMs) || connectedAtMs < 0) {
+  return validated;
+}
+
+function validateScopeConnectedAtMs(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
     throw new InvalidRequest(
       'Field "connectedScope.connectedAtMs" must be a finite non-negative integer.',
     );
   }
-  return { relativePaths: validated, connectedAtMs };
+  return value;
+}
+
+// Issue #184 — three return states: undefined → field absent (leave unchanged); null →
+// explicit clear (forward through to the store); ChatConnectedScope → fully validated value.
+// All input has crossed the wire and is `unknown` until proven otherwise.
+function optionalConnectedScope(
+  body: Record<string, unknown>,
+): ChatConnectedScope | null | undefined {
+  if (!("connectedScope" in body)) return undefined;
+  const raw = body.connectedScope;
+  if (raw === null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new InvalidRequest('Field "connectedScope" must be an object or null.');
+  }
+  const scope = raw as Record<string, unknown>;
+  const relativePaths = validateScopeRelativePaths(scope.relativePaths);
+  const connectedAtMs = validateScopeConnectedAtMs(scope.connectedAtMs);
+  return { relativePaths, connectedAtMs };
 }
 
 function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): UpdateChatPatch {

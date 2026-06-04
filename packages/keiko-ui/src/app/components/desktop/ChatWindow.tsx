@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
+import { ConnectedScopePill } from "./ConnectedScopePill";
 import { Icons } from "./Icons";
 import { DEFAULT_MODEL_ID, type ChatSessionApi } from "./hooks/useChatSession";
-import type { ChatMessage, ModelCapability } from "@/lib/types";
+import type { Chat, ChatMessage, ModelCapability } from "@/lib/types";
 
 interface ChatWindowProps {
   readonly mini?: boolean;
@@ -245,9 +246,28 @@ function ChatContext({ root }: { readonly root: string }): ReactNode {
   );
 }
 
+// Issue #184 — surfaces the chat's explicit connected-scope binding (set via the Files-window
+// connector). Rendered above the message log so screen-reader users hear the live-region
+// announce when the binding flips. The pill self-hides when no scope is bound.
+function ChatScopeHeader({
+  chat,
+  onChatChanged,
+}: {
+  readonly chat: Chat;
+  readonly onChatChanged: (chat: Chat) => void;
+}): ReactNode {
+  if (chat.connectedScope === undefined) return null;
+  return (
+    <div className="chat-scope-header" style={{ padding: "6px 12px" }}>
+      <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
+    </div>
+  );
+}
+
 export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
-  const { messages, draft, loading, sending, error, sendMessage } = session;
+  const { messages, draft, loading, sending, error, sendMessage, activeChat, replaceChat } =
+    session;
   const ready = draft.trim().length > 0 && !sending && !loading;
   const visible = visibleOnly(messages);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -261,6 +281,9 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
     return (
       <div className="chatw chatw-mini">
         {linkedRoot !== null ? <ChatContext root={linkedRoot} /> : null}
+        {activeChat !== undefined ? (
+          <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
+        ) : null}
         <MiniChat session={session} ready={ready} />
       </div>
     );
@@ -269,6 +292,9 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
   return (
     <div className="chatw">
       {linkedRoot !== null ? <ChatContext root={linkedRoot} /> : null}
+      {activeChat !== undefined ? (
+        <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
+      ) : null}
       <div className="chatw-scroll" ref={scrollRef} aria-live="polite">
         {visible.length === 0 ? (
           <ChatHero session={session} ready={ready} />

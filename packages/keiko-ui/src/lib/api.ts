@@ -6,6 +6,7 @@
 
 import type {
   BffError,
+  ChatConnectedScope,
   ChatResponse,
   ChatsResponse,
   ChatStatus,
@@ -363,6 +364,19 @@ export async function updateChat(id: string, patch: UpdateChatInput): Promise<Ch
   return fetchJson(`/api/chats?id=${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
+  });
+}
+
+// Issue #184 — binds a Files-window scope to a chat. `null` clears the binding; a
+// ChatConnectedScope object sets/replaces it. All path validation runs at the BFF boundary;
+// invalid input surfaces as ApiError with HTTP 400 invalid_request.
+export async function updateChatConnectedScope(
+  chatId: string,
+  scope: ChatConnectedScope | null,
+): Promise<ChatResponse> {
+  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ connectedScope: scope }),
   });
 }
 

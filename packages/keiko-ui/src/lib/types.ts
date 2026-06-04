@@ -54,6 +54,7 @@ export type {
   Project,
   ProjectWithAvailability,
   Chat,
+  ChatConnectedScope,
   ChatRole,
   ChatStatus,
   ChatMessage,
