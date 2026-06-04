@@ -30,8 +30,10 @@ import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "./local-knowledge.js";
 
 function openSchemaDb(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
-  for (const stmt of KNOWLEDGE_CAPSULE_MIGRATIONS[0]?.up ?? []) {
-    db.exec(stmt);
+  for (const migration of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+    for (const stmt of migration.up) {
+      db.exec(stmt);
+    }
   }
   db.exec(`PRAGMA user_version = ${String(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION)}`);
   return db;
@@ -166,8 +168,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 1 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(1);
+  it("is the integer 2 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(2);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -411,7 +413,7 @@ describe("STRICT mode", () => {
 });
 
 describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
-  it("has exactly one entry today, versioned 1, sequentially ascending", () => {
+  it("starts at version 1 and is strictly increasing", () => {
     expect(KNOWLEDGE_CAPSULE_MIGRATIONS.length).toBeGreaterThan(0);
     expect(KNOWLEDGE_CAPSULE_MIGRATIONS[0]?.version).toBe(1);
     let previous = 0;
@@ -421,14 +423,74 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
     }
   });
 
-  it("each entry's up statements apply cleanly to a fresh database", () => {
-    for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
-      const db = new DatabaseSync(":memory:");
-      try {
+  it("applying v1 then v2 in order matches a fresh full-schema apply", () => {
+    // v2 is a *delta* — applying every migration in order to a virgin database must end at
+    // the same on-disk shape as openSchemaDb. The forward-only chain is what gives existing
+    // v1 stores a safe upgrade path.
+    const db = new DatabaseSync(":memory:");
+    try {
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
         for (const stmt of entry.up) db.exec(stmt);
-      } finally {
-        db.close();
       }
+      const tables = listSqliteMaster(db, "table");
+      for (const expected of KNOWLEDGE_CAPSULE_TABLES) {
+        expect(tables).toContain(expected);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies v2's delta on top of a v1-only database without re-creating v1 objects", () => {
+    // Real-world upgrade case: an installed v1 store opens after this release. The runtime
+    // applies only entries whose version > current user_version. Verify the v2 delta is
+    // valid against a database that already holds the v1 schema.
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v1 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 1);
+      const v2 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 2);
+      if (v1 === undefined || v2 === undefined) {
+        throw new Error("expected v1 and v2 migrations");
+      }
+      for (const stmt of v1.up) db.exec(stmt);
+      for (const stmt of v2.up) db.exec(stmt);
+      const tables = listSqliteMaster(db, "table");
+      expect(tables).toContain("capsule_membership_changes");
+      const indexes = listSqliteMaster(db, "index");
+      expect(indexes).toContain("idx_capsule_membership_changes_capsule_time");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("v2 audit table rejects an unknown change_kind via CHECK constraint", () => {
+    const db = openSchemaDb();
+    try {
+      seedFullLineage(db);
+      expect(() =>
+        db
+          .prepare(
+            "INSERT INTO capsule_membership_changes (id, capsule_id, change_kind, occurred_at) VALUES (?, ?, ?, ?)",
+          )
+          .run("c-1", "cap-1", "rename-source", 1234),
+      ).toThrow(/CHECK constraint failed/);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("v2 audit rows cascade-delete with their owning capsule", () => {
+    const db = openSchemaDb();
+    try {
+      seedFullLineage(db);
+      db.prepare(
+        "INSERT INTO capsule_membership_changes (id, capsule_id, change_kind, source_id, occurred_at) VALUES (?, ?, ?, ?, ?)",
+      ).run("c-1", "cap-1", "add-source", "src-new", 1234);
+      expect(countRows(db, "capsule_membership_changes")).toBe(1);
+      db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: "cap-1" });
+      expect(countRows(db, "capsule_membership_changes")).toBe(0);
+    } finally {
+      db.close();
     }
   });
 });

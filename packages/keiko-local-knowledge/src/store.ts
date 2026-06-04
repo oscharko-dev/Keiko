@@ -18,6 +18,7 @@ import { DatabaseSync } from "node:sqlite";
 import {
   KNOWLEDGE_CAPSULE_MIGRATIONS,
   KNOWLEDGE_CAPSULE_TABLES,
+  KNOWLEDGE_CAPSULE_V1_TABLES,
 } from "@oscharko-dev/keiko-contracts";
 
 import { KnowledgeStoreError } from "./errors.js";
@@ -109,6 +110,16 @@ function hasAnyUserContent(db: DatabaseSync): boolean {
   return currentUserVersion(db) !== 0;
 }
 
+function expectedV1TablesPresent(db: DatabaseSync): boolean {
+  // Only checks the v1 table set (pre-migration). Used before runMigrations so that a v1
+  // database with a valid pre-v2 schema is not quarantined as corrupt.
+  const present = new Set(listExistingTables(db));
+  for (const expected of KNOWLEDGE_CAPSULE_V1_TABLES) {
+    if (!present.has(expected)) return false;
+  }
+  return true;
+}
+
 function expectedTablesPresent(db: DatabaseSync): boolean {
   const present = new Set(listExistingTables(db));
   for (const expected of KNOWLEDGE_CAPSULE_TABLES) {
@@ -142,8 +153,10 @@ function tryOpenAndMigrate(dbPath: string, onError?: (cause: unknown) => void): 
   }
   try {
     applyDurabilityPragmas(db);
-    if (hasAnyUserContent(db) && !expectedTablesPresent(db)) {
-      // Pre-existing foreign schema or a partial #193 install. Quarantine and retry.
+    if (hasAnyUserContent(db) && !expectedV1TablesPresent(db)) {
+      // Pre-existing foreign schema or a partial install missing even the v1 tables.
+      // Quarantine and retry. The v1 check is intentionally narrow: a v1 database that
+      // has not yet been migrated to v2 passes here, then runMigrations upgrades it.
       db.close();
       return undefined;
     }

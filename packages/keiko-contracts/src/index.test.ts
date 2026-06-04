@@ -102,8 +102,8 @@ import type {
 } from "./index.js";
 
 describe("keiko-contracts package surface", () => {
-  it("exposes the version constant pinned at 0.6.0", () => {
-    expect(KEIKO_CONTRACTS_VERSION).toBe("0.6.0");
+  it("exposes the version constant pinned at 0.7.0", () => {
+    expect(KEIKO_CONTRACTS_VERSION).toBe("0.7.0");
   });
 
   it("HARNESS_CODES.LIMIT_ITERATIONS is the canonical code string", () => {
@@ -249,7 +249,7 @@ describe("keiko-contracts package surface", () => {
   });
 
   it("knowledge-capsule schema value re-exports are reachable through the barrel (#265)", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(1);
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(2);
     // The string contract version and the integer DB version must remain distinct so the
     // contract surface and the on-disk DDL can evolve independently.
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
