@@ -685,6 +685,12 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
     sourceIds: sources.map((s) => s.id),
     startedAt,
   });
+  options.auditSink?.emit({
+    kind: "indexing-job-started",
+    capsuleId: capsule.id,
+    jobId,
+    occurredAt: startedAt,
+  });
 
   // Force mode: tear down ALL vectors for the capsule up front. Per-document teardown
   // still runs in handlePersistedDocument as a defence-in-depth measure.
@@ -768,8 +774,23 @@ function* finalize(
   }
   if (status === "failed") {
     const err = state.lastError ?? { code: "EMBEDDING_ADAPTER_FAILED", message: "indexing failed" };
+    state.options.auditSink?.emit({
+      kind: "indexing-job-failed",
+      capsuleId: state.capsule.id,
+      jobId: state.jobId,
+      errorCode: err.code,
+      occurredAt: finishedAt,
+    });
     yield emit(state, { kind: "job-failed", jobId: state.jobId, error: err, result });
     return;
   }
+  state.options.auditSink?.emit({
+    kind: "indexing-job-completed",
+    capsuleId: state.capsule.id,
+    jobId: state.jobId,
+    processedDocuments: result.processedDocuments,
+    failedDocuments: result.failedDocuments,
+    occurredAt: finishedAt,
+  });
   yield emit(state, { kind: "job-completed", jobId: state.jobId, result });
 }

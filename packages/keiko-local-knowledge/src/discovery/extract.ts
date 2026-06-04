@@ -26,7 +26,13 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
-import type { ParserOptions, ParserRegistry, ParserSelectionInput } from "../parsers/index.js";
+import type {
+  AsyncParserAdapter,
+  ParserAdapter,
+  ParserOptions,
+  ParserRegistry,
+  ParserSelectionInput,
+} from "../parsers/index.js";
 import { buildParserOptions } from "../parsers/index.js";
 import type { KnowledgeStore } from "../store.js";
 import { basenameOf, extensionOf, mediaTypeFor } from "./media-type.js";
@@ -320,13 +326,17 @@ function statusForResult(result: ParserResult): DocumentRecord["status"] {
   return result.parser.parserId === "unsupported" ? "unsupported" : "extracted";
 }
 
-function runParser(
+function hasAsyncParse(adapter: ParserAdapter | AsyncParserAdapter): adapter is AsyncParserAdapter {
+  return typeof (adapter as { readonly parseAsync?: unknown }).parseAsync === "function";
+}
+
+async function runParser(
   deps: ExtractDocumentDeps,
   documentId: DocumentId,
   params: ExtractDocumentParams,
   bytes: Uint8Array,
   options: ParserOptions,
-): ParserResult {
+): Promise<ParserResult> {
   const input = selectionInput(documentId, params.file.relativePath, bytes);
   const resolution = deps.parserRegistry.resolve(input);
   const adapter =
@@ -353,6 +363,9 @@ function runParser(
       ],
       extractedAt: options.now(),
     };
+  }
+  if (hasAsyncParse(adapter)) {
+    return adapter.parseAsync(input, options);
   }
   return adapter.parse(input, options);
 }
@@ -381,7 +394,7 @@ export async function extractDocument(
   const contentHash = hashBytes(bytes);
   const fast = readUnchangedFastPath(deps, params, documentId, contentHash);
   if (fast !== undefined) return fast;
-  const parserResult = runParser(deps, documentId, params, bytes, options);
+  const parserResult = await runParser(deps, documentId, params, bytes, options);
   const status = statusForResult(parserResult);
   const document = buildDocumentRecord({
     documentId,

@@ -305,7 +305,11 @@ function scoreCapsuleVectors(
     scored.push({ chunkId: row.chunk_id, capsuleId: capsule.id, score });
   }
   scored.sort(scoreDesc);
-  return scored.slice(0, topK);
+  return scored.slice(0, oversampleTopK(topK));
+}
+
+function oversampleTopK(topK: number): number {
+  return Math.max(topK, Math.min(topK * 3, topK + 12));
 }
 
 function scoreDesc(a: ScoredCandidate, b: ScoredCandidate): number {
@@ -457,7 +461,7 @@ export async function searchVectorsForScope(
   }
   const selection = selectTopCandidates(state, options);
   if (!selection.ok) return { references: [], noEvidenceReason: selection.reason };
-  return { references: buildReferences(store, selection.top) };
+  return { references: buildReferences(store, selection.top, query) };
 }
 
 function loadCapsules(
@@ -475,6 +479,7 @@ function loadCapsules(
 function buildReferences(
   store: KnowledgeStore,
   candidates: readonly ScoredCandidate[],
+  query: string,
 ): readonly RetrievalReference[] {
   // Group surviving candidates by capsule so we can issue one citation-read per capsule.
   const byCapsule = new Map<string, ScoredCandidate[]>();
@@ -514,9 +519,47 @@ function buildReferences(
     refs.push({
       chunkId: citation.chunkId,
       capsuleId: candidate.capsuleId,
-      score: candidate.score,
+      score: candidate.score + lexicalMetadataBonus(query, citation),
       citation,
     });
   }
+  refs.sort(referenceScoreDesc);
   return refs;
+}
+
+function referenceScoreDesc(a: RetrievalReference, b: RetrievalReference): number {
+  if (b.score !== a.score) return b.score - a.score;
+  return String(a.chunkId).localeCompare(String(b.chunkId));
+}
+
+function lexicalMetadataBonus(query: string, citation: CitationReference): number {
+  const queryTokens = tokenise(query);
+  if (queryTokens.length === 0) return 0;
+  const haystack = tokenise(
+    [
+      citation.safeDisplayName,
+      citation.pageLabel,
+      ...(citation.sectionPath ?? []),
+      String(citation.pageNumber ?? ""),
+    ]
+      .filter((value): value is string => typeof value === "string" && value.length > 0)
+      .join(" "),
+  );
+  if (haystack.length === 0) return 0;
+
+  let hits = 0;
+  for (const token of queryTokens) {
+    if (haystack.includes(token)) {
+      hits += 1;
+    }
+  }
+  if (hits === 0) return 0;
+  return hits / (queryTokens.length * 10);
+}
+
+function tokenise(value: string): readonly string[] {
+  return value
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .filter((token) => token.length >= 2);
 }

@@ -25,6 +25,7 @@ import type { ChunkingOptions } from "../chunking/index.js";
 import type { DiscoveryOptions } from "../discovery/index.js";
 import { KnowledgeStoreError } from "../errors.js";
 import type { ParserRegistry } from "../parsers/index.js";
+import type { AuditEventSink } from "../privacy/index.js";
 import type { KnowledgeStore } from "../store.js";
 
 // ─── Defaults (declared up-front so callers can reason about behaviour) ──────
@@ -76,6 +77,7 @@ export interface IndexingOptions {
   // callback fires for the SAME events. Consumers that only need a side-channel (e.g. a
   // file logger) use this rather than driving the async iterator manually.
   readonly progress?: (event: IndexingEvent) => void;
+  readonly auditSink?: AuditEventSink;
   // When true: re-extract, re-chunk, and re-embed every document — does NOT honour the
   // chunking-layer incremental skip. Existing chunk and vector rows for in-scope documents
   // are deleted at the start of each document's work.

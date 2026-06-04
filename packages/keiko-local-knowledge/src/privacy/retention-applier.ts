@@ -20,7 +20,7 @@ import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 
 import type { KnowledgeStore } from "../store.js";
 
-import type { CapsuleRetentionPolicy, RetentionApplyResult } from "./types.js";
+import type { AuditEventSink, CapsuleRetentionPolicy, RetentionApplyResult } from "./types.js";
 
 const DAY_MS = 86_400_000;
 
@@ -68,6 +68,7 @@ export function applyRetentionToCapsule(
   capsuleId: KnowledgeCapsuleId,
   policy: CapsuleRetentionPolicy,
   now: number,
+  auditSink?: AuditEventSink,
 ): RetentionApplyResult {
   const hasVectorPolicy = typeof policy.retainVectorsDays === "number";
   const hasTextPolicy = typeof policy.retainExtractedTextDays === "number";
@@ -103,5 +104,13 @@ export function applyRetentionToCapsule(
     db.exec("ROLLBACK");
     throw error;
   }
-  return { capsuleId, deletedVectorCount, deletedExtractedTextCount, appliedAt: now };
+  const result = { capsuleId, deletedVectorCount, deletedExtractedTextCount, appliedAt: now };
+  auditSink?.emit({
+    kind: "retention-applied",
+    capsuleId,
+    deletedVectorCount,
+    deletedExtractedTextCount,
+    occurredAt: now,
+  });
+  return result;
 }

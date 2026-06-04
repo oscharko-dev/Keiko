@@ -73,6 +73,13 @@ export interface ParserAdapter {
   readonly parse: (input: ParserSelectionInput, options: ParserOptions) => ParserResult;
 }
 
+export interface AsyncParserAdapter extends ParserAdapter {
+  readonly parseAsync: (
+    input: ParserSelectionInput,
+    options: ParserOptions,
+  ) => Promise<ParserResult>;
+}
+
 // ─── Registry public surface ─────────────────────────────────────────────────
 
 export interface ParserRegistry {

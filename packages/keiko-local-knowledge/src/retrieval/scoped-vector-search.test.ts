@@ -284,6 +284,48 @@ describe("searchVectorsForScope — citation fields", () => {
       expect(ref.citation.pageNumber).toBeUndefined();
     }
   });
+
+  it("applies a lexical metadata bonus from section titles and document names", async () => {
+    const { store } = getFixture();
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-a",
+      sourceId: "src-a",
+      documentId: "doc-a",
+      safeDisplayName: "controls-handbook.docx",
+      unit: {
+        kind: "section",
+        sectionPath: ["Policy", "Controls"],
+        characterStart: 0,
+        characterEnd: 120,
+      } satisfies ParsedUnitWithoutDocId,
+      text: "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+    });
+    await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-b",
+      sourceId: "src-b",
+      documentId: "doc-b",
+      safeDisplayName: "glossary.txt",
+      unit: {
+        kind: "section",
+        sectionPath: ["Glossary"],
+        characterStart: 0,
+        characterEnd: 120,
+      } satisfies ParsedUnitWithoutDocId,
+      text: "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      scriptedAdapter(),
+      {
+        capsuleIds: ["cap-a" as KnowledgeCapsuleId, "cap-b" as KnowledgeCapsuleId],
+      },
+      "controls handbook",
+      { topK: 2 },
+    );
+    expect(outcome.references[0]?.citation.safeDisplayName).toBe("controls-handbook.docx");
+    expect(outcome.references[0]?.citation.sectionPath).toEqual(["Policy", "Controls"]);
+  });
 });
 
 describe("toScopeInput — single capsule sugar", () => {

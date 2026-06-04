@@ -4,15 +4,9 @@
 // ledger, in-memory test capture, future sibling-table writer) by constructing their own
 // `AuditEventSink` and chaining the calls.
 //
-// The default sink ONLY writes for the two event kinds that the v2 schema models in
-// `capsule_membership_changes`: `source-added` → `add-source`, `source-removed` →
-// `remove-source`. The `compose-set` change_kind is intentionally NOT exposed here — the
-// composition lifecycle in composition.ts writes that row itself atomically with the
-// CapsuleSet creation, and we must not duplicate. Other event kinds (capsule-created,
-// capsule-deleted, indexing-job-*, retention-applied) are accepted by the sink but
-// silently ignored because the schema has no column to record them today. When a sibling
-// audit table is added in a future migration, this sink learns to write to it without any
-// caller-side change.
+// The default sink writes every metadata-only event to `capsule_audit_events` and also
+// mirrors the source membership variants into the narrower `capsule_membership_changes`
+// table that #263 already introduced for composition history.
 
 import { randomUUID } from "node:crypto";
 
@@ -27,6 +21,8 @@ import type {
 
 const INSERT_MEMBERSHIP_SQL =
   "INSERT INTO capsule_membership_changes (id, capsule_id, change_kind, source_id, details_json, occurred_at) VALUES (:id, :capsule_id, :change_kind, :source_id, :details_json, :occurred_at)";
+const INSERT_AUDIT_SQL =
+  "INSERT INTO capsule_audit_events (id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents, deleted_vector_count, deleted_extracted_text_count, occurred_at) VALUES (:id, :capsule_id, :kind, :source_id, :job_id, :error_code, :processed_documents, :failed_documents, :deleted_vector_count, :deleted_extracted_text_count, :occurred_at)";
 
 export function emitCapsuleAuditEvent(event: CapsuleAuditEvent, sink: AuditEventSink): void {
   sink.emit(event);
@@ -35,9 +31,7 @@ export function emitCapsuleAuditEvent(event: CapsuleAuditEvent, sink: AuditEvent
 export function createSqliteAuditSink(store: KnowledgeStore): AuditEventSink {
   return {
     emit: (event: CapsuleAuditEvent): void => {
-      // Only the two source-* variants map to a `capsule_membership_changes` row in the
-      // v2 schema. Every other variant is intentionally a no-op until a sibling audit
-      // table lands in a future migration.
+      insertAuditEventRow(store, event);
       if (event.kind === "source-added") {
         insertMembershipRow(store, event, "add-source");
         return;
@@ -48,6 +42,23 @@ export function createSqliteAuditSink(store: KnowledgeStore): AuditEventSink {
       }
     },
   };
+}
+
+function insertAuditEventRow(store: KnowledgeStore, event: CapsuleAuditEvent): void {
+  store._internal.db.prepare(INSERT_AUDIT_SQL).run({
+    id: randomUUID(),
+    capsule_id: event.capsuleId,
+    kind: event.kind,
+    source_id: "sourceId" in event ? event.sourceId : null,
+    job_id: "jobId" in event ? event.jobId : null,
+    error_code: "errorCode" in event ? event.errorCode : null,
+    processed_documents: "processedDocuments" in event ? event.processedDocuments : null,
+    failed_documents: "failedDocuments" in event ? event.failedDocuments : null,
+    deleted_vector_count: "deletedVectorCount" in event ? event.deletedVectorCount : null,
+    deleted_extracted_text_count:
+      "deletedExtractedTextCount" in event ? event.deletedExtractedTextCount : null,
+    occurred_at: event.occurredAt,
+  });
 }
 
 function insertMembershipRow(
