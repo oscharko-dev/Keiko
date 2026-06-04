@@ -300,6 +300,9 @@ export interface AgentBugInvestigationInput {
 export interface GroundedAskRequest {
   readonly chatId: string;
   readonly content: string;
+  // The browser sends the selected registry model id so grounded Q&A preserves the Conversation
+  // Center model-selection guardrails instead of silently falling back to the chat's stored model.
+  readonly modelId?: string | undefined;
 }
 
 export interface GroundedEvidenceCitation {

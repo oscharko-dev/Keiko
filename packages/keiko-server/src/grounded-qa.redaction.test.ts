@@ -9,6 +9,7 @@
 // that lets one of these strings escape will break this test.
 
 import { Readable } from "node:stream";
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -59,10 +60,16 @@ function fakeReq(body: string): IncomingMessage {
   return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
 }
 
+function fakeRes(): RouteContext["res"] {
+  const res = new EventEmitter() as RouteContext["res"] & { writableEnded: boolean };
+  res.writableEnded = false;
+  return res;
+}
+
 function ctx(body: string): RouteContext {
   return {
     req: fakeReq(body),
-    res: {} as RouteContext["res"],
+    res: fakeRes(),
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
   };

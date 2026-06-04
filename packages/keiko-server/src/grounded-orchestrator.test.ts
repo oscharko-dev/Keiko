@@ -210,6 +210,25 @@ describe("runGroundedExploration", () => {
     expect(out.assistantContent).toBe("recorded");
   });
 
+  it("adds a no-evidence uncertainty marker when retrieval finds no matching atoms", async () => {
+    const out = await runGroundedExploration(
+      input({
+        scope: happyScope({ kind: "files", relativePaths: ["src/bar.ts"] }),
+        query: happyQuery({ text: "Investigate `CompletelyMissingSymbol`" }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files).toEqual([]);
+    expect(out.pack.uncertainty.some((marker) => marker.kind === "no-evidence")).toBe(true);
+    expect(out.pack.uncertainty.some((marker) => marker.claim.includes("matched"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("throws ClarificationNeededError when the planner asks for clarification", async () => {
     // A vague single-word query yields zero/low-weight anchors and trips the planner's
     // "no-anchors" / "too-generic" branches. The orchestrator MUST refuse to run any

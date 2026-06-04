@@ -2,8 +2,8 @@
 // layers — #181 exploration planner, #179 lexical search facade, #180 structural adapters,
 // #182 candidate ranker, and #183 context-pack assembler — into a single linear pipeline that
 // produces a redacted `ConnectedContextPack` plus an assistant-content string. The model call
-// is injected through the `GroundedAnswerer` seam so the route can ship today with a
-// deterministic stub; a future PR replaces it with a model-gateway-backed implementation.
+// is injected through the `GroundedAnswerer` seam so production can route through the Model
+// Gateway while tests can keep deterministic answerers.
 //
 // Pure orchestration: the only IO this module performs is delegated through the workspace
 // package's already-bounded WorkspaceFs port. Path validation is enforced by every composed
@@ -51,13 +51,14 @@ import {
   type WorkspaceFs,
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
+import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
 export interface GroundedAnswerer {
-  // The seam the route uses; the default is a deterministic stub that summarises the pack.
-  // A future PR replaces it with a model-gateway-backed implementation.
+  // The seam the route uses: production supplies a Model Gateway-backed answerer, while tests can
+  // keep deterministic answerers.
   answer(question: string, pack: ConnectedContextPack): Promise<string>;
 }
 
@@ -71,6 +72,7 @@ export interface OrchestratorInput {
 export interface OrchestratorDeps {
   readonly answerer: GroundedAnswerer;
   readonly nowMs?: () => number;
+  readonly signal?: AbortSignal | undefined;
   // Optional injected port for tests; production uses the realpath-contained node adapter.
   readonly fs?: WorkspaceFs;
   // Optional injected detector for tests so memFs fixtures don't need full WorkspaceInfo wiring.
@@ -120,6 +122,7 @@ interface SearchInputs {
   readonly query: RetrievalQuery;
   readonly fs: WorkspaceFs;
   readonly nowMs: () => number;
+  readonly signal?: AbortSignal | undefined;
 }
 
 interface RingResult {
@@ -129,6 +132,12 @@ interface RingResult {
 }
 
 const TEXT_ENCODER = new TextEncoder();
+
+function throwIfCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw new CancelledError("grounded repository request cancelled");
+  }
+}
 
 function utf8ByteLength(value: string): number {
   return TEXT_ENCODER.encode(value).length;
@@ -163,6 +172,15 @@ function budgetClipped(stopReason: string, nowMs: number): UncertaintyMarker {
   return {
     kind: "budget-clipped",
     claim: `repository exploration stopped: ${stopReason}`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
+function noEvidence(nowMs: number): UncertaintyMarker {
+  return {
+    kind: "no-evidence",
+    claim: "No repository evidence matched the connected scope for this question.",
     impactedAtomIds: [],
     emittedAtMs: nowMs,
   };
@@ -261,6 +279,7 @@ async function runAllRings(
   const uncertainty: UncertaintyMarker[] = [];
   let governor = initialGovernor;
   for (const ring of rings) {
+    throwIfCancelled(inputs.signal);
     if (!canContinue(governor)) {
       break;
     }
@@ -274,6 +293,7 @@ async function runAllRings(
     }
     governor = reservedSearchCall;
     const result = await runRing(ring, inputs);
+    throwIfCancelled(inputs.signal);
     const afterRing = applyUsage(governor, result.usage);
     const ringAtoms = result.atoms;
     atoms.push(...ringAtoms);
@@ -298,6 +318,7 @@ interface ExcerptInputs {
   readonly initialUsage: ExplorationUsage;
   readonly atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>;
   readonly nowMs: () => number;
+  readonly signal?: AbortSignal | undefined;
 }
 
 interface ExcerptReadSummary {
@@ -391,6 +412,7 @@ async function readPathExcerptWindows(
   const windows: ExcerptWindow[] = [];
   let bytesConsumed = 0;
   for (const window of excerptLineWindows(inputs.atomsByPath.get(scopePath))) {
+    throwIfCancelled(inputs.signal);
     const availableBytes = remainingBytes - bytesConsumed;
     if (availableBytes <= 0) {
       break;
@@ -401,6 +423,7 @@ async function readPathExcerptWindows(
       { scopePath, startLine: window.startLine, endLine: window.endLine, maxBytes },
       { fs: inputs.fs },
     );
+    throwIfCancelled(inputs.signal);
     windows.push({ ...window, content: result.content });
     bytesConsumed += utf8ByteLength(result.content);
   }
@@ -419,6 +442,7 @@ async function readKeptExcerpts(
     inputs.budget.excerptBytesMax - inputs.initialUsage.excerptBytes,
   );
   for (const scopePath of keptPaths) {
+    throwIfCancelled(inputs.signal);
     if (remainingFiles <= 0 || remainingBytes <= 0) {
       const dimensions = exhaustedDimensions(remainingFiles, remainingBytes);
       uncertainty.push(budgetClipped(`budget-exhausted on ${dimensions}`, inputs.nowMs()));
@@ -479,40 +503,37 @@ function createReadyGovernedPlan(input: OrchestratorInput, nowMs: () => number):
   return { plan, governor: planned.governor };
 }
 
-// ─── Public entry ─────────────────────────────────────────────────────────────
+interface AssembleGroundedPackInputs {
+  readonly input: OrchestratorInput;
+  readonly deps: OrchestratorDeps;
+  readonly plan: ExplorationPlan;
+  readonly rings: RingRunSummary;
+  readonly searchScope: SearchScope;
+  readonly fs: WorkspaceFs;
+  readonly nowMs: () => number;
+}
 
-export async function runGroundedExploration(
-  input: OrchestratorInput,
-  deps: OrchestratorDeps,
-): Promise<OrchestratorOutput> {
-  const fs = deps.fs ?? nodeWorkspaceFs;
-  const detect = deps.detectWorkspace ?? detectWorkspace;
-  const nowMs = deps.nowMs ?? Date.now;
-  const start = nowMs();
-
-  const { plan, governor } = createReadyGovernedPlan(input, nowMs);
-  deps.recordPlan?.(plan);
-
-  const workspace = detect(input.workspaceRoot, fs);
-  const searchScope = buildSearchScope(input.scope, workspace);
-  const rings = await runAllRings(
-    plan.rings,
-    { searchScope, query: input.query, fs, nowMs },
-    governor,
-  );
+async function assembleGroundedPack({
+  input,
+  deps,
+  plan,
+  rings,
+  searchScope,
+  fs,
+  nowMs,
+}: AssembleGroundedPackInputs): Promise<ConnectedContextPack> {
   const atoms = rings.atoms;
   const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
-
   const ranking = rankCandidates({ atoms, anchors: plan.anchors }, { nowMs });
   const atomsByPath = groupEvidenceAtomsByPath(atoms);
-
+  const evidenceUncertainty =
+    atoms.length === 0 || ranking.kept.length === 0 ? [noEvidence(nowMs())] : [];
   const excerptReads = await readKeptExcerpts(
     ranking.kept.map((c) => c.scopePath),
-    { searchScope, fs, budget: plan.budget, initialUsage, atomsByPath, nowMs },
+    { searchScope, fs, budget: plan.budget, initialUsage, atomsByPath, nowMs, signal: deps.signal },
   );
   const assembleOptions =
     deps.microIndex === undefined ? { nowMs } : { nowMs, microIndex: deps.microIndex };
-
   const assemble = await assembleContextPack(
     {
       scope: input.scope,
@@ -523,14 +544,46 @@ export async function runGroundedExploration(
       omittedFromRanking: [...rings.omitted, ...ranking.omitted],
       excerpts: excerptReads.excerpts,
       initialUsage,
-      initialUncertainty: [...rings.uncertainty, ...excerptReads.uncertainty],
+      initialUncertainty: [
+        ...rings.uncertainty,
+        ...excerptReads.uncertainty,
+        ...evidenceUncertainty,
+      ],
     },
     assembleOptions,
   );
+  return assemble.pack;
+}
 
-  const assistantContent = await deps.answerer.answer(input.query.text, assemble.pack);
+// ─── Public entry ─────────────────────────────────────────────────────────────
+
+export async function runGroundedExploration(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+): Promise<OrchestratorOutput> {
+  const fs = deps.fs ?? nodeWorkspaceFs;
+  const detect = deps.detectWorkspace ?? detectWorkspace;
+  const nowMs = deps.nowMs ?? Date.now;
+  const start = nowMs();
+  throwIfCancelled(deps.signal);
+
+  const { plan, governor } = createReadyGovernedPlan(input, nowMs);
+  deps.recordPlan?.(plan);
+  throwIfCancelled(deps.signal);
+
+  const workspace = detect(input.workspaceRoot, fs);
+  const searchScope = buildSearchScope(input.scope, workspace);
+  const rings = await runAllRings(
+    plan.rings,
+    { searchScope, query: input.query, fs, nowMs, signal: deps.signal },
+    governor,
+  );
+  throwIfCancelled(deps.signal);
+  const pack = await assembleGroundedPack({ input, deps, plan, rings, searchScope, fs, nowMs });
+  throwIfCancelled(deps.signal);
+  const assistantContent = await deps.answerer.answer(input.query.text, pack);
   const elapsedMs = Math.max(0, nowMs() - start);
-  return { pack: assemble.pack, assistantContent, elapsedMs, plan };
+  return { pack, assistantContent, elapsedMs, plan };
 }
 
 // Re-export DEFAULT_SEARCH_LIMITS for parity with #179 callers that import limits via the

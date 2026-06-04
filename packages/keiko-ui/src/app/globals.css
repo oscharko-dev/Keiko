@@ -5418,14 +5418,7 @@ select.dlg-input {
   color: var(--fg);
   font-family: var(--font-mono);
   font-size: 11px;
-  cursor: pointer;
-}
-.grounded-citation:hover {
-  background: var(--accent-glow);
-}
-.grounded-citation:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+  cursor: default;
 }
 .grounded-citation-score {
   margin-left: 6px;
@@ -5436,6 +5429,10 @@ select.dlg-input {
   font-size: 11px;
   color: var(--ink-muted);
   font-style: italic;
+}
+.grounded-uncertainty-list {
+  margin: 4px 0 0;
+  padding-left: 16px;
 }
 .grounded-meta {
   font-size: 10px;

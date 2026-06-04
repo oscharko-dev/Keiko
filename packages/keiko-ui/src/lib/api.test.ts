@@ -350,13 +350,21 @@ describe("askGrounded", () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await askGrounded({ chatId: "chat-1", content: "how does foo work?" });
+    const result = await askGrounded({
+      chatId: "chat-1",
+      content: "how does foo work?",
+      modelId: "example-chat-model",
+    });
     expect(result).toEqual(response);
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/chats/messages/grounded",
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ chatId: "chat-1", content: "how does foo work?" }),
+        body: JSON.stringify({
+          chatId: "chat-1",
+          content: "how does foo work?",
+          modelId: "example-chat-model",
+        }),
         headers: expect.objectContaining({
           Accept: "application/json",
           "Content-Type": "application/json",
@@ -378,7 +386,10 @@ describe("askGrounded", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const pending = askGrounded({ chatId: "chat-1", content: "q" }, controller.signal);
+    const pending = askGrounded(
+      { chatId: "chat-1", content: "q", modelId: "example-chat-model" },
+      controller.signal,
+    );
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });

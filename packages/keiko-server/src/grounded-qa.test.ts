@@ -4,8 +4,9 @@
 // spinning up a real workspace or HTTP server.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
@@ -22,9 +23,17 @@ import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import {
+  CancelledError,
+  type GatewayConfig,
+  type GatewayRequest,
+  type NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
+const GROUNDED_FIXTURE_QUESTION = "Investigate src/foo.ts behaviour of MyClass";
 
 let store: UiStore;
 let tmp: string;
@@ -33,26 +42,113 @@ function fakeReq(body: string): IncomingMessage {
   return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
 }
 
-function ctx(body: string): RouteContext {
+function fakeRes(): RouteContext["res"] {
+  const res = new EventEmitter() as RouteContext["res"] & { writableEnded: boolean };
+  res.writableEnded = false;
+  return res;
+}
+
+function ctx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {
   return {
     req: fakeReq(body),
-    res: {} as RouteContext["res"],
+    res,
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
   };
 }
 
-function deps(): UiHandlerDeps {
+function customModelConfig(modelId = CHAT_MODEL): GatewayConfig {
   return {
-    config: undefined,
-    configPresent: false,
+    providers: [
+      {
+        modelId,
+        baseUrl: "https://provider.example/v1",
+        apiKey: "test-config-secret-value-1234567890",
+        timeoutMs: 30_000,
+        maxRetries: 0,
+        retryBaseDelayMs: 500,
+      },
+    ],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    capabilities: [
+      {
+        id: modelId,
+        kind: "chat",
+        contextWindow: 64_000,
+        maxOutputTokens: 4_096,
+        toolCalling: true,
+        structuredOutput: true,
+        streaming: true,
+        costClass: "medium",
+        latencyClass: "standard",
+        throughputHint: "test endpoint",
+        preferredUseCases: ["Grounded repository Q&A"],
+        knownLimitations: [],
+      },
+    ],
+  };
+}
+
+function deps(model?: ModelPort, env: Record<string, string> = {}): UiHandlerDeps {
+  const config = model === undefined ? undefined : customModelConfig(CHAT_MODEL);
+  return {
+    config,
+    configPresent: config !== undefined,
     evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
-    env: {},
-    redactor: buildRedactor({}),
+    env,
+    redactor: buildRedactor(env, config),
     registry: createRunRegistry(),
-    modelPortFactory: () => undefined,
+    modelPortFactory: () => model,
     store,
   };
+}
+
+function fakeModel(content: string, seenRequests: GatewayRequest[]): ModelPort {
+  return {
+    call(request): Promise<NormalizedResponse> {
+      seenRequests.push(request);
+      return Promise.resolve({
+        modelId: request.modelId,
+        content,
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: "grounded-qa-test",
+          promptTokens: 41,
+          completionTokens: 7,
+          latencyMs: 13,
+          costClass: "medium",
+        },
+      });
+    },
+  };
+}
+
+function firstGatewayRequest(requests: readonly GatewayRequest[]): GatewayRequest {
+  const request = requests[0];
+  if (request === undefined) {
+    throw new Error("expected a gateway request");
+  }
+  return request;
+}
+
+function expectGroundedGatewayRequest(request: GatewayRequest): void {
+  expect(request.modelId).toBe(CHAT_MODEL);
+  expect(request.stream).toBe(false);
+  const [systemMessage, userMessage] = request.messages;
+  if (systemMessage === undefined || userMessage === undefined) {
+    throw new Error("expected system and user gateway messages");
+  }
+  expect(systemMessage.role).toBe("system");
+  expect(systemMessage.content).toContain("Use only the supplied repository evidence");
+  expect(userMessage.role).toBe("user");
+  expect(userMessage.content).toContain("User question:");
+  expect(userMessage.content).toContain(GROUNDED_FIXTURE_QUESTION);
+  expect(userMessage.content).toContain("Repository evidence excerpts:");
+  expect(userMessage.content).toContain("src/foo.ts");
+  expect(userMessage.content).toContain("MyClass");
+  expect(userMessage.content).toContain("model input tokens");
 }
 
 function emptyPack(): ConnectedContextPack {
@@ -201,9 +297,19 @@ async function setupChatWithScope(): Promise<{ chatId: string; projectPath: stri
   const project = store.createProject(tmp, "demo");
   const chat = store.createChat(project.path, "Investigation", CHAT_MODEL);
   store.updateChat(chat.id, {
-    connectedScope: { kind: "files", relativePaths: ["src"], connectedAtMs: NOW },
+    connectedScope: { kind: "directory", relativePaths: ["src"], connectedAtMs: NOW },
   });
   return Promise.resolve({ chatId: chat.id, projectPath: project.path });
+}
+
+function seedScopedRepo(projectPath: string): void {
+  writeFileSync(join(projectPath, "package.json"), '{"name":"grounded-fixture"}\n', "utf8");
+  mkdirSync(join(projectPath, "src"), { recursive: true });
+  writeFileSync(
+    join(projectPath, "src", "foo.ts"),
+    "export function MyClass() {\n  return 'foo';\n}\n",
+    "utf8",
+  );
 }
 
 async function runHandler(
@@ -263,6 +369,126 @@ describe("handleGroundedAsk", () => {
     expect(result.status).toBe(200);
     expect(captured?.scope.kind).toBe("workspace-root");
     expect(captured?.scope.relativePaths).toEqual([]);
+  });
+
+  it("production path sends the connected context pack through the configured Model Gateway port", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    seedScopedRepo(projectPath);
+    const seenRequests: GatewayRequest[] = [];
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: GROUNDED_FIXTURE_QUESTION,
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      deps(fakeModel("Grounded answer [src/foo.ts:1-3]", seenRequests)),
+    );
+
+    expect(result.status).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    expectGroundedGatewayRequest(firstGatewayRequest(seenRequests));
+    const answer = result.body as GroundedAnswer;
+    expect(answer.content).toBe("Grounded answer [src/foo.ts:1-3]");
+    expect(store.listMessages(chatId).map((message) => message.content)).toContain(
+      "Grounded answer [src/foo.ts:1-3]",
+    );
+  });
+
+  it("rejects an unconfigured grounded model before calling a provider", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    seedScopedRepo(projectPath);
+    const seenRequests: GatewayRequest[] = [];
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: GROUNDED_FIXTURE_QUESTION,
+          modelId: "missing-chat-model",
+        }),
+      ),
+      deps(fakeModel("unused", seenRequests)),
+    );
+
+    expect(result.status).toBe(400);
+    expect(seenRequests).toEqual([]);
+  });
+
+  it("returns NO_MODEL when the selected grounded model has no provider port", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    seedScopedRepo(projectPath);
+    const configuredDeps = {
+      ...deps(fakeModel("unused", [])),
+      modelPortFactory: (): undefined => undefined,
+    } satisfies UiHandlerDeps;
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: GROUNDED_FIXTURE_QUESTION,
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      configuredDeps,
+    );
+
+    expect(result.status).toBe(400);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("NO_MODEL");
+  });
+
+  it("does not persist messages when the HTTP request is cancelled during the model call", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    seedScopedRepo(projectPath);
+    const res = fakeRes();
+    const model: ModelPort = {
+      call(_request, signal): Promise<NormalizedResponse> {
+        return new Promise<NormalizedResponse>((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              reject(new CancelledError("aborted in grounded route test"));
+            },
+            { once: true },
+          );
+          res.emit("close");
+        });
+      },
+    };
+
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: GROUNDED_FIXTURE_QUESTION,
+          modelId: CHAT_MODEL,
+        }),
+        res,
+      ),
+      deps(model),
+    );
+
+    expect(result.status).toBe(499);
+    expect(store.listMessages(chatId)).toEqual([]);
+  });
+
+  it("redacts grounded user content before persisting the user message", async () => {
+    const { chatId } = await setupChatWithScope();
+    const secret = ["sk", "-fakeGroundedUserSecret1234567890abcdef"].join("");
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: `Please explain ${secret}` })),
+      deps(undefined, { OPENAI_API_KEY: secret }),
+      runner(emptyPack(), "ok"),
+    );
+
+    expect(result.status).toBe(200);
+    const answer = result.body as GroundedAnswer;
+    const userMsg = store
+      .listMessages(chatId)
+      .find((message) => message.id === answer.userMessageId);
+    expect(userMsg?.role).toBe("user");
+    expect(userMsg?.content).not.toContain(secret);
   });
 
   it("fails closed when the runner returns an invalid context pack", async () => {
