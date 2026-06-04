@@ -17,9 +17,10 @@ import {
   type RankedFile,
   type RetrievalStrategy,
   type SelectionReason,
+  type WorkspaceFs,
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { UnitTestTarget, UnitTestWorkflowInput, WorkflowLimits } from "./types.js";
 
 export interface TestGenContextDeps {

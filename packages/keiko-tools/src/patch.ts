@@ -8,13 +8,13 @@
 import {
   containedRealPathInfo,
   isDenied,
-  nodeWorkspaceFs,
   PathDeniedError,
   PathEscapeError,
   resolveWithinWorkspace,
   type WorkspaceFs,
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   CommandCancelledError,
   PatchApplyDisabledError,

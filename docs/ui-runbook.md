@@ -75,6 +75,18 @@ Keiko selects only configured chat models that pass the gateway smoke test. Non-
 
 Keep `.keiko/`, runtime config files, and API tokens out of version control.
 
+## Supported Project Paths
+
+Keiko accepts existing local directories on Windows, macOS, and Linux as project roots. Native Windows drive paths such as `C:\Users\Example\Project` and POSIX absolute paths such as `/home/example/project` are both supported. The following forms are rejected with a stable `invalid_path` error:
+
+- Windows UNC and network-share forms such as `\\server\share` or `//server/share`.
+- Windows device paths such as `\\?\C:\…` or `\\.\PhysicalDrive0`.
+- Path traversal segments (`..`) in any position.
+- Remote URL forms such as `http://`, `ssh://`, or `file://`.
+- Strings containing a null byte or exceeding 4096 characters.
+
+Path validation is host-independent for these structural rules; the directory existence check is performed against the host filesystem.
+
 ## Troubleshooting
 
 | Symptom                | Check                                                                                |

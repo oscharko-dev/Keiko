@@ -10,7 +10,7 @@
 
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { detectWorkspace } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { buildBugContext } from "./context.js";
 import { computeBugFingerprint } from "./emit.js";
 import { parseFailureEvidence } from "./failure-parse.js";

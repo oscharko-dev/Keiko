@@ -11,6 +11,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./internal/exec": {
+      "types": "./dist/exec.d.ts",
+      "import": "./dist/exec.js"
+    },
+    "./internal/writer": {
+      "types": "./dist/writer.d.ts",
+      "import": "./dist/writer.js"
     }
   },
   "scripts": {

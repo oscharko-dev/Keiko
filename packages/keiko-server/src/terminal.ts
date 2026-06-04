@@ -23,12 +23,14 @@ import {
   CommandDeniedError,
   CommandTimeoutError,
 } from "@oscharko-dev/keiko-tools";
-import { nodeSpawnFn, runCommand, type RunCommandDeps } from "@oscharko-dev/keiko-tools";
+import { runCommand, type RunCommandDeps } from "@oscharko-dev/keiko-tools";
+import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import { isTerminalCommandAllowed, TERMINAL_COMMAND_RULES } from "@oscharko-dev/keiko-tools";
 import { isWithinWorkspace, resolveWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { containedRealPathInfo } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { DEFAULT_SANDBOX_POLICY, type SandboxPolicy } from "@oscharko-dev/keiko-tools";

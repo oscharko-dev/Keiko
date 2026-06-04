@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupGateway } from "@/lib/api";
@@ -19,6 +19,28 @@ vi.mock("@/lib/api", () => ({
 describe("GatewaySetupDialog", () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("announces dialog semantics, focuses the first field, traps tab focus, and closes on Escape", async () => {
+    const onCancel = vi.fn();
+    const user = userEvent.setup();
+
+    render(<GatewaySetupDialog onCancel={onCancel} />);
+
+    const dialog = screen.getByRole("dialog", { name: /connect keiko to your internal llms/i });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+
+    const baseUrl = screen.getByLabelText(/base url/i);
+    await waitFor(() => expect(baseUrl).toHaveFocus());
+
+    await user.tab({ shift: true });
+    expect(screen.getByRole("button", { name: /cancel/i })).toHaveFocus();
+
+    await user.tab();
+    expect(baseUrl).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it("requires real deployment names for Azure AI Foundry before testing credentials", async () => {

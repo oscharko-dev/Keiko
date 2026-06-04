@@ -21,7 +21,7 @@ import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 import { writeSideFile } from "@oscharko-dev/keiko-evidence";
 import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createNodeEvidenceStore, resolveEvidenceDir } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { dirname, join } from "node:path";

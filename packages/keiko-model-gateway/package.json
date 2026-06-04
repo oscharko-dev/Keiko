@@ -11,6 +11,22 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./internal/http": {
+      "types": "./dist/http.d.ts",
+      "import": "./dist/http.js"
+    },
+    "./internal/normalize": {
+      "types": "./dist/normalize.d.ts",
+      "import": "./dist/normalize.js"
+    },
+    "./internal/openai-adapter": {
+      "types": "./dist/openai-adapter.d.ts",
+      "import": "./dist/openai-adapter.js"
+    },
+    "./internal/resilience": {
+      "types": "./dist/resilience.d.ts",
+      "import": "./dist/resilience.js"
     }
   },
   "scripts": {

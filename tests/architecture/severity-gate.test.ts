@@ -1,9 +1,8 @@
 // Severity-gate test (Issue #169 D5). Loads `.dependency-cruiser.cjs` and asserts every strict
-// per-package direction variant (1, 2, 3a, 3b, 3c, 3d, 4a, 5a, 6a, 7a) plus the trust-1
-// provider-SDK-isolation rule is at `severity: "error"`. This guards against a silent warn-only
-// softening in a future PR — the codebase-wide memory pattern is to add a NEW strict variant when
-// extracting a package, not to weaken an existing one, so a regression that flips an extracted
-// rule back to warn is almost certainly accidental and should fail CI.
+// per-package direction variant (1, 2, 3a, 3b, 3c, 3d, 4a, 5a, 6a, 7a), the extracted UI/root
+// direction rules (8, 9), and the hard trust-boundary rules are at `severity: "error"`. This
+// guards against a silent warn-only softening in a future PR — the codebase-wide memory pattern is
+// to add a NEW strict variant when extracting a package, not to weaken an existing one.
 
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
@@ -28,8 +27,28 @@ const config = require(configPath) as DependencyCruiserConfig;
 // physically-extracted package boundary (see ADR-0019 + ADR-0020). Adding a new package extraction
 // requires adding its rule number here so a future PR cannot silently weaken the new variant to
 // warn.
-const STRICT_DIRECTION_VARIANTS = ["1", "2", "3a", "3b", "3c", "3d", "4a", "5a", "6a", "7a"];
-const REQUIRED_TRUST_RULES = ["adr-0019-trust-1"];
+const STRICT_DIRECTION_VARIANTS = [
+  "1",
+  "2",
+  "3a",
+  "3b",
+  "3c",
+  "3d",
+  "4a",
+  "5a",
+  "6a",
+  "7a",
+  "8",
+  "9",
+];
+const REQUIRED_TRUST_RULES = [
+  "adr-0019-trust-1-provider-sdk-isolation",
+  "adr-0019-trust-2-ui-no-provider-config",
+  "adr-0019-trust-3-ui-no-gateway-internals",
+  "adr-0019-trust-5-patch-routes-through-tools",
+  "adr-0019-trust-6-evidence-allowed-callers",
+  "adr-0019-trust-8-no-do-not-follow-in-prod",
+];
 
 function findRulesByPrefix(prefix: string): readonly DependencyCruiserRule[] {
   const rules = config.forbidden ?? [];

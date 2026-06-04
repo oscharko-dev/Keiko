@@ -1,5 +1,6 @@
 import { createRef } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Workspace } from "./Workspace";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
@@ -91,5 +92,56 @@ describe("Workspace card connections", () => {
 
     expect(confirmConnect).toHaveBeenCalledTimes(1);
     expect(confirmConnect).toHaveBeenCalledWith("files-1", expect.any(Object));
+  });
+
+  it("starts a connection from a port on pointer down", () => {
+    const startConnect = vi.fn();
+    const workspaceApi = api({ startConnect });
+    const wins = [appWindow({ id: "agents-1", type: "agents", z: 1 })];
+
+    render(
+      <Workspace
+        ws={workspace({ wins, api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /connect from top edge/i }), {
+      button: 0,
+      clientX: 112,
+      clientY: 128,
+    });
+
+    expect(startConnect).toHaveBeenCalledTimes(1);
+    expect(startConnect).toHaveBeenCalledWith(
+      "agents-1",
+      expect.objectContaining({ clientX: 112, clientY: 128 }),
+    );
+  });
+
+  it("starts a connection from a port with Enter key activation", async () => {
+    const startConnect = vi.fn();
+    const workspaceApi = api({ startConnect });
+    const wins = [appWindow({ id: "agents-1", type: "agents", z: 1 })];
+    const user = userEvent.setup();
+
+    render(
+      <Workspace
+        ws={workspace({ wins, api: workspaceApi })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const port = screen.getByRole("button", { name: /connect from top edge/i });
+    port.focus();
+    await user.keyboard("{Enter}");
+
+    expect(startConnect).toHaveBeenCalledTimes(1);
+    expect(startConnect).toHaveBeenCalledWith(
+      "agents-1",
+      expect.objectContaining({ clientX: expect.any(Number), clientY: expect.any(Number) }),
+    );
   });
 });

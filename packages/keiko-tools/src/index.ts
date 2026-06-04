@@ -57,13 +57,11 @@ export {
   type CommandDecision,
 } from "./sandbox.js";
 
-// ─── WorkspaceWriter (the only fs.write seam in the tools layer) ────────────────────
-export { nodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
+// ─── WorkspaceWriter port type (Node adapter lives on the internal subpath) ─────────
+export type { WorkspaceWriter } from "./writer.js";
 
 // ─── Command execution boundary ─────────────────────────────────────────────────────
 export {
-  nodeHomeProvider,
-  nodeSpawnFn,
   runCommand,
   type ExecutableResolver,
   type ExecutableResolverDeps,

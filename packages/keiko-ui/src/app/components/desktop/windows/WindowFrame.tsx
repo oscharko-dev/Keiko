@@ -3,6 +3,7 @@
 import {
   useCallback,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
   type RefObject,
@@ -310,13 +311,41 @@ export function WindowFrame({
 
   // Stop propagation BEFORE delegating, so the parent .window's onPointerDown
   // (focus + drag) cannot race with the port-initiated connect handshake.
+  const startPortConnect = useCallback(
+    (
+      target: HTMLDivElement,
+      event:
+        | ReactPointerEvent<HTMLDivElement>
+        | ReactKeyboardEvent<HTMLDivElement>,
+    ): void => {
+      const rect = target.getBoundingClientRect();
+      api.startConnect(win.id, {
+        clientX: "clientX" in event ? event.clientX : rect.left + rect.width / 2,
+        clientY: "clientY" in event ? event.clientY : rect.top + rect.height / 2,
+        preventDefault: () => event.preventDefault(),
+        stopPropagation: () => event.stopPropagation(),
+      } as ReactPointerEvent<Element>);
+    },
+    [api, win.id],
+  );
+
   const onPortPointerDown = useCallback(
     (e: ReactPointerEvent<HTMLDivElement>): void => {
       e.preventDefault();
       e.stopPropagation();
-      api.startConnect(win.id, e);
+      startPortConnect(e.currentTarget, e);
     },
-    [api, win.id],
+    [startPortConnect],
+  );
+
+  const onPortKeyDown = useCallback(
+    (e: ReactKeyboardEvent<HTMLDivElement>): void => {
+      if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
+      e.preventDefault();
+      e.stopPropagation();
+      startPortConnect(e.currentTarget, e);
+    },
+    [startPortConnect],
   );
 
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
@@ -429,6 +458,7 @@ export function WindowFrame({
               role="button"
               tabIndex={0}
               onPointerDown={onPortPointerDown}
+              onKeyDown={onPortKeyDown}
             />
           ))
         : null}
