@@ -6,7 +6,7 @@
 // State is split into capsule-detail-state.ts to keep each file under 400 LOC.
 
 import type { ReactNode } from "react";
-import { useParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import type {
   KnowledgeCapsuleId,
   ParserDiagnostic,
@@ -299,9 +299,8 @@ export interface CapsuleDetailProps {
 }
 
 export function CapsuleDetail({ fetchDetailImpl }: CapsuleDetailProps = {}): ReactNode {
-  const params = useParams();
-  const rawId = Array.isArray(params["capsuleId"]) ? params["capsuleId"][0] : params["capsuleId"];
-  const capsuleId = (rawId ?? "") as KnowledgeCapsuleId;
+  const searchParams = useSearchParams();
+  const capsuleId = (searchParams.get("capsuleId") ?? "") as KnowledgeCapsuleId;
 
   const { data, loadStatus, loadError, reload } = useCapsuleDetail(capsuleId, fetchDetailImpl);
 

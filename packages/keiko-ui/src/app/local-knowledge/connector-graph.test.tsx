@@ -5,7 +5,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectorGraph } from "./connector-graph";
 import type {
   CapsulesResponse,
@@ -13,6 +13,16 @@ import type {
   CapsuleListEntry,
 } from "@/lib/local-knowledge-api";
 import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
+
+const pushMock = vi.fn();
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: pushMock }),
+}));
+
+beforeEach(() => {
+  pushMock.mockReset();
+});
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -217,6 +227,24 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     await waitFor(() => {
       expect(disconnectCapsuleImpl).toHaveBeenCalledWith(id);
     });
+  });
+
+  it("navigates to the capsule health view when Health is clicked", async () => {
+    const id = makeCapsuleId("77");
+    const capsule = makeCapsule({ id, displayName: "Health Cap", lifecycleState: "ready" });
+    const user = userEvent.setup();
+
+    render(<ConnectorGraph fetchCapsulesImpl={fetchWith([capsule])} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Health Cap")).toBeInTheDocument();
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: /open health view for capsule health cap/i }),
+    );
+
+    expect(pushMock).toHaveBeenCalledWith("/local-knowledge/capsule?capsuleId=cap-77");
   });
 });
 

@@ -2,6 +2,7 @@
 // connector-graph.tsx under 400 LOC and each function under 50 LOC.
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import {
   fetchCapsules,
@@ -75,6 +76,7 @@ function useCapsuleActions(
   handleDisconnect: (id: KnowledgeCapsuleId) => void;
   handleOpenHealth: (id: KnowledgeCapsuleId) => void;
 } {
+  const router = useRouter();
   const [actionBusy, setActionBusy] = useState<KnowledgeCapsuleId | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -103,9 +105,8 @@ function useCapsuleActions(
   function handleDisconnect(id: KnowledgeCapsuleId): void {
     void runAction(id, () => disconnectCapsuleImpl(id));
   }
-  // #198 will replace this stub with navigation to the capsule health route.
-  function handleOpenHealth(_id: KnowledgeCapsuleId): void {
-    /* placeholder */
+  function handleOpenHealth(id: KnowledgeCapsuleId): void {
+    router.push(`/local-knowledge/capsule?capsuleId=${encodeURIComponent(id)}`);
   }
 
   return {

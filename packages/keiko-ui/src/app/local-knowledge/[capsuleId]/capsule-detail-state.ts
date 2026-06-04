@@ -31,7 +31,12 @@ export function useCapsuleDetail(
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
-    if (capsuleId === "") return;
+    if (capsuleId === "") {
+      setData(null);
+      setLoadError("No capsule selected.");
+      setLoadStatus("error");
+      return;
+    }
     setLoadStatus("loading");
     setLoadError(null);
     try {

@@ -1,12 +1,12 @@
 // Issue #198 — unit tests for the CapsuleDetail component.
 // Uses vitest + React Testing Library (jsdom) matching connector-graph.test.tsx pattern.
-// next/navigation is mocked so useParams() resolves without a real Next.js router.
+// next/navigation is mocked so useSearchParams() resolves without a real Next.js router.
 // All fetch calls go through the injectable fetchDetailImpl seam.
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CapsuleDetail } from "./capsule-detail";
 import type { CapsuleDetail as CapsuleDetailData } from "@/lib/local-knowledge-api";
 import type {
@@ -16,15 +16,20 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
-// Mock next/navigation so useParams() resolves synchronously in jsdom
+// Mock next/navigation so useSearchParams() resolves synchronously in jsdom
 // ---------------------------------------------------------------------------
 
+let mockSearchParams = new URLSearchParams("capsuleId=cap-test-1");
+
 vi.mock("next/navigation", () => ({
-  useParams: () => ({ capsuleId: "cap-test-1" }),
+  useSearchParams: () => mockSearchParams,
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
-  useSearchParams: () => new URLSearchParams(),
-  usePathname: () => "/local-knowledge/cap-test-1",
+  usePathname: () => "/local-knowledge/capsule",
 }));
+
+afterEach(() => {
+  mockSearchParams = new URLSearchParams("capsuleId=cap-test-1");
+});
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -111,6 +116,19 @@ function resolveDetail(detail: CapsuleDetailData = FULL_DETAIL): () => Promise<C
 // ---------------------------------------------------------------------------
 
 describe("CapsuleDetail — overview section", () => {
+  it("renders a helpful alert when no capsuleId query is selected", async () => {
+    mockSearchParams = new URLSearchParams();
+    const fetchDetailImpl = vi.fn().mockRejectedValue(new Error("fetch should not run"));
+
+    render(<CapsuleDetail fetchDetailImpl={fetchDetailImpl} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toHaveTextContent("No capsule selected.");
+    });
+
+    expect(fetchDetailImpl).not.toHaveBeenCalled();
+  });
+
   it("renders capsule name in the page heading", async () => {
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
 
