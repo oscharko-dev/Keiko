@@ -66,6 +66,15 @@ export {
   type ParserSelectionInput,
 } from "./parsers/index.js";
 
+// OCR adapter seam (Issue #202).
+export {
+  createOcrPipelineParser,
+  nullOcrAdapter,
+  type OcrAdapter,
+  type OcrPageResult,
+  type OcrPipelineAdapter,
+} from "./parsers/ocr/index.js";
+
 export {
   DEFAULT_DISCOVERY_OPTIONS,
   discoverAndExtract,

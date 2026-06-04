@@ -50,3 +50,12 @@ export function createDefaultParserRegistry(): ParserRegistry {
   registry = registerParser(registry, textParser);
   return registry;
 }
+
+// OCR adapter seam (Issue #202).
+export {
+  nullOcrAdapter,
+  createOcrPipelineParser,
+  type OcrAdapter,
+  type OcrPageResult,
+  type OcrPipelineAdapter,
+} from "./ocr/index.js";
