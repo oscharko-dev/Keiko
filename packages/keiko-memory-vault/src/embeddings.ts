@@ -9,6 +9,19 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryEmbeddingInput, MemoryEmbeddingMetric, MemoryEmbeddingRow } from "./types.js";
+import { MemoryStorageError } from "./errors.js";
+
+// Hard upper bound on vector dimensions. The largest production embedding model in scope today
+// (OpenAI text-embedding-3-large) is 3072 dims; 4096 gives one binary-doubling of headroom while
+// capping the per-row BLOB at 16 KiB. Without this bound a caller could request a 2^31 element
+// Float32 allocation (8 GiB) via the in-process API and crash the process — CWE-400.
+export const MAX_EMBEDDING_DIMENSIONS = 4096;
+
+export const ALLOWED_EMBEDDING_METRICS: readonly MemoryEmbeddingMetric[] = [
+  "cosine",
+  "euclidean",
+  "dot",
+];
 
 interface EmbeddingDbRow {
   readonly memory_id: string;
@@ -80,18 +93,38 @@ export function upsertEmbeddingRow(
   );
 }
 
+function narrowMetric(raw: string): MemoryEmbeddingMetric {
+  if (!ALLOWED_EMBEDDING_METRICS.includes(raw as MemoryEmbeddingMetric)) {
+    throw new MemoryStorageError(
+      "schema-mismatch",
+      "Stored embedding metric is not in the allowed set.",
+    );
+  }
+  return raw as MemoryEmbeddingMetric;
+}
+
 export function getEmbeddingRow(
   db: DatabaseSync,
   memoryId: MemoryId,
 ): MemoryEmbeddingRow | undefined {
   const row = db.prepare(SELECT_SQL).get(memoryId) as unknown as EmbeddingDbRow | undefined;
   if (row === undefined) return undefined;
+  // Read-side soundness: a tampered DB row (or a future schema drift) must not silently land a
+  // bad metric string in the typed return shape, and the BLOB length must match the declared
+  // dimension count so callers can rely on `vector.length === dimensions`.
+  const expectedBytes = row.vector_dimensions * BYTES_PER_FLOAT32;
+  if (row.vector.byteLength !== expectedBytes) {
+    throw new MemoryStorageError(
+      "schema-mismatch",
+      "Stored embedding vector byte length does not match declared dimensions.",
+    );
+  }
   const base = {
     memoryId: row.memory_id as MemoryId,
     provider: row.provider,
     modelId: row.model_id,
     dimensions: row.vector_dimensions,
-    metric: row.vector_metric as MemoryEmbeddingMetric,
+    metric: narrowMetric(row.vector_metric),
     vector: decodeVectorLE(row.vector, row.vector_dimensions),
     createdAt: row.created_at,
   };

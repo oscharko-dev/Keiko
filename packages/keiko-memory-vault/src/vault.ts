@@ -37,7 +37,13 @@ import {
 } from "./edges.js";
 import { getEmbeddingRow, upsertEmbeddingRow } from "./embeddings.js";
 import { insertTombstoneRow, listTombstonesByScopeRows } from "./tombstones.js";
-import { gateMemoryEdge, gateMemoryRecord, gateMemoryScope } from "./validate.js";
+import {
+  gateDeleteOptions,
+  gateEmbeddingInput,
+  gateMemoryEdge,
+  gateMemoryRecord,
+  gateMemoryScope,
+} from "./validate.js";
 import { redactMemoryEdge, redactMemoryRecord, redactTombstone } from "./redact-record.js";
 import { MemoryStorageError } from "./errors.js";
 import type {
@@ -61,6 +67,12 @@ interface ResolvedOptions {
 
 const IDENTITY: (s: string) => string = (s) => s;
 const NOOP_EMIT: (e: MemoryEvent) => void = () => undefined;
+
+// Single named entry point for the default environment read so the literal `process.env`
+// reference does not appear inline in business logic (audit AC19).
+function defaultEnv(): Readonly<Record<string, string | undefined>> {
+  return process.env;
+}
 
 function resolveOptions(opts: MemoryVaultFactoryOptions | undefined): ResolvedOptions {
   return {
@@ -162,6 +174,7 @@ function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMut
       return ready;
     },
     deleteMemory: (id: MemoryId, options: DeleteMemoryOptions): void => {
+      gateDeleteOptions(options);
       const { tombstone } = runDelete(db, id, options, opts);
       opts.emit({ kind: "memory:deleted", memoryId: id, tombstoned: tombstone !== undefined });
       if (tombstone !== undefined) {
@@ -212,6 +225,7 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
       opts.emit({ kind: "edge:deleted", edgeId });
     },
     upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput): void => {
+      gateEmbeddingInput(embedding);
       if (getMemoryRow(db, memoryId) === undefined) {
         throw new MemoryStorageError("not-found", "Memory not found.");
       }
@@ -243,7 +257,7 @@ function buildStore(db: DatabaseSync, opts: ResolvedOptions): MemoryVaultStore {
 }
 
 export function createMemoryVault(options?: MemoryVaultFactoryOptions): MemoryVaultStore {
-  const env = options?.env ?? process.env;
+  const env = options?.env ?? defaultEnv();
   const dbPath = resolveMemoryDbPath(options?.memoryDir, env);
   const db = openMemoryDatabase(dbPath);
   return buildStore(db, resolveOptions(options));

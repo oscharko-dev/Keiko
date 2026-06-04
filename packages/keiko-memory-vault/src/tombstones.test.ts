@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   MemoryId,
+  MemoryRecord,
   MemoryScope,
   UserId,
   WorkspaceId,
@@ -9,6 +13,7 @@ import type {
 import { runMigrations } from "./schema.js";
 import type { MemoryTombstone } from "./types.js";
 import { insertTombstoneRow, listTombstonesByScopeRows } from "./tombstones.js";
+import { createMemoryVault } from "./index.js";
 
 function openDb(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -108,5 +113,63 @@ describe("tombstones", () => {
     const db = openDb();
     expect(listTombstonesByScopeRows(db, userScope)).toEqual([]);
     db.close();
+  });
+});
+
+const factoryCleanups: string[] = [];
+
+afterEach(() => {
+  for (const path of factoryCleanups.splice(0)) {
+    rmSync(path, { recursive: true, force: true });
+  }
+});
+
+function freshFactoryDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), "keiko-tomb-ac4-"));
+  factoryCleanups.push(dir);
+  return dir;
+}
+
+function happyRecord(id: string): MemoryRecord {
+  const t = 1_700_000_000_000;
+  return {
+    id: id as MemoryId,
+    schemaVersion: "1",
+    scope: { kind: "user", userId: "u-1" as UserId },
+    type: "preference",
+    body: "body",
+    provenance: {
+      sourceKind: "explicit-user-instruction",
+      capturedAt: t,
+      confidence: 0.9,
+      sensitivity: "confidential",
+    },
+    validity: { validFrom: t },
+    status: "accepted",
+    pinned: false,
+    tags: [],
+    createdAt: t,
+    updatedAt: t,
+  };
+}
+
+describe("AC4: hard delete leaves the tombstones table empty", () => {
+  it("deleteMemory with tombstone:false writes NO tombstone row", () => {
+    const dir = freshFactoryDir();
+    const vault = createMemoryVault({
+      memoryDir: dir,
+      env: { KEIKO_MEMORY_DIR: dir },
+      now: () => 1_700_000_000_000,
+      newTombstoneId: () => "t-never",
+    });
+    vault.insertMemory(happyRecord("m-1"));
+    vault.deleteMemory("m-1" as MemoryId, {
+      tombstone: false,
+      forgetterSurface: "test",
+      nowMs: 1_700_000_000_001,
+    });
+    expect(vault.listTombstonesByScope(userScope)).toEqual([]);
+    expect(vault.getMemory("m-1" as MemoryId)).toBeUndefined();
+    vault.close();
   });
 });

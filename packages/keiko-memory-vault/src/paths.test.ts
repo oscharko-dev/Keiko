@@ -91,6 +91,26 @@ describe("resolveMemoryDir", () => {
     }
   });
 
+  it("rejects an explicit path containing a NUL byte (CWE-22 path-traversal bypass)", () => {
+    try {
+      resolveMemoryDir("/tmp/legit\0/etc/passwd", emptyEnv());
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MemoryStorageError);
+      expect((err as MemoryStorageError).code).toBe("invalid-path");
+      expect((err as MemoryStorageError).message).toMatch(/NUL bytes/);
+    }
+  });
+
+  it("rejects KEIKO_MEMORY_DIR containing a NUL byte", () => {
+    try {
+      resolveMemoryDir(undefined, { KEIKO_MEMORY_DIR: "/tmp/legit\0/etc" });
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as MemoryStorageError).code).toBe("invalid-path");
+    }
+  });
+
   it("rejects a path under a symlinked ancestor", () => {
     const base = freshTmp();
     const real = join(base, "real");

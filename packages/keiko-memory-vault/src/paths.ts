@@ -41,6 +41,13 @@ function hasSymlinkAncestor(path: string): boolean {
 }
 
 function guard(path: string, label: string): string {
+  // NUL bypass (CWE-22): path.normalize() leaves NUL bytes intact, so a string like
+  // "/safe/path\0/etc/passwd" satisfies the CWD-containment check but open(2) truncates
+  // at the NUL and lands on a completely different file. Reject NUL bytes first so the
+  // downstream guards reason about the same string the kernel will syscall on.
+  if (path.includes("\0")) {
+    throw invalidPath(`${label} must not contain NUL bytes.`);
+  }
   if (!isAbsolute(path)) {
     throw invalidPath(`${label} must be absolute.`);
   }

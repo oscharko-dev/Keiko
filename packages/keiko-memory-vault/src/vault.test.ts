@@ -157,8 +157,28 @@ describe("onMemoryEvent fires post-commit and never on rollback", () => {
     const v = openVault(dir, events);
     v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
     events.length = 0;
-    expect(() => v.insertMemory(makeMemory({ id: "m1" as MemoryId }))).toThrow();
+    expect(() => {
+      v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
+    }).toThrow();
     expect(events).toEqual([]);
+    v.close();
+  });
+
+  it("AC18: does NOT emit on validation failure (no SQL touched, no event fired)", () => {
+    const dir = freshDir();
+    const events: MemoryEvent[] = [];
+    const v = openVault(dir, events);
+    // Empty body fails the contract validator (isSafeText rejects empty strings).
+    const invalid = makeMemory({ id: "m-bad" as MemoryId, body: "" });
+    expect(() => {
+      v.insertMemory(invalid);
+    }).toThrow();
+    expect(events).toEqual([]);
+    // The DB must be untouched too: a follow-up successful insert must succeed and the only
+    // event must be the new insert, not a backlog of the failed one.
+    v.insertMemory(makeMemory({ id: "m-good" as MemoryId }));
+    expect(events.map((e) => e.kind)).toEqual(["memory:inserted"]);
+    expect(v.getMemory("m-bad" as MemoryId)).toBeUndefined();
     v.close();
   });
 
@@ -200,7 +220,9 @@ describe("validator gate fires BEFORE any SQL touches", () => {
     const v = openVault(dir);
     v.insertMemory(makeMemory({ id: "m1" as MemoryId }));
     const sentinel: unknown = makeMemory({ id: "m2" as MemoryId, body: "" });
-    expect(() => v.insertMemory(sentinel as MemoryRecord)).toThrow(MemoryStorageValidationError);
+    expect(() => {
+      v.insertMemory(sentinel as MemoryRecord);
+    }).toThrow(MemoryStorageValidationError);
     expect(v.getMemory("m2" as MemoryId)).toBeUndefined();
     expect(v.getMemory("m1" as MemoryId)?.id).toBe("m1");
     v.close();
@@ -233,7 +255,9 @@ describe("validator gate fires BEFORE any SQL touches", () => {
       createdAt: 1,
     };
     // Validator accepts this structurally (ids are well-formed); FK fires at SQL.
-    expect(() => v.insertEdge(badEdge)).toThrow();
+    expect(() => {
+      v.insertEdge(badEdge);
+    }).toThrow();
     v.close();
   });
 });
@@ -336,7 +360,9 @@ describe("update + delete error paths", () => {
   it("throws not-found on update of a missing id", () => {
     const dir = freshDir();
     const v = openVault(dir);
-    expect(() => v.updateMemory("nope" as MemoryId, { body: "x" }, 1)).toThrow(MemoryStorageError);
+    expect(() => {
+      v.updateMemory("nope" as MemoryId, { body: "x" }, 1);
+    }).toThrow(MemoryStorageError);
     v.close();
   });
 
