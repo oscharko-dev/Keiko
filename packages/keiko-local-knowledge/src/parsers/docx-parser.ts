@@ -20,9 +20,10 @@ import type {
 
 const PARSER_ID = "docx";
 const PARSER_VERSION = "1";
-const DOCX_MEDIA =
-  "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+const DOCX_MEDIA = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 const DOCUMENT_XML_ENTRY = "word/document.xml";
+const MAX_DOCUMENT_XML_INFLATED_BYTES = 16 * 1024 * 1024;
+const MAX_DOCUMENT_XML_INFLATE_RATIO = 100;
 const HEADING_STYLE_PATTERN = /<w:pStyle\b[^>]*w:val="Heading([1-6])"/i;
 const PARAGRAPH_PATTERN = /<w:p\b[\s\S]*?<\/w:p>/gi;
 const TEXT_RUN_PATTERN = /<w:t\b[^>]*>([\s\S]*?)<\/w:t>/gi;
@@ -43,9 +44,7 @@ interface ZipFileLike {
 }
 
 function isDocx(input: ParserSelectionInput): boolean {
-  return (
-    input.extension.toLowerCase() === "docx" || input.mediaType.toLowerCase() === DOCX_MEDIA
-  );
+  return input.extension.toLowerCase() === "docx" || input.mediaType.toLowerCase() === DOCX_MEDIA;
 }
 
 function cancelled(
@@ -91,17 +90,59 @@ function closeZipQuietly(zip: ZipFileLike): void {
 
 function openZip(bytes: Uint8Array): Promise<yauzl.ZipFile> {
   return new Promise((resolve, reject) => {
-    yauzl.fromBuffer(Buffer.from(bytes), { lazyEntries: true, decodeStrings: true }, (error, zip) => {
-      if (error !== null) {
-        reject(toError(error, "failed to open docx zip"));
-        return;
-      }
-      resolve(zip);
-    });
+    yauzl.fromBuffer(
+      Buffer.from(bytes),
+      { lazyEntries: true, decodeStrings: true },
+      (error, zip) => {
+        if (error !== null) {
+          reject(toError(error, "failed to open docx zip"));
+          return;
+        }
+        resolve(zip);
+      },
+    );
   });
 }
 
-function readEntryText(zip: yauzl.ZipFile, entry: yauzl.Entry): Promise<string> {
+interface DocxZipLimits {
+  readonly maxInflatedEntryBytes: number;
+  readonly maxInflateRatio: number;
+}
+
+function maxInflatedEntryBytes(maxInputBytes: number): number {
+  const inputCap = Math.max(1, Math.floor(maxInputBytes));
+  return Math.min(MAX_DOCUMENT_XML_INFLATED_BYTES, inputCap * 10);
+}
+
+function assertEntryWithinLimits(entry: yauzl.Entry, limits: DocxZipLimits): void {
+  if (entry.uncompressedSize > limits.maxInflatedEntryBytes) {
+    throw new Error(
+      `docx document.xml inflated size ${String(entry.uncompressedSize)} exceeds limit ${String(
+        limits.maxInflatedEntryBytes,
+      )}`,
+    );
+  }
+  if (
+    entry.compressedSize > 0 &&
+    entry.uncompressedSize / entry.compressedSize > limits.maxInflateRatio
+  ) {
+    throw new Error("docx document.xml compression ratio exceeds limit");
+  }
+}
+
+function destroyStream(readStream: NodeJS.ReadableStream, error: Error): void {
+  const destroy = (readStream as { readonly destroy?: (cause?: Error) => void }).destroy;
+  if (typeof destroy === "function") {
+    destroy.call(readStream, error);
+  }
+}
+
+function readEntryText(
+  zip: yauzl.ZipFile,
+  entry: yauzl.Entry,
+  limits: DocxZipLimits,
+): Promise<string> {
+  assertEntryWithinLimits(entry, limits);
   return new Promise((resolve, reject) => {
     zip.openReadStream(entry, (error, stream) => {
       if (error !== null) {
@@ -110,20 +151,42 @@ function readEntryText(zip: yauzl.ZipFile, entry: yauzl.Entry): Promise<string> 
       }
       const readStream = stream as NodeJS.ReadableStream;
       const chunks: Buffer[] = [];
+      let inflatedBytes = 0;
+      let settled = false;
+      const rejectOnce = (streamError: Error): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(streamError);
+        destroyStream(readStream, streamError);
+      };
       readStream.on("data", (chunk: Buffer) => {
+        if (settled) {
+          return;
+        }
+        inflatedBytes += chunk.byteLength;
+        if (inflatedBytes > limits.maxInflatedEntryBytes) {
+          rejectOnce(new Error("docx document.xml inflated stream exceeds limit"));
+          return;
+        }
         chunks.push(chunk);
       });
       readStream.on("end", () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         resolve(Buffer.concat(chunks).toString("utf8"));
       });
       readStream.on("error", (streamError: Error) => {
-        reject(streamError);
+        rejectOnce(streamError);
       });
     });
   });
 }
 
-function readDocumentXmlFromZip(zip: ZipFileLike): Promise<string> {
+function readDocumentXmlFromZip(zip: ZipFileLike, limits: DocxZipLimits): Promise<string> {
   return new Promise((resolve, reject) => {
     let settled = false;
 
@@ -163,7 +226,7 @@ function readDocumentXmlFromZip(zip: ZipFileLike): Promise<string> {
         return;
       }
       try {
-        const xml = await readEntryText(zip as yauzl.ZipFile, entry);
+        const xml = await readEntryText(zip as yauzl.ZipFile, entry, limits);
         resolveOnce(xml);
       } catch (error) {
         rejectOnce(toError(error, "failed to read docx entry"));
@@ -181,10 +244,13 @@ function readDocumentXmlFromZip(zip: ZipFileLike): Promise<string> {
   });
 }
 
-async function readDocumentXml(bytes: Uint8Array): Promise<string> {
+async function readDocumentXml(bytes: Uint8Array, maxInputBytes: number): Promise<string> {
   const zip = (await openZip(bytes)) as ZipFileLike;
   try {
-    return await readDocumentXmlFromZip(zip);
+    return await readDocumentXmlFromZip(zip, {
+      maxInflatedEntryBytes: maxInflatedEntryBytes(maxInputBytes),
+      maxInflateRatio: MAX_DOCUMENT_XML_INFLATE_RATIO,
+    });
   } finally {
     closeZipQuietly(zip);
   }
@@ -241,7 +307,10 @@ interface HeadingEntry {
   readonly index: number;
 }
 
-function paragraphStarts(paragraphs: readonly Paragraph[]): { readonly starts: readonly number[]; readonly end: number } {
+function paragraphStarts(paragraphs: readonly Paragraph[]): {
+  readonly starts: readonly number[];
+  readonly end: number;
+} {
   const starts: number[] = [];
   let cursor = 0;
   for (const paragraph of paragraphs) {
@@ -251,9 +320,10 @@ function paragraphStarts(paragraphs: readonly Paragraph[]): { readonly starts: r
   return { starts, end: Math.max(0, cursor - 1) };
 }
 
-function isHeadingEntry(
-  entry: { readonly paragraph: Paragraph; readonly index: number },
-): entry is HeadingEntry {
+function isHeadingEntry(entry: {
+  readonly paragraph: Paragraph;
+  readonly index: number;
+}): entry is HeadingEntry {
   return entry.paragraph.headingLevel !== undefined;
 }
 
@@ -261,7 +331,10 @@ function collectHeadings(paragraphs: readonly Paragraph[]): readonly HeadingEntr
   return paragraphs.map((paragraph, index) => ({ paragraph, index })).filter(isHeadingEntry);
 }
 
-function unsupportedMediaUnit(documentId: ParserSelectionInput["documentId"], reason: string): ParsedUnit {
+function unsupportedMediaUnit(
+  documentId: ParserSelectionInput["documentId"],
+  reason: string,
+): ParsedUnit {
   return { kind: "unsupported-media", documentId, reason };
 }
 
@@ -367,7 +440,14 @@ function docxNoTextResult(
     capability,
     input.documentId,
     options,
-    [diagnostic("UNSUPPORTED_FORMAT", "docx has no extractable text content", input.documentId, "info")],
+    [
+      diagnostic(
+        "UNSUPPORTED_FORMAT",
+        "docx has no extractable text content",
+        input.documentId,
+        "info",
+      ),
+    ],
     [unsupportedMediaUnit(input.documentId, "docx-no-text")],
   );
 }
@@ -408,7 +488,7 @@ async function asyncParse(
 
   const startedAt = options.now();
   try {
-    const xml = await readDocumentXml(input.bytes);
+    const xml = await readDocumentXml(input.bytes, options.maxBytes);
     const limit = shouldStop(startedAt, options, 0);
     if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
       return emptyResult(capability, input.documentId, options, [

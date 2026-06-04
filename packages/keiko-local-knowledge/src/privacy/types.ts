@@ -98,10 +98,9 @@ export interface RetentionAppliedEvent {
 }
 
 // AuditEventSink — injectable port. The default node-sqlite sink in `./audit-emitter.ts`
-// maps the schema-compatible event kinds (`source-added`, `source-removed`) to
-// `capsule_membership_changes` rows; other event kinds are accepted but not persisted
-// because the v2 schema does not yet have a sibling audit table for them. Callers that
-// want to forward them to an external evidence ledger compose their own sink.
+// persists every metadata-only event to `capsule_audit_events` and mirrors
+// source-added/source-removed events into `capsule_membership_changes`. Callers that want
+// to forward events to an external evidence ledger compose their own sink.
 
 export interface AuditEventSink {
   readonly emit: (event: CapsuleAuditEvent) => void;

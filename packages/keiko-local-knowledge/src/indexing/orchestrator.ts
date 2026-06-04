@@ -211,14 +211,40 @@ function joinAbs(root: string, rel: string): string {
   return `${root}/${rel}`;
 }
 
+function normaliseSep(p: string): string {
+  return p.replace(/\\/g, "/");
+}
+
+function isContained(absoluteRoot: string, absolutePath: string): boolean {
+  const normRoot = normaliseSep(absoluteRoot);
+  const normPath = normaliseSep(absolutePath);
+  if (normPath === normRoot) return true;
+  const prefix = normRoot.endsWith("/") ? normRoot : `${normRoot}/`;
+  return normPath.startsWith(prefix);
+}
+
 function readSourceText(state: RunState, source: KnowledgeSource, relativePath: string): string {
   const { absoluteRoot } = scopeRootOf(source);
   const abs = joinAbs(absoluteRoot, relativePath);
-  // We deliberately use readFileUtf8 — the discovery layer already realpath-gated the
-  // file before persisting the document row, so re-reading via the same WorkspaceFs port
-  // cannot escape the scope root. The bytes are cached by the OS from the discovery pass
-  // so the cost is a memory copy, not a fresh disk read.
-  return state.options.workspaceFs.readFileUtf8(abs);
+  let real: string;
+  try {
+    real = state.options.workspaceFs.realPath(abs);
+  } catch (cause) {
+    throw new IndexingError(
+      "PERSISTENCE_FAILED",
+      `source realPath failed before embedding: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause },
+    );
+  }
+  if (!isContained(absoluteRoot, real)) {
+    throw new IndexingError(
+      "PERSISTENCE_FAILED",
+      `source realpath escapes scope root before embedding: ${relativePath}`,
+    );
+  }
+  return state.options.workspaceFs.readFileUtf8(normaliseSep(real));
 }
 
 function resolveChunkSourceText(
@@ -378,7 +404,12 @@ function chunkPersistedDocument(
     },
     state.options.chunkingOptions,
   );
-  const chunkCount = resolveChunkCount(state, documentId, chunkResult.skippedExisting, chunkResult.chunkIds);
+  const chunkCount = resolveChunkCount(
+    state,
+    documentId,
+    chunkResult.skippedExisting,
+    chunkResult.chunkIds,
+  );
   return {
     events: chunkedDocumentEvents(state.jobId, documentId, result.relativePath, chunkCount),
     documentId,
@@ -429,7 +460,11 @@ function applyIncrementalFastPath(
     );
     if (existing > 0) {
       state.skippedDocuments += 1;
-      return { events: [{ kind: "document-skipped", jobId: state.jobId, documentId, reason: "already-embedded" }] };
+      return {
+        events: [
+          { kind: "document-skipped", jobId: state.jobId, documentId, reason: "already-embedded" },
+        ],
+      };
     }
     return undefined;
   }
@@ -453,7 +488,17 @@ function tryChunkDocument(
       message: cause instanceof Error ? cause.message : String(cause),
     };
     state.lastError = error;
-    return { events: [{ kind: "document-failed", jobId: state.jobId, documentId, relativePath: result.relativePath, error }] };
+    return {
+      events: [
+        {
+          kind: "document-failed",
+          jobId: state.jobId,
+          documentId,
+          relativePath: result.relativePath,
+          error,
+        },
+      ],
+    };
   }
 }
 
@@ -470,14 +515,29 @@ function applyEmbedResult(
   if (identityErr !== undefined) {
     state.failedDocuments += 1;
     state.lastError = identityErr;
-    events.push({ kind: "document-failed", jobId: state.jobId, documentId, relativePath, error: identityErr });
+    events.push({
+      kind: "document-failed",
+      jobId: state.jobId,
+      documentId,
+      relativePath,
+      error: identityErr,
+    });
     return { events, identityFailure: identityErr };
   }
   if (embedResult.errors.length > 0) {
     state.failedDocuments += 1;
-    const firstErr = embedResult.errors[0] ?? { code: "EMBEDDING_ADAPTER_FAILED", message: "embedding adapter failed" };
+    const firstErr = embedResult.errors[0] ?? {
+      code: "EMBEDDING_ADAPTER_FAILED",
+      message: "embedding adapter failed",
+    };
     state.lastError = firstErr;
-    events.push({ kind: "document-failed", jobId: state.jobId, documentId, relativePath, error: firstErr });
+    events.push({
+      kind: "document-failed",
+      jobId: state.jobId,
+      documentId,
+      relativePath,
+      error: firstErr,
+    });
     return { events };
   }
   state.processedDocuments += 1;
@@ -513,7 +573,13 @@ async function handlePersistedDocument(
     sourceForResult(state, result),
     result.relativePath,
   );
-  return applyEmbedResult(state, documentId, result.relativePath, chunkStep.chunked.events, embedResult);
+  return applyEmbedResult(
+    state,
+    documentId,
+    result.relativePath,
+    chunkStep.chunked.events,
+    embedResult,
+  );
 }
 
 // ─── Per-source pipeline ──────────────────────────────────────────────────────
@@ -598,11 +664,21 @@ async function handleDiscoveryEvent(
 ): Promise<readonly IndexingEvent[]> {
   if (evt.kind === "file-discovered") {
     state.totalDocuments += 1;
-    return [{ kind: "document-discovered", jobId: state.jobId, relativePath: evt.relativePath, sizeBytes: evt.sizeBytes }];
+    return [
+      {
+        kind: "document-discovered",
+        jobId: state.jobId,
+        relativePath: evt.relativePath,
+        sizeBytes: evt.sizeBytes,
+      },
+    ];
   }
   if (evt.kind === "scope-error") {
     state.failedDocuments += 1;
-    const err: IndexingJobError = { code: `DISCOVERY_FAILED:${evt.error.code}`, message: evt.error.message };
+    const err: IndexingJobError = {
+      code: `DISCOVERY_FAILED:${evt.error.code}`,
+      message: evt.error.message,
+    };
     state.lastError = err;
     const failed: IndexingEvent = {
       kind: "document-failed",

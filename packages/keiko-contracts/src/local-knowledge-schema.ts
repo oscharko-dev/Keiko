@@ -15,17 +15,21 @@
 //
 // Lineage invariant
 // -----------------
-//   Every dependent table carries `capsule_id TEXT NOT NULL REFERENCES capsules(id)
-//   ON DELETE CASCADE`. Documents, chunks, and vectors additionally carry `source_id`;
-//   pages, sections, parsed units, chunks, and vectors additionally carry `document_id`.
-//   The DB therefore enforces the Foundry-IQ "no global pool" rule — a chunk or vector
-//   cannot exist outside of its capsule + source + document tuple.
+//   Every operational dependent table carries `capsule_id TEXT NOT NULL REFERENCES
+//   capsules(id) ON DELETE CASCADE`. Documents, chunks, and vectors additionally carry
+//   `source_id`; pages, sections, parsed units, chunks, and vectors additionally carry
+//   `document_id`. The DB therefore enforces the Foundry-IQ "no global pool" rule — a
+//   chunk or vector cannot exist outside of its capsule + source + document tuple.
+//
+//   Audit tables intentionally keep only metadata identifiers and do NOT cascade on capsule
+//   deletion. A `capsule-deleted` audit event must remain durable after the capsule row and
+//   operational index state are removed.
 //
 // Vector identity is denormalised onto every vector row (provider/modelId/dimensions/
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 4 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 5 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -270,8 +274,7 @@ CREATE TABLE capsule_membership_changes (
   change_kind TEXT NOT NULL CHECK (change_kind IN ('add-source', 'remove-source', 'compose-set')),
   source_id TEXT,
   details_json TEXT,
-  occurred_at INTEGER NOT NULL,
-  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
+  occurred_at INTEGER NOT NULL
 ) STRICT;
 `.trim();
 
@@ -301,8 +304,7 @@ CREATE TABLE capsule_audit_events (
   failed_documents INTEGER,
   deleted_vector_count INTEGER,
   deleted_extracted_text_count INTEGER,
-  occurred_at INTEGER NOT NULL,
-  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE
+  occurred_at INTEGER NOT NULL
 ) STRICT;
 `.trim();
 
@@ -387,6 +389,47 @@ const V1_INDEXES_WITHOUT_V2: readonly string[] = [
   "CREATE INDEX idx_indexing_jobs_capsule_status ON indexing_jobs(capsule_id, status);",
 ] as const;
 
+const CREATE_CAPSULE_MEMBERSHIP_CHANGES_V5 = CREATE_CAPSULE_MEMBERSHIP_CHANGES.replace(
+  "capsule_membership_changes",
+  "capsule_membership_changes_v5",
+);
+
+const CREATE_CAPSULE_AUDIT_EVENTS_V5 = CREATE_CAPSULE_AUDIT_EVENTS.replace(
+  "capsule_audit_events",
+  "capsule_audit_events_v5",
+);
+
+const COPY_CAPSULE_MEMBERSHIP_CHANGES_TO_V5 = `
+INSERT INTO capsule_membership_changes_v5 (
+  id, capsule_id, change_kind, source_id, details_json, occurred_at
+)
+SELECT id, capsule_id, change_kind, source_id, details_json, occurred_at
+FROM capsule_membership_changes;
+`.trim();
+
+const COPY_CAPSULE_AUDIT_EVENTS_TO_V5 = `
+INSERT INTO capsule_audit_events_v5 (
+  id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
+  deleted_vector_count, deleted_extracted_text_count, occurred_at
+)
+SELECT id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
+  deleted_vector_count, deleted_extracted_text_count, occurred_at
+FROM capsule_audit_events;
+`.trim();
+
+const REBUILD_AUDIT_TABLES_FOR_DELETE_DURABILITY: readonly string[] = [
+  CREATE_CAPSULE_MEMBERSHIP_CHANGES_V5,
+  COPY_CAPSULE_MEMBERSHIP_CHANGES_TO_V5,
+  "DROP TABLE capsule_membership_changes;",
+  "ALTER TABLE capsule_membership_changes_v5 RENAME TO capsule_membership_changes;",
+  CREATE_CAPSULE_MEMBERSHIP_CHANGES_INDEX,
+  CREATE_CAPSULE_AUDIT_EVENTS_V5,
+  COPY_CAPSULE_AUDIT_EVENTS_TO_V5,
+  "DROP TABLE capsule_audit_events;",
+  "ALTER TABLE capsule_audit_events_v5 RENAME TO capsule_audit_events;",
+  CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
+] as const;
+
 export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] = [
   {
     version: 1,
@@ -409,6 +452,11 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
     reason:
       "Persist normalized extracted text for binary parsers so chunk offsets project against extracted content.",
     up: [CREATE_DOCUMENT_TEXTS],
+  },
+  {
+    version: 5,
+    reason: "Keep metadata-only capsule audit rows durable after capsule deletion for Issue #201.",
+    up: REBUILD_AUDIT_TABLES_FOR_DELETE_DURABILITY,
   },
 ] as const;
 

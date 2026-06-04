@@ -24,28 +24,37 @@ const INSERT_MEMBERSHIP_SQL =
 const INSERT_AUDIT_SQL =
   "INSERT INTO capsule_audit_events (id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents, deleted_vector_count, deleted_extracted_text_count, occurred_at) VALUES (:id, :capsule_id, :kind, :source_id, :job_id, :error_code, :processed_documents, :failed_documents, :deleted_vector_count, :deleted_extracted_text_count, :occurred_at)";
 
+type SqlValue = string | number | null;
+type SqlParams = Record<string, SqlValue>;
+
+interface RunStatement {
+  readonly run: (params?: SqlParams) => unknown;
+}
+
 export function emitCapsuleAuditEvent(event: CapsuleAuditEvent, sink: AuditEventSink): void {
   sink.emit(event);
 }
 
 export function createSqliteAuditSink(store: KnowledgeStore): AuditEventSink {
+  const insertAudit = store._internal.db.prepare(INSERT_AUDIT_SQL) as RunStatement;
+  const insertMembership = store._internal.db.prepare(INSERT_MEMBERSHIP_SQL) as RunStatement;
   return {
     emit: (event: CapsuleAuditEvent): void => {
-      insertAuditEventRow(store, event);
+      insertAuditEventRow(insertAudit, event);
       if (event.kind === "source-added") {
-        insertMembershipRow(store, event, "add-source");
+        insertMembershipRow(insertMembership, event, "add-source");
         return;
       }
       if (event.kind === "source-removed") {
-        insertMembershipRow(store, event, "remove-source");
+        insertMembershipRow(insertMembership, event, "remove-source");
         return;
       }
     },
   };
 }
 
-function insertAuditEventRow(store: KnowledgeStore, event: CapsuleAuditEvent): void {
-  store._internal.db.prepare(INSERT_AUDIT_SQL).run({
+function insertAuditEventRow(statement: RunStatement, event: CapsuleAuditEvent): void {
+  statement.run({
     id: randomUUID(),
     capsule_id: event.capsuleId,
     kind: event.kind,
@@ -62,11 +71,11 @@ function insertAuditEventRow(store: KnowledgeStore, event: CapsuleAuditEvent): v
 }
 
 function insertMembershipRow(
-  store: KnowledgeStore,
+  statement: RunStatement,
   event: CapsuleSourceAddedEvent | CapsuleSourceRemovedEvent,
   changeKind: "add-source" | "remove-source",
 ): void {
-  store._internal.db.prepare(INSERT_MEMBERSHIP_SQL).run({
+  statement.run({
     id: randomUUID(),
     capsule_id: event.capsuleId,
     change_kind: changeKind,

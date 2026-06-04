@@ -84,6 +84,57 @@ const DELETE_DIAGNOSTICS_SQL =
 const SELECT_DOCUMENT_TEXT_SQL =
   "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d";
 
+type SqlValue = string | number | null | Uint8Array;
+type SqlParams = Record<string, SqlValue>;
+
+interface RunStatement {
+  readonly run: (params?: SqlParams) => unknown;
+}
+
+interface GetStatement {
+  readonly get: (params?: SqlParams) => unknown;
+}
+
+interface DiscoveryStatements {
+  readonly insertDocument: RunStatement;
+  readonly insertDocumentText: RunStatement;
+  readonly insertPage: RunStatement;
+  readonly insertSection: RunStatement;
+  readonly insertParsedUnit: RunStatement;
+  readonly insertDiagnostic: RunStatement;
+  readonly deletePages: RunStatement;
+  readonly deleteSections: RunStatement;
+  readonly deleteDocumentText: RunStatement;
+  readonly deleteParsedUnits: RunStatement;
+  readonly deleteDiagnostics: RunStatement;
+  readonly selectDocumentText: GetStatement;
+}
+
+const statementsByDb = new WeakMap<DatabaseSync, DiscoveryStatements>();
+
+function statements(db: DatabaseSync): DiscoveryStatements {
+  const cached = statementsByDb.get(db);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const prepared: DiscoveryStatements = {
+    insertDocument: db.prepare(INSERT_DOCUMENT_SQL) as RunStatement,
+    insertDocumentText: db.prepare(INSERT_DOCUMENT_TEXT_SQL) as RunStatement,
+    insertPage: db.prepare(INSERT_PAGE_SQL) as RunStatement,
+    insertSection: db.prepare(INSERT_SECTION_SQL) as RunStatement,
+    insertParsedUnit: db.prepare(INSERT_PARSED_UNIT_SQL) as RunStatement,
+    insertDiagnostic: db.prepare(INSERT_DIAGNOSTIC_SQL) as RunStatement,
+    deletePages: db.prepare(DELETE_PAGES_SQL) as RunStatement,
+    deleteSections: db.prepare(DELETE_SECTIONS_SQL) as RunStatement,
+    deleteDocumentText: db.prepare(DELETE_DOCUMENT_TEXT_SQL) as RunStatement,
+    deleteParsedUnits: db.prepare(DELETE_PARSED_UNITS_SQL) as RunStatement,
+    deleteDiagnostics: db.prepare(DELETE_DIAGNOSTICS_SQL) as RunStatement,
+    selectDocumentText: db.prepare(SELECT_DOCUMENT_TEXT_SQL) as GetStatement,
+  };
+  statementsByDb.set(db, prepared);
+  return prepared;
+}
+
 export interface DocumentInsertRow {
   readonly id: DocumentId;
   readonly capsuleId: KnowledgeCapsuleId;
@@ -100,7 +151,7 @@ export interface DocumentInsertRow {
 }
 
 export function insertDocumentRow(db: DatabaseSync, row: DocumentInsertRow): void {
-  db.prepare(INSERT_DOCUMENT_SQL).run({
+  statements(db).insertDocument.run({
     id: row.id,
     capsule_id: row.capsuleId,
     source_id: row.sourceId,
@@ -122,11 +173,11 @@ export function deleteDependentRows(
   documentId: DocumentId,
 ): void {
   const params = { c: capsuleId, d: documentId };
-  db.prepare(DELETE_DOCUMENT_TEXT_SQL).run(params);
-  db.prepare(DELETE_PAGES_SQL).run(params);
-  db.prepare(DELETE_SECTIONS_SQL).run(params);
-  db.prepare(DELETE_PARSED_UNITS_SQL).run(params);
-  db.prepare(DELETE_DIAGNOSTICS_SQL).run(params);
+  statements(db).deleteDocumentText.run(params);
+  statements(db).deletePages.run(params);
+  statements(db).deleteSections.run(params);
+  statements(db).deleteParsedUnits.run(params);
+  statements(db).deleteDiagnostics.run(params);
 }
 
 export function insertDocumentTextRow(
@@ -135,7 +186,7 @@ export function insertDocumentTextRow(
   documentId: DocumentId,
   normalizedText: string,
 ): void {
-  db.prepare(INSERT_DOCUMENT_TEXT_SQL).run({
+  statements(db).insertDocumentText.run({
     capsule_id: capsuleId,
     document_id: documentId,
     normalized_text: normalizedText,
@@ -151,7 +202,7 @@ export function readDocumentTextRow(
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
 ): string | undefined {
-  const row = db.prepare(SELECT_DOCUMENT_TEXT_SQL).get({
+  const row = statements(db).selectDocumentText.get({
     c: capsuleId,
     d: documentId,
   }) as DocumentTextRow | undefined;
@@ -163,7 +214,7 @@ export function insertPageRow(
   capsuleId: KnowledgeCapsuleId,
   page: PageRecord,
 ): void {
-  db.prepare(INSERT_PAGE_SQL).run({
+  statements(db).insertPage.run({
     capsule_id: capsuleId,
     document_id: page.documentId,
     page_number: page.pageNumber,
@@ -182,7 +233,7 @@ export function insertSectionRow(
   capsuleId: KnowledgeCapsuleId,
   section: SectionRecord,
 ): void {
-  db.prepare(INSERT_SECTION_SQL).run({
+  statements(db).insertSection.run({
     capsule_id: capsuleId,
     document_id: section.documentId,
     section_path_json: JSON.stringify(section.sectionPath),
@@ -271,7 +322,7 @@ export function insertParsedUnitRow(
   unitId: string,
   unit: ParsedUnit,
 ): void {
-  db.prepare(INSERT_PARSED_UNIT_SQL).run(parsedUnitParams(capsuleId, unitId, unit));
+  statements(db).insertParsedUnit.run(parsedUnitParams(capsuleId, unitId, unit));
 }
 
 export function insertDiagnosticRow(
@@ -283,7 +334,7 @@ export function insertDiagnosticRow(
     readonly createdAt: number;
   },
 ): void {
-  db.prepare(INSERT_DIAGNOSTIC_SQL).run({
+  statements(db).insertDiagnostic.run({
     id: params.id,
     capsule_id: params.capsuleId,
     document_id: params.diagnostic.documentId ?? null,

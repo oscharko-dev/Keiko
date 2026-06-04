@@ -1,16 +1,17 @@
 // applyRetentionToCapsule — bounded DELETE that prunes a capsule's vectors / extracted
-// text rows older than the policy window. Pure SQL — no side effects beyond the two
-// statements. The two `WHERE capsule_id = :capsule_id` clauses are load-bearing: the
-// cascade isolation test in `./retention-applier.test.ts` removes the function's ability
-// to delete cross-capsule rows by relying on those clauses to scope each statement.
+// text rows older than the policy window. Pure SQL — no side effects beyond these scoped
+// statements. The `WHERE capsule_id = :capsule_id` clauses are load-bearing: the cascade
+// isolation test in `./retention-applier.test.ts` removes the function's ability to delete
+// cross-capsule rows by relying on those clauses to scope each statement.
 //
 // Schema notes (cf. packages/keiko-contracts/src/local-knowledge-schema.ts):
 //   * `vectors.created_at` is the embedding-write timestamp — the right column for the
 //     "vector retention" window.
-//   * `parsed_units` has no time column of its own; the "extracted text retention" window
-//     is keyed off `documents.last_extracted_at` via a subquery. The chunks/vectors that
-//     hang off the deleted parsed_units cascade via composite FK (chunks → parsed_units,
-//     vectors → chunks).
+//   * `document_texts` contains raw normalized text and is the row count reported as
+//     deletedExtractedTextCount. `parsed_units` has no time column of its own; its cleanup
+//     is keyed off `documents.last_extracted_at` via the same subquery. The chunks/vectors
+//     that hang off the deleted parsed_units cascade via composite FK (chunks →
+//     parsed_units, vectors → chunks).
 //   * Both statements are issued inside a single BEGIN/COMMIT so a crash mid-retention
 //     cannot leave half the policy applied (matches the source/composition lifecycles).
 //   * A missing field on the policy SKIPS the corresponding statement — `undefined` means
@@ -29,6 +30,10 @@ const DELETE_OLD_VECTORS_SQL =
 
 const DELETE_OLD_PARSED_UNITS_SQL =
   "DELETE FROM parsed_units WHERE capsule_id = :capsule_id AND document_id IN " +
+  "(SELECT id FROM documents WHERE capsule_id = :capsule_id AND last_extracted_at < :cutoff)";
+
+const DELETE_OLD_DOCUMENT_TEXTS_SQL =
+  "DELETE FROM document_texts WHERE capsule_id = :capsule_id AND document_id IN " +
   "(SELECT id FROM documents WHERE capsule_id = :capsule_id AND last_extracted_at < :cutoff)";
 
 interface ChangesRow {
@@ -73,12 +78,7 @@ export function applyRetentionToCapsule(
   const hasVectorPolicy = typeof policy.retainVectorsDays === "number";
   const hasTextPolicy = typeof policy.retainExtractedTextDays === "number";
   if (!hasVectorPolicy && !hasTextPolicy) {
-    return {
-      capsuleId,
-      deletedVectorCount: 0,
-      deletedExtractedTextCount: 0,
-      appliedAt: now,
-    };
+    return { capsuleId, deletedVectorCount: 0, deletedExtractedTextCount: 0, appliedAt: now };
   }
 
   const db = store._internal.db;
@@ -94,10 +94,11 @@ export function applyRetentionToCapsule(
       const textCutoff = cutoffFor(now, policy.retainExtractedTextDays);
       deletedExtractedTextCount = runDelete(
         store,
-        DELETE_OLD_PARSED_UNITS_SQL,
+        DELETE_OLD_DOCUMENT_TEXTS_SQL,
         capsuleId,
         textCutoff,
       );
+      runDelete(store, DELETE_OLD_PARSED_UNITS_SQL, capsuleId, textCutoff);
     }
     db.exec("COMMIT");
   } catch (error) {

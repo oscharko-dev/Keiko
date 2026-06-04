@@ -74,10 +74,8 @@ describe("ConnectorGraph — empty state", () => {
     });
     expect(ctaButton).toBeInTheDocument();
 
-    // Secondary CTA
-    expect(
-      screen.getByRole("button", { name: /connect to an existing capsule/i }),
-    ).toBeInTheDocument();
+    // Secondary future affordance is visible but disabled until the BFF connection flow exists.
+    expect(screen.getByRole("button", { name: /connect to an existing capsule/i })).toBeDisabled();
 
     // Header button still present
     expect(

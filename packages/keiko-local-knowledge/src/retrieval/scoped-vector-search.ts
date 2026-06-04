@@ -439,7 +439,7 @@ function selectTopCandidates(state: SearchState, options: SearchOptions): Candid
     return { ok: false, reason: "incompatible-embedding-identity" };
   }
   state.candidates.sort(scoreDesc);
-  const top = state.candidates.slice(0, options.topK);
+  const top = state.candidates.slice(0, oversampleTopK(options.topK));
   if (top.length === 0) return { ok: false, reason: "below-min-score" };
   return { ok: true, top };
 }
@@ -461,7 +461,7 @@ export async function searchVectorsForScope(
   }
   const selection = selectTopCandidates(state, options);
   if (!selection.ok) return { references: [], noEvidenceReason: selection.reason };
-  return { references: buildReferences(store, selection.top, query) };
+  return { references: buildReferences(store, selection.top, query, options.topK) };
 }
 
 function loadCapsules(
@@ -480,6 +480,7 @@ function buildReferences(
   store: KnowledgeStore,
   candidates: readonly ScoredCandidate[],
   query: string,
+  limit: number,
 ): readonly RetrievalReference[] {
   // Group surviving candidates by capsule so we can issue one citation-read per capsule.
   const byCapsule = new Map<string, ScoredCandidate[]>();
@@ -524,7 +525,7 @@ function buildReferences(
     });
   }
   refs.sort(referenceScoreDesc);
-  return refs;
+  return refs.slice(0, limit);
 }
 
 function referenceScoreDesc(a: RetrievalReference, b: RetrievalReference): number {

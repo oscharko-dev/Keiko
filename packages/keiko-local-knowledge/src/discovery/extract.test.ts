@@ -77,6 +77,12 @@ describe("extractDocument — markdown success path", () => {
     expect(doc.parser.parserId).toBe("text");
     expect(count("documents")).toBe(1);
     expect(count("parsed_units")).toBeGreaterThan(0);
+    const textRow = store._internal.db
+      .prepare(
+        "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
+      )
+      .get({ c: capsuleId, d: doc.id }) as { readonly normalized_text?: string } | undefined;
+    expect(textRow?.normalized_text).toBe("# Hello\n\nWorld");
   });
 });
 

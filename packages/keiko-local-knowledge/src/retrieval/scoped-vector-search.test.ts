@@ -47,6 +47,23 @@ function getFixture(): Fixture {
   return fixture;
 }
 
+function vectorBlob(first: number, second: number): Uint8Array {
+  const vector = new Float32Array(DEFAULT_EMBEDDING.vectorDimensions);
+  vector[0] = first;
+  vector[1] = second;
+  return new Uint8Array(vector.buffer.slice(0));
+}
+
+function setCapsuleVector(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  blob: Uint8Array,
+): void {
+  store._internal.db
+    .prepare("UPDATE vectors SET embedding = :embedding WHERE capsule_id = :capsule_id")
+    .run({ embedding: blob, capsule_id: capsuleId });
+}
+
 describe("searchVectorsForScope — empty capsule", () => {
   it("returns noEvidenceReason 'no-vectors' when the capsule has zero vectors", async () => {
     const { store } = getFixture();
@@ -325,6 +342,61 @@ describe("searchVectorsForScope — citation fields", () => {
     );
     expect(outcome.references[0]?.citation.safeDisplayName).toBe("controls-handbook.docx");
     expect(outcome.references[0]?.citation.sectionPath).toEqual(["Policy", "Controls"]);
+  });
+
+  it("lets lexical metadata promote an oversampled candidate outside the raw vector topK", async () => {
+    const { store } = getFixture();
+    const fast = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-vector",
+      sourceId: "src-vector",
+      documentId: "doc-vector",
+      safeDisplayName: "zeta.txt",
+      unit: {
+        kind: "section",
+        sectionPath: ["Zeta"],
+        characterStart: 0,
+        characterEnd: 120,
+      } satisfies ParsedUnitWithoutDocId,
+      text: "zeta ".repeat(32),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    const metadata = await seedCapsuleWithVectors(store, {
+      capsuleId: "cap-metadata",
+      sourceId: "src-metadata",
+      documentId: "doc-metadata",
+      safeDisplayName: "controls-handbook.docx",
+      unit: {
+        kind: "section",
+        sectionPath: ["Policy", "Controls"],
+        characterStart: 0,
+        characterEnd: 120,
+      } satisfies ParsedUnitWithoutDocId,
+      text: "controls ".repeat(32),
+      chunkingOptions: { maxTokens: 400, minTokens: 0, overlapTokens: 0 },
+    });
+    setCapsuleVector(store, fast.capsuleId, vectorBlob(1, 0));
+    setCapsuleVector(store, metadata.capsuleId, vectorBlob(0.95, Math.sqrt(1 - 0.95 * 0.95)));
+    const adapter = scriptedAdapter({
+      responder: (): OpenAIEmbeddingOutcome => ({
+        ok: true,
+        value: {
+          vector: new Float32Array(vectorBlob(1, 0).buffer),
+          modelId: DEFAULT_EMBEDDING.modelId,
+        },
+      }),
+    });
+
+    const outcome = await searchVectorsForScope(
+      store,
+      adapter,
+      { capsuleIds: [fast.capsuleId, metadata.capsuleId] },
+      "controls handbook",
+      { topK: 1 },
+    );
+
+    expect(outcome.references).toHaveLength(1);
+    expect(outcome.references[0]?.citation.safeDisplayName).toBe("controls-handbook.docx");
+    expect(outcome.references[0]?.score).toBeGreaterThan(1);
   });
 });
 

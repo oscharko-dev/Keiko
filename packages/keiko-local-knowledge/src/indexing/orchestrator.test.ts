@@ -134,6 +134,35 @@ describe("runIndexingJob — happy path", () => {
     expect(record.processedDocuments).toBe(3);
     expect(record.finishedAt).toBeDefined();
   });
+
+  it("embeds text documents from persisted extraction text without a second raw file read", async () => {
+    const inputs: string[] = [];
+    const fsNoUtf8: WorkspaceFs = {
+      ...fixture.fs,
+      readFileUtf8: (absolutePath: string): string => {
+        throw new Error(`unexpected raw text reread: ${absolutePath}`);
+      },
+    };
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        inputs.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const events = await drain(
+      runIndexingJob(buildOptions(fixture, { workspaceFs: fsNoUtf8, embeddingAdapter: adapter })),
+    );
+
+    expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
+    expect(inputs.join("\n")).toContain("Lorem ipsum");
+  });
 });
 
 // ─── Test 2: cancellation mid-pipeline ───────────────────────────────────────
@@ -277,7 +306,9 @@ describe("runIndexingJob — binary parser text projection", () => {
       },
     });
 
-    const events = await drain(runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })));
+    const events = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })),
+    );
     expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
     expect(inputs.join("\n")).toContain("Hello PDF");
     expect(inputs.join("\n")).not.toContain("%PDF-1.4");
@@ -407,7 +438,9 @@ describe("runIndexingJob — concurrency clamp", () => {
     const adapter = happyAdapter();
     const wrapped = {
       ...adapter,
-      request: async (req: Parameters<typeof adapter.request>[0]): Promise<Awaited<ReturnType<typeof adapter.request>>> => {
+      request: async (
+        req: Parameters<typeof adapter.request>[0],
+      ): Promise<Awaited<ReturnType<typeof adapter.request>>> => {
         live += 1;
         if (live > peak) peak = live;
         await new Promise((r) => setImmediate(r));

@@ -331,6 +331,37 @@ function statusForResult(result: ParserResult): DocumentRecord["status"] {
   return result.parser.parserId === "unsupported" ? "unsupported" : "extracted";
 }
 
+const SOURCE_TEXT_PARSER_IDS: ReadonlySet<string> = new Set(["text", "json", "csv", "html"]);
+
+function decodeUtf8ForStorage(bytes: Uint8Array): string {
+  const raw = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  return raw.length > 0 && raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw;
+}
+
+function normalizedTextForPersistence(
+  parserResult: InternalParserResult,
+  bytes: Uint8Array,
+): string | undefined {
+  if (parserResult.normalizedText !== undefined) {
+    return parserResult.normalizedText;
+  }
+  if (!SOURCE_TEXT_PARSER_IDS.has(parserResult.parser.parserId)) {
+    return undefined;
+  }
+  if (parserResult.units.length === 0) {
+    return undefined;
+  }
+  return decodeUtf8ForStorage(bytes);
+}
+
+function withPersistedNormalizedText(
+  parserResult: InternalParserResult,
+  bytes: Uint8Array,
+): InternalParserResult {
+  const normalizedText = normalizedTextForPersistence(parserResult, bytes);
+  return normalizedText === undefined ? parserResult : { ...parserResult, normalizedText };
+}
+
 function hasAsyncParse(adapter: ParserAdapter | AsyncParserAdapter): adapter is AsyncParserAdapter {
   return typeof (adapter as { readonly parseAsync?: unknown }).parseAsync === "function";
 }
@@ -375,6 +406,34 @@ async function runParser(
   return adapter.parse(input, options);
 }
 
+async function runParserForPersistence(
+  deps: ExtractDocumentDeps,
+  documentId: DocumentId,
+  params: ExtractDocumentParams,
+  bytes: Uint8Array,
+  options: ParserOptions,
+): Promise<InternalParserResult> {
+  const result = await runParser(deps, documentId, params, bytes, options);
+  return withPersistedNormalizedText(result, bytes);
+}
+
+function persistExtractedDocument(
+  deps: ExtractDocumentDeps,
+  params: ExtractDocumentParams,
+  documentId: DocumentId,
+  document: DocumentRecord,
+  parserResult: InternalParserResult,
+): void {
+  persistDocumentAndDependents(
+    deps,
+    params,
+    documentId,
+    document,
+    parserResult,
+    deps.store._internal.now,
+  );
+}
+
 export async function extractDocument(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -399,7 +458,7 @@ export async function extractDocument(
   const contentHash = hashBytes(bytes);
   const fast = readUnchangedFastPath(deps, params, documentId, contentHash);
   if (fast !== undefined) return fast;
-  const parserResult = await runParser(deps, documentId, params, bytes, options);
+  const parserResult = await runParserForPersistence(deps, documentId, params, bytes, options);
   const status = statusForResult(parserResult);
   const document = buildDocumentRecord({
     documentId,
@@ -409,14 +468,7 @@ export async function extractDocument(
     parserResult,
     status,
   });
-  persistDocumentAndDependents(
-    deps,
-    params,
-    documentId,
-    document,
-    parserResult,
-    deps.store._internal.now,
-  );
+  persistExtractedDocument(deps, params, documentId, document, parserResult);
   return {
     capsuleId: params.capsuleId,
     sourceId: params.source.id,
