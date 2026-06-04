@@ -59,6 +59,7 @@ describe("extractWorkflowOutcomeCandidates", () => {
     }
     expect(first.proposal.type).toBe("correction");
     expect(first.proposal.provenance.sourceKind).toBe("accepted-correction");
+    expect(first.proposal.provenance.sourceWorkflowRunId).toBe("wr-1");
   });
 
   it("returns [] for outcomeKind=failed (no learning from failed runs)", () => {

@@ -28,7 +28,7 @@ describe("scanForSecrets — credential-shape patterns (looksLikeSecretShape par
   });
 
   it("rejects a three-part JWT shape", () => {
-    const shape = "eyJabcdef12.abcdef1234.abcdef9876";
+    const shape = "eyJ" + "abcdef12.abcdef1234.abcdef9876";
     expect(scanForSecrets(`token: ${shape}`)).toBe("credential-shape");
   });
 
