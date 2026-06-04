@@ -89,7 +89,10 @@ function selectBody(
 ): BodySelection {
   if (type === "chat") {
     const mini = ew < CHAT_MINI_W || eh < CHAT_MINI_H;
-    return { mode: mini ? "mini" : "full", node: <ChatWindow mini={mini} linkedRoot={linkedRoot} /> };
+    return {
+      mode: mini ? "mini" : "full",
+      node: <ChatWindow mini={mini} linkedRoot={linkedRoot} />,
+    };
   }
   const def = WIN_TYPES[type];
   if (ew < def.tiny.w || eh < def.tiny.h) {
@@ -314,9 +317,7 @@ export function WindowFrame({
   const startPortConnect = useCallback(
     (
       target: HTMLDivElement,
-      event:
-        | ReactPointerEvent<HTMLDivElement>
-        | ReactKeyboardEvent<HTMLDivElement>,
+      event: ReactPointerEvent<HTMLDivElement> | ReactKeyboardEvent<HTMLDivElement>,
     ): void => {
       const rect = target.getBoundingClientRect();
       api.startConnect(win.id, {

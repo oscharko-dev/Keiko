@@ -29,8 +29,7 @@ export function AgentGateCard({
   return (
     <div className="arun-gate" data-esc={escalated}>
       <div className="arun-gate-h">
-        <Icons.bell size={13} />{" "}
-        {escalated ? "Keiko escalated to you" : "Approval required"}
+        <Icons.bell size={13} /> {escalated ? "Keiko escalated to you" : "Approval required"}
       </div>
       <div className="arun-gate-t">{gate.title}</div>
       <div className="arun-gate-d mono">{gate.detail}</div>

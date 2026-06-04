@@ -25,9 +25,14 @@ describe("browserFetch header injection", () => {
   });
 
   it("GET (fetchBrowserStatus) sends no Content-Type or CSRF headers", async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(jsonOk({ reachable: true, userAgent: null, browserVersion: null, webSocketDebuggerUrl: null }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonOk({
+        reachable: true,
+        userAgent: null,
+        browserVersion: null,
+        webSocketDebuggerUrl: null,
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await fetchBrowserStatus(9222);
@@ -57,9 +62,11 @@ describe("browserFetch header injection", () => {
   });
 
   it("POST (createBrowserSession) sends Content-Type and CSRF headers", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonOk({ sessionId: "s-1", cdpPort: 9222, targetId: "T-1", status: "open", createdAt: 1 }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonOk({ sessionId: "s-1", cdpPort: 9222, targetId: "T-1", status: "open", createdAt: 1 }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     await createBrowserSession(9222);
@@ -86,7 +93,12 @@ describe("browserFetch header injection", () => {
 
   it("POST (browserScreenshot) sends Content-Type and CSRF headers", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      jsonOk({ seq: 1, viewportPx: { width: 1280, height: 800 }, dataBase64: "AAAA", persisted: false }),
+      jsonOk({
+        seq: 1,
+        viewportPx: { width: 1280, height: 800 },
+        dataBase64: "AAAA",
+        persisted: false,
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
 

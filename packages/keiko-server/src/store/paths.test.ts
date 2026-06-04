@@ -2,11 +2,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
-import {
-  assertUiDbOutsideProject,
-  resolveUiDbPath,
-  UiStoreError,
-} from "./index.js";
+import { assertUiDbOutsideProject, resolveUiDbPath, UiStoreError } from "./index.js";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -54,9 +50,7 @@ describe("resolveUiDbPath", () => {
 
   it("treats an empty explicit string as not set", () => {
     const dataDir = makeTempDir();
-    expect(resolveUiDbPath("", { KEIKO_UI_DATA_DIR: dataDir })).toBe(
-      join(dataDir, "keiko-ui.db"),
-    );
+    expect(resolveUiDbPath("", { KEIKO_UI_DATA_DIR: dataDir })).toBe(join(dataDir, "keiko-ui.db"));
   });
 
   it("treats an empty env value as not set", () => {

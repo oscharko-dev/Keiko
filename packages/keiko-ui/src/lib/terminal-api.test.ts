@@ -21,9 +21,11 @@ describe("terminalFetch header injection", () => {
   });
 
   it("GET /api/terminal/policy sends no CSRF or Content-Type header", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      jsonOk({ commands: ["ls"], limits: { maxOutputBytes: 1, defaultTimeoutMs: 1 } }),
-    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonOk({ commands: ["ls"], limits: { maxOutputBytes: 1, defaultTimeoutMs: 1 } }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     await fetchTerminalPolicy();
@@ -76,9 +78,14 @@ describe("terminalFetch header injection", () => {
   });
 
   it("GET /api/terminal/directories?projectId=... encodes the query", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(jsonOk({
-      path: "/p", parent: null, entries: [], roots: [],
-    }));
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonOk({
+        path: "/p",
+        parent: null,
+        entries: [],
+        roots: [],
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await fetchTerminalDirectories("/proj", "/proj/sub");
@@ -91,10 +98,10 @@ describe("terminalFetch header injection", () => {
 
   it("non-OK responses throw ApiError with code + status", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({ error: { code: "COMMAND_DENIED", message: "no" } }),
-        { status: 403, headers: { "Content-Type": "application/json" } },
-      ),
+      new Response(JSON.stringify({ error: { code: "COMMAND_DENIED", message: "no" } }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      }),
     );
     vi.stubGlobal("fetch", fetchMock);
     await expect(

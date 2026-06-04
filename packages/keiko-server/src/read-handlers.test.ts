@@ -15,7 +15,11 @@ import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { STREAMING } from "./routes.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
-import { EvidenceReadError, EvidenceSchemaError, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  EvidenceReadError,
+  EvidenceSchemaError,
+  type EvidenceStore,
+} from "@oscharko-dev/keiko-evidence";
 
 function ctx(path: string, params: Record<string, string> = {}): RouteContext {
   return {
@@ -308,7 +312,10 @@ describe("GET /api/workspace", () => {
   });
 
   it("rejects non-local workspace path forms with BAD_REQUEST", () => {
-    const result = handleWorkspace(ctx("/api/workspace?dir=https%3A%2F%2Fexample.test"), depsWith({}));
+    const result = handleWorkspace(
+      ctx("/api/workspace?dir=https%3A%2F%2Fexample.test"),
+      depsWith({}),
+    );
     expect(result.status).toBe(400);
     expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
   });
@@ -318,10 +325,7 @@ describe("GET /api/workspace", () => {
     try {
       const deps = depsWithRegisteredProject(root);
       rmSync(root, { recursive: true, force: true });
-      const result = handleWorkspace(
-        ctx(`/api/workspace?dir=${encodeURIComponent(root)}`),
-        deps,
-      );
+      const result = handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
       expect(result.status).toBe(404);
       expect(result.body).toMatchObject({
         error: {

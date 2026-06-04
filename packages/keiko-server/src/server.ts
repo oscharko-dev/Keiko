@@ -84,9 +84,7 @@ function fallbackDeps(): UiHandlerDeps {
 }
 
 function isStateChangingMethod(method: string): boolean {
-  return (
-    method === "POST" || method === "PATCH" || method === "PUT" || method === "DELETE"
-  );
+  return method === "POST" || method === "PATCH" || method === "PUT" || method === "DELETE";
 }
 
 // Returns true when the request was rejected (caller should return immediately).

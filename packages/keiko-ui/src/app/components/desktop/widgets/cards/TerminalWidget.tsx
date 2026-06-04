@@ -343,19 +343,17 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
         /* B2 — role="status" + aria-live="polite" satisfies WCAG 4.1.3 */
         <div className="tm-result" role="status" aria-live="polite">
           <div className="tm-badges">
-            <span className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}>
+            <span
+              className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}
+            >
               exit {String(result.exitCode)}
             </span>
             <span className="tm-badge">{result.durationMs} ms</span>
             {result.truncated ? <span className="tm-badge tm-badge-warn">truncated</span> : null}
             {result.timedOut ? <span className="tm-badge tm-badge-warn">timed out</span> : null}
           </div>
-          {result.stdout.length > 0 ? (
-            <pre className="tm-stdout">{result.stdout}</pre>
-          ) : null}
-          {result.stderr.length > 0 ? (
-            <pre className="tm-stderr">{result.stderr}</pre>
-          ) : null}
+          {result.stdout.length > 0 ? <pre className="tm-stdout">{result.stdout}</pre> : null}
+          {result.stderr.length > 0 ? <pre className="tm-stderr">{result.stderr}</pre> : null}
         </div>
       ) : null}
 

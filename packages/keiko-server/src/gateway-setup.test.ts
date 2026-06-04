@@ -395,10 +395,9 @@ describe("handleGatewaySetup", () => {
           (headers) => headers.auth === null && headers.custom === "Bearer example-secret-token",
         ),
       ).toBe(true);
-      expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.apiKeyHeaderName)).toEqual([
-        "x-litellm-key",
-        "x-litellm-key",
-      ]);
+      expect(
+        currentGatewayConfig(deps)?.providers.map((provider) => provider.apiKeyHeaderName),
+      ).toEqual(["x-litellm-key", "x-litellm-key"]);
       const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
       expect(saved).toContain('"apiKeyHeaderName": "x-litellm-key"');
       expect(saved).not.toContain("litellm-embedding");
@@ -649,9 +648,10 @@ describe("handleGatewaySetup", () => {
         "example-chat-model-fast",
         "example-embedding-model",
       ]);
-      expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual(
-        ["example-chat-model-large", "example-chat-model-fast"],
-      );
+      expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([
+        "example-chat-model-large",
+        "example-chat-model-fast",
+      ]);
       expect(currentGatewayConfig(deps)?.providers.map((provider) => provider.modelId)).toEqual([
         "example-chat-model-large",
         "example-chat-model-fast",

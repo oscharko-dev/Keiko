@@ -77,25 +77,28 @@ function DirectoryPicker({
   const [error, setError] = useState<string | null>(null);
   const requestRoot = projectId ?? value.trim();
 
-  const load = useCallback(async (path?: string): Promise<void> => {
-    if (requestRoot.length === 0) {
-      setListing(null);
-      setDraft("");
-      setError("Select a registered project first.");
-      return;
-    }
-    setLoading(true);
-    setError(null);
-    try {
-      const next = await fetchFilesDirectories(requestRoot, path);
-      setListing(next);
-      setDraft(next.path);
-    } catch (err) {
-      setError(errorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [requestRoot]);
+  const load = useCallback(
+    async (path?: string): Promise<void> => {
+      if (requestRoot.length === 0) {
+        setListing(null);
+        setDraft("");
+        setError("Select a registered project first.");
+        return;
+      }
+      setLoading(true);
+      setError(null);
+      try {
+        const next = await fetchFilesDirectories(requestRoot, path);
+        setListing(next);
+        setDraft(next.path);
+      } catch (err) {
+        setError(errorMessage(err));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [requestRoot],
+  );
 
   useEffect(() => {
     void load(value.length > 0 ? value : undefined);
@@ -103,7 +106,7 @@ function DirectoryPicker({
 
   const choose = (): void => {
     if (listing !== null) {
-      onSelect(selectProjectRoot ? listing.roots[0]?.path ?? listing.path : listing.path);
+      onSelect(selectProjectRoot ? (listing.roots[0]?.path ?? listing.path) : listing.path);
       onClose();
     }
   };
@@ -142,7 +145,11 @@ function DirectoryPicker({
       ) : null}
       <div className="dir-list">
         {listing?.parent !== null && listing?.parent !== undefined ? (
-          <button type="button" className="dir-row" onClick={() => void load(listing.parent ?? undefined)}>
+          <button
+            type="button"
+            className="dir-row"
+            onClick={() => void load(listing.parent ?? undefined)}
+          >
             <Icons.back size={14} />
             <span>Parent directory</span>
           </button>
@@ -165,8 +172,15 @@ function DirectoryPicker({
         {error !== null ? <div className="dir-error">{error}</div> : null}
       </div>
       <div className="dir-actions">
-        <button type="button" className="dlg-btn" onClick={onClose}>Close</button>
-        <button type="button" className="dlg-btn dlg-primary" onClick={choose} disabled={listing === null}>
+        <button type="button" className="dlg-btn" onClick={onClose}>
+          Close
+        </button>
+        <button
+          type="button"
+          className="dlg-btn dlg-primary"
+          onClick={choose}
+          disabled={listing === null}
+        >
           Use directory
         </button>
       </div>
@@ -193,10 +207,7 @@ function splitPaths(value: string): string[] {
 }
 
 function chooseDefaultModel(models: readonly ModelCapability[]): string {
-  return (
-    models.find((model) => model.id === "example-chat-model") ??
-    models[0]
-  )?.id ?? "";
+  return (models.find((model) => model.id === "example-chat-model") ?? models[0])?.id ?? "";
 }
 
 export function isAgentWorkflowModel(model: ModelCapability): boolean {
@@ -223,8 +234,12 @@ function normalizePathList(workspaceRoot: string, value: string): string {
     .join(", ");
 }
 
-function buildInitialAgentFields(workspaceRoot: string, currentFile: string | null): AgentLauncherFields {
-  const file = currentFile === null ? "" : normalizeAgentPathForWorkspace(workspaceRoot, currentFile);
+function buildInitialAgentFields(
+  workspaceRoot: string,
+  currentFile: string | null,
+): AgentLauncherFields {
+  const file =
+    currentFile === null ? "" : normalizeAgentPathForWorkspace(workspaceRoot, currentFile);
   return {
     verifyTargetFiles: file,
     explainFilePath: file,
@@ -278,10 +293,16 @@ function workflowRunBody(
     );
     const target =
       fields.unitTargetKind === "module"
-        ? { kind: "module", moduleDir: normalizeAgentPathForWorkspace(workspaceRoot, fields.unitModuleDir) }
+        ? {
+            kind: "module",
+            moduleDir: normalizeAgentPathForWorkspace(workspaceRoot, fields.unitModuleDir),
+          }
         : fields.unitTargetKind === "changedFiles"
           ? { kind: "changedFiles", filePaths }
-          : { kind: "file", filePath: normalizeAgentPathForWorkspace(workspaceRoot, fields.unitFilePath) };
+          : {
+              kind: "file",
+              filePath: normalizeAgentPathForWorkspace(workspaceRoot, fields.unitFilePath),
+            };
     return {
       workflowId: "unit-test-generation",
       modelId,
@@ -357,7 +378,8 @@ function validationMessage(
       fields.bugFailingOutput.trim().length > 0 ||
       fields.bugStackTrace.trim().length > 0 ||
       splitPaths(fields.bugTargetFiles).length > 0;
-    if (!hasEvidence) return "Bug investigation requires description, output, stack trace, or target files.";
+    if (!hasEvidence)
+      return "Bug investigation requires description, output, stack trace, or target files.";
   }
   return null;
 }
@@ -384,10 +406,14 @@ function renderField(
           disabled={options.length === 0}
         >
           {options.map((o) => (
-            <option key={o} value={o}>{(f.prefix ?? "") + o}</option>
+            <option key={o} value={o}>
+              {(f.prefix ?? "") + o}
+            </option>
           ))}
         </select>
-        <span className="dlg-selchev"><Icons.chevron size={15} /></span>
+        <span className="dlg-selchev">
+          <Icons.chevron size={15} />
+        </span>
       </span>
     );
   }
@@ -503,8 +529,10 @@ function AgentLauncher({
     const normalizedCurrentFile = normalizeAgentPathForWorkspace(workspace, currentFile);
     setFields((current) => {
       const patch: Record<string, string> = {};
-      if (current.verifyTargetFiles.trim().length === 0) patch.verifyTargetFiles = normalizedCurrentFile;
-      if (current.explainFilePath.trim().length === 0) patch.explainFilePath = normalizedCurrentFile;
+      if (current.verifyTargetFiles.trim().length === 0)
+        patch.verifyTargetFiles = normalizedCurrentFile;
+      if (current.explainFilePath.trim().length === 0)
+        patch.explainFilePath = normalizedCurrentFile;
       if (current.unitFilePath.trim().length === 0) patch.unitFilePath = normalizedCurrentFile;
       if (current.unitFilePaths.trim().length === 0) patch.unitFilePaths = normalizedCurrentFile;
       if (current.bugTargetFiles.trim().length === 0) patch.bugTargetFiles = normalizedCurrentFile;
@@ -518,7 +546,8 @@ function AgentLauncher({
     if (workflow === "verify") updateField({ verifyTargetFiles: normalizedCurrentFile });
     else if (workflow === "explain-plan") updateField({ explainFilePath: normalizedCurrentFile });
     else if (workflow === "unit-test-generation") {
-      if (fields.unitTargetKind === "changedFiles") updateField({ unitFilePaths: normalizedCurrentFile });
+      if (fields.unitTargetKind === "changedFiles")
+        updateField({ unitFilePaths: normalizedCurrentFile });
       else updateField({ unitTargetKind: "file", unitFilePath: normalizedCurrentFile });
     } else {
       updateField({ bugTargetFiles: normalizedCurrentFile });
@@ -581,7 +610,9 @@ function AgentLauncher({
     if (workflow === "verify") {
       return (
         <label className="dlg-field">
-          <span className="dlg-label">Target files <span className="dlg-opt">optional</span></span>
+          <span className="dlg-label">
+            Target files <span className="dlg-opt">optional</span>
+          </span>
           <textarea
             className="dlg-input dlg-textarea mono"
             rows={2}
@@ -589,7 +620,8 @@ function AgentLauncher({
             value={fields.verifyTargetFiles}
             onChange={(event) => updateField({ verifyTargetFiles: event.target.value })}
             onBlur={(event) =>
-              updateField({ verifyTargetFiles: normalizePathList(workspace, event.target.value) })}
+              updateField({ verifyTargetFiles: normalizePathList(workspace, event.target.value) })
+            }
           />
         </label>
       );
@@ -607,11 +639,14 @@ function AgentLauncher({
               onBlur={(event) =>
                 updateField({
                   explainFilePath: normalizeAgentPathForWorkspace(workspace, event.target.value),
-                })}
+                })
+              }
             />
           </label>
           <label className="dlg-field">
-            <span className="dlg-label">Question <span className="dlg-opt">optional</span></span>
+            <span className="dlg-label">
+              Question <span className="dlg-opt">optional</span>
+            </span>
             <textarea
               className="dlg-input dlg-textarea"
               rows={2}
@@ -632,13 +667,19 @@ function AgentLauncher({
               <select
                 className="dlg-input mono"
                 value={fields.unitTargetKind}
-                onChange={(event) => updateField({ unitTargetKind: event.target.value as AgentLauncherFields["unitTargetKind"] })}
+                onChange={(event) =>
+                  updateField({
+                    unitTargetKind: event.target.value as AgentLauncherFields["unitTargetKind"],
+                  })
+                }
               >
                 <option value="file">file</option>
                 <option value="module">module</option>
                 <option value="changedFiles">changedFiles</option>
               </select>
-              <span className="dlg-selchev"><Icons.chevron size={15} /></span>
+              <span className="dlg-selchev">
+                <Icons.chevron size={15} />
+              </span>
             </span>
           </label>
           {fields.unitTargetKind === "module" ? (
@@ -652,7 +693,8 @@ function AgentLauncher({
                 onBlur={(event) =>
                   updateField({
                     unitModuleDir: normalizeAgentPathForWorkspace(workspace, event.target.value),
-                  })}
+                  })
+                }
               />
             </label>
           ) : fields.unitTargetKind === "changedFiles" ? (
@@ -665,7 +707,8 @@ function AgentLauncher({
                 value={fields.unitFilePaths}
                 onChange={(event) => updateField({ unitFilePaths: event.target.value })}
                 onBlur={(event) =>
-                  updateField({ unitFilePaths: normalizePathList(workspace, event.target.value) })}
+                  updateField({ unitFilePaths: normalizePathList(workspace, event.target.value) })
+                }
               />
             </label>
           ) : (
@@ -679,7 +722,8 @@ function AgentLauncher({
                 onBlur={(event) =>
                   updateField({
                     unitFilePath: normalizeAgentPathForWorkspace(workspace, event.target.value),
-                  })}
+                  })
+                }
               />
             </label>
           )}
@@ -689,7 +733,9 @@ function AgentLauncher({
     return (
       <>
         <label className="dlg-field">
-          <span className="dlg-label">Description <span className="dlg-opt">optional</span></span>
+          <span className="dlg-label">
+            Description <span className="dlg-opt">optional</span>
+          </span>
           <textarea
             className="dlg-input dlg-textarea"
             rows={2}
@@ -699,7 +745,9 @@ function AgentLauncher({
           />
         </label>
         <label className="dlg-field">
-          <span className="dlg-label">Failing output <span className="dlg-opt">optional</span></span>
+          <span className="dlg-label">
+            Failing output <span className="dlg-opt">optional</span>
+          </span>
           <textarea
             className="dlg-input dlg-textarea mono"
             rows={2}
@@ -708,7 +756,9 @@ function AgentLauncher({
           />
         </label>
         <label className="dlg-field">
-          <span className="dlg-label">Stack trace <span className="dlg-opt">optional</span></span>
+          <span className="dlg-label">
+            Stack trace <span className="dlg-opt">optional</span>
+          </span>
           <textarea
             className="dlg-input dlg-textarea mono"
             rows={2}
@@ -717,7 +767,9 @@ function AgentLauncher({
           />
         </label>
         <label className="dlg-field">
-          <span className="dlg-label">Target files <span className="dlg-opt">optional</span></span>
+          <span className="dlg-label">
+            Target files <span className="dlg-opt">optional</span>
+          </span>
           <textarea
             className="dlg-input dlg-textarea mono"
             rows={2}
@@ -725,7 +777,8 @@ function AgentLauncher({
             value={fields.bugTargetFiles}
             onChange={(event) => updateField({ bugTargetFiles: event.target.value })}
             onBlur={(event) =>
-              updateField({ bugTargetFiles: normalizePathList(workspace, event.target.value) })}
+              updateField({ bugTargetFiles: normalizePathList(workspace, event.target.value) })
+            }
           />
         </label>
       </>
@@ -744,10 +797,14 @@ function AgentLauncher({
             onChange={(event) => setWorkflow(event.target.value as AgentWorkflowId)}
           >
             {AGENT_WORKFLOWS.map((item) => (
-              <option key={item.id} value={item.id}>{item.label}</option>
+              <option key={item.id} value={item.id}>
+                {item.label}
+              </option>
             ))}
           </select>
-          <span className="dlg-selchev"><Icons.chevron size={15} /></span>
+          <span className="dlg-selchev">
+            <Icons.chevron size={15} />
+          </span>
         </span>
       </label>
       <label className="dlg-field">
@@ -760,7 +817,11 @@ function AgentLauncher({
             onClick={() => setDirectoryField("agentWorkspace")}
             onChange={(event) => setWorkspaceRoot(event.target.value)}
           />
-          <button type="button" className="dlg-dirbtn" onClick={() => setDirectoryField("agentWorkspace")}>
+          <button
+            type="button"
+            className="dlg-dirbtn"
+            onClick={() => setDirectoryField("agentWorkspace")}
+          >
             Browse
           </button>
         </span>
@@ -776,7 +837,12 @@ function AgentLauncher({
       {workspace.length > 0 && !registered ? (
         <div className="dlg-agent-warning">
           <span>Workspace is not registered.</span>
-          <button type="button" className="dlg-btn" disabled={registering} onClick={() => void registerWorkspace()}>
+          <button
+            type="button"
+            className="dlg-btn"
+            disabled={registering}
+            onClick={() => void registerWorkspace()}
+          >
             {registering ? "Registering..." : "Register workspace"}
           </button>
         </div>
@@ -791,10 +857,14 @@ function AgentLauncher({
             disabled={models.length === 0}
           >
             {models.map((model) => (
-              <option key={model.id} value={model.id}>{model.id}</option>
+              <option key={model.id} value={model.id}>
+                {model.id}
+              </option>
             ))}
           </select>
-          <span className="dlg-selchev"><Icons.chevron size={15} /></span>
+          <span className="dlg-selchev">
+            <Icons.chevron size={15} />
+          </span>
         </span>
       </label>
       {currentFile !== null ? (
@@ -811,12 +881,21 @@ function AgentLauncher({
             <span className="perm-name">Keiko-Mode</span>
             <span className="perm-desc">coming soon</span>
           </span>
-          <span className="perm-sw on"><span /></span>
+          <span className="perm-sw on">
+            <span />
+          </span>
         </div>
-        <div className="perm-note">Runs are dry-run only. Apply requires explicit review and Apply.</div>
+        <div className="perm-note">
+          Runs are dry-run only. Apply requires explicit review and Apply.
+        </div>
       </div>
       <div className="dlg-agent-actions">
-        <button type="button" className="dlg-btn dlg-primary" disabled={!canStart} onClick={() => void startAgent()}>
+        <button
+          type="button"
+          className="dlg-btn dlg-primary"
+          disabled={!canStart}
+          onClick={() => void startAgent()}
+        >
           {starting ? "Starting..." : "Start agent"}
         </button>
         {loading ? <span className="dlg-note">Loading models and projects...</span> : null}
@@ -887,8 +966,14 @@ export function NewWindowDialog({
   };
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>): void => {
-    if (e.key === "Escape") { onClose(); return; }
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { submit(); return; }
+    if (e.key === "Escape") {
+      onClose();
+      return;
+    }
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      submit();
+      return;
+    }
     if (e.key !== "Tab") return;
     const f = focusableInside(e.currentTarget);
     if (f.length === 0) return;
@@ -918,7 +1003,9 @@ export function NewWindowDialog({
         onKeyDown={onKey}
       >
         <div className="dlg-head">
-          <span className="dlg-ico"><Icon size={20} /></span>
+          <span className="dlg-ico">
+            <Icon size={20} />
+          </span>
           <div className="dlg-htext">
             <span className="dlg-title">New {t.title} window</span>
             <span className="dlg-sub">{t.desc}</span>
@@ -938,44 +1025,57 @@ export function NewWindowDialog({
           {type === "agents" ? (
             <AgentLauncher
               filesContext={filesContext}
-              firstRef={(node) => { firstFieldRef.current = node; }}
+              firstRef={(node) => {
+                firstFieldRef.current = node;
+              }}
               directoryField={directoryField}
               setDirectoryField={setDirectoryField}
               setDialogError={setDialogError}
               onConfirm={onConfirm}
             />
-          ) : fields.length === 0 && (
-            <div className="dlg-empty">Add a new {t.title} window to your workspace.</div>
+          ) : (
+            fields.length === 0 && (
+              <div className="dlg-empty">Add a new {t.title} window to your workspace.</div>
+            )
           )}
-          {type !== "agents" && fields.map((f, i) => (
-            <label className="dlg-field" key={f.key}>
-              <span className="dlg-label">
-                {f.label}
-                {f.optional === true && <span className="dlg-opt">optional</span>}
-              </span>
-              {renderField(
-                f,
-                cfg,
-                set,
-                i === 0 ? (node) => { firstFieldRef.current = node; } : null,
-                setDirectoryField,
-              )}
-              {f.type === "directory" && directoryField === f.key ? (
-                <DirectoryPicker
-                  value={typeof cfg[f.key] === "string" ? cfg[f.key] as string : ""}
-                  selectProjectRoot={f.key === "root"}
-                  onSelect={(path) => set(f.key, path)}
-                  onClose={() => setDirectoryField(null)}
-                />
-              ) : null}
-            </label>
-          ))}
+          {type !== "agents" &&
+            fields.map((f, i) => (
+              <label className="dlg-field" key={f.key}>
+                <span className="dlg-label">
+                  {f.label}
+                  {f.optional === true && <span className="dlg-opt">optional</span>}
+                </span>
+                {renderField(
+                  f,
+                  cfg,
+                  set,
+                  i === 0
+                    ? (node) => {
+                        firstFieldRef.current = node;
+                      }
+                    : null,
+                  setDirectoryField,
+                )}
+                {f.type === "directory" && directoryField === f.key ? (
+                  <DirectoryPicker
+                    value={typeof cfg[f.key] === "string" ? (cfg[f.key] as string) : ""}
+                    selectProjectRoot={f.key === "root"}
+                    onSelect={(path) => set(f.key, path)}
+                    onClose={() => setDirectoryField(null)}
+                  />
+                ) : null}
+              </label>
+            ))}
           {dialogError !== null ? <div className="dlg-error">{dialogError}</div> : null}
         </div>
         <div className="dlg-foot">
-          <button type="button" className="dlg-btn" onClick={onClose}>Cancel</button>
+          <button type="button" className="dlg-btn" onClick={onClose}>
+            Cancel
+          </button>
           {type !== "agents" ? (
-            <button type="button" className="dlg-btn dlg-primary" onClick={submit}>{cta}</button>
+            <button type="button" className="dlg-btn dlg-primary" onClick={submit}>
+              {cta}
+            </button>
           ) : null}
         </div>
       </div>

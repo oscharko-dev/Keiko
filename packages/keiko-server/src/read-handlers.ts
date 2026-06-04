@@ -168,7 +168,10 @@ function readWorkspaceRequest(q: URLSearchParams): WorkspaceRequest | RouteResul
 function workspaceNotRegisteredResult(): RouteResult {
   return {
     status: 403,
-    body: errorBody("WORKSPACE_NOT_REGISTERED", "The workspace directory is not a registered project."),
+    body: errorBody(
+      "WORKSPACE_NOT_REGISTERED",
+      "The workspace directory is not a registered project.",
+    ),
   };
 }
 

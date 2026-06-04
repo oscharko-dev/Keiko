@@ -43,11 +43,25 @@ function deriveOpenTools(wins: readonly AppWindow[] | null): ReadonlySet<string>
 }
 
 const CARD_TYPES: readonly WindowType[] = [
-  "chat", "files", "editor", "browser", "terminal", "review", "agents", "integ",
+  "chat",
+  "files",
+  "editor",
+  "browser",
+  "terminal",
+  "review",
+  "agents",
+  "integ",
 ];
 const TOOL_TYPES: readonly WindowType[] = [
-  "project", "search", "plugins", "automations", "mobile",
-  "inspector", "activity", "notifications", "resources",
+  "project",
+  "search",
+  "plugins",
+  "automations",
+  "mobile",
+  "inspector",
+  "activity",
+  "notifications",
+  "resources",
 ];
 
 function buildCommands(
@@ -77,9 +91,27 @@ function buildCommands(
       run: () => api.toggleTool(tp),
     });
   }
-  out.push({ id: "tile", label: "Tile all windows", group: "Layout", icon: "tile", run: api.tileAll });
-  out.push({ id: "split", label: "Split front windows", group: "Layout", icon: "split", run: api.splitFront });
-  out.push({ id: "cascade", label: "Cascade windows", group: "Layout", icon: "cascade", run: api.cascade });
+  out.push({
+    id: "tile",
+    label: "Tile all windows",
+    group: "Layout",
+    icon: "tile",
+    run: api.tileAll,
+  });
+  out.push({
+    id: "split",
+    label: "Split front windows",
+    group: "Layout",
+    icon: "split",
+    run: api.splitFront,
+  });
+  out.push({
+    id: "cascade",
+    label: "Cascade windows",
+    group: "Layout",
+    icon: "cascade",
+    run: api.cascade,
+  });
   out.push({
     id: "theme",
     label: "Toggle light / dark theme",
@@ -115,23 +147,26 @@ function AppShellInner(): ReactNode {
     setPalOpen(false);
     setPending(type);
   }, []);
-  const confirmNew = useCallback((cfg: Cfg): void => {
-    setPending((current) => {
-      if (current !== null) {
-        const { __connectFilesId, ...windowCfg } = cfg;
-        const createdId = ws.api.add(current, windowCfg);
-        if (
-          current === "agents" &&
-          createdId !== null &&
-          typeof __connectFilesId === "string" &&
-          __connectFilesId.length > 0
-        ) {
-          ws.api.connect(createdId, __connectFilesId);
+  const confirmNew = useCallback(
+    (cfg: Cfg): void => {
+      setPending((current) => {
+        if (current !== null) {
+          const { __connectFilesId, ...windowCfg } = cfg;
+          const createdId = ws.api.add(current, windowCfg);
+          if (
+            current === "agents" &&
+            createdId !== null &&
+            typeof __connectFilesId === "string" &&
+            __connectFilesId.length > 0
+          ) {
+            ws.api.connect(createdId, __connectFilesId);
+          }
         }
-      }
-      return null;
-    });
-  }, [ws.api]);
+        return null;
+      });
+    },
+    [ws.api],
+  );
   const closeDialog = useCallback((): void => setPending(null), []);
   const closeCmdk = useCallback((): void => setCmdkOpen(false), []);
 
@@ -162,12 +197,7 @@ function AppShellInner(): ReactNode {
   const needsGatewaySetup = !session.loading && session.models.length === 0;
 
   const paletteNode = palOpen ? (
-    <Palette
-      types={WIN_TYPES}
-      order={CARD_TYPES}
-      onAdd={pick}
-      onClose={closePalette}
-    />
+    <Palette types={WIN_TYPES} order={CARD_TYPES} onAdd={pick} onClose={closePalette} />
   ) : null;
 
   return (

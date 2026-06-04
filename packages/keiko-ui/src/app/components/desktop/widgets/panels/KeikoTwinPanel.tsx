@@ -67,7 +67,10 @@ function PolicyTab({
     setPolicy((p) => p.map((r) => (r.id === id ? { ...r, decision: DEC_CYCLE[r.decision] } : r)));
   return (
     <div className="pol">
-      <div className="pol-hint">Rights an agent inherits when Keiko governs. Tap a decision to cycle through Allow → Ask → Deny.</div>
+      <div className="pol-hint">
+        Rights an agent inherits when Keiko governs. Tap a decision to cycle through Allow → Ask →
+        Deny.
+      </div>
       {policy.map((r) => {
         const m = DEC_META[r.decision];
         return (
@@ -91,11 +94,7 @@ function PolicyTab({
   );
 }
 
-function EvalTab({
-  decide,
-}: {
-  decide: (kind: GateKind, risk: Risk) => Decision;
-}): ReactNode {
+function EvalTab({ decide }: { decide: (kind: GateKind, risk: Risk) => Decision }): ReactNode {
   const [run, setRun] = useState(false);
   const results = EVAL_SCENARIOS.map((s) => {
     const actual = decide(s.kind, s.risk);
@@ -118,7 +117,13 @@ function EvalTab({
       {results.map((r) => (
         <div className="evl-row" key={r.id} data-state={!run ? "idle" : r.pass ? "pass" : "fail"}>
           <span className="evl-ico">
-            {!run ? <span className="evl-dot" /> : r.pass ? <Icons.check size={13} /> : <Icons.close size={13} />}
+            {!run ? (
+              <span className="evl-dot" />
+            ) : r.pass ? (
+              <Icons.check size={13} />
+            ) : (
+              <Icons.close size={13} />
+            )}
           </span>
           <span className="evl-label">{r.label}</span>
           {run && (
@@ -153,7 +158,9 @@ function MemoryTab({
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Teach Keiko something about you…"
-          onKeyDown={(e) => { if (e.key === "Enter") add(); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") add();
+          }}
         />
         <button type="button" onClick={add} aria-label="Add memory">
           <Icons.plus size={15} />
@@ -199,9 +206,13 @@ function BridgesTab({
             aria-pressed={on}
             onClick={() => setBridges((b) => ({ ...b, [k]: !b[k] }))}
           >
-            <span className="brg-ico"><Icon size={16} /></span>
+            <span className="brg-ico">
+              <Icon size={16} />
+            </span>
             <span className="brg-name">{lbl}</span>
-            <span className={"brg-tg" + (on ? " on" : "")}><span /></span>
+            <span className={"brg-tg" + (on ? " on" : "")}>
+              <span />
+            </span>
           </button>
         );
       })}

@@ -4,13 +4,7 @@ import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "reac
 import { canConnect, snapMap } from "../windows/connectionUtils";
 import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
-import type {
-  AppWindow,
-  Connection,
-  ConnectingState,
-  SnapPrev,
-  View,
-} from "../windows/types";
+import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import type { FilesWindowContext, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
 
 function addPosition(
@@ -31,7 +25,10 @@ interface MutateArgs {
   readonly worldVP: () => ViewportWorld | null;
 }
 
-type Mutations = Pick<WorkspaceApi, "update" | "focus" | "close" | "maximize" | "add" | "toggleTool">;
+type Mutations = Pick<
+  WorkspaceApi,
+  "update" | "focus" | "close" | "maximize" | "add" | "toggleTool"
+>;
 
 function makeUpdate(setWins: MutateArgs["setWins"]): WorkspaceApi["update"] {
   return (id, patch) =>
@@ -40,7 +37,9 @@ function makeUpdate(setWins: MutateArgs["setWins"]): WorkspaceApi["update"] {
 
 function makeFocus(setWins: MutateArgs["setWins"], zc: MutateArgs["zc"]): WorkspaceApi["focus"] {
   return (id) =>
-    setWins((ws) => (ws === null ? ws : ws.map((w) => (w.id === id ? { ...w, z: ++zc.current } : w))));
+    setWins((ws) =>
+      ws === null ? ws : ws.map((w) => (w.id === id ? { ...w, z: ++zc.current } : w)),
+    );
 }
 
 function makeClose(setWins: MutateArgs["setWins"]): WorkspaceApi["close"] {
@@ -185,7 +184,10 @@ function makeSplitFront({ setWins, worldVP }: LayoutArgs): WorkspaceApi["splitFr
       if (ws === null || ws.length === 0) return ws;
       const vp = worldVP();
       if (vp === null) return ws;
-      const ids = [...ws].sort((a, b) => b.z - a.z).slice(0, 2).map((s) => s.id);
+      const ids = [...ws]
+        .sort((a, b) => b.z - a.z)
+        .slice(0, 2)
+        .map((s) => s.id);
       return ws.map((w) => {
         const i = ids.indexOf(w.id);
         if (i === 0) {
@@ -217,7 +219,9 @@ function makeCascade({ setWins, worldVP }: LayoutArgs): WorkspaceApi["cascade"] 
     });
 }
 
-export function makeLayoutActions(args: LayoutArgs): Pick<WorkspaceApi, "tileAll" | "splitFront" | "cascade"> {
+export function makeLayoutActions(
+  args: LayoutArgs,
+): Pick<WorkspaceApi, "tileAll" | "splitFront" | "cascade"> {
   return {
     tileAll: makeTileAll(args),
     splitFront: makeSplitFront(args),

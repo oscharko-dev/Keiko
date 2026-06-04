@@ -12,15 +12,7 @@ interface IcoProps {
   d?: string;
 }
 
-function Ico({
-  size = 18,
-  sw = 1.6,
-  vb = 24,
-  fill,
-  style,
-  children,
-  d,
-}: IcoProps): ReactNode {
+function Ico({ size = 18, sw = 1.6, vb = 24, fill, style, children, d }: IcoProps): ReactNode {
   const useFill = fill !== undefined;
   return (
     <svg
@@ -136,9 +128,7 @@ export const Icons = {
   spark: (p: IcoProps): ReactNode => (
     <Ico {...p} d="M12 3l1.8 5.6L19 10l-5.2 1.4L12 17l-1.8-5.6L5 10l5.2-1.4z" />
   ),
-  pin: (p: IcoProps): ReactNode => (
-    <Ico {...p} d="M9 3h6l-1 5 3 3-5 1-1 8-1-8-5-1 3-3z" />
-  ),
+  pin: (p: IcoProps): ReactNode => <Ico {...p} d="M9 3h6l-1 5 3 3-5 1-1 8-1-8-5-1 3-3z" />,
   archive: (p: IcoProps): ReactNode => (
     <Ico {...p}>
       <rect x="3.5" y="5" width="17" height="4" rx="1" />
@@ -152,9 +142,7 @@ export const Icons = {
     </Ico>
   ),
   minimize: (p: IcoProps): ReactNode => <Ico {...p} d="M5 12h14" />,
-  expand: (p: IcoProps): ReactNode => (
-    <Ico {...p} d="M4 9V4h5M20 15v5h-5M20 9V4h-5M4 15v5h5" />
-  ),
+  expand: (p: IcoProps): ReactNode => <Ico {...p} d="M4 9V4h5M20 15v5h-5M20 9V4h-5M4 15v5h5" />,
   back: (p: IcoProps): ReactNode => <Ico {...p} d="M15 6l-6 6 6 6" />,
   fwd: (p: IcoProps): ReactNode => <Ico {...p} d="M9 6l6 6-6 6" />,
   drag: (p: IcoProps): ReactNode => (
@@ -252,10 +240,7 @@ export const Icons = {
     </Ico>
   ),
   layers: (p: IcoProps): ReactNode => (
-    <Ico
-      {...p}
-      d="M12 3l8 4.5-8 4.5-8-4.5z M4 12l8 4.5 8-4.5 M4 16.5 12 21l8-4.5"
-    />
+    <Ico {...p} d="M12 3l8 4.5-8 4.5-8-4.5z M4 12l8 4.5 8-4.5 M4 16.5 12 21l8-4.5" />
   ),
   tokens: (p: IcoProps): ReactNode => (
     <Ico {...p}>
@@ -263,9 +248,7 @@ export const Icons = {
       <path d="M14 9.5a4.5 4.5 0 1 1-4 6.9" />
     </Ico>
   ),
-  bolt: (p: IcoProps): ReactNode => (
-    <Ico {...p} d="M13 3 5 13h5l-1 8 8-10h-5z" />
-  ),
+  bolt: (p: IcoProps): ReactNode => <Ico {...p} d="M13 3 5 13h5l-1 8 8-10h-5z" />,
   add: (p: IcoProps): ReactNode => (
     <Ico {...p}>
       <rect x="3.5" y="3.5" width="17" height="17" rx="3.5" />
@@ -299,9 +282,7 @@ export const Icons = {
       <path d="M20 20l-4.2-4.2M11 8.3v5.4M8.3 11h5.4" />
     </Ico>
   ),
-  activity: (p: IcoProps): ReactNode => (
-    <Ico {...p} d="M3 12h3l2.5-7 5 14 2.5-7H21" />
-  ),
+  activity: (p: IcoProps): ReactNode => <Ico {...p} d="M3 12h3l2.5-7 5 14 2.5-7H21" />,
 } as const;
 
 export type IconName = keyof typeof Icons;

@@ -15,7 +15,8 @@ export interface TreeNode {
 
 export function fileIconKey(name: string): string | null {
   const n = name.toLowerCase();
-  if (n === "dockerfile" || n.includes("docker-compose") || n.endsWith(".dockerignore")) return "docker";
+  if (n === "dockerfile" || n.includes("docker-compose") || n.endsWith(".dockerignore"))
+    return "docker";
   if (n.endsWith(".json")) return "json";
   if (n.endsWith(".yml") || n.endsWith(".yaml")) return "yaml";
   if (n.endsWith(".md")) return "markdown";
@@ -23,7 +24,8 @@ export function fileIconKey(name: string): string | null {
   if (n.endsWith(".java")) return "java";
   if (n.endsWith(".tsx")) return "react";
   if (n.endsWith(".ts")) return "typescript";
-  if (n.endsWith(".jsx") || n.endsWith(".js") || n.endsWith(".mjs") || n.endsWith(".cjs")) return "javascript";
+  if (n.endsWith(".jsx") || n.endsWith(".js") || n.endsWith(".mjs") || n.endsWith(".cjs"))
+    return "javascript";
   if (n.endsWith(".py")) return "python";
   if (n.endsWith(".go")) return "go";
   if (n.endsWith(".rs")) return "rust";
@@ -39,15 +41,18 @@ export function fileIconKey(name: string): string | null {
     n.endsWith(".gif") ||
     n.endsWith(".webp") ||
     n.endsWith(".svg")
-  ) return "image";
+  )
+    return "image";
   return null;
 }
 
 export function FileIcon({ name, icon }: { name: string; icon?: string | undefined }): ReactNode {
   const key = icon ?? fileIconKey(name);
   if (key !== null) {
-    // eslint-disable-next-line @next/next/no-img-element -- design CSS sizes raw SVG via .fi-img; next/image breaks sizing
-    return <img className="fi-img" src={`/assets/icons/${key}.svg`} width="15" height="15" alt="" />;
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- design CSS sizes raw SVG via .fi-img; next/image breaks sizing.
+      <img className="fi-img" src={`/assets/icons/${key}.svg`} width="15" height="15" alt="" />
+    );
   }
   return (
     <span className="fi-fallback">
@@ -197,7 +202,9 @@ export function TreeNodeComponent({ node, depth, path, active, onPick }: TreeNod
         <button
           className="tr-row"
           style={{ paddingLeft: pad }}
-          onClick={() => { setOpen((o) => !o); }}
+          onClick={() => {
+            setOpen((o) => !o);
+          }}
         >
           <span className="tr-caret" data-open={open}>
             <Icons.chevronR size={11} />
@@ -238,7 +245,9 @@ export function TreeNodeComponent({ node, depth, path, active, onPick }: TreeNod
       className="tr-row tr-file"
       data-active={active === myPath}
       style={{ paddingLeft: pad + 14 }}
-      onClick={() => { onPick(myPath); }}
+      onClick={() => {
+        onPick(myPath);
+      }}
     >
       <FileIcon name={node.name} icon={node.icon} />
       <span className="tr-name">{node.name}</span>

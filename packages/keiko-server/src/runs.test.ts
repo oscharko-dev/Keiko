@@ -79,11 +79,16 @@ describe("run registry completion capture", () => {
   it("captures status, report, and appliable snapshot", () => {
     const registry = reg(() => 0);
     registry.register(registerInput("a"));
-    registry.complete("a", "completed", { status: "dry-run" }, {
-      kind: "unit-tests",
-      payload: { workspaceRoot: "." },
-      limits: undefined,
-    });
+    registry.complete(
+      "a",
+      "completed",
+      { status: "dry-run" },
+      {
+        kind: "unit-tests",
+        payload: { workspaceRoot: "." },
+        limits: undefined,
+      },
+    );
     const record = registry.get("a");
     expect(record?.status).toBe("completed");
     expect(record?.report).toEqual({ status: "dry-run" });
@@ -94,6 +99,8 @@ describe("run registry completion capture", () => {
 
   it("ignores completion of an unknown run", () => {
     const registry = reg(() => 0);
-    expect(() => { registry.complete("missing", "failed", {}, undefined); }).not.toThrow();
+    expect(() => {
+      registry.complete("missing", "failed", {}, undefined);
+    }).not.toThrow();
   });
 });

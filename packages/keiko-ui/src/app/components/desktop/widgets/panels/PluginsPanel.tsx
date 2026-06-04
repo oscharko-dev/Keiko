@@ -53,7 +53,11 @@ function PlugIcon({ img, icon, glyph }: PlugIconProps): ReactNode {
   }
   if (icon !== undefined) {
     const IconComp = Icons[icon];
-    return <span className="pl-line"><IconComp size={18} /></span>;
+    return (
+      <span className="pl-line">
+        <IconComp size={18} />
+      </span>
+    );
   }
   return <span className="mono pl-glyph">{glyph}</span>;
 }

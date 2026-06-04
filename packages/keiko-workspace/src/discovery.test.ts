@@ -2,11 +2,7 @@ import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  discoverFiles,
-  discoverWithStats,
-  readWorkspaceFile,
-} from "./discovery.js";
+import { discoverFiles, discoverWithStats, readWorkspaceFile } from "./discovery.js";
 import { detectWorkspace } from "./detect.js";
 import {
   FileTooLargeError,

@@ -74,9 +74,11 @@ registerWindowRender("files", (cfg, ctx) => {
       resolvedRoot: resolvedRoot ?? undefined,
     });
   };
-  return root !== undefined
-    ? <FilesWidget root={root} onActiveFileChange={onActiveFileChange} />
-    : <FilesWidget onActiveFileChange={onActiveFileChange} />;
+  return root !== undefined ? (
+    <FilesWidget root={root} onActiveFileChange={onActiveFileChange} />
+  ) : (
+    <FilesWidget onActiveFileChange={onActiveFileChange} />
+  );
 });
 registerWindowRender("editor", (cfg) => {
   const file = str(cfg, "file");
@@ -96,16 +98,20 @@ registerWindowRender("terminal", (cfg) => {
 });
 registerWindowRender("review", (cfg) => {
   const runId = str(cfg, "runId");
-  return runId !== undefined && runId !== ""
-    ? <ReviewWidget runId={runId} />
-    : <ReviewWidget />;
+  return runId !== undefined && runId !== "" ? <ReviewWidget runId={runId} /> : <ReviewWidget />;
 });
 registerWindowRender("agents", (cfg, ctx) => (
-  <AgentRunWidget cfg={toAgentCfg(cfg)} linkedRoot={ctx.linkedRoot} linkedFilePath={ctx.linkedFilePath} />
+  <AgentRunWidget
+    cfg={toAgentCfg(cfg)}
+    linkedRoot={ctx.linkedRoot}
+    linkedFilePath={ctx.linkedFilePath}
+  />
 ));
 registerWindowRender("integ", (cfg) => {
   const provider = str(cfg, "provider");
-  return provider !== undefined
-    ? <IntegrationsWidget provider={provider} />
-    : <IntegrationsWidget />;
+  return provider !== undefined ? (
+    <IntegrationsWidget provider={provider} />
+  ) : (
+    <IntegrationsWidget />
+  );
 });

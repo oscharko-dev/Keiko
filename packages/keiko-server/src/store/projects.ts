@@ -22,8 +22,10 @@ function rowToProject(row: ProjectRow): Project {
   };
 }
 
-const SQL_LIST = "SELECT path, name, favorite, created_at, last_opened_at FROM projects ORDER BY path";
-const SQL_GET = "SELECT path, name, favorite, created_at, last_opened_at FROM projects WHERE path = ?";
+const SQL_LIST =
+  "SELECT path, name, favorite, created_at, last_opened_at FROM projects ORDER BY path";
+const SQL_GET =
+  "SELECT path, name, favorite, created_at, last_opened_at FROM projects WHERE path = ?";
 // UPSERT: if path already exists, bump last_opened_at; createdAt is preserved by ON CONFLICT DO UPDATE.
 // A re-add with an explicit name repairs the display name; implicit basename derivation never
 // overwrites a user-chosen existing name.
@@ -75,9 +77,9 @@ export function updateProject(
 ): Project {
   const nameParam = patch.name ?? null;
   const favoriteParam = patch.favorite === undefined ? null : patch.favorite ? 1 : 0;
-  const row = db
-    .prepare(SQL_UPDATE)
-    .get(nameParam, favoriteParam, now, path) as unknown as ProjectRow | undefined;
+  const row = db.prepare(SQL_UPDATE).get(nameParam, favoriteParam, now, path) as unknown as
+    | ProjectRow
+    | undefined;
   if (row === undefined) throw notFound("Project");
   return rowToProject(row);
 }

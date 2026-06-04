@@ -217,7 +217,8 @@ function parseInput(inputJson: string | undefined): Record<string, unknown> | nu
 }
 
 function canApply(workflow: AgentWorkflowId | null, report: RunReport | null): boolean {
-  if (report === null || report.proposedDiff === undefined || report.appliedAt !== undefined) return false;
+  if (report === null || report.proposedDiff === undefined || report.appliedAt !== undefined)
+    return false;
   return (
     (workflow === "unit-test-generation" && report.status === "dry-run") ||
     (workflow === "bug-investigation" && report.status === "fix-proposed")
@@ -263,7 +264,10 @@ function renderVerifyReport(report: RunReport): ReactNode {
   return (
     <div className="arun-result-card">
       <div className="arun-result-title">Verification</div>
-      <div className="arun-kv"><span>Status</span><strong>{report.overallStatus}</strong></div>
+      <div className="arun-kv">
+        <span>Status</span>
+        <strong>{report.overallStatus}</strong>
+      </div>
       {report.results.slice(0, 8).map((result) => (
         <div className="arun-check-row" key={`${result.kind}:${result.command}`}>
           <span>{result.kind}</span>
@@ -312,7 +316,10 @@ function renderHypothesis(report: RunReport): ReactNode {
     <div className="arun-result-card">
       <div className="arun-result-title">Hypothesis</div>
       {rows.map(([label, value]) => (
-        <div className="arun-kv" key={label}><span>{label}</span><strong>{value}</strong></div>
+        <div className="arun-kv" key={label}>
+          <span>{label}</span>
+          <strong>{value}</strong>
+        </div>
       ))}
     </div>
   );
@@ -349,7 +356,9 @@ export function AgentRunWidget({
           setEvidence(response.manifest);
           setReport(null);
         } catch (evidenceError: unknown) {
-          setError(evidenceError instanceof Error ? evidenceError.message : "Unable to load evidence.");
+          setError(
+            evidenceError instanceof Error ? evidenceError.message : "Unable to load evidence.",
+          );
         }
         return;
       }
@@ -411,7 +420,9 @@ export function AgentRunWidget({
       const response = await applyRun(runId);
       setReport(response.report);
     } catch (applyRunError: unknown) {
-      setApplyError(applyRunError instanceof Error ? applyRunError.message : "Unable to apply run.");
+      setApplyError(
+        applyRunError instanceof Error ? applyRunError.message : "Unable to apply run.",
+      );
     } finally {
       setApplying(false);
     }
@@ -468,15 +479,17 @@ export function AgentRunWidget({
       <div className="arun-perms">
         <span className="arun-perm" data-on={linkedRoot !== null}>
           <Icons.files size={11} />
-          {linkedRoot !== null ? linkedRoot : cfg.workspaceRoot ?? "no workspace"}
+          {linkedRoot !== null ? linkedRoot : (cfg.workspaceRoot ?? "no workspace")}
         </span>
         {linkedFilePath !== undefined ? (
           <span className="arun-perm" data-on={true}>
-            <Icons.files size={11} />{linkedFilePath}
+            <Icons.files size={11} />
+            {linkedFilePath}
           </span>
         ) : null}
         <span className="arun-perm" aria-disabled="true">
-          <Icons.plugins size={11} />permissions coming soon
+          <Icons.plugins size={11} />
+          permissions coming soon
         </span>
       </div>
 
@@ -490,16 +503,26 @@ export function AgentRunWidget({
       <div className="arun-log">
         {sse.events.length === 0 ? (
           <div className="arun-log-row">
-            <span className="arun-log-ico"><Icons.reset size={12} /></span>
+            <span className="arun-log-ico">
+              <Icons.reset size={12} />
+            </span>
             <span className="arun-log-text">Waiting for run events...</span>
           </div>
-        ) : sse.events.slice().reverse().slice(0, 50).map((event) => (
-          <div className="arun-log-row" key={`${event.runId}:${event.seq}:${event.type}`}>
-            <span className="arun-log-ico"><Icons.spark size={12} /></span>
-            <span className="arun-log-text">{eventLabel(event)}</span>
-            <span className="arun-log-t mono">{eventTime(event)}</span>
-          </div>
-        ))}
+        ) : (
+          sse.events
+            .slice()
+            .reverse()
+            .slice(0, 50)
+            .map((event) => (
+              <div className="arun-log-row" key={`${event.runId}:${event.seq}:${event.type}`}>
+                <span className="arun-log-ico">
+                  <Icons.spark size={12} />
+                </span>
+                <span className="arun-log-text">{eventLabel(event)}</span>
+                <span className="arun-log-t mono">{eventTime(event)}</span>
+              </div>
+            ))
+        )}
       </div>
 
       {report !== null ? (
@@ -535,8 +558,14 @@ export function AgentRunWidget({
       ) : evidence !== null ? (
         <div className="arun-result-card">
           <div className="arun-result-title">Evidence</div>
-          <div className="arun-kv"><span>Outcome</span><strong>{evidence.run.outcome}</strong></div>
-          <div className="arun-kv"><span>Duration</span><strong>{formatMs(evidence.run.durationMs)}</strong></div>
+          <div className="arun-kv">
+            <span>Outcome</span>
+            <strong>{evidence.run.outcome}</strong>
+          </div>
+          <div className="arun-kv">
+            <span>Duration</span>
+            <strong>{formatMs(evidence.run.durationMs)}</strong>
+          </div>
         </div>
       ) : null}
 
@@ -553,7 +582,12 @@ export function AgentRunWidget({
           Evidence
         </a>
         {showApply ? (
-          <button type="button" className="arun-btn" disabled={applying} onClick={() => void doApply()}>
+          <button
+            type="button"
+            className="arun-btn"
+            disabled={applying}
+            onClick={() => void doApply()}
+          >
             {applying ? "Applying..." : "Apply"}
           </button>
         ) : report?.appliedAt !== undefined ? (

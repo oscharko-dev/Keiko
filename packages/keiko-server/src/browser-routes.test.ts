@@ -9,11 +9,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildCspHeader } from "./csp.js";
-import {
-  buildRedactor,
-  createInMemoryUiStore,
-  type UiHandlerDeps,
-} from "./index.js";
+import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
 import {
@@ -55,7 +51,12 @@ class FakeBrowserSessionManager implements BrowserSessionManager {
       throw new BrowserToolError("BAD_PORT", "Port out of range.");
     }
     if (this.opts.reachable === false) {
-      return { reachable: false, userAgent: null, browserVersion: null, webSocketDebuggerUrl: null };
+      return {
+        reachable: false,
+        userAgent: null,
+        browserVersion: null,
+        webSocketDebuggerUrl: null,
+      };
     }
     return Promise.resolve({
       reachable: true,
@@ -134,9 +135,7 @@ class FakeBrowserSessionManager implements BrowserSessionManager {
     bytes: number;
   }> => {
     if (captureSeq > this.nextScreenshotSeq) {
-      return Promise.reject(
-        new BrowserToolError("NO_PENDING_SCREENSHOT", "Unknown capture seq."),
-      );
+      return Promise.reject(new BrowserToolError("NO_PENDING_SCREENSHOT", "Unknown capture seq."));
     }
     this.applied.push({ sessionId, seq: captureSeq });
     return Promise.resolve({
@@ -165,10 +164,7 @@ class FakeBrowserSessionManager implements BrowserSessionManager {
   public readonly hasSession = (sessionId: string): boolean =>
     this.opened.includes(sessionId) && !this.closed.includes(sessionId);
   public readonly dispose = (): Promise<void> => Promise.resolve();
-  public readonly subscribe = (
-    sessionId: string,
-    listener: BrowserEventEmitter,
-  ): (() => void) => {
+  public readonly subscribe = (sessionId: string, listener: BrowserEventEmitter): (() => void) => {
     let set = this.subscribers.get(sessionId);
     if (set === undefined) {
       set = new Set<BrowserEventEmitter>();
@@ -210,9 +206,10 @@ async function closeServer(server: Server): Promise<void> {
   });
 }
 
-async function makeFixture(
-  overrides?: { readonly omitBrowser?: boolean; readonly fakeOpts?: FakeManagerOptions },
-): Promise<Fixture> {
+async function makeFixture(overrides?: {
+  readonly omitBrowser?: boolean;
+  readonly fakeOpts?: FakeManagerOptions;
+}): Promise<Fixture> {
   const staticRoot = await mkdtemp(join(tmpdir(), "keiko-browser-static-"));
   await writeFile(join(staticRoot, "index.html"), "<html><body>browser</body></html>", "utf8");
   const fakeBrowser = new FakeBrowserSessionManager(overrides?.fakeOpts);

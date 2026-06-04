@@ -43,15 +43,40 @@ describe("parseUnifiedDiff", () => {
     expect(hunk.lines).toHaveLength(5);
 
     // context line: both sides advance
-    expect(hunk.lines[0]).toMatchObject({ kind: "ctx", oldLine: 10, newLine: 10, text: "const x = 1;" });
+    expect(hunk.lines[0]).toMatchObject({
+      kind: "ctx",
+      oldLine: 10,
+      newLine: 10,
+      text: "const x = 1;",
+    });
     // del line: old advances, new is null
-    expect(hunk.lines[1]).toMatchObject({ kind: "del", oldLine: 11, newLine: null, text: "const y = 2;" });
+    expect(hunk.lines[1]).toMatchObject({
+      kind: "del",
+      oldLine: 11,
+      newLine: null,
+      text: "const y = 2;",
+    });
     // add line: old is null, new advances
-    expect(hunk.lines[2]).toMatchObject({ kind: "add", oldLine: null, newLine: 11, text: "const y = 3;" });
+    expect(hunk.lines[2]).toMatchObject({
+      kind: "add",
+      oldLine: null,
+      newLine: 11,
+      text: "const y = 3;",
+    });
     // second add
-    expect(hunk.lines[3]).toMatchObject({ kind: "add", oldLine: null, newLine: 12, text: "const z = 4;" });
+    expect(hunk.lines[3]).toMatchObject({
+      kind: "add",
+      oldLine: null,
+      newLine: 12,
+      text: "const z = 4;",
+    });
     // context after adds
-    expect(hunk.lines[4]).toMatchObject({ kind: "ctx", oldLine: 12, newLine: 13, text: "return x;" });
+    expect(hunk.lines[4]).toMatchObject({
+      kind: "ctx",
+      oldLine: 12,
+      newLine: 13,
+      text: "return x;",
+    });
   });
 
   it("parses a multi-file diff preserving order and per-file totals", () => {
@@ -198,7 +223,9 @@ describe("parseUnifiedDiff", () => {
     ].join("\n");
 
     // Pad to exceed the limit with valid diff add-lines
-    const padding = "+added line\n".repeat(Math.ceil((MAX_DIFF_BYTES + 1024) / "+added line\n".length));
+    const padding = "+added line\n".repeat(
+      Math.ceil((MAX_DIFF_BYTES + 1024) / "+added line\n".length),
+    );
     const raw = header + padding;
 
     const result = parseUnifiedDiff(raw);

@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 
 export type TwinMode = "manual" | "autonomous";
@@ -68,21 +61,20 @@ export interface TwinContextValue {
   readonly persona: Persona;
   readonly setPersona: (next: Persona) => void;
   readonly policy: readonly PolicyRow[];
-  readonly setPolicy: (next: readonly PolicyRow[] | ((prev: readonly PolicyRow[]) => readonly PolicyRow[])) => void;
+  readonly setPolicy: (
+    next: readonly PolicyRow[] | ((prev: readonly PolicyRow[]) => readonly PolicyRow[]),
+  ) => void;
   readonly memory: readonly string[];
-  readonly setMemory: (next: readonly string[] | ((prev: readonly string[]) => readonly string[])) => void;
+  readonly setMemory: (
+    next: readonly string[] | ((prev: readonly string[]) => readonly string[]),
+  ) => void;
   readonly bridges: Bridges;
   readonly setBridges: (next: Bridges | ((prev: Bridges) => Bridges)) => void;
   readonly decide: (kind: GateKind, risk: Risk) => Decision;
 }
 
-export function twinDecide(
-  policy: readonly PolicyRow[],
-  kind: GateKind,
-  risk: Risk,
-): Decision {
-  const d = (id: string): Decision | null =>
-    policy.find((p) => p.id === id)?.decision ?? null;
+export function twinDecide(policy: readonly PolicyRow[], kind: GateKind, risk: Risk): Decision {
+  const d = (id: string): Decision | null => policy.find((p) => p.id === id)?.decision ?? null;
   if (kind === "write") {
     return risk === "high" ? (d("write-prod") ?? "deny") : (d("write") ?? "allow");
   }
@@ -171,11 +163,21 @@ export function TwinProvider({ children }: { children: ReactNode }): ReactNode {
 
   // Persist only after adoption so the mount pass can't clobber stored values
   // with the transient defaults.
-  useEffect(() => { if (hydrated) writeString(KEY_MODE, mode); }, [mode, hydrated]);
-  useEffect(() => { if (hydrated) writeString(KEY_PERSONA, persona); }, [persona, hydrated]);
-  useEffect(() => { if (hydrated) writeJson(KEY_POLICY, policy); }, [policy, hydrated]);
-  useEffect(() => { if (hydrated) writeJson(KEY_MEMORY, memory); }, [memory, hydrated]);
-  useEffect(() => { if (hydrated) writeJson(KEY_BRIDGES, bridges); }, [bridges, hydrated]);
+  useEffect(() => {
+    if (hydrated) writeString(KEY_MODE, mode);
+  }, [mode, hydrated]);
+  useEffect(() => {
+    if (hydrated) writeString(KEY_PERSONA, persona);
+  }, [persona, hydrated]);
+  useEffect(() => {
+    if (hydrated) writeJson(KEY_POLICY, policy);
+  }, [policy, hydrated]);
+  useEffect(() => {
+    if (hydrated) writeJson(KEY_MEMORY, memory);
+  }, [memory, hydrated]);
+  useEffect(() => {
+    if (hydrated) writeJson(KEY_BRIDGES, bridges);
+  }, [bridges, hydrated]);
 
   const decide = useCallback(
     (kind: GateKind, risk: Risk): Decision => twinDecide(policy, kind, risk),
@@ -184,8 +186,17 @@ export function TwinProvider({ children }: { children: ReactNode }): ReactNode {
 
   const value = useMemo<TwinContextValue>(
     () => ({
-      mode, setMode, persona, setPersona, policy, setPolicy,
-      memory, setMemory, bridges, setBridges, decide,
+      mode,
+      setMode,
+      persona,
+      setPersona,
+      policy,
+      setPolicy,
+      memory,
+      setMemory,
+      bridges,
+      setBridges,
+      decide,
     }),
     [mode, persona, policy, memory, bridges, decide],
   );

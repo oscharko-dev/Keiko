@@ -14,10 +14,7 @@ import {
   type TerminalEventEnvelope,
   type TerminalExecutionManager,
 } from "./terminal.js";
-import {
-  createInMemoryEvidenceStore,
-  type EvidenceStore,
-} from "@oscharko-dev/keiko-evidence";
+import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { TerminalToolError } from "./terminal-errors.js";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
@@ -66,13 +63,10 @@ function fakeChild(opts: FakeChildOptions = {}): ChildProcess {
     if (opts.stderr !== undefined && opts.stderr.length > 0) {
       stderrEmitter.emit("data", Buffer.from(opts.stderr, "utf8"));
     }
-    setTimeout(
-      () => {
-        emitter.emit("close", opts.exitCode ?? 0, null);
-        FAKE_CHILDREN.delete(pid);
-      },
-      opts.delayMs ?? 0,
-    );
+    setTimeout(() => {
+      emitter.emit("close", opts.exitCode ?? 0, null);
+      FAKE_CHILDREN.delete(pid);
+    }, opts.delayMs ?? 0);
   });
   return emitter;
 }
@@ -84,20 +78,18 @@ let processKillPatched = false;
 function ensureProcessKillPatched(): void {
   if (processKillPatched) return;
   processKillPatched = true;
-  vi.spyOn(process, "kill").mockImplementation(
-    ((pid: number, signal?: string | number): true => {
-      const positivePid = Math.abs(pid);
-      const child = FAKE_CHILDREN.get(positivePid);
-      if (child !== undefined) {
-        FAKE_CHILDREN.delete(positivePid);
-        setImmediate(() => {
-          child.emit("close", null, signal ?? "SIGTERM");
-        });
-        return true;
-      }
-      return realProcessKill(pid, signal);
-    }),
-  );
+  vi.spyOn(process, "kill").mockImplementation((pid: number, signal?: string | number): true => {
+    const positivePid = Math.abs(pid);
+    const child = FAKE_CHILDREN.get(positivePid);
+    if (child !== undefined) {
+      FAKE_CHILDREN.delete(positivePid);
+      setImmediate(() => {
+        child.emit("close", null, signal ?? "SIGTERM");
+      });
+      return true;
+    }
+    return realProcessKill(pid, signal);
+  });
 }
 
 function makeSpawn(opts: FakeChildOptions = {}): SpawnFn {
@@ -193,7 +185,11 @@ describe("TerminalExecutionManager — happy path", () => {
   it("allows scalar option values for permitted read-only commands", async () => {
     const manager = makeManager(makeSpawn({ stdout: "ok" }));
     await expect(
-      manager.execute({ projectId: workspaceRoot, command: "head", args: ["-n", "10", "file.txt"] }),
+      manager.execute({
+        projectId: workspaceRoot,
+        command: "head",
+        args: ["-n", "10", "file.txt"],
+      }),
     ).resolves.toMatchObject({ exitCode: 0 });
     await expect(
       manager.execute({ projectId: workspaceRoot, command: "tail", args: ["-n", "5", "file.txt"] }),

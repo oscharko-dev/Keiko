@@ -85,7 +85,9 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
     });
 
     expect(deps.configPresent).toBe(true);
-    expect(deps.config?.providers.map((provider) => provider.modelId)).toEqual(["example-chat-model"]);
+    expect(deps.config?.providers.map((provider) => provider.modelId)).toEqual([
+      "example-chat-model",
+    ]);
     expect(deps.config?.providers[0]?.baseUrl).toBe("https://models.example.invalid/openai/v1");
     expect(deps.config?.providers[0]?.apiKey).toBe("fake-test-key");
     store.close();

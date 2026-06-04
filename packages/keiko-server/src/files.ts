@@ -3,14 +3,7 @@
 // registered project root after realpath resolution.
 
 import type { Dirent, Stats } from "node:fs";
-import {
-  lstat,
-  opendir,
-  open,
-  readFile,
-  realpath,
-  stat,
-} from "node:fs/promises";
+import { lstat, opendir, open, readFile, realpath, stat } from "node:fs/promises";
 import {
   basename,
   dirname,
@@ -167,7 +160,11 @@ async function resolveRoot(store: UiStore, rootInput: string | null): Promise<Re
   }
   const project = projectFor(store, rootInput);
   if (project === undefined) {
-    throw new FilesError(403, "WORKSPACE_NOT_REGISTERED", "The selected root is not a registered project.");
+    throw new FilesError(
+      403,
+      "WORKSPACE_NOT_REGISTERED",
+      "The selected root is not a registered project.",
+    );
   }
   if (rootNameIsDenied(project.path)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
@@ -219,7 +216,11 @@ function rootRelativePosixPath(root: string, target: string): string {
   return rel.replaceAll("\\", "/");
 }
 
-function normalizeDirectoryPath(pathInput: string | undefined, registeredRoot: string, realRoot: string): string {
+function normalizeDirectoryPath(
+  pathInput: string | undefined,
+  registeredRoot: string,
+  realRoot: string,
+): string {
   const raw = pathInput?.trim();
   if (raw === undefined || raw.length === 0) return realRoot;
   if (raw.includes("\0")) {
@@ -289,7 +290,10 @@ async function resolveInsideRoot(
   };
 }
 
-async function directoryEntries(root: string, pathValue: string): Promise<readonly FilesDirectoryEntry[]> {
+async function directoryEntries(
+  root: string,
+  pathValue: string,
+): Promise<readonly FilesDirectoryEntry[]> {
   const entries: FilesDirectoryEntry[] = [];
   const dir = await opendir(pathValue);
   try {
@@ -334,9 +338,8 @@ async function classifyEntry(
   parentNativePath: string,
   entry: Dirent,
 ): Promise<FilesTreeEntry> {
-  const childRelativePath = parentRelativePath.length === 0
-    ? entry.name
-    : `${parentRelativePath}/${entry.name}`;
+  const childRelativePath =
+    parentRelativePath.length === 0 ? entry.name : `${parentRelativePath}/${entry.name}`;
   const entryPath = join(parentNativePath, entry.name);
   const linkStats = await lstat(entryPath);
   const symlink = linkStats.isSymbolicLink();
@@ -461,7 +464,12 @@ export async function readFilesTree(
   // reduction only; the matcher never relaxes the deny list. No long-lived
   // cache — the BFF must stay stateless across user-selected roots.
   const ignoreMatcher = await loadRootGitignore(target.realRoot);
-  const listed = await listTreeEntries(target.realRoot, target.relativePath, target.path, ignoreMatcher);
+  const listed = await listTreeEntries(
+    target.realRoot,
+    target.relativePath,
+    target.path,
+    ignoreMatcher,
+  );
   return {
     root: target.root,
     path: target.relativePath,
@@ -545,7 +553,10 @@ function isLikelyUtf8Text(buffer: Buffer): boolean {
   return printable / decoded.length > 0.85;
 }
 
-async function readPrefix(pathValue: string, maxBytes: number): Promise<{
+async function readPrefix(
+  pathValue: string,
+  maxBytes: number,
+): Promise<{
   readonly buffer: Buffer;
   readonly truncated: boolean;
 }> {
@@ -636,7 +647,10 @@ export async function handleFilesDirectories(
   return runFilesHandler(async () => {
     const requestedRoot = ctx.url.searchParams.get("root");
     const requestedPath = ctx.url.searchParams.get("path") ?? undefined;
-    return { status: 200, body: await listFilesDirectories(deps.store, requestedRoot, requestedPath) };
+    return {
+      status: 200,
+      body: await listFilesDirectories(deps.store, requestedRoot, requestedPath),
+    };
   });
 }
 
@@ -646,7 +660,11 @@ export async function handleFilesTree(
 ): Promise<RouteResult> {
   return runFilesHandler(async () => ({
     status: 200,
-    body: await readFilesTree(deps.store, ctx.url.searchParams.get("root"), ctx.url.searchParams.get("path")),
+    body: await readFilesTree(
+      deps.store,
+      ctx.url.searchParams.get("root"),
+      ctx.url.searchParams.get("path"),
+    ),
   }));
 }
 

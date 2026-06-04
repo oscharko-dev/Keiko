@@ -15,22 +15,22 @@ export const FILE_CONTENT: Readonly<Record<string, string>> = {
     "package com.keiko.orca;\n\nimport org.springframework.boot.SpringApplication;\nimport org.springframework.boot.autoconfigure.SpringBootApplication;\n\n@SpringBootApplication\npublic class OrcaApplication {\n    // Bootstraps the agent platform\n    public static void main(String[] args) {\n        SpringApplication.run(OrcaApplication.class, args);\n    }\n}",
   "application.yml":
     "server:\n  port: 8443\nspring:\n  application:\n    name: example-workspace\n  datasource:\n    url: jdbc:postgresql://db.example.test:5432/app\nkeiko:\n  models:\n    chat: https://llm-gateway.example.com/v1\n    embedding: https://embeddings.example.com/v1",
-  "Dockerfile":
+  Dockerfile:
     '# Multi-stage build for the orca backend\nFROM eclipse-temurin:21-jdk AS build\nWORKDIR /app\nCOPY . .\nRUN ./gradlew bootJar\n\nFROM eclipse-temurin:21-jre\nWORKDIR /app\nCOPY --from=build /app/build/libs/*.jar app.jar\nEXPOSE 8443\nENTRYPOINT ["java", "-jar", "app.jar"]',
 };
 
 export function stub(name: string, lang: Lang): string {
   const base = name.replace(/\.[^.]+$/, "").replace(/[^A-Za-z0-9]/g, "");
-  const cap = (base.charAt(0).toUpperCase() + base.slice(1)) || "File";
+  const cap = base.charAt(0).toUpperCase() + base.slice(1) || "File";
   if (lang === "java") {
     return (
       "package com.keiko.orca;\n\n// " +
       name +
       "\npublic class " +
       cap +
-      " {\n    public String describe() {\n        return \"" +
+      ' {\n    public String describe() {\n        return "' +
       name +
-      "\";\n    }\n}"
+      '";\n    }\n}'
     );
   }
   if (lang === "kotlin") {
@@ -46,13 +46,7 @@ export function stub(name: string, lang: Lang): string {
   }
   if (lang === "ts") {
     return (
-      "// " +
-      name +
-      "\nexport const " +
-      base +
-      ' = {\n  name: "' +
-      name +
-      '",\n  ready: true,\n};'
+      "// " + name + "\nexport const " + base + ' = {\n  name: "' + name + '",\n  ready: true,\n};'
     );
   }
   if (lang === "js") {
@@ -78,9 +72,7 @@ export function stub(name: string, lang: Lang): string {
   }
   if (lang === "sql") {
     return (
-      "-- " +
-      name +
-      "\nCREATE TABLE agents (\n  id   uuid PRIMARY KEY,\n  role text NOT NULL\n);"
+      "-- " + name + "\nCREATE TABLE agents (\n  id   uuid PRIMARY KEY,\n  role text NOT NULL\n);"
     );
   }
   if (lang === "cobol") {
@@ -93,18 +85,14 @@ export function stub(name: string, lang: Lang): string {
     );
   }
   if (lang === "graphql") {
-    return (
-      "type Agent {\n  id: ID!\n  role: String!\n  status: Status!\n}\n\nenum Status { RUNNING PAUSED DONE }"
-    );
+    return "type Agent {\n  id: ID!\n  role: String!\n  status: Status!\n}\n\nenum Status { RUNNING PAUSED DONE }";
   }
   if (lang === "css") {
     return "/* " + name + " */\n.workspace {\n  background: #0d0d0d;\n  color: #ededed;\n}";
   }
   if (lang === "props") {
     return (
-      "# " +
-      name +
-      "\nkeiko.mode=autonomous\nkeiko.model.chat=https://llm-gateway.example.com/v1"
+      "# " + name + "\nkeiko.mode=autonomous\nkeiko.model.chat=https://llm-gateway.example.com/v1"
     );
   }
   return "// " + name + "\n// preview";

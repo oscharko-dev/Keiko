@@ -16,11 +16,7 @@ import {
   resolveEvidenceDir,
 } from "./store.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import {
-  EvidenceReadError,
-  EvidenceWriteError,
-  InvalidRunIdError,
-} from "./errors.js";
+import { EvidenceReadError, EvidenceWriteError, InvalidRunIdError } from "./errors.js";
 
 describe("resolveEvidenceDir — precedence (C4)", () => {
   it("prefers the explicit value over env and default", () => {

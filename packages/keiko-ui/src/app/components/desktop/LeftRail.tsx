@@ -122,7 +122,13 @@ export function LeftRail({
       >
         <Icons.settings size={19} />
       </button>
-      <button type="button" className="rail-avatar" data-side="left" aria-label="Account" title="Account">
+      <button
+        type="button"
+        className="rail-avatar"
+        data-side="left"
+        aria-label="Account"
+        title="Account"
+      >
         M
       </button>
     </div>

@@ -76,7 +76,12 @@ describe("createChat", () => {
     store.createChat(proj, "A", "m1");
     store.createChat(proj, "B", "m1");
     store.createChat(otherProj, "C", "m1");
-    expect(store.listChats(proj).map((c) => c.title).sort()).toEqual(["A", "B"]);
+    expect(
+      store
+        .listChats(proj)
+        .map((c) => c.title)
+        .sort(),
+    ).toEqual(["A", "B"]);
     expect(store.listChats(otherProj).map((c) => c.title)).toEqual(["C"]);
   });
 });

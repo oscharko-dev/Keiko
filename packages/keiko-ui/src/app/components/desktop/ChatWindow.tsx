@@ -26,7 +26,7 @@ function visibleOnly(messages: readonly ChatMessage[]): ChatMessage[] {
 }
 
 function modelList(models: readonly ModelCapability[]): readonly ModelCapability[] {
-  return models.length > 0 ? models : ([{ id: DEFAULT_MODEL_ID } as ModelCapability]);
+  return models.length > 0 ? models : [{ id: DEFAULT_MODEL_ID } as ModelCapability];
 }
 
 function onComposerKeyDown(
@@ -142,7 +142,13 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
   );
 }
 
-function ChatHero({ session, ready }: { readonly session: ChatSessionApi; readonly ready: boolean }): ReactNode {
+function ChatHero({
+  session,
+  ready,
+}: {
+  readonly session: ChatSessionApi;
+  readonly ready: boolean;
+}): ReactNode {
   const { loading, activeProject, setDraft, sendMessage } = session;
   const folder = activeProject?.name ?? "example-workspace";
   return (
@@ -157,7 +163,11 @@ function ChatHero({ session, ready }: { readonly session: ChatSessionApi; readon
       <ComposerCore
         session={session}
         ready={ready}
-        placeholder={loading ? "Loading local workspace..." : "Describe a task, paste a link, or ask anything..."}
+        placeholder={
+          loading
+            ? "Loading local workspace..."
+            : "Describe a task, paste a link, or ask anything..."
+        }
       />
       <div className="cmp-context">
         <button type="button" className="chip">
@@ -182,7 +192,13 @@ function ChatHero({ session, ready }: { readonly session: ChatSessionApi; readon
   );
 }
 
-function MiniChat({ session, ready }: { readonly session: ChatSessionApi; readonly ready: boolean }): ReactNode {
+function MiniChat({
+  session,
+  ready,
+}: {
+  readonly session: ChatSessionApi;
+  readonly ready: boolean;
+}): ReactNode {
   const { draft, loading, sending, setDraft, sendMessage } = session;
   return (
     <form

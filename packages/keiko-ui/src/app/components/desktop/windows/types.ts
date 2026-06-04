@@ -10,7 +10,12 @@ export interface AppWindow {
   readonly z: number;
   readonly cfg: Record<string, string | number | boolean | undefined>;
   readonly max: boolean;
-  readonly prev?: { readonly x: number; readonly y: number; readonly w: number; readonly h: number };
+  readonly prev?: {
+    readonly x: number;
+    readonly y: number;
+    readonly w: number;
+    readonly h: number;
+  };
   readonly zoom?: number;
 }
 

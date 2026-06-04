@@ -40,7 +40,9 @@ export function PermControl({ cfg, set }: PermControlProps): ReactNode {
           <span className="perm-name">Keiko-Mode</span>
           <span className="perm-desc">Zero standing rights · Keiko governs</span>
         </span>
-        <span className={"perm-sw" + (keiko ? " on" : "")}><span /></span>
+        <span className={"perm-sw" + (keiko ? " on" : "")}>
+          <span />
+        </span>
       </button>
       {!keiko && (
         <div className="perm-legacy">

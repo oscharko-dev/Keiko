@@ -95,8 +95,21 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     h: 480,
     min: { w: 300, h: 260 },
     config: [
-      { key: "title", label: "Title", type: "text", def: "New chat", optional: true, placeholder: "Name this conversation" },
-      { key: "model", label: "Model", type: "select", options: ["example-chat-model", "example-fast-model"], def: "example-chat-model" },
+      {
+        key: "title",
+        label: "Title",
+        type: "text",
+        def: "New chat",
+        optional: true,
+        placeholder: "Name this conversation",
+      },
+      {
+        key: "model",
+        label: "Model",
+        type: "select",
+        options: ["example-chat-model", "example-fast-model"],
+        def: "example-chat-model",
+      },
     ],
   },
   files: {
@@ -115,7 +128,15 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     desc: "Edit a file",
     w: 480,
     h: 360,
-    config: [{ key: "file", label: "File path", type: "text", def: "windows.jsx", placeholder: "path/to/file.jsx" }],
+    config: [
+      {
+        key: "file",
+        label: "File path",
+        type: "text",
+        def: "windows.jsx",
+        placeholder: "path/to/file.jsx",
+      },
+    ],
   },
   browser: {
     title: "Browser",
@@ -123,7 +144,9 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     desc: "Open a URL",
     w: 460,
     h: 340,
-    config: [{ key: "url", label: "URL", type: "text", def: "localhost:5173", placeholder: "https://…" }],
+    config: [
+      { key: "url", label: "URL", type: "text", def: "localhost:5173", placeholder: "https://…" },
+    ],
   },
   terminal: {
     title: "Terminal",
@@ -147,8 +170,14 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 520,
     h: 420,
     config: [
-      { key: "runId", label: "Run ID", type: "text", def: "", optional: true,
-        placeholder: "e.g. r-2026-06-01-…" },
+      {
+        key: "runId",
+        label: "Run ID",
+        type: "text",
+        def: "",
+        optional: true,
+        placeholder: "e.g. r-2026-06-01-…",
+      },
     ],
   },
   agents: {
@@ -167,7 +196,15 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     desc: "Connect apps",
     w: 320,
     h: 300,
-    config: [{ key: "provider", label: "Provider", type: "select", options: ["GitHub", "Linear", "Slack", "Sentry"], def: "GitHub" }],
+    config: [
+      {
+        key: "provider",
+        label: "Provider",
+        type: "select",
+        options: ["GitHub", "Linear", "Slack", "Sentry"],
+        def: "GitHub",
+      },
+    ],
   },
   keiko: {
     title: "Keiko",

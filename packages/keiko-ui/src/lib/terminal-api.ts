@@ -70,10 +70,9 @@ export async function createTerminalExecution(
 }
 
 export async function abortTerminalExecution(executionId: string): Promise<void> {
-  await terminalFetch<void>(
-    `/api/terminal/executions/${encodeURIComponent(executionId)}`,
-    { method: "DELETE" },
-  );
+  await terminalFetch<void>(`/api/terminal/executions/${encodeURIComponent(executionId)}`, {
+    method: "DELETE",
+  });
 }
 
 export function terminalEventsUrl(): string {

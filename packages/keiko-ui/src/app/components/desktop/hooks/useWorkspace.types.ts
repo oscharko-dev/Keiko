@@ -1,13 +1,7 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { SnapZone } from "../windows/connectionUtils";
 import type { WindowType } from "../windows/WindowsRegistry";
-import type {
-  AppWindow,
-  Connection,
-  ConnectingState,
-  SnapPrev,
-  View,
-} from "../windows/types";
+import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 
 export interface ViewportWorld {
   readonly x: number;

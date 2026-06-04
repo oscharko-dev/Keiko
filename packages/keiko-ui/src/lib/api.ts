@@ -112,10 +112,12 @@ export function clearModelCacheForTests(): void {
 }
 
 export async function fetchModels(): Promise<{ models: ModelCapability[] }> {
-  modelsRequest ??= fetchJson<{ models: ModelCapability[] }>("/api/models").catch((error: unknown) => {
-    modelsRequest = undefined;
-    throw error;
-  });
+  modelsRequest ??= fetchJson<{ models: ModelCapability[] }>("/api/models").catch(
+    (error: unknown) => {
+      modelsRequest = undefined;
+      throw error;
+    },
+  );
   return modelsRequest;
 }
 
@@ -188,9 +190,10 @@ export interface StartChatRunInput {
   };
 }
 
-export async function startChatRun(
-  body: StartChatRunInput,
-): Promise<{ run: { runId: string; fingerprint: string }; messages: MessagesResponse["messages"] }> {
+export async function startChatRun(body: StartChatRunInput): Promise<{
+  run: { runId: string; fingerprint: string };
+  messages: MessagesResponse["messages"];
+}> {
   return fetchJson("/api/chats/runs", {
     method: "POST",
     body: JSON.stringify(body),
@@ -486,7 +489,10 @@ export async function sendDesktopChat(
 // Desktop files — read-only selected-root browser and preview control plane
 // ---------------------------------------------------------------------------
 
-export async function fetchFilesDirectories(root: string, path?: string): Promise<FilesDirectoryListing> {
+export async function fetchFilesDirectories(
+  root: string,
+  path?: string,
+): Promise<FilesDirectoryListing> {
   const params = new URLSearchParams();
   params.set("root", root);
   if (path !== undefined && path.length > 0) params.set("path", path);

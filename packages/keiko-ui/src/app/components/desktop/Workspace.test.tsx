@@ -77,13 +77,7 @@ describe("Workspace card connections", () => {
       api: workspaceApi,
     });
 
-    render(
-      <Workspace
-        ws={ws}
-        wsRef={createRef<HTMLDivElement>()}
-        openPalette={() => undefined}
-      />,
-    );
+    render(<Workspace ws={ws} wsRef={createRef<HTMLDivElement>()} openPalette={() => undefined} />);
 
     const targetMaximizeButton = screen.getAllByRole("button", { name: "Maximize window" })[1];
     expect(targetMaximizeButton).toBeDefined();

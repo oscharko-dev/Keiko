@@ -254,9 +254,7 @@ describe("BrowserWidget", () => {
       );
     });
     await waitFor(() => {
-      expect(document.querySelector(".bw-status")).toHaveTextContent(
-        /http:\/\/127\.0\.0\.1:5173/,
-      );
+      expect(document.querySelector(".bw-status")).toHaveTextContent(/http:\/\/127\.0\.0\.1:5173/);
     });
     const logItem = document.querySelector(".bw-log-item");
     const logKind = document.querySelector(".bw-log-kind");

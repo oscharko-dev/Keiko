@@ -132,9 +132,7 @@ function requireStringArray(body: Record<string, unknown>, key: string): readonl
   return value as readonly string[];
 }
 
-async function runHandler(
-  work: () => Promise<RouteResult> | RouteResult,
-): Promise<RouteResult> {
+async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {
@@ -205,10 +203,7 @@ export async function handleCreateTerminalExecution(
   });
 }
 
-export function handleDeleteTerminalExecution(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): RouteResult {
+export function handleDeleteTerminalExecution(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const guard = requireTerminal(deps);
   if (isRouteResult(guard)) return guard;
   const executionId = ctx.params.executionId ?? "";

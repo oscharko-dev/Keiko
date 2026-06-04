@@ -48,9 +48,7 @@ export function useSSE(runId: string | null): UseSSEResult {
       // automatically on reconnect when the server uses `id:` framing. We pass it explicitly
       // via a query param for the initial deep-link / late-subscribe case.
       const fullUrl =
-        lastSeqRef.current >= 0
-          ? `${url}?lastEventId=${lastSeqRef.current.toString()}`
-          : url;
+        lastSeqRef.current >= 0 ? `${url}?lastEventId=${lastSeqRef.current.toString()}` : url;
 
       es = new EventSource(fullUrl);
 

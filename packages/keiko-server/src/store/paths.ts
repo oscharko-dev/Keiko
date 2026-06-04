@@ -64,10 +64,7 @@ export function resolveUiDbPath(
   return join(homedir(), UI_DB_DIRNAME, UI_DB_FILENAME);
 }
 
-export function assertUiDbOutsideProject(
-  uiDbPath: string | undefined,
-  projectPath: string,
-): void {
+export function assertUiDbOutsideProject(uiDbPath: string | undefined, projectPath: string): void {
   if (uiDbPath === undefined || uiDbPath.length === 0) {
     return;
   }

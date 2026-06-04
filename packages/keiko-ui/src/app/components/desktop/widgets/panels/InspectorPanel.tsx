@@ -58,9 +58,7 @@ export function InspectorPanel(): ReactNode {
                 {cfgRows.map(([k, v]) => (
                   <div className="rb-row" key={k}>
                     <span className="rb-row-k">{k}</span>
-                    <span className="rb-row-v mono">
-                      {String(v).slice(0, 20) || "—"}
-                    </span>
+                    <span className="rb-row-v mono">{String(v).slice(0, 20) || "—"}</span>
                   </div>
                 ))}
               </div>

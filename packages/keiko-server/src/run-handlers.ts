@@ -76,7 +76,13 @@ function rejectUnregisteredWorkspace(parsed: RunRequest, deps: UiHandlerDeps): R
   const registered = deps.store.listProjects().some((p) => p.path === root);
   return registered
     ? null
-    : { status: 403, body: errorBody("WORKSPACE_NOT_REGISTERED", "The workspaceRoot is not a registered project.") };
+    : {
+        status: 403,
+        body: errorBody(
+          "WORKSPACE_NOT_REGISTERED",
+          "The workspaceRoot is not a registered project.",
+        ),
+      };
 }
 
 function resolveRunModel(parsed: RunRequest, deps: UiHandlerDeps): ModelPort | undefined {
@@ -460,7 +466,10 @@ export function handleGetRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResul
   if (record.status === "running") {
     return { status: 200, body: { report: { status: "running" } } };
   }
-  return { status: 200, body: { report: reportWithApply(record.report, record.applyReport, record.appliedAt) } };
+  return {
+    status: 200,
+    body: { report: reportWithApply(record.report, record.applyReport, record.appliedAt) },
+  };
 }
 
 function reportWithApply(
@@ -479,10 +488,7 @@ function reportWithApply(
 
 // Route 9 — POST /api/runs/:runId/apply. The ONLY write path. 404 unknown; 409 when not in an
 // appliable (dry-run-success) state; otherwise re-invokes the gated workflow with apply:true.
-export async function handleApplyRun(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const record = deps.registry.get(ctx.params.runId ?? "");
   if (record === undefined) {
     return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
@@ -501,5 +507,8 @@ export async function handleApplyRun(
   record.appliable = undefined;
   record.applyReport = report;
   record.appliedAt = Date.now();
-  return { status: 200, body: { report: reportWithApply(record.report, record.applyReport, record.appliedAt) } };
+  return {
+    status: 200,
+    body: { report: reportWithApply(record.report, record.applyReport, record.appliedAt) },
+  };
 }

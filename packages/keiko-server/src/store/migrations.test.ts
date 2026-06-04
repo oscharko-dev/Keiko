@@ -110,9 +110,9 @@ describe("runMigrations", () => {
     runMigrations(db);
     const after = db.prepare("PRAGMA user_version").get() as { user_version?: number };
     expect(after.user_version).toBe(SCHEMA_VERSION);
-    const row = db
-      .prepare("SELECT task_type FROM chat_messages WHERE id = 'm1'")
-      .get() as { task_type: string | null };
+    const row = db.prepare("SELECT task_type FROM chat_messages WHERE id = 'm1'").get() as {
+      task_type: string | null;
+    };
     expect(row.task_type).toBeNull();
   });
 });

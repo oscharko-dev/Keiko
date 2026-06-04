@@ -199,14 +199,11 @@ describe("unknown API routes", () => {
 
 describe("CSRF guard — PATCH/DELETE methods (M1)", () => {
   it("rejects PATCH /api/projects without X-Keiko-CSRF: 1 (returns 403 FORBIDDEN_CSRF)", async () => {
-    const response = await fetch(
-      `${baseUrl()}/api/projects?path=${encodeURIComponent("/tmp/x")}`,
-      {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "x" }),
-      },
-    );
+    const response = await fetch(`${baseUrl()}/api/projects?path=${encodeURIComponent("/tmp/x")}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "x" }),
+    });
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ error: { code: "FORBIDDEN_CSRF" } });
   });
@@ -221,14 +218,11 @@ describe("CSRF guard — PATCH/DELETE methods (M1)", () => {
   });
 
   it("rejects PATCH /api/projects without Content-Type: application/json (returns 415)", async () => {
-    const response = await fetch(
-      `${baseUrl()}/api/projects?path=${encodeURIComponent("/tmp/x")}`,
-      {
-        method: "PATCH",
-        headers: { "X-Keiko-CSRF": "1" },
-        body: "x",
-      },
-    );
+    const response = await fetch(`${baseUrl()}/api/projects?path=${encodeURIComponent("/tmp/x")}`, {
+      method: "PATCH",
+      headers: { "X-Keiko-CSRF": "1" },
+      body: "x",
+    });
     expect(response.status).toBe(415);
     expect(await response.json()).toMatchObject({ error: { code: "UNSUPPORTED_MEDIA_TYPE" } });
   });

@@ -134,7 +134,9 @@ function formatExplainCompleted(report: Record<string, unknown>): string {
   return "Plan generated.";
 }
 
-function classifyKind(fallbackKind: RunSummaryFallbackKind): "unit-tests" | "bug" | "verify" | "explain" | "other" {
+function classifyKind(
+  fallbackKind: RunSummaryFallbackKind,
+): "unit-tests" | "bug" | "verify" | "explain" | "other" {
   const wid = fallbackKind.workflowId;
   if (wid === "unit-test-generation" || wid === "unit-tests") return "unit-tests";
   if (wid === "bug-investigation") return "bug";
@@ -143,7 +145,10 @@ function classifyKind(fallbackKind: RunSummaryFallbackKind): "unit-tests" | "bug
   return "other";
 }
 
-function formatCompleted(report: Record<string, unknown>, kind: ReturnType<typeof classifyKind>): string {
+function formatCompleted(
+  report: Record<string, unknown>,
+  kind: ReturnType<typeof classifyKind>,
+): string {
   if (kind === "unit-tests") return formatUnitTestsCompleted(report);
   if (kind === "bug") return formatBugCompleted();
   if (kind === "verify") return formatVerifyCompleted(report);

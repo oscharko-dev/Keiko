@@ -49,7 +49,12 @@ function ProjectRow({ project, activeChat, onChat }: ProjectRowProps): ReactNode
   const [exp, setExp] = useState(project.open);
   return (
     <div className="proj">
-      <button className="proj-head" onClick={() => { setExp((e) => !e); }}>
+      <button
+        className="proj-head"
+        onClick={() => {
+          setExp((e) => !e);
+        }}
+      >
         <span className="proj-caret" data-open={exp}>
           <Icons.chevronR size={13} />
         </span>
@@ -66,7 +71,9 @@ function ProjectRow({ project, activeChat, onChat }: ProjectRowProps): ReactNode
                 key={c.id}
                 className="chat-row"
                 data-active={activeChat === c.id}
-                onClick={() => { onChat(c.id); }}
+                onClick={() => {
+                  onChat(c.id);
+                }}
               >
                 {c.running === true && (
                   <span className="chat-spin">
@@ -91,7 +98,9 @@ function ProjectRow({ project, activeChat, onChat }: ProjectRowProps): ReactNode
 
 export function ProjectPanel(): ReactNode {
   const stored =
-    typeof window !== "undefined" ? (localStorage.getItem("keiko.project.activeChat") ?? "c3") : "c3";
+    typeof window !== "undefined"
+      ? (localStorage.getItem("keiko.project.activeChat") ?? "c3")
+      : "c3";
   const [activeChat, setActiveChat] = useState(stored);
 
   const handleChat = (id: string): void => {

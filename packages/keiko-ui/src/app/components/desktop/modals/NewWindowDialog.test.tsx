@@ -23,9 +23,15 @@ function model(patch: Partial<ModelCapability>): ModelCapability {
 describe("isAgentWorkflowModel", () => {
   it("allows only chat models with tool calling and structured output", () => {
     expect(isAgentWorkflowModel(model({ id: "example-chat-model" }))).toBe(true);
-    expect(isAgentWorkflowModel(model({ id: "example-chat-model-unstructured", structuredOutput: false }))).toBe(false);
+    expect(
+      isAgentWorkflowModel(
+        model({ id: "example-chat-model-unstructured", structuredOutput: false }),
+      ),
+    ).toBe(false);
     expect(isAgentWorkflowModel(model({ id: "basic-chat", toolCalling: false }))).toBe(false);
     expect(isAgentWorkflowModel(model({ id: "embedding", kind: "embedding" }))).toBe(false);
-    expect(isAgentWorkflowModel(model({ id: "example-vision-model", kind: "ocr-vision" }))).toBe(false);
+    expect(isAgentWorkflowModel(model({ id: "example-vision-model", kind: "ocr-vision" }))).toBe(
+      false,
+    );
   });
 });

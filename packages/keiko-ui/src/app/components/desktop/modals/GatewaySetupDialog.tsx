@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  useEffect,
-  useRef,
-  useState,
-  type FormEvent,
-  type ReactNode,
-} from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ApiError, setupGateway } from "@/lib/api";
 import { Icons } from "../Icons";
 

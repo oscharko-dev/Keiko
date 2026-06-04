@@ -10,11 +10,7 @@ import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
-import {
-  buildRedactor,
-  createRunRegistry,
-  type UiHandlerDeps,
-} from "./index.js";
+import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 
@@ -194,9 +190,7 @@ describe("POST /api/projects", () => {
     const secondBody = (await second.json()) as {
       project: { lastOpenedAt: number };
     };
-    expect(secondBody.project.lastOpenedAt).toBeGreaterThanOrEqual(
-      firstBody.project.lastOpenedAt,
-    );
+    expect(secondBody.project.lastOpenedAt).toBeGreaterThanOrEqual(firstBody.project.lastOpenedAt);
     const list = await fetch(url("/api/projects"));
     const listBody = (await list.json()) as { projects: unknown[] };
     expect(listBody.projects).toHaveLength(1);
@@ -725,7 +719,13 @@ describe("POST /api/chats/messages", () => {
     const res = await fetch(url("/api/chats/messages"), {
       method: "POST",
       headers: POST_HEADERS,
-      body: JSON.stringify({ chatId: c.id, projectPath: projDir, role: "user", content: "", timestamp: 1 }),
+      body: JSON.stringify({
+        chatId: c.id,
+        projectPath: projDir,
+        role: "user",
+        content: "",
+        timestamp: 1,
+      }),
     });
     expect(res.status).toBe(400);
   });
@@ -736,7 +736,13 @@ describe("POST /api/chats/messages", () => {
     const res = await fetch(url("/api/chats/messages"), {
       method: "POST",
       headers: POST_HEADERS,
-      body: JSON.stringify({ chatId: c.id, projectPath: projDir, role: "root", content: "x", timestamp: 1 }),
+      body: JSON.stringify({
+        chatId: c.id,
+        projectPath: projDir,
+        role: "root",
+        content: "x",
+        timestamp: 1,
+      }),
     });
     expect(res.status).toBe(400);
   });

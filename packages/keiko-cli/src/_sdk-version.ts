@@ -7,4 +7,4 @@
 // string constant; a single-line literal kept in sync with the root
 // src/sdk/index.ts SDK_VERSION (and the root package.json "version" field) is
 // the minimal-surface alternative.
-export const SDK_VERSION = "0.1.6";
+export const SDK_VERSION = "0.1.7";

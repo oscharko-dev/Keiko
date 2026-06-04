@@ -1,11 +1,7 @@
 // Issue #66 — formatRunSummary unit tests. 12 kind × status cases plus defensive shape cases.
 
 import { describe, expect, it } from "vitest";
-import {
-  classifyRunReport,
-  formatRunSummary,
-  formatRunSummaryFromManifest,
-} from "./run-summary";
+import { classifyRunReport, formatRunSummary, formatRunSummaryFromManifest } from "./run-summary";
 
 const UNIT_KIND = { workflowId: "unit-test-generation" } as const;
 const BUG_KIND = { workflowId: "bug-investigation" } as const;
@@ -197,10 +193,7 @@ describe("formatRunSummaryFromManifest", () => {
   });
 
   it("limit-exceeded outcome maps to failed", () => {
-    const r = formatRunSummaryFromManifest(
-      { run: { outcome: "limit-exceeded" } },
-      UNIT_KIND,
-    );
+    const r = formatRunSummaryFromManifest({ run: { outcome: "limit-exceeded" } }, UNIT_KIND);
     expect(r.workflowStatus).toBe("failed");
   });
 

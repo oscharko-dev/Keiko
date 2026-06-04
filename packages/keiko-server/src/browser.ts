@@ -104,9 +104,7 @@ function requireNumber(body: Record<string, unknown>, key: string): number {
   return value;
 }
 
-async function runHandler(
-  work: () => Promise<RouteResult> | RouteResult,
-): Promise<RouteResult> {
+async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {

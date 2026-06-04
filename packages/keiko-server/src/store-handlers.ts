@@ -110,9 +110,7 @@ function payloadTooLarge(): RouteResult {
   };
 }
 
-async function runHandler(
-  worker: () => Promise<RouteResult> | RouteResult,
-): Promise<RouteResult> {
+async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
   try {
     return await worker();
   } catch (error) {
@@ -144,9 +142,8 @@ function optionalString(body: Record<string, unknown>, name: string): string | u
 
 function assertChatModelId(deps: UiHandlerDeps, modelId: string): void {
   const config = currentGatewayConfig(deps);
-  const capability = config === undefined
-    ? findCapability(modelId)
-    : findConfiguredCapability(config, modelId);
+  const capability =
+    config === undefined ? findCapability(modelId) : findConfiguredCapability(config, modelId);
   if (capability?.kind !== "chat") {
     throw new InvalidRequest('Field "selectedModel" must be a configured chat model id.');
   }
@@ -213,7 +210,12 @@ const TASK_TYPE_RE = /^[a-z][a-z0-9-]*$/;
 function optionalTaskType(body: Record<string, unknown>): string | undefined {
   const v = body.taskType;
   if (v === undefined) return undefined;
-  if (typeof v !== "string" || v.length === 0 || v.length > MAX_TASK_TYPE || !TASK_TYPE_RE.test(v)) {
+  if (
+    typeof v !== "string" ||
+    v.length === 0 ||
+    v.length > MAX_TASK_TYPE ||
+    !TASK_TYPE_RE.test(v)
+  ) {
     throw new InvalidRequest('Field "taskType" must match [a-z][a-z0-9-]* (≤ 64 chars).');
   }
   return v;
@@ -227,9 +229,7 @@ function requireRole(body: Record<string, unknown>): ChatRole {
   return v as ChatRole;
 }
 
-function optionalWorkflowStatus(
-  body: Record<string, unknown>,
-): WorkflowStatus | undefined {
+function optionalWorkflowStatus(body: Record<string, unknown>): WorkflowStatus | undefined {
   const v = body.workflowStatus;
   if (v === undefined) return undefined;
   if (typeof v !== "string" || !WORKFLOW_STATUSES.has(v)) {
@@ -261,19 +261,11 @@ function projectWithAvailability(p: Project): ProjectWithAvailability {
   return { ...p, available: isProjectAvailable(p) };
 }
 
-function chatBelongsToProject(
-  deps: UiHandlerDeps,
-  projectPath: string,
-  chatId: string,
-): boolean {
+function chatBelongsToProject(deps: UiHandlerDeps, projectPath: string, chatId: string): boolean {
   return deps.store.listChats(projectPath).some((chat) => chat.id === chatId);
 }
 
-function messageBelongsToChat(
-  deps: UiHandlerDeps,
-  chatId: string,
-  messageId: string,
-): boolean {
+function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: string): boolean {
   return deps.store.listMessages(chatId).some((message) => message.id === messageId);
 }
 
@@ -281,10 +273,7 @@ function messageBelongsToChat(
 // Route 13 — GET /api/projects
 // ──────────────────────────────────────────────────────────────────────────
 
-export function handleListProjects(
-  _ctx: RouteContext,
-  deps: UiHandlerDeps,
-): RouteResult {
+export function handleListProjects(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const projects = deps.store.listProjects().map(projectWithAvailability);
   return { status: 200, body: { projects } };
 }
@@ -338,10 +327,7 @@ export async function handleUpdateProject(
 // Route 16 — DELETE /api/projects?path=...
 // ──────────────────────────────────────────────────────────────────────────
 
-export function handleDeleteProject(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): RouteResult {
+export function handleDeleteProject(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   return runHandlerSync(() => {
     const targetPath = requireQuery(ctx, "path");
     deps.store.deleteProject(targetPath);
@@ -494,7 +480,9 @@ export async function handleCreateMessage(
 // Route 23 — POST /api/chats/messages/run-summary-pair (issue #66)
 // ──────────────────────────────────────────────────────────────────────────
 
-function buildRunSummaryPair(body: Record<string, unknown>): readonly [NewChatMessage, NewChatMessage] {
+function buildRunSummaryPair(
+  body: Record<string, unknown>,
+): readonly [NewChatMessage, NewChatMessage] {
   const chatId = requireString(body, "chatId");
   const user = requireObject(body, "user");
   const summary = requireObject(body, "summary");
@@ -576,7 +564,10 @@ export async function handleUpdateMessage(
     const id = requireQuery(ctx, "id");
     const chatId = requireQuery(ctx, "chatId");
     const projectPath = requireQuery(ctx, "projectPath");
-    if (!chatBelongsToProject(deps, projectPath, chatId) || !messageBelongsToChat(deps, chatId, id)) {
+    if (
+      !chatBelongsToProject(deps, projectPath, chatId) ||
+      !messageBelongsToChat(deps, chatId, id)
+    ) {
       return notFoundResult("Message not found.");
     }
     const body = await readJsonObject(ctx.req);

@@ -33,8 +33,7 @@ function configRoot(cfg: Record<string, unknown> | undefined): string {
 }
 
 export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
-  const filesSide: WinSnapshot | null =
-    a.type === "files" ? a : b.type === "files" ? b : null;
+  const filesSide: WinSnapshot | null = a.type === "files" ? a : b.type === "files" ? b : null;
   const other = filesSide === null ? null : filesSide === a ? b : a;
   if (filesSide !== null && other !== null && (other.type === "chat" || other.type === "agents")) {
     return `uses ${configRoot(filesSide.cfg)}/`;
@@ -175,10 +174,7 @@ export function defaultLayout(W: number, H: number): DefaultLayoutWindow[] {
   ];
 }
 
-export function subText(
-  type: WindowType,
-  cfg: Record<string, unknown> | undefined,
-): string | null {
+export function subText(type: WindowType, cfg: Record<string, unknown> | undefined): string | null {
   if (cfg === undefined) return null;
   const cfgString = (key: string): string | null => {
     const v = cfg[key];

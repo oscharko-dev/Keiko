@@ -23,14 +23,8 @@ import {
   type VerificationReport,
 } from "../../../src/verification/index.js";
 import { detectWorkspace, readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
-import type {
-  UnitTestWorkflowInput,
-  UnitTestWorkflowReport,
-} from "@oscharko-dev/keiko-workflows";
-import type {
-  BugInvestigationInput,
-  BugInvestigationReport,
-} from "@oscharko-dev/keiko-workflows";
+import type { UnitTestWorkflowInput, UnitTestWorkflowReport } from "@oscharko-dev/keiko-workflows";
+import type { BugInvestigationInput, BugInvestigationReport } from "@oscharko-dev/keiko-workflows";
 import type {
   HarnessEvent,
   RunCompletedEvent,
@@ -239,9 +233,7 @@ function dispatchExplain(
     model: ctx.model,
     tools: new DryRunToolPort(),
     sink,
-    ...(reservedRunId === undefined
-      ? {}
-      : { idSource: { newRunId: (): string => reservedRunId } }),
+    ...(reservedRunId === undefined ? {} : { idSource: { newRunId: (): string => reservedRunId } }),
   });
   const result = session.result.then(
     (runResult): DispatchOutcome => ({

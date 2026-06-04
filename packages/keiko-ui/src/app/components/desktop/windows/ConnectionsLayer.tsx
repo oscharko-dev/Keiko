@@ -86,9 +86,7 @@ export function ConnectionsLayer({
           <path key={it.c.id} className="conn-path" d={it.d} />
         ))}
         {temp !== null ? <path className="conn-path conn-temp" d={temp.d} /> : null}
-        {temp !== null ? (
-          <circle className="conn-dot" cx={temp.ex} cy={temp.ey} r="5" />
-        ) : null}
+        {temp !== null ? <circle className="conn-dot" cx={temp.ex} cy={temp.ey} r="5" /> : null}
       </svg>
       {items.map((it) => (
         <button

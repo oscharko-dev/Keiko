@@ -73,7 +73,9 @@ function readBody(req: IncomingMessage): Promise<string> {
   });
 }
 
-async function readJsonObject(req: IncomingMessage): Promise<Record<string, unknown> | RouteResult> {
+async function readJsonObject(
+  req: IncomingMessage,
+): Promise<Record<string, unknown> | RouteResult> {
   let raw: string;
   try {
     raw = await readBody(req);
@@ -114,18 +116,24 @@ function defaultChatModelId(deps: UiHandlerDeps): string {
   }
   const configured = listConfiguredCapabilities(config);
   return (
-    configured.find((model) => model.id === DEFAULT_CHAT_MODEL && model.kind === "chat") ??
-    configured.find((model) => model.kind === "chat")
-  )?.id ?? DEFAULT_CHAT_MODEL;
+    (
+      configured.find((model) => model.id === DEFAULT_CHAT_MODEL && model.kind === "chat") ??
+      configured.find((model) => model.kind === "chat")
+    )?.id ?? DEFAULT_CHAT_MODEL
+  );
 }
 
 function modelFromBody(body: Record<string, unknown>, deps: UiHandlerDeps): string | RouteResult {
-  const modelId = typeof body.modelId === "string" && body.modelId.length > 0
-    ? body.modelId
-    : defaultChatModelId(deps);
+  const modelId =
+    typeof body.modelId === "string" && body.modelId.length > 0
+      ? body.modelId
+      : defaultChatModelId(deps);
   const capability = chatCapability(deps, modelId);
   if (capability?.kind !== "chat") {
-    return { status: 400, body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id.") };
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
+    };
   }
   return modelId;
 }
@@ -138,9 +146,7 @@ function pickProjectPath(body: Record<string, unknown>, deps: UiHandlerDeps): st
   if (supplied !== undefined) {
     return validateProjectPath(supplied, { mustExist: true });
   }
-  const available = deps.store
-    .listProjects()
-    .find((project) => isProjectAvailable(project));
+  const available = deps.store.listProjects().find((project) => isProjectAvailable(project));
   if (available !== undefined) {
     return available.path;
   }
@@ -192,7 +198,9 @@ function desktopChatErrorResult(error: unknown): RouteResult {
   throw error;
 }
 
-function messageForGateway(message: ChatMessage): { role: "user" | "assistant"; content: string } | null {
+function messageForGateway(
+  message: ChatMessage,
+): { role: "user" | "assistant"; content: string } | null {
   if (message.role !== "user" && message.role !== "assistant") {
     return null;
   }
@@ -202,7 +210,9 @@ function messageForGateway(message: ChatMessage): { role: "user" | "assistant"; 
 function conversationForGateway(messages: readonly ChatMessage[]): GatewayConversationMessage[] {
   const usable = messages
     .map(messageForGateway)
-    .filter((message): message is { role: "user" | "assistant"; content: string } => message !== null)
+    .filter(
+      (message): message is { role: "user" | "assistant"; content: string } => message !== null,
+    )
     .slice(-MAX_CONTEXT_MESSAGES);
   return [
     {
@@ -229,7 +239,10 @@ function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequ
     return { status: 400, body: errorBody("BAD_REQUEST", "chatId and projectPath are required.") };
   }
   if (content.length === 0 || content.length > MAX_CHAT_INPUT_CHARS) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "content must be between 1 and 16000 characters.") };
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "content must be between 1 and 16000 characters."),
+    };
   }
   return {
     chatId,
@@ -244,7 +257,10 @@ function invalidChatModelResult(modelId: string, deps: UiHandlerDeps): RouteResu
   if (capability?.kind === "chat") {
     return undefined;
   }
-  return { status: 400, body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id.") };
+  return {
+    status: 400,
+    body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
+  };
 }
 
 function createUserMessage(deps: UiHandlerDeps, request: SendDesktopChatRequest): ChatMessage {
@@ -328,9 +344,10 @@ export async function handleCreateDesktopChat(
   try {
     const projectPath = pickProjectPath(body, deps);
     const project = ensureProject(deps, projectPath);
-    const title = typeof body.title === "string" && body.title.trim().length > 0
-      ? body.title.trim()
-      : DEFAULT_CHAT_TITLE;
+    const title =
+      typeof body.title === "string" && body.title.trim().length > 0
+        ? body.title.trim()
+        : DEFAULT_CHAT_TITLE;
     const chat = deps.store.createChat(project.path, title, modelId);
     return { status: 201, body: chatEnvelope(deps, project, chat) };
   } catch (error) {

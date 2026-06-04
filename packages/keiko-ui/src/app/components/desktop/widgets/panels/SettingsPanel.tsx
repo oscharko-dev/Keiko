@@ -28,7 +28,10 @@ function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): Rea
           {model.structuredOutput ? "yes" : "no"} · {model.costClass}/{model.latencyClass}
         </div>
       </div>
-      <span className={"ml-status " + (model.kind === "chat" ? "connected" : "untested")} title={model.kind} />
+      <span
+        className={"ml-status " + (model.kind === "chat" ? "connected" : "untested")}
+        title={model.kind}
+      />
     </div>
   );
 }
@@ -63,13 +66,16 @@ function GeneralPrefs(): ReactNode {
         <div>
           <div className="set-sec-t">Workspace wallpaper</div>
           <div className="set-sec-d">
-            Liquid Chrome — a subtle metallic flow behind the grid that reacts to your cursor and clicks. Set to 0 % for the plain workspace background.
+            Liquid Chrome — a subtle metallic flow behind the grid that reacts to your cursor and
+            clicks. Set to 0 % for the plain workspace background.
           </div>
         </div>
       </div>
       <div className="gpref">
         <div className="gpref-row">
-          <label className="gpref-label" htmlFor="wp-op">Wallpaper opacity</label>
+          <label className="gpref-label" htmlFor="wp-op">
+            Wallpaper opacity
+          </label>
           <span className="gpref-val mono">{wp}%</span>
         </div>
         <input
@@ -84,7 +90,10 @@ function GeneralPrefs(): ReactNode {
           style={fill}
           aria-label="Wallpaper opacity"
         />
-        <div className="gpref-scale"><span>Off</span><span>Full</span></div>
+        <div className="gpref-scale">
+          <span>Off</span>
+          <span>Full</span>
+        </div>
       </div>
     </>
   );
@@ -157,7 +166,8 @@ export function SettingsPanel(): ReactNode {
               <div>
                 <div className="set-sec-t">Model gateway</div>
                 <div className="set-sec-d">
-                  Credentials are stored locally by the Keiko loopback server; secrets are never returned to the browser.
+                  Credentials are stored locally by the Keiko loopback server; secrets are never
+                  returned to the browser.
                 </div>
               </div>
               <button type="button" className="set-add" onClick={() => setSetupOpen(true)}>
@@ -172,7 +182,9 @@ export function SettingsPanel(): ReactNode {
               </span>
               <div className="ml-info">
                 <div className="ml-top">
-                  <span className="ml-name">{connected ? "Gateway connected" : "Gateway setup required"}</span>
+                  <span className="ml-name">
+                    {connected ? "Gateway connected" : "Gateway setup required"}
+                  </span>
                   <span className="ml-type mono">{models.length.toString()} models</span>
                   <span className="ml-type mono">{chatCount.toString()} chat</span>
                 </div>
@@ -182,7 +194,10 @@ export function SettingsPanel(): ReactNode {
                     : "Enter the gateway base URL and API token before using chat or agent workflows."}
                 </div>
               </div>
-              <span className={"ml-status " + (connected ? "connected" : "untested")} title={connected ? "connected" : "setup required"} />
+              <span
+                className={"ml-status " + (connected ? "connected" : "untested")}
+                title={connected ? "connected" : "setup required"}
+              />
             </div>
 
             {modelError !== undefined ? <div className="gw-error">{modelError}</div> : null}
@@ -191,7 +206,8 @@ export function SettingsPanel(): ReactNode {
               <div className="set-placeholder">Loading gateway models...</div>
             ) : models.length === 0 ? (
               <div className="set-placeholder">
-                No models are configured yet. Connect the gateway to load configured model capabilities.
+                No models are configured yet. Connect the gateway to load configured model
+                capabilities.
               </div>
             ) : (
               <div className="set-list">

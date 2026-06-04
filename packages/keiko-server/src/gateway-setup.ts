@@ -198,7 +198,10 @@ function modelIdFromKnownFields(item: Record<string, unknown>): string | undefin
   return undefined;
 }
 
-function nestedRecord(value: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+function nestedRecord(
+  value: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> | undefined {
   const nested = value[key];
   return isRecord(nested) ? nested : undefined;
 }
@@ -310,9 +313,7 @@ function deploymentNameValues(value: unknown): readonly string[] | undefined {
 }
 
 function normalizeDeploymentNames(values: readonly string[]): readonly string[] {
-  return Array.from(
-    new Set(values.map((item) => item.trim()).filter((item) => item.length > 0)),
-  );
+  return Array.from(new Set(values.map((item) => item.trim()).filter((item) => item.length > 0)));
 }
 
 function parseDeploymentNames(value: unknown): readonly string[] | RouteResult {
@@ -348,9 +349,7 @@ function validateSetupConnection(
   apiKeyHeaderName: string,
 ): RouteResult | undefined {
   try {
-    parseGatewayConfig(
-      buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }),
-    );
+    parseGatewayConfig(buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }));
     return undefined;
   } catch (error) {
     if (error instanceof ConfigInvalidError) {
@@ -388,9 +387,8 @@ async function defaultGatewaySetupTester(
     }
   }
   await Promise.all(
-    Array.from(
-      { length: Math.min(SETUP_SMOKE_CONCURRENCY, candidateModelIds.length) },
-      () => worker(),
+    Array.from({ length: Math.min(SETUP_SMOKE_CONCURRENCY, candidateModelIds.length) }, () =>
+      worker(),
     ),
   );
   const accepted = tested.filter((modelId): modelId is string => modelId !== undefined);
@@ -455,9 +453,7 @@ function isSymlink(path: string): boolean {
   }
 }
 
-function readSetupRequest(
-  raw: unknown,
-):
+function readSetupRequest(raw: unknown):
   | {
       readonly baseUrl: string;
       readonly apiKey: string;
@@ -522,7 +518,9 @@ async function verifySetupCandidate(
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(baseUrl, "candidate");
   const candidateModelIds =
-    deploymentNames.length > 0 ? deploymentNames : await discovery(baseUrl, apiKey, apiKeyHeaderName);
+    deploymentNames.length > 0
+      ? deploymentNames
+      : await discovery(baseUrl, apiKey, apiKeyHeaderName);
   const smokeTimeoutMs =
     deploymentNames.length > 0 ? DEPLOYMENT_SMOKE_TIMEOUT_MS : DISCOVERED_MODEL_SMOKE_TIMEOUT_MS;
   const candidateRawConfig = buildRawConfig(baseUrl, apiKey, candidateModelIds, {
@@ -582,7 +580,10 @@ async function readJsonSetupBody(ctx: RouteContext): Promise<ParsedSetupBody | R
     bodyText = await readBody(ctx.req);
   } catch (error) {
     if (error instanceof BodyTooLargeError) {
-      return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit.") };
+      return {
+        status: 413,
+        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
+      };
     }
     throw error;
   }
@@ -600,7 +601,10 @@ function gatewayUnavailableResult(): RouteResult {
   };
 }
 
-export async function handleGatewaySetup(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
+export async function handleGatewaySetup(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
   if (deps.gatewayConfig === undefined) {
     return gatewayUnavailableResult();
   }

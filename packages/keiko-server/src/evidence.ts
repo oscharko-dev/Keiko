@@ -87,10 +87,7 @@ export function persistExplainEvidence(
   ctx: EvidencePersistContext,
 ): EvidenceReport {
   const manifest = buildExplainManifest(identity, result);
-  const redactor = createAuditRedactor(
-    { additionalSecrets: ctx.additionalSecrets ?? [] },
-    ctx.env,
-  );
+  const redactor = createAuditRedactor({ additionalSecrets: ctx.additionalSecrets ?? [] }, ctx.env);
   const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
   const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
   return buildEvidenceReport(redacted, location);
@@ -111,10 +108,7 @@ export function persistVerifyEvidence(
   ctx: EvidencePersistContext,
 ): EvidenceReport {
   const manifest = buildVerifyManifest(identity);
-  const redactor = createAuditRedactor(
-    { additionalSecrets: ctx.additionalSecrets ?? [] },
-    ctx.env,
-  );
+  const redactor = createAuditRedactor({ additionalSecrets: ctx.additionalSecrets ?? [] }, ctx.env);
   const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
   const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));
   return buildEvidenceReport(redacted, location);

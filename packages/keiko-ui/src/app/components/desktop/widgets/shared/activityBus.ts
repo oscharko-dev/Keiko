@@ -49,9 +49,13 @@ export function getActivity(): readonly ActivityEvent[] {
 export function useActivitySubscription(): readonly ActivityEvent[] {
   const [, force] = useState(0);
   useEffect(() => {
-    const h = (): void => { force((n) => n + 1); };
+    const h = (): void => {
+      force((n) => n + 1);
+    };
     window.addEventListener(EVENT_NAME, h);
-    return () => { window.removeEventListener(EVENT_NAME, h); };
+    return () => {
+      window.removeEventListener(EVENT_NAME, h);
+    };
   }, []);
   return getActivity();
 }

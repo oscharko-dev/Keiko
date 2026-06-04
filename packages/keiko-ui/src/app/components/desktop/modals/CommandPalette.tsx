@@ -36,16 +36,18 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps): Reac
     };
   }, []);
 
-  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
 
   const filtered = useMemo(() => {
     const needle = q.toLowerCase();
-    return commands.filter((c) =>
-      `${c.label} ${c.group ?? ""}`.toLowerCase().includes(needle),
-    );
+    return commands.filter((c) => `${c.label} ${c.group ?? ""}`.toLowerCase().includes(needle));
   }, [commands, q]);
 
-  useEffect(() => { setSel(0); }, [q]);
+  useEffect(() => {
+    setSel(0);
+  }, [q]);
 
   const run = (c: Command | undefined): void => {
     if (c === undefined) return;

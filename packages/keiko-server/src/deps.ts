@@ -27,19 +27,9 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { dirname, join } from "node:path";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
-import {
-  createNodeUiStore,
-  resolveUiDbPath,
-  type UiStore,
-} from "./store/index.js";
-import {
-  createTerminalExecutionManager,
-  type TerminalExecutionManager,
-} from "./terminal.js";
-import {
-  createBrowserSessionManager,
-  type BrowserSessionManager,
-} from "@oscharko-dev/keiko-tools";
+import { createNodeUiStore, resolveUiDbPath, type UiStore } from "./store/index.js";
+import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
+import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -331,10 +321,8 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
       { additionalSecrets: redactionSecrets(options.env, runtimeConfig.current()) },
       options.env,
     )(value);
-  const liveRedactor = (value: unknown): unknown =>
-    deepRedactStrings(value, redactString);
-  const uiStore =
-    options.store ?? createNodeUiStore(resolvedUiDbPath, { redactString });
+  const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
+  const uiStore = options.store ?? createNodeUiStore(resolvedUiDbPath, { redactString });
   return {
     config,
     configPresent,

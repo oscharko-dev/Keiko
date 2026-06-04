@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { Gateway } from "./gateway.js";
-import { CircuitOpenError, TransportError, UnknownModelError } from "@oscharko-dev/keiko-security/errors/gateway";
+import {
+  CircuitOpenError,
+  TransportError,
+  UnknownModelError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
   Clock,
   GatewayConfig,

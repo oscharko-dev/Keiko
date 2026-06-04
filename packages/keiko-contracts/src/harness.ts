@@ -61,7 +61,7 @@ export const DEFAULT_LIMITS: HarnessLimits = {
 // breaking-shape change to the harness event union or RunManifest schema; consumers compare the
 // literal at parse time. Lives in contracts (not src/harness/session.ts) because tools' browser
 // side-file emission needs the same constant without importing the harness layer.
-export const HARNESS_VERSION = "0.1.6";
+export const HARNESS_VERSION = "0.1.7";
 
 // ─── Task types ───────────────────────────────────────────────────────────────
 

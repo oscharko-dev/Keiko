@@ -33,8 +33,8 @@ describe("keiko-contracts package surface", () => {
     expect(DEFAULT_LIMITS.maxIterations).toBe(10);
   });
 
-  it("HARNESS_VERSION is the literal '0.1.6'", () => {
-    expect(HARNESS_VERSION).toBe("0.1.6");
+  it("HARNESS_VERSION is the literal '0.1.7'", () => {
+    expect(HARNESS_VERSION).toBe("0.1.7");
   });
 
   it("EVIDENCE_SCHEMA_VERSION is the literal string '1'", () => {

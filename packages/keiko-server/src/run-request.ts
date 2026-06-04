@@ -178,7 +178,11 @@ function validateBugReport(report: Record<string, unknown>): RunRequestError | n
   if (failingOutputError !== null) {
     return failingOutputError;
   }
-  const stackTraceError = validateOptionalStringField(report, "stackTrace", "bug report.stackTrace");
+  const stackTraceError = validateOptionalStringField(
+    report,
+    "stackTrace",
+    "bug report.stackTrace",
+  );
   if (stackTraceError !== null) {
     return stackTraceError;
   }

@@ -92,9 +92,7 @@ export function parseUnifiedDiff(raw: string): DiffParseResult {
   const rawLines = input.split("\n");
   // Remove the single trailing empty string that results from a terminal newline.
   const lines =
-    rawLines.length > 0 && rawLines[rawLines.length - 1] === ""
-      ? rawLines.slice(0, -1)
-      : rawLines;
+    rawLines.length > 0 && rawLines[rawLines.length - 1] === "" ? rawLines.slice(0, -1) : rawLines;
   const files: MutableFile[] = [];
   let current: MutableFile | null = null;
   let currentHunk: MutableHunk | null = null;

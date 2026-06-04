@@ -14,13 +14,7 @@ import {
 import { defaultLayout } from "../windows/connectionUtils";
 import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
-import type {
-  AppWindow,
-  Connection,
-  ConnectingState,
-  SnapPrev,
-  View,
-} from "../windows/types";
+import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import type { UseWorkspaceResult, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
 import {
   makeConnectActions,
@@ -359,7 +353,9 @@ function useFitMaximized({ wsRef, viewRef, setWins }: UseFitMaximizedArgs): void
         h: r.height / v.zoom,
       };
       setWins((ws) =>
-        ws === null ? ws : ws.map((w) => (w.max ? { ...w, x: vp.x, y: vp.y, w: vp.w, h: vp.h } : w)),
+        ws === null
+          ? ws
+          : ws.map((w) => (w.max ? { ...w, x: vp.x, y: vp.y, w: vp.w, h: vp.h } : w)),
       );
     });
     ro.observe(el);
@@ -426,7 +422,11 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
   useKeyboardCtrls({ setWins, rect, cancelConnectRef });
   useFitMaximized({ wsRef, viewRef, setWins });
 
-  const { update, focus, close, maximize, add, toggleTool } = makeMutations({ setWins, zc, worldVP });
+  const { update, focus, close, maximize, add, toggleTool } = makeMutations({
+    setWins,
+    zc,
+    worldVP,
+  });
   const { tileAll, splitFront, cascade } = makeLayoutActions({ setWins, worldVP });
   const { setSnap, commitSnap } = makeSnapActions({ setSnapPrev, snapZone, worldVP, update });
   const {
@@ -438,18 +438,17 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
     linkedFilesRoot,
     linkedFilesContext,
     currentFilesContext,
-  } =
-    makeConnectActions({
-      wsRef,
-      viewRef,
-      winsRef,
-      connsRef,
-      connectingRef,
-      connectCleanupRef,
-      focus,
-      setConns,
-      setConnecting,
-    });
+  } = makeConnectActions({
+    wsRef,
+    viewRef,
+    winsRef,
+    connsRef,
+    connectingRef,
+    connectCleanupRef,
+    focus,
+    setConns,
+    setConnecting,
+  });
   cancelConnectRef.current = cancelConnect;
 
   // Component unmount must also drop the global listener.

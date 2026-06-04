@@ -62,7 +62,13 @@ function previewKindLabel(preview: FilesPreviewResponse): string {
   return preview.extension ?? "binary";
 }
 
-function MetadataRow({ label, value }: { readonly label: string; readonly value: string }): ReactNode {
+function MetadataRow({
+  label,
+  value,
+}: {
+  readonly label: string;
+  readonly value: string;
+}): ReactNode {
   return (
     <div className="fpv-meta-row">
       <span>{label}</span>
@@ -97,15 +103,25 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
   }, [path, root]);
 
   const denied = error?.denied === true;
-  const lang = preview !== null ? previewKindLabel(preview) : denied ? "denied" : error !== null ? "error" : "loading";
-  const headerName = denied ? "Hidden file" : preview?.name ?? (error !== null ? "Preview unavailable" : "Loading preview");
+  const lang =
+    preview !== null
+      ? previewKindLabel(preview)
+      : denied
+        ? "denied"
+        : error !== null
+          ? "error"
+          : "loading";
+  const headerName = denied
+    ? "Hidden file"
+    : (preview?.name ?? (error !== null ? "Preview unavailable" : "Loading preview"));
   const headerTitle = headerName;
   const shouldHighlight = preview?.kind === "text" && preview.content.length <= MAX_HIGHLIGHT_BYTES;
-  const lines: readonly (readonly Token[])[] = preview?.kind === "text"
-    ? shouldHighlight
-      ? highlightLines(preview.content, langOf(preview.name))
-      : preview.content.split("\n").map((line): readonly Token[] => [["id", line]])
-    : [];
+  const lines: readonly (readonly Token[])[] =
+    preview?.kind === "text"
+      ? shouldHighlight
+        ? highlightLines(preview.content, langOf(preview.name))
+        : preview.content.split("\n").map((line): readonly Token[] => [["id", line]])
+      : [];
 
   return (
     <div className="fpv">
@@ -120,7 +136,9 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
           <Icons.back size={15} />
         </button>
         <FileIcon name={denied || preview === null ? "" : preview.name} />
-        <span className="fpv-name" title={headerTitle}>{headerName}</span>
+        <span className="fpv-name" title={headerTitle}>
+          {headerName}
+        </span>
         <span className="fpv-lang mono">{lang}</span>
         <span className="spacer" />
         <button
@@ -136,20 +154,21 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
 
       {loading ? <div className="fpv-state">Loading preview...</div> : null}
       {error !== null ? (
-        <div className="fpv-state fpv-error" role="alert">{error.message}</div>
+        <div className="fpv-state fpv-error" role="alert">
+          {error.message}
+        </div>
       ) : null}
 
       {preview?.kind === "text" ? (
         <>
           {preview.truncated ? (
             <div className="fpv-banner">
-              Preview truncated at {formatBytes(preview.maxBytes)}. Open the file in the editor for full content.
+              Preview truncated at {formatBytes(preview.maxBytes)}. Open the file in the editor for
+              full content.
             </div>
           ) : null}
           {!shouldHighlight ? (
-            <div className="fpv-banner">
-              Syntax highlighting disabled for large previews.
-            </div>
+            <div className="fpv-banner">Syntax highlighting disabled for large previews.</div>
           ) : null}
           <div className="fpv-code mono">
             {lines.map((toks, i) => (

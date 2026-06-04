@@ -15,7 +15,9 @@ export function Toggle({ on, onChange, label }: ToggleProps): ReactNode {
       aria-checked={on}
       aria-label={label}
       className={`auto-toggle${on ? " on" : ""}`}
-      onClick={() => { onChange(!on); }}
+      onClick={() => {
+        onChange(!on);
+      }}
     >
       <span />
     </button>

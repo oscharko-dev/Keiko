@@ -21,21 +21,13 @@ interface IntegrationsWidgetProps {
   provider?: string;
 }
 
-export function IntegrationsWidget({
-  provider = "GitHub",
-}: IntegrationsWidgetProps): ReactNode {
+export function IntegrationsWidget({ provider = "GitHub" }: IntegrationsWidgetProps): ReactNode {
   return (
     <div className="integ">
       {APPS.map((a) => {
         const on = a.name === provider;
         return (
-          <button
-            key={a.name}
-            type="button"
-            className="integ-row"
-            data-on={on}
-            aria-pressed={on}
-          >
+          <button key={a.name} type="button" className="integ-row" data-on={on} aria-pressed={on}>
             <span className="integ-glyph mono">{a.glyph}</span>
             <span className="integ-text">
               <span className="integ-name">{a.name}</span>

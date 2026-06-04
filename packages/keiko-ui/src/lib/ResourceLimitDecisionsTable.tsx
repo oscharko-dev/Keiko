@@ -37,11 +37,21 @@ export function ResourceLimitDecisionsTable({ results }: Props): ReactNode {
         </caption>
         <thead>
           <tr className="border-b border-ink/10 text-left">
-            <th scope="col" className="pb-1.5 pr-4 font-medium text-ink-muted">Step</th>
-            <th scope="col" className="pb-1.5 pr-4 font-medium text-ink-muted">Dimension</th>
-            <th scope="col" className="pb-1.5 pr-4 font-medium text-ink-muted">Limit</th>
-            <th scope="col" className="pb-1.5 pr-4 font-medium text-ink-muted">Enforced</th>
-            <th scope="col" className="pb-1.5 font-medium text-ink-muted">Breached</th>
+            <th scope="col" className="pb-1.5 pr-4 font-medium text-ink-muted">
+              Step
+            </th>
+            <th scope="col" className="pb-1.5 pr-4 font-medium text-ink-muted">
+              Dimension
+            </th>
+            <th scope="col" className="pb-1.5 pr-4 font-medium text-ink-muted">
+              Limit
+            </th>
+            <th scope="col" className="pb-1.5 pr-4 font-medium text-ink-muted">
+              Enforced
+            </th>
+            <th scope="col" className="pb-1.5 font-medium text-ink-muted">
+              Breached
+            </th>
           </tr>
         </thead>
         <tbody>

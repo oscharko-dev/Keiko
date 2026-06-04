@@ -9,11 +9,7 @@ import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildCspHeader } from "./csp.js";
-import {
-  buildRedactor,
-  createInMemoryUiStore,
-  type UiHandlerDeps,
-} from "./index.js";
+import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
 import {
@@ -123,7 +119,9 @@ async function listen(srv: Server): Promise<number> {
 
 async function closeServer(srv: Server = server): Promise<void> {
   await new Promise<void>((resolve) => {
-    srv.close(() => { resolve(); });
+    srv.close(() => {
+      resolve();
+    });
   });
 }
 
@@ -333,7 +331,10 @@ describe("POST /api/terminal/executions", () => {
 
   it("maps a TerminalToolError thrown by execute() to the right status", async () => {
     const localTerminal = new FakeTerminalExecutionManager({
-      executeShouldThrow: new TerminalToolError("COMMAND_DENIED", "Command is not in the allowlist."),
+      executeShouldThrow: new TerminalToolError(
+        "COMMAND_DENIED",
+        "Command is not in the allowlist.",
+      ),
     });
     deps = { ...deps, terminal: localTerminal };
     await closeServer();

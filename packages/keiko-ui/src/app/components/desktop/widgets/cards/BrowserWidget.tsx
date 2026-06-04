@@ -4,13 +4,7 @@
 // loopback URL, captures screenshots (dry-run by default), and streams SSE events. URL/session
 // state is driven by the BFF; the displayed `url` prop is a display hint only.
 
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError } from "../../../../../lib/api";
 import {
@@ -272,14 +266,8 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
     }
   }, [session, clearError]);
 
-  const openDisabled = useMemo(
-    () => working || session !== null,
-    [working, session],
-  );
-  const sessionRequiredDisabled = useMemo(
-    () => working || session === null,
-    [working, session],
-  );
+  const openDisabled = useMemo(() => working || session !== null, [working, session]);
+  const sessionRequiredDisabled = useMemo(() => working || session === null, [working, session]);
 
   return (
     <div className="browser" aria-label="Browser tool">

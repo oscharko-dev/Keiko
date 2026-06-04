@@ -62,9 +62,7 @@ export {
 export { nodeWorkspaceWriter } from "@oscharko-dev/keiko-tools/internal/writer";
 export type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 
-export {
-  nodeSpawnFn,
-} from "@oscharko-dev/keiko-tools/internal/exec";
+export { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 
 export {
   runCommand,

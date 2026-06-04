@@ -15,8 +15,7 @@ export function SearchPanel(): ReactNode {
         <span className="kbd">⇧⇧</span>
       </div>
       <div className="tw-label srch-label">
-        example-workspace{" "}
-        <span className="srch-meta mono">spring-boot · typescript</span>
+        example-workspace <span className="srch-meta mono">spring-boot · typescript</span>
       </div>
       <div className="tr">
         {PROJECT_TREE.map((node, i) => (

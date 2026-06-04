@@ -6,9 +6,8 @@ import { FilePreview } from "./FilePreview";
 import { FilesWidget } from "./FilesWidget";
 
 vi.mock("../../../../../lib/api", async () => {
-  const actual = await vi.importActual<typeof import("../../../../../lib/api")>(
-    "../../../../../lib/api",
-  );
+  const actual =
+    await vi.importActual<typeof import("../../../../../lib/api")>("../../../../../lib/api");
   return {
     ...actual,
     fetchFilesPreview: vi.fn(),
@@ -56,7 +55,7 @@ describe("FilesWidget", () => {
       mime: "application/json",
       symlink: false,
       kind: "text",
-      content: "{\"name\":\"keiko\"}\n",
+      content: '{"name":"keiko"}\n',
       truncated: false,
       maxBytes: 1_000_000,
     });
@@ -70,9 +69,11 @@ describe("FilesWidget", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /package\.json/i }));
 
-    await waitFor(() => expect(fetchFilesPreview).toHaveBeenCalledWith("/repo space", "package.json"));
+    await waitFor(() =>
+      expect(fetchFilesPreview).toHaveBeenCalledWith("/repo space", "package.json"),
+    );
     expect(onActiveFileChange).toHaveBeenCalledWith("package.json", "/repo space");
-    expect(await screen.findByText("\"keiko\"")).toBeInTheDocument();
+    expect(await screen.findByText('"keiko"')).toBeInTheDocument();
   });
 
   it("renders tree loading errors", async () => {
@@ -106,8 +107,9 @@ describe("FilePreview", () => {
 
     render(<FilePreview root="/repo" path="archive.bin" onClose={() => undefined} />);
 
-    expect(await screen.findByText("No safe text or image preview is available for this file type."))
-      .toBeInTheDocument();
+    expect(
+      await screen.findByText("No safe text or image preview is available for this file type."),
+    ).toBeInTheDocument();
     expect(screen.getAllByText("archive.bin").length).toBeGreaterThan(0);
   });
 
@@ -117,9 +119,7 @@ describe("FilePreview", () => {
     // never disclosed; the message lists common deny categories as examples
     // only.
     const bffMessage = "secret bff diagnostic that should never reach the user";
-    vi.mocked(fetchFilesPreview).mockRejectedValueOnce(
-      new ApiError("DENIED", bffMessage, 403),
-    );
+    vi.mocked(fetchFilesPreview).mockRejectedValueOnce(new ApiError("DENIED", bffMessage, 403));
 
     const { container } = render(
       <FilePreview root="/repo" path="some/secret.pem" onClose={() => undefined} />,

@@ -67,55 +67,58 @@ export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): Rea
     };
   }, [configuredRoot]);
 
-  const loadDirectory = useCallback(async (path: string): Promise<void> => {
-    if (apiRoot.length === 0) {
-      setDirectories((current) => ({
-        ...current,
-        [path]: {
-          entries: [],
-          truncated: false,
-          loading: false,
-          error: "No registered project is available.",
-        },
-      }));
-      return;
-    }
-    setDirectories((current) => ({
-      ...current,
-      [path]: {
-        entries: current[path]?.entries ?? [],
-        truncated: current[path]?.truncated ?? false,
-        loading: true,
-        error: null,
-      },
-    }));
-    try {
-      const response = await fetchFilesTree(apiRoot, path);
-      if (path === "") {
-        setResolvedRoot(response.root);
-        activeFileChangeRef.current?.(null, response.root);
+  const loadDirectory = useCallback(
+    async (path: string): Promise<void> => {
+      if (apiRoot.length === 0) {
+        setDirectories((current) => ({
+          ...current,
+          [path]: {
+            entries: [],
+            truncated: false,
+            loading: false,
+            error: "No registered project is available.",
+          },
+        }));
+        return;
       }
-      setDirectories((current) => ({
-        ...current,
-        [path]: {
-          entries: response.entries,
-          truncated: response.truncated,
-          loading: false,
-          error: null,
-        },
-      }));
-    } catch (error: unknown) {
       setDirectories((current) => ({
         ...current,
         [path]: {
           entries: current[path]?.entries ?? [],
           truncated: current[path]?.truncated ?? false,
-          loading: false,
-          error: errorMessage(error),
+          loading: true,
+          error: null,
         },
       }));
-    }
-  }, [apiRoot]);
+      try {
+        const response = await fetchFilesTree(apiRoot, path);
+        if (path === "") {
+          setResolvedRoot(response.root);
+          activeFileChangeRef.current?.(null, response.root);
+        }
+        setDirectories((current) => ({
+          ...current,
+          [path]: {
+            entries: response.entries,
+            truncated: response.truncated,
+            loading: false,
+            error: null,
+          },
+        }));
+      } catch (error: unknown) {
+        setDirectories((current) => ({
+          ...current,
+          [path]: {
+            entries: current[path]?.entries ?? [],
+            truncated: current[path]?.truncated ?? false,
+            loading: false,
+            error: errorMessage(error),
+          },
+        }));
+      }
+    },
+    [apiRoot],
+  );
 
   useEffect(() => {
     setSelectedPath(null);
@@ -198,22 +201,29 @@ export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): Rea
     );
   };
 
-  const renderDirectory = (
-    path: string,
-    depth: number,
-    state = directories[path],
-  ): ReactNode => (
+  const renderDirectory = (path: string, depth: number, state = directories[path]): ReactNode => (
     <div className="tr-dir">
-      {state?.loading === true ? <div className="files-note" style={{ paddingLeft: 22 + depth * 13 }}>Loading...</div> : null}
+      {state?.loading === true ? (
+        <div className="files-note" style={{ paddingLeft: 22 + depth * 13 }}>
+          Loading...
+        </div>
+      ) : null}
       {state?.error !== null && state?.error !== undefined ? (
         <div className="files-error" style={{ marginLeft: 8 + depth * 13 }}>
           <span>{state.error}</span>
-          <button type="button" onClick={() => retryDirectory(path)}>Retry</button>
+          <button type="button" onClick={() => retryDirectory(path)}>
+            Retry
+          </button>
         </div>
       ) : null}
       {state?.entries.map((entry) => renderEntry(entry, depth))}
-      {state !== undefined && !state.loading && state.error === null && state.entries.length === 0 ? (
-        <div className="files-note" style={{ paddingLeft: 22 + depth * 13 }}>Empty folder.</div>
+      {state !== undefined &&
+      !state.loading &&
+      state.error === null &&
+      state.entries.length === 0 ? (
+        <div className="files-note" style={{ paddingLeft: 22 + depth * 13 }}>
+          Empty folder.
+        </div>
       ) : null}
       {state?.truncated === true ? (
         <div className="files-note files-warning" style={{ paddingLeft: 22 + depth * 13 }}>

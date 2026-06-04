@@ -47,11 +47,7 @@ import {
   handleTerminalEvents,
   handleTerminalPolicy,
 } from "./terminal-routes.js";
-import {
-  handleFilesDirectories,
-  handleFilesPreview,
-  handleFilesTree,
-} from "./files.js";
+import { handleFilesDirectories, handleFilesPreview, handleFilesTree } from "./files.js";
 import {
   handleBrowserApplyScreenshot,
   handleBrowserContent,
@@ -133,7 +129,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/chats/messages", handler: handleListMessages },
   { method: "POST", pattern: "/api/chats/messages", handler: handleCreateMessage },
   // Issue #66 — atomic composer write: exactly one user message plus one run-summary system message.
-  { method: "POST", pattern: "/api/chats/messages/run-summary-pair", handler: handleCreateRunSummaryPair },
+  {
+    method: "POST",
+    pattern: "/api/chats/messages/run-summary-pair",
+    handler: handleCreateRunSummaryPair,
+  },
   // Issue #66 — PATCH a run-summary message (status/shortResult/taskType).
   { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
@@ -144,7 +144,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/terminal/policy", handler: handleTerminalPolicy },
   { method: "GET", pattern: "/api/terminal/directories", handler: handleTerminalDirectories },
   { method: "POST", pattern: "/api/terminal/executions", handler: handleCreateTerminalExecution },
-  { method: "DELETE", pattern: "/api/terminal/executions/:executionId", handler: handleDeleteTerminalExecution },
+  {
+    method: "DELETE",
+    pattern: "/api/terminal/executions/:executionId",
+    handler: handleDeleteTerminalExecution,
+  },
   { method: "GET", pattern: "/api/terminal/events", handler: handleTerminalEvents },
   // Desktop files — read-only selected-root browser and preview control plane.
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
@@ -153,12 +157,36 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // ADR-0017 — browser tool (BYO Chrome over CDP).
   { method: "GET", pattern: "/api/browser/status", handler: handleBrowserStatus },
   { method: "POST", pattern: "/api/browser/sessions", handler: handleCreateBrowserSession },
-  { method: "DELETE", pattern: "/api/browser/sessions/:sessionId", handler: handleDeleteBrowserSession },
-  { method: "POST", pattern: "/api/browser/sessions/:sessionId/navigate", handler: handleBrowserNavigate },
-  { method: "POST", pattern: "/api/browser/sessions/:sessionId/screenshot", handler: handleBrowserScreenshot },
-  { method: "POST", pattern: "/api/browser/sessions/:sessionId/apply", handler: handleBrowserApplyScreenshot },
-  { method: "POST", pattern: "/api/browser/sessions/:sessionId/content", handler: handleBrowserContent },
-  { method: "GET", pattern: "/api/browser/sessions/:sessionId/events", handler: handleBrowserEvents },
+  {
+    method: "DELETE",
+    pattern: "/api/browser/sessions/:sessionId",
+    handler: handleDeleteBrowserSession,
+  },
+  {
+    method: "POST",
+    pattern: "/api/browser/sessions/:sessionId/navigate",
+    handler: handleBrowserNavigate,
+  },
+  {
+    method: "POST",
+    pattern: "/api/browser/sessions/:sessionId/screenshot",
+    handler: handleBrowserScreenshot,
+  },
+  {
+    method: "POST",
+    pattern: "/api/browser/sessions/:sessionId/apply",
+    handler: handleBrowserApplyScreenshot,
+  },
+  {
+    method: "POST",
+    pattern: "/api/browser/sessions/:sessionId/content",
+    handler: handleBrowserContent,
+  },
+  {
+    method: "GET",
+    pattern: "/api/browser/sessions/:sessionId/events",
+    handler: handleBrowserEvents,
+  },
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured

@@ -15,13 +15,64 @@ interface CodeLine {
 }
 
 const CODE: readonly CodeLine[] = [
-  { n: 1, t: [["k", "const"], ["", " "], ["v", "{ useState }"], ["", " = "], ["v", "React"]] },
+  {
+    n: 1,
+    t: [
+      ["k", "const"],
+      ["", " "],
+      ["v", "{ useState }"],
+      ["", " = "],
+      ["v", "React"],
+    ],
+  },
   { n: 2, t: [] },
-  { n: 3, t: [["k", "function"], ["", " "], ["f", "WindowFrame"], ["p", "({ win, on })"], ["", " {"]] },
-  { n: 4, t: [["", "  "], ["k", "const"], ["", " [drag, setDrag] = "], ["f", "useState"], ["p", "(null)"]] },
-  { n: 5, t: [["", "  "], ["k", "return"], ["", " "], ["p", "<section"], ["a", " className"], ["", "="], ["s", "\"window\""], ["p", ">"]] },
-  { n: 6, t: [["", "    "], ["c", "// drag · resize · snap"]] },
-  { n: 7, t: [["", "  "], ["p", "</section>"]] },
+  {
+    n: 3,
+    t: [
+      ["k", "function"],
+      ["", " "],
+      ["f", "WindowFrame"],
+      ["p", "({ win, on })"],
+      ["", " {"],
+    ],
+  },
+  {
+    n: 4,
+    t: [
+      ["", "  "],
+      ["k", "const"],
+      ["", " [drag, setDrag] = "],
+      ["f", "useState"],
+      ["p", "(null)"],
+    ],
+  },
+  {
+    n: 5,
+    t: [
+      ["", "  "],
+      ["k", "return"],
+      ["", " "],
+      ["p", "<section"],
+      ["a", " className"],
+      ["", "="],
+      ["s", '"window"'],
+      ["p", ">"],
+    ],
+  },
+  {
+    n: 6,
+    t: [
+      ["", "    "],
+      ["c", "// drag · resize · snap"],
+    ],
+  },
+  {
+    n: 7,
+    t: [
+      ["", "  "],
+      ["p", "</section>"],
+    ],
+  },
   { n: 8, t: [["", "}"]] },
 ];
 

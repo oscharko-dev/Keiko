@@ -5,10 +5,9 @@
 import { describe, expect, it } from "vitest";
 import { parseRunRequest } from "./run-request.js";
 
-function ok(value: ReturnType<typeof parseRunRequest>): asserts value is Exclude<
-  ReturnType<typeof parseRunRequest>,
-  { code: "BAD_REQUEST" }
-> {
+function ok(
+  value: ReturnType<typeof parseRunRequest>,
+): asserts value is Exclude<ReturnType<typeof parseRunRequest>, { code: "BAD_REQUEST" }> {
   if ("code" in value) {
     throw new Error(`expected success, got BAD_REQUEST: ${value.message}`);
   }
@@ -65,9 +64,7 @@ describe("parseRunRequest verify variant", () => {
   });
 
   it("rejects when workspaceRoot is missing", () => {
-    const result = parseRunRequest(
-      JSON.stringify({ taskType: "verify", modelId: "m", input: {} }),
-    );
+    const result = parseRunRequest(JSON.stringify({ taskType: "verify", modelId: "m", input: {} }));
     bad(result);
     expect(result.message).toMatch(/workspaceRoot/);
   });
@@ -158,11 +155,19 @@ describe("parseRunRequest selected-project workspaceRoot invariant", () => {
   it.each([
     {
       label: "unit-test-generation",
-      body: { workflowId: "unit-test-generation", modelId: "m", input: { target: { kind: "moduleDir", moduleDir: "/repo" } } },
+      body: {
+        workflowId: "unit-test-generation",
+        modelId: "m",
+        input: { target: { kind: "moduleDir", moduleDir: "/repo" } },
+      },
     },
     {
       label: "bug-investigation",
-      body: { workflowId: "bug-investigation", modelId: "m", input: { report: { description: "bug" } } },
+      body: {
+        workflowId: "bug-investigation",
+        modelId: "m",
+        input: { report: { description: "bug" } },
+      },
     },
     {
       label: "explain-plan",

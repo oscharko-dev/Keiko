@@ -81,12 +81,7 @@ function lineKindLabel(kind: DiffLine["kind"]): string {
 function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): ReactNode {
   if (hasManifest) {
     return (
-      <a
-        className="rv-evidence-link"
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-      >
+      <a className="rv-evidence-link" href={href} target="_blank" rel="noopener noreferrer">
         Evidence
       </a>
     );
@@ -137,7 +132,8 @@ interface DiffLineViewProps {
 
 function DiffLineView({ line, lang }: DiffLineViewProps): ReactNode {
   // gutter sign provides a non-color channel for add/del/ctx (WCAG 1.4.1)
-  const sign = line.kind === "add" ? "+" : line.kind === "del" ? "−" : line.kind === "ctx" ? "·" : "";
+  const sign =
+    line.kind === "add" ? "+" : line.kind === "del" ? "−" : line.kind === "ctx" ? "·" : "";
   const cls = line.kind === "ctx" ? "" : ` rv-${line.kind}`;
 
   let content: ReactNode;
@@ -154,7 +150,9 @@ function DiffLineView({ line, lang }: DiffLineViewProps): ReactNode {
       <span className="rv-sr-only">{lineKindLabel(line.kind)}</span>
       <span className="rv-num-old rv-num">{line.oldLine ?? ""}</span>
       <span className="rv-num-new rv-num">{line.newLine ?? ""}</span>
-      <span className="rv-gutter" aria-hidden="true">{sign}</span>
+      <span className="rv-gutter" aria-hidden="true">
+        {sign}
+      </span>
       <code className="rv-src">{content}</code>
     </div>
   );
@@ -186,26 +184,27 @@ interface DiffFileSectionProps {
   readonly sectionRef: (el: HTMLElement | null) => void;
 }
 
-function DiffFileSection({ file, index, changedFiles, sectionRef }: DiffFileSectionProps): ReactNode {
+function DiffFileSection({
+  file,
+  index,
+  changedFiles,
+  sectionRef,
+}: DiffFileSectionProps): ReactNode {
   const cf = changedFiles.find((c) => c.path === file.path);
   const ext = file.path.includes(".") ? (file.path.split(".").pop() ?? "code") : "code";
 
   return (
-    <section
-      id={`rv-file-${index}`}
-      aria-labelledby={`rv-file-${index}-h`}
-      ref={sectionRef}
-    >
+    <section id={`rv-file-${index}`} aria-labelledby={`rv-file-${index}-h`} ref={sectionRef}>
       <h3 id={`rv-file-${index}-h`} className="rv-file mono">
         <span className="rv-path">{file.path}</span>
-        {file.oldPath !== undefined && (
-          <span className="rv-oldpath"> (was {file.oldPath})</span>
-        )}
+        {file.oldPath !== undefined && <span className="rv-oldpath"> (was {file.oldPath})</span>}
         <span className="spacer" />
         <span className="rv-stat add">+{file.addedLines}</span>
         <span className="rv-stat del">−{file.removedLines}</span>
         {cf?.elevatedReview === true && (
-          <span className="rv-elevated" aria-label="Elevated review">!</span>
+          <span className="rv-elevated" aria-label="Elevated review">
+            !
+          </span>
         )}
       </h3>
       <div className="rv-code mono">
@@ -239,32 +238,33 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
     setEvidenceError(null);
     setActiveFile(null);
 
-    void Promise.allSettled([
-      fetchRunReport(runId),
-      fetchEvidenceManifest(runId),
-    ]).then(([runRes, manifRes]) => {
-      if (cancelled) return;
+    void Promise.allSettled([fetchRunReport(runId), fetchEvidenceManifest(runId)]).then(
+      ([runRes, manifRes]) => {
+        if (cancelled) return;
 
-      if (manifRes.status === "fulfilled") {
-        setHasManifest(true);
-        setEvidenceError(null);
-      } else {
-        const manifestError = errorFromUnknown(manifRes.reason);
-        setHasManifest(false);
-        setEvidenceError(manifestError.code === "NOT_FOUND" ? null : manifestError);
-      }
+        if (manifRes.status === "fulfilled") {
+          setHasManifest(true);
+          setEvidenceError(null);
+        } else {
+          const manifestError = errorFromUnknown(manifRes.reason);
+          setHasManifest(false);
+          setEvidenceError(manifestError.code === "NOT_FOUND" ? null : manifestError);
+        }
 
-      if (runRes.status === "fulfilled") {
-        setReport(runRes.value.report);
+        if (runRes.status === "fulfilled") {
+          setReport(runRes.value.report);
+          setLoading(false);
+          return;
+        }
+
+        setFetchError(errorFromUnknown(runRes.reason));
         setLoading(false);
-        return;
-      }
+      },
+    );
 
-      setFetchError(errorFromUnknown(runRes.reason));
-      setLoading(false);
-    });
-
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [runId]);
 
   const doApply = (): void => {
@@ -288,14 +288,17 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
 
   const evidenceHref = `/api/evidence/${encodeURIComponent(runId ?? "")}`;
   const diff = useMemo(
-    () => report?.proposedDiff !== undefined ? parseUnifiedDiff(report.proposedDiff) : null,
+    () => (report?.proposedDiff !== undefined ? parseUnifiedDiff(report.proposedDiff) : null),
     [report?.proposedDiff],
   );
   const changedFiles: readonly ChangedFile[] = report?.changedFiles ?? [];
-  const totals = useMemo(() => ({
-    added: diff?.files.reduce((s, f) => s + f.addedLines, 0) ?? 0,
-    removed: diff?.files.reduce((s, f) => s + f.removedLines, 0) ?? 0,
-  }), [diff]);
+  const totals = useMemo(
+    () => ({
+      added: diff?.files.reduce((s, f) => s + f.addedLines, 0) ?? 0,
+      removed: diff?.files.reduce((s, f) => s + f.removedLines, 0) ?? 0,
+    }),
+    [diff],
+  );
   const selectedFileIndex =
     diff !== null && diff.files.length > 0
       ? Math.min(activeFile ?? 0, diff.files.length - 1)
@@ -308,7 +311,9 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
     return (
       <section className="review rv-empty" aria-label="Diff review">
         <h2 className="rv-empty-h">Review</h2>
-        <p className="rv-empty-p">Enter a run ID in the window configuration to load a proposed diff.</p>
+        <p className="rv-empty-p">
+          Enter a run ID in the window configuration to load a proposed diff.
+        </p>
       </section>
     );
   }
@@ -331,7 +336,11 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
             : `${fetchError.code}: ${fetchError.message}`}
           {(hasManifest || evidenceError !== null) && (
             <span className="rv-error-evidence">
-              <EvidenceControl href={evidenceHref} hasManifest={hasManifest} error={evidenceError} />
+              <EvidenceControl
+                href={evidenceHref}
+                hasManifest={hasManifest}
+                error={evidenceError}
+              />
             </span>
           )}
         </div>
@@ -358,73 +367,74 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
               <span className="rv-model mono">{report.modelId}</span>
             )}
             <span className="rv-counts mono">
-              {diff !== null && (
-                `${diff.files.length} file${diff.files.length !== 1 ? "s" : ""}`
-              )}
-              {" "}
-              <span className="rv-stat add">+{totals.added}</span>
-              {" "}
+              {diff !== null && `${diff.files.length} file${diff.files.length !== 1 ? "s" : ""}`}{" "}
+              <span className="rv-stat add">+{totals.added}</span>{" "}
               <span className="rv-stat del">−{totals.removed}</span>
             </span>
             <span className="spacer" />
             <EvidenceControl href={evidenceHref} hasManifest={hasManifest} error={evidenceError} />
           </div>
 
-          {diff !== null && diff.files.length > 0 && selectedFileIndex !== null && selectedFile !== undefined && (
-            <div className="rv-layout">
-              {/* File list */}
-              <nav className="rv-filelist" aria-label="Changed files">
-                <ul>
-                  {diff.files.map((file, idx) => {
-                    const cf = changedFiles.find((c) => c.path === file.path);
-                    const selected = selectedFileIndex === idx;
-                    return (
-                      <li key={file.path}>
-                        <button
-                          type="button"
-                          className="rv-filerow"
-                          aria-pressed={selected}
-                          aria-controls={selected ? `rv-file-${idx}` : undefined}
-                          onClick={() => selectFile(idx)}
-                        >
-                          <span className="rv-filerow-path mono">{shortPath(file.path)}</span>
-                          <span className="rv-stat add">+{file.addedLines}</span>
-                          <span className="rv-stat del">−{file.removedLines}</span>
-                          {cf?.elevatedReview === true && (
-                            <span className="rv-elevated" aria-label="Elevated review">!</span>
-                          )}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </nav>
+          {diff !== null &&
+            diff.files.length > 0 &&
+            selectedFileIndex !== null &&
+            selectedFile !== undefined && (
+              <div className="rv-layout">
+                {/* File list */}
+                <nav className="rv-filelist" aria-label="Changed files">
+                  <ul>
+                    {diff.files.map((file, idx) => {
+                      const cf = changedFiles.find((c) => c.path === file.path);
+                      const selected = selectedFileIndex === idx;
+                      return (
+                        <li key={file.path}>
+                          <button
+                            type="button"
+                            className="rv-filerow"
+                            aria-pressed={selected}
+                            aria-controls={selected ? `rv-file-${idx}` : undefined}
+                            onClick={() => selectFile(idx)}
+                          >
+                            <span className="rv-filerow-path mono">{shortPath(file.path)}</span>
+                            <span className="rv-stat add">+{file.addedLines}</span>
+                            <span className="rv-stat del">−{file.removedLines}</span>
+                            {cf?.elevatedReview === true && (
+                              <span className="rv-elevated" aria-label="Elevated review">
+                                !
+                              </span>
+                            )}
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </nav>
 
-              {/* Diff body */}
-              <div className="rv-body">
-                <DiffFileSection
-                  key={selectedFile.path}
-                  file={selectedFile}
-                  index={selectedFileIndex}
-                  changedFiles={changedFiles}
-                  sectionRef={() => undefined}
-                />
-                {diff.truncated && (
-                  <p role="note" className="rv-truncated">
-                    Diff truncated at 512 KB. Open the{" "}
-                    {hasManifest ? (
-                      <a href={evidenceHref} target="_blank" rel="noopener noreferrer">
-                        evidence manifest
-                      </a>
-                    ) : (
-                      "evidence manifest"
-                    )}{" "}
-                    for the full record.
-                  </p>
-                )}
+                {/* Diff body */}
+                <div className="rv-body">
+                  <DiffFileSection
+                    key={selectedFile.path}
+                    file={selectedFile}
+                    index={selectedFileIndex}
+                    changedFiles={changedFiles}
+                    sectionRef={() => undefined}
+                  />
+                  {diff.truncated && (
+                    <p role="note" className="rv-truncated">
+                      Diff truncated at 512 KB. Open the{" "}
+                      {hasManifest ? (
+                        <a href={evidenceHref} target="_blank" rel="noopener noreferrer">
+                          evidence manifest
+                        </a>
+                      ) : (
+                        "evidence manifest"
+                      )}{" "}
+                      for the full record.
+                    </p>
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            )}
 
           {/* Apply controls */}
           <div className="rv-controls">
@@ -432,17 +442,14 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
               {applying ? "Applying…" : report.appliedAt !== undefined ? "Applied" : ""}
             </span>
             {applyError !== null && (
-              <span role="alert" className="rv-apply-error">{applyError.message}</span>
+              <span role="alert" className="rv-apply-error">
+                {applyError.message}
+              </span>
             )}
             {report.appliedAt !== undefined ? (
               <span className="rv-final mono">Applied</span>
             ) : canApplyReport(report) ? (
-              <button
-                type="button"
-                className="arun-btn"
-                disabled={applying}
-                onClick={doApply}
-              >
+              <button type="button" className="arun-btn" disabled={applying} onClick={doApply}>
                 {applying ? "Applying…" : "Apply"}
               </button>
             ) : null}

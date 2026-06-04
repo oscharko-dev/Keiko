@@ -18,7 +18,9 @@ const AUTOMATIONS: AutomationRow[] = [
 ];
 
 const STORE_KEY = "keiko.automations.v1";
-const INITIAL: Record<string, boolean> = Object.fromEntries(AUTOMATIONS.map((r) => [r.id, r.defaultOn]));
+const INITIAL: Record<string, boolean> = Object.fromEntries(
+  AUTOMATIONS.map((r) => [r.id, r.defaultOn]),
+);
 
 function loadDefaults(): Record<string, boolean> {
   if (typeof window === "undefined") return { ...INITIAL };
@@ -26,7 +28,8 @@ function loadDefaults(): Record<string, boolean> {
     const raw = localStorage.getItem(STORE_KEY);
     if (raw === null) return { ...INITIAL };
     const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return { ...INITIAL };
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      return { ...INITIAL };
     const out: Record<string, boolean> = { ...INITIAL };
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
       if (k in INITIAL && typeof v === "boolean") out[k] = v;
@@ -64,7 +67,13 @@ export function AutomationsPanel(): ReactNode {
               <span className="auto-name">{r.name}</span>
               <span className="auto-when mono">{r.when}</span>
             </span>
-            <Toggle on={on} onChange={() => { toggle(r.id); }} label={r.name} />
+            <Toggle
+              on={on}
+              onChange={() => {
+                toggle(r.id);
+              }}
+              label={r.name}
+            />
           </div>
         );
       })}

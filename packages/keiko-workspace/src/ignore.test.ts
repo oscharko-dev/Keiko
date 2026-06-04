@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  compileIgnore,
-  DEFAULT_DENY_PATTERNS,
-  isDenied,
-  isIgnored,
-} from "./ignore.js";
+import { compileIgnore, DEFAULT_DENY_PATTERNS, isDenied, isIgnored } from "./ignore.js";
 
 describe("DEFAULT_DENY_PATTERNS", () => {
   it("is a frozen, non-empty list", () => {

@@ -25,8 +25,8 @@ describe("desktop files browser", () => {
     root = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-")));
     await mkdir(join(root, "src"));
     await mkdir(join(root, "assets"));
-    await writeFile(join(root, "package.json"), "{\"name\":\"fixture\"}\n");
-    await writeFile(join(root, "src", "app.ts"), "const value: string = \"ok\";\n");
+    await writeFile(join(root, "package.json"), '{"name":"fixture"}\n');
+    await writeFile(join(root, "src", "app.ts"), 'const value: string = "ok";\n');
     await writeFile(join(root, "assets", "pixel.png"), PNG_1X1);
     await writeFile(join(root, "archive.bin"), Buffer.from([0, 1, 2, 3, 4, 5]));
     store = createInMemoryUiStore();
@@ -95,7 +95,9 @@ describe("desktop files browser", () => {
       status: 403,
       code: "WORKSPACE_NOT_REGISTERED",
     });
-    await expect(readFilesPreview(store, unregistered, "x.txt", buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      readFilesPreview(store, unregistered, "x.txt", buildRedactor({})),
+    ).rejects.toMatchObject({
       status: 403,
       code: "WORKSPACE_NOT_REGISTERED",
     });
@@ -170,7 +172,9 @@ describe("desktop files browser", () => {
       readable: false,
     });
 
-    await expect(readFilesPreview(store, root, "config.txt", buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      readFilesPreview(store, root, "config.txt", buildRedactor({})),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -201,7 +205,9 @@ describe("desktop files browser", () => {
   it("refuses to preview .env.local (matches the .env.* deny pattern)", async () => {
     await writeFile(join(root, ".env.local"), "API_KEY=value\n");
 
-    await expect(readFilesPreview(store, root, ".env.local", buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      readFilesPreview(store, root, ".env.local", buildRedactor({})),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -308,7 +314,9 @@ describe("desktop files browser", () => {
       status: 403,
       code: "DENIED",
     });
-    await expect(readFilesPreview(store, root, "node_modules/foo.js", buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      readFilesPreview(store, root, "node_modules/foo.js", buildRedactor({})),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });
@@ -326,7 +334,9 @@ describe("desktop files browser", () => {
       status: 403,
       code: "DENIED",
     });
-    await expect(readFilesPreview(store, root, "node_modules/missing.js", buildRedactor({}))).rejects.toMatchObject({
+    await expect(
+      readFilesPreview(store, root, "node_modules/missing.js", buildRedactor({})),
+    ).rejects.toMatchObject({
       status: 403,
       code: "DENIED",
     });

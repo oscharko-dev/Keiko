@@ -104,11 +104,7 @@ void main(){
 }
 `;
 
-function compileShader(
-  gl: WebGLRenderingContext,
-  type: number,
-  src: string,
-): WebGLShader | null {
+function compileShader(gl: WebGLRenderingContext, type: number, src: string): WebGLShader | null {
   const s = gl.createShader(type);
   if (s === null) return null;
   gl.shaderSource(s, src);
@@ -131,10 +127,7 @@ function readOpacity(): number {
   return Number.isFinite(v) ? Math.max(0, Math.min(100, v)) / 100 : 1;
 }
 
-function setupShader(
-  host: HTMLElement,
-  canvas: HTMLCanvasElement,
-): (() => void) | undefined {
+function setupShader(host: HTMLElement, canvas: HTMLCanvasElement): (() => void) | undefined {
   canvas.style.opacity = String(readOpacity());
 
   const onOpacity = (e: Event): void => {
@@ -190,11 +183,7 @@ function setupShader(
 
   const buf: WebGLBuffer | null = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, buf);
-  gl.bufferData(
-    gl.ARRAY_BUFFER,
-    new Float32Array([-1, -1, 3, -1, -1, 3]),
-    gl.STATIC_DRAW,
-  );
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
   const aPos = gl.getAttribLocation(prog, "aPos");
   gl.enableVertexAttribArray(aPos);
   gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);
@@ -227,8 +216,7 @@ function setupShader(
   }
   resize();
 
-  const ro =
-    typeof ResizeObserver !== "undefined" ? new ResizeObserver(resize) : null;
+  const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(resize) : null;
   if (ro !== null) ro.observe(host);
   else window.addEventListener("resize", resize);
 
@@ -270,8 +258,7 @@ function setupShader(
       ripT[i] = (now - (ripStart[i] ?? Number.NEGATIVE_INFINITY)) / 1000;
     }
 
-    const dark =
-      document.documentElement.dataset.theme === "light" ? 0 : 1;
+    const dark = document.documentElement.dataset.theme === "light" ? 0 : 1;
 
     if (gl !== null) {
       gl.uniform2f(uRes, canvas.width, canvas.height);

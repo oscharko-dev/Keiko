@@ -68,22 +68,28 @@ describe("files API helpers", () => {
   it("encodes directory picker, tree, and preview query parameters", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ path: "/repo space", parent: null, entries: [], roots: [] }))
-      .mockResolvedValueOnce(jsonResponse({ root: "/repo space", path: "src/app.ts", entries: [], truncated: false }))
-      .mockResolvedValueOnce(jsonResponse({
-        root: "/repo space",
-        path: "src/app.ts",
-        name: "app.ts",
-        sizeBytes: 10,
-        modifiedAt: 1,
-        extension: "ts",
-        mime: "text/plain",
-        symlink: false,
-        kind: "text",
-        content: "const x = 1;\n",
-        truncated: false,
-        maxBytes: 1_000_000,
-      }));
+      .mockResolvedValueOnce(
+        jsonResponse({ path: "/repo space", parent: null, entries: [], roots: [] }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ root: "/repo space", path: "src/app.ts", entries: [], truncated: false }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          root: "/repo space",
+          path: "src/app.ts",
+          name: "app.ts",
+          sizeBytes: 10,
+          modifiedAt: 1,
+          extension: "ts",
+          mime: "text/plain",
+          symlink: false,
+          kind: "text",
+          content: "const x = 1;\n",
+          truncated: false,
+          maxBytes: 1_000_000,
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     await fetchFilesDirectories("/repo space");

@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { assertConfiguredModel, selectConfiguredModel } from "./model-selection.js";
-import type {
-  GatewayConfig,
-  ModelCapability,
-  ModelProviderConfig,
-} from "./types.js";
+import type { GatewayConfig, ModelCapability, ModelProviderConfig } from "./types.js";
 
 function provider(modelId: string): ModelProviderConfig {
   return {
