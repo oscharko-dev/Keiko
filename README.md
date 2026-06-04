@@ -161,6 +161,10 @@ Known limits:
 - Local project scripts can execute repository code when you run verification.
 - Do not run Keiko against untrusted repositories.
 
+## Privacy and Evidence
+
+Every grounded answer in the Conversation Center shows a context inspection summary so you can see which scope was searched and how much budget was spent. The connected context pack itself is ephemeral and never persisted, while evidence runs survive chat deletion intentionally for audit. See the [connected context privacy contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/connected-context-privacy.md) for the full surface — what is sent to the model, what stays local, and how to remove evidence — and the matching decision record [ADR-0022](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0022-connected-context-privacy.md).
+
 ## Troubleshooting
 
 | Symptom                | Check                                                                                                    |
