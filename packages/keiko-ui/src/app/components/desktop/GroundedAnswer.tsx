@@ -28,12 +28,11 @@ function formatScopeLabel(summary: GroundedAnswerContextPackSummary): string {
     return "workspace root";
   }
   // The opaque scopeId is BFF-internal (a sha256 prefix). Truncating to 8 hex chars keeps
-  // it short enough to read but still distinguishable across binding sessions.
+  // it short enough to read but still distinguishable across binding sessions. The label
+  // never carries the file count (Copilot PR #264 finding: "files (3 files)" double-prints
+  // when the headline also prepends the count); the headline owns the count display.
   const idTail = summary.scopeId.slice(-8);
-  if (summary.scopeKind === "directory") {
-    return `directory (${idTail})`;
-  }
-  return `files (${String(summary.fileCount)} files)`;
+  return `${summary.scopeKind} (${idTail})`;
 }
 
 function MetricRow({
@@ -58,10 +57,15 @@ function ContextPackSummary({
 }): ReactNode {
   const { usage, budget } = contextPack;
   const scope = formatScopeLabel(contextPack);
+  // workspace-root and directory scopes do not have an atomic file count: workspace-root is
+  // unbounded (fileCount sentinel -1), directory scopes contain whatever files the planner
+  // selected at search time, not a fixed count of "what was bound". Only the "files" scope
+  // kind has a meaningful count to display (Copilot PR #264 — "1 file in directory" reads
+  // as "this directory contains exactly one file" which it doesn't).
   const headline =
-    contextPack.scopeKind === "workspace-root"
-      ? `Scope: ${scope}`
-      : `Scope: ${String(contextPack.fileCount)} file${contextPack.fileCount === 1 ? "" : "s"} in ${scope}`;
+    contextPack.scopeKind === "files"
+      ? `Scope: ${String(contextPack.fileCount)} file${contextPack.fileCount === 1 ? "" : "s"} in ${scope}`
+      : `Scope: ${scope}`;
   return (
     <section className="grounded-context-pack" aria-label="Context inspection summary">
       <div className="grounded-context-pack-headline">{headline}</div>

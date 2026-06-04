@@ -266,7 +266,7 @@ describe("grounded-qa redaction guard (Issue #187 / ADR-0022 D4)", () => {
     expect(serialised).not.toContain("how do I use");
   });
 
-  it("uncertainty markers surface .kind and .claim only — and .claim is structurally pack-internal in production but the wire must still be inspected here", async () => {
+  it("uncertainty markers surface .kind and .claim only — and .claim is redacted at the BFF boundary", async () => {
     const chatId = await setupChat();
     const result = await handleGroundedAsk(
       ctx(JSON.stringify({ chatId, content: "explain" })),
@@ -279,17 +279,14 @@ describe("grounded-qa redaction guard (Issue #187 / ADR-0022 D4)", () => {
     expect(marker).toBeDefined();
     const keys = Object.keys(marker ?? {}).sort();
     expect(keys).toEqual(["claim", "kind"]);
-    // The pack's uncertainty.claim carries an AWS access key shape and a Slack token shape.
-    // These flow through buildUncertainty unchanged today (the pack is supposed to be
-    // upstream-redacted), so this test documents the current contract: claim text is
-    // surfaced to the UI verbatim and the upstream layer is responsible for cleaning it.
-    // If a future change adds redaction at this boundary, this assertion will flip to
-    // .not.toContain — that flip is the signal to update ADR-0022 D4.
+    // ADR-0022 D4: even though production packs SHOULD be upstream-redacted, the BFF
+    // applies deps.redactor to uncertainty.claim as defense in depth. The attacker pack
+    // embeds AKIA and xoxb shapes; both must be redacted before the wire.
     const serialised = JSON.stringify(marker);
-    expect(serialised).toContain(AKIA_FAKE);
+    assertNoSecretShape(serialised, "uncertainty marker JSON");
   });
 
-  it("the full wire response leaks no secret EXCEPT the documented uncertainty.claim contract above", async () => {
+  it("the full wire response leaks no secret", async () => {
     const chatId = await setupChat();
     const result = await handleGroundedAsk(
       ctx(JSON.stringify({ chatId, content: "explain" })),
@@ -297,13 +294,8 @@ describe("grounded-qa redaction guard (Issue #187 / ADR-0022 D4)", () => {
       runner(attackerPack(), "Inspected 1 file(s) for the query."),
     );
     const answer = result.body as GroundedAnswer;
-    // Strip the documented-leak field (uncertainty.claim) and check the rest of the wire.
-    const sanitised = {
-      ...answer,
-      uncertainty: answer.uncertainty.map((u) => ({ kind: u.kind })),
-    };
-    const serialised = JSON.stringify(sanitised);
-    assertNoSecretShape(serialised, "full wire response (excluding uncertainty.claim)");
+    const serialised = JSON.stringify(answer);
+    assertNoSecretShape(serialised, "full wire response");
     expect(serialised).not.toContain("PRIVATE KEY");
     expect(serialised).not.toContain("how do I use");
   });

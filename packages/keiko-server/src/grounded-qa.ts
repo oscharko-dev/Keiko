@@ -22,7 +22,7 @@ import {
 
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
-import type { UiHandlerDeps } from "./deps.js";
+import type { Redactor, UiHandlerDeps } from "./deps.js";
 import type { Chat, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
@@ -188,8 +188,19 @@ function buildCitations(pack: ConnectedContextPack): readonly GroundedEvidenceCi
   return citations;
 }
 
-function buildUncertainty(pack: ConnectedContextPack): readonly GroundedUncertainty[] {
-  return pack.uncertainty.map((u) => ({ kind: u.kind, claim: u.claim }));
+function buildUncertainty(
+  pack: ConnectedContextPack,
+  redactor: Redactor,
+): readonly GroundedUncertainty[] {
+  // uncertainty.claim is the one wire-visible string sourced from the in-process pack that
+  // can carry user-controlled text (e.g., excerpt fragments paraphrased into a confidence
+  // marker). Production packs SHOULD be upstream-redacted (per ADR-0019), but the BFF still
+  // applies the live-payload redactor as defense in depth so secret-shaped strings never
+  // reach the browser even when the pack assembler skips its own redaction step.
+  return pack.uncertainty.map((u) => ({
+    kind: u.kind,
+    claim: redactor(u.claim) as string,
+  }));
 }
 
 // ─── Composition seam (test injection) ────────────────────────────────────────
@@ -281,7 +292,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
     assistantMessageId: assistantMessage.id,
     content: output.assistantContent,
     citations,
-    uncertainty: buildUncertainty(output.pack),
+    uncertainty: buildUncertainty(output.pack, deps.redactor),
     omittedCount: output.pack.omitted.length,
     elapsedMs: output.elapsedMs,
     contextPack,
