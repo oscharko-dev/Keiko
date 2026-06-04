@@ -27,6 +27,14 @@ const INSERT_DOCUMENT_SQL = [
   ")",
 ].join(" ");
 
+const INSERT_DOCUMENT_TEXT_SQL = [
+  "INSERT OR REPLACE INTO document_texts (",
+  "  capsule_id, document_id, normalized_text",
+  ") VALUES (",
+  "  :capsule_id, :document_id, :normalized_text",
+  ")",
+].join(" ");
+
 const INSERT_PAGE_SQL = [
   "INSERT INTO pages (",
   "  capsule_id, document_id, page_number, page_label, character_start, character_end,",
@@ -67,10 +75,14 @@ const INSERT_DIAGNOSTIC_SQL = [
 
 const DELETE_PAGES_SQL = "DELETE FROM pages WHERE capsule_id = :c AND document_id = :d";
 const DELETE_SECTIONS_SQL = "DELETE FROM sections WHERE capsule_id = :c AND document_id = :d";
+const DELETE_DOCUMENT_TEXT_SQL =
+  "DELETE FROM document_texts WHERE capsule_id = :c AND document_id = :d";
 const DELETE_PARSED_UNITS_SQL =
   "DELETE FROM parsed_units WHERE capsule_id = :c AND document_id = :d";
 const DELETE_DIAGNOSTICS_SQL =
   "DELETE FROM parser_diagnostics WHERE capsule_id = :c AND document_id = :d";
+const SELECT_DOCUMENT_TEXT_SQL =
+  "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d";
 
 export interface DocumentInsertRow {
   readonly id: DocumentId;
@@ -110,10 +122,40 @@ export function deleteDependentRows(
   documentId: DocumentId,
 ): void {
   const params = { c: capsuleId, d: documentId };
+  db.prepare(DELETE_DOCUMENT_TEXT_SQL).run(params);
   db.prepare(DELETE_PAGES_SQL).run(params);
   db.prepare(DELETE_SECTIONS_SQL).run(params);
   db.prepare(DELETE_PARSED_UNITS_SQL).run(params);
   db.prepare(DELETE_DIAGNOSTICS_SQL).run(params);
+}
+
+export function insertDocumentTextRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+  normalizedText: string,
+): void {
+  db.prepare(INSERT_DOCUMENT_TEXT_SQL).run({
+    capsule_id: capsuleId,
+    document_id: documentId,
+    normalized_text: normalizedText,
+  });
+}
+
+interface DocumentTextRow {
+  readonly normalized_text: string;
+}
+
+export function readDocumentTextRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): string | undefined {
+  const row = db.prepare(SELECT_DOCUMENT_TEXT_SQL).get({
+    c: capsuleId,
+    d: documentId,
+  }) as DocumentTextRow | undefined;
+  return row?.normalized_text;
 }
 
 export function insertPageRow(

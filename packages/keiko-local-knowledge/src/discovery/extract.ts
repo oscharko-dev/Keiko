@@ -34,12 +34,14 @@ import type {
   ParserSelectionInput,
 } from "../parsers/index.js";
 import { buildParserOptions } from "../parsers/index.js";
+import type { InternalParserResult } from "../parsers/types.js";
 import type { KnowledgeStore } from "../store.js";
 import { basenameOf, extensionOf, mediaTypeFor } from "./media-type.js";
 import {
   deleteDependentRows,
   insertDiagnosticRow,
   insertDocumentRow,
+  insertDocumentTextRow,
   insertPageRow,
   insertParsedUnitRow,
   insertSectionRow,
@@ -143,11 +145,14 @@ function persistDependentRows(
   deps: ExtractDocumentDeps,
   capsuleId: KnowledgeCapsuleId,
   documentId: DocumentId,
-  parserResult: ParserResult,
+  parserResult: InternalParserResult,
   now: () => number,
 ): void {
   const db = deps.store._internal.db;
   deleteDependentRows(db, capsuleId, documentId);
+  if (parserResult.normalizedText !== undefined) {
+    insertDocumentTextRow(db, capsuleId, documentId, parserResult.normalizedText);
+  }
   for (const page of parserResult.pages) insertPageRow(db, capsuleId, page);
   for (const section of parserResult.sections) insertSectionRow(db, capsuleId, section);
   parserResult.units.forEach((unit, index) => {
@@ -191,7 +196,7 @@ function persistDocumentAndDependents(
   params: ExtractDocumentParams,
   documentId: DocumentId,
   document: DocumentRecord,
-  parserResult: ParserResult,
+  parserResult: InternalParserResult,
   now: () => number,
 ): void {
   const db = deps.store._internal.db;
@@ -336,7 +341,7 @@ async function runParser(
   params: ExtractDocumentParams,
   bytes: Uint8Array,
   options: ParserOptions,
-): Promise<ParserResult> {
+): Promise<InternalParserResult> {
   const input = selectionInput(documentId, params.file.relativePath, bytes);
   const resolution = deps.parserRegistry.resolve(input);
   const adapter =

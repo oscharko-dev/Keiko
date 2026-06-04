@@ -80,6 +80,15 @@ export interface AsyncParserAdapter extends ParserAdapter {
   ) => Promise<ParserResult>;
 }
 
+// Internal parser extension point: adapters may surface a normalized text projection that
+// differs from the original on-disk bytes (for example PDF/DOCX extracted text). The public
+// contract still treats ParserResult as metadata-only; the discovery/indexing pipeline uses
+// this optional field only inside the local package to keep chunk offsets aligned with the
+// text users actually retrieve against.
+export interface InternalParserResult extends ParserResult {
+  readonly normalizedText?: string;
+}
+
 // ─── Registry public surface ─────────────────────────────────────────────────
 
 export interface ParserRegistry {

@@ -25,7 +25,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 3 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 4 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -109,6 +109,17 @@ CREATE TABLE documents (
   FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
   FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
   UNIQUE (capsule_id, id)
+) STRICT;
+`.trim();
+
+const CREATE_DOCUMENT_TEXTS = `
+CREATE TABLE document_texts (
+  capsule_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  normalized_text TEXT NOT NULL,
+  PRIMARY KEY (document_id),
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE
 ) STRICT;
 `.trim();
 
@@ -306,6 +317,7 @@ export const KNOWLEDGE_CAPSULE_DDL: readonly string[] = [
   CREATE_CAPSULE_SOURCES,
   CREATE_CAPSULE_SET_MEMBERS,
   CREATE_DOCUMENTS,
+  CREATE_DOCUMENT_TEXTS,
   CREATE_PAGES,
   CREATE_SECTIONS,
   CREATE_PARSED_UNITS,
@@ -392,6 +404,12 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
     reason: "Persist metadata-only capsule lifecycle and retention audit events for Issue #201.",
     up: [CREATE_CAPSULE_AUDIT_EVENTS, CREATE_CAPSULE_AUDIT_EVENTS_INDEX],
   },
+  {
+    version: 4,
+    reason:
+      "Persist normalized extracted text for binary parsers so chunk offsets project against extracted content.",
+    up: [CREATE_DOCUMENT_TEXTS],
+  },
 ] as const;
 
 // Expected table/index names; consumers can iterate to assert presence without re-parsing
@@ -418,6 +436,7 @@ export const KNOWLEDGE_CAPSULE_V1_TABLES: readonly string[] = [
 
 export const KNOWLEDGE_CAPSULE_TABLES: readonly string[] = [
   ...KNOWLEDGE_CAPSULE_V1_TABLES,
+  "document_texts",
   "capsule_membership_changes",
   "capsule_audit_events",
 ] as const;

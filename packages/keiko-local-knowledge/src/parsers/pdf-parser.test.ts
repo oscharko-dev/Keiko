@@ -19,6 +19,7 @@ describe("pdfParser", () => {
     expect(result.parser.parserId).toBe("pdf");
     expect(result.pages).toHaveLength(1);
     expect(result.units[0]).toMatchObject({ kind: "page", pageNumber: 1 });
+    expect("normalizedText" in result ? result.normalizedText : undefined).toContain("Hello PDF");
     expect(result.diagnostics).toEqual([]);
   });
 

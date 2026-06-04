@@ -18,6 +18,7 @@ import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
 import { createCapsule, getCapsule } from "../capsule-lifecycle.js";
 import { createDefaultParserRegistry } from "../parsers/index.js";
+import { PDF_TEXT_LAYER } from "../parsers/parser-test-fixtures.js";
 import { addSourceToCapsule } from "../source-lifecycle.js";
 import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.js";
 import { folderScope, memoryFs } from "../discovery/test-support.js";
@@ -31,7 +32,7 @@ import type { KnowledgeStore } from "../store.js";
 
 const ROOT = "/srv/orchestrator";
 
-type FixtureFiles = Record<string, string>;
+type FixtureFiles = Record<string, string | Uint8Array>;
 
 interface Fixture {
   readonly store: KnowledgeStore;
@@ -245,6 +246,41 @@ describe("runIndexingJob — force", () => {
     // Force should NOT leave stale rows from the first pass.
     const secondVectorCount = countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId);
     expect(secondVectorCount).toBe(firstVectorCount);
+  });
+});
+
+describe("runIndexingJob — binary parser text projection", () => {
+  let fixture: Fixture;
+
+  beforeEach(() => {
+    fixture = buildFixture({
+      "policy.pdf": PDF_TEXT_LAYER,
+    });
+  });
+
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  it("embeds normalized extracted text instead of raw PDF bytes", async () => {
+    const inputs: string[] = [];
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        inputs.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const events = await drain(runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })));
+    expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
+    expect(inputs.join("\n")).toContain("Hello PDF");
+    expect(inputs.join("\n")).not.toContain("%PDF-1.4");
   });
 });
 

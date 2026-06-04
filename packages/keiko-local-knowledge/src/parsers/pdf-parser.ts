@@ -9,6 +9,7 @@ import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 import { diagnostic, emptyResult, oversizeDiagnostic, shouldStop } from "./_internal.js";
 import type {
   AsyncParserAdapter,
+  InternalParserResult,
   ParserAdapter,
   ParserCapability,
   ParserOptions,
@@ -18,6 +19,27 @@ import type {
 const PARSER_ID = "pdf";
 const PARSER_VERSION = "1";
 const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46] as const;
+
+interface PdfTextItem {
+  readonly str?: string;
+}
+
+interface PdfTextContent {
+  readonly items: readonly PdfTextItem[];
+}
+
+interface PdfPageLike {
+  readonly getTextContent: () => Promise<PdfTextContent>;
+}
+
+interface PdfDocumentLike {
+  readonly numPages: number;
+  readonly getPage: (pageNumber: number) => Promise<PdfPageLike>;
+}
+
+interface PdfLoadingTaskLike {
+  readonly promise: Promise<PdfDocumentLike>;
+}
 
 function hasPdfMagic(bytes: Uint8Array): boolean {
   if (bytes.length < PDF_MAGIC.length) return false;
@@ -50,8 +72,8 @@ function isAborted(signal: AbortSignal | undefined): boolean {
 }
 
 function syncFallback(capability: ParserCapability): ParserAdapter["parse"] {
-  return (input, options) =>
-    emptyResult(
+  return (input, options) => {
+    return emptyResult(
       capability,
       input.documentId,
       options,
@@ -63,11 +85,44 @@ function syncFallback(capability: ParserCapability): ParserAdapter["parse"] {
           "info",
         ),
       ],
-      [{ kind: "unsupported-media", documentId: input.documentId, reason: "pdf-async-required" }],
+      [unsupportedMediaUnit(input.documentId, "pdf-async-required")],
     );
+  };
 }
 
-function normalisePageText(items: readonly { readonly str?: string }[]): string {
+function loadPdfDocument(bytes: Uint8Array): Promise<PdfDocumentLike> {
+  const task = pdfjs.getDocument({
+    data: bytes,
+    useWorkerFetch: false,
+    verbosity: 0,
+  }) as unknown as PdfLoadingTaskLike;
+  return task.promise;
+}
+
+function unsupportedMediaUnit(documentId: ParserSelectionInput["documentId"], reason: string): ParsedUnit {
+  return { kind: "unsupported-media", documentId, reason };
+}
+
+function pageUnit(page: PageRecord): ParsedUnit {
+  return page.pageLabel === undefined
+    ? {
+        kind: "page",
+        documentId: page.documentId,
+        pageNumber: page.pageNumber,
+        characterStart: page.characterStart,
+        characterEnd: page.characterEnd,
+      }
+    : {
+        kind: "page",
+        documentId: page.documentId,
+        pageNumber: page.pageNumber,
+        pageLabel: page.pageLabel,
+        characterStart: page.characterStart,
+        characterEnd: page.characterEnd,
+      };
+}
+
+function normalisePageText(items: readonly PdfTextItem[]): string {
   const tokens: string[] = [];
   for (const item of items) {
     const value = item.str?.trim();
@@ -78,11 +133,91 @@ function normalisePageText(items: readonly { readonly str?: string }[]): string 
   return tokens.join(" ").trim();
 }
 
+function appendPageRecord(
+  pages: PageRecord[],
+  units: ParsedUnit[],
+  input: ParserSelectionInput,
+  pageNumber: number,
+  text: string,
+  cursor: number,
+): number {
+  const pageStart = cursor;
+  const pageEnd = cursor + text.length;
+  const pageLabel = String(pageNumber);
+  const pageRecord: PageRecord = {
+    documentId: input.documentId,
+    pageNumber,
+    pageLabel,
+    characterStart: pageStart,
+    characterEnd: pageEnd,
+  };
+  pages.push(pageRecord);
+  units.push(pageUnit(pageRecord));
+  return pageEnd + 2;
+}
+
+function noTextResult(
+  capability: ParserCapability,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+  diagnostics: readonly ParserDiagnostic[] = [],
+): ParserResult {
+  if (diagnostics.length > 0) {
+    return emptyResult(capability, input.documentId, options, diagnostics);
+  }
+  return emptyResult(
+    capability,
+    input.documentId,
+    options,
+    [diagnostic("UNSUPPORTED_FORMAT", "pdf has no extractable text layer", input.documentId, "info")],
+    [unsupportedMediaUnit(input.documentId, "pdf-no-text-layer")],
+  );
+}
+
+async function extractPages(
+  doc: PdfDocumentLike,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+  startedAt: number,
+): Promise<{
+  readonly diagnostics: readonly ParserDiagnostic[];
+  readonly pages: readonly PageRecord[];
+  readonly units: readonly ParsedUnit[];
+  readonly pageTexts: readonly string[];
+}> {
+  const diagnostics: ParserDiagnostic[] = [];
+  const pages: PageRecord[] = [];
+  const units: ParsedUnit[] = [];
+  const pageTexts: string[] = [];
+  let cursor = 0;
+
+  for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
+    const limit = shouldStop(startedAt, options, units.length);
+    if (limit.stop) {
+      if (limit.code !== undefined && limit.message !== undefined) {
+        diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
+      }
+      break;
+    }
+
+    const page = await doc.getPage(pageNumber);
+    const content = await page.getTextContent();
+    const text = normalisePageText(content.items);
+    if (text.length === 0) {
+      continue;
+    }
+    pageTexts.push(text);
+    cursor = appendPageRecord(pages, units, input, pageNumber, text, cursor);
+  }
+
+  return { diagnostics, pages, units, pageTexts };
+}
+
 async function asyncParse(
   capability: ParserCapability,
   input: ParserSelectionInput,
   options: ParserOptions,
-): Promise<ParserResult> {
+): Promise<InternalParserResult> {
   if (input.bytes.byteLength > options.maxBytes) {
     return emptyResult(capability, input.documentId, options, [
       oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
@@ -94,73 +229,14 @@ async function asyncParse(
 
   const startedAt = options.now();
   try {
-    const task = pdfjs.getDocument({
-      data: input.bytes,
-      useWorkerFetch: false,
-      verbosity: 0,
-    });
-    const doc = await task.promise;
-    const diagnostics: ParserDiagnostic[] = [];
-    const pages: PageRecord[] = [];
-    const units: ParsedUnit[] = [];
-    let cursor = 0;
-    let extractedPageCount = 0;
-
-    for (let pageNumber = 1; pageNumber <= doc.numPages; pageNumber += 1) {
-      const limit = shouldStop(startedAt, options, units.length);
-      if (limit.stop) {
-        if (limit.code !== undefined && limit.message !== undefined) {
-          diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
-        }
-        break;
-      }
-
-      const page = await doc.getPage(pageNumber);
-      const content = await page.getTextContent();
-      const text = normalisePageText(content.items as readonly { readonly str?: string }[]);
-      if (text.length === 0) {
-        continue;
-      }
-      const pageStart = cursor;
-      const pageEnd = cursor + text.length;
-      const pageLabel = String(pageNumber);
-      pages.push({
-        documentId: input.documentId,
-        pageNumber,
-        pageLabel,
-        characterStart: pageStart,
-        characterEnd: pageEnd,
-      });
-      units.push({
-        kind: "page",
-        documentId: input.documentId,
-        pageNumber,
-        pageLabel,
-        characterStart: pageStart,
-        characterEnd: pageEnd,
-      });
-      cursor = pageEnd + 2;
-      extractedPageCount += 1;
-    }
+    const doc = await loadPdfDocument(input.bytes);
+    const { diagnostics, pages, units, pageTexts } = await extractPages(doc, input, options, startedAt);
 
     if (isAborted(options.signal)) {
       return cancelled(capability, input, options);
     }
-    if (extractedPageCount === 0) {
-      return emptyResult(
-        capability,
-        input.documentId,
-        options,
-        [
-          diagnostic(
-            "UNSUPPORTED_FORMAT",
-            "pdf has no extractable text layer",
-            input.documentId,
-            "info",
-          ),
-        ],
-        [{ kind: "unsupported-media", documentId: input.documentId, reason: "pdf-no-text-layer" }],
-      );
+    if (pages.length === 0) {
+      return noTextResult(capability, input, options, diagnostics);
     }
 
     return {
@@ -171,7 +247,8 @@ async function asyncParse(
       units,
       diagnostics,
       extractedAt: options.now(),
-    };
+      normalizedText: pageTexts.join("\n\n"),
+    } satisfies InternalParserResult;
   } catch (error) {
     return emptyResult(capability, input.documentId, options, [
       diagnostic(

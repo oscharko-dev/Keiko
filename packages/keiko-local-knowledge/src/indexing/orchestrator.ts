@@ -38,6 +38,7 @@ import type {
 import { chunkDocument } from "../chunking/chunker-runner.js";
 import { getCapsule, updateCapsuleState } from "../capsule-lifecycle.js";
 import { discoverAndExtract } from "../discovery/discovery-runner.js";
+import { readDocumentTextRow } from "../discovery/persist.js";
 import type { ExtractionEvent, ExtractionResult } from "../discovery/types.js";
 import { listCapsuleSources } from "../source-lifecycle.js";
 
@@ -220,6 +221,23 @@ function readSourceText(state: RunState, source: KnowledgeSource, relativePath: 
   return state.options.workspaceFs.readFileUtf8(abs);
 }
 
+function resolveChunkSourceText(
+  state: RunState,
+  documentId: DocumentId,
+  source: KnowledgeSource,
+  relativePath: string,
+): string {
+  const persistedText = readDocumentTextRow(
+    state.options.store._internal.db,
+    state.capsule.id,
+    documentId,
+  );
+  if (persistedText !== undefined) {
+    return persistedText;
+  }
+  return readSourceText(state, source, relativePath);
+}
+
 // ─── Batch boundaries ─────────────────────────────────────────────────────────
 function sliceIntoBatches<T>(items: readonly T[], batchSize: number): readonly (readonly T[])[] {
   if (items.length === 0) return [];
@@ -243,9 +261,9 @@ async function embedDocumentChunks(
   source: KnowledgeSource,
   relativePath: string,
 ): Promise<EmbedDocumentResult> {
-  // Re-read the document's UTF-8 source text. Cached by the OS from the discovery pass;
-  // the in-memory copy is dropped after the document's batches all complete.
-  const sourceText = readSourceText(state, source, relativePath);
+  // Text-like documents are re-read from disk; binary parsers persist a normalized text
+  // projection so chunk slicing stays aligned with extracted content.
+  const sourceText = resolveChunkSourceText(state, documentId, source, relativePath);
   const chunks = projectChunksToEmbed(state, documentId, sourceText);
   if (chunks.length === 0) {
     return { vectorCount: 0, errors: [], lastChunkId: null };
@@ -348,7 +366,12 @@ function chunkPersistedDocument(
       capsuleId: state.capsule.id,
       sourceId: result.sourceId,
       documentId,
-      sourceText: readSourceText(state, sourceForResult(state, result), result.relativePath),
+      sourceText: resolveChunkSourceText(
+        state,
+        documentId,
+        sourceForResult(state, result),
+        result.relativePath,
+      ),
       force: state.options.force === true,
       ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
     },

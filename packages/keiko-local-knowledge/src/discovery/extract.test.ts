@@ -11,6 +11,7 @@ import { createCapsule } from "../capsule-lifecycle.js";
 import { freshStore, sampleCapsuleInput } from "../_support.js";
 import type { KnowledgeStore } from "../store.js";
 import { createDefaultParserRegistry, buildParserOptions } from "../parsers/index.js";
+import { PDF_TEXT_LAYER } from "../parsers/parser-test-fixtures.js";
 
 import { extractDocument } from "./extract.js";
 import { folderScope, memoryFs } from "./test-support.js";
@@ -98,6 +99,31 @@ describe("extractDocument — unsupported format", () => {
     expect(result.diagnostics.some((d) => d.code === "UNSUPPORTED_FORMAT")).toBe(true);
     const diagCount = count("parser_diagnostics");
     expect(diagCount).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("extractDocument — normalized binary text", () => {
+  it("persists extracted text for binary parsers that emit normalized content", async () => {
+    const fs = memoryFs(ROOT, [{ relativePath: "policy.pdf", content: PDF_TEXT_LAYER }]);
+    const registry = createDefaultParserRegistry();
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "policy.pdf", sizeBytes: PDF_TEXT_LAYER.byteLength },
+      },
+    );
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    const row = store._internal.db
+      .prepare(
+        "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d",
+      )
+      .get({ c: capsuleId, d: result.outcome.document.id }) as
+      | { readonly normalized_text?: string }
+      | undefined;
+    expect(row?.normalized_text).toContain("Hello PDF");
   });
 });
 

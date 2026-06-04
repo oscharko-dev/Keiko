@@ -109,6 +109,9 @@ function seedFullLineage(db: DatabaseSync, overrides: SeedOverrides = {}): SeedH
     "intro.md",
   );
   db.prepare(
+    `INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (?, ?, ?)`,
+  ).run(capsuleId, documentId, "normalized body");
+  db.prepare(
     `INSERT INTO parsed_units (id, capsule_id, document_id, kind) VALUES (?, ?, ?, ?)`,
   ).run(parsedUnitId, capsuleId, documentId, "section");
   db.prepare(
@@ -168,8 +171,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 3 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(3);
+  it("is the integer 4 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(4);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -358,6 +361,7 @@ describe("lineage enforcement", () => {
       const dependents = [
         "capsule_sources",
         "documents",
+        "document_texts",
         "pages",
         "sections",
         "parsed_units",
