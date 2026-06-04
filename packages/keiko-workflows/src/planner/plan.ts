@@ -19,9 +19,12 @@ import { extractAnchors, type SearchAnchor, type SearchAnchorKind } from "./anch
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
+// The planner emits "ready" / "completed" / "budget-exhausted" / "clarification-needed" /
+// "scope-invalid". Execution status ("running") is owned by the governor's separate
+// GovernorState union — keeping it out of this surface avoids a misleading "running" plan
+// state that the planner itself never produces.
 export type ExplorationPlanState =
   | "ready"
-  | "running"
   | "completed"
   | "budget-exhausted"
   | "clarification-needed"
@@ -37,7 +40,7 @@ export interface RetrievalRing {
   readonly rationale: string;
 }
 
-export type ClarificationReason = "no-anchors" | "too-generic" | "scope-empty";
+export type ClarificationReason = "no-anchors" | "too-generic" | "scope-empty" | "scope-invalid";
 
 export interface ClarificationPrompt {
   readonly reason: ClarificationReason;
@@ -131,8 +134,13 @@ function sliceLimits(budget: ExplorationBudget, weight: number): SearchLimits {
   );
   // Matches budget allotted at 50% per ring (the planner doesn't know match density yet).
   const matchesBudget = budget.searchCallsMax * weight * 0.5;
+  // maxBytesPerFileScanned has an 8 KiB floor that can push the ring's worst-case excerpt
+  // budget (files * bytes-per-file) past its weighted share of excerptBytesMax. Cap
+  // maxFilesScanned so the worst case stays within the slice while preserving the floor.
+  const filesByBudget = budget.filesReadMax * weight;
+  const filesByExcerpt = perRingExcerptBytes / maxBytesPerFileScanned;
   return {
-    maxFilesScanned: atLeastOne(budget.filesReadMax * weight),
+    maxFilesScanned: atLeastOne(Math.min(filesByBudget, filesByExcerpt)),
     maxMatchesReturned: atLeastOne(matchesBudget),
     maxBytesPerFileScanned,
     elapsedMsMax: atLeastOne(budget.elapsedMsMax * weight),
@@ -273,7 +281,7 @@ function resolveInputs(input: CreatePlanInput, deps: CreatePlanDeps | undefined)
 }
 
 function buildScopeInvalidPlan(input: CreatePlanInput, resolved: ResolvedInputs): ExplorationPlan {
-  const clarification = buildClarification("no-anchors", SCOPE_INVALID_QUESTIONS, 0);
+  const clarification = buildClarification("scope-invalid", SCOPE_INVALID_QUESTIONS, 0);
   const seed: PlanSeed = {
     scopeId: input.scope.scopeId,
     queryKind: input.query.kind,
