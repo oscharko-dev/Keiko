@@ -19,6 +19,16 @@ export interface Project {
   readonly lastOpenedAt: number;
 }
 
+// Issue #184 — the workspace-relative scope binding a Files window selection to a chat. The
+// patch shape distinguishes "no change" (field absent) from "clear" (field set to null) using
+// the standard JSON-patch convention; the stored entity surface carries `undefined` when no
+// scope is bound. Path validation happens at the BFF boundary via isValidScopePath from
+// @oscharko-dev/keiko-contracts/connected-context; this shape carries already-validated paths.
+export interface ChatConnectedScope {
+  readonly relativePaths: readonly string[];
+  readonly connectedAtMs: number;
+}
+
 export interface Chat {
   readonly id: string;
   readonly projectPath: string;
@@ -26,6 +36,7 @@ export interface Chat {
   readonly selectedModel: string;
   readonly branchLabel: string | undefined;
   readonly status: "open" | "closed" | undefined;
+  readonly connectedScope: ChatConnectedScope | undefined;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -55,11 +66,15 @@ export interface UpdateProjectPatch {
   readonly favorite?: boolean;
 }
 
+// Issue #184 — `connectedScope: null` explicitly clears the binding; `undefined` (field absent)
+// leaves it untouched. The BFF PATCH handler is responsible for validating each scopePath via
+// isValidScopePath; this shape carries the post-validation values across the wire.
 export interface UpdateChatPatch {
   readonly title?: string;
   readonly selectedModel?: string;
   readonly branchLabel?: string;
   readonly status?: "open" | "closed";
+  readonly connectedScope?: ChatConnectedScope | null;
 }
 
 export interface NewChatMessage {
