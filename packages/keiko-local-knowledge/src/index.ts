@@ -85,3 +85,4 @@ export {
   type ExtractionResult,
   type WalkYield,
 } from "./discovery/index.js";
+export * from "./indexing/index.js";
