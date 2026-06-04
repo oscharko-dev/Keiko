@@ -35,6 +35,8 @@ export interface AssembleInput {
   readonly ranked: readonly CandidateFile[];
   readonly omittedFromRanking: readonly OmittedContextEntry[];
   readonly excerpts: ReadonlyMap<string, string>;
+  readonly initialUsage?: ExplorationUsage;
+  readonly initialUncertainty?: readonly UncertaintyMarker[];
 }
 
 export interface AssembleOptions {
@@ -123,11 +125,12 @@ async function applyReranker(
   ranked: readonly CandidateFile[],
   atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>,
   budget: ExplorationBudget,
+  usage: ExplorationUsage,
 ): Promise<RerankerOutcome> {
   // The seam is only invoked when the budget actually allows rerank calls. This keeps
   // ExplorationBudget.rerankCallsMax authoritative even when a custom reranker is supplied
   // and avoids billing a rerank call against a run whose budget set rerankCallsMax=0.
-  if (budget.rerankCallsMax <= 0) {
+  if (usage.rerankCalls >= budget.rerankCallsMax) {
     return { ordered: ranked, reranked: false };
   }
   const availability = await reranker.isAvailable();
@@ -145,11 +148,21 @@ interface BuildPlan {
   readonly extraOmitted: OmittedContextEntry[];
 }
 
-function emptyBuildPlan(): BuildPlan {
+function cloneUsage(usage: ExplorationUsage | undefined): ExplorationUsage {
+  if (usage === undefined) {
+    return zeroUsage();
+  }
+  return { ...usage };
+}
+
+function emptyBuildPlan(
+  initialUsage: ExplorationUsage | undefined,
+  initialUncertainty: readonly UncertaintyMarker[] | undefined,
+): BuildPlan {
   return {
     files: [],
-    usage: zeroUsage(),
-    uncertainty: [],
+    usage: cloneUsage(initialUsage),
+    uncertainty: [...(initialUncertainty ?? [])],
     extraOmitted: [],
   };
 }
@@ -197,7 +210,9 @@ function recordBudgetClip(
   plan.uncertainty.push({
     kind: "budget-clipped",
     claim: `context pack truncated at ${candidate.scopePath}`,
-    impactedAtomIds: atomsForPath.map((a) => a.stableId),
+    // The clipped candidate is omitted from pack.files, so its atoms are not valid
+    // uncertainty references under the connected-context contract.
+    impactedAtomIds: [],
     emittedAtMs: nowMs,
   });
   plan.extraOmitted.push({
@@ -262,8 +277,13 @@ function processCandidate(
   return "continue";
 }
 
-function buildPlan(ordered: readonly CandidateFile[], ctx: ProcessContext): BuildPlan {
-  const plan = emptyBuildPlan();
+function buildPlan(
+  ordered: readonly CandidateFile[],
+  ctx: ProcessContext,
+  initialUsage: ExplorationUsage | undefined,
+  initialUncertainty: readonly UncertaintyMarker[] | undefined,
+): BuildPlan {
+  const plan = emptyBuildPlan(initialUsage, initialUncertainty);
   for (const candidate of ordered) {
     const outcome = processCandidate(plan, candidate, ctx);
     if (outcome === "budget-clipped") {
@@ -312,6 +332,8 @@ function buildCacheAtomIds(input: AssembleInput, resolved: ResolvedOptions): rea
   const fingerprint = JSON.stringify({
     atoms: input.atoms.map((a) => a.stableId),
     budget: input.budget,
+    initialUsage: input.initialUsage,
+    initialUncertainty: input.initialUncertainty,
     ranked: input.ranked.map((c) => c.scopePath),
     maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
     editablePaths: [...resolved.editablePaths].sort(),
@@ -336,21 +358,28 @@ export async function assembleContextPack(
     return { pack: cached, fromIndex: true };
   }
   const atomsByPath = groupAtomsByPath(input.atoms);
+  const initialUsage = cloneUsage(input.initialUsage);
   const rerankerOutcome = await applyReranker(
     resolved.reranker,
     input.ranked,
     atomsByPath,
     input.budget,
+    initialUsage,
   );
   const now = resolved.nowMs();
-  const plan = buildPlan(rerankerOutcome.ordered, {
-    atomsByPath,
-    excerpts: input.excerpts,
-    budget: input.budget,
-    maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
-    editablePaths: resolved.editablePaths,
-    nowMs: now,
-  });
+  const plan = buildPlan(
+    rerankerOutcome.ordered,
+    {
+      atomsByPath,
+      excerpts: input.excerpts,
+      budget: input.budget,
+      maxBytesPerExcerpt: resolved.maxBytesPerExcerpt,
+      editablePaths: resolved.editablePaths,
+      nowMs: now,
+    },
+    initialUsage,
+    input.initialUncertainty,
+  );
   if (rerankerOutcome.reranked) {
     plan.usage = { ...plan.usage, rerankCalls: plan.usage.rerankCalls + 1 };
   }

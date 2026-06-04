@@ -149,10 +149,42 @@ describe("assembleContextPack", () => {
     const result = await assembleContextPack(input, { nowMs: fixedNow });
     const clipped = result.pack.uncertainty.find((u) => u.kind === "budget-clipped");
     expect(clipped).toBeDefined();
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
     // The first candidate exceeds 5 bytes, so processing stops immediately and the second
     // file is never added.
     expect(result.pack.files.length).toBe(0);
     expect(result.pack.omitted.some((o) => o.reason === "budget-exhausted")).toBe(true);
+  });
+
+  it("starts from caller-supplied usage and skips reranking when that budget is already spent", async () => {
+    let rerankCalls = 0;
+    const reverse: RerankerSeam = {
+      name: "reverse-fake",
+      isAvailable: () => Promise.resolve({ available: true, modelLabel: "fake" }),
+      rerank: (cs) => {
+        rerankCalls += 1;
+        return Promise.resolve([...cs].reverse());
+      },
+    };
+    const input: AssembleInput = {
+      ...baseInput(),
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, rerankCallsMax: 1 },
+      initialUsage: {
+        searchCalls: 1,
+        filesRead: 0,
+        excerptBytes: 0,
+        modelInputTokens: 0,
+        modelOutputTokens: 0,
+        elapsedMs: 0,
+        rerankCalls: 1,
+      },
+    };
+    const result = await assembleContextPack(input, { nowMs: fixedNow, reranker: reverse });
+    expect(rerankCalls).toBe(0);
+    expect(result.pack.files.map((f) => f.scopePath)).toEqual(["a.ts", "b.ts"]);
+    expect(result.pack.usage.searchCalls).toBe(1);
+    expect(result.pack.usage.rerankCalls).toBe(1);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
   });
 
   it("emits a no-evidence marker when an excerpt is missing for a candidate path", async () => {

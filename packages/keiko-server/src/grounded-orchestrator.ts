@@ -11,14 +11,23 @@
 
 import type {
   ConnectedContextPack,
+  ExplorationBudget,
+  ExplorationUsage,
   RetrievalQuery,
   SelectedScope,
+  UncertaintyMarker,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
+  advanceRing,
+  applyUsage,
   assembleContextPack,
-  planExploration,
+  canContinue,
+  complete,
+  planAndGovern,
   rankCandidates,
   type ClarificationPrompt,
+  type ExplorationPlan,
+  type GovernorState,
   type RetrievalRing,
 } from "@oscharko-dev/keiko-workflows";
 import {
@@ -51,6 +60,7 @@ export interface OrchestratorInput {
   readonly scope: SelectedScope;
   readonly query: RetrievalQuery;
   readonly workspaceRoot: string;
+  readonly budget?: ExplorationBudget;
 }
 
 export interface OrchestratorDeps {
@@ -60,12 +70,15 @@ export interface OrchestratorDeps {
   readonly fs?: WorkspaceFs;
   // Optional injected detector for tests so memFs fixtures don't need full WorkspaceInfo wiring.
   readonly detectWorkspace?: (root: string, fs: WorkspaceFs) => WorkspaceInfo;
+  // Called after a ready plan exists and before any workspace detection or repository IO starts.
+  readonly recordPlan?: (plan: ExplorationPlan) => void;
 }
 
 export interface OrchestratorOutput {
   readonly pack: ConnectedContextPack;
   readonly assistantContent: string;
   readonly elapsedMs: number;
+  readonly plan?: ExplorationPlan;
 }
 
 // Raised when the planner asks for clarification (no anchors, too-generic prompt, etc.). The
@@ -99,17 +112,64 @@ interface SearchInputs {
   readonly searchScope: SearchScope;
   readonly query: RetrievalQuery;
   readonly fs: WorkspaceFs;
+  readonly nowMs: () => number;
 }
 
-async function runRing(
-  ring: RetrievalRing,
-  inputs: SearchInputs,
-): Promise<readonly EvidenceAtom[]> {
+interface RingResult {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly usage: ExplorationUsage;
+}
+
+const TEXT_ENCODER = new TextEncoder();
+
+function utf8ByteLength(value: string): number {
+  return TEXT_ENCODER.encode(value).length;
+}
+
+function usageDelta(overrides: Partial<ExplorationUsage> = {}): ExplorationUsage {
+  return {
+    searchCalls: 0,
+    filesRead: 0,
+    excerptBytes: 0,
+    modelInputTokens: 0,
+    modelOutputTokens: 0,
+    elapsedMs: 0,
+    rerankCalls: 0,
+    ...overrides,
+  };
+}
+
+function clampUsageToBudget(usage: ExplorationUsage, budget: ExplorationBudget): ExplorationUsage {
+  return {
+    searchCalls: Math.min(usage.searchCalls, budget.searchCallsMax),
+    filesRead: Math.min(usage.filesRead, budget.filesReadMax),
+    excerptBytes: Math.min(usage.excerptBytes, budget.excerptBytesMax),
+    modelInputTokens: Math.min(usage.modelInputTokens, budget.modelInputTokensMax),
+    modelOutputTokens: Math.min(usage.modelOutputTokens, budget.modelOutputTokensMax),
+    elapsedMs: Math.min(usage.elapsedMs, budget.elapsedMsMax),
+    rerankCalls: Math.min(usage.rerankCalls, budget.rerankCallsMax),
+  };
+}
+
+function budgetClipped(stopReason: string, nowMs: number): UncertaintyMarker {
+  return {
+    kind: "budget-clipped",
+    claim: `repository exploration stopped: ${stopReason}`,
+    impactedAtomIds: [],
+    emittedAtMs: nowMs,
+  };
+}
+
+async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingResult> {
   if (ring.kind === "lexical") {
     const result = await searchText(inputs.searchScope, inputs.query, ring.searchLimits, {
       fs: inputs.fs,
+      nowMs: inputs.nowMs,
     });
-    return result.atoms;
+    return {
+      atoms: result.atoms,
+      usage: usageDelta({ filesRead: result.filesScanned, elapsedMs: result.elapsedMs }),
+    };
   }
   // Keep the planner's ring split authoritative: the structural ring should only run the
   // structural adapters, while the git-history ring should only run the repo-level history
@@ -125,40 +185,101 @@ async function runRing(
     inputs.query,
     ring.searchLimits,
     inputs.fs,
+    { nowMs: inputs.nowMs },
   );
-  return result.atoms;
+  return {
+    atoms: result.atoms,
+    usage: usageDelta({ elapsedMs: result.elapsedMs }),
+  };
+}
+
+interface RingRunSummary {
+  readonly atoms: readonly EvidenceAtom[];
+  readonly governor: GovernorState;
+  readonly uncertainty: readonly UncertaintyMarker[];
 }
 
 async function runAllRings(
   rings: readonly RetrievalRing[],
   inputs: SearchInputs,
-): Promise<readonly EvidenceAtom[]> {
+  initialGovernor: GovernorState,
+): Promise<RingRunSummary> {
   const atoms: EvidenceAtom[] = [];
+  const uncertainty: UncertaintyMarker[] = [];
+  let governor = initialGovernor;
   for (const ring of rings) {
-    const ringAtoms = await runRing(ring, inputs);
+    if (!canContinue(governor)) {
+      break;
+    }
+    const reservedSearchCall = applyUsage(governor, usageDelta({ searchCalls: 1 }));
+    if (reservedSearchCall.status === "budget-exhausted") {
+      governor = reservedSearchCall;
+      uncertainty.push(
+        budgetClipped(reservedSearchCall.stopReason ?? "budget exhausted", inputs.nowMs()),
+      );
+      break;
+    }
+    governor = reservedSearchCall;
+    const result = await runRing(ring, inputs);
+    const afterRing = applyUsage(governor, result.usage);
+    const ringAtoms = result.atoms;
     atoms.push(...ringAtoms);
+    if (afterRing.status === "budget-exhausted") {
+      governor = afterRing;
+      uncertainty.push(budgetClipped(afterRing.stopReason ?? "budget exhausted", inputs.nowMs()));
+      break;
+    }
+    governor = advanceRing(afterRing);
   }
-  return atoms;
+  if (governor.status === "running") {
+    governor = complete(governor);
+  }
+  return { atoms, governor, uncertainty };
 }
 
 interface ExcerptInputs {
   readonly searchScope: SearchScope;
   readonly fs: WorkspaceFs;
+  readonly budget: ExplorationBudget;
+  readonly initialUsage: ExplorationUsage;
+  readonly nowMs: () => number;
+}
+
+interface ExcerptReadSummary {
+  readonly excerpts: ReadonlyMap<string, string>;
+  readonly uncertainty: readonly UncertaintyMarker[];
 }
 
 async function readKeptExcerpts(
   keptPaths: readonly string[],
   inputs: ExcerptInputs,
-): Promise<ReadonlyMap<string, string>> {
+): Promise<ExcerptReadSummary> {
   const excerpts = new Map<string, string>();
+  const uncertainty: UncertaintyMarker[] = [];
+  let remainingFiles = Math.max(0, inputs.budget.filesReadMax - inputs.initialUsage.filesRead);
+  let remainingBytes = Math.max(
+    0,
+    inputs.budget.excerptBytesMax - inputs.initialUsage.excerptBytes,
+  );
   for (const scopePath of keptPaths) {
+    if (remainingFiles <= 0 || remainingBytes <= 0) {
+      const dimensions = [
+        ...(remainingFiles <= 0 ? ["filesRead"] : []),
+        ...(remainingBytes <= 0 ? ["excerptBytes"] : []),
+      ].join(", ");
+      uncertainty.push(budgetClipped(`budget-exhausted on ${dimensions}`, inputs.nowMs()));
+      break;
+    }
     try {
+      const maxBytes = Math.min(8192, remainingBytes);
       const result = await readExcerpt(
         inputs.searchScope,
-        { scopePath, startLine: 1, endLine: 200, maxBytes: 8192 },
+        { scopePath, startLine: 1, endLine: 200, maxBytes },
         { fs: inputs.fs },
       );
       excerpts.set(scopePath, result.content);
+      remainingFiles -= 1;
+      remainingBytes -= utf8ByteLength(result.content);
     } catch (error) {
       if (error instanceof RepoSearchUnsupportedFileError) {
         continue;
@@ -166,7 +287,7 @@ async function readKeptExcerpts(
       throw error;
     }
   }
-  return excerpts;
+  return { excerpts, uncertainty };
 }
 
 function buildSearchScope(scope: SelectedScope, workspace: WorkspaceInfo): SearchScope {
@@ -175,6 +296,35 @@ function buildSearchScope(scope: SelectedScope, workspace: WorkspaceInfo): Searc
     scopeId: scope.scopeId,
     relativePaths: scope.relativePaths,
   };
+}
+
+interface ReadyPlanResult {
+  readonly plan: ExplorationPlan;
+  readonly governor: GovernorState;
+}
+
+function createReadyGovernedPlan(input: OrchestratorInput, nowMs: () => number): ReadyPlanResult {
+  const planned = planAndGovern(
+    input.budget === undefined
+      ? { scope: input.scope, query: input.query }
+      : { scope: input.scope, query: input.query, budget: input.budget },
+    { nowMs },
+  );
+  const { plan } = planned;
+  if (plan.state !== "ready") {
+    if (plan.clarification !== undefined) {
+      throw new ClarificationNeededError(plan.clarification);
+    }
+    throw new ClarificationNeededError({
+      reason: "scope-invalid",
+      suggestedQuestions: ["Reselect files or a directory before asking."],
+      minimumAnchorCount: 0,
+    });
+  }
+  if (planned.governor === undefined) {
+    throw new Error("ready exploration plan did not produce a budget governor");
+  }
+  return { plan, governor: planned.governor };
 }
 
 // ─── Public entry ─────────────────────────────────────────────────────────────
@@ -188,27 +338,24 @@ export async function runGroundedExploration(
   const nowMs = deps.nowMs ?? Date.now;
   const start = nowMs();
 
-  const plan = planExploration({ scope: input.scope, query: input.query }, { nowMs });
-  if (plan.state !== "ready") {
-    if (plan.clarification !== undefined) {
-      throw new ClarificationNeededError(plan.clarification);
-    }
-    throw new ClarificationNeededError({
-      reason: "scope-invalid",
-      suggestedQuestions: ["Reselect files or a directory before asking."],
-      minimumAnchorCount: 0,
-    });
-  }
+  const { plan, governor } = createReadyGovernedPlan(input, nowMs);
+  deps.recordPlan?.(plan);
 
   const workspace = detect(input.workspaceRoot, fs);
   const searchScope = buildSearchScope(input.scope, workspace);
-  const atoms = await runAllRings(plan.rings, { searchScope, query: input.query, fs });
+  const rings = await runAllRings(
+    plan.rings,
+    { searchScope, query: input.query, fs, nowMs },
+    governor,
+  );
+  const atoms = rings.atoms;
+  const initialUsage = clampUsageToBudget(rings.governor.usage, plan.budget);
 
   const ranking = rankCandidates({ atoms, anchors: plan.anchors }, { nowMs });
 
-  const excerpts = await readKeptExcerpts(
+  const excerptReads = await readKeptExcerpts(
     ranking.kept.map((c) => c.scopePath),
-    { searchScope, fs },
+    { searchScope, fs, budget: plan.budget, initialUsage, nowMs },
   );
 
   const assemble = await assembleContextPack(
@@ -219,14 +366,16 @@ export async function runGroundedExploration(
       atoms,
       ranked: ranking.kept,
       omittedFromRanking: ranking.omitted,
-      excerpts,
+      excerpts: excerptReads.excerpts,
+      initialUsage,
+      initialUncertainty: [...rings.uncertainty, ...excerptReads.uncertainty],
     },
     { nowMs },
   );
 
   const assistantContent = await deps.answerer.answer(input.query.text, assemble.pack);
   const elapsedMs = Math.max(0, nowMs() - start);
-  return { pack: assemble.pack, assistantContent, elapsedMs };
+  return { pack: assemble.pack, assistantContent, elapsedMs, plan };
 }
 
 // Re-export DEFAULT_SEARCH_LIMITS for parity with #179 callers that import limits via the

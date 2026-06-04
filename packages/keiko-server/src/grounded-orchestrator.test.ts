@@ -9,6 +9,8 @@ import { join } from "node:path";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  DEFAULT_EXPLORATION_BUDGET,
+  validateConnectedContextPack,
   type ConnectedContextPack,
   type RetrievalQuery,
   type SelectedScope,
@@ -115,9 +117,30 @@ describe("runGroundedExploration", () => {
     expect(out.pack.query.text).toBe("Investigate src/foo.ts behaviour of `MyClass`");
     expect(out.assistantContent).toContain("Inspected");
     expect(out.elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(out.plan?.state).toBe("ready");
     // The pack must always carry uncertainty + omitted as readonly arrays even when empty.
     expect(Array.isArray(out.pack.uncertainty)).toBe(true);
     expect(Array.isArray(out.pack.omitted)).toBe(true);
+  });
+
+  it("records the exploration plan before workspace detection or repository exploration", async () => {
+    const events: string[] = [];
+    const out = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      recordPlan: (plan) => {
+        events.push(`record:${plan.planId}`);
+      },
+      detectWorkspace: () => {
+        events.push("detect");
+        return fakeWorkspace();
+      },
+    });
+    const plan = out.plan;
+    if (plan === undefined) {
+      throw new Error("expected orchestrator output to expose the recorded plan");
+    }
+    expect(events).toEqual([`record:${plan.planId}`, "detect"]);
   });
 
   it("passes the question and the full pack to the injected answerer", async () => {
@@ -179,7 +202,9 @@ describe("runGroundedExploration", () => {
       join(ROOT, ".git", "logs", "HEAD"),
       "0000000000000000000000000000000000000000 abc123def456 Alice <alice@example.com> 1700000000 +0000\tcommit: seed\n",
     );
-    const pairAdapter = testSourcePairingAdapter as { lookup: typeof testSourcePairingAdapter.lookup };
+    const pairAdapter = testSourcePairingAdapter as {
+      lookup: typeof testSourcePairingAdapter.lookup;
+    };
     const importAdapter = importGraphAdapter as { lookup: typeof importGraphAdapter.lookup };
     const gitAdapter = gitHistoryAdapter as { lookup: typeof gitHistoryAdapter.lookup };
     const originalPairLookup = pairAdapter.lookup;
@@ -220,6 +245,25 @@ describe("runGroundedExploration", () => {
     expect(pairCalls).toBe(1);
     expect(importCalls).toBe(1);
     expect(gitCalls).toBe(1);
+  });
+
+  it("uses the budget governor to stop before an over-budget retrieval ring", async () => {
+    const out = await runGroundedExploration(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
+        query: happyQuery({ text: "Investigate src/foo.ts and tests/foo.test.ts MyClass" }),
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, searchCallsMax: 1 },
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+    expect(out.pack.usage.searchCalls).toBe(1);
+    expect(out.pack.uncertainty.some((u) => u.kind === "budget-clipped")).toBe(true);
+    expect(out.pack.uncertainty.some((u) => u.claim.includes("searchCalls"))).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 });
 

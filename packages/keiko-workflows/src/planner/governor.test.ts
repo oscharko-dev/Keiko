@@ -154,11 +154,29 @@ describe("advanceRing", () => {
     }
     expect(g.currentRingIndex).toBe(g.plan.rings.length);
   });
+
+  it("does not advance after budget exhaustion", () => {
+    let g = makeGovernor();
+    g = applyUsage(g, delta({ filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1 }));
+    const advanced = advanceRing(g);
+    expect(advanced).toBe(g);
+    expect(advanced.currentRingIndex).toBe(0);
+    expect(advanced.status).toBe("budget-exhausted");
+  });
 });
 
 describe("complete", () => {
   it("marks the state completed", () => {
     const g = complete(makeGovernor());
     expect(g.status).toBe("completed");
+  });
+
+  it("does not overwrite budget-exhausted terminal state", () => {
+    let g = makeGovernor();
+    g = applyUsage(g, delta({ filesRead: DEFAULT_EXPLORATION_BUDGET.filesReadMax + 1 }));
+    const completed = complete(g);
+    expect(completed).toBe(g);
+    expect(completed.status).toBe("budget-exhausted");
+    expect(completed.stopReason).toContain("filesRead");
   });
 });
