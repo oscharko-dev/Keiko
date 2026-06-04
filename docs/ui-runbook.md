@@ -97,3 +97,8 @@ Path validation is host-independent for these structural rules; the directory ex
 | Credential test fails  | Confirm the base URL points to an OpenAI-compatible API and that the token is valid. |
 | Custom proxy key fails | Confirm whether your gateway expects `Authorization` or a custom API-key header.     |
 | Stop does not clean up | Ensure the process is gone, then remove `.keiko/ui.pid` and start again.             |
+
+For a longer, categorised playbook covering TLS trust failures, first-run
+gateway setup outcomes, the `NO_MODEL` response, workspace path
+validation, and the run-engine command allowlist, see the
+[Troubleshooting guide](troubleshooting/README.md).

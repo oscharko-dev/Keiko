@@ -28,3 +28,11 @@ All seven required CI status checks must pass before a change can merge into `de
 
 The rationale for the CI and supply-chain security baseline is recorded in
 [ADR-0002](docs/adr/README.md#adr-0002).
+
+## Troubleshooting documentation
+
+Operator-facing failure modes live in [`docs/troubleshooting/README.md`](docs/troubleshooting/README.md).
+When adding a new entry, copy [`docs/troubleshooting/_template.md`](docs/troubleshooting/_template.md)
+and follow the **Symptom**, **Root Cause**, **Diagnostic Steps**, and
+**Resolution** structure. Do not include API keys, customer data,
+internal endpoints, or unredacted log lines in examples.
