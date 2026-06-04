@@ -14,7 +14,7 @@ If you find a bug or defect while using Keiko, open a GitHub issue with the
 The template adds the `User Findings` label automatically and asks for the
 Keiko version, platform, reproduction steps, expected result, actual result,
 and redacted evidence. Do not include API keys, customer data, private
-endpoints, internal screenshots, private logs, or other secrets.
+screenshots, internal model endpoints, private logs, or other secrets.
 
 ## Vision
 
