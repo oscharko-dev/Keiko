@@ -570,7 +570,7 @@ async function main() {
     assert(deleted.status === 404, "hard-deleted memory still resolved from the Memory Center API");
 
     console.log(
-      "installable-memory-smoke ok: tarball-installed UI/BFF served pages and exercised create, use, correct, forget, delete, scope isolation, and restart persistence.",
+      "installable-memory-smoke ok: tarball-installed UI/BFF served pages and exercised create, use, correct, forget, delete, scope isolation, restart persistence, and memory-off mode.",
     );
   } finally {
     if (ui !== null) {
