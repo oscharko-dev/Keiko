@@ -161,10 +161,13 @@ function chatModelCapability(id: string): ModelCapability {
 
 describe("ChatWindow conversation model dropdown (Issue #144)", () => {
   it("renders every chat-eligible model id in the Model dropdown options", () => {
+    // activeChat is required so the composer bar (containing the model select)
+    // is rendered — without it the new NoChatState shows instead (#146).
     renderWindow(
       makeSession({
         models: [chatModelCapability("test-chat-1"), chatModelCapability("test-chat-2")],
         selectedModel: "test-chat-1",
+        activeChat: makeChat(),
       }),
     );
     const select = screen.getByLabelText("Model");
@@ -178,10 +181,12 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
     // isConversationEligibleModel before populating session.models. This test
     // pins the regression — if the session ever stopped filtering, the
     // dropdown would surface embedding models and this assertion would fail.
+    // activeChat is required so the composer bar is rendered (#146).
     renderWindow(
       makeSession({
         models: [chatModelCapability("test-chat-1")],
         selectedModel: "test-chat-1",
+        activeChat: makeChat(),
       }),
     );
     const select = screen.getByLabelText("Model");

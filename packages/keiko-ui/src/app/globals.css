@@ -4068,6 +4068,125 @@ select.dlg-input {
   font-size: 12.5px;
 }
 
+/* ---------- COMPOSER: NO-MODEL ALERT (Issue #146) ---------- */
+/* Gives the alert a predictable id-able anchor inside the composer area.   */
+.cmp-no-model {
+  margin-bottom: 10px;
+}
+
+/* ---------- COMPOSER: LOADING STATUS (Issue #146 AC #3) ---------- */
+/* role="status" — polite live region; non-technical wording per spec.      */
+.cmp-loading-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 2px;
+  font-size: 12.5px;
+  color: var(--fg);
+}
+.cmp-loading-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+  animation: pulse 1.4s infinite;
+}
+
+/* ---------- COMPOSER: VISUALLY-HIDDEN HINT (Issue #146 AC #2) ---------- */
+/* Screen readers read this via aria-describedby; sighted users see title.  */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ---------- EMPTY COMPOSER STATE (Issue #146 Deliverable) ---------- */
+.chatw-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 32px 24px;
+  text-align: center;
+  animation: fadeUp 0.25s ease both;
+}
+.chatw-empty-headline {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+  margin: 0 0 8px;
+}
+.chatw-empty-sub {
+  font-size: 13.5px;
+  color: var(--fg-muted);
+  margin: 0 0 24px;
+  max-width: 340px;
+  line-height: 1.55;
+}
+.chatw-empty-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  max-width: 480px;
+}
+.chatw-empty-no-chat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 40px 24px;
+  text-align: center;
+  animation: fadeUp 0.25s ease both;
+}
+.chatw-empty-no-chat-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  margin-bottom: 14px;
+}
+.chatw-empty-no-chat-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0 0 6px;
+}
+.chatw-empty-no-chat-hint {
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  margin: 0;
+  max-width: 260px;
+  line-height: 1.5;
+}
+
+/* focus-visible ring for starter-prompt buttons (WCAG 2.4.7) */
+.suggest:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* focus-visible ring for model select (WCAG 2.4.7) */
+.cmp-model-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 /* ---------- RIGHT RAIL ---------- */
 .rightbar {
   width: 280px;
