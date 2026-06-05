@@ -126,12 +126,35 @@ function seedFullLineage(db: DatabaseSync, overrides: SeedOverrides = {}): SeedH
   db.prepare(
     `INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, status, total_documents, processed_documents, failed_documents, skipped_documents) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(`job-${suffix}`, capsuleId, `["${sourceId}"]`, 1000, "succeeded", 1, 1, 0, 0);
-  db.prepare(
-    `INSERT INTO chunks (
-       id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count,
-       safe_excerpt_hash
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  ).run(chunkId, capsuleId, sourceId, documentId, parsedUnitId, 0, 256, "abc");
+  const chunkColumns = db.prepare("PRAGMA table_info('chunks')").all() as { name?: string }[];
+  const hasStrategyVersion = chunkColumns.some(
+    (column) => column.name === "chunking_strategy_version",
+  );
+  if (hasStrategyVersion) {
+    db.prepare(
+      `INSERT INTO chunks (
+         id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count,
+         safe_excerpt_hash, chunking_strategy_version
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      chunkId,
+      capsuleId,
+      sourceId,
+      documentId,
+      parsedUnitId,
+      0,
+      256,
+      "abc",
+      "issue-195-v1",
+    );
+  } else {
+    db.prepare(
+      `INSERT INTO chunks (
+         id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count,
+         safe_excerpt_hash
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(chunkId, capsuleId, sourceId, documentId, parsedUnitId, 0, 256, "abc");
+  }
   const embedding = new Uint8Array(1536 * 4);
   db.prepare(
     `INSERT INTO vectors (
@@ -171,8 +194,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 5 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(5);
+  it("is the integer 6 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(6);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -236,6 +259,22 @@ describe("KNOWLEDGE_CAPSULE_DDL", () => {
       db.close();
     }
   });
+
+  it("persists chunking_strategy_version on chunks for stale-index detection", () => {
+    const db = openSchemaDb();
+    try {
+      const columns = db.prepare("PRAGMA table_info('chunks')").all() as {
+        name?: string;
+        type?: string;
+        notnull?: number;
+      }[];
+      const byName = new Map(columns.map((c) => [c.name ?? "", c]));
+      expect(byName.get("chunking_strategy_version")?.type).toBe("TEXT");
+      expect(byName.has("chunking_strategy_version")).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
 });
 
 describe("lineage enforcement", () => {
@@ -245,9 +284,9 @@ describe("lineage enforcement", () => {
       expect(() =>
         db
           .prepare(
-            `INSERT INTO chunks (id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count, safe_excerpt_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO chunks (id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count, safe_excerpt_hash, chunking_strategy_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run("c", null, "s", "d", "u", 0, 0, "h"),
+          .run("c", null, "s", "d", "u", 0, 0, "h", "issue-195-v1"),
       ).toThrow(/NOT NULL/);
     } finally {
       db.close();
@@ -284,9 +323,9 @@ describe("lineage enforcement", () => {
       expect(() =>
         db
           .prepare(
-            `INSERT INTO chunks (id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count, safe_excerpt_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO chunks (id, capsule_id, source_id, document_id, parsed_unit_id, order_index, token_count, safe_excerpt_hash, chunking_strategy_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run("chunk-x", "cap-A", a.sourceId, "doc-B", a.parsedUnitId, 0, 1, "h"),
+          .run("chunk-x", "cap-A", a.sourceId, "doc-B", a.parsedUnitId, 0, 1, "h", "issue-195-v1"),
       ).toThrow(/FOREIGN KEY/);
     } finally {
       db.close();

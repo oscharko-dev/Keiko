@@ -12,13 +12,15 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { DatabaseSync } from "node:sqlite";
 
+import { CHUNKING_STRATEGY_VERSION } from "./types.js";
+
 const INSERT_CHUNK_SQL = [
   "INSERT INTO chunks (",
   "  id, capsule_id, source_id, document_id, parsed_unit_id,",
-  "  order_index, token_count, safe_excerpt_hash",
+  "  order_index, token_count, safe_excerpt_hash, chunking_strategy_version",
   ") VALUES (",
   "  :id, :capsule_id, :source_id, :document_id, :parsed_unit_id,",
-  "  :order_index, :token_count, :safe_excerpt_hash",
+  "  :order_index, :token_count, :safe_excerpt_hash, :chunking_strategy_version",
   ")",
 ].join(" ");
 
@@ -27,6 +29,12 @@ const DELETE_CHUNKS_FOR_DOCUMENT_SQL =
 
 const COUNT_CHUNKS_FOR_DOCUMENT_SQL =
   "SELECT COUNT(*) AS n FROM chunks WHERE capsule_id = :c AND document_id = :d";
+
+const COUNT_STALE_CHUNKS_FOR_DOCUMENT_SQL = [
+  "SELECT COUNT(*) AS n FROM chunks",
+  "WHERE capsule_id = :c AND document_id = :d",
+  "  AND (chunking_strategy_version IS NULL OR chunking_strategy_version <> :v)",
+].join(" ");
 
 const SELECT_PARSED_UNITS_FOR_DOCUMENT_SQL = [
   "SELECT id, kind, page_number, page_label, section_path_json,",
@@ -46,6 +54,7 @@ export interface ChunkInsertRow {
   readonly orderIndex: number;
   readonly tokenCount: number;
   readonly safeExcerptHash: string;
+  readonly chunkingStrategyVersion: string;
 }
 
 export function insertChunkRow(db: DatabaseSync, row: ChunkInsertRow): void {
@@ -58,6 +67,7 @@ export function insertChunkRow(db: DatabaseSync, row: ChunkInsertRow): void {
     order_index: row.orderIndex,
     token_count: row.tokenCount,
     safe_excerpt_hash: row.safeExcerptHash,
+    chunking_strategy_version: row.chunkingStrategyVersion,
   });
 }
 
@@ -82,6 +92,34 @@ export function countChunksForDocument(
     | CountRow
     | undefined;
   return typeof row?.n === "number" ? row.n : 0;
+}
+
+export function hasStaleChunksForDocument(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): boolean {
+  const row = db.prepare(COUNT_STALE_CHUNKS_FOR_DOCUMENT_SQL).get({
+    c: capsuleId,
+    d: documentId,
+    v: CHUNKING_STRATEGY_VERSION,
+  }) as CountRow | undefined;
+  return (row?.n ?? 0) > 0;
+}
+
+interface DocumentSourceRow {
+  readonly source_id: string;
+}
+
+export function selectDocumentSourceId(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): KnowledgeSourceId | undefined {
+  const row = db
+    .prepare("SELECT source_id FROM documents WHERE capsule_id = :c AND id = :d")
+    .get({ c: capsuleId, d: documentId }) as DocumentSourceRow | undefined;
+  return row === undefined ? undefined : (row.source_id as KnowledgeSourceId);
 }
 
 // The raw row shape we read from `parsed_units`. `kind` and offset columns mirror the

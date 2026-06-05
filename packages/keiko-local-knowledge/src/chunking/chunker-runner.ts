@@ -20,13 +20,15 @@ import { chunkParsedUnit } from "./chunker.js";
 import {
   countChunksForDocument,
   deleteChunksForDocument,
+  hasStaleChunksForDocument,
   insertChunkRow,
+  selectDocumentSourceId,
   selectParsedUnitsForDocument,
   type ParsedUnitRow,
 } from "./chunker-persist.js";
 import type { KnowledgeStore } from "../store.js";
 import type { ChunkDocumentParams, ChunkDocumentResult, ChunkingOptions } from "./types.js";
-import { ChunkingError } from "./types.js";
+import { CHUNKING_STRATEGY_VERSION, ChunkingError } from "./types.js";
 
 // ─── Row → ParsedUnit reconstitution ──────────────────────────────────────────
 // The parsed_units table is the canonical write surface for #194. We re-hydrate the
@@ -194,6 +196,7 @@ function persistAllChunks(
         orderIndex,
         tokenCount: chunk.tokenCount,
         safeExcerptHash: chunk.safeExcerptHash,
+        chunkingStrategyVersion: CHUNKING_STRATEGY_VERSION,
       });
       chunkIds.push(id);
       orderIndex += 1;
@@ -212,7 +215,14 @@ export function chunkDocument(
 
   const db = store._internal.db;
   const existingCount = countChunksForDocument(db, capsuleId, documentId);
-  if (existingCount > 0 && force !== true) {
+  const staleChunks = existingCount > 0 && hasStaleChunksForDocument(db, capsuleId, documentId);
+  const documentSourceId = selectDocumentSourceId(db, capsuleId, documentId);
+  if (documentSourceId !== undefined && String(documentSourceId) !== String(sourceId)) {
+    throw new ChunkingError(
+      `chunkDocument sourceId ${String(sourceId)} does not match document ${String(documentId)} source ${String(documentSourceId)}`,
+    );
+  }
+  if (existingCount > 0 && force !== true && !staleChunks) {
     return { capsuleId, documentId, chunkIds: [], skippedExisting: true };
   }
 
@@ -223,7 +233,7 @@ export function chunkDocument(
 
   db.exec("BEGIN");
   try {
-    if (force === true && existingCount > 0) {
+    if ((force === true || staleChunks) && existingCount > 0) {
       deleteChunksForDocument(db, capsuleId, documentId);
     }
     const ctx: PersistContext = { capsuleId, sourceId, documentId, sourceText };
