@@ -7370,3 +7370,144 @@ select.dlg-input {
     }
   }
 }
+
+/* ============================================================
+   INSTALL BANNER (#124 — PWA install guidance)
+   Surface A: non-intrusive affordance, WCAG 2.2 AA
+   ============================================================ */
+
+.install-banner {
+  /* Fixed to the bottom of the viewport, above the app footer. */
+  position: fixed;
+  bottom: 40px; /* clear the footer (~36px) with 4px gap */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 900;
+
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  padding: 14px 18px;
+
+  max-width: 480px;
+  width: calc(100vw - 48px);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .install-banner {
+    animation: install-banner-slide-in 180ms ease-out both;
+  }
+
+  @keyframes install-banner-slide-in {
+    from {
+      opacity: 0;
+      transform: translateX(-50%) translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  }
+}
+
+.install-banner-body {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.install-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.install-banner-heading {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--fg);
+}
+
+.install-banner-desc {
+  font-size: 13px;
+  line-height: 1.5;
+  /* --fg-muted: oklch(0.74 0.004 160) ≈ #b3b9b7 on --card ≈ #2e3330.
+     Computed relative luminance: fg-muted ~0.19, card ~0.04 → contrast ≈ 5.0:1 (AA pass). */
+  color: var(--fg-muted);
+}
+
+.install-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Primary install button: --ink-inverse on --accent = 6.94:1 (WCAG AA) */
+.install-banner-btn-install {
+  height: 32px;
+  min-width: 120px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--accent);
+  /* ink-inverse #1a1e23 on accent #4eba87 = 6.94:1 (AA pass) */
+  color: var(--ink-inverse);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  /* 32px height meets WCAG 2.5.8 24×24 minimum target size */
+  outline: none;
+}
+
+.install-banner-btn-install:hover:not(:disabled) {
+  background: var(--accent-bright);
+}
+
+.install-banner-btn-install:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--accent-glow);
+}
+
+/* Dismiss button: --fg-muted on --card surface.
+   fg-muted oklch(0.74) on card oklch(0.235) → contrast ≈ 5.0:1 (AA pass). */
+.install-banner-btn-dismiss {
+  height: 32px;
+  min-width: 60px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  /* 32px height meets WCAG 2.5.8 24×24 minimum target size */
+  outline: none;
+}
+
+.install-banner-btn-dismiss:hover {
+  background: var(--card-2);
+  color: var(--fg);
+}
+
+.install-banner-btn-dismiss:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--accent-glow);
+}
+
+/* Light-theme override: --fg-muted on white falls below WCAG 4.5:1 (2.98:1). The
+   informational copy and the dismiss control switch to --fg in light theme, which
+   the a11y audit measured at 5.47:1. Dark theme is unchanged. */
+[data-theme="light"] .install-banner-btn-dismiss,
+[data-theme="light"] .install-banner-desc {
+  color: var(--fg);
+}

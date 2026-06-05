@@ -35,7 +35,7 @@ function packDryRun(): readonly string[] {
   }
   const parsed = JSON.parse(result.stdout) as PackResult | readonly PackResult[];
   const entry = Array.isArray(parsed) ? parsed[0] : parsed;
-  return entry === undefined ? [] : entry.files.map((f) => f.path);
+  return entry === undefined ? [] : entry.files.map((f: PackEntry) => f.path);
 }
 
 describe("keiko-ui PWA public surface (ADR-0024, issue #123)", () => {
