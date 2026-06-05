@@ -13,6 +13,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
+import type { AuditEventSink } from "./privacy/types.js";
 import type { KnowledgeStore } from "./store.js";
 
 export interface AddCapsuleSourceInput {
@@ -88,6 +89,7 @@ export function addSourceToCapsule(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
   input: AddCapsuleSourceInput,
+  auditSink?: AuditEventSink,
 ): KnowledgeSource {
   const db = store._internal.db;
   const now = store._internal.now();
@@ -119,7 +121,14 @@ export function addSourceToCapsule(
       `addSourceToCapsule: insert succeeded but row not found for ${String(input.id)}`,
     );
   }
-  return readSource(store, capsuleId, input.id);
+  const source = readSource(store, capsuleId, input.id);
+  auditSink?.emit({
+    kind: "source-added",
+    capsuleId,
+    sourceId: input.id,
+    occurredAt: now,
+  });
+  return source;
 }
 
 function readSource(
@@ -150,8 +159,10 @@ export function removeSourceFromCapsule(
   store: KnowledgeStore,
   capsuleId: KnowledgeCapsuleId,
   sourceId: KnowledgeSourceId,
+  auditSink?: AuditEventSink,
 ): void {
   const db = store._internal.db;
+  const occurredAt = store._internal.now();
   db.exec("BEGIN");
   try {
     // Verify the (capsule, source) tuple exists. Deleting on a non-matching tuple would
@@ -171,4 +182,5 @@ export function removeSourceFromCapsule(
     }
     throw error;
   }
+  auditSink?.emit({ kind: "source-removed", capsuleId, sourceId, occurredAt });
 }

@@ -324,7 +324,9 @@ function EmptyState({
       </button>
       <button
         type="button"
+        disabled
         aria-label="Connect to an existing capsule"
+        title="Existing-capsule connection is unavailable until the Local Knowledge BFF is wired."
         className="lk-btn lk-btn-ghost lk-btn-lg"
       >
         Connect to existing capsule

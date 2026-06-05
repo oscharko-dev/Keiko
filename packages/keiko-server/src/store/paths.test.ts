@@ -78,6 +78,17 @@ describe("resolveUiDbPath", () => {
     symlinkSync(target, link, "dir");
     expectCode(() => resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: link }), "invalid_request");
   });
+
+  it("rejects an explicit path containing NUL bytes (CWE-22 parity with memory-vault)", () => {
+    expectCode(() => resolveUiDbPath("/tmp/legit\0/etc/passwd", {}), "invalid_request");
+  });
+
+  it("rejects a KEIKO_UI_DATA_DIR value containing NUL bytes (CWE-22 parity)", () => {
+    expectCode(
+      () => resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: "/tmp/legit\0/etc" }),
+      "invalid_request",
+    );
+  });
 });
 
 describe("assertUiDbOutsideProject", () => {

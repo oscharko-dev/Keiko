@@ -46,6 +46,9 @@ function seedDocWithVector(store: KnowledgeStore, opts: SeedDocOptions): void {
     sdn: `${opts.documentId}.txt`,
   });
   db.prepare(
+    "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, :t)",
+  ).run({ c: opts.capsuleId, d: opts.documentId, t: `normalized ${opts.documentId}` });
+  db.prepare(
     "INSERT INTO parsed_units (id, capsule_id, document_id, kind) VALUES (:id, :c, :d, :k)",
   ).run({ id: opts.parsedUnitId, c: opts.capsuleId, d: opts.documentId, k: "text" });
   db.prepare(
@@ -87,6 +90,15 @@ function parsedUnitIdsForCapsule(store: KnowledgeStore, capsuleId: KnowledgeCaps
     .prepare("SELECT id FROM parsed_units WHERE capsule_id = :c ORDER BY id ASC")
     .all({ c: capsuleId }) as unknown as readonly { readonly id: string }[];
   return rows.map((r) => r.id);
+}
+
+function documentTextIdsForCapsule(store: KnowledgeStore, capsuleId: KnowledgeCapsuleId): string[] {
+  const rows = store._internal.db
+    .prepare(
+      "SELECT document_id FROM document_texts WHERE capsule_id = :c ORDER BY document_id ASC",
+    )
+    .all({ c: capsuleId }) as unknown as readonly { readonly document_id: string }[];
+  return rows.map((r) => r.document_id);
 }
 
 describe("applyRetentionToCapsule", () => {
@@ -159,6 +171,7 @@ describe("applyRetentionToCapsule", () => {
     expect(result.deletedExtractedTextCount).toBe(0);
     expect(vectorIdsForCapsule(env.store, capsuleId)).toEqual(["vec-1"]);
     expect(parsedUnitIdsForCapsule(env.store, capsuleId)).toEqual(["pu-1"]);
+    expect(documentTextIdsForCapsule(env.store, capsuleId)).toEqual(["doc-1"]);
   });
 
   it("does not touch rows in other capsules (capsule_id scope clause is load-bearing)", () => {
@@ -206,9 +219,11 @@ describe("applyRetentionToCapsule", () => {
     // Target capsule: pruned.
     expect(vectorIdsForCapsule(env.store, targetId)).toEqual([]);
     expect(parsedUnitIdsForCapsule(env.store, targetId)).toEqual([]);
+    expect(documentTextIdsForCapsule(env.store, targetId)).toEqual([]);
     // Neighbour capsule: completely untouched.
     expect(vectorIdsForCapsule(env.store, neighbourId)).toEqual(["vec-neighbour"]);
     expect(parsedUnitIdsForCapsule(env.store, neighbourId)).toEqual(["pu-n"]);
+    expect(documentTextIdsForCapsule(env.store, neighbourId)).toEqual(["doc-n"]);
   });
 
   it("deletes parsed_units whose parent document was last extracted before the cutoff", () => {
@@ -248,5 +263,6 @@ describe("applyRetentionToCapsule", () => {
 
     expect(result.deletedExtractedTextCount).toBe(1);
     expect(parsedUnitIdsForCapsule(env.store, capsuleId)).toEqual(["pu-new"]);
+    expect(documentTextIdsForCapsule(env.store, capsuleId)).toEqual(["doc-new"]);
   });
 });

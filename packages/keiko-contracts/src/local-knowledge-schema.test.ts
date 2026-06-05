@@ -109,6 +109,9 @@ function seedFullLineage(db: DatabaseSync, overrides: SeedOverrides = {}): SeedH
     "intro.md",
   );
   db.prepare(
+    `INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (?, ?, ?)`,
+  ).run(capsuleId, documentId, "normalized body");
+  db.prepare(
     `INSERT INTO parsed_units (id, capsule_id, document_id, kind) VALUES (?, ?, ?, ?)`,
   ).run(parsedUnitId, capsuleId, documentId, "section");
   db.prepare(
@@ -168,8 +171,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 2 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(2);
+  it("is the integer 5 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(5);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -358,6 +361,7 @@ describe("lineage enforcement", () => {
       const dependents = [
         "capsule_sources",
         "documents",
+        "document_texts",
         "pages",
         "sections",
         "parsed_units",
@@ -423,10 +427,10 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
     }
   });
 
-  it("applying v1 then v2 in order matches a fresh full-schema apply", () => {
-    // v2 is a *delta* — applying every migration in order to a virgin database must end at
-    // the same on-disk shape as openSchemaDb. The forward-only chain is what gives existing
-    // v1 stores a safe upgrade path.
+  it("applying all migrations in order matches a fresh full-schema apply", () => {
+    // Every post-v1 migration is a *delta* — applying every migration in order to a virgin
+    // database must end at the same on-disk shape as openSchemaDb. The forward-only chain
+    // is what gives existing stores a safe upgrade path.
     const db = new DatabaseSync(":memory:");
     try {
       for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
@@ -463,6 +467,35 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
     }
   });
 
+  it("applies v5 on top of a v4 database and preserves existing audit rows", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v5 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 5);
+      if (v5 === undefined) {
+        throw new Error("expected v5 migration");
+      }
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 5) break;
+        for (const stmt of entry.up) db.exec(stmt);
+      }
+      seedFullLineage(db);
+      db.prepare(
+        "INSERT INTO capsule_membership_changes (id, capsule_id, change_kind, source_id, occurred_at) VALUES (?, ?, ?, ?, ?)",
+      ).run("c-1", "cap-1", "add-source", "src-new", 1234);
+      db.prepare(
+        "INSERT INTO capsule_audit_events (id, capsule_id, kind, occurred_at) VALUES (?, ?, ?, ?)",
+      ).run("a-1", "cap-1", "capsule-deleted", 1235);
+
+      for (const stmt of v5.up) db.exec(stmt);
+      db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: "cap-1" });
+
+      expect(countRows(db, "capsule_membership_changes")).toBe(1);
+      expect(countRows(db, "capsule_audit_events")).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
   it("v2 audit table rejects an unknown change_kind via CHECK constraint", () => {
     const db = openSchemaDb();
     try {
@@ -479,16 +512,21 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
     }
   });
 
-  it("v2 audit rows cascade-delete with their owning capsule", () => {
+  it("metadata-only audit rows survive capsule deletion", () => {
     const db = openSchemaDb();
     try {
       seedFullLineage(db);
       db.prepare(
         "INSERT INTO capsule_membership_changes (id, capsule_id, change_kind, source_id, occurred_at) VALUES (?, ?, ?, ?, ?)",
       ).run("c-1", "cap-1", "add-source", "src-new", 1234);
+      db.prepare(
+        "INSERT INTO capsule_audit_events (id, capsule_id, kind, occurred_at) VALUES (?, ?, ?, ?)",
+      ).run("a-1", "cap-1", "capsule-deleted", 1235);
       expect(countRows(db, "capsule_membership_changes")).toBe(1);
+      expect(countRows(db, "capsule_audit_events")).toBe(1);
       db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: "cap-1" });
-      expect(countRows(db, "capsule_membership_changes")).toBe(0);
+      expect(countRows(db, "capsule_membership_changes")).toBe(1);
+      expect(countRows(db, "capsule_audit_events")).toBe(1);
     } finally {
       db.close();
     }

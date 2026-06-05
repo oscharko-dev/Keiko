@@ -18,6 +18,7 @@ import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
 import { createCapsule, getCapsule } from "../capsule-lifecycle.js";
 import { createDefaultParserRegistry } from "../parsers/index.js";
+import { PDF_TEXT_LAYER } from "../parsers/parser-test-fixtures.js";
 import { addSourceToCapsule } from "../source-lifecycle.js";
 import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.js";
 import { folderScope, memoryFs } from "../discovery/test-support.js";
@@ -31,7 +32,7 @@ import type { KnowledgeStore } from "../store.js";
 
 const ROOT = "/srv/orchestrator";
 
-type FixtureFiles = Record<string, string>;
+type FixtureFiles = Record<string, string | Uint8Array>;
 
 interface Fixture {
   readonly store: KnowledgeStore;
@@ -132,6 +133,35 @@ describe("runIndexingJob — happy path", () => {
     expect(record.status).toBe("succeeded");
     expect(record.processedDocuments).toBe(3);
     expect(record.finishedAt).toBeDefined();
+  });
+
+  it("embeds text documents from persisted extraction text without a second raw file read", async () => {
+    const inputs: string[] = [];
+    const fsNoUtf8: WorkspaceFs = {
+      ...fixture.fs,
+      readFileUtf8: (absolutePath: string): string => {
+        throw new Error(`unexpected raw text reread: ${absolutePath}`);
+      },
+    };
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        inputs.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const events = await drain(
+      runIndexingJob(buildOptions(fixture, { workspaceFs: fsNoUtf8, embeddingAdapter: adapter })),
+    );
+
+    expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
+    expect(inputs.join("\n")).toContain("Lorem ipsum");
   });
 });
 
@@ -248,6 +278,43 @@ describe("runIndexingJob — force", () => {
   });
 });
 
+describe("runIndexingJob — binary parser text projection", () => {
+  let fixture: Fixture;
+
+  beforeEach(() => {
+    fixture = buildFixture({
+      "policy.pdf": PDF_TEXT_LAYER,
+    });
+  });
+
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  it("embeds normalized extracted text instead of raw PDF bytes", async () => {
+    const inputs: string[] = [];
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        inputs.push(req.input);
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const events = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })),
+    );
+    expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
+    expect(inputs.join("\n")).toContain("Hello PDF");
+    expect(inputs.join("\n")).not.toContain("%PDF-1.4");
+  });
+});
+
 // ─── Test 5: embedding-identity mismatch ─────────────────────────────────────
 describe("runIndexingJob — identity gate", () => {
   let fixture: Fixture;
@@ -300,6 +367,74 @@ describe("runIndexingJob — identity gate", () => {
     await drain(runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })));
     const capsule = getCapsule(fixture.store, fixture.capsuleId);
     expect(capsule?.lifecycleState).toBe("error");
+  });
+});
+
+describe("runIndexingJob — embedding capability preflight", () => {
+  let fixture: Fixture;
+
+  beforeEach(() => {
+    fixture = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor sit amet. ".repeat(8),
+    });
+  });
+
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  it("fails before discovery when the embedding model is not verified", async () => {
+    let requestCount = 0;
+    const adapter = scriptedAdapter({
+      responder: () => {
+        requestCount += 1;
+        return { ok: false, kind: "wrong-header" };
+      },
+    });
+
+    const events = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })),
+    );
+
+    expect(requestCount).toBe(1);
+    expect(events[0]?.kind).toBe("job-started");
+    expect(events[1]?.kind).toBe("job-failed");
+    expect(events.some((event) => event.kind === "document-discovered")).toBe(false);
+    const terminal = events.at(-1);
+    expect(terminal?.kind).toBe("job-failed");
+    if (terminal?.kind === "job-failed") {
+      expect(terminal.error.code).toBe("EMBEDDING_ADAPTER_FAILED");
+      expect(terminal.error.message).toBe(
+        "model gateway rejected the request — check API key configuration",
+      );
+      expect(terminal.result.processedDocuments).toBe(0);
+      expect(terminal.result.vectorsPersisted).toBe(0);
+    }
+    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBe(0);
+  });
+
+  it("preserves existing vectors on force=true when preflight fails", async () => {
+    await drain(runIndexingJob(buildOptions(fixture)));
+    const before = countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId);
+    expect(before).toBeGreaterThan(0);
+
+    const adapter = scriptedAdapter({
+      responder: () => ({ ok: false, kind: "unsupported-model" }),
+    });
+    const events = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter, force: true })),
+    );
+
+    const after = countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId);
+    expect(after).toBe(before);
+    expect(events.some((event) => event.kind === "document-discovered")).toBe(false);
+    const terminal = events.at(-1);
+    expect(terminal?.kind).toBe("job-failed");
+    if (terminal?.kind === "job-failed") {
+      expect(terminal.error.message).toBe(
+        "embedding model is not available on the configured gateway",
+      );
+    }
   });
 });
 
@@ -371,7 +506,9 @@ describe("runIndexingJob — concurrency clamp", () => {
     const adapter = happyAdapter();
     const wrapped = {
       ...adapter,
-      request: async (req: Parameters<typeof adapter.request>[0]): Promise<Awaited<ReturnType<typeof adapter.request>>> => {
+      request: async (
+        req: Parameters<typeof adapter.request>[0],
+      ): Promise<Awaited<ReturnType<typeof adapter.request>>> => {
         live += 1;
         if (live > peak) peak = live;
         await new Promise((r) => setImmediate(r));

@@ -11,11 +11,17 @@ import {
   updateCapsuleState,
 } from "./capsule-lifecycle.js";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
+import { createSqliteAuditSink } from "./privacy/audit-emitter.js";
 import { freshStore, sampleCapsuleInput } from "./_support.js";
 import type { KnowledgeStore } from "./store.js";
 
 interface CountRow {
   readonly n: number;
+}
+
+interface AuditKindRow {
+  readonly kind: string;
+  readonly occurred_at: number;
 }
 
 let store: KnowledgeStore;
@@ -171,9 +177,27 @@ describe("deleteCapsule + cascade", () => {
   });
 
   it("raises KnowledgeNotFoundError when deleting a missing capsule", () => {
-    expect(() => { deleteCapsule(store, "ghost" as KnowledgeCapsuleId); }).toThrow(
-      KnowledgeNotFoundError,
+    expect(() => {
+      deleteCapsule(store, "ghost" as KnowledgeCapsuleId);
+    }).toThrow(KnowledgeNotFoundError);
+  });
+
+  it("persists capsule-deleted audit evidence after deleting the capsule row", () => {
+    Object.defineProperty(store._internal, "now", { value: (): number => 42, configurable: true });
+    const capsule = createCapsule(
+      store,
+      sampleCapsuleInput({ id: "cap-audit" as KnowledgeCapsuleId }),
     );
+    const sink = createSqliteAuditSink(store);
+
+    deleteCapsule(store, capsule.id, sink);
+
+    const row = store._internal.db
+      .prepare(
+        "SELECT kind, occurred_at FROM capsule_audit_events WHERE capsule_id = :c ORDER BY occurred_at DESC LIMIT 1",
+      )
+      .get({ c: capsule.id }) as AuditKindRow | undefined;
+    expect(row).toEqual({ kind: "capsule-deleted", occurred_at: 42 });
   });
 });
 
@@ -182,6 +206,7 @@ describe("deleteCapsule + cascade", () => {
 const ALL_DEPENDENT_TABLES = [
   "capsule_sources",
   "documents",
+  "document_texts",
   "pages",
   "sections",
   "parsed_units",
@@ -195,6 +220,7 @@ interface CountMap {
   readonly capsules: number;
   readonly capsule_sources: number;
   readonly documents: number;
+  readonly document_texts: number;
   readonly pages: number;
   readonly sections: number;
   readonly parsed_units: number;
@@ -211,6 +237,7 @@ function countAll(s: KnowledgeStore): CountMap {
     capsules: c("capsules"),
     capsule_sources: c("capsule_sources"),
     documents: c("documents"),
+    document_texts: c("document_texts"),
     pages: c("pages"),
     sections: c("sections"),
     parsed_units: c("parsed_units"),
@@ -238,6 +265,10 @@ function seedFullLineage(s: KnowledgeStore, capsuleId: string, suffix: string): 
   db.prepare(
     "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) VALUES (:id, :c, :s, '/a.md', 1, 'text/markdown', 'h', 'p', '1', 1, 'ready', 'a.md')",
   ).run({ id: documentId, c: capsuleId, s: sourceId });
+
+  db.prepare(
+    "INSERT INTO document_texts (capsule_id, document_id, normalized_text) VALUES (:c, :d, 'body')",
+  ).run({ c: capsuleId, d: documentId });
 
   db.prepare(
     "INSERT INTO pages (capsule_id, document_id, page_number, character_start, character_end) VALUES (:c, :d, 1, 0, 100)",

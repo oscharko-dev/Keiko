@@ -28,6 +28,14 @@ function hasSymlinkAncestor(path: string): boolean {
 }
 
 function resolveConfiguredPath(path: string, label: string): string {
+  // NUL bypass (CWE-22): path.normalize() leaves NUL bytes intact, so a string like
+  // "/safe/path\0/etc/passwd" satisfies the CWD-containment check but open(2) truncates
+  // at the NUL and lands on a completely different file. Reject NUL bytes first so the
+  // downstream guards reason about the same string the kernel will syscall on. Parity
+  // with the fix landed in packages/keiko-memory-vault/src/paths.ts (commit fbb90a88).
+  if (path.includes("\0")) {
+    throw invalidRequest(`${label} must not contain NUL bytes.`);
+  }
   if (!isAbsolute(path)) {
     throw invalidRequest(`${label} must be absolute.`);
   }

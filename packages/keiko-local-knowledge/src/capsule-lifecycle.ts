@@ -23,6 +23,7 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
+import type { AuditEventSink } from "./privacy/types.js";
 import type { KnowledgeStore } from "./store.js";
 
 export interface CreateCapsuleInput {
@@ -153,7 +154,11 @@ function withOptionalCapsuleFields(base: KnowledgeCapsule, row: CapsuleRow): Kno
   return result;
 }
 
-export function createCapsule(store: KnowledgeStore, input: CreateCapsuleInput): KnowledgeCapsule {
+export function createCapsule(
+  store: KnowledgeStore,
+  input: CreateCapsuleInput,
+  auditSink?: AuditEventSink,
+): KnowledgeCapsule {
   const now = store._internal.now();
   const params = {
     id: input.id,
@@ -195,6 +200,7 @@ export function createCapsule(store: KnowledgeStore, input: CreateCapsuleInput):
     // safely with a synthesised value.
     throw new KnowledgeStoreError(`createCapsule: insert succeeded but row not found for ${String(input.id)}`);
   }
+  auditSink?.emit({ kind: "capsule-created", capsuleId: capsule.id, occurredAt: now });
   return capsule;
 }
 
@@ -245,8 +251,13 @@ export function updateCapsuleState(
   return capsule;
 }
 
-export function deleteCapsule(store: KnowledgeStore, id: KnowledgeCapsuleId): void {
+export function deleteCapsule(
+  store: KnowledgeStore,
+  id: KnowledgeCapsuleId,
+  auditSink?: AuditEventSink,
+): void {
   const db = store._internal.db;
+  const occurredAt = store._internal.now();
   db.exec("BEGIN");
   try {
     const result = db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: id });
@@ -261,4 +272,5 @@ export function deleteCapsule(store: KnowledgeStore, id: KnowledgeCapsuleId): vo
     }
     throw error;
   }
+  auditSink?.emit({ kind: "capsule-deleted", capsuleId: id, occurredAt });
 }

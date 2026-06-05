@@ -1,5 +1,20 @@
 # Local Knowledge Connector — Verification Matrix (Epic #189)
 
+## Audit correction (2026-06-04)
+
+This document was used as closure evidence for Epic [#189](https://github.com/oscharko-dev/Keiko/issues/189), but a post-merge audit against `origin/dev` found that several PASS claims in earlier revisions of this matrix did not match the landed code. In particular:
+
+- Local Knowledge BFF routes and Conversation Center HTTP wiring were not fully wired in `packages/keiko-server` even though earlier text described them as shipped.
+- Some file references in this matrix pointed to paths that do not exist in the repository.
+- PDF and DOCX ingestion were previously described as complete even though the parser layer still classified them as not implemented before the audit fixes in this branch.
+
+Treat the historical PASS rows below as implementation provenance, not as authoritative release evidence. The authoritative audit status is:
+
+- `#194` and `#266`: corrected in this audit branch by adding real PDF and DOCX extraction adapters plus async parser execution in discovery.
+- `#199`: corrected in this audit branch by adding bounded hybrid lexical metadata reranking on top of scoped vector retrieval.
+- `#201`: corrected in this audit branch by persisting all metadata-only audit events and emitting them from lifecycle/indexing/retention paths.
+- `#197`, `#198`, and `#200`: still require further work before Epic `#189` can be considered fully implemented and closure-ready.
+
 ## Summary
 
 Epic [#189](https://github.com/oscharko-dev/Keiko/issues/189) shipped 17 child issues that compose the Local Knowledge Connector capability: type contracts, SQL schema, embedding capability check, vector store, capsule composition, parser registry, document discovery, chunking, indexing orchestrator, two UI surfaces (graph and capsule detail), retrieval, evaluation harness, Conversation Center Q&A wiring, privacy/retention/audit controls, OCR adapter seam, and this verification matrix.

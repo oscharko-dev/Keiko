@@ -6,7 +6,12 @@
 import { describe, expect, it } from "vitest";
 
 import * as parsers from "./index.js";
-import { PDF_MAGIC, selectionFromBytes, selectionFromText } from "./parser-test-fixtures.js";
+import {
+  DOCX_SIMPLE,
+  PDF_TEXT_LAYER,
+  selectionFromBytes,
+  selectionFromText,
+} from "./parser-test-fixtures.js";
 
 describe("parsers barrel", () => {
   it("exposes every shipped adapter", () => {
@@ -14,6 +19,8 @@ describe("parsers barrel", () => {
     expect(parsers.jsonParser).toBeDefined();
     expect(parsers.csvParser).toBeDefined();
     expect(parsers.htmlParser).toBeDefined();
+    expect(parsers.pdfParser).toBeDefined();
+    expect(parsers.docxParser).toBeDefined();
     expect(parsers.unsupportedParser).toBeDefined();
   });
 
@@ -76,11 +83,24 @@ describe("createDefaultParserRegistry", () => {
     expect(resolution.adapter.capability.parserId).toBe("text");
   });
 
-  it("falls through to the unsupported adapter for PDF magic bytes", () => {
+  it("routes PDF to the PDF parser", () => {
     const registry = parsers.createDefaultParserRegistry();
-    const resolution = registry.resolve(selectionFromBytes(PDF_MAGIC, { extension: "pdf" }));
+    const resolution = registry.resolve(selectionFromBytes(PDF_TEXT_LAYER, { extension: "pdf" }));
     expect(resolution.kind).toBe("matched");
     if (resolution.kind !== "matched") throw new Error("unreachable");
-    expect(resolution.adapter.capability.parserId).toBe("unsupported");
+    expect(resolution.adapter.capability.parserId).toBe("pdf");
+  });
+
+  it("routes DOCX to the DOCX parser", () => {
+    const registry = parsers.createDefaultParserRegistry();
+    const resolution = registry.resolve(
+      selectionFromBytes(DOCX_SIMPLE, {
+        extension: "docx",
+        mediaType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      }),
+    );
+    expect(resolution.kind).toBe("matched");
+    if (resolution.kind !== "matched") throw new Error("unreachable");
+    expect(resolution.adapter.capability.parserId).toBe("docx");
   });
 });

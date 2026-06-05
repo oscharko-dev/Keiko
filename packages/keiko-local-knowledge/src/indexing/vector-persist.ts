@@ -22,6 +22,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { DatabaseSync } from "node:sqlite";
 
+import { KnowledgeStoreError } from "../errors.js";
+
 const INSERT_VECTOR_SQL = [
   "INSERT INTO vectors (",
   "  id, capsule_id, source_id, document_id, chunk_id,",
@@ -75,7 +77,19 @@ export interface VectorInsertRow {
   readonly createdAt: number;
 }
 
+function assertEmbeddingShape(row: VectorInsertRow): void {
+  const expectedByteLength = row.identity.vectorDimensions * Float32Array.BYTES_PER_ELEMENT;
+  if (row.embedding.byteLength !== expectedByteLength) {
+    throw new KnowledgeStoreError(
+      `vector ${String(row.id)} for capsule=${String(row.capsuleId)} ` +
+        `chunk=${String(row.chunkId)} has blob length ${String(row.embedding.byteLength)} ` +
+        `but identity.vectorDimensions=${String(row.identity.vectorDimensions)}`,
+    );
+  }
+}
+
 export function insertVectorRow(db: DatabaseSync, row: VectorInsertRow): void {
+  assertEmbeddingShape(row);
   db.prepare(INSERT_VECTOR_SQL).run({
     id: String(row.id),
     capsule_id: String(row.capsuleId),
@@ -143,6 +157,8 @@ export function composeVectorRecord(row: VectorInsertRow): VectorRecord {
     id: row.id,
     chunkId: row.chunkId,
     capsuleId: row.capsuleId,
+    sourceId: row.sourceId,
+    documentId: row.documentId,
     embeddingIdentity: row.identity,
     vectorDimensions: row.identity.vectorDimensions,
     storageReference: row.storageReference,
