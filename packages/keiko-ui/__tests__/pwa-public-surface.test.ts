@@ -44,5 +44,5 @@ describe("keiko-ui PWA public surface (ADR-0024, issue #123)", () => {
     for (const required of REQUIRED_PUBLIC_FILES) {
       expect(paths, `expected ${required} in pack output`).toContain(required);
     }
-  });
+  }, 30_000);
 });

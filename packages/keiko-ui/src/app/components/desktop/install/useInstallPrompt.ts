@@ -20,10 +20,13 @@ type BeforeInstallPromptEvent = Event & {
 };
 
 function isBeforeInstallPromptEvent(e: Event): e is BeforeInstallPromptEvent {
-  return (
-    typeof (e as BeforeInstallPromptEvent).prompt === "function" &&
-    typeof (e as BeforeInstallPromptEvent).userChoice === "object"
-  );
+  // Verify promise-like shape on userChoice rather than only `typeof === "object"`,
+  // which would accept any non-null object. The .then check ensures we can safely
+  // await the user's install decision (CodeQL: missing-await defense).
+  if (typeof (e as { prompt?: unknown }).prompt !== "function") return false;
+  const userChoice = (e as { userChoice?: unknown }).userChoice;
+  if (typeof userChoice !== "object" || userChoice === null) return false;
+  return typeof (userChoice as { then?: unknown }).then === "function";
 }
 
 export interface UseInstallPromptResult {

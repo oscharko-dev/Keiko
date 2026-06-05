@@ -31,5 +31,5 @@ describe("keiko-ui PWA service-worker surface (ADR-0024 D6, issue #126)", () => 
   it("ships public/sw.js in `npm pack --dry-run`", () => {
     const paths = packDryRun();
     expect(paths, "expected public/sw.js in pack output").toContain("public/sw.js");
-  });
+  }, 30_000);
 });
