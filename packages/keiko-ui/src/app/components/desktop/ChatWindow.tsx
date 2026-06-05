@@ -57,6 +57,9 @@ const NO_MODEL_ALERT_ID = "cmp-no-model-alert";
 // Stable id for the "type a message" send-button hint for aria-describedby.
 const SEND_HINT_ID = "cmp-send-hint";
 
+// Stable id for the loading status so blocked actions can reference it.
+const LOADING_STATUS_ID = "cmp-loading-status";
+
 // Workspace-aware starter prompts for the empty state.
 function starterPrompts(activeProject: ProjectWithAvailability | undefined): readonly string[] {
   if (activeProject !== undefined) {
@@ -165,6 +168,7 @@ function ComposerBar({
     models,
     selectedModel,
     setSelectedModel,
+    draft,
     noEligibleModels,
     loading,
     sending,
@@ -176,18 +180,22 @@ function ComposerBar({
   // Use aria-disabled rather than the HTML disabled attribute so focus is retained.
   // Issue #151 — budget-exceeded also blocks send.
   const sendBlocked = noEligibleModels || budgetExceeded || !ready;
+  const draftEmpty = draft.trim().length === 0;
 
   // AC #2: aria-describedby chains:
   // - model select → NO_MODEL_ALERT_ID when noEligibleModels
   // - send button  → NO_MODEL_ALERT_ID when noEligibleModels,
   //                  BUDGET_EXCEEDED_ALERT_ID when context exceeded,
-  //                  else SEND_HINT_ID when !ready
+  //                  LOADING_STATUS_ID while bootstrapping,
+  //                  else SEND_HINT_ID when only the draft is empty
   const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
   const sendDescribedBy = noEligibleModels
     ? NO_MODEL_ALERT_ID
     : budgetExceeded
       ? BUDGET_EXCEEDED_ALERT_ID
-      : !ready
+      : loading
+        ? LOADING_STATUS_ID
+        : draftEmpty
         ? SEND_HINT_ID
         : undefined;
 
@@ -275,7 +283,7 @@ function ComposerBar({
         </button>
       ) : (
         <button
-          type={noEligibleModels || budgetExceeded ? "button" : "submit"}
+          type={sendBlocked ? "button" : "submit"}
           className="cmp-send"
           data-on={!sendBlocked}
           aria-disabled={sendBlocked}
@@ -285,11 +293,12 @@ function ComposerBar({
               ? "No conversation-eligible model is configured — connect a gateway in Settings"
               : budgetExceeded
                 ? "Context exceeds the model's window — clear history or pick a larger-context model"
-                : !ready
+                : loading
+                  ? "Connecting to your gateway"
+                  : draftEmpty
                   ? "Type a message to send"
                   : "Send message"
           }
-          disabled={!noEligibleModels && !budgetExceeded && !ready}
           aria-label="Send message"
         >
           <Icons.arrowUp size={16} />
@@ -316,7 +325,7 @@ function NoModelAlert(): ReactNode {
 // percentage — engineering note forbids it.
 function LoadingStatus(): ReactNode {
   return (
-    <div role="status" className="cmp-loading-status">
+    <div id={LOADING_STATUS_ID} role="status" className="cmp-loading-status">
       <span className="cmp-loading-dot" aria-hidden="true" />
       Connecting to your gateway…
     </div>
