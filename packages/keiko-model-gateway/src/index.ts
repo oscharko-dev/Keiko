@@ -40,11 +40,14 @@ export type {
 export {
   CAPABILITY_REGISTRY,
   createDefaultChatCapability,
+  explainConversationIneligibility,
   findCapability,
+  isConversationEligibleModel,
   listCapabilities,
   resolveCostClass,
   selectCheapest,
   type CapabilityQuery,
+  type ConversationIneligibilityReason,
 } from "./capabilities.js";
 
 export { CAPABILITY_DATA } from "./capabilities.data.js";

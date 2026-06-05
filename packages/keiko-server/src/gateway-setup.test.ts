@@ -16,7 +16,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
-import { handleGatewaySetup } from "./gateway-setup.js";
+import {
+  handleGatewaySetup,
+  MAX_DISCOVERED_MODELS,
+  isExplicitlyNonChatModel,
+  modelIdFromDiscoveryItem,
+  normalizeDiscoveryPayload,
+  smokeTestCandidates,
+} from "./gateway-setup.js";
 import type { RouteContext } from "./routes.js";
 
 const tmpDirs: string[] = [];
@@ -661,5 +668,192 @@ describe("handleGatewaySetup", () => {
       globalThis.fetch = originalFetch;
       deps.store.close();
     }
+  });
+});
+
+// Issue #144: discovery-normalization seam tests. Synthetic generic IDs only —
+// no customer model names. These pin AC #4 ("Discovery handles additional
+// customer gateway models without requiring code changes for each model name")
+// by exercising the wrapper with every documented payload shape.
+describe("normalizeDiscoveryPayload", () => {
+  it("returns OpenAI-compatible ids in original order", () => {
+    const payload = { data: [{ id: "test-chat-1" }, { id: "test-chat-2" }] };
+    expect(normalizeDiscoveryPayload(payload)).toEqual(["test-chat-1", "test-chat-2"]);
+  });
+
+  it("drops LiteLLM model_info.mode === 'embedding'", () => {
+    const payload = {
+      data: [
+        { model_name: "x", model_info: { mode: "chat" } },
+        { model_name: "y", model_info: { mode: "embedding" } },
+      ],
+    };
+    expect(normalizeDiscoveryPayload(payload)).toEqual(["x"]);
+  });
+
+  it("drops LiteLLM litellm_params.mode that is not chat-compatible", () => {
+    const payload = {
+      data: [
+        { model_name: "chat-via-params", litellm_params: { mode: "chat" } },
+        { model_name: "embedding-via-params", litellm_params: { mode: "embedding" } },
+        { model_name: "audio-via-params", litellm_params: { mode: "audio_transcription" } },
+      ],
+    };
+    expect(normalizeDiscoveryPayload(payload)).toEqual(["chat-via-params"]);
+  });
+
+  it("drops entries with capabilities.chat_completion === false", () => {
+    const payload = {
+      data: [
+        { id: "test-chat-1" },
+        { id: "test-image-1", capabilities: { chat_completion: false } },
+      ],
+    };
+    expect(normalizeDiscoveryPayload(payload)).toEqual(["test-chat-1"]);
+  });
+
+  it("deduplicates repeated ids", () => {
+    const payload = {
+      data: [{ id: "test-chat-1" }, { id: "test-chat-1" }, { id: "test-chat-2" }],
+    };
+    expect(normalizeDiscoveryPayload(payload)).toEqual(["test-chat-1", "test-chat-2"]);
+  });
+
+  it("drops entries with no recognised id field, keeping healthy peers", () => {
+    const payload = {
+      data: [{ id: "test-chat-1" }, { unrecognised: "no-id-here" }, { id: "test-chat-2" }],
+    };
+    expect(normalizeDiscoveryPayload(payload)).toEqual(["test-chat-1", "test-chat-2"]);
+  });
+
+  it("drops ids containing disallowed control characters", () => {
+    const payload = {
+      data: [{ id: "test-chat-1" }, { id: "bad\nmodel" }, { id: "test-chat-2" }],
+    };
+    expect(normalizeDiscoveryPayload(payload)).toEqual(["test-chat-1", "test-chat-2"]);
+  });
+
+  it("throws when data is not an array (schema-level malformation)", () => {
+    expect(() => normalizeDiscoveryPayload({ data: "not-an-array" })).toThrow(
+      "model discovery response must contain a data array",
+    );
+  });
+
+  it("throws when every entry is dropped (no usable models)", () => {
+    const payload = { data: [{ unrecognised: "x" }, { capabilities: { chat_completion: false } }] };
+    expect(() => normalizeDiscoveryPayload(payload)).toThrow(
+      "model discovery returned no model ids",
+    );
+  });
+
+  it("truncates to MAX_DISCOVERED_MODELS when the payload is oversized", () => {
+    const payload = {
+      data: Array.from({ length: MAX_DISCOVERED_MODELS + 5 }, (_unused, index) => ({
+        id: `m-${String(index)}`,
+      })),
+    };
+    expect(normalizeDiscoveryPayload(payload).length).toBe(MAX_DISCOVERED_MODELS);
+  });
+});
+
+// Issue #144: cover the lower-level helpers directly so a future split into
+// `discovery-normalization.ts` keeps the same observable surface.
+describe("modelIdFromDiscoveryItem", () => {
+  it("returns the id for a healthy OpenAI-compatible record", () => {
+    expect(modelIdFromDiscoveryItem({ id: "test-chat-1" })).toBe("test-chat-1");
+  });
+
+  it("returns undefined for an explicitly non-chat record", () => {
+    expect(
+      modelIdFromDiscoveryItem({ id: "test-embed-1", model_info: { mode: "embedding" } }),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined for non-record input", () => {
+    expect(modelIdFromDiscoveryItem("not-an-object")).toBeUndefined();
+    expect(modelIdFromDiscoveryItem(null)).toBeUndefined();
+  });
+});
+
+describe("isExplicitlyNonChatModel", () => {
+  it("returns true when capabilities.chat_completion is explicitly false", () => {
+    expect(isExplicitlyNonChatModel({ capabilities: { chat_completion: false } })).toBe(true);
+  });
+
+  it("returns true for a non-chat-compatible mode", () => {
+    expect(isExplicitlyNonChatModel({ mode: "embedding" })).toBe(true);
+  });
+
+  it("returns true for an unrecognised mode (only chat-compatible modes survive)", () => {
+    // CHAT_COMPATIBLE_MODES is a closed allow-list ("chat", "completion",
+    // "responses"). Anything else explicitly disqualifies the record. The
+    // LiteLLM fallback for entries with NO mode field is the absence path,
+    // covered below.
+    expect(isExplicitlyNonChatModel({ mode: "unrecognised-mode" })).toBe(true);
+  });
+
+  it("returns false when no chat-disqualifying signal is present", () => {
+    expect(isExplicitlyNonChatModel({ id: "test-chat-1" })).toBe(false);
+  });
+
+  it("returns false when mode field is absent (entry is kept for smoke testing)", () => {
+    // Matches the LiteLLM fixture in handleGatewaySetup tests: a record with
+    // model_name and no model_info.mode is smoke-tested because we can't
+    // disqualify it from the discovery payload alone.
+    expect(isExplicitlyNonChatModel({ model_name: "test-chat-1" })).toBe(false);
+  });
+});
+
+// Issue #144: smoke-test seam — pure helper extracted from
+// `defaultGatewaySetupTester`. Concurrency, order preservation, and the
+// terminal "all rejected" error are the three pieces of the observable
+// contract that downstream code depends on.
+describe("smokeTestCandidates", () => {
+  it("returns every candidate when every probe resolves (original order)", async () => {
+    const result = await smokeTestCandidates(
+      ["test-chat-1", "test-chat-2", "test-chat-3"],
+      () => Promise.resolve(),
+      2,
+    );
+    expect(result).toEqual(["test-chat-1", "test-chat-2", "test-chat-3"]);
+  });
+
+  it("drops rejected probes and preserves order among survivors", async () => {
+    const rejected = new Set(["test-chat-2"]);
+    const result = await smokeTestCandidates(
+      ["test-chat-1", "test-chat-2", "test-chat-3", "test-chat-4"],
+      (modelId) => (rejected.has(modelId) ? Promise.reject(new Error("nope")) : Promise.resolve()),
+      2,
+    );
+    expect(result).toEqual(["test-chat-1", "test-chat-3", "test-chat-4"]);
+  });
+
+  it("throws the documented error when every probe rejects", async () => {
+    await expect(
+      smokeTestCandidates(
+        ["test-chat-1", "test-chat-2"],
+        () => Promise.reject(new Error("nope")),
+        2,
+      ),
+    ).rejects.toThrow("no discovered model accepted the chat-completions smoke test");
+  });
+
+  it("respects the concurrency cap (peak in-flight <= 2 with 5 candidates)", async () => {
+    const tracker = { inflight: 0, peak: 0 };
+    const probe = async (): Promise<void> => {
+      tracker.inflight += 1;
+      tracker.peak = Math.max(tracker.peak, tracker.inflight);
+      // Yield once so concurrent workers have an opportunity to enter the
+      // probe before we decrement. A microtask is enough — no timers needed.
+      await Promise.resolve();
+      tracker.inflight -= 1;
+    };
+    await smokeTestCandidates(
+      ["test-chat-1", "test-chat-2", "test-chat-3", "test-chat-4", "test-chat-5"],
+      probe,
+      2,
+    );
+    expect(tracker.peak).toBeLessThanOrEqual(2);
+    expect(tracker.peak).toBeGreaterThanOrEqual(1);
   });
 });
