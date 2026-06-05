@@ -250,7 +250,17 @@ export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
 }
 
 function configSecretValues(config: GatewayConfig | undefined): readonly string[] {
-  return config?.providers.map((provider) => provider.apiKey) ?? [];
+  // Epic #177 audit: include both `apiKey` and `baseUrl` so error-message and evidence
+  // redaction can scrub the provider URL the user (or the provider's response) might echo
+  // back. `baseUrl` is not a credential per se, but pairing it with the apiKey reveals the
+  // backend topology and gives an attacker a place to direct probes; the matrix's security
+  // section claims both shapes are scrubbed at the BFF boundary.
+  if (config === undefined) return [];
+  const out: string[] = [];
+  for (const provider of config.providers) {
+    out.push(provider.apiKey, provider.baseUrl);
+  }
+  return out;
 }
 
 function redactionSecrets(env: EnvSource, config: GatewayConfig | undefined): readonly string[] {

@@ -5660,10 +5660,12 @@ select.dlg-input {
   cursor: not-allowed;
 }
 
+/* Epic #177 audit: --fg-faint = 2.34:1 on --card → fails WCAG 1.4.3 (4.5:1). The hint is
+   primary instructional text ("select a file/folder"), not chrome — needs --fg (16.96:1). */
 .scope-connect-hint {
   display: block;
   font-size: 11px;
-  color: var(--fg-faint);
+  color: var(--fg);
   margin-top: 4px;
 }
 
@@ -5751,14 +5753,19 @@ select.dlg-input {
   font-size: 11px;
   cursor: default;
 }
+/* Epic #177 audit: citation score, uncertainty, and meta lines all read meaningful values
+   (score number, uncertainty claim, omitted-count). --fg-faint = 2.34:1 and --ink-muted =
+   3.89:1 on --card → both fail WCAG 1.4.3 (4.5:1). Align with the labels pattern documented
+   at .grounded-context-pack-headline below: use --fg (16.96:1). Size/weight/italic keep the
+   visual hierarchy intact. */
 .grounded-citation-score {
   margin-left: 6px;
-  color: var(--fg-faint);
+  color: var(--fg);
   font-size: 10px;
 }
 .grounded-uncertainty {
   font-size: 11px;
-  color: var(--ink-muted);
+  color: var(--fg);
   font-style: italic;
 }
 .grounded-uncertainty-list {
@@ -5767,7 +5774,7 @@ select.dlg-input {
 }
 .grounded-meta {
   font-size: 10px;
-  color: var(--fg-faint);
+  color: var(--fg);
   font-family: var(--font-mono);
 }
 

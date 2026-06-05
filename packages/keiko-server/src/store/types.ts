@@ -45,6 +45,7 @@ export interface UiStore {
   readonly deleteProject: (path: string) => void;
 
   readonly listChats: (projectPath: string) => readonly Chat[];
+  readonly findChatById: (id: string) => Chat | undefined;
   readonly createChat: (
     projectPath: string,
     title: string,

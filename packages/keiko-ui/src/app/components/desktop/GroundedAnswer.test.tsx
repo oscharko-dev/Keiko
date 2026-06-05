@@ -300,4 +300,14 @@ describe("GroundedAnswer", () => {
       screen.getByRole("link", { name: "View connected-context audit evidence" }),
     ).toHaveAttribute("href", "/api/evidence/grounded-run-1");
   });
+
+  it("renders HTML payload in answer.content as escaped text, not live markup", () => {
+    // Mutation guard: replacing `{answer.content}` with
+    // `<div dangerouslySetInnerHTML={{__html: answer.content}}/>` must fail this test.
+    const { container } = render(
+      <GroundedAnswer answer={answer({ content: "<script>alert(1)</script>" })} busy={false} />,
+    );
+    expect(container.textContent).toContain("<script>alert(1)</script>");
+    expect(container.querySelectorAll("script")).toHaveLength(0);
+  });
 });

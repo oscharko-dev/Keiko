@@ -45,7 +45,7 @@ import {
 import { validateProjectPath } from "./store/validation.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig } from "./deps.js";
+import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
@@ -221,10 +221,14 @@ function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record
 // reach the wire. GatewayError messages may carry the provider base URL, response body excerpts,
 // or `Bearer …` tokens echoed back by the provider; UiStoreError messages may carry user-controlled
 // path fragments. Redaction at this single boundary keeps gateway credentials and provider endpoints
-// out of conversation error envelopes (AC #2 + AC #4). `deps.redactionSecrets` carries the resolved
-// gateway literals (apiKey, baseUrl, env values) so non-standard credential shapes are still scrubbed.
+// out of conversation error envelopes (AC #2 + AC #4).
+//
+// Epic #177 audit: read the LIVE gateway-derived secrets via currentRedactionSecrets(deps) so
+// values added through PATCH /api/gateway/config after process start are scrubbed too. The
+// `deps.redactionSecrets` field is the startup snapshot frozen by buildUiHandlerDeps and would
+// miss any runtime-added apiKey/baseUrl.
 function redactErrorMessage(message: string, deps: UiHandlerDeps): string {
-  return redact(message, deps.redactionSecrets ?? []);
+  return redact(message, currentRedactionSecrets(deps));
 }
 
 function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResult {
@@ -721,11 +725,7 @@ function captureMemoryActions(
   deps: UiHandlerDeps,
   context: ConversationMemoryRuntimeContext,
 ): readonly ConversationMemoryActionWire[] {
-  if (
-    request.memory === undefined ||
-    !request.memory.enabled ||
-    deps.memoryVault === undefined
-  ) {
+  if (request.memory === undefined || !request.memory.enabled || deps.memoryVault === undefined) {
     return [];
   }
   const outcomes = extractCandidatesFromUserText(request.content, buildCaptureContext(context), {

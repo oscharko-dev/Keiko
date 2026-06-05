@@ -35,7 +35,7 @@ import {
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig } from "./deps.js";
+import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
 import type { Chat, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
@@ -448,13 +448,12 @@ export type GroundedRunner = (input: OrchestratorInput) => Promise<OrchestratorO
 
 // ─── Lookup helpers ───────────────────────────────────────────────────────────
 
+// Epic #177 audit: the grounded-ask hot path scanned every project's chat list per request
+// (O(projects × chats)). The chat id is unique across projects, so `UiStore.findChatById` is a
+// single-row SELECT. This helper is kept (instead of inlining the store call) so callers can
+// continue to depend on the deps surface rather than the store directly.
 function findChatById(deps: UiHandlerDeps, chatId: string): Chat | undefined {
-  for (const project of deps.store.listProjects()) {
-    for (const chat of deps.store.listChats(project.path)) {
-      if (chat.id === chatId) return chat;
-    }
-  }
-  return undefined;
+  return deps.store.findChatById(chatId);
 }
 
 // ─── Route worker (extracted to keep handleGroundedAsk under the LOC bound) ───
@@ -526,7 +525,10 @@ function persistGroundedAuditEvidence(
     {
       store: workerCtx.deps.evidenceStore,
       env: workerCtx.deps.env,
-      additionalSecrets: workerCtx.deps.redactionSecrets,
+      // Epic #177 audit: read the LIVE gateway-derived secrets list so apiKey/baseUrl values
+      // added via the runtime PATCH /api/gateway/config path are scrubbed by the evidence
+      // persister. `deps.redactionSecrets` is the startup snapshot frozen by buildUiHandlerDeps.
+      additionalSecrets: currentRedactionSecrets(workerCtx.deps),
       costClassResolver: resolveCostClass,
     },
   );

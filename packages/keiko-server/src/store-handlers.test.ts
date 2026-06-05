@@ -717,6 +717,20 @@ describe("PATCH /api/chats", () => {
     expect(body.chat.connectedScope).toBeUndefined();
   });
 
+  it("clears grounded context indexes when connectedScope is patched to null", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    openGroundedIndex(c.id);
+    expect(groundedContextIndexRegistry.size()).toBe(1);
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ connectedScope: null }),
+    });
+    expect(res.status).toBe(200);
+    expect(groundedContextIndexRegistry.size()).toBe(0);
+  });
+
   it("clears grounded context indexes when connectedScope is replaced", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");

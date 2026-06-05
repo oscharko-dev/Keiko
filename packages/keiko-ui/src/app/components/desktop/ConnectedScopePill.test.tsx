@@ -45,6 +45,9 @@ describe("ConnectedScopePill", () => {
     });
     render(<ConnectedScopePill chat={chat} updateScope={vi.fn()} />);
     expect(screen.getByRole("status")).toHaveTextContent("File: api.ts");
+    expect(screen.getByText(/Keiko may inspect only the connected file scope/i)).toHaveTextContent(
+      /safe-read exclusions and context budget limits apply/i,
+    );
   });
 
   it("renders a folder label when the scope is a directory", () => {
@@ -53,6 +56,9 @@ describe("ConnectedScopePill", () => {
     });
     render(<ConnectedScopePill chat={chat} updateScope={vi.fn()} />);
     expect(screen.getByRole("status")).toHaveTextContent("Folder: lib");
+    expect(screen.getByText(/Keiko may inspect only the connected folder/i)).toHaveTextContent(
+      /safe-read exclusions and context budget limits apply/i,
+    );
   });
 
   it("renders a count when the scope has multiple paths", () => {

@@ -12,8 +12,13 @@ import { isValidScopePath } from "./connected-context.js";
 export const WORKFLOW_HANDOFF_SCHEMA_VERSION = "1" as const;
 
 // ─── Patch-scope limits ───────────────────────────────────────────────────────
-// Four independently-exhausted dimensions; conflating any pair lets one dimension hide
+// Four independently-budgeted dimensions; conflating any pair lets one dimension hide
 // overshoot in another (same posture as the seven-dim exploration budget in #178).
+// `checkPatchAgainstScope` enforces the three quantitative dimensions that the contracts
+// layer can verify from a proposed patch alone (maxFileCount, maxPatchBytes, maxNewFiles).
+// `elapsedMsMax` is the elapsed-time ceiling the caller polices against its own clock and
+// surfaces through its workflow-run violation channel — the contracts package is a leaf
+// (ADR-0019 direction 1) and intentionally performs no clock reads.
 export interface PatchScopeLimits {
   readonly maxFileCount: number;
   readonly maxPatchBytes: number;

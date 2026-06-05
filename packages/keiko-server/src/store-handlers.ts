@@ -284,12 +284,11 @@ function chatBelongsToProject(deps: UiHandlerDeps, projectPath: string, chatId: 
   return deps.store.listChats(projectPath).some((chat) => chat.id === chatId);
 }
 
+// Epic #177 audit: the chat PATCH path scanned every project's chat list per request
+// (O(projects × chats)). The chat id is unique across projects, so `UiStore.findChatById` is a
+// single-row SELECT. Helper preserved so callers stay decoupled from the store interface.
 function findChatById(deps: UiHandlerDeps, chatId: string): Chat | undefined {
-  for (const project of deps.store.listProjects()) {
-    const chat = deps.store.listChats(project.path).find((candidate) => candidate.id === chatId);
-    if (chat !== undefined) return chat;
-  }
-  return undefined;
+  return deps.store.findChatById(chatId);
 }
 
 function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: string): boolean {

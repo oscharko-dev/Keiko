@@ -28,6 +28,7 @@ import {
 } from "./projects.js";
 import {
   deleteChat as sqlDeleteChat,
+  findChatById as sqlFindChatById,
   insertChat as sqlInsertChat,
   listChats as sqlListChats,
   touchChat as sqlTouchChat,
@@ -163,6 +164,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       deleteProjectRecord(db, path);
     },
     listChats: (projectPath: string) => sqlListChats(db, projectPath),
+    findChatById: (id: string): Chat | undefined => sqlFindChatById(db, id),
     createChat: (
       projectPath: string,
       title: string,

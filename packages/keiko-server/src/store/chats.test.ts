@@ -86,6 +86,32 @@ describe("createChat", () => {
   });
 });
 
+// Epic #177 audit: grounded-ask and chat PATCH paths used a project-scan + chat-scan helper
+// that fired O(projects × chats) row fetches per request. `findChatById` is the single-row
+// SELECT replacement; these tests pin its three semantic boundaries.
+describe("findChatById (#177)", () => {
+  it("returns the chat regardless of which project owns it", () => {
+    const otherProj = join(tmp, "other");
+    mkdirSync(otherProj);
+    store.createProject(otherProj);
+    const a = store.createChat(proj, "A", "m1");
+    const c = store.createChat(otherProj, "C", "m1");
+    expect(store.findChatById(a.id)?.title).toBe("A");
+    expect(store.findChatById(c.id)?.title).toBe("C");
+  });
+
+  it("returns undefined for an unknown chat id without throwing", () => {
+    expect(store.findChatById("does-not-exist")).toBeUndefined();
+  });
+
+  it("returns the same Chat shape as listChats (round-trip equality)", () => {
+    const created = store.createChat(proj, "Round", "m1", { branchLabel: "feature" });
+    const listed = store.listChats(proj).find((c) => c.id === created.id);
+    const found = store.findChatById(created.id);
+    expect(found).toEqual(listed);
+  });
+});
+
 describe("updateChat", () => {
   it("updates fields and bumps updatedAt", () => {
     const c = store.createChat(proj, "t", "m");
