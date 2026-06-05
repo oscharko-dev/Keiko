@@ -33,7 +33,7 @@ import type {
   ParserRegistry,
   ParserSelectionInput,
 } from "../parsers/index.js";
-import { buildParserOptions } from "../parsers/index.js";
+import { buildParserOptions, unsupportedParser } from "../parsers/index.js";
 import type { InternalParserResult } from "../parsers/types.js";
 import type { KnowledgeStore } from "../store.js";
 import { basenameOf, extensionOf, mediaTypeFor } from "./media-type.js";
@@ -375,31 +375,7 @@ async function runParser(
 ): Promise<InternalParserResult> {
   const input = selectionInput(documentId, params.file.relativePath, bytes);
   const resolution = deps.parserRegistry.resolve(input);
-  const adapter =
-    resolution.kind === "matched"
-      ? resolution.adapter
-      : // resolution.kind === "unsupported" shouldn't happen — the registry's unsupported
-        // sentinel matches any unrecognised input — but guard so a misconfigured registry
-        // doesn't crash the runner.
-        deps.parserRegistry.list().find((a) => a.capability.parserId === "unsupported");
-  if (adapter === undefined) {
-    return {
-      documentId,
-      parser: { parserId: "none", parserVersion: "0" },
-      pages: [],
-      sections: [],
-      units: [],
-      diagnostics: [
-        {
-          severity: "error",
-          code: "UNSUPPORTED_FORMAT",
-          message: "no parser adapter resolved",
-          documentId,
-        },
-      ],
-      extractedAt: options.now(),
-    };
-  }
+  const adapter = resolution.kind === "matched" ? resolution.adapter : unsupportedParser;
   if (hasAsyncParse(adapter)) {
     return adapter.parseAsync(input, options);
   }
