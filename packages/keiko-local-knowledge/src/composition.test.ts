@@ -24,6 +24,7 @@ import {
 } from "./composition.js";
 import { KnowledgeNotFoundError } from "./errors.js";
 import { addSourceToCapsule, listCapsuleSources } from "./source-lifecycle.js";
+import { SourceRoutingValidationError } from "./source-routing-validation.js";
 import { freshStore, sampleCapsuleInput, sampleSourceInput } from "./_support.js";
 import type { KnowledgeStore } from "./store.js";
 
@@ -138,6 +139,27 @@ describe("buildComposedRetrievalScope", () => {
     expect(() => buildComposedRetrievalScope(store, "ghost" as CapsuleSetId)).toThrow(
       KnowledgeNotFoundError,
     );
+  });
+
+  it("rejects a set when a member capsule has invalid source-routing controls", () => {
+    const capsuleId = createCapsule(
+      store,
+      sampleCapsuleInput({
+        id: "cap-invalid" as KnowledgeCapsuleId,
+        alwaysQuery: true,
+        lifecycleState: "ready",
+        sourceRoutingInstructions: "prefer @ghost",
+      }),
+    ).id;
+    addSourceToCapsule(store, capsuleId, sampleSourceInput("src-1"));
+    const setId = createCapsuleSet(store, {
+      id: "set-invalid" as CapsuleSetId,
+      displayName: "Invalid",
+      tags: [],
+      capsuleIds: [capsuleId],
+    }).id;
+
+    expect(() => buildComposedRetrievalScope(store, setId)).toThrow(SourceRoutingValidationError);
   });
 
   it("deduplicates sources when two member capsules link to the same source id", () => {

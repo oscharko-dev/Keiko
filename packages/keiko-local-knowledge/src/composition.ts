@@ -33,6 +33,7 @@ import { getCapsule } from "./capsule-lifecycle.js";
 import { getCapsuleSet, createCapsuleSet, createCapsuleSetWithinTxn } from "./capsule-set-lifecycle.js";
 import { KnowledgeNotFoundError } from "./errors.js";
 import { listCapsuleSources, type AddCapsuleSourceInput } from "./source-lifecycle.js";
+import { validateSourceRoutingForCapsule } from "./source-routing-validation.js";
 import type { KnowledgeStore } from "./store.js";
 
 // ─── Errors ────────────────────────────────────────────────────────────────────
@@ -125,6 +126,7 @@ function composeScopeFromSet(store: KnowledgeStore, set: CapsuleSet): ComposedRe
   const alwaysQueryCapsuleIds = capsules.filter((c) => c.alwaysQuery === true).map((c) => c.id);
   const routingMap = new Map<KnowledgeCapsuleId, string>();
   for (const capsule of capsules) {
+    validateSourceRoutingForCapsule(capsule, listCapsuleSources(store, capsule.id));
     if (capsule.sourceRoutingInstructions !== undefined) {
       routingMap.set(capsule.id, capsule.sourceRoutingInstructions);
     }
