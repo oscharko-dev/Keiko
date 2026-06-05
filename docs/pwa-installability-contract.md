@@ -209,3 +209,7 @@ The following are not delivered by Epic #121 or documented here:
 - **Multiple concurrent Keiko instances on different ports.** Each port is a separate browser
   origin with a separate service worker and PWA installation. Managing multiple installations
   is a user-space concern; Keiko does not orchestrate it.
+
+## Verification
+
+Cross-platform installability verification is documented in [`pwa-verification-runbook.md`](pwa-verification-runbook.md). The runbook lists the manual evidence required by ADR-0024 D10 before Epic #121 can be closed. Automated installability gates are covered by `packages/keiko-server/src/installability.test.ts`.
