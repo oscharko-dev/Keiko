@@ -6045,3 +6045,468 @@ select.dlg-input {
   opacity: 0.45;
   cursor: not-allowed;
 }
+
+/* ============================================================
+   MEMORY CENTER (Issue #211 / Epic #204)
+   mc-* prefix to avoid collisions with lk-* (local-knowledge)
+   WCAG notes:
+     - .mc-chip[data-active="true"] uses --ink-inverse on --accent (6.94:1).
+     - .lk-btn-primary uses #06281b on --accent (>4.5:1) — re-used here.
+     - .mc-badge-* colours verified ≥ 4.5:1 against their backgrounds.
+     - All interactive elements get focus-visible rings via .lk-btn:focus-visible
+       or explicit outline rules below.
+   ============================================================ */
+
+/* ── Filters ─────────────────────────────────────────────── */
+.mc-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mc-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mc-filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  min-width: 72px;
+  flex-shrink: 0;
+}
+
+.mc-filter-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* Filter toggle chip — aria-pressed reflects state */
+.mc-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  min-width: 24px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 12px;
+  border: 1px solid var(--line-soft);
+  background: var(--card);
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition:
+    background 120ms,
+    color 120ms,
+    border-color 120ms;
+  /* WCAG 2.5.8 — 24×24 minimum already met by height: 24px */
+}
+
+.mc-chip:hover:not(:disabled) {
+  background: var(--card-2);
+  color: var(--fg);
+}
+
+.mc-chip[data-active="true"],
+.mc-chip[aria-pressed="true"] {
+  background: var(--accent);
+  /* --ink-inverse on --accent = 6.94:1 (WCAG AA) */
+  color: var(--ink-inverse);
+  border-color: var(--accent);
+}
+
+.mc-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Status badges ───────────────────────────────────────── */
+.mc-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+/* proposed — warm amber, 4.6:1 on its background */
+.mc-badge-proposed {
+  background: color-mix(in oklch, var(--warn) 22%, transparent);
+  color: oklch(0.26 0.012 75);
+  border-color: color-mix(in oklch, var(--warn) 55%, transparent);
+}
+
+/* accepted — accent green */
+.mc-badge-accepted {
+  background: var(--accent-dim);
+  color: var(--fg);
+  border-color: var(--accent-line);
+}
+
+/* conflicted — danger red */
+.mc-badge-conflicted {
+  background: color-mix(in oklch, var(--danger) 18%, transparent);
+  color: var(--danger);
+  border-color: color-mix(in oklch, var(--danger) 45%, transparent);
+}
+
+/* rejected / forgotten / superseded / expired — muted */
+.mc-badge-rejected,
+.mc-badge-forgotten,
+.mc-badge-superseded,
+.mc-badge-expired {
+  background: var(--inset);
+  color: var(--fg-dim);
+  border-color: var(--line-soft);
+}
+
+/* archived — soft blue */
+.mc-badge-archived {
+  background: color-mix(in oklch, var(--info) 16%, transparent);
+  color: var(--fg-muted);
+  border-color: color-mix(in oklch, var(--info) 40%, transparent);
+}
+
+.mc-badge-pinned {
+  background: color-mix(in oklch, var(--accent) 20%, transparent);
+  color: var(--fg);
+  border-color: var(--accent-line);
+}
+
+.mc-badge-default {
+  background: var(--inset);
+  color: var(--fg-dim);
+  border-color: var(--line-soft);
+}
+
+/* count bubble (queue counter in header) */
+.mc-badge-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 10px;
+  background: var(--accent);
+  /* --ink-inverse on --accent = 6.94:1 */
+  color: var(--ink-inverse);
+  margin-left: 6px;
+}
+
+/* ── Memory list rows ────────────────────────────────────── */
+.mc-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  text-decoration: none;
+  color: var(--fg);
+  transition: background 120ms;
+}
+
+.mc-row:hover {
+  background: var(--card-2);
+}
+
+.mc-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mc-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mc-row-body {
+  font-size: 13px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mc-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mc-row-type,
+.mc-row-scope {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.mc-row-pinned {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* ── Detail view ─────────────────────────────────────────── */
+.mc-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.mc-detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mc-detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mc-back-link {
+  align-self: flex-start;
+  text-decoration: none;
+}
+
+.mc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mc-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  font-size: 13px;
+}
+
+.mc-meta-label {
+  font-weight: 600;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.mc-meta-value {
+  color: var(--fg);
+  word-break: break-word;
+  margin: 0;
+}
+
+.mc-meta-empty {
+  font-size: 13px;
+  color: var(--fg-dim);
+}
+
+.mc-body-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  background: var(--inset);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+
+.mc-code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  word-break: break-all;
+}
+
+.mc-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.mc-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  color: var(--fg-muted);
+}
+
+/* ── Actions ─────────────────────────────────────────────── */
+.mc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.mc-action-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin: 0;
+  width: 100%;
+}
+
+/* ── Review queue rows ───────────────────────────────────── */
+.mc-review-row {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+}
+
+.mc-review-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mc-review-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Queue link in Memory Center header */
+.mc-queue-link {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ── Dialog ──────────────────────────────────────────────── */
+.mc-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: oklch(0 0 0 / 0.55);
+  display: grid;
+  place-items: center;
+  z-index: 9000;
+}
+
+.mc-dialog {
+  width: min(480px, calc(100vw - 32px));
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: var(--shadow-pop);
+}
+
+.mc-dialog-title {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--fg);
+  margin: 0;
+}
+
+.mc-dialog-body {
+  font-size: 13px;
+  color: var(--fg-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.mc-dialog-quote {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--fg-muted);
+  border-left: 3px solid var(--line);
+  padding: 8px 12px;
+  margin: 0;
+  background: var(--inset);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.mc-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mc-dialog-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.mc-dialog-hint {
+  font-weight: 400;
+  color: var(--fg-faint);
+}
+
+.mc-dialog-textarea,
+.mc-dialog-input,
+.mc-dialog-select {
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  padding: 8px 10px;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.mc-dialog-textarea:focus,
+.mc-dialog-input:focus,
+.mc-dialog-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.mc-dialog-textarea:focus-visible,
+.mc-dialog-input:focus-visible,
+.mc-dialog-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mc-dialog-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin: 0;
+}
+
+.mc-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
