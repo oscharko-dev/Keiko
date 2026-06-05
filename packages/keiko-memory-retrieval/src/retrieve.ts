@@ -5,8 +5,9 @@
 // a scope it did not authorise because no other code path reaches the port.
 //
 // Pipeline:
-//   1. Validate request (non-empty scopes, non-negative budget + weights).
-//   2. For each scope in request.scopes -> port.listByScope(scope, {maxResults}).
+//   1. Validate request (non-empty scopes, finite non-negative weights, finite integer
+//      budget/maxIncluded).
+//   2. For each scope in request.scopes -> port.listByScope(scope, {maxResults, include*}).
 //      Wrap any port throw as RetrievalError('port-failure', cause: original).
 //   3. Dedupe by memoryId (a record reachable from multiple scopes appears once).
 //   4. Apply suppression (status / validity / confidence) -> "suppressed-by-status".
@@ -64,28 +65,38 @@ function resolveWeights(request: MemoryRetrievalRequest): RankingWeights {
 
 function assertNonNegativeWeights(weights: RankingWeights): void {
   for (const [name, value] of Object.entries(weights) as readonly [string, number][]) {
-    if (value < 0) {
+    if (!Number.isFinite(value) || value < 0) {
       throw new RetrievalError(
         "invalid-weight",
-        `weight ${name} must be >= 0 (got ${String(value)})`,
+        `weight ${name} must be a finite number >= 0 (got ${String(value)})`,
       );
     }
   }
 }
 
 function assertNonNegativeBudget(budgetTokens: number, maxIncluded: number): void {
-  if (budgetTokens < 0) {
+  if (!Number.isFinite(budgetTokens) || !Number.isInteger(budgetTokens) || budgetTokens < 0) {
     throw new RetrievalError(
       "invalid-budget",
-      `budgetTokens must be >= 0 (got ${String(budgetTokens)})`,
+      `budgetTokens must be a finite integer >= 0 (got ${String(budgetTokens)})`,
     );
   }
-  if (maxIncluded < 0) {
+  if (!Number.isFinite(maxIncluded) || !Number.isInteger(maxIncluded) || maxIncluded < 0) {
     throw new RetrievalError(
       "invalid-budget",
-      `maxIncluded must be >= 0 (got ${String(maxIncluded)})`,
+      `maxIncluded must be a finite integer >= 0 (got ${String(maxIncluded)})`,
     );
   }
+}
+
+function assertValidThreshold(staleConfidenceThreshold: number): void {
+  if (Number.isFinite(staleConfidenceThreshold) && staleConfidenceThreshold >= 0 && staleConfidenceThreshold <= 1) {
+    return;
+  }
+  throw new RetrievalError(
+    "invalid-threshold",
+    `staleConfidenceThreshold must be a finite number in [0, 1] (got ${String(staleConfidenceThreshold)})`,
+  );
 }
 
 function validateAndResolve(request: MemoryRetrievalRequest): ResolvedRequest {
@@ -97,12 +108,14 @@ function validateAndResolve(request: MemoryRetrievalRequest): ResolvedRequest {
   assertNonNegativeBudget(budgetTokens, maxIncluded);
   const weights = resolveWeights(request);
   assertNonNegativeWeights(weights);
+  const staleConfidenceThreshold =
+    request.staleConfidenceThreshold ?? DEFAULT_STALE_CONFIDENCE_THRESHOLD;
+  assertValidThreshold(staleConfidenceThreshold);
   return {
     budgetTokens,
     maxIncluded,
     weights,
-    staleConfidenceThreshold:
-      request.staleConfidenceThreshold ?? DEFAULT_STALE_CONFIDENCE_THRESHOLD,
+    staleConfidenceThreshold,
   };
 }
 
@@ -113,7 +126,12 @@ function fetchScoped(
   const all: MemoryRecord[] = [];
   for (const scope of scopes) {
     try {
-      const batch = port.listByScope(scope, { maxResults: DEFAULT_LIST_BY_SCOPE_MAX_RESULTS });
+      const batch = port.listByScope(scope, {
+        includeForgotten: true,
+        includeArchived: true,
+        includeExpired: true,
+        maxResults: DEFAULT_LIST_BY_SCOPE_MAX_RESULTS,
+      });
       for (const r of batch) all.push(r);
     } catch (cause) {
       throw new RetrievalError("port-failure", `listByScope threw for scope.kind=${scope.kind}`, {

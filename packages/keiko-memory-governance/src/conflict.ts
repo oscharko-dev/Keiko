@@ -31,6 +31,7 @@
 import type {
   MemoryId,
   MemoryRecord,
+  MemoryScope,
   MemoryStatus,
   MemorySupersession,
 } from "@oscharko-dev/keiko-contracts/memory";
@@ -83,6 +84,21 @@ function tokenize(body: string): readonly string[] {
   return norm.split(" ");
 }
 
+function scopeCoordinateKey(scope: MemoryScope): string {
+  switch (scope.kind) {
+    case "user":
+      return `user:${scope.userId}`;
+    case "workspace":
+      return `workspace:${scope.workspaceId}`;
+    case "project":
+      return `project:${scope.projectId}`;
+    case "workflow":
+      return `workflow:${scope.workflowDefinitionId}`;
+    case "global":
+      return "global";
+  }
+}
+
 function jaccardSimilarity(a: string, b: string): number {
   const aTokens = new Set(tokenize(a));
   const bTokens = new Set(tokenize(b));
@@ -95,11 +111,32 @@ function jaccardSimilarity(a: string, b: string): number {
   return union === 0 ? 0 : intersect / union;
 }
 
-const NEGATION_MARKERS: readonly string[] = [" not ", "nt "];
+const NEGATION_CONTRACTIONS: readonly string[] = [
+  "aint",
+  "arent",
+  "cant",
+  "couldnt",
+  "didnt",
+  "doesnt",
+  "dont",
+  "hadnt",
+  "hasnt",
+  "havent",
+  "isnt",
+  "mustnt",
+  "shouldnt",
+  "wasnt",
+  "werent",
+  "wont",
+  "wouldnt",
+] as const;
+
 function hasNegation(body: string): boolean {
-  const padded = ` ${normalizeBody(body)} `;
-  for (const marker of NEGATION_MARKERS) {
-    if (padded.includes(marker)) return true;
+  for (const token of tokenize(body)) {
+    if (token === "not") return true;
+    for (const contraction of NEGATION_CONTRACTIONS) {
+      if (token === contraction) return true;
+    }
   }
   return false;
 }
@@ -121,7 +158,7 @@ const DEDUP_OVERLAP_THRESHOLD = 0.85;
 // ─── Pairwise conflict detection ──────────────────────────────────────────────
 function differentScopeOrType(a: MemoryRecord, b: MemoryRecord): boolean {
   if (a.type !== b.type) return true;
-  if (a.scope.kind !== b.scope.kind) return true;
+  if (scopeCoordinateKey(a.scope) !== scopeCoordinateKey(b.scope)) return true;
   return false;
 }
 

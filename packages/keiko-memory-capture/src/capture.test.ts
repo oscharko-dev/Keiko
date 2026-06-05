@@ -115,4 +115,16 @@ describe("extractCandidatesFromWorkflowOutcome", () => {
       extractCandidatesFromWorkflowOutcome(outcome, ctx(), { defaultSensitivity: "restricted" }),
     ).toEqual([{ kind: "rejected", reason: "restricted-sensitivity" }]);
   });
+
+  it("rejects an oversize workflow report before secret scanning", () => {
+    const outcome: WorkflowOutcomeInput = {
+      runId: "wr-1" as WorkflowRunId,
+      outcomeKind: "success",
+      structuredReport: "x".repeat(5000),
+      capturedAt: 0,
+    };
+    expect(extractCandidatesFromWorkflowOutcome(outcome, ctx())).toEqual([
+      { kind: "rejected", reason: "exceeds-length-limit" },
+    ]);
+  });
 });

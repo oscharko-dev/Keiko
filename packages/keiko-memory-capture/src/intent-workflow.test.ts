@@ -35,7 +35,10 @@ function outcome(overrides: Partial<WorkflowOutcomeInput> = {}): WorkflowOutcome
 
 describe("extractWorkflowOutcomeCandidates", () => {
   it("emits a semantic-fact candidate for outcomeKind=success", () => {
-    const results = extractWorkflowOutcomeCandidates(outcome(), ctx());
+    const results = extractWorkflowOutcomeCandidates(
+      outcome({ capturedAt: 1_650_000_000_000 }),
+      ctx(),
+    );
     expect(results).toHaveLength(1);
     const first = results[0];
     expect(first?.kind).toBe("candidate");
@@ -44,7 +47,9 @@ describe("extractWorkflowOutcomeCandidates", () => {
     expect(first.proposal.body).toBe("the test runner is vitest");
     expect(first.proposal.provenance.sourceKind).toBe("workflow-outcome");
     expect(first.proposal.provenance.sourceWorkflowRunId).toBe("wr-1");
+    expect(first.proposal.provenance.capturedAt).toBe(1_650_000_000_000);
     expect(first.proposal.provenance.confidence).toBeLessThan(1);
+    expect(first.proposal.validity.validFrom).toBe(1_650_000_000_000);
   });
 
   it("emits a correction candidate for outcomeKind=corrected", () => {

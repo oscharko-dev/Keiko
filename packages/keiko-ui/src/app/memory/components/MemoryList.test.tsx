@@ -124,6 +124,16 @@ describe("MemoryList — populated state", () => {
       expect(link).toHaveAttribute("href", "/memory/detail?id=mem-42");
     });
   });
+
+  it("shows the consolidation entry point in the header", async () => {
+    render(<MemoryList fetchMemoriesImpl={fetchWith([makeRecord()])} />);
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: /consolidation/i })).toHaveAttribute(
+        "href",
+        "/memory/consolidation",
+      );
+    });
+  });
 });
 
 describe("MemoryList — error state", () => {

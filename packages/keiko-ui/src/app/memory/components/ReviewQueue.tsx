@@ -10,16 +10,12 @@ import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import {
-  fetchMemoryReviewQueue,
   acceptMemoryProposal,
+  fetchMemoryReviewQueue,
   rejectMemoryProposal,
   type MemoryReviewQueueResponse,
 } from "@/lib/memory-api";
 import { ApiError } from "@/lib/api";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function formatError(err: unknown): string {
   if (err instanceof ApiError) return `${err.code}: ${err.message}`;
@@ -27,56 +23,21 @@ function formatError(err: unknown): string {
   return "An unexpected error occurred.";
 }
 
-// ---------------------------------------------------------------------------
-// ReviewRow
-// ---------------------------------------------------------------------------
-
 interface ReviewRowProps {
   readonly record: MemoryRecord;
-  readonly onAccepted: (id: MemoryId) => void;
-  readonly onRejected: (id: MemoryId) => void;
-  readonly acceptImpl: typeof acceptMemoryProposal;
-  readonly rejectImpl: typeof rejectMemoryProposal;
+  readonly busyAction: "accept" | "reject" | null;
+  readonly rowError: string | null;
+  readonly onAccept: (record: MemoryRecord) => void;
+  readonly onReject: (record: MemoryRecord) => void;
 }
 
 function ReviewRow({
   record,
-  onAccepted,
-  onRejected,
-  acceptImpl,
-  rejectImpl,
+  busyAction,
+  rowError,
+  onAccept,
+  onReject,
 }: ReviewRowProps): ReactNode {
-  const [busy, setBusy] = useState<"accept" | "reject" | null>(null);
-  const [rowError, setRowError] = useState<string | null>(null);
-
-  const handleAccept = useCallback((): void => {
-    setBusy("accept");
-    setRowError(null);
-    void (async () => {
-      try {
-        await acceptImpl(record.id as MemoryId);
-        onAccepted(record.id as MemoryId);
-      } catch (err) {
-        setRowError(formatError(err));
-        setBusy(null);
-      }
-    })();
-  }, [acceptImpl, record.id, onAccepted]);
-
-  const handleReject = useCallback((): void => {
-    setBusy("reject");
-    setRowError(null);
-    void (async () => {
-      try {
-        await rejectImpl(record.id as MemoryId, "rejected from review queue");
-        onRejected(record.id as MemoryId);
-      } catch (err) {
-        setRowError(formatError(err));
-        setBusy(null);
-      }
-    })();
-  }, [rejectImpl, record.id, onRejected]);
-
   return (
     <li>
       <article className="mc-review-row" aria-label={`Review: ${record.body.slice(0, 60)}`}>
@@ -109,35 +70,40 @@ function ReviewRow({
               <button
                 type="button"
                 className="lk-btn lk-btn-primary"
-                disabled={busy !== null}
-                aria-busy={busy === "accept"}
-                onClick={handleAccept}
+                disabled={busyAction !== null}
+                aria-busy={busyAction === "accept"}
+                onClick={() => {
+                  onAccept(record);
+                }}
                 aria-label={`Accept memory: ${record.body.slice(0, 40)}`}
               >
-                {busy === "accept" ? "Accepting…" : "Accept"}
+                {busyAction === "accept" ? "Accepting…" : "Accept"}
               </button>
               <button
                 type="button"
                 className="lk-btn lk-btn-ghost"
-                disabled={busy !== null}
-                aria-busy={busy === "reject"}
-                onClick={handleReject}
+                disabled={busyAction !== null}
+                aria-busy={busyAction === "reject"}
+                onClick={() => {
+                  onReject(record);
+                }}
                 aria-label={`Reject memory: ${record.body.slice(0, 40)}`}
               >
-                {busy === "reject" ? "Rejecting…" : "Reject"}
+                {busyAction === "reject" ? "Rejecting…" : "Reject"}
               </button>
             </>
           ) : (
-            // Conflicted — only reject/dismiss available in queue
             <button
               type="button"
               className="lk-btn lk-btn-ghost"
-              disabled={busy !== null}
-              aria-busy={busy === "reject"}
-              onClick={handleReject}
+              disabled={busyAction !== null}
+              aria-busy={busyAction === "reject"}
+              onClick={() => {
+                onReject(record);
+              }}
               aria-label={`Dismiss conflict for memory: ${record.body.slice(0, 40)}`}
             >
-              {busy === "reject" ? "Dismissing…" : "Dismiss"}
+              {busyAction === "reject" ? "Dismissing…" : "Dismiss"}
             </button>
           )}
         </div>
@@ -145,10 +111,6 @@ function ReviewRow({
     </li>
   );
 }
-
-// ---------------------------------------------------------------------------
-// ReviewQueue
-// ---------------------------------------------------------------------------
 
 interface ReviewQueueProps {
   readonly fetchQueueImpl?: typeof fetchMemoryReviewQueue;
@@ -164,6 +126,8 @@ export function ReviewQueue({
   const [records, setRecords] = useState<readonly MemoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [busyById, setBusyById] = useState<Partial<Record<string, "accept" | "reject">>>({});
+  const [rowErrorsById, setRowErrorsById] = useState<Partial<Record<string, string>>>({});
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -171,6 +135,8 @@ export function ReviewQueue({
     try {
       const res: MemoryReviewQueueResponse = await fetchQueueImpl();
       setRecords(res.memories);
+      setBusyById({});
+      setRowErrorsById({});
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -182,13 +148,60 @@ export function ReviewQueue({
     void load();
   }, [load]);
 
-  const handleAccepted = useCallback((id: MemoryId): void => {
-    setRecords((prev) => prev.filter((r) => r.id !== id));
+  const clearRowState = useCallback((id: MemoryId): void => {
+    setBusyById((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setRowErrorsById((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   }, []);
 
-  const handleRejected = useCallback((id: MemoryId): void => {
-    setRecords((prev) => prev.filter((r) => r.id !== id));
-  }, []);
+  const removeRecord = useCallback(
+    (id: MemoryId): void => {
+      setRecords((prev) => prev.filter((r) => r.id !== id));
+      clearRowState(id);
+    },
+    [clearRowState],
+  );
+
+  const runRowAction = useCallback(
+    async (record: MemoryRecord, action: "accept" | "reject"): Promise<void> => {
+      const id = record.id as MemoryId;
+      setBusyById((prev) => ({ ...prev, [id]: action }));
+      setRowErrorsById((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+
+      try {
+        if (action === "accept") {
+          await acceptImpl(id);
+        } else {
+          await rejectImpl(
+            id,
+            record.status === "conflicted"
+              ? "dismissed conflict from review queue"
+              : "rejected from review queue",
+          );
+        }
+        removeRecord(id);
+      } catch (err) {
+        setRowErrorsById((prev) => ({ ...prev, [id]: formatError(err) }));
+        setBusyById((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }
+    },
+    [acceptImpl, rejectImpl, removeRecord],
+  );
 
   return (
     <>
@@ -250,10 +263,14 @@ export function ReviewQueue({
               <ReviewRow
                 key={record.id}
                 record={record}
-                onAccepted={handleAccepted}
-                onRejected={handleRejected}
-                acceptImpl={acceptImpl}
-                rejectImpl={rejectImpl}
+                busyAction={busyById[record.id] ?? null}
+                rowError={rowErrorsById[record.id] ?? null}
+                onAccept={(row) => {
+                  void runRowAction(row, "accept");
+                }}
+                onReject={(row) => {
+                  void runRowAction(row, "reject");
+                }}
               />
             ))}
           </ul>

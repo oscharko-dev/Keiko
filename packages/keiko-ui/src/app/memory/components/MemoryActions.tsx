@@ -1,6 +1,6 @@
 "use client";
 
-// Issue #211 — Memory action buttons: approve / reject / pin / unpin / archive / forget / delete.
+// Issue #211 — Memory action buttons: approve / reject / correct / pin / unpin / archive / forget / delete.
 // Governance gating: pin/unpin are mutually exclusive based on record.pinned.
 // approve/reject only appear for proposed status.
 //
@@ -15,6 +15,7 @@ import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
 import {
   acceptMemoryProposal,
   archiveMemory,
+  correctMemory,
   deleteMemory,
   pinMemory,
   rejectMemoryProposal,
@@ -24,32 +25,24 @@ import { ApiError } from "@/lib/api";
 import { EditMemoryDialog } from "./EditMemoryDialog";
 import { ForgetConfirmDialog } from "./ForgetConfirmDialog";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function formatError(err: unknown): string {
   if (err instanceof ApiError) return `${err.code}: ${err.message}`;
   if (err instanceof Error) return err.message;
   return "An unexpected error occurred.";
 }
 
-type BusyAction = "accept" | "reject" | "pin" | "unpin" | "archive" | "delete" | null;
-
-// ---------------------------------------------------------------------------
-// MemoryActions
-// ---------------------------------------------------------------------------
+type BusyAction = "accept" | "reject" | "pin" | "unpin" | "archive" | null;
 
 interface MemoryActionsProps {
   readonly record: MemoryRecord;
   readonly onRecordChange: (updated: MemoryRecord | null) => void;
-  // Injectable for tests
   readonly acceptImpl?: typeof acceptMemoryProposal;
   readonly rejectImpl?: typeof rejectMemoryProposal;
   readonly pinImpl?: typeof pinMemory;
   readonly unpinImpl?: typeof unpinMemory;
   readonly archiveImpl?: typeof archiveMemory;
   readonly deleteImpl?: typeof deleteMemory;
+  readonly correctImpl?: typeof correctMemory;
 }
 
 export function MemoryActions({
@@ -61,15 +54,20 @@ export function MemoryActions({
   unpinImpl = unpinMemory,
   archiveImpl = archiveMemory,
   deleteImpl = deleteMemory,
+  correctImpl = correctMemory,
 }: MemoryActionsProps): ReactNode {
   const [busy, setBusy] = useState<BusyAction>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [showEdit, setShowEdit] = useState(false);
+  const [showCorrect, setShowCorrect] = useState(false);
   const [showForget, setShowForget] = useState(false);
+  const [showDelete, setShowDelete] = useState(false);
 
   const run = useCallback(async (action: BusyAction, fn: () => Promise<void>): Promise<void> => {
     setBusy(action);
     setError(null);
+    setNotice(null);
     try {
       await fn();
     } catch (err) {
@@ -84,42 +82,40 @@ export function MemoryActions({
       const res = await acceptImpl(record.id as MemoryId);
       onRecordChange(res.memory);
     });
-  }, [run, acceptImpl, record.id, onRecordChange]);
+  }, [acceptImpl, onRecordChange, record.id, run]);
 
   const handleReject = useCallback((): void => {
     void run("reject", async () => {
       const res = await rejectImpl(record.id as MemoryId, "rejected by user in Memory Center");
       onRecordChange(res.memory);
     });
-  }, [run, rejectImpl, record.id, onRecordChange]);
+  }, [onRecordChange, record.id, rejectImpl, run]);
 
   const handlePin = useCallback((): void => {
     void run("pin", async () => {
       const res = await pinImpl(record.id as MemoryId);
       onRecordChange(res.memory);
     });
-  }, [run, pinImpl, record.id, onRecordChange]);
+  }, [onRecordChange, pinImpl, record.id, run]);
 
   const handleUnpin = useCallback((): void => {
     void run("unpin", async () => {
       const res = await unpinImpl(record.id as MemoryId);
       onRecordChange(res.memory);
     });
-  }, [run, unpinImpl, record.id, onRecordChange]);
+  }, [onRecordChange, record.id, run, unpinImpl]);
 
   const handleArchive = useCallback((): void => {
     void run("archive", async () => {
       const res = await archiveImpl(record.id as MemoryId, "archived by user in Memory Center");
       onRecordChange(res.memory);
     });
-  }, [run, archiveImpl, record.id, onRecordChange]);
+  }, [archiveImpl, onRecordChange, record.id, run]);
 
-  const handleDelete = useCallback((): void => {
-    void run("delete", async () => {
-      await deleteImpl(record.id as MemoryId);
-      onRecordChange(null);
-    });
-  }, [run, deleteImpl, record.id, onRecordChange]);
+  const handleCorrectionSaved = useCallback((correction: MemoryRecord): void => {
+    setShowCorrect(false);
+    setNotice(`Correction submitted for review: ${correction.body}`);
+  }, []);
 
   const isProposed = record.status === "proposed";
   const canArchive =
@@ -131,7 +127,6 @@ export function MemoryActions({
 
   return (
     <div className="mc-actions" role="group" aria-label="Memory actions">
-      {/* Accept / Reject — proposed only */}
       {isProposed ? (
         <>
           <button
@@ -157,22 +152,37 @@ export function MemoryActions({
         </>
       ) : null}
 
-      {/* Edit */}
       {!isForgotten ? (
-        <button
-          type="button"
-          className="lk-btn lk-btn-ghost"
-          disabled={busy !== null}
-          onClick={() => {
-            setShowEdit(true);
-          }}
-          aria-label="Edit memory body, tags, or sensitivity"
-        >
-          Edit
-        </button>
+        <>
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost"
+            disabled={busy !== null}
+            onClick={() => {
+              setError(null);
+              setNotice(null);
+              setShowEdit(true);
+            }}
+            aria-label="Edit memory body, tags, or sensitivity"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost"
+            disabled={busy !== null}
+            onClick={() => {
+              setError(null);
+              setNotice(null);
+              setShowCorrect(true);
+            }}
+            aria-label="Create a correction proposal for this memory"
+          >
+            Correct
+          </button>
+        </>
       ) : null}
 
-      {/* Pin / Unpin */}
       {!isForgotten ? (
         record.pinned ? (
           <button
@@ -199,7 +209,6 @@ export function MemoryActions({
         )
       ) : null}
 
-      {/* Archive */}
       {canArchive ? (
         <button
           type="button"
@@ -213,13 +222,14 @@ export function MemoryActions({
         </button>
       ) : null}
 
-      {/* Forget (destructive — opens dialog) */}
       {!isForgotten ? (
         <button
           type="button"
           className="lk-btn lk-btn-danger"
           disabled={busy !== null}
           onClick={() => {
+            setError(null);
+            setNotice(null);
             setShowForget(true);
           }}
           aria-label="Forget this memory permanently"
@@ -228,26 +238,32 @@ export function MemoryActions({
         </button>
       ) : null}
 
-      {/* Delete (hard delete — opens confirmation inline) */}
       <button
         type="button"
         className="lk-btn lk-btn-danger"
         disabled={busy !== null}
-        aria-busy={busy === "delete"}
-        onClick={handleDelete}
+        onClick={() => {
+          setError(null);
+          setNotice(null);
+          setShowDelete(true);
+        }}
         aria-label="Hard-delete this memory record"
       >
-        {busy === "delete" ? "Deleting…" : "Delete"}
+        Delete
       </button>
 
-      {/* Error banner */}
       {error !== null ? (
-        <p role="alert" className="mc-action-error">
+        <p role="alert" aria-live="assertive" className="mc-action-error">
           {error}
         </p>
       ) : null}
 
-      {/* Dialogs */}
+      {notice !== null ? (
+        <p role="status" aria-live="polite" className="mc-action-notice">
+          {notice}
+        </p>
+      ) : null}
+
       {showEdit ? (
         <EditMemoryDialog
           record={record}
@@ -261,15 +277,42 @@ export function MemoryActions({
         />
       ) : null}
 
+      {showCorrect ? (
+        <EditMemoryDialog
+          mode="correct"
+          record={record}
+          correctMemoryImpl={correctImpl}
+          onSave={handleCorrectionSaved}
+          onClose={() => {
+            setShowCorrect(false);
+          }}
+        />
+      ) : null}
+
       {showForget ? (
         <ForgetConfirmDialog
           record={record}
-          onForgotten={() => {
+          onComplete={() => {
             setShowForget(false);
             onRecordChange(null);
           }}
           onClose={() => {
             setShowForget(false);
+          }}
+        />
+      ) : null}
+
+      {showDelete ? (
+        <ForgetConfirmDialog
+          mode="delete"
+          record={record}
+          deleteMemoryImpl={deleteImpl}
+          onComplete={() => {
+            setShowDelete(false);
+            onRecordChange(null);
+          }}
+          onClose={() => {
+            setShowDelete(false);
           }}
         />
       ) : null}

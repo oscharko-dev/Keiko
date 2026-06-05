@@ -185,6 +185,54 @@ function resolveOrderBy(options: ListMemoriesOptions): { column: string; dir: "A
   return { column, dir };
 }
 
+function buildListSql(where: readonly string[], options: ListMemoriesOptions): string {
+  const { column, dir } = resolveOrderBy(options);
+  let sql = "SELECT * FROM memories";
+  if (where.length > 0) {
+    sql += ` WHERE ${where.join(" AND ")}`;
+  }
+  sql += ` ORDER BY ${column} ${dir}`;
+  if (typeof options.limit === "number") {
+    sql += " LIMIT ?";
+    if (typeof options.offset === "number") {
+      sql += " OFFSET ?";
+    }
+  }
+  return sql;
+}
+
+function appendPagingParams(params: (string | number)[], options: ListMemoriesOptions): void {
+  if (typeof options.limit !== "number") return;
+  params.push(options.limit);
+  if (typeof options.offset === "number") {
+    params.push(options.offset);
+  }
+}
+
+export function listMemoriesRows(
+  db: DatabaseSync,
+  options: ListMemoriesOptions,
+  nowMs: number,
+): readonly MemoryRecord[] {
+  const params: (string | number)[] = [];
+  const where: string[] = [];
+  for (const built of [
+    buildEnumClause("type", options.type),
+    buildEnumClause("status", options.status),
+    buildPinnedClause(options.pinned),
+    buildExpiryClause(options.includeExpired, nowMs),
+  ]) {
+    if (built === undefined) continue;
+    where.push(...built.clauses);
+    params.push(...built.params);
+  }
+  appendPagingParams(params, options);
+  const rows = db
+    .prepare(buildListSql(where, options))
+    .all(...params) as unknown as readonly MemoryRow[];
+  return rows.map(rowToMemoryRecord);
+}
+
 export function listMemoriesByScopeRows(
   db: DatabaseSync,
   scope: MemoryScope,
@@ -205,18 +253,9 @@ export function listMemoriesByScopeRows(
     where.push(...built.clauses);
     params.push(...built.params);
   }
-  const { column, dir } = resolveOrderBy(options);
-  // `column` and `dir` are validated against ORDER_COLUMN_MAP / a fixed asc|desc enum so they are
-  // not caller-controlled strings reaching the SQL surface.
-  let sql = `SELECT * FROM memories WHERE ${where.join(" AND ")} ORDER BY ${column} ${dir}`;
-  if (typeof options.limit === "number") {
-    sql += " LIMIT ?";
-    params.push(options.limit);
-    if (typeof options.offset === "number") {
-      sql += " OFFSET ?";
-      params.push(options.offset);
-    }
-  }
-  const rows = db.prepare(sql).all(...params) as unknown as readonly MemoryRow[];
+  appendPagingParams(params, options);
+  const rows = db
+    .prepare(buildListSql(where, options))
+    .all(...params) as unknown as readonly MemoryRow[];
   return rows.map(rowToMemoryRecord);
 }

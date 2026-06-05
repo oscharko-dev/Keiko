@@ -95,6 +95,7 @@ export interface MemoryVaultStore {
   readonly updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number) => MemoryRecord;
   readonly getMemory: (id: MemoryId) => MemoryRecord | undefined;
   readonly deleteMemory: (id: MemoryId, options: DeleteMemoryOptions) => void;
+  readonly listMemories: (options?: ListMemoriesOptions) => readonly MemoryRecord[];
   readonly listMemoriesByScope: (
     scope: MemoryScope,
     options?: ListMemoriesOptions,

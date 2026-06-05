@@ -26,6 +26,7 @@ import {
   deleteMemoryRow,
   getMemoryRow,
   insertMemoryRow,
+  listMemoriesRows,
   listMemoriesByScopeRows,
   updateMemoryRow,
 } from "./memories.js";
@@ -101,7 +102,15 @@ function mergePatch(existing: MemoryRecord, patch: MemoryUpdatePatch, nowMs: num
   // updatedAt is owned by the vault, not the patch, so the caller cannot regress it. createdAt
   // and the scope coordinate are immutable on update (scope changes require supersession +
   // re-insert by design — moving a record across scopes is an audit event, not a field write).
-  const next: MemoryRecord = { ...existing, ...patch, updatedAt: nowMs };
+  const next: MemoryRecord = {
+    ...existing,
+    ...patch,
+    id: existing.id,
+    schemaVersion: existing.schemaVersion,
+    scope: existing.scope,
+    createdAt: existing.createdAt,
+    updatedAt: nowMs,
+  };
   return next;
 }
 
@@ -151,7 +160,7 @@ function runDelete(
 
 type MemoryMutators = Pick<
   MemoryVaultStore,
-  "insertMemory" | "updateMemory" | "deleteMemory" | "getMemory" | "listMemoriesByScope"
+  "insertMemory" | "updateMemory" | "deleteMemory" | "getMemory" | "listMemories" | "listMemoriesByScope"
 >;
 
 function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMutators {
@@ -182,6 +191,11 @@ function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMut
       }
     },
     getMemory: (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id),
+    listMemories: (options?: ListMemoriesOptions): readonly MemoryRecord[] => {
+      const effective = options ?? {};
+      const nowMs = effective.nowMs ?? opts.now();
+      return listMemoriesRows(db, effective, nowMs);
+    },
     listMemoriesByScope: (
       scope: MemoryScope,
       options?: ListMemoriesOptions,

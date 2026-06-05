@@ -47,8 +47,9 @@ const EXTRACTORS: readonly Extractor[] = [
 ];
 
 // Pre-flight guard: returns a rejection outcome when the input is empty or oversize, otherwise
-// null. Pulled out so the entry function stays under the 50-line budget.
-function preflightUserText(text: string, policy: CapturePolicyOptions): CaptureOutcome | null {
+// null. Shared by the user-text and workflow-text entry points so both paths enforce the same
+// length and restricted-sensitivity rules before any secret scan runs.
+function preflightText(text: string, policy: CapturePolicyOptions): CaptureOutcome | null {
   const trimmed = text.trim();
   if (trimmed.length === 0) {
     return { kind: "rejected", reason: "empty-content" };
@@ -68,7 +69,7 @@ export function extractCandidatesFromUserText(
   context: CaptureContext,
   policy: CapturePolicyOptions = {},
 ): readonly CaptureOutcome[] {
-  const preflight = preflightUserText(text, policy);
+  const preflight = preflightText(text, policy);
   if (preflight !== null) {
     return [preflight];
   }
@@ -86,8 +87,9 @@ export function extractCandidatesFromWorkflowOutcome(
   context: CaptureContext,
   policy: CapturePolicyOptions = {},
 ): readonly CaptureOutcome[] {
-  if (policy.defaultSensitivity === "restricted") {
-    return [{ kind: "rejected", reason: "restricted-sensitivity" }];
+  const preflight = preflightText(outcome.structuredReport, policy);
+  if (preflight !== null) {
+    return [preflight];
   }
   return extractWorkflowOutcomeCandidates(outcome, context, policy);
 }

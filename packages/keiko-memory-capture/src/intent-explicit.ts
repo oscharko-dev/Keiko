@@ -31,8 +31,8 @@ const CORRECTION_LABEL_RE = /^\s*correction:\s*(.+?)\s*$/i;
 const THATS_WRONG_RE =
   /^\s*that(?:'s|\s+is)\s+wrong[,.]?\s+(.+?)\s+(?:is|are|should\s+be)\s+(.+?)\s*$/i;
 
-// Helper: secret scan + length scan + reject the body if either fires. Returns either a
-// rejection outcome (caller should return it) or null when the body is safe to embed.
+// Helper: secret scan + reject the body if it fires. Length enforcement happens in capture.ts
+// preflight before the explicit extractors run.
 function rejectIfUnsafe(body: string, policy: CapturePolicyOptions): CaptureOutcome | null {
   const reason = scanForSecrets(body, policy.customerIdentifierMatchers ?? []);
   if (reason !== null) {

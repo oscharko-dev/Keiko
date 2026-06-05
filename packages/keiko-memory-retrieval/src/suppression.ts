@@ -21,6 +21,8 @@
 
 import type { MemoryRecord, MemoryStatus } from "@oscharko-dev/keiko-contracts/memory";
 
+import { RetrievalError } from "./errors.js";
+
 export type SuppressionReason =
   | "archived"
   | "forgotten"
@@ -35,6 +37,18 @@ export interface SuppressionResult {
 }
 
 const NOT_SUPPRESSED: SuppressionResult = { suppressed: false } as const;
+
+function isFiniteInRange(value: number, min: number, max: number): boolean {
+  return Number.isFinite(value) && value >= min && value <= max;
+}
+
+function assertValidThreshold(staleConfidenceThreshold: number): void {
+  if (isFiniteInRange(staleConfidenceThreshold, 0, 1)) return;
+  throw new RetrievalError(
+    "invalid-threshold",
+    `staleConfidenceThreshold must be a finite number in [0, 1] (got ${String(staleConfidenceThreshold)})`,
+  );
+}
 
 function statusSuppression(status: MemoryStatus): SuppressionResult | null {
   switch (status) {
@@ -79,6 +93,7 @@ export function isMemorySuppressed(
   nowMs: number,
   staleConfidenceThreshold: number,
 ): SuppressionResult {
+  assertValidThreshold(staleConfidenceThreshold);
   const byStatus = statusSuppression(memory.status);
   if (byStatus !== null) return byStatus;
   const byValidity = validitySuppression(memory, nowMs);

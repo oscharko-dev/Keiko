@@ -51,6 +51,7 @@ import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
+import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -198,20 +199,20 @@ function parseTypes(raw: unknown): readonly MemoryType[] | null {
   return out;
 }
 
-function vaultAsQueryPort(vault: MemoryVaultStore): MemoryQueryPort {
-  // The vault and the retrieval port disagree on the option shape: the retrieval layer
-  // describes a CAP (`maxResults`, plus archived/forgotten visibility toggles), while the
-  // vault accepts row-paging knobs (`limit`/`offset`/`status`/`type`). We translate
-  // `maxResults → limit`. Visibility flags from retrieval are ignored: the vault only
-  // returns non-deleted rows, and #210's suppression layer is what filters archived /
-  // forgotten records out post-fetch — exactly what `retrieveMemoryContext` already does
-  // via `isMemorySuppressed`. Edges are intentionally not exposed (graph-proximity boost
-  // skips cleanly when the port omits the optional edge methods).
+export function vaultAsQueryPort(vault: MemoryVaultStore): MemoryQueryPort {
+  // Retrieval must see expired rows so it can omit them with a concrete suppression reason
+  // instead of having storage silently drop them. Archived/forgotten rows already come back
+  // from the vault by default and are suppressed later by the retrieval layer.
   return {
     listByScope: (scope, options): readonly MemoryRecord[] => {
       const limit = options?.maxResults;
-      return vault.listMemoriesByScope(scope, limit !== undefined ? { limit } : undefined);
+      return vault.listMemoriesByScope(scope, {
+        includeExpired: true,
+        ...(limit === undefined ? {} : { limit }),
+      });
     },
+    listOutgoingEdges: (memoryId) => vault.listOutgoingEdges(memoryId),
+    listIncomingEdges: (memoryId) => vault.listIncomingEdges(memoryId),
   };
 }
 
@@ -391,6 +392,7 @@ export async function handleMemoryCaptureFromConversation(
   const outcomes: readonly CaptureOutcome[] = extractCandidatesFromUserText(
     input.text,
     captureContext,
+    { resolver: createMemoryTargetResolver(vault) },
   );
   // Redact every outcome (proposal bodies may carry user text that needs scrubbing).
   return { status: 200, body: deps.redactor({ outcomes }) };

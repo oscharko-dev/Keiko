@@ -94,6 +94,14 @@ describe("rankMemories — basic ordering", () => {
       graph: 0,
     });
   });
+
+  it("normalizes exported scores into the documented [0, 1] range", () => {
+    const r = buildRecord({ id: "x", pinned: true, updatedAt: now });
+    const [first] = rankMemories([r], { nowMs: now, weights: DEFAULT_RANKING_WEIGHTS });
+    expect(first?.score).toBeGreaterThanOrEqual(0);
+    expect(first?.score).toBeLessThanOrEqual(1);
+    expect(first?.score).toBeCloseTo((0.2 + 0.16 + 0.3) / 1.15);
+  });
 });
 
 describe("rankMemories — graph proximity layering", () => {

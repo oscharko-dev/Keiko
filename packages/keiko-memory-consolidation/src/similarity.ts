@@ -42,18 +42,33 @@ export function bigramTokens(normalized: string): Set<string> {
   return tokens;
 }
 
+export interface PreparedBody {
+  readonly normalized: string;
+  readonly tokens: ReadonlySet<string>;
+}
+
+export function prepareBody(body: string): PreparedBody {
+  const normalized = normalizeBody(body);
+  return {
+    normalized,
+    tokens: bigramTokens(normalized),
+  };
+}
+
+export function jaccardSimilarityPrepared(a: PreparedBody, b: PreparedBody): number {
+  if (a.tokens.size === 0 && b.tokens.size === 0) return 1;
+  if (a.tokens.size === 0 || b.tokens.size === 0) return 0;
+  let intersectionSize = 0;
+  for (const token of a.tokens) {
+    if (b.tokens.has(token)) intersectionSize += 1;
+  }
+  const unionSize = a.tokens.size + b.tokens.size - intersectionSize;
+  return intersectionSize / unionSize;
+}
+
 // Jaccard similarity of two strings over their normalized character-bigram sets. Returns 1 for
 // two empty inputs (vacuously similar — they map to the same equivalence class) and 0 when one
 // side is empty but the other is not (no overlap is possible). Output is in [0, 1].
 export function jaccardSimilarity(a: string, b: string): number {
-  const tokensA = bigramTokens(normalizeBody(a));
-  const tokensB = bigramTokens(normalizeBody(b));
-  if (tokensA.size === 0 && tokensB.size === 0) return 1;
-  if (tokensA.size === 0 || tokensB.size === 0) return 0;
-  let intersectionSize = 0;
-  for (const token of tokensA) {
-    if (tokensB.has(token)) intersectionSize += 1;
-  }
-  const unionSize = tokensA.size + tokensB.size - intersectionSize;
-  return intersectionSize / unionSize;
+  return jaccardSimilarityPrepared(prepareBody(a), prepareBody(b));
 }

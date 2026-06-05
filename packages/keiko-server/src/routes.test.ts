@@ -26,8 +26,8 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 73 route contract including local-knowledge capsule management, Quality Intelligence connector routes, and the QI Conversation Center handoff route", () => {
-    expect(API_ROUTES).toHaveLength(73);
+  it("declares the 77 route contract including local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, and the QI Conversation Center handoff route", () => {
+    expect(API_ROUTES).toHaveLength(77);
   });
 
   it("includes the Quality Intelligence Conversation Center handoff route (#281)", () => {
@@ -94,15 +94,28 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
-  it("includes the 14 memory routes (12 from #211 Memory Center + 2 from #212 Conversation Center)", () => {
+  it("includes the 17 memory routes (12 from #211, 2 from #212, 3 consolidation-job routes from #208)", () => {
     const memoryRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/memory"));
-    expect(memoryRoutes).toHaveLength(14);
+    expect(memoryRoutes).toHaveLength(17);
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/context"),
     ).toBeDefined();
     expect(
       API_ROUTES.find(
         (r) => r.method === "POST" && r.pattern === "/api/memory/capture-from-conversation",
+      ),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/consolidation/jobs"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find(
+        (r) => r.method === "GET" && r.pattern === "/api/memory/consolidation/jobs/:jobId",
+      ),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find(
+        (r) => r.method === "POST" && r.pattern === "/api/memory/consolidation/jobs/:jobId/cancel",
       ),
     ).toBeDefined();
   });

@@ -191,7 +191,10 @@ export function makeEdge(edge: FixtureEdge): MemoryEdge {
 export function vaultPort(vault: MemoryVaultStore): MemoryQueryPort {
   return {
     listByScope: (scope: MemoryScope, options?: ListByScopeOptions): readonly MemoryRecord[] =>
-      vault.listMemoriesByScope(scope, { limit: options?.maxResults ?? 500 }),
+      vault.listMemoriesByScope(scope, {
+        includeExpired: true,
+        limit: options?.maxResults ?? 500,
+      }),
     listOutgoingEdges: (id: MemoryId): readonly MemoryEdge[] => vault.listOutgoingEdges(id),
     listIncomingEdges: (id: MemoryId): readonly MemoryEdge[] => vault.listIncomingEdges(id),
   };

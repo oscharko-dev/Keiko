@@ -154,6 +154,50 @@ describe("ReviewQueue — populated state", () => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
       expect(screen.getByText(/accept failed/i)).toBeInTheDocument();
     });
+    expect(screen.getByRole("button", { name: /accept memory:/i })).toBeEnabled();
+  });
+
+  it("keeps other rows interactive while one row is busy", async () => {
+    let resolveAccept: (() => void) | undefined;
+    const slowAccept = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveAccept = () => resolve({ memory: makeProposed(makeId(7), "accepted") });
+        }),
+    );
+    const records = [
+      makeProposed(makeId(7), "First proposal"),
+      makeProposed(makeId(8), "Second proposal"),
+    ];
+    const user = userEvent.setup();
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith(records)}
+        acceptImpl={slowAccept}
+        rejectImpl={rejectOk()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("First proposal")).toBeInTheDocument();
+      expect(screen.getByText("Second proposal")).toBeInTheDocument();
+    });
+
+    const acceptButtons = screen.getAllByRole("button", { name: /accept memory:/i });
+    expect(acceptButtons).toHaveLength(2);
+    const [firstAcceptButton, secondAcceptButton] = acceptButtons;
+    expect(firstAcceptButton).toBeDefined();
+    expect(secondAcceptButton).toBeDefined();
+    if (firstAcceptButton === undefined || secondAcceptButton === undefined) {
+      throw new Error("Expected both review queue accept buttons to be rendered.");
+    }
+    await user.click(firstAcceptButton);
+    expect(firstAcceptButton).toBeDisabled();
+    expect(secondAcceptButton).toBeEnabled();
+
+    resolveAccept?.();
+    await waitFor(() => {
+      expect(screen.queryByText("First proposal")).toBeNull();
+    });
   });
 });
 

@@ -34,7 +34,7 @@ const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = [
   // intentionally skips this because audit summaries may legitimately mention the word "Bearer"
   // with a placeholder; capture is stricter because a real Bearer in a memory body is almost
   // never legitimate.
-  /\bBearer\s+[A-Za-z0-9._~+/=-]+/,
+  /\bBearer\s+[A-Za-z0-9._~+/=-]+/i,
   // URL-embedded basic-auth credentials.
   /\bhttps?:\/\/[^\s/:@]+:[^\s/:@]+@/i,
   // Form-encoded credential assignments. Each is a single non-nested capture; the value run

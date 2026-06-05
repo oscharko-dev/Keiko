@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { GovernanceError } from "./errors.js";
 import { isMemorySuppressedFromRetrieval } from "./suppression.js";
 import { FIXED_NOW_MS, makeRecord } from "./_support.js";
 
@@ -132,6 +133,24 @@ describe("isMemorySuppressedFromRetrieval — confidence branch", () => {
       isMemorySuppressedFromRetrieval(m, FIXED_NOW_MS, { staleConfidenceThreshold: 0.4 })
         .suppressed,
     ).toBe(false);
+  });
+
+  it("throws GovernanceError('invalid-threshold') when staleConfidenceThreshold is NaN", () => {
+    const m = makeRecord({ status: "accepted", confidence: 0.5 });
+    expect(() =>
+      isMemorySuppressedFromRetrieval(m, FIXED_NOW_MS, {
+        staleConfidenceThreshold: Number.NaN,
+      }),
+    ).toThrow(GovernanceError);
+  });
+
+  it("throws GovernanceError('invalid-threshold') when staleConfidenceThreshold is out of range", () => {
+    const m = makeRecord({ status: "accepted", confidence: 0.5 });
+    expect(() =>
+      isMemorySuppressedFromRetrieval(m, FIXED_NOW_MS, {
+        staleConfidenceThreshold: 1.01,
+      }),
+    ).toThrow(/invalid-threshold/);
   });
 });
 

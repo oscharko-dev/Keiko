@@ -23,7 +23,7 @@ import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 
 import { compareRecordsByAge, compareReviewItems, scopeCoordinateKey } from "./_ordering.js";
 import type { DuplicateCluster } from "./dedupe.js";
-import { jaccardSimilarity, normalizeBody } from "./similarity.js";
+import { jaccardSimilarityPrepared, normalizeBody, prepareBody } from "./similarity.js";
 import type { ProposedAction, ReviewItem } from "./types.js";
 
 // Conflict-detection overlap threshold. Lower than the dedup Jaccard default (0.85) because a
@@ -36,6 +36,7 @@ export const CONFLICT_OVERLAP_THRESHOLD = 0.4;
 export interface ConflictsOptions {
   readonly nowMs: number;
   readonly newReviewItemId: () => string;
+  readonly cancellationSignal?: () => boolean;
 }
 
 // Negation markers checked AFTER normalizeBody (lowercased, punctuation removed). The
@@ -177,26 +178,63 @@ function buildConflictPairItem(
   };
 }
 
+function shouldSkipPair(
+  older: MemoryRecord | undefined,
+  newer: MemoryRecord | undefined,
+  olderPrepared: ReturnType<typeof prepareBody> | undefined,
+  newerPrepared: ReturnType<typeof prepareBody> | undefined,
+  excluded: ReadonlySet<string>,
+): boolean {
+  if (older === undefined || newer === undefined) return true;
+  if (olderPrepared === undefined || newerPrepared === undefined) return true;
+  if (excluded.has(pairKey(older.id, newer.id))) return true;
+  return !isPolarityConflict(older, newer);
+}
+
+function resolveComparablePair(
+  older: MemoryRecord | undefined,
+  newer: MemoryRecord | undefined,
+  olderPrepared: ReturnType<typeof prepareBody> | undefined,
+  newerPrepared: ReturnType<typeof prepareBody> | undefined,
+): {
+  readonly older: MemoryRecord;
+  readonly newer: MemoryRecord;
+  readonly olderPrepared: ReturnType<typeof prepareBody>;
+  readonly newerPrepared: ReturnType<typeof prepareBody>;
+} | null {
+  if (older === undefined || newer === undefined) return null;
+  if (olderPrepared === undefined || newerPrepared === undefined) return null;
+  return { older, newer, olderPrepared, newerPrepared };
+}
+
 function scanPartitionPairs(
   partition: readonly MemoryRecord[],
   excluded: ReadonlySet<string>,
   overlapThreshold: number,
   options: ConflictsOptions,
-): readonly ReviewItem[] {
+): { readonly items: readonly ReviewItem[]; readonly canceled: boolean } {
   const items: ReviewItem[] = [];
   const sorted = [...partition].sort(compareRecordsByAge);
+  const prepared = sorted.map((record) => prepareBody(record.body));
   for (let i = 0; i < sorted.length; i += 1) {
+    if (options.cancellationSignal?.() === true) {
+      return { items, canceled: true };
+    }
     for (let j = i + 1; j < sorted.length; j += 1) {
       const older = sorted[i];
       const newer = sorted[j];
-      if (older === undefined || newer === undefined) continue;
-      if (excluded.has(pairKey(older.id, newer.id))) continue;
-      if (!isPolarityConflict(older, newer)) continue;
-      if (jaccardSimilarity(older.body, newer.body) < overlapThreshold) continue;
-      items.push(buildConflictPairItem(older, newer, options));
+      const olderPrepared = prepared[i];
+      const newerPrepared = prepared[j];
+      if (shouldSkipPair(older, newer, olderPrepared, newerPrepared, excluded)) continue;
+      const pair = resolveComparablePair(older, newer, olderPrepared, newerPrepared);
+      if (pair === null) continue;
+      if (jaccardSimilarityPrepared(pair.olderPrepared, pair.newerPrepared) < overlapThreshold) {
+        continue;
+      }
+      items.push(buildConflictPairItem(pair.older, pair.newer, options));
     }
   }
-  return items;
+  return { items, canceled: false };
 }
 
 // Conflict-pair sweep — finds polarity-flip pairs that did NOT surface as duplicate clusters
@@ -214,9 +252,11 @@ export function findConflictPairs(
   const partitions = partitionForConflicts(records);
   const items: ReviewItem[] = [];
   for (const partition of partitions) {
-    for (const item of scanPartitionPairs(partition, excluded, overlapThreshold, options)) {
+    const scanned = scanPartitionPairs(partition, excluded, overlapThreshold, options);
+    for (const item of scanned.items) {
       items.push(item);
     }
+    if (scanned.canceled) break;
   }
   return items.sort(compareReviewItems);
 }
