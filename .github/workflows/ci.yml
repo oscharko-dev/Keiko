@@ -37,6 +37,8 @@ jobs:
       - run: npm run lint
       - run: npm run arch:check
       - run: npm run arch:check:negative
+      - name: Quality Intelligence supply-chain gate
+        run: npm run check:qi-supply-chain
       - run: npm test
 
   actionlint:

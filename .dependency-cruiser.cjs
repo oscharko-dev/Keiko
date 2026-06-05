@@ -415,6 +415,42 @@ module.exports = {
       },
     },
     {
+      name: "adr-0019-direction-10a-quality-intelligence-only-contracts-security",
+      comment:
+        "ADR-0019 direction rule 10 (quality-intelligence strict variant), introduced by ADR-0023 " +
+        "D14 (issue #272): keiko-quality-intelligence is a pure-domain leaf and may depend only " +
+        "on keiko-contracts and keiko-security. The dependency on keiko-security carries the " +
+        "redact() / deepRedactStrings primitives that validators and golden-summary builders " +
+        "apply before persisting any free-text field (defence-in-depth before audit). The " +
+        "package does NOT depend on keiko-workspace, keiko-tools, keiko-evidence, " +
+        "keiko-model-gateway, or any of the memory packages: model routing is owned by issue " +
+        "#279 (gateway-side), source ingestion by #278 (workspace-side), evidence persistence " +
+        "by #274 (evidence-side), and persistence orchestration by #273 (workflows/harness). " +
+        "Added at error severity by issue #272 because the quality-intelligence package " +
+        "physically exists. Also fires on the negative-test fixture under " +
+        "tests/architecture/fixtures/quality-intelligence/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs. The to.path forbids both non-allow-listed packages " +
+        "AND every sibling src/ shim domain (gateway|workspace|tools|harness|workflows|audit|" +
+        "ui|verification|evaluations|cli) so a future deep-import is caught (boundary-" +
+        "weakening gap pattern from issues #160 and #165). pathNot only filters self-" +
+        "references; it must NOT silently exclude sibling-but-still-in-src/ domains (memory " +
+        "lesson from issues #160 and #162).",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-quality-intelligence/src/|" +
+          "tests/architecture/fixtures/quality-intelligence/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|quality-intelligence)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|quality-intelligence)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|quality-intelligence)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+        pathNot: "^packages/keiko-quality-intelligence/src/",
+      },
+    },
+    {
       name: "adr-0019-direction-4-harness-scope",
       comment:
         "ADR-0019 direction rule 4 (base safety net): keiko-harness may depend only on " +
@@ -509,9 +545,9 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|quality-intelligence)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|quality-intelligence)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|quality-intelligence)|" +
           "src/(cli|ui|evaluations|gateway|workspace|tools|harness|audit))",
         pathNot: "^src/workflows/",
       },
@@ -548,9 +584,9 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|server)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|server)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|server)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|quality-intelligence|server)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|quality-intelligence|server)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|quality-intelligence|server)|" +
           "src/(cli|evaluations|gateway|workspace|tools|harness|workflows|audit))",
         pathNot: "^src/ui/",
       },
@@ -559,11 +595,12 @@ module.exports = {
       name: "adr-0019-direction-6-domain-not-server",
       comment:
         "ADR-0019 direction rule 6: domain packages (contracts, security, model-gateway, " +
-        "workspace, tools, harness, workflows, evidence) must not import from keiko-server.",
+        "workspace, tools, harness, workflows, evidence, quality-intelligence) must not " +
+        "import from keiko-server. quality-intelligence added by issue #272 (ADR-0023 D14).",
       severity: "warn",
       from: {
         path:
-          "^(packages/keiko-(contracts|security|model-gateway|workspace|tools|harness|workflows|evidence)/src/|" +
+          "^(packages/keiko-(contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|quality-intelligence)/src/|" +
           "src/(gateway|workspace|tools|audit|harness|workflows|verification|evaluations)/)",
       },
       to: {
@@ -577,11 +614,12 @@ module.exports = {
         "depend on domain packages, never the reverse. After issue #168 the strict variant " +
         "adr-0019-direction-7a-* fires at error severity for the forward direction (cli → " +
         "allow-listed only); this rule stays as a warn-level safety net for the reverse " +
-        "direction (domain → cli).",
+        "direction (domain → cli). quality-intelligence added to from.path by issue #272 " +
+        "(ADR-0023 D14).",
       severity: "warn",
       from: {
         path:
-          "^(packages/keiko-(contracts|security|model-gateway|workspace|tools|harness|workflows|evidence)/src/|" +
+          "^(packages/keiko-(contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|quality-intelligence)/src/|" +
           "src/(gateway|workspace|tools|audit|harness|workflows|verification|evaluations)/)",
       },
       to: {
@@ -618,9 +656,9 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server|cli)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server|cli)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server|cli)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server|cli|quality-intelligence)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server|cli|quality-intelligence)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server|cli|quality-intelligence)|" +
           "src/(gateway|workspace|tools|harness|workflows|audit|ui))",
         pathNot: "^src/cli/",
       },
@@ -747,11 +785,15 @@ module.exports = {
         "ADR-0019 trust rule 6: keiko-evidence is an allowed dependency only from harness, " +
         "workflows, server, cli, and the ADR-0012 evaluation harness that scores audit-" +
         "completeness by persisting and validating evidence manifests. Other domain packages " +
-        "must not import it.",
+        "must not import it. After issue #272 keiko-quality-intelligence is added to from.path " +
+        "because ADR-0023 D14 declares it a pure-domain leaf that may depend only on " +
+        "keiko-contracts and keiko-security; evidence persistence for QI runs is orchestrated " +
+        "by issue #274 from the workflows/server side, never inside the quality-intelligence " +
+        "package itself.",
       severity: "error",
       from: {
         path:
-          "^(packages/keiko-(contracts|security|model-gateway|workspace|tools)/src/|" +
+          "^(packages/keiko-(contracts|security|model-gateway|workspace|tools|quality-intelligence)/src/|" +
           "src/(gateway|workspace|tools|verification)/)",
       },
       to: {

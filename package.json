@@ -29,7 +29,7 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build:packages": "npm --workspace @oscharko-dev/keiko-contracts run build && npm --workspace @oscharko-dev/keiko-security run build && npm --workspace @oscharko-dev/keiko-model-gateway run build && npm --workspace @oscharko-dev/keiko-workspace run build && npm --workspace @oscharko-dev/keiko-tools run build && npm --workspace @oscharko-dev/keiko-evidence run build && npm --workspace @oscharko-dev/keiko-local-knowledge run build && npm --workspace @oscharko-dev/keiko-memory-vault run build && npm --workspace @oscharko-dev/keiko-memory-capture run build && npm --workspace @oscharko-dev/keiko-memory-consolidation run build && npm --workspace @oscharko-dev/keiko-memory-governance run build && npm --workspace @oscharko-dev/keiko-memory-retrieval run build && npm --workspace @oscharko-dev/keiko-harness run build && npm --workspace @oscharko-dev/keiko-workflows run build && npm --workspace @oscharko-dev/keiko-server run build && npm --workspace @oscharko-dev/keiko-cli run build",
+    "build:packages": "npm --workspace @oscharko-dev/keiko-contracts run build && npm --workspace @oscharko-dev/keiko-security run build && npm --workspace @oscharko-dev/keiko-quality-intelligence run build && npm --workspace @oscharko-dev/keiko-model-gateway run build && npm --workspace @oscharko-dev/keiko-workspace run build && npm --workspace @oscharko-dev/keiko-tools run build && npm --workspace @oscharko-dev/keiko-evidence run build && npm --workspace @oscharko-dev/keiko-local-knowledge run build && npm --workspace @oscharko-dev/keiko-memory-vault run build && npm --workspace @oscharko-dev/keiko-memory-capture run build && npm --workspace @oscharko-dev/keiko-memory-consolidation run build && npm --workspace @oscharko-dev/keiko-memory-governance run build && npm --workspace @oscharko-dev/keiko-memory-retrieval run build && npm --workspace @oscharko-dev/keiko-harness run build && npm --workspace @oscharko-dev/keiko-workflows run build && npm --workspace @oscharko-dev/keiko-server run build && npm --workspace @oscharko-dev/keiko-cli run build",
     "build": "npm run build:packages && tsc -p tsconfig.build.json",
     "typecheck": "npm run build:packages && tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
@@ -42,12 +42,13 @@
     "check:package-surface": "node scripts/check-package-surface.mjs",
     "smoke:install": "node scripts/installable-package-smoke.mjs",
     "check:workspace-supply-chain": "node scripts/check-workspace-supply-chain.mjs",
+    "check:qi-supply-chain": "node scripts/check-quality-intelligence-supply-chain.mjs",
     "arch:check": "depcruise --validate .dependency-cruiser.cjs src packages",
     "arch:check:negative": "node scripts/arch-check-negative.mjs",
     "conversation:release-check": "npm run typecheck && npm run lint && npm run arch:check && npm run arch:check:negative && npm test && node dist/cli/index.js --version",
-    "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:package-surface",
-    "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:package-surface",
-    "clean": "rm -rf dist coverage packages/keiko-contracts/dist packages/keiko-security/dist packages/keiko-model-gateway/dist packages/keiko-workspace/dist packages/keiko-tools/dist packages/keiko-evidence/dist packages/keiko-local-knowledge/dist packages/keiko-harness/dist packages/keiko-workflows/dist packages/keiko-server/dist packages/keiko-cli/dist packages/keiko-memory-vault/dist packages/keiko-memory-capture/dist packages/keiko-memory-consolidation/dist packages/keiko-memory-governance/dist packages/keiko-memory-retrieval/dist packages/keiko-ui/.next packages/keiko-ui/out"
+    "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:package-surface && npm run check:qi-supply-chain",
+    "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:package-surface && npm run check:qi-supply-chain",
+    "clean": "rm -rf dist coverage packages/keiko-contracts/dist packages/keiko-security/dist packages/keiko-quality-intelligence/dist packages/keiko-model-gateway/dist packages/keiko-workspace/dist packages/keiko-tools/dist packages/keiko-evidence/dist packages/keiko-local-knowledge/dist packages/keiko-harness/dist packages/keiko-workflows/dist packages/keiko-server/dist packages/keiko-cli/dist packages/keiko-memory-vault/dist packages/keiko-memory-capture/dist packages/keiko-memory-consolidation/dist packages/keiko-memory-governance/dist packages/keiko-memory-retrieval/dist packages/keiko-ui/.next packages/keiko-ui/out"
   },
   "overrides": {
     "postcss": "8.5.15",

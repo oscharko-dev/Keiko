@@ -93,6 +93,13 @@ import {
   handleReindexLocalKnowledgeCapsule,
   handleStartLocalKnowledgeCapsuleIndexing,
 } from "./local-knowledge-handlers.js";
+import {
+  handleQiCapabilities,
+  handleQiDryRunFigma,
+  handleQiDryRunJira,
+  handleQiSourceSelect,
+  QI_HANDOFF_ROUTE_GROUP,
+} from "./qualityIntelligence/index.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -192,10 +199,26 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
   // Issue #198 audit fix — live capsule detail/health routes for the Local Knowledge UI.
-  { method: "GET", pattern: "/api/local-knowledge/capsules", handler: handleListLocalKnowledgeCapsules },
-  { method: "POST", pattern: "/api/local-knowledge/capsules", handler: handleCreateLocalKnowledgeCapsule },
-  { method: "GET", pattern: "/api/local-knowledge/capsule-sets", handler: handleListLocalKnowledgeCapsuleSets },
-  { method: "GET", pattern: "/api/local-knowledge/capsules/:capsuleId", handler: handleGetLocalKnowledgeCapsule },
+  {
+    method: "GET",
+    pattern: "/api/local-knowledge/capsules",
+    handler: handleListLocalKnowledgeCapsules,
+  },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/capsules",
+    handler: handleCreateLocalKnowledgeCapsule,
+  },
+  {
+    method: "GET",
+    pattern: "/api/local-knowledge/capsule-sets",
+    handler: handleListLocalKnowledgeCapsuleSets,
+  },
+  {
+    method: "GET",
+    pattern: "/api/local-knowledge/capsules/:capsuleId",
+    handler: handleGetLocalKnowledgeCapsule,
+  },
   {
     method: "POST",
     pattern: "/api/local-knowledge/capsules/:capsuleId/index",
@@ -211,7 +234,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/local-knowledge/capsules/:capsuleId/connection",
     handler: handleDisconnectLocalKnowledgeCapsule,
   },
-  { method: "DELETE", pattern: "/api/local-knowledge/capsules/:capsuleId", handler: handleDeleteLocalKnowledgeCapsule },
+  {
+    method: "DELETE",
+    pattern: "/api/local-knowledge/capsules/:capsuleId",
+    handler: handleDeleteLocalKnowledgeCapsule,
+  },
   {
     method: "POST",
     pattern: "/api/local-knowledge/capsules/:capsuleId/reindex",
@@ -294,6 +321,34 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/browser/sessions/:sessionId/events",
     handler: handleBrowserEvents,
   },
+  // Issue #278 (Epic #270) — Quality Intelligence connector routes (additive).
+  // Authorisation defaults to FALSE; only flips on explicit gateway-config flags.
+  // No outbound network call; no provider SDK import.
+  {
+    method: "POST",
+    pattern: "/api/quality-intelligence/sources/select",
+    handler: handleQiSourceSelect,
+  },
+  {
+    method: "POST",
+    pattern: "/api/quality-intelligence/sources/dryrun-figma",
+    handler: handleQiDryRunFigma,
+  },
+  {
+    method: "POST",
+    pattern: "/api/quality-intelligence/sources/dryrun-jira",
+    handler: handleQiDryRunJira,
+  },
+  {
+    method: "GET",
+    pattern: "/api/quality-intelligence/sources/capabilities",
+    handler: handleQiCapabilities,
+  },
+  // Issue #281 (Epic #270) — Conversation Center → QI workflow handoff route group.
+  // Single POST seam; the body is a typed `QualityIntelligenceConversationCenterHandoff`
+  // envelope (refs only, no chat content). Registered as a sibling group so concurrent
+  // QI epic merges (e.g. #280) stay mechanically merge-safe.
+  ...QI_HANDOFF_ROUTE_GROUP,
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured
