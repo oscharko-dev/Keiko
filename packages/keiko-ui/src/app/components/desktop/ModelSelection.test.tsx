@@ -4,17 +4,18 @@
 // IMPORTANT: isConversationEligibleModel is a STATIC top-level import (dynamic import
 //            does not resolve value-exports correctly in jsdom).
 
-import { act, render, screen } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import { type ReactNode } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { Footer } from "./Footer";
 import type { ChatSessionApi } from "./hooks/useChatSession";
-import { pickChatModelId, resolveSelectedModelId } from "./hooks/useChatSession";
+import { pickChatModelId, resolveSelectedModelId, useChatSession } from "./hooks/useChatSession";
 import { chooseDefaultModel } from "./modals/NewWindowDialog";
+import * as api from "@/lib/api";
 import { isConversationEligibleModel } from "@/lib/types";
-import type { Chat, ModelCapability } from "@/lib/types";
+import type { Chat, ChatResponse, ModelCapability } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -147,6 +148,16 @@ describe("resolveSelectedModelId", () => {
 
   it("returns undefined when no eligible models remain", () => {
     expect(resolveSelectedModelId("removed-model", [])).toBeUndefined();
+  });
+
+  // N3 — bootstrap path: latestChat.selectedModel may be undefined in the DB.
+  it("treats undefined current as stale and returns the first eligible model", () => {
+    const models = [chatModel("provider-model-a")];
+    expect(resolveSelectedModelId(undefined, models)).toBe("provider-model-a");
+  });
+
+  it("returns undefined when current is undefined and no eligible models remain", () => {
+    expect(resolveSelectedModelId(undefined, [])).toBeUndefined();
   });
 });
 
@@ -360,5 +371,135 @@ describe("ChatWindow mini composer (AC #2)", () => {
     renderWindow(makeSession({ noEligibleModels: true, selectedModel: undefined }), true);
     const alert = screen.getByRole("alert");
     expect(alert.textContent).toMatch(/Settings/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AC #3 integration — setSelectedModel PATCH persistence and rollback
+// Tests the real useChatSession hook with mocked @/lib/api (vi.spyOn, no
+// module-level vi.mock per file-level constraint).
+// ---------------------------------------------------------------------------
+
+const HOOK_PROJECT_PATH = "/hook-proj";
+
+function chatModelCapability(id: string): ModelCapability {
+  return chatModel(id);
+}
+
+function makeHookChat(overrides: Partial<Chat> = {}): Chat {
+  return {
+    id: "hook-chat-1",
+    projectPath: HOOK_PROJECT_PATH,
+    title: "t",
+    selectedModel: "model-a",
+    branchLabel: undefined,
+    status: undefined,
+    connectedScope: undefined,
+    localKnowledgeScope: undefined,
+    createdAt: 1,
+    updatedAt: 2,
+    ...overrides,
+  };
+}
+
+function chatResponse(chat: Chat): ChatResponse {
+  return { chat };
+}
+
+function mockBootstrapModels(modelIds: string[]): void {
+  const chat = makeHookChat();
+  vi.spyOn(api, "fetchModels").mockResolvedValue({
+    models: modelIds.map(chatModelCapability),
+  });
+  vi.spyOn(api, "fetchProjects").mockResolvedValue({
+    projects: [
+      {
+        path: HOOK_PROJECT_PATH,
+        name: "proj",
+        favorite: false,
+        createdAt: 0,
+        lastOpenedAt: 0,
+        available: true,
+      },
+    ],
+  });
+  vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [chat] });
+  vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+}
+
+async function bootChatHook() {
+  const view = renderHook(() => useChatSession());
+  await waitFor(() => {
+    expect(view.result.current.loading).toBe(false);
+    expect(view.result.current.activeChat).toBeDefined();
+  });
+  return view;
+}
+
+describe("setSelectedModel PATCH persistence (AC #3 integration)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    api.clearModelCacheForTests();
+    mockBootstrapModels(["model-a", "model-b"]);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("rolls back the optimistic update when PATCH fails so UI stays consistent with the server", async () => {
+    vi.spyOn(api, "updateChat").mockRejectedValue(new Error("network error"));
+
+    const view = await bootChatHook();
+    expect(view.result.current.selectedModel).toBe("model-a");
+
+    act(() => {
+      view.result.current.setSelectedModel("model-b");
+    });
+    // Optimistic update applied synchronously.
+    expect(view.result.current.selectedModel).toBe("model-b");
+
+    // PATCH rejects — state must revert to "model-a".
+    await waitFor(() => {
+      expect(view.result.current.selectedModel).toBe("model-a");
+    });
+    expect(view.result.current.error).toMatch(/network error/i);
+  });
+
+  it("last-write-wins: a stale PATCH response from an earlier call does not overwrite a later selection", async () => {
+    const chat = makeHookChat();
+    let resolveFirst!: (v: ChatResponse) => void;
+    let resolveSecond!: (v: ChatResponse) => void;
+    const firstPatch = new Promise<ChatResponse>((res) => {
+      resolveFirst = res;
+    });
+    const secondPatch = new Promise<ChatResponse>((res) => {
+      resolveSecond = res;
+    });
+
+    let callCount = 0;
+    vi.spyOn(api, "updateChat").mockImplementation(() => {
+      callCount += 1;
+      return callCount === 1 ? firstPatch : secondPatch;
+    });
+
+    const view = await bootChatHook();
+
+    act(() => {
+      view.result.current.setSelectedModel("model-b");
+      view.result.current.setSelectedModel("model-c");
+    });
+
+    // Resolve the first (stale) PATCH after the second call already superseded it.
+    await act(async () => {
+      resolveFirst(chatResponse({ ...chat, selectedModel: "model-b" }));
+    });
+    // Stale response must be silently dropped; "model-c" stays.
+    expect(view.result.current.selectedModel).toBe("model-c");
+
+    // Resolve the second (current) PATCH.
+    await act(async () => {
+      resolveSecond(chatResponse({ ...chat, selectedModel: "model-c" }));
+    });
+    expect(view.result.current.selectedModel).toBe("model-c");
   });
 });

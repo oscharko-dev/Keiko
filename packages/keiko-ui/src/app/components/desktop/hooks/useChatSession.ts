@@ -529,19 +529,31 @@ export function useChatSession(): UseChatSessionResult {
 
   const setSelectedModel = useCallback((id: string) => {
     setError(undefined);
-    setState((previous) => ({
-      ...previous,
-      selectedModel: id,
-      activeChat:
-        previous.activeChat === undefined
-          ? previous.activeChat
-          : { ...previous.activeChat, selectedModel: id },
-      chats: previous.chats.map((chat) =>
-        previous.activeChat !== undefined && chat.id === previous.activeChat.id
-          ? { ...chat, selectedModel: id }
-          : chat,
-      ),
-    }));
+    // Capture pre-update snapshot so the optimistic write can be rolled back if
+    // the PATCH fails — without this the server and UI diverge permanently.
+    let snapshot:
+      | { selectedModel: string | undefined; activeChat: Chat | undefined; chats: Chat[] }
+      | undefined;
+    setState((previous) => {
+      snapshot = {
+        selectedModel: previous.selectedModel,
+        activeChat: previous.activeChat,
+        chats: previous.chats,
+      };
+      return {
+        ...previous,
+        selectedModel: id,
+        activeChat:
+          previous.activeChat === undefined
+            ? previous.activeChat
+            : { ...previous.activeChat, selectedModel: id },
+        chats: previous.chats.map((chat) =>
+          previous.activeChat !== undefined && chat.id === previous.activeChat.id
+            ? { ...chat, selectedModel: id }
+            : chat,
+        ),
+      };
+    });
     const activeChatId = activeChatIdRef.current;
     if (activeChatId === undefined) return;
     const requestId = selectedModelPersistRef.current + 1;
@@ -553,13 +565,27 @@ export function useChatSession(): UseChatSessionResult {
         setState((previous) => ({
           ...previous,
           selectedModel: result.chat.selectedModel,
-          activeChat: previous.activeChat?.id === result.chat.id ? result.chat : previous.activeChat,
+          activeChat:
+            previous.activeChat?.id === result.chat.id ? result.chat : previous.activeChat,
           chats: previous.chats.map((chat) => (chat.id === result.chat.id ? result.chat : chat)),
         }));
       })
       .catch((caught) => {
         if (selectedModelPersistRef.current !== requestId) return;
         setError(errorMessage(caught));
+        // Roll back optimistic update so UI stays consistent with the server.
+        if (snapshot !== undefined) {
+          const rollback = snapshot;
+          setState((previous) => ({
+            ...previous,
+            selectedModel: rollback.selectedModel,
+            activeChat:
+              previous.activeChat?.id === rollback.activeChat?.id
+                ? rollback.activeChat
+                : previous.activeChat,
+            chats: rollback.chats,
+          }));
+        }
       });
   }, []);
 
@@ -626,34 +652,37 @@ export function useChatSession(): UseChatSessionResult {
     [openNewChat, state.models],
   );
 
-  const openChat = useCallback(async (chat: Chat): Promise<void> => {
-    setError(undefined);
-    // Issue #152 — opening a different chat must abort any in-flight send so
-    // a late response from the prior chat never lands here.
-    sendControllerRef.current?.abort();
-    sendControllerRef.current = null;
-    activeChatIdRef.current = chat.id;
-    // Issue #185 — clear any prior grounded answer so the new chat doesn't render stale
-    // citations from a previous conversation's last grounded turn.
-    setLatestGrounded(undefined);
-    setLatestMemory(undefined);
-    try {
-      const messagePayload = await fetchChatMessages(chat.id, chat.projectPath);
-      const selectedModel = resolveSelectedModelId(chat.selectedModel, state.models);
-      setState((previous) => {
-        const project = previous.projects.find((item) => item.path === chat.projectPath);
-        return {
-          ...previous,
-          activeProject: project,
-          activeChat: chat,
-          selectedModel,
-          messages: Array.from(messagePayload.messages),
-        };
-      });
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  }, [state.models]);
+  const openChat = useCallback(
+    async (chat: Chat): Promise<void> => {
+      setError(undefined);
+      // Issue #152 — opening a different chat must abort any in-flight send so
+      // a late response from the prior chat never lands here.
+      sendControllerRef.current?.abort();
+      sendControllerRef.current = null;
+      activeChatIdRef.current = chat.id;
+      // Issue #185 — clear any prior grounded answer so the new chat doesn't render stale
+      // citations from a previous conversation's last grounded turn.
+      setLatestGrounded(undefined);
+      setLatestMemory(undefined);
+      try {
+        const messagePayload = await fetchChatMessages(chat.id, chat.projectPath);
+        const selectedModel = resolveSelectedModelId(chat.selectedModel, state.models);
+        setState((previous) => {
+          const project = previous.projects.find((item) => item.path === chat.projectPath);
+          return {
+            ...previous,
+            activeProject: project,
+            activeChat: chat,
+            selectedModel,
+            messages: Array.from(messagePayload.messages),
+          };
+        });
+      } catch (caught) {
+        setError(errorMessage(caught));
+      }
+    },
+    [state.models],
+  );
 
   const addProject = useCallback(
     async (path: string): Promise<void> => {
@@ -1012,7 +1041,8 @@ export function useChatSession(): UseChatSessionResult {
     activeProject: state.activeProject,
     activeChat: state.activeChat,
     selectedModel: state.selectedModel,
-    noEligibleModels: !loading && resolveSelectedModelId(state.selectedModel, state.models) === undefined,
+    noEligibleModels:
+      !loading && resolveSelectedModelId(state.selectedModel, state.models) === undefined,
     draft,
     loading,
     sending,
