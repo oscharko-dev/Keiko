@@ -26,8 +26,15 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 72 route contract including local-knowledge capsule management and Quality Intelligence connector routes", () => {
-    expect(API_ROUTES).toHaveLength(72);
+  it("declares the 73 route contract including local-knowledge capsule management, Quality Intelligence connector routes, and the QI Conversation Center handoff route", () => {
+    expect(API_ROUTES).toHaveLength(73);
+  });
+
+  it("includes the Quality Intelligence Conversation Center handoff route (#281)", () => {
+    const handoff = API_ROUTES.find(
+      (r) => r.method === "POST" && r.pattern === "/api/quality-intelligence/handoff",
+    );
+    expect(handoff).toBeDefined();
   });
 
   it("includes the local-knowledge capsule detail routes", () => {

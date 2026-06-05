@@ -30,3 +30,16 @@ export {
 } from "./connectorRoutes.js";
 // Issue #280 — read-only UI routes for the Quality Intelligence panel.
 export { handleListQiRuns, handleGetQiRun } from "./uiRoutes.js";
+// Issue #281 — Conversation Center → QI workflow handoff route group.
+export {
+  QI_HANDOFF_ROUTE_GROUP,
+  createHandleQiHandoff,
+  handleQiHandoff,
+  type QiHandoffRouteOptions,
+  type QiHandoffSuccessBody,
+} from "./handoffRoutes.js";
+export {
+  qiHandoffErrorBody,
+  type QiHandoffErrorBody,
+  type QiHandoffErrorCode,
+} from "./handoffErrors.js";
