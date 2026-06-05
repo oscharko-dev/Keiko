@@ -274,7 +274,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
         details_json:
-          '{"sourceIds":["src-audit"],"chunkIds":["chunk-1"],"referenceCount":1,"noEvidence":false}',
+          '{"sourceIds":["src-audit"],"chunkIds":["2725aea2d2dea736"],"referenceCount":1,"noEvidence":false}',
         occurred_at: 7,
       },
       {
@@ -287,7 +287,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
         details_json:
-          '{"sourceIds":["src-audit"],"chunkIds":["chunk-1"],"referenceCount":1,"citationCount":1,"modelId":"gpt-5.4"}',
+          '{"sourceIds":["src-audit"],"chunkIds":["2725aea2d2dea736"],"referenceCount":1,"citationCount":1,"modelId":"gpt-5.4"}',
         occurred_at: 8,
       },
     ]);

@@ -64,7 +64,7 @@ export type MemoryValidation<T> = MemoryValidationOk<T> | MemoryValidationFail;
 // Pattern coverage — intentionally narrow (high precision over high recall):
 //   COVERED:  sk- (OpenAI-style), AKIA (AWS), gh[pousr]_ (GitHub tokens),
 //             xox[abporsu]- (Slack), three-part JWTs, PEM private keys,
-//             long contiguous digit runs (PAN/IBAN-shape).
+//             long contiguous digit runs that resemble a payment-card PAN.
 //   EXCLUDED: opaque "Bearer <token>" (catches only JWT-encoded bearers),
 //             URL-embedded credentials (https://user:pass@host),
 //             generic password=, secret=, key= form-encoded values.
@@ -78,8 +78,36 @@ const SECRET_SHAPE_PATTERNS: readonly RegExp[] = [
   /\bxox[abporsu]-[A-Za-z0-9-]{10,}\b/,
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/,
   /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
-  /\b\d{13,19}\b/,
 ];
+
+const PAN_SHAPE_RE = /\b(?:\d[ -]?){13,19}\b/g;
+
+function passesLuhn(value: string): boolean {
+  let sum = 0;
+  let shouldDouble = false;
+  for (let index = value.length - 1; index >= 0; index -= 1) {
+    let digit = Number(value[index]);
+    if (shouldDouble) {
+      digit *= 2;
+      if (digit > 9) {
+        digit -= 9;
+      }
+    }
+    sum += digit;
+    shouldDouble = !shouldDouble;
+  }
+  return sum % 10 === 0;
+}
+
+function hasPaymentCardPanShape(value: string): boolean {
+  for (const match of value.matchAll(PAN_SHAPE_RE)) {
+    const candidate = match[0].replaceAll(/[ -]/g, "");
+    if (candidate.length >= 13 && candidate.length <= 19 && passesLuhn(candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 export function looksLikeSecretShape(value: string): boolean {
   for (const re of SECRET_SHAPE_PATTERNS) {
@@ -87,7 +115,7 @@ export function looksLikeSecretShape(value: string): boolean {
       return true;
     }
   }
-  return false;
+  return hasPaymentCardPanShape(value);
 }
 
 // ─── Status transition legality ───────────────────────────────────────────────

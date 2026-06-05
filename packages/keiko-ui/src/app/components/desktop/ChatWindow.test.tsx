@@ -1,12 +1,19 @@
 // Issue #185 AC3 — tests for the grounded-request cancel button in ChatWindow.
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import type { Chat, ModelCapability } from "@/lib/types";
+import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
+
+vi.mock("@/lib/local-knowledge-api", () => ({
+  fetchCapsules: vi.fn(async () => ({ capsules: [] })),
+  fetchCapsuleSets: vi.fn(async () => ({ capsuleSets: [] })),
+}));
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -70,6 +77,17 @@ function renderWindow(session: ChatSessionApi): void {
       <ChatWindow />
     </ChatSessionProvider>,
   );
+}
+
+const fetchCapsulesMock = vi.mocked(fetchCapsules);
+const fetchCapsuleSetsMock = vi.mocked(fetchCapsuleSets);
+
+function makeCapsuleId(value: string): KnowledgeCapsuleId {
+  return value as KnowledgeCapsuleId;
+}
+
+function makeCapsuleSetId(value: string): CapsuleSetId {
+  return value as CapsuleSetId;
 }
 
 describe("ChatWindow cancel button", () => {
@@ -144,6 +162,57 @@ describe("ChatWindow cancel button", () => {
     );
     await user.click(screen.getByRole("button", { name: "Cancel grounded request" }));
     expect(cancelGrounded).toHaveBeenCalledOnce();
+  });
+});
+
+describe("ChatWindow local knowledge scope disclosure", () => {
+  it("keeps the active capsule visible when it is no longer in the ready capsule list", async () => {
+    fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });
+    fetchCapsuleSetsMock.mockResolvedValueOnce({ capsuleSets: [] });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScope: {
+            kind: "capsule",
+            capsuleId: makeCapsuleId("cap-stale"),
+            connectedAtMs: 1,
+          },
+        }),
+      }),
+    );
+
+    await waitFor(() => {
+      const select = screen.getByLabelText("Grounding mode") as HTMLSelectElement;
+      expect(select.value).toBe("capsule:cap-stale");
+    });
+    expect(
+      screen.getByRole("option", { name: "Knowledge capsule: cap-stale (not ready)" }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the active capsule set visible and reports the load error when capsule sets fail to load", async () => {
+    fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });
+    fetchCapsuleSetsMock.mockRejectedValueOnce(new Error("capsule sets offline"));
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          localKnowledgeScope: {
+            kind: "capsule-set",
+            capsuleSetId: makeCapsuleSetId("set-1"),
+            connectedAtMs: 1,
+          },
+        }),
+      }),
+    );
+
+    await waitFor(() => {
+      const select = screen.getByLabelText("Grounding mode") as HTMLSelectElement;
+      expect(select.value).toBe("capsule-set:set-1");
+    });
+    expect(
+      screen.getByRole("option", { name: "Capsule set: set-1 (unavailable)" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent("capsule sets offline");
   });
 });
 

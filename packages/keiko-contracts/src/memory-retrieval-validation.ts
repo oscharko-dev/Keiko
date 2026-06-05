@@ -70,7 +70,7 @@ function validateRetrievalFilters(input: Record<string, unknown>, errors: string
     errors.push("retrieval.textQuery must be a bounded control-free string when set");
   }
   if (input.tagsFilter !== undefined) {
-    validateTags(input.tagsFilter, errors);
+    validateTags("retrieval.tagsFilter", input.tagsFilter, errors);
   }
 }
 

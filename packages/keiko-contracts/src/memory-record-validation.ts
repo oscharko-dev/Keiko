@@ -36,6 +36,7 @@ import {
   isRecord,
   isSafeText,
   pushNestedErrors,
+  validateRetentionHint,
   validateTags,
 } from "./memory-internal.js";
 
@@ -92,19 +93,7 @@ function validateRecordRetentionHint(input: Record<string, unknown>, errors: str
   if (hint === undefined) {
     return;
   }
-  if (!isRecord(hint)) {
-    errors.push("record.retentionHint must be an object when set");
-    return;
-  }
-  if (!isNonEmptyTrimmedString(hint.policyKey)) {
-    errors.push("record.retentionHint.policyKey must be a non-empty string");
-  }
-  if (hint.retainUntil !== undefined && !isFiniteNonNegativeNumber(hint.retainUntil)) {
-    errors.push("record.retentionHint.retainUntil must be a finite non-negative number when set");
-  }
-  if (hint.notes !== undefined && !isSafeText(hint.notes, MEMORY_REASON_MAX_CHARS)) {
-    errors.push("record.retentionHint.notes must be a bounded control-free string when set");
-  }
+  validateRetentionHint("record.retentionHint", hint, errors);
 }
 
 // ─── validateMemoryRecord ─────────────────────────────────────────────────────
@@ -121,7 +110,7 @@ export function validateMemoryRecord(input: unknown): MemoryValidation<MemoryRec
   }
   pushNestedErrors("record", validateMemoryProvenance(input.provenance), errors);
   pushNestedErrors("record", validateMemoryValidityInterval(input.validity), errors);
-  validateTags(input.tags, errors);
+  validateTags("record.tags", input.tags, errors);
   validateRecordRetentionHint(input, errors);
   if (errors.length > 0) {
     return { ok: false, errors };

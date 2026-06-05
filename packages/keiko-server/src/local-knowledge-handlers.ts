@@ -1,17 +1,21 @@
+import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import type { IncomingMessage } from "node:http";
 import {
   createSqliteAuditSink,
   createDefaultParserRegistry,
+  createCapsule,
   deleteCapsule,
   getCapsule,
   listCapsuleSets,
   listCapsuleSources,
   listCapsules,
   openKnowledgeStore,
+  removeSourceFromCapsule,
   resolveKnowledgeStorePath,
   runIndexingJob,
+  updateCapsuleState,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   CapsuleHealth,
@@ -27,6 +31,7 @@ import {
   KnowledgeNotFoundError,
   KnowledgeStoreError,
 } from "@oscharko-dev/keiko-local-knowledge";
+import { validateKnowledgeSourceScope } from "@oscharko-dev/keiko-contracts";
 import {
   currentGatewayConfig,
   type UiHandlerDeps,
@@ -572,6 +577,92 @@ function parseReindexMode(body: Record<string, unknown>): "changed-files" | "rep
   throw new InvalidRequest('Field "mode" must be "changed-files" or "repair-failed".');
 }
 
+function parseCreateCapsuleInput(body: Record<string, unknown>): {
+  readonly displayName: string;
+  readonly description?: string;
+} {
+  const displayName =
+    typeof body.displayName === "string" ? body.displayName.trim() : undefined;
+  if (displayName === undefined || displayName.length === 0) {
+    throw new InvalidRequest('Field "displayName" must be a non-empty string.');
+  }
+  const descriptionRaw = body.description;
+  if (descriptionRaw === undefined) {
+    return { displayName };
+  }
+  if (typeof descriptionRaw !== "string") {
+    throw new InvalidRequest('Field "description" must be a string when provided.');
+  }
+  const description = descriptionRaw.trim();
+  return description.length === 0 ? { displayName } : { displayName, description };
+}
+
+function defaultEmbeddingIdentity(modelId: string): KnowledgeCapsule["embeddingModelIdentity"] {
+  return {
+    provider: "openai",
+    modelId,
+    vectorDimensions: 1536,
+    vectorMetric: "cosine",
+  };
+}
+
+function createCapsuleStorageReference(capsuleId: string): string {
+  return `capsules/${capsuleId}`;
+}
+
+function latestRunningJobId(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: KnowledgeCapsule["id"],
+): string | undefined {
+  const row = store._internal.db
+    .prepare(
+      [
+        "SELECT id",
+        "FROM indexing_jobs",
+        "WHERE capsule_id = :c AND status = 'running'",
+        "ORDER BY started_at DESC, id DESC",
+        "LIMIT 1",
+      ].join(" "),
+    )
+    .get({ c: capsuleId }) as { readonly id: string } | undefined;
+  return row?.id;
+}
+
+function requestRunningJobCancellation(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: KnowledgeCapsule["id"],
+): boolean {
+  const jobId = latestRunningJobId(store, capsuleId);
+  if (jobId === undefined) {
+    return false;
+  }
+  store._internal.db
+    .prepare(
+      "UPDATE indexing_jobs SET cancellation_requested = 1 WHERE id = :id AND capsule_id = :c",
+    )
+    .run({ id: jobId, c: capsuleId });
+  return true;
+}
+
+function assertScopeShape(scope: KnowledgeSourceScope): void {
+  const result = validateKnowledgeSourceScope(scope);
+  if (result.ok) return;
+  throw new InvalidRequest(result.errors.join(" "));
+}
+
+function disconnectCapsuleSources(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: KnowledgeCapsule["id"],
+): void {
+  const auditSink = createSqliteAuditSink(store);
+  const sources = listCapsuleSources(store, capsuleId);
+  for (const source of sources) {
+    assertScopeShape(source.scope);
+    removeSourceFromCapsule(store, capsuleId, source.id, auditSink);
+  }
+  updateCapsuleState(store, capsuleId, "draft");
+}
+
 async function runCapsuleIndexingJob(
   deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
@@ -688,6 +779,53 @@ export async function handleListLocalKnowledgeCapsuleSets(
   });
 }
 
+export async function handleCreateLocalKnowledgeCapsule(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
+    const input = parseCreateCapsuleInput(await readJsonObject(ctx.req));
+    const env = openStoreForDeps(deps);
+    try {
+      const configuredModelId = currentGatewayConfig(deps)?.providers[0]?.modelId;
+      if (configuredModelId === undefined) {
+        return conflict(
+          "No configured embedding model is available for new capsules. Configure the Model Gateway first.",
+        );
+      }
+      const capsuleId = randomUUID() as KnowledgeCapsule["id"];
+      const capsule = createCapsule(
+        env.store,
+        {
+          id: capsuleId,
+          displayName: input.displayName,
+          ...(input.description !== undefined ? { description: input.description } : {}),
+          tags: [],
+          retrievalEffort: "default",
+          outputMode: "snippets",
+          answerGroundingPolicy: "require-citations",
+          embeddingModelIdentity: defaultEmbeddingIdentity(configuredModelId),
+          lifecycleState: "draft",
+          storageReference: createCapsuleStorageReference(capsuleId),
+        },
+        createSqliteAuditSink(env.store),
+      );
+      return {
+        status: 201,
+        body: {
+          capsule,
+          health: buildCapsuleHealth(deps, env.store, env.dbPath, capsule),
+          sources: loadSourceStats(env.store, capsule.id),
+          parserDiagnostics: loadParserDiagnostics(env.store, capsule.id),
+          indexingJobs: loadIndexingJobs(env.store, capsule.id),
+        },
+      };
+    } finally {
+      env.close();
+    }
+  });
+}
+
 export async function handleGetLocalKnowledgeCapsule(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -710,6 +848,83 @@ export async function handleGetLocalKnowledgeCapsule(
           indexingJobs: loadIndexingJobs(env.store, capsule.id),
         },
       };
+    } finally {
+      env.close();
+    }
+  });
+}
+
+export async function handleStartLocalKnowledgeCapsuleIndexing(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
+    const capsuleId = parseCapsuleId(ctx);
+    await readJsonObject(ctx.req);
+    const env = openStoreForDeps(deps);
+    try {
+      const capsule = getCapsule(env.store, capsuleId);
+      if (capsule === undefined) {
+        return notFound(`Capsule not found: ${capsuleId}`);
+      }
+      if (configuredProviderForCapsule(deps, capsule) === undefined) {
+        return conflict(
+          "No configured embedding model matches this capsule. Update the Model Gateway configuration before indexing it.",
+        );
+      }
+      const terminal = await runCapsuleIndexingJob(deps, env.store, capsule, undefined);
+      if (terminal?.kind === "job-failed") {
+        return conflict(
+          "Capsule indexing failed. Review the capsule health diagnostics and job history for details.",
+        );
+      }
+      return actionResponse(capsule.id);
+    } finally {
+      env.close();
+    }
+  });
+}
+
+export async function handleCancelLocalKnowledgeCapsuleIndexing(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
+    const capsuleId = parseCapsuleId(ctx);
+    await readJsonObject(ctx.req);
+    const env = openStoreForDeps(deps);
+    try {
+      const capsule = getCapsule(env.store, capsuleId);
+      if (capsule === undefined) {
+        return notFound(`Capsule not found: ${capsuleId}`);
+      }
+      if (!requestRunningJobCancellation(env.store, capsule.id)) {
+        return conflict(
+          "No running indexing job was found for this capsule. External cancellation is limited to marking persisted running jobs for cancellation.",
+        );
+      }
+      return actionResponse(capsule.id);
+    } finally {
+      env.close();
+    }
+  });
+}
+
+export async function handleDisconnectLocalKnowledgeCapsule(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
+    const capsuleId = parseCapsuleId(ctx);
+    await readJsonObject(ctx.req);
+    const env = openStoreForDeps(deps);
+    try {
+      const capsule = getCapsule(env.store, capsuleId);
+      if (capsule === undefined) {
+        return notFound(`Capsule not found: ${capsuleId}`);
+      }
+      disconnectCapsuleSources(env.store, capsule.id);
+      return actionResponse(capsule.id);
     } finally {
       env.close();
     }

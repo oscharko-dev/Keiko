@@ -78,11 +78,15 @@ import {
   handleDeleteBrowserSession,
 } from "./browser.js";
 import {
+  handleCancelLocalKnowledgeCapsuleIndexing,
+  handleCreateLocalKnowledgeCapsule,
   handleDeleteLocalKnowledgeCapsule,
+  handleDisconnectLocalKnowledgeCapsule,
   handleGetLocalKnowledgeCapsule,
   handleListLocalKnowledgeCapsules,
   handleListLocalKnowledgeCapsuleSets,
   handleReindexLocalKnowledgeCapsule,
+  handleStartLocalKnowledgeCapsuleIndexing,
 } from "./local-knowledge-handlers.js";
 
 export interface ApiError {
@@ -184,8 +188,24 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
   // Issue #198 audit fix — live capsule detail/health routes for the Local Knowledge UI.
   { method: "GET", pattern: "/api/local-knowledge/capsules", handler: handleListLocalKnowledgeCapsules },
+  { method: "POST", pattern: "/api/local-knowledge/capsules", handler: handleCreateLocalKnowledgeCapsule },
   { method: "GET", pattern: "/api/local-knowledge/capsule-sets", handler: handleListLocalKnowledgeCapsuleSets },
   { method: "GET", pattern: "/api/local-knowledge/capsules/:capsuleId", handler: handleGetLocalKnowledgeCapsule },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/capsules/:capsuleId/index",
+    handler: handleStartLocalKnowledgeCapsuleIndexing,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/local-knowledge/capsules/:capsuleId/index",
+    handler: handleCancelLocalKnowledgeCapsuleIndexing,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/local-knowledge/capsules/:capsuleId/connection",
+    handler: handleDisconnectLocalKnowledgeCapsule,
+  },
   { method: "DELETE", pattern: "/api/local-knowledge/capsules/:capsuleId", handler: handleDeleteLocalKnowledgeCapsule },
   {
     method: "POST",

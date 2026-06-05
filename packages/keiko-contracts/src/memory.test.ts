@@ -808,6 +808,15 @@ describe("operation validators", () => {
     expect(validateMemoryProposal({ ...happyProposal(), type: "myth" }).ok).toBe(false);
   });
 
+  it("validateMemoryProposal rejects an invalid retention hint", () => {
+    expect(
+      validateMemoryProposal({
+        ...happyProposal(),
+        retentionHint: { policyKey: "", retainUntil: -1 },
+      }).ok,
+    ).toBe(false);
+  });
+
   it("validateMemoryAcceptance accepts a happy acceptance and rejects empty IDs", () => {
     const happy = {
       schemaVersion: MEMORY_SCHEMA_VERSION,
@@ -852,6 +861,18 @@ describe("operation validators", () => {
       bodyPatch: "new body",
     };
     expect(validateMemoryUpdate(update).ok).toBe(true);
+  });
+
+  it("validateMemoryUpdate rejects an invalid retentionHintPatch", () => {
+    expect(
+      validateMemoryUpdate({
+        schemaVersion: MEMORY_SCHEMA_VERSION,
+        memoryId: "mem-1",
+        reviewerId: "rev-1",
+        updatedAt: 0,
+        retentionHintPatch: { policyKey: "", notes: "\u0000bad" },
+      }).ok,
+    ).toBe(false);
   });
 
   it("validateMemorySupersession rejects same old/new IDs and missing reason", () => {
@@ -982,6 +1003,15 @@ describe("validateMemoryAuditRecord", () => {
     expect(validateMemoryAuditRecord(r).ok).toBe(false);
   });
 
+  it("rejects audit actions with empty identifier fields", () => {
+    const r = {
+      ...happyAuditRecord(),
+      actionKind: "accepted",
+      action: { kind: "accepted", proposalId: "", memoryId: "", scope: happyScopeUser() },
+    };
+    expect(validateMemoryAuditRecord(r).ok).toBe(false);
+  });
+
   it("validates retrieved action's matchedMemoryIds + scopes", () => {
     const r = {
       ...happyAuditRecord(),
@@ -1042,9 +1072,27 @@ describe("looksLikeSecretShape", () => {
     expect(looksLikeSecretShape("card 4111111111111111 end")).toBe(true);
   });
 
+  it("does not flag a plain epoch-millisecond timestamp", () => {
+    expect(looksLikeSecretShape("capturedAt=1717603200000")).toBe(false);
+  });
+
   it("does not flag normal prose", () => {
     expect(looksLikeSecretShape("Prefer 2-space indentation for TypeScript files.")).toBe(false);
     expect(looksLikeSecretShape("Use the project-id 'p-1' in URLs.")).toBe(false);
+  });
+
+  it("scopes tag validation errors to the caller field", () => {
+    const result = validateMemoryRetrievalRequest({
+      schemaVersion: MEMORY_SCHEMA_VERSION,
+      requestedAt: 0,
+      scopes: [happyScopeUser()],
+      tagsFilter: [""],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.errors).toContain("retrieval.tagsFilter entry must be a non-empty bounded control-free string");
   });
 });
 

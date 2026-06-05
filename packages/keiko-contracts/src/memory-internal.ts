@@ -56,20 +56,40 @@ export function isSafeText(value: unknown, maxChars: number): value is string {
   return !FORBIDDEN_CONTROL_RE.test(value);
 }
 
-export function validateTags(input: unknown, errors: string[]): void {
+export function validateTags(field: string, input: unknown, errors: string[]): void {
   if (!isStringArray(input)) {
-    errors.push("tags must be a string array");
+    errors.push(`${field} must be a string array`);
     return;
   }
   if (input.length > MEMORY_TAGS_MAX_COUNT) {
-    errors.push(`tags must have at most ${String(MEMORY_TAGS_MAX_COUNT)} entries`);
+    errors.push(`${field} must have at most ${String(MEMORY_TAGS_MAX_COUNT)} entries`);
     return;
   }
   for (const tag of input) {
     if (tag.length === 0 || tag.length > MEMORY_TAG_MAX_CHARS || FORBIDDEN_CONTROL_RE.test(tag)) {
-      errors.push("tags entry must be a non-empty bounded control-free string");
+      errors.push(`${field} entry must be a non-empty bounded control-free string`);
       return;
     }
+  }
+}
+
+export function validateRetentionHint(
+  field: string,
+  input: unknown,
+  errors: string[],
+): void {
+  if (!isRecord(input)) {
+    errors.push(`${field} must be an object when set`);
+    return;
+  }
+  if (!isNonEmptyTrimmedString(input.policyKey)) {
+    errors.push(`${field}.policyKey must be a non-empty string`);
+  }
+  if (input.retainUntil !== undefined && !isFiniteNonNegativeNumber(input.retainUntil)) {
+    errors.push(`${field}.retainUntil must be a finite non-negative number when set`);
+  }
+  if (input.notes !== undefined && !isSafeText(input.notes, MEMORY_REASON_MAX_CHARS)) {
+    errors.push(`${field}.notes must be a bounded control-free string when set`);
   }
 }
 

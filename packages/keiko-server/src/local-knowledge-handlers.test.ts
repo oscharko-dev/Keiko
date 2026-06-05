@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addSourceToCapsule,
   createCapsule,
+  listCapsules,
   openKnowledgeStore,
   resolveKnowledgeStorePath,
 } from "@oscharko-dev/keiko-local-knowledge";
@@ -19,9 +20,13 @@ import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";
 import {
   handleDeleteLocalKnowledgeCapsule,
+  handleCancelLocalKnowledgeCapsuleIndexing,
+  handleCreateLocalKnowledgeCapsule,
+  handleDisconnectLocalKnowledgeCapsule,
   handleGetLocalKnowledgeCapsule,
   handleListLocalKnowledgeCapsules,
   handleReindexLocalKnowledgeCapsule,
+  handleStartLocalKnowledgeCapsuleIndexing,
 } from "./local-knowledge-handlers.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
@@ -138,6 +143,44 @@ afterEach(() => {
 });
 
 describe("local-knowledge handlers", () => {
+  it("creates a draft capsule with the default Local Knowledge policy", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+
+    const result = await handleCreateLocalKnowledgeCapsule(
+      baseCtx(tmp, "POST", { displayName: "New Capsule", description: "Created from UI" }),
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(201);
+    expect(result.body).toMatchObject({
+      capsule: {
+        displayName: "New Capsule",
+        description: "Created from UI",
+        lifecycleState: "draft",
+        retrievalEffort: "default",
+        outputMode: "snippets",
+        answerGroundingPolicy: "require-citations",
+      },
+    });
+    const created = result.body as {
+      readonly capsule: { readonly storageReference: string };
+    };
+    expect(created.capsule.storageReference).toMatch(/^capsules\//);
+
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const capsules = listCapsules(verify);
+    verify.close();
+    expect(capsules).toHaveLength(1);
+    expect(capsules[0]).toMatchObject({
+      displayName: "New Capsule",
+      lifecycleState: "draft",
+      sourceIds: [],
+    });
+  });
+
   it("lists persisted capsules", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -305,6 +348,42 @@ describe("local-knowledge handlers", () => {
     ]);
   });
 
+  it("starts capsule indexing from the graph surface", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "policy.md"), "# Policy\n\nConnected source.\n", "utf8");
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ ok: true, capsuleId: "cap-1" });
+
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const jobs = verify._internal.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM indexing_jobs WHERE capsule_id = :c AND status = 'succeeded'",
+      )
+      .get({ c: capId }) as { readonly n: number };
+    verify.close();
+    expect(jobs.n).toBe(1);
+  });
+
   it("limits repair-failed reindex jobs to sources with failed documents", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -377,6 +456,75 @@ describe("local-knowledge handlers", () => {
     expect(result.body).toMatchObject({
       error: { code: "LOCAL_KNOWLEDGE_UNAVAILABLE" },
     });
+  });
+
+  it("marks the latest persisted running job as cancellation-requested", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    store._internal.db
+      .prepare(
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-running', :c, '[]', 10, NULL, 'running', 0, 0, 0, 0, NULL, NULL, NULL, 0)",
+      )
+      .run({ c: capId });
+    store.close();
+
+    const result = await handleCancelLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "DELETE", { confirm: true }), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ ok: true, capsuleId: "cap-1" });
+
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const row = verify._internal.db
+      .prepare("SELECT cancellation_requested FROM indexing_jobs WHERE id = 'job-running'")
+      .get() as { readonly cancellation_requested: number };
+    verify.close();
+    expect(row.cancellation_requested).toBe(1);
+  });
+
+  it("disconnects a capsule by removing its linked sources and resetting it to draft", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: join(tmp, "docs-a"), recursive: true },
+    });
+    addSourceToCapsule(store, capId, {
+      id: "src-2" as never,
+      displayName: "Notes",
+      tags: [],
+      scope: { kind: "folder", rootPath: join(tmp, "docs-b"), recursive: true },
+    });
+    store.close();
+
+    const result = await handleDisconnectLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "DELETE", { confirm: true }), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ ok: true, capsuleId: "cap-1" });
+
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const capsule = verify._internal.db
+      .prepare("SELECT lifecycle_state FROM capsules WHERE id = :c")
+      .get({ c: capId }) as { readonly lifecycle_state: string };
+    const sources = verify._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM capsule_sources WHERE capsule_id = :c")
+      .get({ c: capId }) as { readonly n: number };
+    verify.close();
+    expect(capsule.lifecycle_state).toBe("draft");
+    expect(sources.n).toBe(0);
   });
 
   it("deletes a capsule index explicitly", async () => {
