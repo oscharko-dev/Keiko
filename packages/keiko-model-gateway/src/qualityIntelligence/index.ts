@@ -85,3 +85,10 @@ export { createInMemoryReplayCache, deriveReplayCacheKey, isCacheable } from "./
 // ─── M2: cancellation ────────────────────────────────────────────────────────
 export type { QualityIntelligenceCancellationHandle } from "./cancellation.js";
 export { composeCancellationSignal } from "./cancellation.js";
+
+// ─── M3: dispatcher (port composition) ───────────────────────────────────────
+export type {
+  QualityIntelligenceDispatcherArgs,
+  QualityIntelligenceDispatcherResult,
+} from "./dispatcher.js";
+export { dispatchQualityIntelligenceRequest } from "./dispatcher.js";
