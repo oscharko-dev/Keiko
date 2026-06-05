@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { MemoryAuditEvent, MemoryScope } from "@oscharko-dev/keiko-contracts";
+import { safeSummary } from "./memory-audit-event-builders.js";
 
 function maskedCoordinate(value: string, redactString: (input: string) => string): string {
   const redacted = redactString(value);
@@ -70,17 +71,20 @@ export function sanitizeAuditEvent(
   event: MemoryAuditEvent,
   redactString: (input: string) => string,
 ): MemoryAuditEvent {
+  const redactedSummary = safeSummary(event.summary, redactString);
   switch (event.kind) {
     case "memory:retrieved":
       return {
         ...event,
+        summary: redactedSummary,
         scopes: event.scopes.map((scope) => sanitizeMemoryScope(scope, redactString)),
       };
     case "memory:workflow-used":
-      return event;
+      return { ...event, summary: redactedSummary };
     default:
       return {
         ...event,
+        summary: redactedSummary,
         scope: sanitizeMemoryScope(event.scope, redactString),
       };
   }

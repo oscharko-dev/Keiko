@@ -243,6 +243,49 @@ describe("createMemoryAuditHandler", () => {
     expect(events[0]?.summary).not.toContain(secret);
   });
 
+  it("redacts a Bearer token in the audit summary when the real audit redactor is wired", () => {
+    const store = createInMemoryEvidenceStore();
+    // Fragmented literal so this source file does not contain a contiguous Bearer token.
+    const bearerToken = ["Bearer", " ", "AAAA-BBBB-fake-token-1234567890"].join("");
+    const secret = "AAAA-BBBB-fake-token-1234567890";
+    const redact = createAuditRedactor({ additionalSecrets: [secret] }, {});
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: redact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    // Embed the Bearer token in the record id so `safeSummary` receives it in the
+    // summary string: "memory Bearer AAAA-BBBB-fake-token-1234567890 proposed (type=preference)".
+    const id = brandedMemoryId(bearerToken);
+    const record = makeRecord({ id, status: "proposed" });
+    handler({ kind: "memory:inserted", record });
+    const events = readEvents(store, FIXED_NOW);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.summary).not.toContain(secret);
+  });
+
+  it("redacts an api_key= assignment pattern in the audit summary", () => {
+    const store = createInMemoryEvidenceStore();
+    // Fragmented literal — source file must not contain the pattern contiguously.
+    const secretValue = "super-secret-value-1234";
+    const apiKeyId = ["api_key=", secretValue].join("");
+    const redact = createAuditRedactor({ additionalSecrets: [secretValue] }, {});
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: redact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    // Embed the api_key= assignment in the record id so it enters the summary string.
+    const id = brandedMemoryId(apiKeyId);
+    const record = makeRecord({ id, status: "proposed" });
+    handler({ kind: "memory:inserted", record });
+    const events = readEvents(store, FIXED_NOW);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.summary).not.toContain(secretValue);
+  });
+
   it("masks persisted scope coordinates at the audit boundary", () => {
     const store = createInMemoryEvidenceStore();
     const handler = createMemoryAuditHandler({
