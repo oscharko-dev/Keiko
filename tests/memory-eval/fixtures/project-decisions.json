@@ -43,8 +43,8 @@
     "edges": [
       {
         "id": "edge-rate-limit-related",
-        "from": "dec-rate-limit-policy",
-        "to": "dec-rate-limit-burst",
+        "from": "dec-rate-limit-burst",
+        "to": "dec-rate-limit-policy",
         "kind": "related",
         "createdAt": 1700000000000
       }
