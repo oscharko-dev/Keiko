@@ -388,6 +388,27 @@ describe("keiko-contracts package surface", () => {
     expect(typeof subpath.isScopeReachable).toBe("function");
   });
 
+  it("memory workflow port re-exports are reachable through the barrel (#213)", () => {
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    type _MemoryWorkflowPort = import("./index.js").MemoryWorkflowPort;
+    type _MemoryWorkflowContext = import("./index.js").MemoryWorkflowContext;
+    type _MemoryUsedEvent = import("./index.js").MemoryUsedEvent;
+    type _MemoryOmittedEvent = import("./index.js").MemoryOmittedEvent;
+    type _MemoryWriteCandidateEvent = import("./index.js").MemoryWriteCandidateEvent;
+    pin<_MemoryWorkflowPort>();
+    pin<_MemoryWorkflowContext>();
+    pin<_MemoryUsedEvent>();
+    pin<_MemoryOmittedEvent>();
+    pin<_MemoryWriteCandidateEvent>();
+    expect(true).toBe(true);
+  });
+
+  it("memory workflow port subpath is importable (#213)", async () => {
+    const subpath = await import("./memory-workflow-port.js");
+    // Pure type-only module: it should import cleanly with no runtime exports.
+    expect(Object.keys(subpath).length).toBe(0);
+  });
+
   it("connected-context barrel exports are reachable through the root surface (#178)", () => {
     expect(CONNECTED_CONTEXT_SCHEMA_VERSION).toBe("1");
     expect(SELECTED_SCOPE_KINDS).toContain("files");
