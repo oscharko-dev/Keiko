@@ -92,4 +92,38 @@ describe("buildBugPrompt (AC #9 prompt construction)", () => {
     const user = messages.find((m) => m.role === "user")?.content ?? "";
     expect(user).toContain("rejected: out-of-scope");
   });
+
+  it("prepends the memory block when memoryText is provided", () => {
+    const messages = buildBugPrompt(
+      REPORT,
+      parseFailureEvidence(REPORT),
+      makePack([]),
+      "vitest",
+      undefined,
+      "prior fix: divide by 2",
+    );
+    const user = messages.find((m) => m.role === "user")?.content ?? "";
+    expect(user.startsWith("Memory context (governed, scoped):")).toBe(true);
+  });
+
+  it("omits the memory block when memoryText is undefined", () => {
+    const messages = buildBugPrompt(REPORT, parseFailureEvidence(REPORT), makePack([]), "vitest");
+    const user = messages.find((m) => m.role === "user")?.content ?? "";
+    expect(user).not.toContain("Memory context");
+  });
+
+  it("redacts a secret-shaped string in the memory block before it reaches the prompt", () => {
+    const secret = `ghp_${"C".repeat(36)}`;
+    const messages = buildBugPrompt(
+      REPORT,
+      parseFailureEvidence(REPORT),
+      makePack([]),
+      "vitest",
+      undefined,
+      `prior context token=${secret}`,
+    );
+    const user = messages.find((m) => m.role === "user")?.content ?? "";
+    expect(user).not.toContain(secret);
+    expect(user).toContain("[REDACTED]");
+  });
 });
