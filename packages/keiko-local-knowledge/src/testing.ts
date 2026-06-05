@@ -14,11 +14,11 @@ import type {
 
 import { chunkDocument } from "./chunking/chunker-runner.js";
 import type { ChunkingOptions } from "./chunking/types.js";
-import { createCapsule } from "./capsule-lifecycle.js";
+import { createCapsule, type CreateCapsuleInput } from "./capsule-lifecycle.js";
 import { insertDocumentRow, insertParsedUnitRow } from "./discovery/persist.js";
 import { embedChunkBatch } from "./indexing/embedding-batcher.js";
 import type { ChunkToEmbed } from "./indexing/types.js";
-import { addSourceToCapsule } from "./source-lifecycle.js";
+import { addSourceToCapsule, type AddCapsuleSourceInput } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
 
 const DEFAULT_EMBEDDING: EmbeddingModelIdentity = {
@@ -102,7 +102,7 @@ function sampleCapsuleInput(
     id: KnowledgeCapsuleId;
     embeddingModelIdentity: EmbeddingModelIdentity;
   }>,
-) {
+): CreateCapsuleInput {
   return {
     id: overrides.id,
     displayName: "Engineering Capsule",
@@ -116,7 +116,7 @@ function sampleCapsuleInput(
   };
 }
 
-function sampleSourceInput(id: KnowledgeSourceId) {
+function sampleSourceInput(id: KnowledgeSourceId): AddCapsuleSourceInput {
   return {
     id,
     displayName: `Source ${String(id)}`,
@@ -127,6 +127,18 @@ function sampleSourceInput(id: KnowledgeSourceId) {
       recursive: true,
     },
   };
+}
+
+interface ResolvedSeedOptions {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId;
+  readonly documentId: DocumentId;
+  readonly identity: EmbeddingModelIdentity;
+  readonly text: string;
+  readonly contentHash: string;
+  readonly safeDisplayName: string;
+  readonly unit: ParsedUnit;
+  readonly chunkingOptions: ChunkingOptions;
 }
 
 function composeUnit(
@@ -147,62 +159,95 @@ function composeUnit(
   };
 }
 
-export async function seedCapsuleWithVectors(
-  store: KnowledgeStore,
-  options: SeedVectorsOptions = {},
-): Promise<SeededVectors> {
+function normalizeSeedText(
+  unit: ParsedUnitWithoutDocId | undefined,
+  text: string | undefined,
+): string {
+  const baseText =
+    text ?? "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi";
+  const requiredEnd =
+    unit !== undefined && unit.kind !== "unsupported-media" ? unit.characterEnd : 0;
+  return baseText.length >= requiredEnd ? baseText : baseText.padEnd(requiredEnd, " x");
+}
+
+function resolveSeedOptions(options: SeedVectorsOptions): ResolvedSeedOptions {
   const capsuleId = (options.capsuleId ?? "cap-1") as KnowledgeCapsuleId;
   const sourceId = (options.sourceId ?? "src-1") as KnowledgeSourceId;
   const documentId = (options.documentId ?? "doc-1") as DocumentId;
   const identity = options.identity ?? DEFAULT_EMBEDDING;
-  const baseText =
-    options.text ?? "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi";
-  const requiredEnd =
-    options.unit !== undefined && options.unit.kind !== "unsupported-media"
-      ? options.unit.characterEnd
-      : 0;
-  const text = baseText.length >= requiredEnd ? baseText : baseText.padEnd(requiredEnd, " x");
-
-  createCapsule(store, sampleCapsuleInput({ id: capsuleId, embeddingModelIdentity: identity }));
-  addSourceToCapsule(store, capsuleId, sampleSourceInput(sourceId));
-  insertDocumentRow(store._internal.db, {
-    id: documentId,
+  const text = normalizeSeedText(options.unit, options.text);
+  return {
     capsuleId,
-    sourceId: String(sourceId),
+    sourceId,
+    documentId,
+    identity,
+    text,
+    contentHash: options.contentHash ?? "a".repeat(64),
+    safeDisplayName: options.safeDisplayName ?? "sample.txt",
+    unit: composeUnit(options.unit, documentId, text.length),
+    chunkingOptions: options.chunkingOptions ?? { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+  };
+}
+
+function insertSeedRows(store: KnowledgeStore, options: ResolvedSeedOptions): void {
+  createCapsule(store, sampleCapsuleInput({ id: options.capsuleId, embeddingModelIdentity: options.identity }));
+  addSourceToCapsule(store, options.capsuleId, sampleSourceInput(options.sourceId));
+  insertDocumentRow(store._internal.db, {
+    id: options.documentId,
+    capsuleId: options.capsuleId,
+    sourceId: String(options.sourceId),
     documentPath: "docs/sample.txt",
     sizeBytes: 1024,
     mediaType: "text/plain",
-    contentHash: options.contentHash ?? "a".repeat(64),
+    contentHash: options.contentHash,
     parserId: "text",
     parserVersion: "1",
     lastExtractedAt: 1_700_000_000_000,
     status: "extracted",
-    safeDisplayName: options.safeDisplayName ?? "sample.txt",
+    safeDisplayName: options.safeDisplayName,
   });
   insertParsedUnitRow(
     store._internal.db,
-    capsuleId,
-    `unit-${String(capsuleId)}`,
-    composeUnit(options.unit, documentId, text.length),
+    options.capsuleId,
+    `unit-${String(options.capsuleId)}`,
+    options.unit,
   );
+}
 
+function buildSeedChunks(
+  store: KnowledgeStore,
+  options: ResolvedSeedOptions,
+): Readonly<{
+  chunkIds: readonly ChunkId[];
+  chunks: readonly ChunkToEmbed[];
+}> {
   const chunkResult = chunkDocument(
     store,
     {
-      capsuleId,
-      sourceId,
-      documentId,
-      sourceText: text,
+      capsuleId: options.capsuleId,
+      sourceId: options.sourceId,
+      documentId: options.documentId,
+      sourceText: options.text,
     },
-    options.chunkingOptions ?? { maxTokens: 2, minTokens: 0, overlapTokens: 0 },
+    options.chunkingOptions,
   );
-  const chunks: ChunkToEmbed[] = chunkResult.chunkIds.map((id, index) => ({
-    id,
-    capsuleId,
-    sourceId,
-    documentId,
-    text: `chunk-${String(index)}-${String(capsuleId)}`,
-  }));
+  return {
+    chunkIds: chunkResult.chunkIds,
+    chunks: chunkResult.chunkIds.map((id, index) => ({
+      id,
+      capsuleId: options.capsuleId,
+      sourceId: options.sourceId,
+      documentId: options.documentId,
+      text: `chunk-${String(index)}-${String(options.capsuleId)}`,
+    })),
+  };
+}
+
+async function embedSeedChunks(
+  store: KnowledgeStore,
+  identity: EmbeddingModelIdentity,
+  chunks: readonly ChunkToEmbed[],
+): Promise<void> {
   let counter = 0;
   await embedChunkBatch(chunks, {
     adapter: scriptedAdapter({ identity }),
@@ -215,11 +260,21 @@ export async function seedCapsuleWithVectors(
       return `storage-${String(counter)}`;
     },
   });
+}
+
+export async function seedCapsuleWithVectors(
+  store: KnowledgeStore,
+  options: SeedVectorsOptions = {},
+): Promise<SeededVectors> {
+  const resolved = resolveSeedOptions(options);
+  insertSeedRows(store, resolved);
+  const { chunkIds, chunks } = buildSeedChunks(store, resolved);
+  await embedSeedChunks(store, resolved.identity, chunks);
   return {
-    capsuleId,
-    sourceId,
-    documentId,
-    chunkIds: chunkResult.chunkIds,
+    capsuleId: resolved.capsuleId,
+    sourceId: resolved.sourceId,
+    documentId: resolved.documentId,
+    chunkIds,
     vectorTexts: chunks.map((chunk) => chunk.text),
   };
 }
