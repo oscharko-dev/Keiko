@@ -70,6 +70,28 @@ describe("retrieveMemoryContext — input validation", () => {
     }
   });
 
+  it("throws RetrievalError('invalid-threshold') when staleConfidenceThreshold is NaN", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext(baseRequest({ staleConfidenceThreshold: Number.NaN }), port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-threshold");
+    }
+  });
+
+  it("throws RetrievalError('invalid-threshold') when staleConfidenceThreshold is out of range", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext(baseRequest({ staleConfidenceThreshold: 1.1 }), port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-threshold");
+    }
+  });
+
   it("wraps port failures as RetrievalError('port-failure') with cause preserved", () => {
     const root = new Error("port boom");
     const port: MemoryQueryPort = {

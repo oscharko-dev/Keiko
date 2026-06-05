@@ -6,6 +6,7 @@ export type GovernanceErrorCode =
   | "envelope-validation-failed"
   | "illegal-status-transition"
   | "invalid-resolution"
+  | "invalid-threshold"
   | "invalid-validity-window"
   | "idempotent-noop"
   | "unsupported-selector"

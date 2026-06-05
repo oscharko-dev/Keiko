@@ -18,6 +18,8 @@
 
 import type { MemoryRecord, MemoryStatus } from "@oscharko-dev/keiko-contracts/memory";
 
+import { GovernanceError } from "./errors.js";
+
 export type SuppressionReason =
   | "archived"
   | "forgotten"
@@ -38,6 +40,19 @@ export interface SuppressionOptions {
 const DEFAULT_STALE_CONFIDENCE_THRESHOLD = 0.3;
 
 const NOT_SUPPRESSED: SuppressionResult = { suppressed: false } as const;
+
+function isFiniteInRange(value: number, min: number, max: number): boolean {
+  return Number.isFinite(value) && value >= min && value <= max;
+}
+
+function resolveThreshold(options: SuppressionOptions): number {
+  const threshold = options.staleConfidenceThreshold ?? DEFAULT_STALE_CONFIDENCE_THRESHOLD;
+  if (isFiniteInRange(threshold, 0, 1)) return threshold;
+  throw new GovernanceError(
+    "invalid-threshold",
+    `staleConfidenceThreshold must be a finite number in [0, 1] (got ${String(threshold)})`,
+  );
+}
 
 function statusSuppression(status: MemoryStatus): SuppressionResult | null {
   switch (status) {
@@ -86,11 +101,11 @@ export function isMemorySuppressedFromRetrieval(
   nowMs: number,
   options: SuppressionOptions = {},
 ): SuppressionResult {
+  const threshold = resolveThreshold(options);
   const byStatus = statusSuppression(memory.status);
   if (byStatus !== null) return byStatus;
   const byValidity = validitySuppression(memory, nowMs);
   if (byValidity !== null) return byValidity;
-  const threshold = options.staleConfidenceThreshold ?? DEFAULT_STALE_CONFIDENCE_THRESHOLD;
   const byConfidence = confidenceSuppression(memory, threshold);
   if (byConfidence !== null) return byConfidence;
   return NOT_SUPPRESSED;

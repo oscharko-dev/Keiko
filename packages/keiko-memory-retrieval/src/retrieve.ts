@@ -88,6 +88,16 @@ function assertNonNegativeBudget(budgetTokens: number, maxIncluded: number): voi
   }
 }
 
+function assertValidThreshold(staleConfidenceThreshold: number): void {
+  if (Number.isFinite(staleConfidenceThreshold) && staleConfidenceThreshold >= 0 && staleConfidenceThreshold <= 1) {
+    return;
+  }
+  throw new RetrievalError(
+    "invalid-threshold",
+    `staleConfidenceThreshold must be a finite number in [0, 1] (got ${String(staleConfidenceThreshold)})`,
+  );
+}
+
 function validateAndResolve(request: MemoryRetrievalRequest): ResolvedRequest {
   if (request.scopes.length === 0) {
     throw new RetrievalError("empty-scopes", "request.scopes must contain at least one scope");
@@ -97,12 +107,14 @@ function validateAndResolve(request: MemoryRetrievalRequest): ResolvedRequest {
   assertNonNegativeBudget(budgetTokens, maxIncluded);
   const weights = resolveWeights(request);
   assertNonNegativeWeights(weights);
+  const staleConfidenceThreshold =
+    request.staleConfidenceThreshold ?? DEFAULT_STALE_CONFIDENCE_THRESHOLD;
+  assertValidThreshold(staleConfidenceThreshold);
   return {
     budgetTokens,
     maxIncluded,
     weights,
-    staleConfidenceThreshold:
-      request.staleConfidenceThreshold ?? DEFAULT_STALE_CONFIDENCE_THRESHOLD,
+    staleConfidenceThreshold,
   };
 }
 

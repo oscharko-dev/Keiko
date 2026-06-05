@@ -8,6 +8,7 @@
 export type RetrievalErrorCode =
   | "empty-scopes"
   | "invalid-budget"
+  | "invalid-threshold"
   | "invalid-weight"
   | "port-failure";
 

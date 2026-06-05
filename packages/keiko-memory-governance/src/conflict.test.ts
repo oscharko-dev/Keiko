@@ -5,7 +5,7 @@ import { checkStatusTransition, MEMORY_STATUSES } from "@oscharko-dev/keiko-cont
 
 import { buildConflictTransitions, detectConflictPair } from "./conflict.js";
 import { GovernanceError } from "./errors.js";
-import { ctx, FIXED_NOW_MS, makeRecord, must } from "./_support.js";
+import { ctx, FIXED_NOW_MS, makeRecord, must, projectScope } from "./_support.js";
 
 describe("detectConflictPair", () => {
   it("detects a negation-flip pair", () => {
@@ -65,9 +65,39 @@ describe("detectConflictPair", () => {
     expect(detectConflictPair(a, b).hasConflict).toBe(false);
   });
 
+  it("does NOT detect a conflict across different scope coordinates of the same kind", () => {
+    const a = makeRecord({
+      id: "m-a",
+      body: "the deploy target is staging us-east-1",
+      type: "decision",
+      scope: projectScope("p-1"),
+    });
+    const b = makeRecord({
+      id: "m-b",
+      body: "the deploy target is staging eu-west-1",
+      type: "decision",
+      scope: projectScope("p-2"),
+    });
+    expect(detectConflictPair(a, b).hasConflict).toBe(false);
+  });
+
   it("does NOT detect a conflict on near-duplicate same-polarity bodies (let dedupe collapse them)", () => {
     const a = makeRecord({ id: "m-a", body: "we ship on Friday", type: "decision" });
     const b = makeRecord({ id: "m-b", body: "we ship on Friday", type: "decision" });
+    expect(detectConflictPair(a, b).hasConflict).toBe(false);
+  });
+
+  it("does NOT treat words ending in 'nt' as negation markers", () => {
+    const a = makeRecord({
+      id: "m-a",
+      body: "important deploy target is staging us east",
+      type: "decision",
+    });
+    const b = makeRecord({
+      id: "m-b",
+      body: "deploy target is staging us east",
+      type: "decision",
+    });
     expect(detectConflictPair(a, b).hasConflict).toBe(false);
   });
 

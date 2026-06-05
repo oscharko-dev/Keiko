@@ -22,6 +22,7 @@ describe("RetrievalError", () => {
     const codes: readonly RetrievalErrorCode[] = [
       "empty-scopes",
       "invalid-budget",
+      "invalid-threshold",
       "invalid-weight",
       "port-failure",
     ];

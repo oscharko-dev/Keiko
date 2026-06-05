@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { RetrievalError } from "./errors.js";
 import { isMemorySuppressed } from "./suppression.js";
 import { buildRecord } from "./_support.js";
 
@@ -50,5 +51,21 @@ describe("isMemorySuppressed", () => {
   it("does not suppress when confidence is strictly above the threshold", () => {
     const m = buildRecord({ status: "accepted", confidence: 0.3001 });
     expect(isMemorySuppressed(m, 1_000, 0.3).suppressed).toBe(false);
+  });
+
+  it("throws RetrievalError('invalid-threshold') when threshold is NaN", () => {
+    const m = buildRecord({ status: "accepted", confidence: 0.5 });
+    expect(() => isMemorySuppressed(m, 1_000, Number.NaN)).toThrow(RetrievalError);
+  });
+
+  it("throws RetrievalError('invalid-threshold') when threshold is out of range", () => {
+    const m = buildRecord({ status: "accepted", confidence: 0.5 });
+    try {
+      isMemorySuppressed(m, 1_000, 1.1);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-threshold");
+    }
   });
 });
