@@ -16,6 +16,7 @@ import type {
   OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "./deps.js";
+import type { RouteContext } from "./routes.js";
 import {
   handleDeleteLocalKnowledgeCapsule,
   handleGetLocalKnowledgeCapsule,
@@ -40,13 +41,15 @@ function jsonRequest(
 function depsFor(tmp: string): UiHandlerDeps {
   const localKnowledgeEmbeddingRequest = vi.fn<
     (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>
-  >(async () => ({
-    ok: true as const,
-    value: {
-      vector: Float32Array.from({ length: 1536 }, (_, index) => index / 1000),
-      modelId: "text-embedding-3-small",
-    },
-  }));
+  >(() =>
+    Promise.resolve({
+      ok: true as const,
+      value: {
+        vector: Float32Array.from({ length: 1536 }, (_, index) => index / 1000),
+        modelId: "text-embedding-3-small",
+      },
+    }),
+  );
   return {
     config: {
       providers: [
@@ -81,7 +84,7 @@ function capsuleId(value: string): KnowledgeCapsuleId {
   return value as KnowledgeCapsuleId;
 }
 
-function baseCtx(tmp: string, method: string, body?: Record<string, unknown>) {
+function baseCtx(tmp: string, method: string, body?: Record<string, unknown>): RouteContext {
   return {
     req: jsonRequest(body, method),
     res: {} as never,
@@ -90,7 +93,11 @@ function baseCtx(tmp: string, method: string, body?: Record<string, unknown>) {
   };
 }
 
-function seedStore(tmp: string) {
+function seedStore(tmp: string): {
+  readonly store: ReturnType<typeof openKnowledgeStore>;
+  readonly capId: KnowledgeCapsuleId;
+  readonly dbPath: string;
+} {
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: tmp });
   const store = openKnowledgeStore({ dbPath });
   const capId = capsuleId("cap-1");
@@ -123,7 +130,10 @@ interface IndexingJobSummaryRow {
 
 afterEach(() => {
   while (tempDirs.length > 0) {
-    rmSync(tempDirs.pop() as string, { recursive: true, force: true });
+    const tempDir = tempDirs.pop();
+    if (tempDir !== undefined) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   }
 });
 

@@ -153,7 +153,9 @@ function openStoreForDeps(deps: UiHandlerDeps): {
   return {
     store,
     dbPath,
-    close: () => store.close(),
+    close: (): void => {
+      store.close();
+    },
   };
 }
 
@@ -368,6 +370,7 @@ function buildCapsuleHealth(
   const failedDocuments = countDocumentStatus(store, capsule.id, "failed");
   const skippedDocuments = countDocumentStatus(store, capsule.id, "skipped");
   const compatibility = vectorCompatibility(deps, capsule);
+  const indexedAt = lastIndexedAt(store, capsule.id);
   return {
     capsuleId: capsule.id,
     lifecycleState: capsule.lifecycleState,
@@ -375,9 +378,7 @@ function buildCapsuleHealth(
     documentCount,
     chunkCount,
     vectorCount,
-    ...(lastIndexedAt(store, capsule.id) !== undefined
-      ? { lastIndexedAt: lastIndexedAt(store, capsule.id) as number }
-      : {}),
+    ...(indexedAt !== undefined ? { lastIndexedAt: indexedAt } : {}),
     embeddingIdentity: capsule.embeddingModelIdentity,
     vectorCompatible: compatibility.vectorCompatible,
     failedDocuments,
@@ -418,10 +419,7 @@ function canonicalizeScopeRoot(scope: KnowledgeSourceScope): KnowledgeSourceScop
   if (scope.kind === "folder" || scope.kind === "files") {
     return { ...scope, rootPath: nodeWorkspaceFs.realPath(scope.rootPath) };
   }
-  if (scope.kind === "repository") {
-    return { ...scope, repositoryRoot: nodeWorkspaceFs.realPath(scope.repositoryRoot) };
-  }
-  return scope;
+  return { ...scope, repositoryRoot: nodeWorkspaceFs.realPath(scope.repositoryRoot) };
 }
 
 function canonicalizeCapsuleSourceRoots(
@@ -449,6 +447,56 @@ function canonicalizeCapsuleSourceRoots(
 
 function actionResponse(capsuleId: string): RouteResult {
   return { status: 200, body: { ok: true, capsuleId } };
+}
+
+function parseCapsuleId(ctx: RouteContext): KnowledgeCapsule["id"] {
+  const capsuleId = ctx.params.capsuleId;
+  if (capsuleId === undefined) {
+    throw new InvalidRequest("Route parameter capsuleId is required.");
+  }
+  return capsuleId as KnowledgeCapsule["id"];
+}
+
+function parseReindexMode(body: Record<string, unknown>): "changed-files" | "repair-failed" | undefined {
+  const mode = body.mode;
+  if (mode === undefined || mode === "changed-files" || mode === "repair-failed") {
+    return mode;
+  }
+  throw new InvalidRequest('Field "mode" must be "changed-files" or "repair-failed".');
+}
+
+async function runCapsuleIndexingJob(
+  deps: UiHandlerDeps,
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsule: KnowledgeCapsule,
+): Promise<
+  | { readonly kind: "job-completed"; readonly result: { readonly failedDocuments: number } }
+  | { readonly kind: "job-failed" }
+  | undefined
+> {
+  const provider = configuredProviderForCapsule(deps, capsule);
+  if (provider === undefined) {
+    return { kind: "job-failed" };
+  }
+  canonicalizeCapsuleSourceRoots(store, capsule);
+  const adapter = createEmbeddingAdapter(provider, requestEmbeddingImpl(deps));
+  let terminal:
+    | { readonly kind: "job-completed"; readonly result: { readonly failedDocuments: number } }
+    | { readonly kind: "job-failed" }
+    | undefined;
+  for await (const event of runIndexingJob({
+    capsuleId: capsule.id,
+    parserRegistry: createDefaultParserRegistry(),
+    workspaceFs: nodeWorkspaceFs,
+    embeddingAdapter: adapter,
+    store,
+    force: false,
+  })) {
+    if (event.kind === "job-completed" || event.kind === "job-failed") {
+      terminal = event;
+    }
+  }
+  return terminal;
 }
 
 async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
@@ -497,13 +545,10 @@ export async function handleGetLocalKnowledgeCapsule(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   return runHandler(() => {
-    const capsuleId = ctx.params.capsuleId;
-    if (capsuleId === undefined) {
-      throw new InvalidRequest("Route parameter capsuleId is required.");
-    }
+    const capsuleId = parseCapsuleId(ctx);
     const env = openStoreForDeps(deps);
     try {
-      const capsule = getCapsule(env.store, capsuleId as KnowledgeCapsule["id"]);
+      const capsule = getCapsule(env.store, capsuleId);
       if (capsule === undefined) {
         return notFound(`Capsule not found: ${capsuleId}`);
       }
@@ -528,14 +573,11 @@ export async function handleDeleteLocalKnowledgeCapsule(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   return runHandler(async () => {
-    const capsuleId = ctx.params.capsuleId;
-    if (capsuleId === undefined) {
-      throw new InvalidRequest("Route parameter capsuleId is required.");
-    }
+    const capsuleId = parseCapsuleId(ctx);
     await readJsonObject(ctx.req);
     const env = openStoreForDeps(deps);
     try {
-      deleteCapsule(env.store, capsuleId as KnowledgeCapsule["id"]);
+      deleteCapsule(env.store, capsuleId);
       return actionResponse(capsuleId);
     } finally {
       env.close();
@@ -548,50 +590,20 @@ export async function handleReindexLocalKnowledgeCapsule(
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
   return runHandler(async () => {
-    const capsuleId = ctx.params.capsuleId;
-    if (capsuleId === undefined) {
-      throw new InvalidRequest("Route parameter capsuleId is required.");
-    }
-    const body = await readJsonObject(ctx.req);
-    const mode = body.mode;
-    if (
-      mode !== undefined &&
-      mode !== "changed-files" &&
-      mode !== "repair-failed"
-    ) {
-      throw new InvalidRequest('Field "mode" must be "changed-files" or "repair-failed".');
-    }
-
+    const capsuleId = parseCapsuleId(ctx);
+    parseReindexMode(await readJsonObject(ctx.req));
     const env = openStoreForDeps(deps);
     try {
-      const capsule = getCapsule(env.store, capsuleId as KnowledgeCapsule["id"]);
+      const capsule = getCapsule(env.store, capsuleId);
       if (capsule === undefined) {
         return notFound(`Capsule not found: ${capsuleId}`);
       }
-      const provider = configuredProviderForCapsule(deps, capsule);
-      if (provider === undefined) {
+      if (configuredProviderForCapsule(deps, capsule) === undefined) {
         return conflict(
           "No configured embedding model matches this capsule. Update the Model Gateway configuration before refreshing it.",
         );
       }
-      canonicalizeCapsuleSourceRoots(env.store, capsule);
-      const adapter = createEmbeddingAdapter(provider, requestEmbeddingImpl(deps));
-      let terminal:
-        | { readonly kind: "job-completed"; readonly result: { readonly failedDocuments: number } }
-        | { readonly kind: "job-failed" }
-        | undefined;
-      for await (const event of runIndexingJob({
-        capsuleId: capsule.id,
-        parserRegistry: createDefaultParserRegistry(),
-        workspaceFs: nodeWorkspaceFs,
-        embeddingAdapter: adapter,
-        store: env.store,
-        force: false,
-      })) {
-        if (event.kind === "job-completed" || event.kind === "job-failed") {
-          terminal = event;
-        }
-      }
+      const terminal = await runCapsuleIndexingJob(deps, env.store, capsule);
       if (terminal?.kind === "job-failed") {
         return conflict(
           "Capsule refresh failed. Review the capsule health diagnostics and job history for details.",
