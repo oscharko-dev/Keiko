@@ -53,3 +53,24 @@ export type {
   QualityIntelligenceRecordOptions,
   QualityIntelligenceRecordResult,
 } from "./store.js";
+
+// ─── Retention, deletion, recovery (M3) ────────────────────────────────────────────
+export {
+  applyQualityIntelligenceRetention,
+  deleteQualityIntelligenceRun,
+  quarantineCorruptQualityIntelligenceManifest,
+  snapshotQualityIntelligenceRunsForRecovery,
+} from "./retention.js";
+export type {
+  QualityIntelligenceDeleteOptions,
+  QualityIntelligenceDeletionReceipt,
+  QualityIntelligenceDeletionStatus,
+  QualityIntelligenceQuarantineOptions,
+  QualityIntelligenceQuarantineReceipt,
+  QualityIntelligenceRecoverySnapshot,
+  QualityIntelligenceRetentionDecision,
+  QualityIntelligenceRetentionDecisionInput,
+  QualityIntelligenceRetentionResult,
+  QualityIntelligenceRunDeletedEvent,
+  QualityIntelligenceRunSnapshotEntry,
+} from "./retention.js";
