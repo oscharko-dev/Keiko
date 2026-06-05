@@ -17,7 +17,7 @@ interface Fixture {
   readonly store: KnowledgeStore;
   readonly cleanup: () => void;
   readonly seeded: ReturnType<typeof seedCapsuleSourceAndDocument>;
-  readonly chunkId: string;
+  readonly chunkId: VectorInsertRow["chunkId"];
 }
 
 function toBytes(vector: Float32Array): Uint8Array {
@@ -30,7 +30,7 @@ function buildRow(fixture: Fixture, overrides: Partial<VectorInsertRow> = {}): V
     capsuleId: fixture.seeded.capsuleId,
     sourceId: fixture.seeded.sourceId,
     documentId: fixture.seeded.documentId,
-    chunkId: fixture.chunkId as VectorInsertRow["chunkId"],
+    chunkId: fixture.chunkId,
     embedding: toBytes(deterministicVector("alpha", DEFAULT_EMBEDDING.vectorDimensions)),
     identity: DEFAULT_EMBEDDING,
     storageReference: "vectors/vec:test-1",

@@ -81,8 +81,9 @@ function assertEmbeddingShape(row: VectorInsertRow): void {
   const expectedByteLength = row.identity.vectorDimensions * Float32Array.BYTES_PER_ELEMENT;
   if (row.embedding.byteLength !== expectedByteLength) {
     throw new KnowledgeStoreError(
-      `vector blob length ${String(row.embedding.byteLength)} does not match ` +
-        `identity.vectorDimensions=${String(row.identity.vectorDimensions)}`,
+      `vector ${String(row.id)} for capsule=${String(row.capsuleId)} ` +
+        `chunk=${String(row.chunkId)} has blob length ${String(row.embedding.byteLength)} ` +
+        `but identity.vectorDimensions=${String(row.identity.vectorDimensions)}`,
     );
   }
 }
