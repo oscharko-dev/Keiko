@@ -1,6 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { SafeMarkdown } from "./SafeMarkdown";
 
 // ---------------------------------------------------------------------------
@@ -50,6 +49,28 @@ describe("SafeMarkdown — copy button interaction", () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith("console.log('hi');");
     });
+
+    // Restore original descriptor
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3a. Copy button is a safe no-op when navigator.clipboard is undefined
+// ---------------------------------------------------------------------------
+describe("SafeMarkdown — copy button without clipboard API", () => {
+  it("does not throw when navigator.clipboard is undefined (non-secure context)", () => {
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: undefined,
+      configurable: true,
+    });
+
+    render(<SafeMarkdown source={"```js\nconsole.log('hi');\n```"} />);
+    const copyBtn = screen.getByRole("button", { name: "Copy code block" });
+    expect(() => fireEvent.click(copyBtn)).not.toThrow();
 
     // Restore original descriptor
     if (clipboardDescriptor !== undefined) {

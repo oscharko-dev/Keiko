@@ -139,7 +139,15 @@ function checkDocumentContextBudget(
   if (documentContext === undefined || documentContext.length === 0) return undefined;
   let total = 0;
   for (const entry of documentContext) {
-    total += entry.extractedBytes;
+    // The wire's declared `extractedBytes` is caller-supplied and therefore untrusted: a
+    // client can claim 100 bytes while shipping a 10 MiB `text` blob and slip past the cap.
+    // Measure the real UTF-8 byte size of the strings we will actually use, and take the
+    // MAX of declared vs measured so under-reporting cannot shrink the contribution.
+    const measuredBytes =
+      Buffer.byteLength(entry.text, "utf8") +
+      Buffer.byteLength(entry.truncationMarker ?? "", "utf8");
+    const declaredBytes = Number.isFinite(entry.extractedBytes) ? entry.extractedBytes : 0;
+    total += Math.max(declaredBytes, measuredBytes);
     if (total > MAX_AGGREGATE_DOCUMENT_BYTES) {
       return fail("CONVERSATION_OVERSIZED_CONTEXT", MSG_OVERSIZED_CONTEXT);
     }

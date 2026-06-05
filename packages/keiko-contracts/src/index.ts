@@ -275,6 +275,7 @@ export type {
   UpdateChatMessagePatch,
   GroundedAnswerContextPackSummary,
   ConversationDocumentContextWire,
+  ConversationAttachmentDescriptorWire,
   DesktopChatSendRequestWire,
   BffErrorCode,
   BffError,

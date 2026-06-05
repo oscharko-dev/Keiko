@@ -203,6 +203,53 @@ describe("validateConversationPayload", () => {
     }
   });
 
+  it("rejects under-reported extractedBytes that hide an oversize text payload", () => {
+    // Caller claims a tiny extractedBytes (100) but ships a 300 KiB text blob — server must
+    // measure the actual UTF-8 length and reject. Without the MAX(declared, measured) guard
+    // the aggregate (100) sails under the 256 KiB budget while 300 KiB of text reaches the
+    // model prompt.
+    const oversizeText = "a".repeat(300 * 1024);
+    const result = validateConversationPayload({
+      modelId: "test-chat",
+      modelCapabilities: registry(baseCapability()),
+      documentContext: [
+        {
+          id: "a",
+          displayName: "a.txt",
+          mimeType: "text/plain",
+          sizeBytes: 100,
+          extractedBytes: 100,
+          truncated: false,
+          text: oversizeText,
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("CONVERSATION_OVERSIZED_CONTEXT");
+    }
+  });
+
+  it("accepts an honest document context whose declared and actual byte counts agree", () => {
+    const text = "okay";
+    const result = validateConversationPayload({
+      modelId: "test-chat",
+      modelCapabilities: registry(baseCapability()),
+      documentContext: [
+        {
+          id: "a",
+          displayName: "a.txt",
+          mimeType: "text/plain",
+          sizeBytes: text.length,
+          extractedBytes: Buffer.byteLength(text, "utf8"),
+          truncated: false,
+          text,
+        },
+      ],
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
   it("never echoes a caller-supplied model id, file name, or byte count in any error message", () => {
     // Exercise every failure path with deliberately distinctive caller-supplied values and
     // assert none of them leak into any returned message. This is the privacy contract:

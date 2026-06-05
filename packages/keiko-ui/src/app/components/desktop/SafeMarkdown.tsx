@@ -26,6 +26,12 @@ function CopyButton({ text }: { readonly text: string }): ReactNode {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(() => {
+    // navigator.clipboard is undefined in non-secure contexts (and unimplemented in jsdom).
+    // Guard with optional chaining + an explicit existence check so a click in those contexts
+    // becomes a no-op rather than a TypeError.
+    if (typeof navigator === "undefined" || navigator.clipboard?.writeText === undefined) {
+      return;
+    }
     void navigator.clipboard.writeText(text).then(
       () => {
         setCopied(true);

@@ -356,6 +356,91 @@ describe("desktop chat routes", () => {
     expect(lastTurn?.content).not.toContain("x".repeat(257));
   });
 
+  // PR #367 review (HIGH): the text-bytes cap previously used `string.length`, which counts
+  // UTF-16 code units. A multi-byte UTF-8 payload (each "漢" = 1 unit but 3 bytes) can blow past
+  // the 64 KiB MAX_DOCUMENT_CONTEXT_TEXT_BYTES while `length` stays under the cap. The fixed
+  // server measures `Buffer.byteLength(..., "utf8")`, so this entry must be dropped.
+  it("rejects a documentContext entry whose UTF-8 byte length exceeds the cap despite small string length", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    // "漢字" is 6 UTF-8 bytes but 2 UTF-16 code units. Repeating it 11_000 times yields
+    // 22_000 code units (≈ 66 KiB UTF-8) — just over the 64 KiB MAX_DOCUMENT_CONTEXT_TEXT_BYTES
+    // cap (so the byte check rejects it), yet `text.length` (22_000) is comfortably below it,
+    // and the JSON envelope stays under the 128 KiB request-body limit.
+    const multiByteText = "漢字".repeat(11_000);
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "hello",
+        documentContext: [
+          {
+            id: "doc-1",
+            displayName: "kanji.txt",
+            mimeType: "text/plain",
+            sizeBytes: 100_000,
+            extractedBytes: 100_000,
+            truncated: false,
+            text: multiByteText,
+          },
+        ],
+      }),
+    });
+    // Malformed entry dropped → send still succeeds, but the prompt MUST NOT contain
+    // the kanji payload (the document block was not emitted).
+    expect(sendRes.status).toBe(200);
+    const lastTurn = seenRequests[0]?.messages.at(-1);
+    expect(lastTurn?.content).not.toContain("漢字");
+  });
+
+  // PR #367 review (HIGH): sizeBytes / extractedBytes were only checked `>= 0`. A non-integer
+  // value such as 1.5 survives JSON round-trip and previously slipped through. The fixed server
+  // enforces Number.isInteger so the entry is dropped. (NaN/Infinity become null via JSON.stringify
+  // and are already rejected by the earlier `typeof value === "number"` gate — this test pins
+  // the integer-only guard, which is the missing one.)
+  it("rejects a documentContext entry whose extractedBytes is a non-integer (1.5)", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "hello",
+        documentContext: [
+          {
+            id: "doc-bad-bytes",
+            displayName: "bad-bytes.txt",
+            mimeType: "text/plain",
+            sizeBytes: 4,
+            extractedBytes: 1.5,
+            truncated: false,
+            text: "okay",
+          },
+        ],
+      }),
+    });
+    // Entry dropped; send still succeeds without a document block.
+    expect(sendRes.status).toBe(200);
+    const lastTurn = seenRequests[0]?.messages.at(-1);
+    expect(lastTurn?.content).not.toContain("bad-bytes.txt");
+  });
+
   // ─── Issue #149 — server-side modality guardrails ───────────────────────────────
   //
   // The validator runs BEFORE the model adapter is invoked. AC#4 requires that the gateway is

@@ -222,15 +222,30 @@ export interface ConversationDocumentContextWire {
   readonly text: string;
 }
 
+// Issue #149 — descriptor for a single image/document attachment carried on the conversation
+// send path. Only kind/mime/size metadata travels here; bytes are not on this wire. The server
+// validator enforces modality + mime allowlist + per-attachment size cap before any model is
+// invoked.
+export interface ConversationAttachmentDescriptorWire {
+  readonly id: string;
+  readonly kind: "image" | "document";
+  readonly name: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+}
+
 // Issue #148 — wire shape for POST /api/desktop/chat. Authored here (not inside keiko-server)
 // so the UI and the server share a single source of truth for the send payload. Existing
-// callers that omit `documentContext` keep working — the field is optional and additive.
+// callers that omit `documentContext` or `attachments` keep working — both fields are optional
+// and additive. `attachments` was already parsed and validated by the server (PR #367 review);
+// this field exposes it on the typed wire so the UI compiles against the same surface.
 export interface DesktopChatSendRequestWire {
   readonly chatId: string;
   readonly projectPath: string;
   readonly content: string;
   readonly modelId?: string | undefined;
   readonly documentContext?: readonly ConversationDocumentContextWire[] | undefined;
+  readonly attachments?: readonly ConversationAttachmentDescriptorWire[] | undefined;
 }
 
 // ─── Gateway safe-config projection (BFF /api/gateway/config) ─────────────────────

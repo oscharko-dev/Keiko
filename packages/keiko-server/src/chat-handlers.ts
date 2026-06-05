@@ -358,11 +358,17 @@ function readDocumentContextFields(
 }
 
 function fieldsWithinCaps(fields: DocumentContextFields): boolean {
+  // `string.length` returns UTF-16 code units, which under-counts bytes for any non-ASCII
+  // content (e.g. "漢" = 1 code unit but 3 UTF-8 bytes). The model prompt is bounded in UTF-8
+  // bytes, so we MUST measure the same way here. Also enforce that the declared sizes are
+  // finite non-negative INTEGERS so callers cannot ship NaN/Infinity/1.5 and bypass the cap.
   return (
     fields.displayName.length > 0 &&
     fields.displayName.length <= MAX_DOCUMENT_DISPLAY_NAME &&
-    fields.text.length <= MAX_DOCUMENT_CONTEXT_TEXT_BYTES &&
+    Buffer.byteLength(fields.text, "utf8") <= MAX_DOCUMENT_CONTEXT_TEXT_BYTES &&
+    Number.isInteger(fields.sizeBytes) &&
     fields.sizeBytes >= 0 &&
+    Number.isInteger(fields.extractedBytes) &&
     fields.extractedBytes >= 0
   );
 }
@@ -378,7 +384,7 @@ function parseDocumentContextEntry(value: unknown): ConversationDocumentContextW
     typeof value.truncationMarker === "string" ? value.truncationMarker : undefined;
   if (
     truncationMarker !== undefined &&
-    truncationMarker.length > MAX_DOCUMENT_TRUNCATION_MARKER_BYTES
+    Buffer.byteLength(truncationMarker, "utf8") > MAX_DOCUMENT_TRUNCATION_MARKER_BYTES
   ) {
     return undefined;
   }
