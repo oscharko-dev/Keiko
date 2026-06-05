@@ -22,6 +22,7 @@ import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import "./widgets";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow } from "./windows/types";
+import { InstallBanner } from "./install/InstallBanner";
 
 function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
   if (wins === null || wins.length === 0) return null;
@@ -238,6 +239,7 @@ function AppShellInner(): ReactNode {
           )}
           {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
           {needsGatewaySetup ? <GatewaySetupDialog /> : null}
+          <InstallBanner />
         </div>
       </WsContext.Provider>
     </ChatSessionProvider>
