@@ -35,3 +35,21 @@ export {
   getQualityIntelligenceRetentionProfile,
 } from "./retentionPolicy.js";
 export type { QualityIntelligenceRetentionProfile } from "./retentionPolicy.js";
+
+// ─── Local-state store + CRUD (M2) ─────────────────────────────────────────────────
+export {
+  createInMemoryQualityIntelligenceLocalStore,
+  createNodeQualityIntelligenceLocalStore,
+  listQualityIntelligenceRuns,
+  loadQualityIntelligenceRun,
+  recordQualityIntelligenceRun,
+  QI_SUBDIR,
+} from "./store.js";
+export type {
+  QualityIntelligenceLoadOptions,
+  QualityIntelligenceLocalStore,
+  QualityIntelligenceNodeStoreOptions,
+  QualityIntelligenceRecordInput,
+  QualityIntelligenceRecordOptions,
+  QualityIntelligenceRecordResult,
+} from "./store.js";
