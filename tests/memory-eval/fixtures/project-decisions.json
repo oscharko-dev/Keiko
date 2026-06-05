@@ -1,0 +1,53 @@
+[
+  {
+    "id": "project-decisions-basic",
+    "description": "Project-scope decisions for a synthetic project. Includes two related decisions that the long-range-understanding scenario links via a `related` edge — the linked decision must outrank an unrelated decision when the seed query mentions the parent.",
+    "memories": [
+      {
+        "id": "dec-rate-limit-policy",
+        "scope": { "kind": "project", "projectId": "proj-keiko" },
+        "type": "decision",
+        "body": "rate limiter uses token bucket per route",
+        "tags": ["architecture"],
+        "confidence": 0.9,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "dec-rate-limit-burst",
+        "scope": { "kind": "project", "projectId": "proj-keiko" },
+        "type": "decision",
+        "body": "burst capacity is sixty requests per minute",
+        "tags": ["architecture"],
+        "confidence": 0.85,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "dec-unrelated-color",
+        "scope": { "kind": "project", "projectId": "proj-keiko" },
+        "type": "decision",
+        "body": "primary accent colour is forest green",
+        "tags": ["design"],
+        "confidence": 0.6,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge-rate-limit-related",
+        "from": "dec-rate-limit-burst",
+        "to": "dec-rate-limit-policy",
+        "kind": "related",
+        "createdAt": 1700000000000
+      }
+    ]
+  }
+]

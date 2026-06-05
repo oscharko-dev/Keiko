@@ -1,0 +1,33 @@
+[
+  {
+    "id": "correction-pair-build-tool",
+    "description": "An older semantic-fact about the build tool followed by a newer correction-type memory. The correction must outrank the older fact for a query that mentions the topic — proves that the correction boost + recency together suppress the stale fact.",
+    "memories": [
+      {
+        "id": "fact-build-tool-old",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "semantic-fact",
+        "body": "the build tool for the project is webpack",
+        "tags": ["build"],
+        "confidence": 0.8,
+        "capturedAt": 1699000000000,
+        "validFrom": 1699000000000,
+        "createdAt": 1699000000000,
+        "updatedAt": 1699000000000
+      },
+      {
+        "id": "correction-build-tool-new",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "correction",
+        "body": "actually the build tool for the project is vite, not webpack",
+        "tags": ["build"],
+        "sourceKind": "accepted-correction",
+        "confidence": 0.95,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    ]
+  }
+]
