@@ -38,11 +38,14 @@ function ReviewRow({
   onAccept,
   onReject,
 }: ReviewRowProps): ReactNode {
+  const labelId = `memory-review-body-${record.id}`;
   return (
     <li>
-      <article className="mc-review-row" aria-label={`Review: ${record.body.slice(0, 60)}`}>
+      <article className="mc-review-row">
         <div className="mc-review-body">
-          <p className="mc-row-body">{record.body}</p>
+          <p id={labelId} className="mc-row-body">
+            {record.body}
+          </p>
           <div className="mc-row-meta">
             <span className="mc-row-type">{record.type}</span>
             <span className="mc-row-scope">{record.scope.kind}</span>
@@ -60,11 +63,7 @@ function ReviewRow({
             </p>
           ) : null}
         </div>
-        <div
-          className="mc-review-actions"
-          role="group"
-          aria-label={`Actions for: ${record.body.slice(0, 40)}`}
-        >
+        <div className="mc-review-actions" role="group" aria-labelledby={labelId}>
           {record.status === "proposed" ? (
             <>
               <button
@@ -75,7 +74,6 @@ function ReviewRow({
                 onClick={() => {
                   onAccept(record);
                 }}
-                aria-label={`Accept memory: ${record.body.slice(0, 40)}`}
               >
                 {busyAction === "accept" ? "Accepting…" : "Accept"}
               </button>
@@ -87,7 +85,6 @@ function ReviewRow({
                 onClick={() => {
                   onReject(record);
                 }}
-                aria-label={`Reject memory: ${record.body.slice(0, 40)}`}
               >
                 {busyAction === "reject" ? "Rejecting…" : "Reject"}
               </button>
@@ -101,7 +98,6 @@ function ReviewRow({
               onClick={() => {
                 onReject(record);
               }}
-              aria-label={`Dismiss conflict for memory: ${record.body.slice(0, 40)}`}
             >
               {busyAction === "reject" ? "Dismissing…" : "Dismiss"}
             </button>

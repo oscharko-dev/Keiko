@@ -77,8 +77,8 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Use camelCase for variables")).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: /accept memory:/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /reject memory:/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Accept" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
   });
 
   it("renders conflicted memory with Dismiss button (no Accept)", async () => {
@@ -93,8 +93,8 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Conflicting preference")).toBeInTheDocument();
     });
-    expect(screen.queryByRole("button", { name: /accept memory:/i })).toBeNull();
-    expect(screen.getByRole("button", { name: /dismiss conflict/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
   });
 
   it("removes row from queue after Accept", async () => {
@@ -110,7 +110,7 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Memory to accept")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: /accept memory:/i }));
+    await user.click(screen.getByRole("button", { name: "Accept" }));
     await waitFor(() => {
       expect(screen.queryByText("Memory to accept")).toBeNull();
     });
@@ -129,7 +129,7 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Memory to reject")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: /reject memory:/i }));
+    await user.click(screen.getByRole("button", { name: "Reject" }));
     await waitFor(() => {
       expect(screen.queryByText("Memory to reject")).toBeNull();
     });
@@ -149,12 +149,12 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.getByText("Fail to accept")).toBeInTheDocument();
     });
-    await user.click(screen.getByRole("button", { name: /accept memory:/i }));
+    await user.click(screen.getByRole("button", { name: "Accept" }));
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
       expect(screen.getByText(/accept failed/i)).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: /accept memory:/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Accept" })).toBeEnabled();
   });
 
   it("keeps other rows interactive while one row is busy", async () => {
@@ -182,7 +182,7 @@ describe("ReviewQueue — populated state", () => {
       expect(screen.getByText("Second proposal")).toBeInTheDocument();
     });
 
-    const acceptButtons = screen.getAllByRole("button", { name: /accept memory:/i });
+    const acceptButtons = screen.getAllByRole("button", { name: "Accept" });
     expect(acceptButtons).toHaveLength(2);
     const [firstAcceptButton, secondAcceptButton] = acceptButtons;
     expect(firstAcceptButton).toBeDefined();

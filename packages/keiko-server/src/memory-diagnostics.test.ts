@@ -15,9 +15,11 @@ import {
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type {
   MemoryId,
+  MemoryProjectId,
   MemoryRecord,
   MemoryScope,
   MemoryUserId,
+  MemoryWorkspaceId,
 } from "@oscharko-dev/keiko-contracts";
 import { exportMemoryDiagnostics } from "./memory-diagnostics.js";
 import { createMemoryAuditHandler } from "./memory-audit-handler.js";
@@ -32,6 +34,16 @@ function brandedMemoryId(value: string): MemoryId {
 function brandedMemoryUserId(value: string): MemoryUserId {
   const u: unknown = value;
   return u as MemoryUserId;
+}
+
+function brandedMemoryProjectId(value: string): MemoryProjectId {
+  const u: unknown = value;
+  return u as MemoryProjectId;
+}
+
+function brandedMemoryWorkspaceId(value: string): MemoryWorkspaceId {
+  const u: unknown = value;
+  return u as MemoryWorkspaceId;
 }
 
 const USER_ID = brandedMemoryUserId("u-diagnostics");
@@ -185,6 +197,24 @@ describe("exportMemoryDiagnostics — storage path redaction", () => {
     });
     expect(diag.storagePath).not.toContain(secret);
   });
+
+  it("masks scope coordinates in the diagnostics snapshot", () => {
+    const vault = makeVault();
+    const diag = exportMemoryDiagnostics({
+      vault,
+      scopes: [
+        {
+          kind: "project",
+          projectId: brandedMemoryProjectId("/Users/private/project"),
+        },
+      ],
+      evidenceStore: createInMemoryEvidenceStore(),
+      redactString: (s) => s,
+      evidenceDir: "/tmp/evidence",
+      now: () => FIXED_NOW,
+    });
+    expect(JSON.stringify(diag)).not.toContain("/Users/private/project");
+  });
 });
 
 // ── Audit tail ────────────────────────────────────────────────────────────────
@@ -222,6 +252,53 @@ describe("exportMemoryDiagnostics — sanitised audit tail", () => {
       now: () => FIXED_NOW,
     });
     expect(diag.recentAuditEvents).toHaveLength(0);
+  });
+
+  it("filters the audit tail down to the requested scopes", () => {
+    const evidenceStore = createInMemoryEvidenceStore();
+    const vault = makeVault(evidenceStore);
+    const otherScope: MemoryScope = {
+      kind: "workspace",
+      workspaceId: brandedMemoryWorkspaceId("ws-other"),
+    };
+    insertRecord(vault, { id: "r-a", status: "proposed" });
+    vault.insertMemory({
+      id: brandedMemoryId("r-b"),
+      schemaVersion: "1",
+      scope: otherScope,
+      type: "preference",
+      body: "record r-b",
+      provenance: {
+        sourceKind: "explicit-user-instruction",
+        capturedAt: FIXED_NOW,
+        confidence: 0.9,
+        sensitivity: "public",
+      },
+      validity: { validFrom: FIXED_NOW },
+      status: "proposed",
+      pinned: false,
+      tags: [],
+      createdAt: FIXED_NOW,
+      updatedAt: FIXED_NOW,
+    });
+    const diag = exportMemoryDiagnostics({
+      vault,
+      scopes: [SCOPE],
+      evidenceStore,
+      redactString: (s) => s,
+      evidenceDir: "/tmp/evidence",
+      lastNAuditEvents: 10,
+      now: () => FIXED_NOW,
+    });
+    expect(diag.recentAuditEvents).toHaveLength(1);
+    const first = diag.recentAuditEvents[0];
+    if (first !== undefined && first.kind !== "memory:workflow-used") {
+      if (first.kind === "memory:retrieved") {
+        expect(first.scopes).toHaveLength(1);
+      } else {
+        expect(first.scope.kind).toBe("user");
+      }
+    }
   });
 
   it("clamps lastNAuditEvents to [1, 1000]", () => {

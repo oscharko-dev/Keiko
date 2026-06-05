@@ -1,8 +1,7 @@
 // AC: accurate retrieval. A user-scope preference matching the query text must rank top-1.
 //
 // Mutation-robustness controls:
-//  1. POSITIVE: top-1 included memory id is the matching preference, AND it carries the
-//     highest weighted score.
+//  1. POSITIVE: top-1 included memory id is the matching preference.
 //  2. NEGATIVE/CONTROL: re-rank the same candidate set without the matching record and
 //     assert the unrelated noise no longer leads with a preference body — proves the
 //     scenario WOULD fail if the matching record was dropped from the ranker output.

@@ -19,6 +19,7 @@ import { errorBody, STREAMING } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentRedactionSecrets } from "./deps.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { createAuditRedactor } from "@oscharko-dev/keiko-evidence";
 import { UiStoreError, type ChatMessage, type NewChatMessage } from "./store/index.js";
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -273,6 +274,11 @@ function engineContextFor(
       env: deps.env,
       additionalSecrets: currentRedactionSecrets(deps),
     },
+    memoryVault: deps.memoryVault,
+    memoryAuditRedactString: createAuditRedactor(
+      { additionalSecrets: currentRedactionSecrets(deps) },
+      deps.env,
+    ),
   };
 }
 

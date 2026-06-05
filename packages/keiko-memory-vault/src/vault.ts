@@ -114,6 +114,14 @@ function mergePatch(existing: MemoryRecord, patch: MemoryUpdatePatch, nowMs: num
   return next;
 }
 
+function existingMemoryOrThrow(db: DatabaseSync, id: MemoryId): MemoryRecord {
+  const existing = getMemoryRow(db, id);
+  if (existing === undefined) {
+    throw new MemoryStorageError("not-found", "Memory not found.");
+  }
+  return existing;
+}
+
 function buildTombstone(
   record: MemoryRecord,
   options: DeleteMemoryOptions,
@@ -172,10 +180,7 @@ function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMut
       return ready;
     },
     updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number): MemoryRecord => {
-      const existing = getMemoryRow(db, id);
-      if (existing === undefined) {
-        throw new MemoryStorageError("not-found", "Memory not found.");
-      }
+      const existing = existingMemoryOrThrow(db, id);
       const merged = mergePatch(existing, patch, nowMs);
       const ready = preparedForWrite(merged, opts);
       updateMemoryRow(db, ready);
@@ -184,8 +189,14 @@ function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMut
     },
     deleteMemory: (id: MemoryId, options: DeleteMemoryOptions): void => {
       gateDeleteOptions(options);
+      const existing = existingMemoryOrThrow(db, id);
       const { tombstone } = runDelete(db, id, options, opts);
-      opts.emit({ kind: "memory:deleted", memoryId: id, tombstoned: tombstone !== undefined });
+      opts.emit({
+        kind: "memory:deleted",
+        memoryId: id,
+        scope: existing.scope,
+        tombstoned: tombstone !== undefined,
+      });
       if (tombstone !== undefined) {
         opts.emit({ kind: "memory:tombstoned", tombstone });
       }

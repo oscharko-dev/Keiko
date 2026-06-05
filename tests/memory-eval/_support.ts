@@ -283,14 +283,22 @@ const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), "fixtures");
 
 function isFixtureScope(value: unknown): value is FixtureScope {
   if (typeof value !== "object" || value === null) return false;
-  const kind = (value as { kind?: unknown }).kind;
-  return (
-    kind === "user" ||
-    kind === "workspace" ||
-    kind === "project" ||
-    kind === "workflow" ||
-    kind === "global"
-  );
+  const scope = value as Record<string, unknown>;
+  const kind = scope.kind;
+  switch (kind) {
+    case "user":
+      return typeof scope.userId === "string";
+    case "workspace":
+      return typeof scope.workspaceId === "string";
+    case "project":
+      return typeof scope.projectId === "string";
+    case "workflow":
+      return typeof scope.workflowDefinitionId === "string";
+    case "global":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function isFixtureRecord(value: unknown): value is FixtureRecord {

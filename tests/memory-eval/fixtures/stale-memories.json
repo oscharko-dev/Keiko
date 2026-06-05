@@ -1,7 +1,7 @@
 [
   {
     "id": "stale-memories-mixed",
-    "description": "Mix of stale and fresh memories. Stale entries have low confidence (below the default 0.3 threshold) or are explicitly flagged with a staleReason. The suppression layer must omit them from retrieval, leaving only the fresh memory.",
+    "description": "Mix of fresh, stale, and blocked memories that all share the same scope and topic. Retrieval must suppress low-confidence, expired, rejected, and conflicted records, leaving only the fresh fact eligible for inclusion.",
     "memories": [
       {
         "id": "stale-low-confidence",
@@ -15,12 +15,36 @@
         "updatedAt": 1700000000000
       },
       {
-        "id": "stale-flagged",
+        "id": "stale-expired",
         "scope": { "kind": "user", "userId": "user-alice" },
         "type": "semantic-fact",
-        "body": "deploy script ran on the old jenkins host",
-        "staleReason": "source workflow rejected after re-validation",
+        "body": "deploy script still runs on the retired jenkins host",
         "confidence": 0.85,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "validUntil": 1699999999000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "blocked-rejected",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "semantic-fact",
+        "body": "deploy script runs on an unapproved legacy server",
+        "status": "rejected",
+        "confidence": 0.95,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "blocked-conflicted",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "semantic-fact",
+        "body": "deploy script runs on a host with conflicting inventory data",
+        "status": "conflicted",
+        "confidence": 0.95,
         "capturedAt": 1700000000000,
         "validFrom": 1700000000000,
         "createdAt": 1700000000000,
@@ -30,7 +54,7 @@
         "id": "fresh-fact",
         "scope": { "kind": "user", "userId": "user-alice" },
         "type": "semantic-fact",
-        "body": "deploy script runs from github actions on the main branch",
+        "body": "deploy script runs from GitHub Actions after the green pipeline succeeds",
         "confidence": 0.9,
         "capturedAt": 1700000000000,
         "validFrom": 1700000000000,

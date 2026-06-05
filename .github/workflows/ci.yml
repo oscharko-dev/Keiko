@@ -92,8 +92,14 @@ jobs:
       - run: npm ci
       - name: Build
         run: npm run build
+      - name: Prepare packaged CLI and UI assets
+        run: |
+          npm run prepare:bin
+          npm run build:ui
       - name: Installable-package smoke (Issue #169 AC2)
         run: npm run smoke:install
+      - name: Installable memory smoke (Issue #216)
+        run: npm run smoke:install:memory
       - name: Smoke - offline evaluate exits 0
         run: KEIKO_EVIDENCE_DIR="$(mktemp -d)" node dist/cli/index.js evaluate --suite all
       - name: Security audit (high and above)

@@ -26,6 +26,11 @@ import { MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { auditRunIdFor } from "./memory-audit-handler.js";
+import {
+  auditEventTouchesScope,
+  memoryScopeKey,
+  sanitizeMemoryScope,
+} from "./memory-scope-sanitizer.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -105,12 +110,18 @@ function readRecentAuditEvents(
   store: EvidenceStore,
   nowMs: number,
   limit: number,
+  allowedScopeKeys: ReadonlySet<string>,
 ): readonly MemoryAuditEvent[] {
-  const today = readAuditManifest(store, auditRunIdFor(nowMs));
+  const today = readAuditManifest(store, auditRunIdFor(nowMs)).filter((event) =>
+    auditEventTouchesScope(event, allowedScopeKeys),
+  );
   if (today.length >= limit) {
     return today.slice(today.length - limit);
   }
-  const yesterday = readAuditManifest(store, auditRunIdFor(nowMs - 24 * 60 * 60 * 1000));
+  const yesterday = readAuditManifest(
+    store,
+    auditRunIdFor(nowMs - 24 * 60 * 60 * 1000),
+  ).filter((event) => auditEventTouchesScope(event, allowedScopeKeys));
   const combined = [...yesterday, ...today];
   if (combined.length <= limit) {
     return combined;
@@ -141,17 +152,25 @@ export function exportMemoryDiagnostics(
 ): MemoryDiagnostics {
   const now = options.now ?? ((): number => Date.now());
   const nowMs = now();
-  const scopeCounts: MemoryScopeCount[] = [];
   const histogram = emptyHistogram();
-  for (const scope of options.scopes) {
+  const sanitizedScopes = options.scopes.map((scope) =>
+    sanitizeMemoryScope(scope, options.redactString),
+  );
+  const allowedScopeKeys = new Set(sanitizedScopes.map((scope) => memoryScopeKey(scope)));
+  const scopeCounts = options.scopes.map((scope, index) => {
     const records = options.vault.listMemoriesByScope(scope, { includeExpired: true });
-    scopeCounts.push({ scope, count: records.length });
     for (const record of records) {
       histogram[record.status] += 1;
     }
-  }
+    return { scope: sanitizedScopes[index] ?? sanitizeMemoryScope(scope, options.redactString), count: records.length };
+  });
   const tail = clampTail(options.lastNAuditEvents);
-  const recentAuditEvents = readRecentAuditEvents(options.evidenceStore, nowMs, tail);
+  const recentAuditEvents = readRecentAuditEvents(
+    options.evidenceStore,
+    nowMs,
+    tail,
+    allowedScopeKeys,
+  );
   return {
     schemaVersion: "1",
     generatedAt: nowMs,

@@ -6,7 +6,7 @@ Synthetic-fixture benchmark for the Governed Enterprise Memory Vault stack
 
 The harness composes the production memory packages (`keiko-memory-vault`,
 `keiko-memory-capture`, `keiko-memory-governance`, `keiko-memory-retrieval`)
-with deterministic clocks and counter-based IDs, then runs eight scenarios
+with deterministic clocks and counter-based IDs, then runs nine scenarios
 that each cover one acceptance criterion of the epic.
 
 ## How to run
@@ -30,10 +30,11 @@ npm test -- tests/memory-eval/scenarios/cross-scope-isolation.test.ts
 
 ## Where the scorecard lands
 
-`tests/memory-eval/scorecard.json` — written by `eval-runner.test.ts` on a
-successful orchestrator run. The runner asserts byte-identical output across
-two consecutive runs as a determinism guard, so the file in git should match
-the file the test produces on a clean checkout.
+`tests/memory-eval/scorecard.json` — optional local evidence artifact written by
+`eval-runner.test.ts` only when `KEIKO_WRITE_MEMORY_EVAL_SCORECARD=1` is set.
+The runner still asserts byte-identical output across two consecutive runs as a
+determinism guard during every test run; the explicit write path exists so a PR
+can attach a fresh JSON scorecard without dirtying ordinary local or CI runs.
 
 ## Fixture format
 
@@ -85,15 +86,16 @@ kind requires its matching coordinate field (e.g. `userId` for `user`).
 
 ## What each fixture is for
 
-| File                         | Scenarios that consume it          |
-| ---------------------------- | ---------------------------------- |
-| `user-preferences.json`      | accurate-retrieval, no-memory-mode |
-| `project-decisions.json`     | long-range-understanding           |
-| `workflow-lessons.json`      | test-time-learning                 |
-| `correction-pairs.json`      | correction-handling                |
-| `stale-memories.json`        | accurate-retrieval (suppression)   |
-| `forget-targets.json`        | selective-forgetting               |
-| `cross-scope-collision.json` | cross-scope-isolation              |
+| File                         | Scenarios that consume it               |
+| ---------------------------- | --------------------------------------- |
+| `user-preferences.json`      | accurate-retrieval, no-memory-mode      |
+| `project-decisions.json`     | long-range-understanding                |
+| `workflow-lessons.json`      | test-time-learning                      |
+| `correction-pairs.json`      | correction-handling                     |
+| `stale-memories.json`        | suppressed-memory                       |
+| `forget-targets.json`        | selective-forgetting                    |
+| `cross-scope-collision.json` | cross-scope-isolation                   |
+| `invalid-scope.json`         | `_support.test.ts` (fixture validation) |
 
 `error-propagation` does not load a fixture; it constructs a malformed record
 inline because the assertion is that the validator REJECTS it.
@@ -104,7 +106,7 @@ inline because the assertion is that the validator REJECTS it.
 {
   "evalSchemaVersion": "1",
   "generatedAt": 1700000000000,
-  "totals": { "scenarios": 8, "passed": 8, "failed": 0 },
+  "totals": { "scenarios": 9, "passed": 9, "failed": 0 },
   "scenarios": [{ "name": "accurate-retrieval", "passed": true, "evidence": "..." }],
 }
 ```

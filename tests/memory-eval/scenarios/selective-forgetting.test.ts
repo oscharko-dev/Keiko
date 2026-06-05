@@ -17,7 +17,11 @@ import {
   buildForgetOperations,
   selectMemoriesForForget,
 } from "@oscharko-dev/keiko-memory-governance";
-import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import {
+  createMemoryVault,
+  type MemoryTombstone,
+  type MemoryVaultStore,
+} from "@oscharko-dev/keiko-memory-vault";
 import {
   retrieveMemoryContext,
   type MemoryRetrievalRequest,
@@ -99,13 +103,19 @@ function runSelectiveForgetting(): { passed: boolean; evidence: string } {
       });
     }
     const after = includedIds(vault);
+    const tombstones: readonly MemoryTombstone[] = vault.listTombstonesByScope(
+      userScope("user-alice"),
+    );
+    const tombstoneIds = tombstones.map((t) => String(t.memoryId));
     const selectedExactlyTwo = selected.length === 2;
     const forgottenAbsent =
       !after.includes("forget-pref-one") && !after.includes("forget-pref-two");
     const keptPresent = after.includes(KEPT_ID);
+    const tombstonesPresent =
+      tombstoneIds.includes("forget-pref-one") && tombstoneIds.includes("forget-pref-two");
     return {
-      passed: selectedExactlyTwo && forgottenAbsent && keptPresent,
-      evidence: `selected=${String(selected.length)} after=[${after.join(",")}]`,
+      passed: selectedExactlyTwo && forgottenAbsent && keptPresent && tombstonesPresent,
+      evidence: `selected=${String(selected.length)} after=[${after.join(",")}] tombstones=[${tombstoneIds.join(",")}]`,
     };
   } finally {
     vault.close();

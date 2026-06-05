@@ -2,8 +2,7 @@
 // the same topic when both share scope and query relevance.
 //
 // Mutation-robustness controls:
-//  1. POSITIVE: the correction-type memory ranks above the older semantic-fact and
-//     `inclusionReason` reflects the correction contribution being dominant.
+//  1. POSITIVE: the correction-type memory ranks above the older semantic-fact.
 //  2. NEGATIVE/CONTROL: re-rank with the correction removed — the stale fact must surface
 //     as top-1 in that control universe, proving the ranking swap is caused by the
 //     correction-type contribution rather than recency alone.

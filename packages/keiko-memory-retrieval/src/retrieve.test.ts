@@ -258,6 +258,30 @@ describe("retrieveMemoryContext — AC4 stale suppression", () => {
   });
 });
 
+describe("retrieveMemoryContext — no-memory short-circuit", () => {
+  it("does not fetch any scopes when maxIncluded is 0", () => {
+    const { port, calledScopes } = portReturning({
+      "user:u1": [buildRecord({ id: "pref", body: "prefer vitest" })],
+    });
+    const result = retrieveMemoryContext(baseRequest({ maxIncluded: 0, budgetTokens: 200 }), port);
+    expect(calledScopes).toEqual([]);
+    expect(result.included).toEqual([]);
+    expect(result.contextBlock.text).toBe("");
+    expect(result.budget).toEqual({ tokens: 200, used: 0 });
+  });
+
+  it("does not fetch any scopes when budgetTokens is 0", () => {
+    const { port, calledScopes } = portReturning({
+      "user:u1": [buildRecord({ id: "pref", body: "prefer vitest" })],
+    });
+    const result = retrieveMemoryContext(baseRequest({ budgetTokens: 0 }), port);
+    expect(calledScopes).toEqual([]);
+    expect(result.included).toEqual([]);
+    expect(result.contextBlock.text).toBe("");
+    expect(result.budget).toEqual({ tokens: 0, used: 0 });
+  });
+});
+
 describe("retrieveMemoryContext — AC5 budget pressure", () => {
   it("under low budget, surfaces budget-exceeded omissions", () => {
     const records = Array.from({ length: 30 }, (_, i) =>

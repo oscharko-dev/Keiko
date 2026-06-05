@@ -4,9 +4,9 @@
 // Mutation-robustness controls:
 //  1. POSITIVE: the linked decision (dec-rate-limit-burst) appears in the included set with
 //     a non-zero `graph` subscore.
-//  2. NEGATIVE/CONTROL: re-run retrieval against a port that exposes NO edges (no
-//     listOutgoingEdges) — the linked record's `graph` subscore must collapse to 0 and the
-//     ranking shifts. This proves the test would fail if the graph contribution disappeared.
+//  2. NEGATIVE/CONTROL: re-run retrieval against a port whose edge methods always return
+//     empty lists — the linked record's `graph` subscore must collapse to 0. This proves
+//     the test would fail if the graph contribution disappeared.
 
 import { describe, expect, it } from "vitest";
 

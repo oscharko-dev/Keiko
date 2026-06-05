@@ -33,15 +33,21 @@
 // kinds; the retrieval and workflow packages adopt the audit boundary in a follow-up.
 
 import { randomUUID } from "node:crypto";
-import type { MemoryAuditEvent, MemoryId, MemoryStatus } from "@oscharko-dev/keiko-contracts";
+import type {
+  MemoryAuditEvent,
+  MemoryId,
+  MemoryStatus,
+} from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { MemoryEvent } from "@oscharko-dev/keiko-memory-vault";
 import {
+  buildDeletedEvent,
   buildInsertedEvent,
   buildTombstonedEvent,
   buildUpdatedEvent,
   type BuildContext,
 } from "./memory-audit-event-builders.js";
+import { sanitizeAuditEvent } from "./memory-scope-sanitizer.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -114,18 +120,26 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
       // eslint-disable-next-line no-console
       console.error("memory-audit-handler: persistence failed", error);
     });
-  const ctx: BuildContext = { now, newEventId, redactString: options.redactString };
   const previousStatus = new Map<MemoryId, MemoryStatus>();
   const previousPinned = new Map<MemoryId, boolean>();
 
   return (event: MemoryEvent): void => {
+    const ctx: BuildContext = {
+      occurredAt: now(),
+      newEventId,
+      redactString: options.redactString,
+    };
     const auditEvent = mapVaultEvent(event, previousStatus, previousPinned, ctx);
     updateStateCache(event, previousStatus, previousPinned);
     if (auditEvent === undefined) {
       return;
     }
     try {
-      appendAuditEvent(options.evidenceStore, auditRunIdFor(ctx.now()), auditEvent);
+      appendAuditEvent(
+        options.evidenceStore,
+        auditRunIdFor(auditEvent.occurredAt),
+        sanitizeAuditEvent(auditEvent, options.redactString),
+      );
     } catch (error) {
       onPersistError(error);
     }
@@ -151,11 +165,14 @@ function mapVaultEvent(
     case "memory:tombstoned":
       return buildTombstonedEvent(event.tombstone, ctx);
     case "memory:deleted":
+      if (event.tombstoned) {
+        return undefined;
+      }
+      return buildDeletedEvent(event.memoryId, event.scope, ctx);
     case "edge:inserted":
     case "edge:deleted":
     case "embedding:upserted":
-      // memory:deleted is paired with memory:tombstoned for tombstoned deletes; emitting
-      // both would double-count. Edge and embedding events are out of audit scope.
+      // Edge and embedding events are out of audit scope.
       return undefined;
     default:
       return undefined;
@@ -194,6 +211,7 @@ function updateStateCache(
 export interface RecordMemoryAuditOptions {
   readonly evidenceStore: EvidenceStore;
   readonly now?: () => number;
+  readonly redactString?: (input: string) => string;
   readonly onPersistError?: (error: unknown) => void;
 }
 
@@ -201,7 +219,7 @@ export function recordMemoryAudit(
   options: RecordMemoryAuditOptions,
   event: MemoryAuditEvent,
 ): void {
-  const nowMs = (options.now ?? ((): number => Date.now()))();
+  const redactString = options.redactString ?? ((input: string): string => input);
   const onPersistError =
     options.onPersistError ??
     ((error: unknown): void => {
@@ -209,7 +227,11 @@ export function recordMemoryAudit(
       console.error("memory-audit-handler: direct emission failed", error);
     });
   try {
-    appendAuditEvent(options.evidenceStore, auditRunIdFor(nowMs), event);
+    appendAuditEvent(
+      options.evidenceStore,
+      auditRunIdFor(event.occurredAt),
+      sanitizeAuditEvent(event, redactString),
+    );
   } catch (error) {
     onPersistError(error);
   }

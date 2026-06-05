@@ -5,10 +5,11 @@
 // memory without ripping out the call site.
 //
 // Mutation-robustness controls:
-//  1. POSITIVE: included.length === 0 AND contextBlock.text === "" AND budget.tokens === 0.
-//  2. NEGATIVE/CONTROL: the same fixture with defaults (no overrides) DOES surface
-//     memories — proves the empty result is caused by the off knobs, not by an upstream
-//     fixture problem.
+//  1. POSITIVE: included.length === 0, contextBlock.text === "", budget.tokens === 0, AND
+//     the retrieval port is never called.
+//  2. NEGATIVE/CONTROL: the same fixture with defaults DOES surface memories and does touch
+//     the retrieval port — proves the empty result is caused by the off knobs, not by an
+//     upstream fixture problem.
 
 import { describe, expect, it } from "vitest";
 
@@ -46,15 +47,21 @@ function runNoMemoryMode(): { passed: boolean; evidence: string } {
     nowMs: FIXED_NOW_MS,
   };
   const offResult = retrieveMemoryContext(offRequest, port);
-  const onResult = retrieveMemoryContext(onRequest, port);
   const offPass =
     offResult.included.length === 0 &&
     offResult.contextBlock.text === "" &&
-    offResult.budget.tokens === 0;
-  const controlPass = onResult.included.length > 0;
+    offResult.budget.tokens === 0 &&
+    port.calledScopes.length === 0;
+  const controlPort = spyPortFromRecords(records);
+  const controlResult = retrieveMemoryContext(onRequest, controlPort);
+  const controlPass = controlResult.included.length > 0 && controlPort.calledScopes.length > 0;
   return {
     passed: offPass && controlPass,
-    evidence: `off.included=${String(offResult.included.length)} off.text="${offResult.contextBlock.text}" on.included=${String(onResult.included.length)}`,
+    evidence: `off.calls=${String(port.calledScopes.length)} off.included=${String(
+      offResult.included.length,
+    )} on.calls=${String(controlPort.calledScopes.length)} on.included=${String(
+      controlResult.included.length,
+    )}`,
   };
 }
 

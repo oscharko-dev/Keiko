@@ -52,6 +52,25 @@ interface ResolvedRequest {
   readonly staleConfidenceThreshold: number;
 }
 
+function emptyResult(
+  request: MemoryRetrievalRequest,
+  budgetTokens: number,
+): MemoryRetrievalResult {
+  return {
+    contextBlock: {
+      text: "",
+      memories: [],
+    },
+    included: [],
+    omitted: [],
+    budget: {
+      tokens: budgetTokens,
+      used: 0,
+    },
+    request,
+  };
+}
+
 function resolveWeights(request: MemoryRetrievalRequest): RankingWeights {
   return {
     relevance: request.relevanceWeight ?? DEFAULT_RANKING_WEIGHTS.relevance,
@@ -211,6 +230,9 @@ export function retrieveMemoryContext(
   port: MemoryQueryPort,
 ): MemoryRetrievalResult {
   const resolved = validateAndResolve(request);
+  if (resolved.maxIncluded === 0 || resolved.budgetTokens === 0) {
+    return emptyResult(request, resolved.budgetTokens);
+  }
   const fetched = fetchScoped(port, request.scopes);
   const deduped = dedupeById(fetched);
   const filtered = applyFilters(deduped, request, resolved);

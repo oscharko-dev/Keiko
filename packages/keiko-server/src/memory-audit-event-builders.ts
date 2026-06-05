@@ -6,6 +6,7 @@
 import type {
   MemoryAuditEvent,
   MemoryAuditInitiatorSurface,
+  MemoryId,
   MemoryRecord,
   MemoryScope,
   MemoryStatus,
@@ -22,7 +23,7 @@ export const VAULT_DERIVED_SURFACE: MemoryAuditInitiatorSurface = "system";
 // ─── Build context ────────────────────────────────────────────────────────────
 
 export interface BuildContext {
-  readonly now: () => number;
+  readonly occurredAt: number;
   readonly newEventId: () => string;
   readonly redactString: (input: string) => string;
 }
@@ -121,7 +122,7 @@ function buildSingleRecordEvent(
   const envelope = {
     schemaVersion: "1" as const,
     eventId: ctx.newEventId(),
-    occurredAt: ctx.now(),
+    occurredAt: ctx.occurredAt,
     initiatorSurface: VAULT_DERIVED_SURFACE,
     summary,
     memoryId: record.id,
@@ -152,7 +153,7 @@ export function buildProposedEvent(record: MemoryRecord, ctx: BuildContext): Mem
     schemaVersion: "1",
     kind: "memory:proposed",
     eventId: ctx.newEventId(),
-    occurredAt: ctx.now(),
+    occurredAt: ctx.occurredAt,
     initiatorSurface: VAULT_DERIVED_SURFACE,
     summary: safeSummary(`memory ${record.id} proposed (type=${record.type})`, ctx.redactString),
     memoryId: record.id,
@@ -255,7 +256,7 @@ export function buildTombstonedEvent(
     schemaVersion: "1",
     kind: "memory:forgotten",
     eventId: ctx.newEventId(),
-    occurredAt: ctx.now(),
+    occurredAt: ctx.occurredAt,
     initiatorSurface: VAULT_DERIVED_SURFACE,
     summary: safeSummary(
       `memory ${tombstone.memoryId} forgotten (surface=${tombstone.forgetterSurface})`,
@@ -264,5 +265,23 @@ export function buildTombstonedEvent(
     memoryId: tombstone.memoryId,
     scope: scopeFromTombstone(tombstone),
     tombstoned: true,
+  };
+}
+
+export function buildDeletedEvent(
+  memoryId: MemoryId,
+  scope: MemoryScope,
+  ctx: BuildContext,
+): MemoryAuditEvent {
+  return {
+    schemaVersion: "1",
+    kind: "memory:forgotten",
+    eventId: ctx.newEventId(),
+    occurredAt: ctx.occurredAt,
+    initiatorSurface: VAULT_DERIVED_SURFACE,
+    summary: safeSummary(`memory ${memoryId} deleted without tombstone`, ctx.redactString),
+    memoryId,
+    scope,
+    tombstoned: false,
   };
 }
