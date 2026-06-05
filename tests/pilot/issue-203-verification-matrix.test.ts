@@ -14,15 +14,15 @@ function localMarkdownTargets(markdown: string): readonly string[] {
   for (const match of matches) {
     const raw = match[1];
     if (raw === undefined) continue;
-    if (raw.startsWith("https://") || raw.startsWith("http://") || raw.startsWith("#")) {
-      continue;
-    }
     const unwrapped =
       raw.startsWith("<") && raw.endsWith(">")
         ? raw.slice(1, -1)
         : raw;
+    if (unwrapped.startsWith("https://") || unwrapped.startsWith("http://") || unwrapped.startsWith("#")) {
+      continue;
+    }
     const withoutAnchor = unwrapped.split("#")[0] ?? unwrapped;
-    targets.push(withoutAnchor.replace(/:\d+$/, ""));
+    targets.push(withoutAnchor.replace(/:\\d+$/, ""));
   }
   return targets;
 }
@@ -50,7 +50,7 @@ describe("Issue #203 verification matrix drift", () => {
     expect(markdown).toContain("scripts/installable-package-smoke.mjs");
   });
 
-  it("does not regress to the stale paths and claims from the original #203 PR", () => {
+  it("does not regress to the stale paths and claims from the original PR #318", () => {
     const markdown = readMatrix();
     const forbidden = [
       "packages/keiko-ui/src/app/(keiko)/local-knowledge",
