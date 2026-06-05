@@ -1,0 +1,31 @@
+{
+  "_header": "synthetic — no customer data; safe to bundle",
+  "findings": [
+    {
+      "kind": "logic-defect",
+      "id": "finding-synthetic-01",
+      "runId": "run-synthetic-01",
+      "candidateId": "tc-synthetic-01",
+      "severity": "high",
+      "summary": "Synthetic step references a precondition that is not declared",
+      "evidenceAtomIds": ["atom-synthetic-01"]
+    },
+    {
+      "kind": "faithfulness-defect",
+      "id": "finding-synthetic-02",
+      "runId": "run-synthetic-01",
+      "candidateId": "tc-synthetic-01",
+      "severity": "medium",
+      "summary": "Synthetic step paraphrases an unrelated requirement",
+      "evidenceAtomIds": ["atom-synthetic-02"]
+    },
+    {
+      "kind": "policy-violation",
+      "id": "finding-synthetic-03",
+      "runId": "run-synthetic-01",
+      "severity": "critical",
+      "summary": "Synthetic run exceeded the policy-mandated step count",
+      "evidenceAtomIds": []
+    }
+  ]
+}

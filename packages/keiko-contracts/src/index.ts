@@ -593,3 +593,34 @@ export type {
   ConversationBudgetPressure,
 } from "./conversation-budget.js";
 export { estimateConversationBudget } from "./conversation-budget.js";
+
+// ─── Quality Intelligence (Issue #277 / Epic #270) ─────────────────────────────
+// QI surface is re-exported under a single namespace because the QI vocabulary
+// (RunId, TestCaseId, finding kinds, etc.) collides with names already used by
+// gateway/workflow/audit modules above. Consumers reach the QI types via
+// `import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";` and then
+// `QualityIntelligence.QualityIntelligenceRunEvent`, or via the subpath barrel.
+// The schema version literal follows the same evolution rule as
+// LOCAL_KNOWLEDGE_SCHEMA_VERSION / MEMORY_SCHEMA_VERSION: a breaking change adds a
+// new literal member instead of mutating the existing one.
+export * as QualityIntelligence from "./qualityIntelligence/index.js";
+// Issue #280 introduced flat BFF wire-type re-exports for the UI consumers.
+export type {
+  QualityIntelligenceUiEvidenceRef,
+  QualityIntelligenceUiFindingSummary,
+  QualityIntelligenceUiRunDetail,
+  QualityIntelligenceUiRunSummary,
+  QualityIntelligenceUiRunTotals,
+} from "./qualityIntelligence/bffWire.js";
+// Issue #283 added flat export-adapter consumers.
+export type {
+  QualityIntelligenceExportAdapter,
+  QualityIntelligenceExportBundle,
+  QualityIntelligenceExportBundleEntry,
+  QualityIntelligenceTestCaseCandidate,
+} from "./qualityIntelligence/index.js";
+export {
+  assertExportBundleInvariant,
+  QUALITY_INTELLIGENCE_EXPORT_ADAPTERS,
+  QUALITY_INTELLIGENCE_TMS_ADAPTERS,
+} from "./qualityIntelligence/index.js";

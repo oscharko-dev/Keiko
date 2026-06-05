@@ -103,3 +103,9 @@ export * from "./conversation/index.js";
 export { readCitationExcerpt } from "./conversation/citation-excerpts.js";
 export { scriptedAdapter, seedCapsuleWithVectors } from "./testing.js";
 export * from "./privacy/index.js";
+
+// ─── Quality Intelligence handoff (Issue #278) ─────────────────────────────────
+// Pure adapter that converts a local-knowledge RetrievalReference list into a list of
+// `QualityIntelligenceLocalKnowledgeCapsuleEnvelope` instances for QI ingestion. No
+// new retrieval logic; consumes only existing local-knowledge / contract types.
+export * as QualityIntelligenceHandoff from "./qualityIntelligence/index.js";

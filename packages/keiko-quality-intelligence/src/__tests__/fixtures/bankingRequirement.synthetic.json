@@ -1,0 +1,46 @@
+{
+  "_header": "synthetic — no customer data; safe to bundle",
+  "runId": "qi-run-banking-synthetic-0001",
+  "envelopes": [
+    {
+      "kind": "repository-context",
+      "id": "qi-source-banking-001",
+      "displayLabel": "User must verify KYC before submitting a payment",
+      "localRef": "workspace://banking/kyc-flow",
+      "provenance": {
+        "origin": "workspace",
+        "registeredAt": "2026-06-05T00:00:00.000Z",
+        "integrityHashSha256Hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "kind": "human-context",
+      "id": "qi-source-banking-002",
+      "displayLabel": "Operator shall reject transfers above the AML threshold",
+      "localRef": "human://banking/ops-note-7",
+      "provenance": {
+        "origin": "conversation-center",
+        "registeredAt": "2026-06-05T00:00:01.000Z",
+        "integrityHashSha256Hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    }
+  ],
+  "atoms": [
+    {
+      "kind": "requirement",
+      "id": "qi-atom-banking-001",
+      "sourceEnvelopeId": "qi-source-banking-001",
+      "canonicalHashSha256Hex": "1111111111111111111111111111111111111111111111111111111111111111",
+      "redactionStatus": "not-required",
+      "lifecycleStatus": "draft"
+    },
+    {
+      "kind": "requirement",
+      "id": "qi-atom-banking-002",
+      "sourceEnvelopeId": "qi-source-banking-002",
+      "canonicalHashSha256Hex": "2222222222222222222222222222222222222222222222222222222222222222",
+      "redactionStatus": "not-required",
+      "lifecycleStatus": "draft"
+    }
+  ]
+}

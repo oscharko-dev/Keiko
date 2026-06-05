@@ -50,6 +50,61 @@ export {
   InvalidRunIdError,
   type AuditCode,
 } from "./errors.js";
+// QualityIntelligence sub-module (Issue #274, ADR-0023 D8). Mirrors the contracts barrel layout —
+// callers may use it either as a namespace import
+// (`import { QualityIntelligence } from '@oscharko-dev/keiko-evidence'`) OR as a flat
+// import of the public surface (`import { recordQualityIntelligenceRun, ... } from
+// '@oscharko-dev/keiko-evidence'`). The flat re-exports below mirror what the
+// `QualityIntelligence` namespace exposes — flat-named symbols are added per ADR-0019
+// trust rule 6 to let downstream consumers (Issue #273 workflow runners, future
+// orchestrators) avoid namespace plumbing in hot paths.
+export * as QualityIntelligence from "./qualityIntelligence/index.js";
+export {
+  QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID,
+  QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION,
+  QUALITY_INTELLIGENCE_RETENTION_PROFILES,
+  applyQualityIntelligenceRetention,
+  createInMemoryQualityIntelligenceLocalStore,
+  createNodeQualityIntelligenceLocalStore,
+  deleteQualityIntelligenceRun,
+  getQualityIntelligenceRetentionProfile,
+  listQualityIntelligenceRuns,
+  loadQualityIntelligenceRun,
+  quarantineCorruptQualityIntelligenceManifest,
+  recordQualityIntelligenceRun,
+  redactQualityIntelligenceEvidence,
+  snapshotQualityIntelligenceRunsForRecovery,
+  validateQualityIntelligenceEvidenceManifest,
+  type QualityIntelligenceDeleteOptions,
+  type QualityIntelligenceDeletionReceipt,
+  type QualityIntelligenceDeletionStatus,
+  type QualityIntelligenceEvidenceManifest,
+  type QualityIntelligenceEvidenceRefRow,
+  type QualityIntelligenceExportRow,
+  type QualityIntelligenceFindingRow,
+  type QualityIntelligenceIntegrityHashes,
+  type QualityIntelligenceLoadOptions,
+  type QualityIntelligenceLocalStore,
+  type QualityIntelligenceManifestTotals,
+  type QualityIntelligenceNodeStoreOptions,
+  type QualityIntelligenceProvenanceRefs,
+  type QualityIntelligenceQuarantineOptions,
+  type QualityIntelligenceQuarantineReceipt,
+  type QualityIntelligenceRecordInput,
+  type QualityIntelligenceRecordOptions,
+  type QualityIntelligenceRecordResult,
+  type QualityIntelligenceRecoverySnapshot,
+  type QualityIntelligenceRedactionOptions,
+  type QualityIntelligenceRedactionResult,
+  type QualityIntelligenceRedactionSummary,
+  type QualityIntelligenceRetentionDecision,
+  type QualityIntelligenceRetentionDecisionInput,
+  type QualityIntelligenceRetentionResult,
+  type QualityIntelligenceRunDeletedEvent,
+  type QualityIntelligenceRunSnapshotEntry,
+  type QualityIntelligenceSchemaValidationResult,
+} from "./qualityIntelligence/index.js";
+
 export {
   EVIDENCE_SCHEMA_VERSION,
   DEFAULT_RETENTION,
