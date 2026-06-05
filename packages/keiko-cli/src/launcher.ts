@@ -268,12 +268,29 @@ function assertTargetNotSymlink(target: string): void {
 // (idempotent re-install / collision detection). On POSIX we also pass O_NOFOLLOW so a
 // symlink at the final path component is rejected; on Windows the lstat above is the
 // only available guard.
+//
+// MINOR (verifier): the `existsSync(targetPath)` check in `cmdInstall` and the `openSync`
+// call below form a TOCTOU window. The O_EXCL flag closes it — if another process plants
+// a file at `target` between the two calls, `openSync` raises `EEXIST` and we surface a
+// `TARGET_EXISTS` LauncherError (user-readable) rather than letting the raw ErrnoException
+// propagate. The conversion is the only reason we catch+rethrow here.
 function writeAtomicExcl(target: string, content: string, mode: number): void {
   const dir = dirname(target);
   mkdirSync(dir, { recursive: true, mode: 0o755 });
   const nofollow = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
   const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | nofollow;
-  const fd = openSync(target, flags, mode);
+  let fd: number;
+  try {
+    fd = openSync(target, flags, mode);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new LauncherError(
+        "TARGET_EXISTS",
+        `keiko launcher: ${target} appeared between the pre-flight existsSync check and the O_EXCL open. Refusing to overwrite (TOCTOU defense).`,
+      );
+    }
+    throw e;
+  }
   try {
     writeSync(fd, content);
   } finally {
@@ -288,10 +305,29 @@ function writeAtomicExcl(target: string, content: string, mode: number): void {
   }
 }
 
-function defaultStateDir(cwd: string, env: EnvSource): string {
+// F4: when `KEIKO_STATE_DIR` is set, its resolved path MUST be contained under the
+// user's homedir. Without this guard, an attacker who can plant the env var (wrapper
+// script in PATH, dev-container `.env`, exported in a parent shell) can combine with
+// F1 to steer the launcher state file to a world-writable location and from there to
+// arbitrary-file primitives. We re-use `assertRealpathContained` so symlinked-ancestor
+// edge cases compare consistently. The thrown error is re-classified as
+// `STATE_DIR_ESCAPE` so the user-facing message is unambiguous.
+function defaultStateDir(cwd: string, env: EnvSource, home: string): string {
   const fromEnv = env.KEIKO_STATE_DIR ?? process.env.KEIKO_STATE_DIR;
   if (typeof fromEnv === "string" && fromEnv.length > 0) {
-    return isAbsolute(fromEnv) ? fromEnv : resolve(cwd, fromEnv);
+    const resolved = isAbsolute(fromEnv) ? fromEnv : resolve(cwd, fromEnv);
+    try {
+      assertRealpathContained(home, resolved);
+    } catch (e) {
+      if (e instanceof LauncherError && e.code === "PATH_ESCAPE") {
+        throw new LauncherError(
+          "STATE_DIR_ESCAPE",
+          `keiko launcher: KEIKO_STATE_DIR ${fromEnv} resolves outside the user's home directory (${home}); refusing to proceed.`,
+        );
+      }
+      throw e;
+    }
+    return resolved;
   }
   return resolve(cwd, ".keiko");
 }
@@ -508,11 +544,12 @@ interface ResolvedDeps {
 
 function resolveDeps(env: EnvSource, deps: LauncherCliDeps): ResolvedDeps {
   const cwd = deps.cwd ?? process.cwd();
+  const homedirFn = deps.homedir ?? defaultHomedir;
   return {
-    homedir: deps.homedir ?? defaultHomedir,
+    homedir: homedirFn,
     platform: deps.platform ?? ((): NodeJS.Platform => process.platform),
     resolveExe: deps.resolveExe ?? defaultResolveExe,
-    stateDir: deps.stateDir ?? defaultStateDir(cwd, env),
+    stateDir: deps.stateDir ?? defaultStateDir(cwd, env, homedirFn()),
   };
 }
 
@@ -533,14 +570,17 @@ export function runLauncherCli(
     return 2;
   }
   const rest = args.slice(1);
-  const r = resolveDeps(env, deps);
-  const home = r.homedir();
-  const handlers: Readonly<Record<LauncherSubcommand, () => number>> = {
-    install: () => dispatchInstall(rest, io, env, r),
-    remove: () => dispatchRemove(rest, io, { stateDir: r.stateDir, homedir: home }),
-    status: () => cmdStatus(io, { stateDir: r.stateDir, homedir: home }),
-  };
   try {
+    // `resolveDeps` may throw `STATE_DIR_ESCAPE` (F4) when KEIKO_STATE_DIR resolves
+    // outside the user's home — it MUST be inside the try/catch so the LauncherError
+    // is converted to a `1` exit instead of an uncaught throw.
+    const r = resolveDeps(env, deps);
+    const home = r.homedir();
+    const handlers: Readonly<Record<LauncherSubcommand, () => number>> = {
+      install: () => dispatchInstall(rest, io, env, r),
+      remove: () => dispatchRemove(rest, io, { stateDir: r.stateDir, homedir: home }),
+      status: () => cmdStatus(io, { stateDir: r.stateDir, homedir: home }),
+    };
     return handlers[first]();
   } catch (e) {
     if (e instanceof LauncherError) {

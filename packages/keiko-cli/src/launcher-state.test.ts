@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   LAUNCHER_STATE_VERSION,
+  MAX_STATE_FILE_BYTES,
   findEntry,
   hashContent,
   loadState,
@@ -153,6 +154,44 @@ describe("loadState / saveState", () => {
     } finally {
       chmodSync(file, 0o600);
     }
+  });
+
+  it("F5 — refuses to load a state file larger than MAX_STATE_FILE_BYTES", () => {
+    const root = makeRoot();
+    const file = join(root, "launcher-state.json");
+    // Construct a payload one byte over the cap (MAX_STATE_FILE_BYTES = 1 MiB) without
+    // allocating a real 1 GB buffer. The content is JSON-shaped enough to bypass the
+    // outer JSON parse path — though that doesn't matter, we expect the throw BEFORE
+    // we attempt to allocate the read buffer.
+    const oversized = Buffer.alloc(MAX_STATE_FILE_BYTES + 1, 0x20); // spaces
+    writeFileSync(file, oversized);
+    expect(() => loadState(root)).toThrow(LauncherError);
+    try {
+      loadState(root);
+    } catch (e) {
+      expect(e).toBeInstanceOf(LauncherError);
+      expect((e as LauncherError).code).toBe("STATE_TOO_LARGE");
+    }
+  });
+
+  it("F5 — accepts a state file at exactly MAX_STATE_FILE_BYTES", () => {
+    const root = makeRoot();
+    const file = join(root, "launcher-state.json");
+    // Cap is inclusive: stat.size > MAX is the threshold. A file at exactly MAX bytes
+    // should be accepted as far as the size guard is concerned; downstream JSON parse
+    // will fail and yield emptyState (silent in this case because we suppress the
+    // warning here for assertion clarity).
+    const atCap = Buffer.alloc(MAX_STATE_FILE_BYTES, 0x20);
+    writeFileSync(file, atCap);
+    const warnings: string[] = [];
+    const state = loadState(root, {
+      onWarn: (msg: string): void => {
+        warnings.push(msg);
+      },
+    });
+    expect(state.entries).toEqual([]);
+    // JSON-parse failure path emitted a warning, not the size-cap path.
+    expect(warnings.join("")).toContain("not valid JSON");
   });
 
   it("refuses to load via a symlinked state file (defense-in-depth)", () => {

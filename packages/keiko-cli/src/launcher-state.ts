@@ -194,6 +194,11 @@ export function loadState(stateDir: string, options: ParseOptions = {}): Launche
   return parseState(parsed, options);
 }
 
+// F5: cap on the state-file size we will allocate a Buffer for. The launcher records
+// a handful of entries (~ a few hundred bytes each); 1 MiB is overwhelming headroom
+// and prevents a hostile/corrupt 1 GB state file from OOM-ing the launcher.
+export const MAX_STATE_FILE_BYTES = 1 << 20;
+
 // O_NOFOLLOW-based read: refuses to traverse a symlink at the final path component.
 // We avoid `readFileSync(file)` because it would follow a symlink. On Windows the
 // O_NOFOLLOW flag is undefined; we fall back to a normal open after the `lstat` check
@@ -203,6 +208,12 @@ function readWithoutFollow(file: string): string {
   const fd = openSync(file, fsConstants.O_RDONLY | nofollow);
   try {
     const stat = fstatSync(fd);
+    if (stat.size > MAX_STATE_FILE_BYTES) {
+      throw new LauncherError(
+        "STATE_TOO_LARGE",
+        `keiko launcher: state file exceeds ${String(MAX_STATE_FILE_BYTES)} bytes (got ${String(stat.size)}); refusing to load.`,
+      );
+    }
     if (stat.size === 0) return "";
     const buf = Buffer.alloc(stat.size);
     let offset = 0;

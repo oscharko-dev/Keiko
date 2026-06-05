@@ -427,6 +427,49 @@ describe("runLauncherCli — state-file tamper regression (F1/F2)", () => {
   });
 });
 
+describe("runLauncherCli — KEIKO_STATE_DIR containment (F4)", () => {
+  it("refuses with STATE_DIR_ESCAPE when KEIKO_STATE_DIR resolves outside homedir", () => {
+    if (osPlatform() === "win32") return;
+    const root = makeRoot();
+    const home = join(root, "home");
+    mkdirSync(home, { recursive: true });
+    // Escape target lives OUTSIDE home (sibling under the test temp root).
+    const escapeRoot = makeRoot();
+    const escapeDir = join(escapeRoot, "evil-state");
+    mkdirSync(escapeDir, { recursive: true });
+    const c = makeIo();
+    // Pass KEIKO_STATE_DIR via the `env` arg (the launcher reads from EnvSource OR
+    // process.env; EnvSource takes precedence). Do NOT pass deps.stateDir — that would
+    // bypass the defaultStateDir path we're testing.
+    const code = runLauncherCli(
+      ["status"],
+      c.io,
+      { KEIKO_STATE_DIR: escapeDir },
+      { homedir: () => home, platform: () => "linux", resolveExe: () => "/usr/local/bin/keiko" },
+    );
+    expect(code).toBe(1);
+    expect(c.err()).toContain("KEIKO_STATE_DIR");
+    expect(c.err()).toContain("outside the user's home directory");
+  });
+
+  it("accepts KEIKO_STATE_DIR when contained under homedir", () => {
+    if (osPlatform() === "win32") return;
+    const root = makeRoot();
+    const home = join(root, "home");
+    const stateDir = join(home, "custom-state");
+    mkdirSync(stateDir, { recursive: true });
+    const c = makeIo();
+    const code = runLauncherCli(
+      ["status"],
+      c.io,
+      { KEIKO_STATE_DIR: stateDir },
+      { homedir: () => home, platform: () => "linux", resolveExe: () => "/usr/local/bin/keiko" },
+    );
+    expect(code).toBe(0);
+    expect(c.out()).toContain("no shortcuts recorded");
+  });
+});
+
 describe("runLauncherCli status", () => {
   it("returns 0 with a clean message when no shortcuts recorded", () => {
     const h = makeHarness();
