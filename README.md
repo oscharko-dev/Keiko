@@ -97,7 +97,7 @@ For an OS shortcut that starts the local server in one step:
 keiko launcher install
 ```
 
-This generates a shortcut in `~/.local/share/applications/` (Linux), `~/Applications/` (macOS), or `%APPDATA%\Microsoft\Windows\Start Menu\Programs\` (Windows). Remove it with `keiko launcher remove`. Firefox and Safari users can follow the manual fallback instructions in the [PWA installability contract](docs/pwa-installability-contract.md).
+This generates a shortcut in `~/.local/share/applications/` (Linux), `~/Applications/` (macOS), or `%APPDATA%\Microsoft\Windows\Start Menu\Programs\` (Windows). Remove it with `keiko launcher remove`. Firefox and Safari users can follow the manual fallback instructions in the [PWA installability contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pwa-installability-contract.md).
 
 ## Daily Use
 
