@@ -39,3 +39,9 @@ export {
 // Pure-domain ingestion modelling: ADF parsing, untrusted-content normalisation,
 // source-mix planning, source reconciliation. No IO; consumes contract types only.
 export * as QualityIntelligenceIngestion from "./ingestion/index.js";
+
+// ─── Review sub-namespace (Issue #282) ─────────────────────────────────────────
+// Pure-domain review governance: state machine, lifecycle policy, four-eyes
+// pairing guard, and the producer half of the audit-event envelope. No IO, no
+// persistence; consumes contract types only.
+export * as QualityIntelligenceReview from "./review/index.js";
