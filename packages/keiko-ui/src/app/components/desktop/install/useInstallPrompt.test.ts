@@ -15,16 +15,15 @@ function makePromptEvent(outcome: UserChoiceOutcome = "accepted"): Event & {
   platforms: readonly string[];
 } {
   const promptFn = vi.fn().mockResolvedValue(undefined);
+  const preventDefaultFn = vi.fn();
   const userChoice = Promise.resolve({ outcome, platform: "web" });
 
   const event = Object.assign(new Event("beforeinstallprompt"), {
     platforms: ["web"] as readonly string[],
     userChoice,
     prompt: promptFn,
+    preventDefault: preventDefaultFn,
   });
-
-  // Vitest's Event implementation does have preventDefault; we want to spy on it
-  vi.spyOn(event, "preventDefault");
 
   return event as typeof event;
 }
