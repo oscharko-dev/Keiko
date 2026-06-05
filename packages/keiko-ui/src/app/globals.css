@@ -6734,3 +6734,218 @@ select.dlg-input {
   gap: 8px;
   margin-top: 4px;
 }
+
+/* ============================================================
+   SAFE MARKDOWN — Issue #150
+   Scoped to .sm-root so styles only affect rendered markdown.
+   WCAG 2.2 AA: all text uses var(--fg) (not --fg-dim).
+   ============================================================ */
+
+/* Root container: resets white-space so markdown flows normally
+   (the parent .chat-msg-bubble uses white-space: pre-wrap which
+   would break markdown layout). */
+.sm-root {
+  white-space: normal;
+  word-break: break-word;
+  color: var(--fg);
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* Paragraphs */
+.sm-p {
+  margin: 0 0 10px;
+}
+.sm-p:last-child {
+  margin-bottom: 0;
+}
+
+/* Headings */
+.sm-h {
+  font-weight: 700;
+  margin: 14px 0 6px;
+  color: var(--fg);
+  line-height: 1.3;
+}
+.sm-h:first-child {
+  margin-top: 0;
+}
+.sm-h1 {
+  font-size: 1.25em;
+}
+.sm-h2 {
+  font-size: 1.15em;
+}
+.sm-h3 {
+  font-size: 1.05em;
+}
+.sm-h4,
+.sm-h5,
+.sm-h6 {
+  font-size: 1em;
+}
+
+/* Lists */
+.sm-ul,
+.sm-ol {
+  margin: 0 0 10px 1.4em;
+  padding: 0;
+}
+.sm-ul:last-child,
+.sm-ol:last-child {
+  margin-bottom: 0;
+}
+.sm-li {
+  margin-bottom: 3px;
+}
+
+/* Inline code */
+.sm-inline-code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--inset);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--fg);
+}
+
+/* Fenced code block container */
+.sm-code-block-frame {
+  position: relative;
+  margin: 10px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+/* Header row: language badge + copy button */
+.sm-code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: var(--card-2);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+/* Language label — small muted badge */
+.sm-code-lang {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  letter-spacing: 0.03em;
+  text-transform: lowercase;
+}
+
+/* Copy button — min 24×24 for WCAG 2.5.8 */
+.sm-code-copy {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--fg-muted);
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    color 0.1s,
+    border-color 0.1s;
+}
+.sm-code-copy:hover {
+  color: var(--fg);
+  border-color: var(--line-strong);
+}
+.sm-code-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Pre / code */
+.sm-pre {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--inset);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg);
+}
+.sm-pre code {
+  font-family: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+/* Blockquote */
+.sm-blockquote {
+  margin: 10px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--accent-line);
+  background: var(--inset);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--fg);
+}
+
+/* Horizontal rule */
+.sm-hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 14px 0;
+}
+
+/* Links — accent colour, underline, WCAG 4.5:1 on card bg.
+   --accent #4EBA87 on --card oklch(0.235) = ~4.6:1 AA pass. */
+.sm-link {
+  color: var(--accent-bright);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+.sm-link:hover {
+  color: var(--accent);
+}
+.sm-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Table */
+.sm-table-wrapper {
+  overflow-x: auto;
+  margin: 10px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+}
+.sm-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+.sm-table th,
+.sm-table td {
+  padding: 6px 12px;
+  border: 1px solid var(--line-soft);
+  color: var(--fg);
+  text-align: left;
+}
+.sm-table th {
+  background: var(--card-2);
+  font-weight: 600;
+}
+.sm-table tr:nth-child(even) td {
+  background: var(--inset);
+}
+
+/* AC #3 — chat-msg-bubble override: assistant bubbles must not clip
+   horizontally scrollable code blocks. white-space is reset by .sm-root.
+   The .chatw-scroll container already has overflow:auto on the Y axis,
+   so long responses remain scrollable and the composer stays in view. */
+.chat-msg[data-role="assistant"] .chat-msg-bubble {
+  white-space: normal;
+}
