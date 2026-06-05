@@ -777,6 +777,29 @@ interface RunCapsuleIndexingJobOptions {
   readonly force: boolean;
 }
 
+// LK-001 (Epic #189): both the start and refresh handlers map a terminal IndexingTerminal
+// to the same 3-way response — cancelled → 409 cancelled, failed → 409 failed-message,
+// any other (completed or absent) → 200 ok. Extracted so each handler stays under the
+// 50-LOC per-function ceiling.
+function indexingCompletionResponse(
+  capsuleId: KnowledgeCapsule["id"],
+  terminal: IndexingTerminal | undefined,
+  failedMessage: string,
+): RouteResult {
+  if (terminal?.kind === "job-cancelled") {
+    return indexingConflict(
+      "indexing-cancelled",
+      "Indexing job was cancelled.",
+      capsuleId,
+      terminal.jobId,
+    );
+  }
+  if (terminal?.kind === "job-failed") {
+    return conflict(failedMessage);
+  }
+  return actionResponse(capsuleId);
+}
+
 async function runCapsuleIndexingJob(
   deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
@@ -991,22 +1014,11 @@ export async function handleStartLocalKnowledgeCapsuleIndexing(
         mode: undefined,
         force: false,
       });
-      // LK-001 (Epic #189): job-cancelled is terminal-not-successful; surface it as 409
-      // so the UI does not treat a cancelled run as a completed one.
-      if (terminal?.kind === "job-cancelled") {
-        return indexingConflict(
-          "indexing-cancelled",
-          "Indexing job was cancelled.",
-          capsule.id,
-          terminal.jobId,
-        );
-      }
-      if (terminal?.kind === "job-failed") {
-        return conflict(
-          "Capsule indexing failed. Review the capsule health diagnostics and job history for details.",
-        );
-      }
-      return actionResponse(capsule.id);
+      return indexingCompletionResponse(
+        capsule.id,
+        terminal,
+        "Capsule indexing failed. Review the capsule health diagnostics and job history for details.",
+      );
     } finally {
       env.close();
     }
@@ -1110,21 +1122,11 @@ export async function handleReindexLocalKnowledgeCapsule(
         mode,
         force,
       });
-      // LK-001 (Epic #189): mirror the cancelled-as-409 path from the start handler.
-      if (terminal?.kind === "job-cancelled") {
-        return indexingConflict(
-          "indexing-cancelled",
-          "Indexing job was cancelled.",
-          capsule.id,
-          terminal.jobId,
-        );
-      }
-      if (terminal?.kind === "job-failed") {
-        return conflict(
-          "Capsule refresh failed. Review the capsule health diagnostics and job history for details.",
-        );
-      }
-      return actionResponse(capsule.id);
+      return indexingCompletionResponse(
+        capsule.id,
+        terminal,
+        "Capsule refresh failed. Review the capsule health diagnostics and job history for details.",
+      );
     } finally {
       env.close();
     }
