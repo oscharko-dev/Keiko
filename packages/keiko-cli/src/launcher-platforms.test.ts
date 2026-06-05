@@ -210,9 +210,9 @@ describe("launcherFor", () => {
     expect(launcherFor("win32")).toBe(windowsLauncher);
   });
   it("rejects an unknown platform", () => {
-    // Forced narrowing: launcherFor accepts NodeJS.Platform; we deliberately feed a value
-    // outside the union to verify the unsupported-platform refusal. Casting via `unknown`
-    // satisfies typescript-eslint's no-unnecessary-type-assertion rule.
-    expect(() => launcherFor("freebsd" as unknown as NodeJS.Platform)).toThrow(LauncherError);
+    // `freebsd` is a valid `NodeJS.Platform` token but deliberately absent from the
+    // launcher REGISTRY (we ship linux/darwin/win32 only). No cast is needed — the
+    // value is type-correct; the refusal is a runtime check.
+    expect(() => launcherFor("freebsd")).toThrow(LauncherError);
   });
 });

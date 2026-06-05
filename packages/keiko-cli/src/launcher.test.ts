@@ -232,7 +232,7 @@ describe("runLauncherCli install — refusals (security)", () => {
   });
 
   // Adversarial exec paths — the launcher MUST refuse each individually with exit 1.
-  const ADVERSARIAL: ReadonlyArray<readonly [string, string]> = [
+  const ADVERSARIAL: readonly (readonly [string, string])[] = [
     ["/usr/local/bin/keiko;rm", "semicolon"],
     ["/usr/local/bin/keiko && evil", "&& chain"],
     ["/Users/me/My Keiko/bin/keiko", "space"],

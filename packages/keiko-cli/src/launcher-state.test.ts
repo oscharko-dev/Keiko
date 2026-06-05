@@ -139,9 +139,9 @@ describe("loadState / saveState", () => {
     const realTarget = join(root, "real.json");
     writeFileSync(realTarget, "{}");
     symlinkSync(realTarget, join(root, "launcher-state.json"));
-    expect(() => saveState(root, { version: LAUNCHER_STATE_VERSION, entries: [] })).toThrow(
-      LauncherError,
-    );
+    expect(() => {
+      saveState(root, { version: LAUNCHER_STATE_VERSION, entries: [] });
+    }).toThrow(LauncherError);
   });
 
   it("writes atomically via temp dir + rename (no temp left behind on success)", () => {
