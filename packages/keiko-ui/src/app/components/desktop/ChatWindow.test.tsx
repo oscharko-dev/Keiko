@@ -302,12 +302,12 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
     expect(options).toContain("test-chat-2");
   });
 
-  it("does not render an embedding-kind model id when session.models is pre-filtered (AC #2)", () => {
-    // Production path: useChatSession.bootstrapSession filters via
-    // isConversationEligibleModel before populating session.models. This test
-    // pins the regression — if the session ever stopped filtering, the
-    // dropdown would surface embedding models and this assertion would fail.
-    // activeChat is required so the composer bar is rendered (#146).
+  it("does not render a non-chat model id in the dropdown when session.models is pre-filtered (AC #2)", () => {
+    // UI rendering path only: ChatWindow renders whatever session.models
+    // contains and never re-filters it. The bootstrap-level filter that keeps
+    // embedding / ocr-vision models out of session.models is separately
+    // pinned in Streaming.test.tsx ("useChatSession bootstrap eligibility
+    // filter"). activeChat is required so the composer bar is rendered (#146).
     renderWindow(
       makeSession({
         models: [chatModelCapability("test-chat-1")],

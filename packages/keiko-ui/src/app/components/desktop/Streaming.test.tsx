@@ -112,6 +112,46 @@ function chatModelCapability(id: string): ModelCapability {
   };
 }
 
+function embeddingCapability(id: string): ModelCapability {
+  return {
+    id,
+    kind: "embedding",
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "test fixture",
+    preferredUseCases: ["Embeddings"],
+    knownLimitations: ["test fixture"],
+  };
+}
+
+function ocrVisionCapability(id: string): ModelCapability {
+  return {
+    id,
+    kind: "ocr-vision",
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: true,
+    supportsDocumentInput: true,
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "standard",
+    throughputHint: "test fixture",
+    preferredUseCases: ["OCR"],
+    knownLimitations: ["test fixture"],
+  };
+}
+
 function userMessage(content: string): ChatMessage {
   return {
     id: "m1",
@@ -436,5 +476,64 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     // we set to empty above).
     const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
     expect(assistants).toHaveLength(0);
+  });
+});
+
+// ─── useChatSession bootstrap eligibility filter (Issue #144 AC #1/#2) ─────────
+// Why: the only call-site of isConversationEligibleModel that operates at the
+// session boundary is useChatSession.ts:293. Removing that line would make
+// embedding / ocr-vision models reachable from the conversation dropdown. Every
+// other AC #1/#2 test either (a) passes pre-filtered data directly into context
+// (ChatWindow.test.tsx) or (b) tests the helper in isolation (capabilities.test.ts /
+// ModelSelection.test.tsx). This describe block is the SOLE mutation-robust guard
+// on the bootstrap filter itself.
+
+describe("useChatSession bootstrap eligibility filter (Issue #144 AC #1/#2)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    api.clearModelCacheForTests();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("session.models contains only chat-eligible models after bootstrap", async () => {
+    // fetchModels returns a deliberate mix: one chat-eligible model plus one
+    // embedding and one ocr-vision model. bootstrapSession must filter the
+    // list via isConversationEligibleModel (useChatSession.ts:293) so only
+    // the chat model reaches session.models. Deleting that filter line causes
+    // all three assertions below to fail, making this test mutation-robust.
+    vi.spyOn(api, "fetchModels").mockResolvedValue({
+      models: [
+        chatModelCapability("test-chat-eligible"),
+        embeddingCapability("test-embed-only"),
+        ocrVisionCapability("test-ocr-only"),
+      ],
+    });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({
+      projects: [
+        {
+          path: "/proj",
+          name: "proj",
+          favorite: false,
+          createdAt: 0,
+          lastOpenedAt: 0,
+          available: true,
+        },
+      ],
+    });
+    vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [makeChat()] });
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+
+    const view = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(view.result.current.loading).toBe(false);
+    });
+
+    const modelIds = view.result.current.models.map((m) => m.id);
+    expect(modelIds).toContain("test-chat-eligible");
+    expect(modelIds).not.toContain("test-embed-only");
+    expect(modelIds).not.toContain("test-ocr-only");
+    expect(view.result.current.models.every((m) => m.kind === "chat")).toBe(true);
   });
 });

@@ -69,7 +69,7 @@ function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): Rea
           {model.structuredOutput ? "yes" : "no"} · {model.costClass}/{model.latencyClass}
         </div>
       </div>
-      <span className={"ml-status " + statusClass} title={statusTitle} />
+      <span className={"ml-status " + statusClass} title={statusTitle} aria-hidden="true" />
     </div>
   );
 }
@@ -233,9 +233,7 @@ export function SettingsPanel(): ReactNode {
               </span>
               <div className="ml-info">
                 <div className="ml-top">
-                  <span className="ml-name">
-                    {gatewayStatusLabel}
-                  </span>
+                  <span className="ml-name">{gatewayStatusLabel}</span>
                   <span className="ml-type mono">{models.length.toString()} models</span>
                   <span className="ml-type mono">{chatCount.toString()} chat</span>
                 </div>
@@ -244,6 +242,7 @@ export function SettingsPanel(): ReactNode {
               <span
                 className={"ml-status " + gatewayStatusTone}
                 title={gatewayConfigured ? "gateway configured" : "setup required"}
+                aria-hidden="true"
               />
             </div>
 
