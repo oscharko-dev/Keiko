@@ -13,6 +13,7 @@ import type {
 
 import {
   scoreCitationQuality,
+  scoreContextBudgetFit,
   scoreNoEvidenceAccuracy,
   scorePrecision,
   scoreRecall,
@@ -206,5 +207,38 @@ describe("scoreNoEvidenceAccuracy", () => {
 
   it("returns 0 when actual returned refs but expected was no-evidence", () => {
     expect(scoreNoEvidenceAccuracy(false, true)).toBe(0);
+  });
+
+  it("returns 0 when the no-evidence reason differs from the expected one", () => {
+    expect(scoreNoEvidenceAccuracy(true, true, "no-vectors", "below-min-score")).toBe(0);
+  });
+});
+
+describe("scoreContextBudgetFit", () => {
+  it("returns 1.0 when no budget is configured", () => {
+    const returned = [makeRef("c1", "cap")];
+    expect(scoreContextBudgetFit(returned, new Map([["c1", 20]]), undefined)).toBe(1);
+  });
+
+  it("returns 1.0 when the retrieved chunks fit within budget", () => {
+    const returned = [makeRef("c1", "cap"), makeRef("c2", "cap")];
+    const tokens = new Map([
+      ["c1", 20],
+      ["c2", 30],
+    ]);
+    expect(scoreContextBudgetFit(returned, tokens, 50)).toBe(1);
+  });
+
+  it("returns the bounded over-budget ratio when retrieval exceeds budget", () => {
+    const returned = [makeRef("c1", "cap"), makeRef("c2", "cap")];
+    const tokens = new Map([
+      ["c1", 20],
+      ["c2", 30],
+    ]);
+    expect(scoreContextBudgetFit(returned, tokens, 25)).toBe(0.5);
+  });
+
+  it("returns 1.0 for an empty result set even when a budget is configured", () => {
+    expect(scoreContextBudgetFit([], new Map(), 1)).toBe(1);
   });
 });

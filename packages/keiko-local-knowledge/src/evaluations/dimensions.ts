@@ -173,6 +173,35 @@ export type { CitationRequirementKey };
 export function scoreNoEvidenceAccuracy(
   actualNoEvidence: boolean,
   expectedNoEvidence: boolean,
+  actualReason?: string,
+  expectedReason?: string,
 ): 0 | 1 {
-  return actualNoEvidence === expectedNoEvidence ? 1 : 0;
+  if (actualNoEvidence !== expectedNoEvidence) return 0;
+  if (expectedReason !== undefined) {
+    return actualReason === expectedReason ? 1 : 0;
+  }
+  return 1;
+}
+
+// ─── Context-budget fit ──────────────────────────────────────────────────────
+// `1.0` when the retrieved chunk-token total fits within the configured budget. When it
+// exceeds the budget we return the bounded ratio `budget / used`, which keeps the score in
+// `[0, 1]` while preserving how far over budget the retrieval spilled. Queries without a
+// configured budget are treated vacuously as 1.0 because there is no concrete fit target.
+
+export function scoreContextBudgetFit(
+  references: readonly RetrievalReference[],
+  chunkTokenCounts: ReadonlyMap<string, number>,
+  budgetTokens: number | undefined,
+): number {
+  if (budgetTokens === undefined) return 1;
+  if (references.length === 0) return 1;
+  if (budgetTokens <= 0) return 0;
+  let used = 0;
+  for (const reference of references) {
+    used += chunkTokenCounts.get(String(reference.chunkId)) ?? 0;
+  }
+  if (used <= 0) return 1;
+  if (used <= budgetTokens) return 1;
+  return budgetTokens / used;
 }

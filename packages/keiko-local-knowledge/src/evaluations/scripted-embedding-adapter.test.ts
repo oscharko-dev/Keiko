@@ -175,6 +175,10 @@ describe("createScriptedEmbeddingAdapter — topic salt", () => {
     const hiOne = await embed(oneBoost, withTopicMarker("body", "hi"));
     expect(bytesOf(hiResult)).toBe(bytesOf(hiOne));
   });
+
+  it("rejects topic markers that cannot be parsed by the adapter", () => {
+    expect(() => withTopicMarker("body", "bad topic")).toThrow(/invalid eval topic marker/);
+  });
 });
 
 describe("createScriptedEmbeddingAdapter — offline guarantees", () => {

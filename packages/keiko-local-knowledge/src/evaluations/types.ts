@@ -9,11 +9,12 @@
 // + source + document + parsed-unit + chunk specs to materialise an in-memory store, plus
 // a list of queries with ground truth (`expectedChunkIds`) or an explicit no-evidence flag.
 //
-// `RetrievalEvalScorecard` is the immutable result the runner returns. The dimensions are
-// each in `[0, 1]` so a downstream aggregator can compare or threshold without re-deriving
-// semantics. `passed` is the conjunction of per-dimension thresholds in `PASS_THRESHOLDS`
-// — exposing the constant lets a UI display a "X met 4/5 thresholds" breakdown without
-// re-implementing the comparison.
+// `RetrievalEvalScorecard` is the immutable result the runner returns. The quality
+// dimensions are each in `[0, 1]`; latency is reported separately as a deterministic
+// synthetic-millisecond total unless the caller overrides `deps.now`. `passed` is the
+// conjunction of per-dimension thresholds in `PASS_THRESHOLDS` — exposing the constant
+// lets a UI display a "X met 5/6 thresholds" breakdown without re-implementing the
+// comparison.
 
 import type {
   CapsuleAnswerGroundingPolicy,
@@ -24,6 +25,7 @@ import type {
   KnowledgeSourceId,
   ParsedUnit,
 } from "@oscharko-dev/keiko-contracts";
+import type { RetrievalNoEvidenceReason, RetrievalReference } from "../retrieval/types.js";
 
 // ─── Fixture specs ───────────────────────────────────────────────────────────
 // A fixture is the deterministic seed for a single eval run. The runner materialises the
@@ -39,18 +41,33 @@ export interface EvalChunkSpec {
   // ground-truth chunk for a query verifiably the top result without resorting to actual
   // natural-language matching.
   readonly topic?: string;
+  // Optional reference to the parsed-unit this chunk should cite. When omitted the runner
+  // assigns the chunk to the document's first parsed unit.
+  readonly parsedUnitId?: string;
 }
 
+export type EvalParsedUnitWithoutDocId =
+  | Omit<Extract<ParsedUnit, { kind: "page" }>, "documentId">
+  | Omit<Extract<ParsedUnit, { kind: "section" }>, "documentId">
+  | Omit<Extract<ParsedUnit, { kind: "json-path" }>, "documentId">
+  | Omit<Extract<ParsedUnit, { kind: "csv-row" }>, "documentId">
+  | Omit<Extract<ParsedUnit, { kind: "html-block" }>, "documentId">
+  | Omit<Extract<ParsedUnit, { kind: "unsupported-media" }>, "documentId">;
+
 export interface EvalParsedUnitSpec {
+  readonly id: string;
   // `documentId` is filled in by the runner from `EvalDocumentSpec.id` so a fixture cannot
   // accidentally specify a unit that points at the wrong document.
-  readonly unit: Omit<Extract<ParsedUnit, { kind: "page" }>, "documentId">;
+  readonly unit: EvalParsedUnitWithoutDocId;
 }
 
 export interface EvalDocumentSpec {
   readonly id: DocumentId;
   readonly safeDisplayName: string;
-  readonly parsedUnit: EvalParsedUnitSpec;
+  readonly mediaType?: string;
+  readonly parserId?: string;
+  readonly parserVersion?: string;
+  readonly parsedUnits: readonly EvalParsedUnitSpec[];
   readonly chunks: readonly EvalChunkSpec[];
 }
 
@@ -88,8 +105,17 @@ export interface RetrievalEvalQuery {
   readonly scope: EvalRetrievalScope;
   readonly expectedChunkIds?: readonly ChunkId[];
   readonly expectedNoEvidence?: boolean;
+  readonly expectedNoEvidenceReason?: RetrievalNoEvidenceReason;
   // Optional override of the retrieval `topK`. Used by the mutation-witness test.
   readonly topK?: number;
+  // Optional budget for the retrieved context, measured in the fixture's synthetic token
+  // counts (the runner seeds `tokenCount` from the chunk text length). Used to score
+  // whether the retrieved pack fits a bounded answer-generation context window.
+  readonly contextBudgetTokens?: number;
+  // Optional override for the query-time embedding identity. This lets a fixture emulate
+  // stale vectors or an operator rebinding the adapter to a new embedding identity while
+  // the capsule still holds older vectors.
+  readonly queryEmbeddingIdentity?: EmbeddingModelIdentity;
 }
 
 export interface RetrievalEvalFixture {
@@ -100,9 +126,9 @@ export interface RetrievalEvalFixture {
 }
 
 // ─── Scorecard ───────────────────────────────────────────────────────────────
-// Each dimension is in `[0, 1]`. The runner averages across queries — averaging is safe
-// because every dimension is bounded and a missing input (no expected refs, no returned
-// refs) yields a vacuous 1.0 rather than NaN.
+// The quality dimensions are in `[0, 1]`. The runner averages across queries — averaging
+// is safe because every bounded dimension yields a vacuous 1.0 rather than NaN when its
+// input is absent. `latencyMs` is an unbounded sum kept outside the threshold contract.
 
 export interface RetrievalEvalDimensionScores {
   readonly recall: number;
@@ -110,7 +136,30 @@ export interface RetrievalEvalDimensionScores {
   readonly sourceIsolation: number;
   readonly citationQuality: number;
   readonly noEvidenceAccuracy: number;
+  readonly contextBudgetFit: number;
+  // Deterministic by default because the runner's default clock is monotonic synthetic
+  // time. Callers may override `deps.now` to record real latency instead.
   readonly latencyMs: number;
+}
+
+export interface ModelJudgedRetrievalEvalInput {
+  readonly fixtureId: string;
+  readonly queryId: string;
+  readonly queryText: string;
+  readonly references: readonly RetrievalReference[];
+  readonly noEvidence: boolean;
+  readonly reason?: RetrievalNoEvidenceReason;
+}
+
+export interface ModelJudgedRetrievalEvalScores {
+  readonly groundedness: number;
+  readonly faithfulness: number;
+}
+
+export interface ModelJudgedRetrievalEvalJudge {
+  readonly judge: (
+    input: ModelJudgedRetrievalEvalInput,
+  ) => Promise<ModelJudgedRetrievalEvalScores>;
 }
 
 export interface RetrievalEvalScorecard {
@@ -118,6 +167,7 @@ export interface RetrievalEvalScorecard {
   readonly runId: string;
   readonly dimensions: RetrievalEvalDimensionScores;
   readonly passed: boolean;
+  readonly modelJudged?: ModelJudgedRetrievalEvalScores;
 }
 
 // ─── Pass thresholds ─────────────────────────────────────────────────────────
@@ -131,6 +181,7 @@ export interface RetrievalEvalThresholds {
   readonly sourceIsolation: number;
   readonly citationQuality: number;
   readonly noEvidenceAccuracy: number;
+  readonly contextBudgetFit: number;
 }
 
 export const PASS_THRESHOLDS: RetrievalEvalThresholds = Object.freeze({
@@ -139,4 +190,5 @@ export const PASS_THRESHOLDS: RetrievalEvalThresholds = Object.freeze({
   sourceIsolation: 1.0,
   citationQuality: 0.9,
   noEvidenceAccuracy: 1.0,
+  contextBudgetFit: 1.0,
 });
