@@ -33,11 +33,30 @@ import {
   isSafeText,
   pushNestedErrors,
   validateMemoryIdString,
+  validateRetentionHint,
   validateSchemaVersionLiteral,
   validateTags,
 } from "./memory-internal.js";
 
 // ─── Proposal ─────────────────────────────────────────────────────────────────
+function validateProposalOptionalFields(input: Record<string, unknown>, errors: string[]): void {
+  if (input.payload !== undefined) {
+    pushNestedErrors("proposal", validateMemoryStructuredPayload(input.payload), errors);
+  }
+  validateTags("proposal.tags", input.tags, errors);
+  pushNestedErrors("proposal", validateMemoryProvenance(input.provenance), errors);
+  pushNestedErrors("proposal", validateMemoryValidityInterval(input.validity), errors);
+  if (input.retentionHint !== undefined) {
+    validateRetentionHint("proposal.retentionHint", input.retentionHint, errors);
+  }
+  if (
+    input.captureReason !== undefined &&
+    !isSafeText(input.captureReason, MEMORY_RATIONALE_MAX_CHARS)
+  ) {
+    errors.push("proposal.captureReason must be a bounded control-free string when set");
+  }
+}
+
 export function validateMemoryProposal(input: unknown): MemoryValidation<MemoryProposal> {
   if (!isRecord(input)) {
     return { ok: false, errors: ["proposal must be an object"] };
@@ -55,20 +74,9 @@ export function validateMemoryProposal(input: unknown): MemoryValidation<MemoryP
   if (!isSafeText(input.body, MEMORY_BODY_MAX_CHARS)) {
     errors.push("proposal.body must be a bounded control-free non-empty string");
   }
-  if (input.payload !== undefined) {
-    pushNestedErrors("proposal", validateMemoryStructuredPayload(input.payload), errors);
-  }
-  validateTags(input.tags, errors);
-  pushNestedErrors("proposal", validateMemoryProvenance(input.provenance), errors);
-  pushNestedErrors("proposal", validateMemoryValidityInterval(input.validity), errors);
+  validateProposalOptionalFields(input, errors);
   if (input.initialStatus !== "proposed") {
     errors.push('proposal.initialStatus must be the literal "proposed"');
-  }
-  if (
-    input.captureReason !== undefined &&
-    !isSafeText(input.captureReason, MEMORY_RATIONALE_MAX_CHARS)
-  ) {
-    errors.push("proposal.captureReason must be a bounded control-free string when set");
   }
   if (errors.length > 0) {
     return { ok: false, errors };
@@ -168,7 +176,7 @@ function validateUpdatePatchFields(input: Record<string, unknown>, errors: strin
     pushNestedErrors("update", validateMemoryStructuredPayload(input.payloadPatch), errors);
   }
   if (input.tagsPatch !== undefined) {
-    validateTags(input.tagsPatch, errors);
+    validateTags("update.tagsPatch", input.tagsPatch, errors);
   }
   if (input.validityPatch !== undefined) {
     pushNestedErrors("update", validateMemoryValidityInterval(input.validityPatch), errors);
@@ -181,8 +189,8 @@ function validateUpdatePatchFields(input: Record<string, unknown>, errors: strin
       `update.sensitivityPatch must be one of ${MEMORY_SENSITIVITIES.join("|")} when set`,
     );
   }
-  if (input.retentionHintPatch !== undefined && !isRecord(input.retentionHintPatch)) {
-    errors.push("update.retentionHintPatch must be an object when set");
+  if (input.retentionHintPatch !== undefined) {
+    validateRetentionHint("update.retentionHintPatch", input.retentionHintPatch, errors);
   }
 }
 

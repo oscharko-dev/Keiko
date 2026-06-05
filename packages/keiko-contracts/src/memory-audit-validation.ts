@@ -93,12 +93,24 @@ function validateAuditActionFieldShapes(action: Record<string, unknown>, errors:
   if ("fieldsChanged" in action) {
     validateAuditFieldsChanged(action.fieldsChanged, errors);
   }
+  validateOptionalAuditIdField("action.proposalId", action.proposalId, errors);
+  validateOptionalAuditIdField("action.memoryId", action.memoryId, errors);
+  validateOptionalAuditIdField("action.edgeId", action.edgeId, errors);
+  validateOptionalAuditIdField("action.oldMemoryId", action.oldMemoryId, errors);
+  validateOptionalAuditIdField("action.newMemoryId", action.newMemoryId, errors);
   if ("edgeKind" in action && !isMember(action.edgeKind, MEMORY_EDGE_KINDS)) {
     errors.push(`action.edgeKind must be one of ${MEMORY_EDGE_KINDS.join("|")}`);
   }
   if ("reason" in action && !isSafeText(action.reason, MEMORY_REASON_MAX_CHARS)) {
     errors.push("action.reason must be a bounded control-free non-empty string");
   }
+}
+
+function validateOptionalAuditIdField(field: string, value: unknown, errors: string[]): void {
+  if (value === undefined) {
+    return;
+  }
+  validateMemoryIdString(field, value, errors);
 }
 
 function validateAuditActionKindShape(action: Record<string, unknown>, errors: string[]): void {
