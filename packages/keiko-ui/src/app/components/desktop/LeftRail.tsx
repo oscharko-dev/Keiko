@@ -111,6 +111,17 @@ export function LeftRail({
         >
           <Icons.pin size={19} />
         </Link>
+        {/* Issue #280 (Epic #270) — Quality Intelligence is a page route, not a window tool */}
+        <Link
+          href="/quality-intelligence"
+          className="rail-btn"
+          data-active="false"
+          data-side="left"
+          aria-label="Quality Intelligence"
+          title="Quality Intelligence"
+        >
+          <Icons.review size={19} />
+        </Link>
       </div>
       <div className="rail-div" />
       <button

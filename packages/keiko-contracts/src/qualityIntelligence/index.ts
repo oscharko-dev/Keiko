@@ -174,3 +174,12 @@ export type {
   QualityIntelligenceConversationCenterHandoff,
 } from "./handoffEnvelope.js";
 export { QUALITY_INTELLIGENCE_HANDOFF_PROMPTED_ACTIONS } from "./handoffEnvelope.js";
+
+// ─── BFF wire shapes (Issue #280) ─────────────────────────────────────────────
+export type {
+  QualityIntelligenceUiRunTotals,
+  QualityIntelligenceUiRunSummary,
+  QualityIntelligenceUiFindingSummary,
+  QualityIntelligenceUiEvidenceRef,
+  QualityIntelligenceUiRunDetail,
+} from "./bffWire.js";
