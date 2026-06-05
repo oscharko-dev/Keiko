@@ -6409,7 +6409,8 @@ select.dlg-input {
   border-radius: 12px;
   border: 1px solid var(--line-soft);
   background: var(--card);
-  color: var(--fg-muted);
+  /* --fg on --card: contrast ≥4.5:1 (WCAG AA). --fg-muted was 4.09:1. */
+  color: var(--fg);
   cursor: pointer;
   transition:
     background 120ms,
@@ -6677,6 +6678,14 @@ select.dlg-input {
 .mc-action-error {
   font-size: 12px;
   color: var(--danger);
+  margin: 0;
+  width: 100%;
+}
+
+/* --ok (#4eba87) on default background (--bg #2c3842) = 5.82:1 (WCAG AA) */
+.mc-action-notice {
+  font-size: 12px;
+  color: var(--ok);
   margin: 0;
   width: 100%;
 }

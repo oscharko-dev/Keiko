@@ -35,6 +35,31 @@ describe("MemoryActions", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows mc-action-notice after a correction is submitted", async () => {
+    const correctionRecord = makeRecord({ body: "Use unknown not any." });
+    const correctImpl = vi.fn().mockResolvedValue({ correction: correctionRecord });
+    const user = userEvent.setup();
+
+    render(
+      <MemoryActions record={makeRecord()} onRecordChange={vi.fn()} correctImpl={correctImpl} />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: /create a correction proposal for this memory/i }),
+    );
+    const textarea = screen.getByLabelText(/corrected body/i);
+    await user.clear(textarea);
+    await user.type(textarea, "Use unknown not any.");
+    await user.click(screen.getByRole("button", { name: /submit correction/i }));
+
+    await waitFor(() => {
+      const notice = screen.getByRole("status");
+      expect(notice).toBeInTheDocument();
+      expect(notice.className).toContain("mc-action-notice");
+      expect(notice).toHaveTextContent("Correction submitted for review:");
+    });
+  });
+
   it("gates hard delete behind an explicit confirmation step", async () => {
     const deleteImpl = vi
       .fn()
