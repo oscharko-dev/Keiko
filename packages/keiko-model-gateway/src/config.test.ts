@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
-import { loadConfigFromFile, parseGatewayConfig, toSafeObject } from "./config.js";
+import {
+  loadConfigFromFile,
+  parseCapabilityList,
+  parseGatewayConfig,
+  parseModelCapability,
+  toSafeObject,
+} from "./config.js";
 
 interface RawProvider {
   modelId: string;
@@ -136,6 +142,31 @@ describe("parseGatewayConfig", () => {
       capability: { id: "other-model", kind: "chat" },
     }));
     expect(() => parseGatewayConfig(raw)).toThrow(/capability\.id/);
+  });
+
+  // Test B — parseProviderCapability non-chat workflow rejection via inline path (Issue #143 verifier LOW)
+  // Exercises config.ts:323 — the kind !== "chat" && workflowEligible guard inside the
+  // per-provider inline capability parser. This path is distinct from the top-level
+  // parseModelCapability surface tested in the parseModelCapability describe block.
+  it("rejects an inline provider capability with kind: 'embedding' and workflowEligible: true", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      capability: {
+        kind: "embedding",
+        workflowEligible: true,
+      },
+    }));
+    try {
+      parseGatewayConfig(raw);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      const message = (error as ConfigInvalidError).message;
+      expect(message).toContain("providers[0].capability.workflowEligible");
+      expect(message).toMatch(
+        /providers\[0\]\.capability\.workflowEligible must be false when providers\[0\]\.capability\.kind is not "chat"/u,
+      );
+    }
   });
 
   it("rejects an empty providers array", () => {
@@ -338,5 +369,248 @@ describe("loadConfigFromFile", () => {
       KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY: "example-file-load-token-1234567890",
     });
     expect(config.providers[0]?.apiKey).toBe("example-file-load-token-1234567890");
+  });
+});
+
+// ─── Strict capability parser (Issue #143) ───────────────────────────────────────
+// `parseModelCapability` is the fail-closed parser for explicit, wire-facing
+// capability records (top-level `capabilities` array). Every boolean is required
+// (no implicit defaults) — callers that want a default chat capability must call
+// `createDefaultChatCapability`. Sibling-field values (especially anything from a
+// ModelProviderConfig such as apiKey) must NEVER appear in error messages.
+
+function validCapability(): Record<string, unknown> {
+  return {
+    id: "example-chat-model",
+    kind: "chat",
+    contextWindow: 64_000,
+    maxOutputTokens: 4_096,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "runtime-configured",
+    preferredUseCases: ["Chat"],
+    knownLimitations: ["Validate against the target endpoint"],
+  };
+}
+
+function withoutKey(source: Record<string, unknown>, key: string): Record<string, unknown> {
+  const clone = { ...source };
+  Reflect.deleteProperty(clone, key);
+  return clone;
+}
+
+describe("parseModelCapability", () => {
+  it("accepts a valid chat capability and round-trips every declared field", () => {
+    const raw = validCapability();
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed).toEqual(raw);
+  });
+
+  it("rejects a missing supportsImageInput with a path-scoped ConfigInvalidError", () => {
+    const rest = withoutKey(validCapability(), "supportsImageInput");
+    try {
+      parseModelCapability(rest, "capabilities[0]");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      const message = (error as Error).message;
+      expect(message).toContain("capabilities[0].supportsImageInput");
+      // No sibling-field VALUES (provider modelId/url/key) leak into the message.
+      // The path itself may contain field NAMES; values are what must not appear.
+      expect(message).not.toContain("64000");
+      expect(message).not.toContain("runtime-configured");
+      expect(message).not.toContain("Validate against the target endpoint");
+    }
+  });
+
+  it("rejects a missing supportsDocumentInput", () => {
+    const rest = withoutKey(validCapability(), "supportsDocumentInput");
+    expect(() => parseModelCapability(rest, "capabilities[0]")).toThrow(/supportsDocumentInput/);
+  });
+
+  it("rejects a missing workflowEligible", () => {
+    const rest = withoutKey(validCapability(), "workflowEligible");
+    expect(() => parseModelCapability(rest, "capabilities[0]")).toThrow(/workflowEligible/);
+  });
+
+  it("rejects a non-chat kind with workflowEligible: true (invariant: workflow ⇒ chat)", () => {
+    const raw = {
+      ...validCapability(),
+      kind: "embedding",
+      workflowEligible: true,
+    };
+    try {
+      parseModelCapability(raw, "capabilities[0]");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("workflowEligible");
+    }
+  });
+
+  it("rejects an unknown kind discriminant", () => {
+    const raw = { ...validCapability(), kind: "unknown-kind" };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/kind/);
+  });
+
+  it("rejects an unknown top-level field (strict — no silent absorption)", () => {
+    const raw = { ...validCapability(), surpriseField: "value" };
+    try {
+      parseModelCapability(raw, "capabilities[0]");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("surpriseField");
+    }
+  });
+
+  it("rejects a non-object input", () => {
+    expect(() => parseModelCapability("not-an-object", "capabilities[0]")).toThrow(
+      ConfigInvalidError,
+    );
+  });
+
+  it("rejects a non-integer contextWindow", () => {
+    const raw = { ...validCapability(), contextWindow: -1 };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/contextWindow/);
+  });
+
+  it("accepts an embedding capability whose workflowEligible is false", () => {
+    const raw = { ...validCapability(), kind: "embedding", workflowEligible: false };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.kind).toBe("embedding");
+    expect(parsed.workflowEligible).toBe(false);
+  });
+
+  it("accepts an ocr-vision capability whose workflowEligible is false", () => {
+    const raw = { ...validCapability(), kind: "ocr-vision", workflowEligible: false };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.kind).toBe("ocr-vision");
+  });
+
+  // Test A — ocr-vision + workflowEligible rejection (top-level parser, Issue #143 verifier LOW)
+  it("rejects kind: 'ocr-vision' with workflowEligible: true", () => {
+    const malformed = {
+      id: "test-vision",
+      kind: "ocr-vision" as const,
+      contextWindow: 8000,
+      maxOutputTokens: 4000,
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: false,
+      supportsImageInput: true,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "medium" as const,
+      latencyClass: "standard" as const,
+      throughputHint: "test",
+      preferredUseCases: [],
+      knownLimitations: [],
+    };
+    expect(() => parseModelCapability(malformed, "capability")).toThrow(ConfigInvalidError);
+    expect(() => parseModelCapability(malformed, "capability")).toThrow(
+      /capability\.workflowEligible must be false when capability\.kind is not "chat"/u,
+    );
+  });
+
+  // Test C — credential-shaped sibling field no-leakage (Issue #143 security-triage MEDIUM, OWASP A09)
+  it("does not echo a credential-shaped sibling field in the rejection message", () => {
+    const credentialShaped = "sk-test-abcdef1234567890";
+    const malformed = {
+      id: "test-chat",
+      kind: "chat" as const,
+      contextWindow: 8000,
+      maxOutputTokens: 4000,
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: false,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: false,
+      costClass: "medium" as const,
+      latencyClass: "standard" as const,
+      throughputHint: "test",
+      preferredUseCases: [],
+      knownLimitations: [],
+      apiKey: credentialShaped,
+    };
+    try {
+      parseModelCapability(malformed, "capability");
+      throw new Error("expected parseModelCapability to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      const message = (error as ConfigInvalidError).message;
+      expect(message).toContain("capability.apiKey");
+      expect(message).not.toContain(credentialShaped);
+    }
+  });
+});
+
+describe("parseCapabilityList", () => {
+  it("returns parsed entries in declaration order", () => {
+    const raw = [
+      { ...validCapability(), id: "first" },
+      { ...validCapability(), id: "second" },
+      { ...validCapability(), id: "third" },
+    ];
+    const parsed = parseCapabilityList(raw, "capabilities");
+    expect(parsed.map((c) => c.id)).toEqual(["first", "second", "third"]);
+  });
+
+  it("rejects the whole list when any single entry is malformed (no partial acceptance)", () => {
+    const raw = [
+      { ...validCapability(), id: "ok" },
+      { ...validCapability(), id: "bad", kind: "unknown-kind" },
+      { ...validCapability(), id: "alsoOk" },
+    ];
+    try {
+      parseCapabilityList(raw, "capabilities");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("capabilities[1].kind");
+    }
+  });
+
+  it("rejects a non-array input", () => {
+    expect(() => parseCapabilityList({ not: "an array" }, "capabilities")).toThrow(
+      ConfigInvalidError,
+    );
+  });
+
+  it("returns an empty list for an empty array", () => {
+    expect(parseCapabilityList([], "capabilities")).toEqual([]);
+  });
+});
+
+describe("parseGatewayConfig top-level capabilities array", () => {
+  it("validates a top-level capabilities array through parseCapabilityList", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      capabilities: [{ ...validCapability(), id: "example-chat-model" }],
+    };
+    const config = parseGatewayConfig(raw);
+    expect(config.capabilities?.[0]?.id).toBe("example-chat-model");
+    expect(config.capabilities?.[0]?.supportsImageInput).toBe(false);
+  });
+
+  it("rejects a malformed top-level capabilities array without echoing the apiKey", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      capabilities: [{ ...validCapability(), kind: "unknown-kind" }],
+    };
+    try {
+      parseGatewayConfig(raw);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).not.toContain("example-test-token-1234567890");
+    }
   });
 });
