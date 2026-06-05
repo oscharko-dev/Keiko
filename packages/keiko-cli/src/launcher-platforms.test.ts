@@ -14,7 +14,7 @@ import {
 // Adversarial executable paths that MUST be refused. Each one targets a distinct
 // shell-injection class. The test below iterates them individually so a regression on
 // one character class fails its own sub-assertion (mutation-robust).
-const ADVERSARIAL_EXEC_PATHS: ReadonlyArray<readonly [string, string]> = [
+const ADVERSARIAL_EXEC_PATHS: readonly (readonly [string, string])[] = [
   ["/usr/local/bin/keiko;rm -rf /", "semicolon command separator"],
   ["/usr/local/bin/keiko && evil", "&& chained command"],
   ["/Users/me/My Keiko/bin/keiko", "ASCII space"],
@@ -210,6 +210,9 @@ describe("launcherFor", () => {
     expect(launcherFor("win32")).toBe(windowsLauncher);
   });
   it("rejects an unknown platform", () => {
-    expect(() => launcherFor("freebsd" as NodeJS.Platform)).toThrow(LauncherError);
+    // Forced narrowing: launcherFor accepts NodeJS.Platform; we deliberately feed a value
+    // outside the union to verify the unsupported-platform refusal. Casting via `unknown`
+    // satisfies typescript-eslint's no-unnecessary-type-assertion rule.
+    expect(() => launcherFor("freebsd" as unknown as NodeJS.Platform)).toThrow(LauncherError);
   });
 });
