@@ -114,6 +114,7 @@ export type {
   StreamDelta,
   StreamEvent,
 } from "./gateway.js";
+export { CONVERSATION_CAPABILITY_CONTRACT_VERSION } from "./gateway.js";
 
 // ─── Tools ──────────────────────────────────────────────────────────────────────
 export type {

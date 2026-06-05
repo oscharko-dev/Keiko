@@ -80,6 +80,9 @@ function customModelConfig(modelId = CHAT_MODEL): GatewayConfig {
         toolCalling: true,
         structuredOutput: true,
         streaming: true,
+        supportsImageInput: false,
+        supportsDocumentInput: false,
+        workflowEligible: false,
         costClass: "medium",
         latencyClass: "standard",
         throughputHint: "test endpoint",
@@ -709,7 +712,10 @@ describe("handleGroundedAsk", () => {
     );
     expect(result.status).toBe(200);
     const answer = result.body as GroundedAnswer;
-    expect(answer.citations.map((citation) => citation.scopePath)).toEqual(["src/bar.ts", "src/foo.ts"]);
+    expect(answer.citations.map((citation) => citation.scopePath)).toEqual([
+      "src/bar.ts",
+      "src/foo.ts",
+    ]);
   });
 
   // Case 3 companion fixture: when the orchestrator reports no evidence, the route must preserve

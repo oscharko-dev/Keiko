@@ -245,29 +245,32 @@ interface ProviderConnection {
   readonly apiKey: string;
 }
 
-function parseProviderCapability(
-  raw: unknown,
+function buildProviderCapabilityBody(
+  raw: Record<string, unknown>,
   path: string,
-  modelId: string,
-): ModelCapability | undefined {
-  if (raw === undefined) {
-    return undefined;
-  }
-  if (!isRecord(raw)) {
-    throw new ConfigInvalidError(`${path} must be an object`);
-  }
-  const id = optionalNonEmptyString(raw.id, `${path}.id`, modelId);
-  if (id !== modelId) {
-    throw new ConfigInvalidError(`${path}.id must match the provider modelId`);
-  }
+  id: string,
+  kind: ModelKind,
+  workflowEligible: boolean,
+): ModelCapability {
   return {
     id,
-    kind: requireEnum<ModelKind>(raw.kind, `${path}.kind`, ["chat", "embedding", "ocr-vision"]),
+    kind,
     contextWindow: optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0),
     maxOutputTokens: optionalNonNegativeInt(raw.maxOutputTokens, `${path}.maxOutputTokens`, 0),
     toolCalling: optionalBoolean(raw.toolCalling, `${path}.toolCalling`, false),
     structuredOutput: optionalBoolean(raw.structuredOutput, `${path}.structuredOutput`, false),
     streaming: optionalBoolean(raw.streaming, `${path}.streaming`, false),
+    supportsImageInput: optionalBoolean(
+      raw.supportsImageInput,
+      `${path}.supportsImageInput`,
+      false,
+    ),
+    supportsDocumentInput: optionalBoolean(
+      raw.supportsDocumentInput,
+      `${path}.supportsDocumentInput`,
+      false,
+    ),
+    workflowEligible,
     costClass: requireEnum<CostClass>(raw.costClass ?? "medium", `${path}.costClass`, [
       "low",
       "medium",
@@ -290,6 +293,145 @@ function parseProviderCapability(
       "Capabilities are runtime-declared and should be verified in the target environment",
     ]),
   };
+}
+
+function parseProviderCapability(
+  raw: unknown,
+  path: string,
+  modelId: string,
+): ModelCapability | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!isRecord(raw)) {
+    throw new ConfigInvalidError(`${path} must be an object`);
+  }
+  const id = optionalNonEmptyString(raw.id, `${path}.id`, modelId);
+  if (id !== modelId) {
+    throw new ConfigInvalidError(`${path}.id must match the provider modelId`);
+  }
+  const kind = requireEnum<ModelKind>(raw.kind, `${path}.kind`, [
+    "chat",
+    "embedding",
+    "ocr-vision",
+  ]);
+  // Conservative defaults for the per-provider inline capability path (Issue #143).
+  // The strict, no-default surface is parseModelCapability for the top-level
+  // `capabilities` array. Workflow eligibility is also gated by the chat invariant
+  // here so an inline embedding/ocr-vision declaration cannot opt itself in.
+  const workflowEligible = optionalBoolean(raw.workflowEligible, `${path}.workflowEligible`, false);
+  if (kind !== "chat" && workflowEligible) {
+    throw new ConfigInvalidError(
+      `${path}.workflowEligible must be false when ${path}.kind is not "chat"`,
+    );
+  }
+  return buildProviderCapabilityBody(raw, path, id, kind, workflowEligible);
+}
+
+// Strict, fail-closed parser for explicit wire-facing capability records (Issue #143).
+// Used by `parseCapabilityList` against the top-level `capabilities` array. Every
+// boolean is REQUIRED here — callers that want a default chat capability call
+// `createDefaultChatCapability` instead. Error messages identify the field path
+// and never echo sibling-field values; the `ConfigInvalidError` base also runs
+// `redact()` so apiKey-shaped substrings are scrubbed defensively.
+const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
+  "id",
+  "kind",
+  "contextWindow",
+  "maxOutputTokens",
+  "toolCalling",
+  "structuredOutput",
+  "streaming",
+  "supportsImageInput",
+  "supportsDocumentInput",
+  "workflowEligible",
+  "costClass",
+  "latencyClass",
+  "throughputHint",
+  "preferredUseCases",
+  "knownLimitations",
+]);
+
+function requireBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new ConfigInvalidError(`${path} must be a boolean`);
+  }
+  return value;
+}
+
+function requireNonNegativeIntStrict(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new ConfigInvalidError(`${path} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function requireStringArray(value: unknown, path: string): readonly string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
+    throw new ConfigInvalidError(`${path} must be an array of strings`);
+  }
+  return value as readonly string[];
+}
+
+export function parseModelCapability(value: unknown, path: string): ModelCapability {
+  if (!isRecord(value)) {
+    throw new ConfigInvalidError(`${path} must be an object`);
+  }
+  // Reject unknown top-level keys so an adversarial config cannot smuggle
+  // future-named fields past the parser. The first offending key is reported
+  // by name; values are NEVER echoed.
+  for (const key of Object.keys(value)) {
+    if (!MODEL_CAPABILITY_KNOWN_KEYS.has(key)) {
+      throw new ConfigInvalidError(`${path}.${key} is not a recognised capability field`);
+    }
+  }
+  const id = requireNonEmptyString(value.id, `${path}.id`);
+  const kind = requireEnum<ModelKind>(value.kind, `${path}.kind`, [
+    "chat",
+    "embedding",
+    "ocr-vision",
+  ]);
+  const workflowEligible = requireBoolean(value.workflowEligible, `${path}.workflowEligible`);
+  if (kind !== "chat" && workflowEligible) {
+    throw new ConfigInvalidError(
+      `${path}.workflowEligible must be false when ${path}.kind is not "chat"`,
+    );
+  }
+  return {
+    id,
+    kind,
+    contextWindow: requireNonNegativeIntStrict(value.contextWindow, `${path}.contextWindow`),
+    maxOutputTokens: requireNonNegativeIntStrict(value.maxOutputTokens, `${path}.maxOutputTokens`),
+    toolCalling: requireBoolean(value.toolCalling, `${path}.toolCalling`),
+    structuredOutput: requireBoolean(value.structuredOutput, `${path}.structuredOutput`),
+    streaming: requireBoolean(value.streaming, `${path}.streaming`),
+    supportsImageInput: requireBoolean(value.supportsImageInput, `${path}.supportsImageInput`),
+    supportsDocumentInput: requireBoolean(
+      value.supportsDocumentInput,
+      `${path}.supportsDocumentInput`,
+    ),
+    workflowEligible,
+    costClass: requireEnum<CostClass>(value.costClass, `${path}.costClass`, [
+      "low",
+      "medium",
+      "high",
+    ]),
+    latencyClass: requireEnum<LatencyClass>(value.latencyClass, `${path}.latencyClass`, [
+      "fast",
+      "standard",
+      "slow",
+    ]),
+    throughputHint: requireNonEmptyString(value.throughputHint, `${path}.throughputHint`),
+    preferredUseCases: requireStringArray(value.preferredUseCases, `${path}.preferredUseCases`),
+    knownLimitations: requireStringArray(value.knownLimitations, `${path}.knownLimitations`),
+  };
+}
+
+export function parseCapabilityList(value: unknown, path: string): readonly ModelCapability[] {
+  if (!Array.isArray(value)) {
+    throw new ConfigInvalidError(`${path} must be an array`);
+  }
+  return value.map((entry, index) => parseModelCapability(entry, `${path}[${String(index)}]`));
 }
 
 function resolveProviderConnection(
@@ -386,9 +528,15 @@ export function parseGatewayConfig(raw: unknown, env: EnvSource = {}): GatewayCo
   }
   const parsed = providersRaw.map((item, index) => parseProvider(item, index, env));
   const providers = parsed.map((item) => item.provider);
-  const capabilities = parsed
+  const inlineCapabilities = parsed
     .map((item) => item.capability)
     .filter((item): item is ModelCapability => item !== undefined);
+  // Top-level `capabilities` array is the wire-facing surface for explicit
+  // capability records (Issue #143). Validated by the strict parser so a
+  // malformed entry fails closed before reaching any consumer.
+  const topLevelCapabilities =
+    raw.capabilities === undefined ? [] : parseCapabilityList(raw.capabilities, "capabilities");
+  const capabilities: readonly ModelCapability[] = [...inlineCapabilities, ...topLevelCapabilities];
   return {
     providers,
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),

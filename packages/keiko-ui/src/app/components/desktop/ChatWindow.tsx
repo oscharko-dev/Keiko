@@ -32,8 +32,36 @@ function visibleOnly(messages: readonly ChatMessage[]): ChatMessage[] {
   return messages.filter((m) => m.role === "user" || m.role === "assistant");
 }
 
+// Conservative default chat capability for the empty-discovery fallback (Issue #143 / AC #2).
+// Mirrors `createDefaultChatCapability` in @oscharko-dev/keiko-model-gateway — duplicated here
+// rather than imported because that package is Node-only (node:fs, node:net) and this module
+// is a Client Component. Unknown discovered chat models stay text-only and not workflow-eligible
+// until a server-side normaliser enriches them.
+function fallbackChatCapability(id: string): ModelCapability {
+  return {
+    id,
+    kind: "chat",
+    contextWindow: 0,
+    maxOutputTokens: 0,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "runtime-configured endpoint",
+    preferredUseCases: ["Chat"],
+    knownLimitations: [
+      "Runtime-configured capability; validate against the target endpoint before production use",
+      "Image input, document input, and workflow eligibility require explicit enrichment",
+    ],
+  };
+}
+
 function modelList(models: readonly ModelCapability[]): readonly ModelCapability[] {
-  return models.length > 0 ? models : [{ id: DEFAULT_MODEL_ID } as ModelCapability];
+  return models.length > 0 ? models : [fallbackChatCapability(DEFAULT_MODEL_ID)];
 }
 
 function onComposerKeyDown(

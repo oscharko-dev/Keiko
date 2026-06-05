@@ -5,6 +5,11 @@
 // here. `readonly` everywhere; optional props are `| undefined` because exactOptionalPropertyTypes
 // is on.
 
+// Bumped to 2 by issue #143 (Epic #142 Conversation Center): ModelCapability now carries
+// supportsImageInput / supportsDocumentInput / workflowEligible. A future structural break
+// adds a new literal member rather than mutating this constant.
+export const CONVERSATION_CAPABILITY_CONTRACT_VERSION = 2 as const;
+
 // ─── Modality discriminant ────────────────────────────────────────────────────
 
 export type ModelKind = "chat" | "embedding" | "ocr-vision";
@@ -23,6 +28,13 @@ export interface ModelCapability {
   readonly toolCalling: boolean;
   readonly structuredOutput: boolean;
   readonly streaming: boolean;
+  // Conversation Center modality flags (Issue #143 / Epic #142). Conservative
+  // defaults: unknown discovered chat models are text-only and not workflow-eligible.
+  // Image and document INPUT support; workflow eligibility MUST be false for non-chat
+  // kinds (the parser in keiko-model-gateway/src/config.ts enforces this).
+  readonly supportsImageInput: boolean;
+  readonly supportsDocumentInput: boolean;
+  readonly workflowEligible: boolean;
   readonly costClass: CostClass;
   readonly latencyClass: LatencyClass;
   readonly throughputHint: string;

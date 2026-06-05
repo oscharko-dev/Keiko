@@ -43,12 +43,18 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
     toolCalling: true,
     structuredOutput: true,
     streaming: true,
+    // Conservative defaults for an UNKNOWN discovered chat model (Issue #143 / AC #2):
+    // text-only and not workflow-eligible until explicitly enriched.
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
     costClass: "medium",
     latencyClass: "standard",
     throughputHint: "runtime-configured endpoint",
     preferredUseCases: ["Chat", "Agent workflow"],
     knownLimitations: [
       "Runtime-configured capability; validate against the target endpoint before production use",
+      "Image input, document input, and workflow eligibility require explicit enrichment",
     ],
   };
 }

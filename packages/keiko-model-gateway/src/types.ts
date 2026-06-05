@@ -26,6 +26,7 @@ export type {
   StreamDelta,
   StreamEvent,
 } from "@oscharko-dev/keiko-contracts";
+export { CONVERSATION_CAPABILITY_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts";
 
 // ─── Provider configuration (credential-bearing — STAYS local) ────────────────
 
