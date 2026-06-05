@@ -26,13 +26,21 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 57 route contract (ADR-0017 browser + ADR-0018 terminal + first-run gateway setup + #185 grounded Q&A + #211 Memory Center)", () => {
-    expect(API_ROUTES).toHaveLength(57);
+  it("declares the 59 route contract (ADR-0017 browser + ADR-0018 terminal + first-run gateway setup + #185 grounded Q&A + #211 Memory Center + #212 Conversation Center memory)", () => {
+    expect(API_ROUTES).toHaveLength(59);
   });
 
-  it("includes the 12 Memory Center routes (#211)", () => {
+  it("includes the 14 memory routes (12 from #211 Memory Center + 2 from #212 Conversation Center)", () => {
     const memoryRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/memory"));
-    expect(memoryRoutes).toHaveLength(12);
+    expect(memoryRoutes).toHaveLength(14);
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/context"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find(
+        (r) => r.method === "POST" && r.pattern === "/api/memory/capture-from-conversation",
+      ),
+    ).toBeDefined();
   });
 
   it("includes the first-run gateway setup route", () => {
