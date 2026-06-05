@@ -7503,3 +7503,11 @@ select.dlg-input {
   outline-offset: 2px;
   box-shadow: 0 0 0 4px var(--accent-glow);
 }
+
+/* Light-theme override: --fg-muted on white falls below WCAG 4.5:1 (2.98:1). The
+   informational copy and the dismiss control switch to --fg in light theme, which
+   the a11y audit measured at 5.47:1. Dark theme is unchanged. */
+[data-theme="light"] .install-banner-btn-dismiss,
+[data-theme="light"] .install-banner-desc {
+  color: var(--fg);
+}
