@@ -78,12 +78,20 @@ activate the installed app.
 To create a shortcut that starts the server and opens the app in one action, run:
 
 ```
-keiko launcher create
+keiko launcher install
 ```
 
 This command generates a platform-appropriate shortcut file in a user-accessible location and
-prints the file path. No administrator privileges are required. The shortcut is not created
-automatically; this command is always explicit.
+prints the file path. The exact path depends on your operating system:
+
+- **Linux:** `~/.local/share/applications/keiko.desktop`
+- **macOS:** `~/Applications/Keiko Launcher.command`
+- **Windows:** `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Keiko.bat`
+
+No administrator privileges are required. The shortcut is not created automatically; this
+command is always explicit. To delete a shortcut you previously created, run `keiko launcher
+remove`, which removes the recorded shortcut after verifying its content has not been tampered
+with.
 
 ### Step 7 — Relaunch flow
 
@@ -109,7 +117,7 @@ starting a second server instance.
 
 **Fallback instruction for Firefox and Safari (macOS):** Bookmark `http://localhost:<port>/`
 in your browser. Use `keiko start` to start the server before opening the bookmark. Use
-`keiko launcher create` to generate an OS shortcut that handles server start.
+`keiko launcher install` to generate an OS shortcut that handles server start.
 
 **Fallback instruction for Safari on iOS/iPadOS:** Navigate to `http://localhost:<port>/` on
 your iOS device while connected to the same network as the Keiko server. Tap the Share button,
@@ -165,7 +173,7 @@ keiko launcher remove
 ```
 
 This command reads the recorded shortcut path and deletes the file. If the shortcut was moved
-manually, you can delete it at its original location, which `keiko launcher list` displays.
+manually, you can delete it at its original location, which `keiko launcher status` displays.
 
 ### Removing Keiko entirely
 
@@ -201,3 +209,7 @@ The following are not delivered by Epic #121 or documented here:
 - **Multiple concurrent Keiko instances on different ports.** Each port is a separate browser
   origin with a separate service worker and PWA installation. Managing multiple installations
   is a user-space concern; Keiko does not orchestrate it.
+
+## Verification
+
+Cross-platform installability verification is documented in [`pwa-verification-runbook.md`](pwa-verification-runbook.md). The runbook lists the manual evidence required by ADR-0024 D10 before Epic #121 can be closed. Automated installability gates are covered by `packages/keiko-server/src/installability.test.ts`.

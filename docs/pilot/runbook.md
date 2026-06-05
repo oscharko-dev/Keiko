@@ -8,10 +8,10 @@ This guide is for teams validating Keiko before broader rollout.
 2. Install Keiko in the project:
 
 ```bash
-npm install @oscharko-dev/keiko
-npx keiko init
-npm run keiko:start
+npm install @oscharko-dev/keiko && npx keiko init && npm run keiko:start
 ```
+
+(Yarn, pnpm, and npx are also supported; see the [main README](../../README.md) for all package manager options.)
 
 3. Open `http://127.0.0.1:1983`.
 4. Complete the first-run model gateway setup in Settings.

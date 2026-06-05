@@ -1,0 +1,174 @@
+// Pure per-OS modules for `keiko launcher install`. Each platform exports `generateContent`
+// (a pure string-producing function over a sanitized executable path + optional port),
+// `installDirFor(homedir)` (the user-local approved directory), and `safeFileName()`
+// (the canonical filename written under that directory).
+//
+// SECURITY — the content generators do NOT quote or escape; they refuse with `LauncherError`
+// any executable path or port that has not been validated by `validateExecPath` /
+// `validatePort`. The validators are deliberately strict allow-lists: a `keiko` executable
+// path that contains a space, a shell metacharacter, or any character outside
+// `[A-Za-z0-9_\-./\\:]` is rejected. Spaces in the bin location are a documented
+// unsupported edge case for this release (ADR-0024 D8 / spec §"Per-platform content rules").
+//
+// PLATFORMS:
+//   - Linux:   `~/.local/share/applications/keiko.desktop` (XDG Desktop Entry, text).
+//   - macOS:   `~/Applications/Keiko Launcher.command` (bash script, chmod 0o755).
+//   - Windows: `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Keiko.bat` (.bat fallback,
+//              per ADR-0024 D8 trade-off). The .bat opens a brief cmd window before
+//              handing off to keiko; the binary `.lnk` format is out of scope for this
+//              release. The fallback is acceptable per spec §"Windows .lnk (binary format)".
+
+import { posix as posixPath, win32 as win32Path } from "node:path";
+
+// Allow-list: alphanumerics + the small set of safe path separators / characters that npm
+// install paths legitimately produce. Anything else — spaces, quotes, `;`, `$`, backtick,
+// `&`, `|`, `(`, `)`, `<`, `>`, `*`, `?`, `~`, `#`, `!`, `,`, `=`, `+`, control chars —
+// is rejected. The intent is defense-in-depth even though XDG `.desktop` and `.bat`
+// have their own quoting rules: no metacharacter ever reaches the file content.
+const EXEC_PATH_RE = /^[A-Za-z0-9_\-./\\:]+$/;
+
+export const MIN_PORT = 1024;
+export const MAX_PORT = 65535;
+
+export type Platform = "linux" | "darwin" | "win32";
+
+export class LauncherError extends Error {
+  public readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+    this.name = "LauncherError";
+  }
+}
+
+export function validateExecPath(path: string): string {
+  if (path.length === 0) {
+    throw new LauncherError(
+      "EXEC_PATH_EMPTY",
+      "keiko launcher: resolved executable path is empty.",
+    );
+  }
+  if (path.length > 4096) {
+    throw new LauncherError(
+      "EXEC_PATH_TOO_LONG",
+      "keiko launcher: resolved executable path exceeds 4096 chars.",
+    );
+  }
+  if (!EXEC_PATH_RE.test(path)) {
+    throw new LauncherError(
+      "EXEC_PATH_UNSAFE",
+      `keiko launcher: resolved executable path contains disallowed characters: ${path}\nOnly [A-Za-z0-9_\\-./\\\\:] are permitted. Re-install keiko under a path without spaces or shell metacharacters.`,
+    );
+  }
+  return path;
+}
+
+export function validatePort(port: number): number {
+  if (!Number.isInteger(port) || port < MIN_PORT || port > MAX_PORT) {
+    throw new LauncherError(
+      "PORT_OUT_OF_RANGE",
+      `keiko launcher: --port must be an integer in [${String(MIN_PORT)}, ${String(MAX_PORT)}]; received ${String(port)}.`,
+    );
+  }
+  return port;
+}
+
+export interface LauncherContentInput {
+  readonly exe: string;
+  readonly port: number | undefined;
+}
+
+export interface PlatformLauncher {
+  readonly id: Platform;
+  readonly installDirFor: (homedir: string) => string;
+  readonly safeFileName: () => string;
+  readonly generateContent: (input: LauncherContentInput) => string;
+  readonly fileMode: number;
+}
+
+function portFlag(port: number | undefined): string {
+  if (port === undefined) return "";
+  validatePort(port);
+  return ` --port ${String(port)}`;
+}
+
+function requireSafeExe(exe: string): string {
+  return validateExecPath(exe);
+}
+
+export const linuxLauncher: PlatformLauncher = {
+  id: "linux",
+  installDirFor: (homedir) => posixPath.join(homedir, ".local", "share", "applications"),
+  safeFileName: () => "keiko.desktop",
+  fileMode: 0o644,
+  generateContent: ({ exe, port }) => {
+    const safeExe = requireSafeExe(exe);
+    const flag = portFlag(port);
+    return [
+      "[Desktop Entry]",
+      "Type=Application",
+      "Name=Keiko",
+      "Comment=Keiko local developer-assist workspace",
+      `Exec=${safeExe} start --open${flag}`,
+      "Terminal=false",
+      "Categories=Development;",
+      "StartupNotify=true",
+      "",
+    ].join("\n");
+  },
+};
+
+export const macosLauncher: PlatformLauncher = {
+  id: "darwin",
+  installDirFor: (homedir) => posixPath.join(homedir, "Applications"),
+  safeFileName: () => "Keiko Launcher.command",
+  fileMode: 0o755,
+  generateContent: ({ exe, port }) => {
+    const safeExe = requireSafeExe(exe);
+    const flag = portFlag(port);
+    return [
+      "#!/usr/bin/env bash",
+      "# Keiko launcher — generated by `keiko launcher install`. Edit at your own risk.",
+      "# Remove with: keiko launcher remove",
+      "set -euo pipefail",
+      `exec ${safeExe} start --open${flag}`,
+      "",
+    ].join("\n");
+  },
+};
+
+// Windows .bat fallback (per ADR-0024 D8 trade-off, definitively chosen for this release).
+// A `.bat` opens a brief cmd window before launching keiko; the alternative — a binary
+// `.lnk` shortcut — would launch cleanly but requires emitting the MS-SHLLINK binary
+// shell-link format by hand, which is brittle and out of scope. The brief cmd window is
+// documented and acceptable for the pilot. `@start "" <exe> ...` detaches the keiko
+// process from the cmd window so the latter closes immediately after dispatch.
+export const windowsLauncher: PlatformLauncher = {
+  id: "win32",
+  installDirFor: (homedir) =>
+    win32Path.join(homedir, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs"),
+  safeFileName: () => "Keiko.bat",
+  fileMode: 0o644,
+  generateContent: ({ exe, port }) => {
+    const safeExe = requireSafeExe(exe);
+    const flag = portFlag(port);
+    return `@start "" ${safeExe} start --open${flag}\r\n`;
+  },
+};
+
+const REGISTRY: Readonly<Record<Platform, PlatformLauncher>> = {
+  linux: linuxLauncher,
+  darwin: macosLauncher,
+  win32: windowsLauncher,
+};
+
+export function launcherFor(platform: NodeJS.Platform): PlatformLauncher {
+  const entry = (REGISTRY as Readonly<Record<string, PlatformLauncher | undefined>>)[platform];
+  if (entry === undefined) {
+    throw new LauncherError(
+      "PLATFORM_UNSUPPORTED",
+      `keiko launcher: platform "${platform}" is not supported. Supported: linux, darwin, win32.`,
+    );
+  }
+  return entry;
+}

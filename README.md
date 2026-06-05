@@ -40,9 +40,17 @@ Software engineering is the first use case because repositories, tests, reviews,
 Install Keiko in the project where you want to use it:
 
 ```bash
-npm install @oscharko-dev/keiko
-npx keiko init
-npm run keiko:start
+# npm
+npm install @oscharko-dev/keiko && npx keiko init && npm run keiko:start
+
+# yarn
+yarn add @oscharko-dev/keiko && yarn keiko init && yarn keiko:start
+
+# pnpm
+pnpm add @oscharko-dev/keiko && pnpm exec keiko init && pnpm keiko:start
+
+# npx (no global install)
+npx @oscharko-dev/keiko init && npx keiko start
 ```
 
 Open the local UI:
@@ -78,6 +86,18 @@ Keiko calls the gateway model list endpoint, tests discovered chat models with a
 For OpenAI-compatible gateways such as LiteLLM, usually leave deployment names empty. For Azure AI Foundry, paste the deployment names you want Keiko to offer in the UI.
 
 The UI runs on loopback only. The `--host` option can validate a loopback host value; the server always binds `127.0.0.1`.
+
+## Install as an App
+
+After Keiko's UI loads in a Chromium-family browser (Chrome, Edge, or Chromium), an "Install Keiko" affordance appears in the page header. Accepting the prompt installs Keiko as a standalone application with the Keiko icon in your OS application shelf, Dock, or Start menu.
+
+For an OS shortcut that starts the local server in one step:
+
+```bash
+keiko launcher install
+```
+
+This generates a shortcut in `~/.local/share/applications/` (Linux), `~/Applications/` (macOS), or `%APPDATA%\Microsoft\Windows\Start Menu\Programs\` (Windows). Remove it with `keiko launcher remove`. Firefox and Safari users can follow the manual fallback instructions in the [PWA installability contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pwa-installability-contract.md).
 
 ## Daily Use
 

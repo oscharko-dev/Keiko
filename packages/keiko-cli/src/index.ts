@@ -18,5 +18,6 @@ export { runModelsCli } from "./models.js";
 export { runInitCli, KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT, type InitCliDeps } from "./init.js";
 export { runLifecycleCli, type LifecycleCliDeps } from "./lifecycle.js";
 export { runUiCli, parseUiArgs, waitForShutdown, type UiCliDeps } from "./ui.js";
+export { runLauncherCli, type LauncherCliDeps } from "./launcher.js";
 // gateway-config.ts is a helper module (resolveConfigPathFromArgs) used internally by
 // models.ts; it does not expose a CLI command, so nothing is re-exported here.

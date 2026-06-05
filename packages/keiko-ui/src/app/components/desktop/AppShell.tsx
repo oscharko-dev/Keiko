@@ -22,6 +22,8 @@ import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import "./widgets";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow } from "./windows/types";
+import { InstallBanner } from "./install/InstallBanner";
+import { registerSw } from "./install/registerSw";
 
 function topWindow(wins: readonly AppWindow[] | null): AppWindow | null {
   if (wins === null || wins.length === 0) return null;
@@ -238,6 +240,7 @@ function AppShellInner(): ReactNode {
           )}
           {cmdkOpen && <CommandPalette commands={commands} onClose={closeCmdk} />}
           {needsGatewaySetup ? <GatewaySetupDialog /> : null}
+          <InstallBanner />
         </div>
       </WsContext.Provider>
     </ChatSessionProvider>
@@ -254,6 +257,13 @@ export function AppShell(): ReactNode {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
     setMounted(true);
+  }, []);
+  // Register the PWA service worker exactly once per client mount (issue #126, ADR-0024 D6).
+  // Sitting in the outer mount component means we register on first client render and never
+  // again across the inner shell's remount cycle. `registerSw` is a silent no-op on SSR /
+  // unsupported browsers / failure, so this effect cannot break the app.
+  useEffect(() => {
+    registerSw();
   }, []);
   if (!mounted) return <div className="app" aria-hidden="true" />;
   return (

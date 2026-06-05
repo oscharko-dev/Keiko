@@ -83,4 +83,25 @@ describe("buildCspHeader", () => {
     expect(header).toContain("base-uri 'none'");
     expect(header).toContain("form-action 'none'");
   });
+
+  it("allows the PWA manifest via manifest-src 'self' (issue #123, ADR-0024 D4)", () => {
+    const header = buildCspHeader([]);
+    expect(header).toContain("manifest-src 'self'");
+    const manifestDirective = header.split("; ").find((d) => d.startsWith("manifest-src "));
+    expect(manifestDirective).toBe("manifest-src 'self'");
+  });
+
+  it("allows the service worker via worker-src 'self' (issue #126, ADR-0024 D6)", () => {
+    const header = buildCspHeader([]);
+    expect(header).toContain("worker-src 'self'");
+    const workerDirective = header.split("; ").find((d) => d.startsWith("worker-src "));
+    expect(workerDirective).toBe("worker-src 'self'");
+  });
+
+  it("keeps worker-src locked to 'self' even when script hashes are folded in", () => {
+    // Hashes belong to script-src; worker-src must not grow as a side effect of them.
+    const header = buildCspHeader(["'sha256-abc'", "'sha256-def'"]);
+    const workerDirective = header.split("; ").find((d) => d.startsWith("worker-src "));
+    expect(workerDirective).toBe("worker-src 'self'");
+  });
 });
