@@ -24,6 +24,7 @@ function simpleFs(): ReturnType<typeof memoryFs> {
     { relativePath: "src/index.ts", content: "export {};" },
     { relativePath: "src/sub/deep.ts", content: "// deep" },
     { relativePath: ".git/config", content: "[core]" },
+    { relativePath: ".vscode/settings.json", content: "{}" },
     { relativePath: ".next/server/app.js", content: "// next" },
     { relativePath: "node_modules/pkg/index.js", content: "module.exports = {};" },
     { relativePath: "dist/bundle.js", content: "// bundle" },
@@ -43,6 +44,7 @@ describe("walkSource — folder scope", () => {
   it("skips hidden and generated directories by default", () => {
     const files = collect(folderScope(ROOT));
     expect(files).not.toContain(".git/config");
+    expect(files).not.toContain(".vscode/settings.json");
     expect(files).not.toContain(".next/server/app.js");
     expect(files).not.toContain("node_modules/pkg/index.js");
     expect(files).not.toContain("dist/bundle.js");

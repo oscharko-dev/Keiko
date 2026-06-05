@@ -180,7 +180,7 @@ function isGlobMatched(bounds: ScopeBounds, relativePath: string): boolean {
 }
 
 function shouldDescendIntoDirectory(entryName: string): boolean {
-  return !HIDDEN_OR_GENERATED_DIRS.has(entryName);
+  return !entryName.startsWith(".") && !HIDDEN_OR_GENERATED_DIRS.has(entryName);
 }
 
 function shouldSkipDirectoryEntry(ctx: WalkContext, entryName: string): boolean {
