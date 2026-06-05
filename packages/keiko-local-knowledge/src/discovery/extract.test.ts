@@ -130,7 +130,7 @@ describe("extractDocument — unsupported format", () => {
       .prepare(
         "SELECT kind FROM parsed_units WHERE capsule_id = :c AND document_id = :d ORDER BY id ASC",
       )
-      .all({ c: capsuleId, d: result.outcome.document.id }) as readonly {
+      .all({ c: capsuleId, d: result.outcome.document.id }) as unknown as readonly {
       readonly kind: string;
     }[];
     expect(units.map((row) => row.kind)).toContain("unsupported-media");
