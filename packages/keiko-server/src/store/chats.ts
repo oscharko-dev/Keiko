@@ -190,6 +190,10 @@ const SELECT_COLUMNS =
   "connected_scope_paths, connected_scope_at, local_knowledge_scope_json, created_at, updated_at";
 
 const SQL_LIST = `SELECT ${SELECT_COLUMNS} FROM chats WHERE project_path = ? ORDER BY created_at ASC`;
+// Epic #177 audit: grounded-ask and chat PATCH paths used a project-scan + chat-scan helper that
+// fired O(projects × chats) row fetches per request. The chat id is unique across projects (the
+// schema enforces it via the chats.id primary key), so a single-row lookup is correct and bounded.
+const SQL_FIND_BY_ID = `SELECT ${SELECT_COLUMNS} FROM chats WHERE id = ? LIMIT 1`;
 const SQL_INSERT = `
 INSERT INTO chats (id, project_path, title, selected_model, branch_label, status,
   connected_scope_paths, connected_scope_at, local_knowledge_scope_json, created_at, updated_at)
@@ -239,6 +243,11 @@ function validateSelectedModel(value: string): void {
 
 export function listChats(db: DatabaseSync, projectPath: string): readonly Chat[] {
   return (db.prepare(SQL_LIST).all(projectPath) as unknown as ChatRow[]).map(rowToChat);
+}
+
+export function findChatById(db: DatabaseSync, id: string): Chat | undefined {
+  const row = db.prepare(SQL_FIND_BY_ID).get(id) as unknown as ChatRow | undefined;
+  return row === undefined ? undefined : rowToChat(row);
 }
 
 export function insertChat(
@@ -305,7 +314,9 @@ function validateLocalKnowledgeScopeShape(scope: ChatLocalKnowledgeScope): void 
     !Number.isInteger(scope.connectedAtMs) ||
     scope.connectedAtMs < 0
   ) {
-    throw invalidRequest("localKnowledgeScope.connectedAtMs must be a finite non-negative integer.");
+    throw invalidRequest(
+      "localKnowledgeScope.connectedAtMs must be a finite non-negative integer.",
+    );
   }
   switch (scope.kind) {
     case "capsule":
