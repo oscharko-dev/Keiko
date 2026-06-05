@@ -183,6 +183,10 @@ function shouldDescendIntoDirectory(entryName: string): boolean {
   return !HIDDEN_OR_GENERATED_DIRS.has(entryName);
 }
 
+function shouldSkipDirectoryEntry(ctx: WalkContext, entryName: string): boolean {
+  return !ctx.bounds.recursive || !shouldDescendIntoDirectory(entryName);
+}
+
 function* yieldFileIfAllowed(
   ctx: WalkContext,
   absolutePath: string,
@@ -257,8 +261,7 @@ function* descend(ctx: WalkContext, absoluteDir: string, depth: number): Generat
     const childAbs = joinAbs(absoluteDir, entry.name);
     const childRel = toPosixRelative(ctx.bounds.rootPath, childAbs);
     if (entry.isDirectory) {
-      if (!ctx.bounds.recursive) continue;
-      if (!shouldDescendIntoDirectory(entry.name)) continue;
+      if (shouldSkipDirectoryEntry(ctx, entry.name)) continue;
       yield* descend(ctx, childAbs, depth + 1);
       continue;
     }
