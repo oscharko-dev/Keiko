@@ -330,6 +330,55 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
+  it("returns empty memory result and omits prompt injection when memory.enabled is false", async () => {
+    const memoryDir = join(tmp, "memory-vault-off");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    insertAcceptedMemory(memoryVault, "Use pnpm instead of npm for installs.");
+    await restartWithDeps(deps(fakeModel("no-memory response"), { memoryVault }));
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Which package manager should I use?",
+        memory: {
+          enabled: false,
+          budgetTokens: 900,
+          context: {
+            userId: "local-operator",
+            workspaceId: projectDir,
+            projectId: projectDir,
+            conversationId: created.chat.id,
+          },
+        },
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      memory?: {
+        context: { enabled: boolean; memories: unknown[] };
+        actions: unknown[];
+      };
+    };
+    expect(seenRequests[0]?.messages.at(-1)?.content).not.toContain("Included memory context:");
+    expect(body.memory?.context.enabled).toBe(false);
+    expect(body.memory?.context.memories).toHaveLength(0);
+    expect(body.memory?.actions).toHaveLength(0);
+    memoryVault.close();
+  });
+
   // Issue #174 — on native Windows the desktop bootstrap calls validateProjectPath(process.cwd()),
   // and process.cwd() returns a drive-letter form such as `C:\Users\Example\Project`. The previous
   // validator rejected any Windows drive shape regardless of host, returning `invalid_path` even

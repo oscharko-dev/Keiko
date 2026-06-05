@@ -202,7 +202,9 @@ function startInstalledUi(tmp, configPath, uiDbPath, memoryDir) {
   // eslint-disable-next-line max-lines-per-function
   return listen(portServer).then(async () => {
     const port = getPort(portServer);
-    await new Promise((resolvePromise, reject) => portServer.close((error) => (error ? reject(error) : resolvePromise())));
+    await new Promise((resolvePromise, reject) =>
+      portServer.close((error) => (error ? reject(error) : resolvePromise())),
+    );
     const child = spawn(
       "node",
       [bin, "ui", "--port", String(port), "--config", configPath, "--ui-db", uiDbPath],
@@ -222,7 +224,12 @@ function startInstalledUi(tmp, configPath, uiDbPath, memoryDir) {
     const baseUrl = `http://127.0.0.1:${String(port)}`;
     const exitPromise = new Promise((resolvePromise) =>
       child.once("exit", (code, signal) =>
-        resolvePromise({ code, signal, stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") }),
+        resolvePromise({
+          code,
+          signal,
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
+        }),
       ),
     );
     const healthPromise = waitForHealth(baseUrl);
@@ -297,9 +304,9 @@ async function createChat(baseUrl, projectPath) {
   return body.chat.id;
 }
 
-function memoryWire(projectPath, conversationId) {
+function memoryWire(projectPath, conversationId, enabled = true) {
   return {
-    enabled: true,
+    enabled,
     budgetTokens: 900,
     context: {
       userId: USER_ID,
@@ -310,7 +317,7 @@ function memoryWire(projectPath, conversationId) {
   };
 }
 
-async function sendChat(baseUrl, projectPath, chatId, content) {
+async function sendChat(baseUrl, projectPath, chatId, content, enabled = true) {
   return api(baseUrl, "/api/desktop/chat", {
     method: "POST",
     body: JSON.stringify({
@@ -318,7 +325,7 @@ async function sendChat(baseUrl, projectPath, chatId, content) {
       projectPath,
       modelId: MODEL_ID,
       content,
-      memory: memoryWire(projectPath, chatId),
+      memory: memoryWire(projectPath, chatId, enabled),
     }),
   });
 }
@@ -400,7 +407,10 @@ async function main() {
       "remember that project alpha uses pnpm for installs",
     );
     const proposalId = remember.memory?.actions?.[0]?.proposalId;
-    assert(typeof proposalId === "string" && proposalId.length > 0, "remember flow did not create a proposal");
+    assert(
+      typeof proposalId === "string" && proposalId.length > 0,
+      "remember flow did not create a proposal",
+    );
     await acceptProposal(ui.baseUrl, proposalId);
 
     const retrievalChatId = await createChat(ui.baseUrl, projectA);
@@ -410,14 +420,24 @@ async function main() {
       retrievalChatId,
       "Which package manager should I use for installs?",
     );
-    assert(retrieval.memory?.context?.enabled === true, "retrieval response did not mark memory as enabled");
     assert(
-      Array.isArray(retrieval.memory?.context?.memories) && retrieval.memory.context.memories.length > 0,
+      retrieval.memory?.context?.enabled === true,
+      "retrieval response did not mark memory as enabled",
+    );
+    assert(
+      Array.isArray(retrieval.memory?.context?.memories) &&
+        retrieval.memory.context.memories.length > 0,
       "retrieval response did not surface included memories",
     );
     const retrievalPrompt = JSON.stringify(provider.latestRequest());
-    assert(retrievalPrompt.includes("Included memory context:"), "model prompt did not include the memory block");
-    assert(retrievalPrompt.includes("pnpm"), "model prompt did not include the accepted memory body");
+    assert(
+      retrievalPrompt.includes("Included memory context:"),
+      "model prompt did not include the memory block",
+    );
+    assert(
+      retrievalPrompt.includes("pnpm"),
+      "model prompt did not include the accepted memory body",
+    );
 
     await ui.stop();
     ui = await startInstalledUi(installRoot, configPath, uiDbPath, memoryDir);
@@ -430,13 +450,44 @@ async function main() {
       "Which package manager should I use for installs?",
     );
     assert(
-      typeof afterRestart.contextBlock?.text === "string" && afterRestart.contextBlock.text.includes("pnpm"),
+      typeof afterRestart.contextBlock?.text === "string" &&
+        afterRestart.contextBlock.text.includes("pnpm"),
       "accepted memory did not survive a UI restart",
     );
 
-    const corrected = await correction(ui.baseUrl, proposalId, "project alpha uses yarn for installs");
+    const noMemoryChatId = await createChat(ui.baseUrl, projectA);
+    const noMemory = await sendChat(
+      ui.baseUrl,
+      projectA,
+      noMemoryChatId,
+      "Which package manager should I use for installs?",
+      false,
+    );
+    const noMemoryPrompt = JSON.stringify(provider.latestRequest());
+    assert(
+      noMemory.memory?.context?.enabled === false,
+      "memory-off response did not mark context.enabled=false",
+    );
+    assert(
+      !Array.isArray(noMemory.memory?.context?.memories) ||
+        noMemory.memory.context.memories.length === 0,
+      "memory-off response surfaced included memories",
+    );
+    assert(
+      !noMemoryPrompt.includes("Included memory context:"),
+      "memory-off model call included a memory block despite memory being disabled",
+    );
+
+    const corrected = await correction(
+      ui.baseUrl,
+      proposalId,
+      "project alpha uses yarn for installs",
+    );
     const correctionId = corrected.correction?.id;
-    assert(typeof correctionId === "string" && correctionId.length > 0, "correction flow did not create a correction record");
+    assert(
+      typeof correctionId === "string" && correctionId.length > 0,
+      "correction flow did not create a correction record",
+    );
     await acceptProposal(ui.baseUrl, correctionId);
 
     const correctedChatId = await createChat(ui.baseUrl, projectA);
@@ -449,7 +500,9 @@ async function main() {
     const correctedPrompt = JSON.stringify(provider.latestRequest());
     assert(
       correctedPrompt.includes("yarn") &&
-        correctedRetrieval.memory?.context?.memories?.some((memory) => memory.bodyExcerpt.includes("yarn")),
+        correctedRetrieval.memory?.context?.memories?.some((memory) =>
+          memory.bodyExcerpt.includes("yarn"),
+        ),
       "corrected memory was not surfaced after acceptance",
     );
 
@@ -462,7 +515,8 @@ async function main() {
     );
     const isolatedPrompt = JSON.stringify(provider.latestRequest());
     assert(
-      Array.isArray(isolated.memory?.context?.memories) && isolated.memory.context.memories.length === 0,
+      Array.isArray(isolated.memory?.context?.memories) &&
+        isolated.memory.context.memories.length === 0,
       "project-scoped memory leaked into a different project",
     );
     assert(
@@ -478,7 +532,10 @@ async function main() {
       "remember that project alpha deploys happen on Tuesdays",
     );
     const forgetId = forgetSeed.memory?.actions?.[0]?.proposalId;
-    assert(typeof forgetId === "string" && forgetId.length > 0, "forget flow did not create a proposal");
+    assert(
+      typeof forgetId === "string" && forgetId.length > 0,
+      "forget flow did not create a proposal",
+    );
     await acceptProposal(ui.baseUrl, forgetId);
     await forgetMemory(ui.baseUrl, forgetId);
     const afterForget = await memoryContext(
@@ -503,7 +560,10 @@ async function main() {
       "remember that project alpha delete-me flag is disabled",
     );
     const deleteId = deleteSeed.memory?.actions?.[0]?.proposalId;
-    assert(typeof deleteId === "string" && deleteId.length > 0, "delete flow did not create a proposal");
+    assert(
+      typeof deleteId === "string" && deleteId.length > 0,
+      "delete flow did not create a proposal",
+    );
     await acceptProposal(ui.baseUrl, deleteId);
     await deleteMemory(ui.baseUrl, deleteId);
     const deleted = await fetchMemory(ui.baseUrl, deleteId);
