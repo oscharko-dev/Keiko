@@ -36,6 +36,8 @@ const PUBLIC_EXPORTS = [
   "mediaTypeFor",
   "walkSource",
   "DEFAULT_DISCOVERY_OPTIONS",
+  "scriptedAdapter",
+  "seedCapsuleWithVectors",
 ] as const;
 
 describe("barrel surface", () => {
@@ -48,17 +50,22 @@ describe("barrel surface", () => {
   // Foundry-IQ invariant: there is no unscoped read API. Any export whose name starts
   // with `list` MUST take an explicit capsule scope (function arity ≥ 2, second arg
   // by convention). Aliasing this away by renaming is also caught — no export name
-  // contains "Vectors" or "Chunks" at all in this package's public surface, because
-  // vectors/chunks are write-time concerns of #196 and read-time concerns of #199.
+  // contains "Vectors" or "Chunks" at all in this package's public surface, except for
+  // the explicit test seeding helper exported for package consumers that need fixture
+  // setup without reaching into internals.
   it("does not expose unscoped chunk/vector readers", () => {
     const names = Object.keys(api);
     const offenders = names.filter(
-      (name) =>
-        /^list(All|Every)/.test(name) ||
-        /Vectors?$/.test(name) ||
-        /Chunks?$/.test(name) ||
-        name === "listVectors" ||
-        name === "listChunks",
+      (name) => {
+        if (name === "seedCapsuleWithVectors") return false;
+        return (
+          /^list(All|Every)/.test(name) ||
+          /Vectors?$/.test(name) ||
+          /Chunks?$/.test(name) ||
+          name === "listVectors" ||
+          name === "listChunks"
+        );
+      },
     );
     expect(offenders, `unscoped reader exports leaked: ${offenders.join(", ")}`).toStrictEqual([]);
   });
