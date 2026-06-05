@@ -5,7 +5,7 @@
 // Parser diagnostics NEVER render raw extracted text — only severity/code/message/page_number.
 // State is split into capsule-detail-state.ts to keep each file under 400 LOC.
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import type {
   KnowledgeCapsuleId,
@@ -44,6 +44,40 @@ function formatTs(epochMs: number): string {
 
 function SectionHeading({ children }: { children: ReactNode }): ReactNode {
   return <h2 className="lk-section-head">{children}</h2>;
+}
+
+const DEFAULT_VISIBLE_ROWS = 25;
+
+function useVisibleRows(total: number): {
+  readonly visibleCount: number;
+  readonly showAll: boolean;
+  readonly setShowAll: (value: boolean) => void;
+} {
+  const [showAll, setShowAll] = useState(false);
+  return {
+    visibleCount: showAll ? total : Math.min(DEFAULT_VISIBLE_ROWS, total),
+    showAll,
+    setShowAll,
+  };
+}
+
+function MoreRowsButton({
+  hiddenCount,
+  showAll,
+  onToggle,
+  noun,
+}: {
+  hiddenCount: number;
+  showAll: boolean;
+  onToggle: () => void;
+  noun: string;
+}): ReactNode {
+  if (!showAll && hiddenCount <= 0) return null;
+  return (
+    <button type="button" className="lk-btn lk-btn-ghost" onClick={onToggle}>
+      {showAll ? `Show fewer ${noun}` : `Show ${hiddenCount.toString()} more ${noun}`}
+    </button>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +243,10 @@ function HealthDiagnosticsSection({
 }: {
   diagnostics: readonly ParserDiagnostic[];
 }): ReactNode {
+  const { visibleCount, showAll, setShowAll } = useVisibleRows(diagnostics.length);
+  const visible = diagnostics.slice(0, visibleCount);
+  const hiddenCount = diagnostics.length - visible.length;
+
   return (
     <section aria-labelledby="lkd-diag-heading">
       <SectionHeading>
@@ -219,11 +257,19 @@ function HealthDiagnosticsSection({
           No parser diagnostics — all documents processed cleanly.
         </p>
       ) : (
-        <ul className="lkd-list lkd-diag-list" aria-label="Parser diagnostics">
-          {diagnostics.map((diag, i) => (
-            <DiagnosticRow key={`${diag.code}-${i.toString()}`} diag={diag} />
-          ))}
-        </ul>
+        <>
+          <ul className="lkd-list lkd-diag-list" aria-label="Parser diagnostics">
+            {visible.map((diag, i) => (
+              <DiagnosticRow key={`${diag.code}-${i.toString()}`} diag={diag} />
+            ))}
+          </ul>
+          <MoreRowsButton
+            hiddenCount={hiddenCount}
+            noun="diagnostics"
+            showAll={showAll}
+            onToggle={() => setShowAll(!showAll)}
+          />
+        </>
       )}
     </section>
   );
@@ -270,6 +316,10 @@ function JobRow({ job }: { job: IndexingJobRecord }): ReactNode {
 }
 
 function IndexingJobsSection({ jobs }: { jobs: readonly IndexingJobRecord[] }): ReactNode {
+  const { visibleCount, showAll, setShowAll } = useVisibleRows(jobs.length);
+  const visible = jobs.slice(0, visibleCount);
+  const hiddenCount = jobs.length - visible.length;
+
   return (
     <section aria-labelledby="lkd-jobs-heading">
       <SectionHeading>
@@ -278,11 +328,19 @@ function IndexingJobsSection({ jobs }: { jobs: readonly IndexingJobRecord[] }): 
       {jobs.length === 0 ? (
         <p className="lkd-empty-note">No indexing jobs recorded yet.</p>
       ) : (
-        <ul className="lkd-list" aria-label="Indexing job history">
-          {jobs.map((job) => (
-            <JobRow key={job.id} job={job} />
-          ))}
-        </ul>
+        <>
+          <ul className="lkd-list" aria-label="Indexing job history">
+            {visible.map((job) => (
+              <JobRow key={job.id} job={job} />
+            ))}
+          </ul>
+          <MoreRowsButton
+            hiddenCount={hiddenCount}
+            noun="jobs"
+            showAll={showAll}
+            onToggle={() => setShowAll(!showAll)}
+          />
+        </>
       )}
     </section>
   );

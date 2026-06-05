@@ -1,0 +1,253 @@
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import type { IncomingMessage } from "node:http";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  addSourceToCapsule,
+  createCapsule,
+  openKnowledgeStore,
+  resolveKnowledgeStorePath,
+} from "@oscharko-dev/keiko-local-knowledge";
+import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type { UiHandlerDeps } from "./deps.js";
+import {
+  handleDeleteLocalKnowledgeCapsule,
+  handleGetLocalKnowledgeCapsule,
+  handleListLocalKnowledgeCapsules,
+  handleReindexLocalKnowledgeCapsule,
+} from "./local-knowledge-handlers.js";
+import { buildRedactor, createRunRegistry } from "./index.js";
+import { createInMemoryUiStore } from "./store/index.js";
+
+function jsonRequest(
+  body: Record<string, unknown> | undefined,
+  method: string,
+): IncomingMessage {
+  const bytes =
+    body === undefined ? [] : [Buffer.from(JSON.stringify(body), "utf8")];
+  const req = Readable.from(bytes) as IncomingMessage;
+  req.method = method;
+  req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };
+  return req;
+}
+
+function depsFor(tmp: string): UiHandlerDeps {
+  return {
+    config: {
+      providers: [
+        {
+          modelId: "text-embedding-3-small",
+          baseUrl: "https://gateway.example.test/v1",
+          apiKey: "redacted",
+          timeoutMs: 30_000,
+          maxRetries: 1,
+          retryBaseDelayMs: 100,
+        },
+      ],
+      circuitBreaker: {
+        failureThreshold: 3,
+        cooldownMs: 1_000,
+        halfOpenProbes: 1,
+      },
+    },
+    configPresent: true,
+    evidenceStore: { put: () => "", list: () => [], get: () => undefined, delete: () => undefined },
+    env: {},
+    redactor: buildRedactor({}),
+    registry: createRunRegistry(),
+    modelPortFactory: () => undefined,
+    store: createInMemoryUiStore(),
+    uiDbPath: join(tmp, "keiko-ui.db"),
+    localKnowledgeEmbeddingRequest: vi.fn(async () => ({
+      ok: true,
+      value: {
+        vector: Float32Array.from({ length: 1536 }, (_, index) => index / 1000),
+        modelId: "text-embedding-3-small",
+      },
+    })),
+  };
+}
+
+function capsuleId(value: string): KnowledgeCapsuleId {
+  return value as KnowledgeCapsuleId;
+}
+
+function baseCtx(tmp: string, method: string, body?: Record<string, unknown>) {
+  return {
+    req: jsonRequest(body, method),
+    res: {} as never,
+    params: {},
+    url: new URL("http://127.0.0.1/api/local-knowledge/capsules"),
+  };
+}
+
+function seedStore(tmp: string) {
+  const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: tmp });
+  const store = openKnowledgeStore({ dbPath });
+  const capId = capsuleId("cap-1");
+  createCapsule(store, {
+    id: capId,
+    displayName: "Audit Capsule",
+    tags: ["docs"],
+    retrievalEffort: "default",
+    outputMode: "snippets",
+    answerGroundingPolicy: "require-citations",
+    embeddingModelIdentity: {
+      provider: "openai",
+      modelId: "text-embedding-3-small",
+      vectorDimensions: 1536,
+      vectorMetric: "cosine",
+    },
+    lifecycleState: "ready",
+    storageReference: "capsules/cap-1",
+  });
+  return { store, capId, dbPath };
+}
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  while (tempDirs.length > 0) {
+    rmSync(tempDirs.pop() as string, { recursive: true, force: true });
+  }
+});
+
+describe("local-knowledge handlers", () => {
+  it("lists persisted capsules", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store } = seedStore(tmp);
+    store.close();
+
+    const result = await handleListLocalKnowledgeCapsules(baseCtx(tmp, "GET"), depsFor(tmp));
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      capsules: [
+        {
+          id: "cap-1",
+          displayName: "Audit Capsule",
+          lifecycleState: "ready",
+          sourceCount: 0,
+        },
+      ],
+    });
+  });
+
+  it("returns capsule detail with health, source stats, diagnostics, and jobs", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: join(tmp, "docs"), recursive: true },
+    });
+    store._internal.db
+      .prepare(
+        "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) VALUES ('doc-1', :c, 'src-1', 'policy.txt', 10, 'text/plain', 'aa', 'text', '1', 10, 'failed', 'policy.txt')",
+      )
+      .run({ c: capId });
+    store._internal.db
+      .prepare(
+        "INSERT INTO parser_diagnostics (id, capsule_id, document_id, severity, code, message, page_number, created_at) VALUES ('diag-1', :c, 'doc-1', 'error', 'PARSE_ERR', 'Parser failed', 1, 11)",
+      )
+      .run({ c: capId });
+    store._internal.db
+      .prepare(
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-1', :c, '[\"src-1\"]', 12, 13, 'failed', 1, 0, 1, 0, 'PARSE_ERR', 'Parser failed', NULL, 0)",
+      )
+      .run({ c: capId });
+    store.close();
+
+    const result = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      capsule: { id: "cap-1", displayName: "Audit Capsule" },
+      health: { capsuleId: "cap-1", failedDocuments: 1, vectorCompatible: true },
+      sources: [{ sourceId: "src-1", displayName: "Policies", failedCount: 1 }],
+      parserDiagnostics: [{ code: "PARSE_ERR", message: "Parser failed", pageNumber: 1 }],
+      indexingJobs: [{ id: "job-1", status: "failed", failedDocuments: 1 }],
+    });
+  });
+
+  it("runs incremental refresh and records a skipped second pass for unchanged files", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "policy.md"),
+      "# Policy\n\n" + "Policy alpha beta gamma delta epsilon.\n".repeat(20),
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const deps = depsFor(tmp);
+    const first = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "changed-files" }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+    const second = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "repair-failed" }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const jobs = inspect._internal.db
+      .prepare(
+        "SELECT status, processed_documents, skipped_documents FROM indexing_jobs WHERE capsule_id = :c ORDER BY started_at ASC, id ASC",
+      )
+      .all({ c: "cap-1" }) as readonly {
+      readonly status: string;
+      readonly processed_documents: number;
+      readonly skipped_documents: number;
+    }[];
+    inspect.close();
+
+    expect(jobs).toHaveLength(2);
+    expect(jobs[0]).toMatchObject({ status: "succeeded", processed_documents: 1 });
+    expect(jobs[1]).toMatchObject({ status: "succeeded", skipped_documents: 1 });
+  });
+
+  it("deletes a capsule index explicitly", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store } = seedStore(tmp);
+    store.close();
+
+    const result = await handleDeleteLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "DELETE"), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+    expect(result.status).toBe(200);
+
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const row = verify._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM capsules WHERE id = 'cap-1'")
+      .get() as { readonly n: number };
+    verify.close();
+    expect(row.n).toBe(0);
+  });
+});

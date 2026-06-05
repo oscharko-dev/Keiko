@@ -267,6 +267,28 @@ describe("CapsuleDetail — health diagnostics section", () => {
     // Page number rendered
     expect(screen.getByText("p.3")).toBeInTheDocument();
   });
+
+  it("caps parser diagnostics by default and expands on demand", async () => {
+    const user = userEvent.setup();
+    const diagnostics = Array.from({ length: 30 }, (_, index) => ({
+      severity: "warning" as const,
+      code: `WARN_${index.toString().padStart(2, "0")}`,
+      message: `Diagnostic ${index.toString()}`,
+    }));
+    render(
+      <CapsuleDetail
+        fetchDetailImpl={resolveDetail({ ...FULL_DETAIL, parserDiagnostics: diagnostics })}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Diagnostic 24")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText("Diagnostic 29")).toBeNull();
+    await user.click(screen.getByRole("button", { name: /show 5 more diagnostics/i }));
+    expect(screen.getByText("Diagnostic 29")).toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -294,6 +316,29 @@ describe("CapsuleDetail — indexing jobs section", () => {
     await waitFor(() => {
       expect(screen.getByText("No indexing jobs recorded yet.")).toBeInTheDocument();
     });
+  });
+
+  it("caps job history by default and expands on demand", async () => {
+    const user = userEvent.setup();
+    const jobs = Array.from({ length: 28 }, (_, index) => ({
+      id: `job-${index.toString()}`,
+      capsuleId: makeCapsuleId("test-1"),
+      sourceIds: [],
+      startedAt: 1_700_000_000_000 + index,
+      status: "succeeded" as const,
+      totalDocuments: 1,
+      processedDocuments: 1,
+      failedDocuments: 0,
+      skippedDocuments: 0,
+    }));
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail({ ...FULL_DETAIL, indexingJobs: jobs })} />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Succeeded")).toHaveLength(25);
+    });
+
+    await user.click(screen.getByRole("button", { name: /show 3 more jobs/i }));
+    expect(screen.getAllByText("Succeeded")).toHaveLength(28);
   });
 });
 

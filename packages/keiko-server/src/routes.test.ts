@@ -26,8 +26,38 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 59 route contract (ADR-0017 browser + ADR-0018 terminal + first-run gateway setup + #185 grounded Q&A + #211 Memory Center + #212 Conversation Center memory)", () => {
-    expect(API_ROUTES).toHaveLength(59);
+  it("declares the 63 route contract including local-knowledge capsule management", () => {
+    expect(API_ROUTES).toHaveLength(63);
+  });
+
+  it("includes the local-knowledge capsule detail routes", () => {
+    const localKnowledgeRoutes = API_ROUTES.filter((r) =>
+      r.pattern.startsWith("/api/local-knowledge"),
+    );
+    expect(localKnowledgeRoutes).toHaveLength(4);
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsules",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "GET" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "POST" && r.pattern === "/api/local-knowledge/capsules/:capsuleId/reindex",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "DELETE" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
+      ),
+    ).toBeDefined();
   });
 
   it("includes the 14 memory routes (12 from #211 Memory Center + 2 from #212 Conversation Center)", () => {

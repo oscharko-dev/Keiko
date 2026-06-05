@@ -98,6 +98,12 @@ export {
   handleCreateMessage,
 } from "./store-handlers.js";
 export {
+  handleDeleteLocalKnowledgeCapsule,
+  handleGetLocalKnowledgeCapsule,
+  handleListLocalKnowledgeCapsules,
+  handleReindexLocalKnowledgeCapsule,
+} from "./local-knowledge-handlers.js";
+export {
   createTerminalExecutionManager,
   buildTerminalPolicySummary,
   listDirectories,

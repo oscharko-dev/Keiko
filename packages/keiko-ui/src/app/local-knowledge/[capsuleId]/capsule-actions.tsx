@@ -1,17 +1,21 @@
 "use client";
 
 // Issue #198 — Destructive-action buttons for the capsule detail page.
-// Three actions: Delete, Re-index, Mark Stale.
+// Three actions: Delete, Refresh changed files, Repair failed files.
 // Each is gated behind a confirmation modal (aria-modal="true", focus-trapped).
 // Delete requires typing the capsule display name before confirming (Foundry IQ pattern).
-// Re-index and Mark Stale use a single "Are you sure?" step.
+// Refresh and Repair use a single "Are you sure?" step.
 //
 // Focus trap: Tab/Shift+Tab cycle within the dialog; Escape cancels.
 // WCAG: min 30×30 button targets, focus-visible ring, colour tokens for danger text.
 
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import { deleteCapsule, reindexCapsule, markCapsuleStale } from "@/lib/local-knowledge-api";
+import {
+  deleteCapsule,
+  refreshCapsuleChangedFiles,
+  repairCapsuleFailedFiles,
+} from "@/lib/local-knowledge-api";
 import type { CapsuleActionResponse } from "@/lib/local-knowledge-api";
 import { ApiError } from "@/lib/api";
 
@@ -19,7 +23,7 @@ import { ApiError } from "@/lib/api";
 // Types
 // ---------------------------------------------------------------------------
 
-type ActionKind = "delete" | "reindex" | "mark-stale";
+type ActionKind = "delete" | "refresh" | "repair";
 
 interface ConfirmState {
   readonly kind: ActionKind;
@@ -38,25 +42,25 @@ function formatError(error: unknown): string {
 
 function actionTitle(kind: ActionKind): string {
   if (kind === "delete") return "Delete capsule";
-  if (kind === "reindex") return "Re-index capsule";
-  return "Mark capsule stale";
+  if (kind === "refresh") return "Refresh changed files";
+  return "Repair failed files";
 }
 
 function actionDescription(kind: ActionKind, capsuleDisplayName: string): string {
   if (kind === "delete") {
     return `This permanently deletes the capsule index. The source files on disk are NOT deleted. Type "${capsuleDisplayName}" to confirm.`;
   }
-  if (kind === "reindex") {
-    return "This discards the current index and starts a full re-index from scratch. The capsule will be unavailable during indexing.";
+  if (kind === "refresh") {
+    return "This runs an incremental refresh. Unchanged files stay in place, changed files are re-indexed, and removed files are cleaned up.";
   }
-  return "Marking the capsule stale signals that its index is out of date. Queries will stop returning results from it until it is re-indexed.";
+  return "This retries files that previously failed indexing and also picks up any newly changed files in the same incremental pass.";
 }
 
 function confirmButtonLabel(kind: ActionKind, busy: boolean): string {
   if (busy) return "Working…";
   if (kind === "delete") return "Delete";
-  if (kind === "reindex") return "Re-index";
-  return "Mark stale";
+  if (kind === "refresh") return "Refresh";
+  return "Repair";
 }
 
 // ---------------------------------------------------------------------------
@@ -251,8 +255,8 @@ export interface CapsuleActionsProps {
   readonly onActionComplete: () => void;
   // Injectable seams for tests
   readonly deleteCapsuleImpl?: typeof deleteCapsule;
-  readonly reindexCapsuleImpl?: typeof reindexCapsule;
-  readonly markCapsuleStaleImpl?: typeof markCapsuleStale;
+  readonly refreshCapsuleImpl?: typeof refreshCapsuleChangedFiles;
+  readonly repairCapsuleImpl?: typeof repairCapsuleFailedFiles;
 }
 
 export function CapsuleActions({
@@ -260,8 +264,8 @@ export function CapsuleActions({
   capsuleDisplayName,
   onActionComplete,
   deleteCapsuleImpl = deleteCapsule,
-  reindexCapsuleImpl = reindexCapsule,
-  markCapsuleStaleImpl = markCapsuleStale,
+  refreshCapsuleImpl = refreshCapsuleChangedFiles,
+  repairCapsuleImpl = repairCapsuleFailedFiles,
 }: CapsuleActionsProps): ReactNode {
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [busy, setBusy] = useState(false);
@@ -301,10 +305,10 @@ export function CapsuleActions({
     const { kind } = confirm;
     if (kind === "delete") {
       void runAction(() => deleteCapsuleImpl(capsuleId));
-    } else if (kind === "reindex") {
-      void runAction(() => reindexCapsuleImpl(capsuleId));
+    } else if (kind === "refresh") {
+      void runAction(() => refreshCapsuleImpl(capsuleId));
     } else {
-      void runAction(() => markCapsuleStaleImpl(capsuleId));
+      void runAction(() => repairCapsuleImpl(capsuleId));
     }
   }
 
@@ -318,18 +322,18 @@ export function CapsuleActions({
         <button
           type="button"
           className="lk-btn lk-btn-ghost"
-          aria-label={`Re-index capsule ${capsuleDisplayName}`}
-          onClick={() => openModal("reindex")}
+          aria-label={`Refresh changed files for capsule ${capsuleDisplayName}`}
+          onClick={() => openModal("refresh")}
         >
-          Re-index
+          Refresh changed files
         </button>
         <button
           type="button"
           className="lk-btn lk-btn-ghost"
-          aria-label={`Mark capsule ${capsuleDisplayName} as stale`}
-          onClick={() => openModal("mark-stale")}
+          aria-label={`Repair failed files for capsule ${capsuleDisplayName}`}
+          onClick={() => openModal("repair")}
         >
-          Mark stale
+          Repair failed files
         </button>
         <button
           type="button"

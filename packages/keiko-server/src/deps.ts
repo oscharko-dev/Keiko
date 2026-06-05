@@ -33,6 +33,10 @@ import { createBrowserSessionManager, type BrowserSessionManager } from "@oschar
 import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { createBffMemoryVault } from "./memory-handlers.js";
 import { createMemoryAuditHandler } from "./memory-audit-handler.js";
+import type {
+  OpenAIEmbeddingOutcome,
+  OpenAIEmbeddingRequest,
+} from "@oscharko-dev/keiko-model-gateway";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -93,6 +97,11 @@ export interface UiHandlerDeps {
   // Test seam for model discovery. Production calls the OpenAI-compatible /models endpoint.
   readonly gatewayModelDiscovery?:
     | ((baseUrl: string, apiKey: string, apiKeyHeaderName?: string) => Promise<readonly string[]>)
+    | undefined;
+  // Issue #198 audit seam: lets local-knowledge route tests stub embedding requests without
+  // touching global fetch. Production leaves this undefined and uses requestOpenAIEmbedding.
+  readonly localKnowledgeEmbeddingRequest?:
+    | ((request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>)
     | undefined;
 }
 

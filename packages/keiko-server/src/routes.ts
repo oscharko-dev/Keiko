@@ -77,6 +77,12 @@ import {
   handleCreateBrowserSession,
   handleDeleteBrowserSession,
 } from "./browser.js";
+import {
+  handleDeleteLocalKnowledgeCapsule,
+  handleGetLocalKnowledgeCapsule,
+  handleListLocalKnowledgeCapsules,
+  handleReindexLocalKnowledgeCapsule,
+} from "./local-knowledge-handlers.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -175,6 +181,15 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
+  // Issue #198 audit fix — live capsule detail/health routes for the Local Knowledge UI.
+  { method: "GET", pattern: "/api/local-knowledge/capsules", handler: handleListLocalKnowledgeCapsules },
+  { method: "GET", pattern: "/api/local-knowledge/capsules/:capsuleId", handler: handleGetLocalKnowledgeCapsule },
+  { method: "DELETE", pattern: "/api/local-knowledge/capsules/:capsuleId", handler: handleDeleteLocalKnowledgeCapsule },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/capsules/:capsuleId/reindex",
+    handler: handleReindexLocalKnowledgeCapsule,
+  },
   // Issue #211 — Memory Center governance routes (Epic #204).
   { method: "GET", pattern: "/api/memory", handler: handleListMemories },
   { method: "GET", pattern: "/api/memory/review-queue", handler: handleMemoryReviewQueue },
