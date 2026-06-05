@@ -10,6 +10,7 @@
 import type {
   DocumentId,
   KnowledgeCapsuleId,
+  KnowledgeSourceId,
   PageRecord,
   ParsedUnit,
   ParserDiagnostic,
@@ -83,6 +84,12 @@ const DELETE_DIAGNOSTICS_SQL =
   "DELETE FROM parser_diagnostics WHERE capsule_id = :c AND document_id = :d";
 const SELECT_DOCUMENT_TEXT_SQL =
   "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d";
+const SELECT_DOCUMENTS_FOR_SOURCE_SQL = [
+  "SELECT id, document_path FROM documents",
+  "WHERE capsule_id = :c AND source_id = :s",
+  "ORDER BY document_path ASC",
+].join(" ");
+const DELETE_DOCUMENT_SQL = "DELETE FROM documents WHERE capsule_id = :c AND id = :d";
 
 type SqlValue = string | number | null | Uint8Array;
 type SqlParams = Record<string, SqlValue>;
@@ -107,7 +114,11 @@ interface DiscoveryStatements {
   readonly deleteDocumentText: RunStatement;
   readonly deleteParsedUnits: RunStatement;
   readonly deleteDiagnostics: RunStatement;
+  readonly deleteDocument: RunStatement;
   readonly selectDocumentText: GetStatement;
+  readonly selectDocumentsForSource: {
+    readonly all: (params?: SqlParams) => readonly unknown[];
+  };
 }
 
 const statementsByDb = new WeakMap<DatabaseSync, DiscoveryStatements>();
@@ -129,7 +140,11 @@ function statements(db: DatabaseSync): DiscoveryStatements {
     deleteDocumentText: db.prepare(DELETE_DOCUMENT_TEXT_SQL) as RunStatement,
     deleteParsedUnits: db.prepare(DELETE_PARSED_UNITS_SQL) as RunStatement,
     deleteDiagnostics: db.prepare(DELETE_DIAGNOSTICS_SQL) as RunStatement,
+    deleteDocument: db.prepare(DELETE_DOCUMENT_SQL) as RunStatement,
     selectDocumentText: db.prepare(SELECT_DOCUMENT_TEXT_SQL) as GetStatement,
+    selectDocumentsForSource: db.prepare(SELECT_DOCUMENTS_FOR_SOURCE_SQL) as {
+      readonly all: (params?: SqlParams) => readonly unknown[];
+    },
   };
   statementsByDb.set(db, prepared);
   return prepared;
@@ -207,6 +222,31 @@ export function readDocumentTextRow(
     d: documentId,
   }) as DocumentTextRow | undefined;
   return row?.normalized_text;
+}
+
+export interface PersistedSourceDocumentRow {
+  readonly id: DocumentId;
+  readonly document_path: string;
+}
+
+export function listPersistedDocumentsForSource(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  sourceId: KnowledgeSourceId,
+): readonly PersistedSourceDocumentRow[] {
+  const rows = statements(db).selectDocumentsForSource.all({
+    c: capsuleId,
+    s: sourceId,
+  });
+  return rows as readonly PersistedSourceDocumentRow[];
+}
+
+export function deleteDocumentRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): void {
+  statements(db).deleteDocument.run({ c: capsuleId, d: documentId });
 }
 
 export function insertPageRow(

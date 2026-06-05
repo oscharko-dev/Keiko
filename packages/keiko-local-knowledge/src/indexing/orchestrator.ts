@@ -40,7 +40,11 @@ import { chunkDocument } from "../chunking/chunker-runner.js";
 import { hasStaleChunksForDocument } from "../chunking/chunker-persist.js";
 import { getCapsule, updateCapsuleState } from "../capsule-lifecycle.js";
 import { discoverAndExtract } from "../discovery/discovery-runner.js";
-import { readDocumentTextRow } from "../discovery/persist.js";
+import {
+  deleteDocumentRow,
+  listPersistedDocumentsForSource,
+  readDocumentTextRow,
+} from "../discovery/persist.js";
 import type { ExtractionEvent, ExtractionResult } from "../discovery/types.js";
 import { listCapsuleSources } from "../source-lifecycle.js";
 
@@ -615,7 +619,19 @@ async function* runOneSource(
   );
 
   let cancelled = false;
+  let sawScopeError = false;
+  let completed = false;
+  const discoveredPaths = new Set<string>();
   for await (const evt of stream) {
+    if (evt.kind === "file-discovered") {
+      discoveredPaths.add(evt.relativePath);
+    } else if (evt.kind === "scope-error") {
+      sawScopeError = true;
+    } else if (evt.kind === "cancelled") {
+      cancelled = true;
+    } else if (evt.kind === "completed") {
+      completed = true;
+    }
     if (aborted(state.options.signal)) {
       cancelled = true;
       break;
@@ -635,6 +651,9 @@ async function* runOneSource(
     }
   }
   if (cancelled) return;
+  if (completed && !sawScopeError) {
+    pruneDeletedSourceDocuments(state, source, discoveredPaths);
+  }
 }
 
 // Routes a file-extracted event: force-skipped docs are re-shaped to persisted so the
@@ -711,6 +730,22 @@ async function handleDiscoveryEvent(
   return handleFileExtracted(state, evt.result);
 }
 
+function pruneDeletedSourceDocuments(
+  state: RunState,
+  source: KnowledgeSource,
+  discoveredPaths: ReadonlySet<string>,
+): void {
+  const persisted = listPersistedDocumentsForSource(
+    state.options.store._internal.db,
+    state.capsule.id,
+    source.id,
+  );
+  for (const document of persisted) {
+    if (discoveredPaths.has(document.document_path)) continue;
+    deleteDocumentRow(state.options.store._internal.db, state.capsule.id, document.id);
+  }
+}
+
 // ─── Capsule resolution + job lifecycle ───────────────────────────────────────
 function resolveCapsule(options: IndexingOptions): KnowledgeCapsule {
   const capsule = getCapsule(options.store, options.capsuleId);
@@ -765,9 +800,7 @@ function buildResult(
   };
 }
 
-async function verifyEmbeddingPreflight(
-  state: RunState,
-): Promise<IndexingJobError | undefined> {
+async function verifyEmbeddingPreflight(state: RunState): Promise<IndexingJobError | undefined> {
   const result = await verifyEmbeddingCapability(state.options.embeddingAdapter, {
     modelId: state.capsule.embeddingModelIdentity.modelId,
     provider: state.capsule.embeddingModelIdentity.provider,
