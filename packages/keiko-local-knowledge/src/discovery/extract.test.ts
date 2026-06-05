@@ -11,6 +11,7 @@ import { createCapsule } from "../capsule-lifecycle.js";
 import { freshStore, sampleCapsuleInput } from "../_support.js";
 import type { KnowledgeStore } from "../store.js";
 import { createDefaultParserRegistry, buildParserOptions } from "../parsers/index.js";
+import type { ParserAdapter, ParserOptions, ParserRegistry, ParserSelectionInput } from "../parsers/index.js";
 import { PDF_TEXT_LAYER } from "../parsers/parser-test-fixtures.js";
 
 import { extractDocument } from "./extract.js";
@@ -244,6 +245,68 @@ describe("extractDocument — path containment", () => {
     if (result.outcome.kind !== "failed") return;
     expect(result.outcome.error.code).toBe("PATH_ESCAPE");
     expect(count("documents")).toBe(0);
+  });
+
+  it("redacts absolute paths from parser diagnostics before returning and persisting them", async () => {
+    const privateRoot = "/Users/victim/work/docs";
+    source = addSourceToCapsule(store, capsuleId, {
+      id: "src-private" as KnowledgeSourceId,
+      displayName: "private docs",
+      tags: [],
+      scope: folderScope(privateRoot),
+    });
+    const fs = memoryFs(privateRoot, [{ relativePath: "secret.txt", content: "hidden" }]);
+    const adapter: ParserAdapter = {
+      capability: {
+        parserId: "test-parser",
+        parserVersion: "1",
+        matches: () => true,
+      },
+      parse: (input: ParserSelectionInput, options: ParserOptions) => ({
+        documentId: input.documentId,
+        parser: { parserId: "test-parser", parserVersion: "1" },
+        pages: [],
+        sections: [],
+        units: [],
+        diagnostics: [
+          {
+            severity: "error" as const,
+            code: "READ_FAILED",
+            message: `failed to parse ${privateRoot}/secret.txt at offset 42`,
+            documentId: input.documentId,
+          },
+        ],
+        extractedAt: options.now(),
+      }),
+    };
+    const registry: ParserRegistry = {
+      list: () => [adapter],
+      resolve: () => ({ kind: "matched", adapter }),
+    };
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "secret.txt", sizeBytes: 6 },
+      },
+    );
+    expect(result.outcome.kind).toBe("persisted");
+    expect(result.diagnostics[0]?.message).not.toContain(privateRoot);
+    expect(result.diagnostics[0]?.message).toContain("~/secret.txt");
+
+    const documentId = documentIdFor({
+      capsuleId,
+      sourceId: source.id,
+      relativePath: "secret.txt",
+    });
+    const row = store._internal.db
+      .prepare(
+        "SELECT message FROM parser_diagnostics WHERE capsule_id = :c AND document_id = :d LIMIT 1",
+      )
+      .get({ c: capsuleId, d: documentId }) as { readonly message?: string } | undefined;
+    expect(row?.message).not.toContain(privateRoot);
+    expect(row?.message).toContain("~/secret.txt");
   });
 });
 
