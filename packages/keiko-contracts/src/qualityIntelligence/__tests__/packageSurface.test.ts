@@ -61,6 +61,7 @@ const QI_SOURCE_FILES: readonly string[] = [
   "exportBundle.ts",
   "auditSummary.ts",
   "handoffEnvelope.ts",
+  "bffWire.ts",
   "index.ts",
 ];
 
