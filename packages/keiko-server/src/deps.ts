@@ -33,6 +33,10 @@ import { createBrowserSessionManager, type BrowserSessionManager } from "@oschar
 import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { createBffMemoryVault } from "./memory-handlers.js";
 import { createMemoryAuditHandler } from "./memory-audit-handler.js";
+import {
+  createConsolidationJobRegistry,
+  type ConsolidationJobRegistry,
+} from "./memory-consolidation-registry.js";
 import type {
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
@@ -87,6 +91,8 @@ export interface UiHandlerDeps {
   // Issue #211 — Memory Center vault. Optional so legacy tests that do not exercise /api/memory/*
   // keep their fixtures unchanged. Production wiring creates one at buildUiHandlerDeps time.
   readonly memoryVault?: MemoryVaultStore | undefined;
+  // Issue #208 — explicit, bounded in-memory consolidation job registry for Memory Center polling.
+  readonly consolidationJobs?: ConsolidationJobRegistry | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
   // and can be updated after a successful credential test without restarting the loopback server.
   readonly gatewayConfig?: RuntimeGatewayConfig | undefined;
@@ -315,6 +321,19 @@ function buildBrowserManager(options: {
   });
 }
 
+function buildMemoryVault(
+  redactString: (value: string) => string,
+  evidenceStore: EvidenceStore,
+): MemoryVaultStore {
+  return createBffMemoryVault(
+    redactString,
+    // #214 — wire every successful vault mutation into the audit ledger. The handler
+    // shares the same redactString closure as the live-payload redactor so audit
+    // summaries inherit the same secret-shape scrubbing as wire traffic.
+    createMemoryAuditHandler({ evidenceStore, redactString }),
+  );
+}
+
 // Assembles the handler deps for the real `keiko ui` process, mirroring the CLI config/evidence
 // wiring (loadConfigFromFile / resolveEvidenceDir / createNodeEvidenceStore). The UI store is
 // created at the resolved UI-DB path (explicit → KEIKO_UI_DATA_DIR → ~/.keiko/keiko-ui.db) unless
@@ -363,12 +382,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
       evidenceStore,
       redactor: liveRedactor,
     }),
-    memoryVault: createBffMemoryVault(
-      redactString,
-      // #214 — wire every successful vault mutation into the audit ledger. The handler
-      // shares the same redactString closure as the live-payload redactor so audit
-      // summaries inherit the same secret-shape scrubbing as wire traffic.
-      createMemoryAuditHandler({ evidenceStore, redactString }),
-    ),
+    memoryVault: buildMemoryVault(redactString, evidenceStore),
+    consolidationJobs: createConsolidationJobRegistry(),
   };
 }

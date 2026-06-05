@@ -60,6 +60,12 @@ describe("runConsolidation - invalid options", () => {
     const result = runConsolidation([makeRecord()], baseOptions({ maxAgeMs: -1 }));
     expect(result.state).toBe("failed");
   });
+
+  it("returns state 'failed' when an input record fails contract validation", () => {
+    const invalid = { ...makeRecord(), body: "" };
+    const result = runConsolidation([invalid], baseOptions());
+    expect(result.state).toBe("failed");
+  });
 });
 
 describe("runConsolidation - two-member duplicate (no negation)", () => {
@@ -142,7 +148,7 @@ describe("runConsolidation - cancellation", () => {
     expect(result.clustersInspected).toBe(0);
   });
 
-  it("returns state 'canceled' with partial results after the first cluster", () => {
+  it("returns state 'canceled' with bounded partial progress once cancellation starts firing", () => {
     const a = makeRecord({ id: "m-1a", body: "alpha alpha", createdAt: 100 });
     const b = makeRecord({ id: "m-1b", body: "alpha alpha", createdAt: 200 });
     const c = makeRecord({ id: "m-2a", body: "beta beta", createdAt: 100 });
@@ -153,13 +159,13 @@ describe("runConsolidation - cancellation", () => {
       baseOptions({
         cancellationSignal: () => {
           calls += 1;
-          return calls > 1;
+          return calls > 5;
         },
       }),
     );
     expect(result.state).toBe("canceled");
-    expect(result.clustersInspected).toBe(1);
-    expect(result.edgesProposed.length + result.reviewItems.length).toBeGreaterThan(0);
+    expect(result.clustersInspected).toBeLessThanOrEqual(1);
+    expect(result.edgesProposed.length + result.reviewItems.length).toBeLessThanOrEqual(1);
   });
 });
 
@@ -168,6 +174,7 @@ describe("runConsolidation - stale flag integration", () => {
     const stale = makeRecord({
       id: "m-stale",
       body: "old fact",
+      validFrom: FIXED_NOW_MS - 10_000,
       validUntil: FIXED_NOW_MS - 1,
     });
     const result = runConsolidation([stale], baseOptions());
@@ -179,6 +186,21 @@ describe("runConsolidation - stale flag integration", () => {
       detectedAt: FIXED_NOW_MS,
     });
   });
+
+  it("skips non-accepted records instead of producing stale or review output for them", () => {
+    const archived = makeRecord({
+      id: "m-archived",
+      body: "old fact",
+      status: "archived",
+      validFrom: FIXED_NOW_MS - 10_000,
+      validUntil: FIXED_NOW_MS - 1,
+    });
+    const result = runConsolidation([archived], baseOptions());
+    expect(result.state).toBe("skipped");
+    expect(result.staleFlags).toEqual([]);
+    expect(result.reviewItems).toEqual([]);
+    expect(result.edgesProposed).toEqual([]);
+  });
 });
 
 describe("runConsolidation - end-to-end mixed input", () => {
@@ -186,6 +208,7 @@ describe("runConsolidation - end-to-end mixed input", () => {
     const stale = makeRecord({
       id: "m-stale",
       body: "stale fact",
+      validFrom: FIXED_NOW_MS - 10_000,
       validUntil: FIXED_NOW_MS - 1,
     });
     const dupA = makeRecord({ id: "m-da", body: "same body", createdAt: 100 });
@@ -214,5 +237,24 @@ describe("runConsolidation - elapsedMs is always 0 (pure layer)", () => {
   it("never computes wall-clock elapsed; caller does this at job-transition site", () => {
     const result = runConsolidation([], baseOptions());
     expect(result.elapsedMs).toBe(0);
+  });
+});
+
+describe("runConsolidation - reserved summaryGenerator seam", () => {
+  it("does not invoke summaryGenerator in v1", () => {
+    let calls = 0;
+    const older = makeRecord({ id: "m-old", body: "use tabs", createdAt: 100 });
+    const newer = makeRecord({ id: "m-new", body: "use tabs", createdAt: 200 });
+    const result = runConsolidation(
+      [older, newer],
+      baseOptions({
+        summaryGenerator: () => {
+          calls += 1;
+          return Promise.resolve("summary");
+        },
+      }),
+    );
+    expect(result.state).toBe("completed");
+    expect(calls).toBe(0);
   });
 });

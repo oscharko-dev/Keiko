@@ -201,18 +201,26 @@ export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProp
     <>
       <header className="lk-header">
         <h1 className="lk-title">Memory Center</h1>
-        <Link href="/memory/review-queue" className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link">
-          Review queue
-          {total > 0 ? (
-            <span
-              role="status"
-              aria-label={`${total.toString()} memories`}
-              className="mc-badge-count"
-            >
-              {total}
-            </span>
-          ) : null}
-        </Link>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <Link href="/memory/consolidation" className="lk-btn lk-btn-ghost lk-btn-lg">
+            Consolidation
+          </Link>
+          <Link
+            href="/memory/review-queue"
+            className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
+          >
+            Review queue
+            {total > 0 ? (
+              <span
+                role="status"
+                aria-label={`${total.toString()} memories`}
+                className="mc-badge-count"
+              >
+                {total}
+              </span>
+            ) : null}
+          </Link>
+        </div>
       </header>
 
       <MemoryFilters filters={filters} onChange={handleFilterChange} />

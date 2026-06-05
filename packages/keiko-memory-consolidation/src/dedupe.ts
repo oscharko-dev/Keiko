@@ -17,7 +17,7 @@
 import type { MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 
 import { compareRecordsByAge, scopeCoordinateKey } from "./_ordering.js";
-import { jaccardSimilarity, normalizeBody } from "./similarity.js";
+import { jaccardSimilarityPrepared, prepareBody, type PreparedBody } from "./similarity.js";
 
 export interface DuplicateCluster {
   // Oldest member of the cluster. The "canonical" representative used by the orchestrator to
@@ -28,8 +28,17 @@ export interface DuplicateCluster {
 
 interface MutableCluster {
   readonly canonical: MemoryRecord;
-  readonly canonicalNormalized: string;
+  readonly canonicalBody: PreparedBody;
   readonly members: MemoryRecord[];
+}
+
+export interface DuplicateClusterScanOptions {
+  readonly cancellationSignal?: () => boolean;
+}
+
+export interface DuplicateClusterScanResult {
+  readonly clusters: readonly DuplicateCluster[];
+  readonly canceled: boolean;
 }
 
 function partitionKey(record: MemoryRecord): string {
@@ -40,24 +49,22 @@ function partitionKey(record: MemoryRecord): string {
 // canonical (oldest) member to keep cluster-add at O(1) per candidate per cluster.
 function clusterAccepts(
   cluster: MutableCluster,
-  candidate: MemoryRecord,
-  candidateNormalized: string,
+  candidateBody: PreparedBody,
   jaccardThreshold: number,
 ): boolean {
-  if (candidate.body === cluster.canonical.body) return true;
-  if (candidateNormalized === cluster.canonicalNormalized) return true;
-  const score = jaccardSimilarity(candidate.body, cluster.canonical.body);
+  if (candidateBody.normalized === cluster.canonicalBody.normalized) return true;
+  const score = jaccardSimilarityPrepared(candidateBody, cluster.canonicalBody);
   return score >= jaccardThreshold;
 }
 
 function tryJoinExistingCluster(
   partition: MutableCluster[],
   candidate: MemoryRecord,
-  candidateNormalized: string,
+  candidateBody: PreparedBody,
   jaccardThreshold: number,
 ): boolean {
   for (const cluster of partition) {
-    if (clusterAccepts(cluster, candidate, candidateNormalized, jaccardThreshold)) {
+    if (clusterAccepts(cluster, candidateBody, jaccardThreshold)) {
       cluster.members.push(candidate);
       return true;
     }
@@ -68,22 +75,26 @@ function tryJoinExistingCluster(
 function clusterPartition(
   records: readonly MemoryRecord[],
   jaccardThreshold: number,
-): MutableCluster[] {
+  cancellationSignal?: () => boolean,
+): { readonly clusters: readonly MutableCluster[]; readonly canceled: boolean } {
   // Order inputs so the OLDEST record in any group of similar records becomes the canonical
   // member (cluster.canonical). Without this, the canonical would depend on input order — a
   // determinism break.
   const ordered = [...records].sort(compareRecordsByAge);
   const partition: MutableCluster[] = [];
   for (const record of ordered) {
-    const normalized = normalizeBody(record.body);
-    if (tryJoinExistingCluster(partition, record, normalized, jaccardThreshold)) continue;
+    if (cancellationSignal?.() === true) {
+      return { clusters: partition, canceled: true };
+    }
+    const prepared = prepareBody(record.body);
+    if (tryJoinExistingCluster(partition, record, prepared, jaccardThreshold)) continue;
     partition.push({
       canonical: record,
-      canonicalNormalized: normalized,
+      canonicalBody: prepared,
       members: [record],
     });
   }
-  return partition;
+  return { clusters: partition, canceled: false };
 }
 
 function finalizeCluster(cluster: MutableCluster): DuplicateCluster {
@@ -96,10 +107,11 @@ function finalizeCluster(cluster: MutableCluster): DuplicateCluster {
 
 // Public entry point. Returns clusters of size >= 2 only; singletons are filtered out.
 // Output is deterministic for any permutation of `records`.
-export function findDuplicateClusters(
+export function scanDuplicateClusters(
   records: readonly MemoryRecord[],
   jaccardThreshold: number,
-): readonly DuplicateCluster[] {
+  options: DuplicateClusterScanOptions = {},
+): DuplicateClusterScanResult {
   const partitions = new Map<string, MemoryRecord[]>();
   for (const record of records) {
     const key = partitionKey(record);
@@ -111,16 +123,29 @@ export function findDuplicateClusters(
     }
   }
   const clusters: DuplicateCluster[] = [];
+  let canceled = false;
   for (const bucket of partitions.values()) {
-    const built = clusterPartition(bucket, jaccardThreshold);
-    for (const cluster of built) {
+    const built = clusterPartition(bucket, jaccardThreshold, options.cancellationSignal);
+    canceled ||= built.canceled;
+    for (const cluster of built.clusters) {
       if (cluster.members.length >= 2) {
         clusters.push(finalizeCluster(cluster));
       }
     }
+    if (canceled) break;
   }
   // Stable cluster ordering: by canonical id (the oldest member's id is unique per cluster).
-  return clusters.sort((a, b) =>
-    a.canonicalId < b.canonicalId ? -1 : a.canonicalId > b.canonicalId ? 1 : 0,
-  );
+  return {
+    clusters: clusters.sort((a, b) =>
+      a.canonicalId < b.canonicalId ? -1 : a.canonicalId > b.canonicalId ? 1 : 0,
+    ),
+    canceled,
+  };
+}
+
+export function findDuplicateClusters(
+  records: readonly MemoryRecord[],
+  jaccardThreshold: number,
+): readonly DuplicateCluster[] {
+  return scanDuplicateClusters(records, jaccardThreshold).clusters;
 }

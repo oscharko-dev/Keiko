@@ -57,6 +57,11 @@ import {
   handleMemoryRetrieveContext,
   handleMemoryCaptureFromConversation,
 } from "./memory-conv-handlers.js";
+import {
+  handleCancelConsolidationJob,
+  handleCreateConsolidationJob,
+  handleGetConsolidationJob,
+} from "./memory-consolidation-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import {
@@ -239,6 +244,22 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/memory/capture-from-conversation",
     handler: handleMemoryCaptureFromConversation,
+  },
+  // Issue #208 — explicit consolidation jobs for the Memory Center review surface.
+  {
+    method: "POST",
+    pattern: "/api/memory/consolidation/jobs",
+    handler: handleCreateConsolidationJob,
+  },
+  {
+    method: "GET",
+    pattern: "/api/memory/consolidation/jobs/:jobId",
+    handler: handleGetConsolidationJob,
+  },
+  {
+    method: "POST",
+    pattern: "/api/memory/consolidation/jobs/:jobId/cancel",
+    handler: handleCancelConsolidationJob,
   },
   // ADR-0017 — browser tool (BYO Chrome over CDP).
   { method: "GET", pattern: "/api/browser/status", handler: handleBrowserStatus },

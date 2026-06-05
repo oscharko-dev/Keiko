@@ -5,12 +5,15 @@
 
 import { ApiError } from "./api";
 import type {
+  MemoryEdge,
   MemoryId,
   MemoryRecord,
+  MemoryScope,
   MemoryScopeKind,
   MemorySensitivity,
   MemoryStatus,
   MemoryType,
+  MemoryUpdate,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -37,6 +40,82 @@ export interface MemoryActionResponse {
   readonly memory: MemoryRecord;
 }
 
+export type MemoryConsolidationJobState =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "canceled"
+  | "skipped";
+
+export type MemoryConsolidationStaleReason = "expired" | "low-confidence" | "aged-out";
+
+export interface MemoryConsolidationStaleFlag {
+  readonly memoryId: MemoryId;
+  readonly reason: MemoryConsolidationStaleReason;
+  readonly detectedAt: number;
+}
+
+export type MemoryConsolidationReviewReason = "multi-way-duplicate" | "potential-conflict";
+
+export type MemoryConsolidationProposedAction =
+  | { readonly kind: "merge"; readonly winner: MemoryId; readonly losers: readonly MemoryId[] }
+  | { readonly kind: "supersede"; readonly newer: MemoryId; readonly older: MemoryId };
+
+export interface MemoryConsolidationReviewItem {
+  readonly id: string;
+  readonly reason: MemoryConsolidationReviewReason;
+  readonly relatedMemoryIds: readonly MemoryId[];
+  readonly proposedAction?: MemoryConsolidationProposedAction;
+  readonly detectedAt: number;
+}
+
+export interface MemoryConsolidationResult {
+  readonly state: "completed" | "canceled" | "skipped" | "failed";
+  readonly edgesProposed: readonly MemoryEdge[];
+  readonly updatesProposed: readonly MemoryUpdate[];
+  readonly staleFlags: readonly MemoryConsolidationStaleFlag[];
+  readonly reviewItems: readonly MemoryConsolidationReviewItem[];
+  readonly clustersInspected: number;
+  readonly elapsedMs: number;
+}
+
+export interface MemoryConsolidationJob {
+  readonly id: string;
+  readonly state: MemoryConsolidationJobState;
+  readonly startedAt?: number;
+  readonly completedAt?: number;
+  readonly result?: MemoryConsolidationResult;
+  readonly error?: string;
+}
+
+export interface MemoryConsolidationJobSelection {
+  readonly scopes: readonly MemoryScope[];
+  readonly types?: readonly MemoryType[];
+  readonly statuses?: readonly MemoryStatus[];
+  readonly includeExpired: boolean;
+}
+
+export interface MemoryConsolidationJobSettings {
+  readonly jaccardThreshold: number;
+  readonly staleConfidenceThreshold: number;
+  readonly maxAgeMs: number;
+  readonly maxClustersPerRun: number;
+}
+
+export interface MemoryConsolidationJobEnvelope {
+  readonly job: MemoryConsolidationJob;
+  readonly createdAt: number;
+  readonly selection: MemoryConsolidationJobSelection;
+  readonly settings: MemoryConsolidationJobSettings;
+  readonly memoryCount: number;
+  readonly cancelRequested: boolean;
+}
+
+export interface MemoryConsolidationJobResponse {
+  readonly job: MemoryConsolidationJobEnvelope;
+}
+
 export interface MemoryForgetResponse {
   readonly forgotten: true;
   readonly memoryId: string;
@@ -59,6 +138,13 @@ export interface MemoryListFilters {
   readonly sensitivity?: readonly MemorySensitivity[];
   readonly limit?: number;
   readonly offset?: number;
+}
+
+export interface StartMemoryConsolidationInput {
+  readonly jaccardThreshold: number;
+  readonly staleConfidenceThreshold: number;
+  readonly maxAgeMs: number;
+  readonly maxClustersPerRun: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +216,37 @@ export async function fetchMemoryReviewQueue(
   fetchImpl = fetchJson<MemoryReviewQueueResponse>,
 ): Promise<MemoryReviewQueueResponse> {
   return fetchImpl("/api/memory/review-queue");
+}
+
+// ---------------------------------------------------------------------------
+// Consolidation jobs
+// ---------------------------------------------------------------------------
+
+export async function startMemoryConsolidation(
+  input: StartMemoryConsolidationInput,
+  fetchImpl = fetchJson<MemoryConsolidationJobResponse>,
+): Promise<MemoryConsolidationJobResponse> {
+  return fetchImpl("/api/memory/consolidation/jobs", {
+    method: "POST",
+    body: JSON.stringify({ settings: input }),
+  });
+}
+
+export async function fetchMemoryConsolidationJob(
+  jobId: string,
+  fetchImpl = fetchJson<MemoryConsolidationJobResponse>,
+): Promise<MemoryConsolidationJobResponse> {
+  return fetchImpl(`/api/memory/consolidation/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export async function cancelMemoryConsolidationJob(
+  jobId: string,
+  fetchImpl = fetchJson<MemoryConsolidationJobResponse>,
+): Promise<MemoryConsolidationJobResponse> {
+  return fetchImpl(`/api/memory/consolidation/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+    body: "{}",
+  });
 }
 
 // ---------------------------------------------------------------------------

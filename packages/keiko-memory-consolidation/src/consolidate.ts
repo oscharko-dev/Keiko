@@ -14,7 +14,11 @@
 // cancel. The signal is polled once at the very start as well, so a caller that already knows
 // it wants to abort can short-circuit without inspecting any cluster.
 
-import type { MemoryEdge, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  type MemoryEdge,
+  type MemoryRecord,
+  validateMemoryRecord,
+} from "@oscharko-dev/keiko-contracts/memory";
 
 import {
   JACCARD_DEFAULT,
@@ -24,7 +28,7 @@ import {
 } from "./_constants.js";
 import { compareEdges, compareReviewItems } from "./_ordering.js";
 import { CONFLICT_OVERLAP_THRESHOLD, detectConflicts, findConflictPairs } from "./conflicts.js";
-import { findDuplicateClusters, type DuplicateCluster } from "./dedupe.js";
+import { scanDuplicateClusters, type DuplicateCluster } from "./dedupe.js";
 import { findStaleMemories } from "./stale.js";
 import type { ConsolidationOptions, ConsolidationResult, ReviewItem, StaleFlag } from "./types.js";
 
@@ -38,6 +42,8 @@ interface ResolvedOptions {
   readonly maxClustersPerRun: number;
   readonly cancellationSignal: () => boolean;
 }
+
+const ELIGIBLE_STATUS = "accepted";
 
 function isFiniteInRange(n: number, lo: number, hi: number): boolean {
   return Number.isFinite(n) && n >= lo && n <= hi;
@@ -93,6 +99,18 @@ function emptyResult(state: ConsolidationResult["state"]): ConsolidationResult {
     clustersInspected: 0,
     elapsedMs: 0,
   };
+}
+
+function eligibleMemories(memories: readonly MemoryRecord[]): readonly MemoryRecord[] | null {
+  const accepted: MemoryRecord[] = [];
+  for (const memory of memories) {
+    const validated = validateMemoryRecord(memory);
+    if (!validated.ok) return null;
+    if (validated.value.status === ELIGIBLE_STATUS) {
+      accepted.push(validated.value);
+    }
+  }
+  return accepted;
 }
 
 interface ClusterEffects {
@@ -190,13 +208,15 @@ function collectConflictPairs(
   clusters: readonly DuplicateCluster[],
   resolved: ResolvedOptions,
   consumedState: "completed" | "canceled",
+  clusterScanCanceled: boolean,
 ): readonly ReviewItem[] {
   // If the cluster sweep was canceled, do NOT extend work into the conflict-pair sweep —
   // honour the cancellation boundary so partial results stay partial.
-  if (consumedState === "canceled") return [];
+  if (consumedState === "canceled" || clusterScanCanceled) return [];
   return findConflictPairs(records, clusters, CONFLICT_OVERLAP_THRESHOLD, {
     nowMs: resolved.nowMs,
     newReviewItemId: resolved.newReviewItemId,
+    cancellationSignal: resolved.cancellationSignal,
   });
 }
 
@@ -207,14 +227,27 @@ export function runConsolidation(
 ): ConsolidationResult {
   const resolved = resolveOptions(options);
   if (resolved === null) return emptyResult("failed");
-  if (memories.length === 0 || resolved.maxClustersPerRun === 0) return emptyResult("skipped");
-  const clusters = findDuplicateClusters(memories, resolved.jaccardThreshold);
+  if (resolved.cancellationSignal()) return emptyResult("canceled");
+  const eligible = eligibleMemories(memories);
+  if (eligible === null) return emptyResult("failed");
+  if (eligible.length === 0 || resolved.maxClustersPerRun === 0) return emptyResult("skipped");
+  const scanned = scanDuplicateClusters(eligible, resolved.jaccardThreshold, {
+    cancellationSignal: resolved.cancellationSignal,
+  });
+  if (scanned.canceled && scanned.clusters.length === 0) return emptyResult("canceled");
+  const clusters = scanned.clusters;
   const consumed = consumeClusters(clusters, resolved);
-  const conflictPairs = collectConflictPairs(memories, clusters, resolved, consumed.state);
-  const staleFlags = collectStaleFlags(memories, resolved);
+  const conflictPairs = collectConflictPairs(
+    eligible,
+    clusters,
+    resolved,
+    consumed.state,
+    scanned.canceled,
+  );
+  const staleFlags = collectStaleFlags(eligible, resolved);
   const mergedReviewItems = [...consumed.reviewItems, ...conflictPairs].sort(compareReviewItems);
   return {
-    state: consumed.state,
+    state: scanned.canceled ? "canceled" : consumed.state,
     edgesProposed: [...consumed.edges].sort(compareEdges),
     updatesProposed: [],
     staleFlags,
