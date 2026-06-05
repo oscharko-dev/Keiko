@@ -474,6 +474,8 @@ export type {
   MemoryArchive,
   MemoryAuditAction,
   MemoryAuditActionKind,
+  MemoryAuditEvent,
+  MemoryAuditEventKind,
   MemoryAuditInitiatorSurface,
   MemoryAuditRecord,
   MemoryAuditRecordId,
@@ -518,6 +520,9 @@ export type {
 } from "./memory-barrel.js";
 export {
   MEMORY_AUDIT_ACTION_KINDS,
+  MEMORY_AUDIT_EVENT_KINDS,
+  MEMORY_AUDIT_EVENT_SCHEMA_VERSION,
+  MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS,
   MEMORY_AUDIT_INITIATOR_SURFACES,
   MEMORY_EDGE_KINDS,
   MEMORY_SCHEMA_VERSION,

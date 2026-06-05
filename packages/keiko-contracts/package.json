@@ -47,6 +47,10 @@
     "./memory-workflow-port": {
       "types": "./dist/memory-workflow-port.d.ts",
       "import": "./dist/memory-workflow-port.js"
+    },
+    "./memory-audit-events": {
+      "types": "./dist/memory-audit-events.d.ts",
+      "import": "./dist/memory-audit-events.js"
     }
   },
   "scripts": {

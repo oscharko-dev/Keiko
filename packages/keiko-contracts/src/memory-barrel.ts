@@ -111,6 +111,14 @@ export { isScopeReachable, validateMemoryRetrievalRequest } from "./memory-retri
 // ─── Audit record validator ──────────────────────────────────────────────────
 export { validateMemoryAuditRecord } from "./memory-audit-validation.js";
 
+// ─── Audit event surface (#214) ──────────────────────────────────────────────
+export type { MemoryAuditEvent, MemoryAuditEventKind } from "./memory-audit-events.js";
+export {
+  MEMORY_AUDIT_EVENT_KINDS,
+  MEMORY_AUDIT_EVENT_SCHEMA_VERSION,
+  MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS,
+} from "./memory-audit-events.js";
+
 // ─── Record validators + discriminator helpers ────────────────────────────────
 export {
   assertNeverMemoryType,
