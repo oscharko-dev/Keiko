@@ -274,6 +274,8 @@ export type {
   NewChatMessage,
   UpdateChatMessagePatch,
   GroundedAnswerContextPackSummary,
+  ConversationDocumentContextWire,
+  DesktopChatSendRequestWire,
 } from "./bff-wire.js";
 export { buildGroundedAnswerContextPackSummary } from "./bff-wire.js";
 

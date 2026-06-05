@@ -269,4 +269,90 @@ describe("desktop chat routes", () => {
       cwdSpy.mockRestore();
     }
   });
+
+  // Issue #148 — documentContext on a send payload is projected into a structured prompt block
+  // for the model call ONLY. The persisted user-message bubble keeps the raw draft so chat
+  // history stays readable. The gateway sees the composed form on the latest user turn.
+  it("composes the latest user turn with attached document context for the model call", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Summarise this",
+        documentContext: [
+          {
+            id: "doc-1",
+            displayName: "spec.md",
+            mimeType: "text/markdown",
+            sizeBytes: 1024,
+            extractedBytes: 22,
+            truncated: false,
+            text: "Some document content.",
+          },
+        ],
+      }),
+    });
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      messages: { role: string; content: string }[];
+    };
+    // The persisted user message keeps the raw draft (chat history stays readable).
+    expect(body.messages[0]).toMatchObject({ role: "user", content: "Summarise this" });
+    // The gateway received the structured prompt on the latest user turn.
+    const lastTurn = seenRequests[0]?.messages.at(-1);
+    expect(lastTurn?.role).toBe("user");
+    expect(lastTurn?.content).toContain("User message:");
+    expect(lastTurn?.content).toContain("Summarise this");
+    expect(lastTurn?.content).toContain("Attached document context:");
+    expect(lastTurn?.content).toContain("spec.md");
+    expect(lastTurn?.content).toContain("Some document content.");
+  });
+
+  it("ignores malformed documentContext entries instead of rejecting the send", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "hello",
+        documentContext: [
+          // missing required fields → must be silently dropped
+          { id: "bad" },
+          // good entry survives
+          {
+            id: "doc-1",
+            displayName: "ok.txt",
+            mimeType: "text/plain",
+            sizeBytes: 4,
+            extractedBytes: 4,
+            truncated: false,
+            text: "okay",
+          },
+        ],
+      }),
+    });
+    expect(sendRes.status).toBe(200);
+    const lastTurn = seenRequests[0]?.messages.at(-1);
+    expect(lastTurn?.content).toContain("ok.txt");
+    expect(lastTurn?.content).not.toContain("[bad]");
+  });
 });

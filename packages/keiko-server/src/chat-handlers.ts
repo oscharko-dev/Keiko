@@ -11,6 +11,7 @@ import {
   listConfiguredCapabilities,
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
+import type { ConversationDocumentContextWire } from "@oscharko-dev/keiko-contracts";
 import {
   UiStoreError,
   isProjectAvailable,
@@ -18,6 +19,7 @@ import {
   type ChatMessage,
   type Project,
 } from "./store/index.js";
+import { composeConversationPrompt } from "./conversation-prompt.js";
 import { validateProjectPath } from "./store/validation.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
@@ -229,6 +231,93 @@ interface SendDesktopChatRequest {
   readonly projectPath: string;
   readonly content: string;
   readonly modelId: string | undefined;
+  // Issue #148 — client-extracted document text. Already redacted by keiko-workspace at the
+  // extraction boundary; the server passes these into a structured prompt block but does NOT
+  // re-extract from disk (server-side modality enforcement is owned by issue #149).
+  readonly documentContext: readonly ConversationDocumentContextWire[];
+}
+
+const MAX_DOCUMENT_CONTEXT_ENTRIES = 16;
+const MAX_DOCUMENT_CONTEXT_TEXT_BYTES = 65_536; // mirrors MAX_EXTRACTED_BYTES per doc
+const MAX_DOCUMENT_DISPLAY_NAME = 256;
+
+interface DocumentContextFields {
+  readonly id: string;
+  readonly displayName: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly extractedBytes: number;
+  readonly truncated: boolean;
+  readonly text: string;
+}
+
+function pickString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+function pickNumber(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === "number" ? value : undefined;
+}
+function pickBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
+  const value = record[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readDocumentContextFields(
+  value: Record<string, unknown>,
+): DocumentContextFields | undefined {
+  const id = pickString(value, "id");
+  const displayName = pickString(value, "displayName");
+  const mimeType = pickString(value, "mimeType");
+  const sizeBytes = pickNumber(value, "sizeBytes");
+  const extractedBytes = pickNumber(value, "extractedBytes");
+  const truncated = pickBoolean(value, "truncated");
+  const text = pickString(value, "text");
+  if (
+    id === undefined ||
+    displayName === undefined ||
+    mimeType === undefined ||
+    sizeBytes === undefined ||
+    extractedBytes === undefined ||
+    truncated === undefined ||
+    text === undefined
+  ) {
+    return undefined;
+  }
+  return { id, displayName, mimeType, sizeBytes, extractedBytes, truncated, text };
+}
+
+function fieldsWithinCaps(fields: DocumentContextFields): boolean {
+  return (
+    fields.displayName.length > 0 &&
+    fields.displayName.length <= MAX_DOCUMENT_DISPLAY_NAME &&
+    fields.text.length <= MAX_DOCUMENT_CONTEXT_TEXT_BYTES &&
+    fields.sizeBytes >= 0 &&
+    fields.extractedBytes >= 0
+  );
+}
+
+function parseDocumentContextEntry(value: unknown): ConversationDocumentContextWire | undefined {
+  if (!isRecord(value)) return undefined;
+  const fields = readDocumentContextFields(value);
+  if (fields === undefined) return undefined;
+  // Defence-in-depth caps. The client extractor already enforces these, but the server is
+  // the trust boundary for what reaches the model prompt.
+  if (!fieldsWithinCaps(fields)) return undefined;
+  const truncationMarker =
+    typeof value.truncationMarker === "string" ? value.truncationMarker : undefined;
+  return { ...fields, truncationMarker };
+}
+
+function parseDocumentContext(value: unknown): readonly ConversationDocumentContextWire[] {
+  if (!Array.isArray(value)) return [];
+  const out: ConversationDocumentContextWire[] = [];
+  for (const entry of value.slice(0, MAX_DOCUMENT_CONTEXT_ENTRIES)) {
+    const parsed = parseDocumentContextEntry(entry);
+    if (parsed !== undefined) out.push(parsed);
+  }
+  return out;
 }
 
 function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequest | RouteResult {
@@ -249,6 +338,7 @@ function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequ
     projectPath,
     content,
     modelId: typeof body.modelId === "string" && body.modelId.length > 0 ? body.modelId : undefined,
+    documentContext: parseDocumentContext(body.documentContext),
   };
 }
 
@@ -295,6 +385,30 @@ function createAssistantMessage(
   });
 }
 
+// Issue #148 — projects the latest user turn into the structured prompt form (user message +
+// attached document blocks). Earlier history turns stay verbatim — the document context is a
+// per-send payload and never replayed across the conversation log.
+function applyDocumentContextToLatestUserTurn(
+  history: readonly GatewayConversationMessage[],
+  request: SendDesktopChatRequest,
+): GatewayConversationMessage[] {
+  if (request.documentContext.length === 0) {
+    return Array.from(history);
+  }
+  const composed = composeConversationPrompt(request.content, request.documentContext);
+  // Replace ONLY the last user turn (the one we just persisted). System and assistant turns
+  // are untouched. Walking from the end avoids rewriting a same-text earlier turn.
+  const out: GatewayConversationMessage[] = Array.from(history);
+  for (let i = out.length - 1; i >= 0; i -= 1) {
+    const entry = out[i];
+    if (entry?.role === "user" && entry.content === request.content) {
+      out[i] = { role: "user", content: composed };
+      break;
+    }
+  }
+  return out;
+}
+
 async function persistModelChatTurn(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -307,10 +421,12 @@ async function persistModelChatTurn(
   }
   try {
     const userMessage = createUserMessage(deps, request);
+    const history = conversationForGateway(deps.store.listMessages(request.chatId));
+    const messages = applyDocumentContextToLatestUserTurn(history, request);
     const response = await model.call(
       {
         modelId,
-        messages: conversationForGateway(deps.store.listMessages(request.chatId)),
+        messages,
         stream: false,
       },
       new AbortController().signal,
