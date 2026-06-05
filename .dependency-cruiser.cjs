@@ -521,7 +521,8 @@ module.exports = {
       comment:
         "ADR-0019 direction rule 6 (server strict variant): keiko-server and the src/ui/ " +
         "shim may depend on keiko-contracts, keiko-security, keiko-model-gateway, " +
-        "keiko-workspace, keiko-tools, keiko-harness, keiko-workflows, and keiko-evidence " +
+        "keiko-workspace, keiko-tools, keiko-harness, keiko-workflows, keiko-evidence, " +
+        "keiko-memory-vault, keiko-memory-governance, and keiko-memory-retrieval " +
         "only, and must reach those allowed dependencies through their public package " +
         "surfaces (`@oscharko-dev/keiko-<name>`) — NOT by deep-importing the legacy " +
         "`src/<name>/` shim layers. The to.path therefore forbids both the non-allow-listed " +
@@ -538,16 +539,17 @@ module.exports = {
         "intentionally NOT in the forbidden list: the server depends on the verification " +
         "orchestrator (run-engine.ts via the apply-mode verification gate) and " +
         "verification is not yet a physical package — the boundary will be re-evaluated " +
-        "when verification is extracted in a future issue.",
+        "when verification is extracted in a future issue. memory-vault, memory-governance, " +
+        "and memory-retrieval added by issue #211 (Memory Center UI BFF routes).",
       severity: "error",
       from: {
         path: "^(packages/keiko-server/src/|" + "src/ui/|" + "tests/architecture/fixtures/server/)",
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|server)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|server)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|server)|" +
           "src/(cli|evaluations|gateway|workspace|tools|harness|workflows|audit))",
         pathNot: "^src/ui/",
       },
