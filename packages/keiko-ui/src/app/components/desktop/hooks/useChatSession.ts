@@ -12,6 +12,7 @@ import {
   fetchProjects,
   sendDesktopChat,
   startChatRun,
+  updateChat,
 } from "@/lib/api";
 import { acceptMemoryProposal, rejectMemoryProposal } from "@/lib/memory-api";
 import { findChatWorkflow } from "@/lib/chat-workflow-catalog";
@@ -155,6 +156,19 @@ function sortChats(chats: readonly Chat[]): Chat[] {
 // surfaces branch on undefined to show a clear "no model" error (AC #1 / #4).
 export function pickChatModelId(models: readonly ModelCapability[]): string | undefined {
   return models[0]?.id;
+}
+
+// Reopened chats can persist a model id that is no longer present in the
+// current eligible model list. Fail closed to a live eligible model, or to
+// undefined so the UI blocks sends with the no-model alert.
+export function resolveSelectedModelId(
+  current: string | undefined,
+  models: readonly ModelCapability[],
+): string | undefined {
+  if (current !== undefined && models.some((model) => model.id === current)) {
+    return current;
+  }
+  return pickChatModelId(models);
 }
 
 export type ChatSessionApi = UseChatSessionResult;
@@ -303,9 +317,10 @@ async function bootstrapSession(): Promise<Partial<SessionState>> {
     const latestChat = sortedChats[0];
     if (latestChat !== undefined) {
       const messagePayload = await fetchChatMessages(latestChat.id, project.path);
+      const selectedModel = resolveSelectedModelId(latestChat.selectedModel, chatModels);
       return {
         models: chatModels,
-        selectedModel: latestChat.selectedModel,
+        selectedModel,
         projects: Array.from(projectPayload.projects),
         activeProject: project,
         chats: sortedChats,
@@ -369,6 +384,7 @@ export function useChatSession(): UseChatSessionResult {
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [memoryBudgetTokens, setMemoryBudgetTokens] = useState(DEFAULT_MEMORY_BUDGET_TOKENS);
   const activeChatIdRef = useRef<string | undefined>(undefined);
+  const selectedModelPersistRef = useRef(0);
   // Issue #147 — pending-attachment state. Cleared after a successful send (AC #3).
   const [pendingAttachments, setPendingAttachments] = useState<readonly PendingAttachment[]>([]);
 
@@ -512,19 +528,52 @@ export function useChatSession(): UseChatSessionResult {
   }, []);
 
   const setSelectedModel = useCallback((id: string) => {
-    setState((previous) => ({ ...previous, selectedModel: id }));
+    setError(undefined);
+    setState((previous) => ({
+      ...previous,
+      selectedModel: id,
+      activeChat:
+        previous.activeChat === undefined
+          ? previous.activeChat
+          : { ...previous.activeChat, selectedModel: id },
+      chats: previous.chats.map((chat) =>
+        previous.activeChat !== undefined && chat.id === previous.activeChat.id
+          ? { ...chat, selectedModel: id }
+          : chat,
+      ),
+    }));
+    const activeChatId = activeChatIdRef.current;
+    if (activeChatId === undefined) return;
+    const requestId = selectedModelPersistRef.current + 1;
+    selectedModelPersistRef.current = requestId;
+    void updateChat(activeChatId, { selectedModel: id })
+      .then((result) => {
+        if (selectedModelPersistRef.current !== requestId) return;
+        if (activeChatIdRef.current !== result.chat.id) return;
+        setState((previous) => ({
+          ...previous,
+          selectedModel: result.chat.selectedModel,
+          activeChat: previous.activeChat?.id === result.chat.id ? result.chat : previous.activeChat,
+          chats: previous.chats.map((chat) => (chat.id === result.chat.id ? result.chat : chat)),
+        }));
+      })
+      .catch((caught) => {
+        if (selectedModelPersistRef.current !== requestId) return;
+        setError(errorMessage(caught));
+      });
   }, []);
 
   const openNewChat = useCallback(
     async (projectOverride?: ProjectWithAvailability): Promise<void> => {
-      if (state.selectedModel === undefined) {
+      const modelId = resolveSelectedModelId(state.selectedModel, state.models);
+      if (modelId === undefined) {
         setError("No conversation-eligible model is configured. Connect a gateway in Settings.");
         return;
       }
       setError(undefined);
       try {
         const input: { modelId: string; title: string; projectPath?: string } = {
-          modelId: state.selectedModel,
+          modelId,
           title: DEFAULT_CHAT_TITLE,
         };
         const targetPath = projectOverride?.path ?? state.activeProject?.path;
@@ -561,11 +610,12 @@ export function useChatSession(): UseChatSessionResult {
         }
         const messagePayload = await fetchChatMessages(latest.id, project.path);
         activeChatIdRef.current = latest.id;
+        const selectedModel = resolveSelectedModelId(latest.selectedModel, state.models);
         setState((previous) => ({
           ...previous,
           chats: sorted,
           activeChat: latest,
-          selectedModel: latest.selectedModel,
+          selectedModel,
           messages: Array.from(messagePayload.messages),
         }));
         setLatestMemory(undefined);
@@ -573,7 +623,7 @@ export function useChatSession(): UseChatSessionResult {
         setError(errorMessage(caught));
       }
     },
-    [openNewChat],
+    [openNewChat, state.models],
   );
 
   const openChat = useCallback(async (chat: Chat): Promise<void> => {
@@ -589,20 +639,21 @@ export function useChatSession(): UseChatSessionResult {
     setLatestMemory(undefined);
     try {
       const messagePayload = await fetchChatMessages(chat.id, chat.projectPath);
+      const selectedModel = resolveSelectedModelId(chat.selectedModel, state.models);
       setState((previous) => {
         const project = previous.projects.find((item) => item.path === chat.projectPath);
         return {
           ...previous,
           activeProject: project,
           activeChat: chat,
-          selectedModel: chat.selectedModel,
+          selectedModel,
           messages: Array.from(messagePayload.messages),
         };
       });
     } catch (caught) {
       setError(errorMessage(caught));
     }
-  }, []);
+  }, [state.models]);
 
   const addProject = useCallback(
     async (path: string): Promise<void> => {
@@ -773,7 +824,7 @@ export function useChatSession(): UseChatSessionResult {
     const content = draft.trim();
     const chat = state.activeChat;
     const project = state.activeProject;
-    const modelId = state.selectedModel;
+    const modelId = resolveSelectedModelId(state.selectedModel, state.models);
     // AC #1: block submission when no eligible model is configured.
     if (
       content.length === 0 ||
@@ -840,6 +891,7 @@ export function useChatSession(): UseChatSessionResult {
     state.activeChat,
     state.activeProject,
     state.selectedModel,
+    state.models,
     sendGrounded,
     sendUngrounded,
     clearPendingAttachments,
@@ -960,7 +1012,7 @@ export function useChatSession(): UseChatSessionResult {
     activeProject: state.activeProject,
     activeChat: state.activeChat,
     selectedModel: state.selectedModel,
-    noEligibleModels: !loading && state.selectedModel === undefined,
+    noEligibleModels: !loading && resolveSelectedModelId(state.selectedModel, state.models) === undefined,
     draft,
     loading,
     sending,

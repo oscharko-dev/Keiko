@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ModelCapability } from "@/lib/types";
 import { isAgentWorkflowModel } from "./NewWindowDialog";
+import { WIN_TYPES } from "../windows/WindowsRegistry";
 
 function model(patch: Partial<ModelCapability>): ModelCapability {
   return {
@@ -36,5 +37,11 @@ describe("isAgentWorkflowModel", () => {
     expect(isAgentWorkflowModel(model({ id: "example-vision-model", kind: "ocr-vision" }))).toBe(
       false,
     );
+  });
+});
+
+describe("chat window config", () => {
+  it("does not expose a dead model field in the new-window dialog", () => {
+    expect(WIN_TYPES.chat.config?.some((field) => field.key === "model")).toBe(false);
   });
 });

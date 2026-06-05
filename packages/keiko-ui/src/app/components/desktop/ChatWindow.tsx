@@ -195,6 +195,7 @@ function ComposerBar({
   const selectTitle = noEligibleModels
     ? "No conversation-eligible model is configured — connect a gateway in Settings"
     : "Model";
+  const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
 
   return (
     <div className="cmp-bar">
@@ -210,18 +211,23 @@ function ComposerBar({
         <Icons.cube size={13} style={{ color: "var(--accent)" }} />
         <select
           className="cmp-model-select"
-          value={loading ? "" : (selectedModel ?? "")}
+          value={selectValue}
           aria-label="Model"
           aria-disabled={noEligibleModels || loading ? "true" : undefined}
           aria-describedby={selectDescribedBy}
           title={selectTitle}
-          disabled={noEligibleModels || loading}
-          onChange={(event) => setSelectedModel(event.target.value)}
+          disabled={loading}
+          onChange={(event) => {
+            if (noEligibleModels || loading) return;
+            setSelectedModel(event.target.value);
+          }}
         >
           {loading ? (
             <option value="" disabled>
               Loading models…
             </option>
+          ) : noEligibleModels ? (
+            <option value="">No conversation-eligible model</option>
           ) : (
             modelList(models).map((model) => (
               <option key={model.id} value={model.id}>

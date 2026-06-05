@@ -11,7 +11,7 @@ import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { Footer } from "./Footer";
 import type { ChatSessionApi } from "./hooks/useChatSession";
-import { pickChatModelId } from "./hooks/useChatSession";
+import { pickChatModelId, resolveSelectedModelId } from "./hooks/useChatSession";
 import { chooseDefaultModel } from "./modals/NewWindowDialog";
 import { isConversationEligibleModel } from "@/lib/types";
 import type { Chat, ModelCapability } from "@/lib/types";
@@ -131,6 +131,22 @@ describe("pickChatModelId (AC #1, AC #4)", () => {
   it("returns the first model id, never a hard-coded placeholder", () => {
     const models = [chatModel("provider-model-a"), chatModel("provider-model-b")];
     expect(pickChatModelId(models)).toBe("provider-model-a");
+  });
+});
+
+describe("resolveSelectedModelId", () => {
+  it("preserves the current model when it is still eligible", () => {
+    const models = [chatModel("provider-model-a"), chatModel("provider-model-b")];
+    expect(resolveSelectedModelId("provider-model-b", models)).toBe("provider-model-b");
+  });
+
+  it("falls back to the first eligible model when the persisted id is stale", () => {
+    const models = [chatModel("provider-model-a"), chatModel("provider-model-b")];
+    expect(resolveSelectedModelId("removed-model", models)).toBe("provider-model-a");
+  });
+
+  it("returns undefined when no eligible models remain", () => {
+    expect(resolveSelectedModelId("removed-model", [])).toBeUndefined();
   });
 });
 

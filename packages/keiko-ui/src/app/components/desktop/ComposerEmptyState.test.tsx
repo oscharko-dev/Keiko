@@ -148,7 +148,7 @@ describe("AC #1 — voice button removal", () => {
 // ── AC #2 — disabled controls explain what is missing ────────────────────────
 
 describe("AC #2 — disabled controls aria-describedby", () => {
-  it("disabled model select references the NoModelAlert id when noEligibleModels", () => {
+  it("no-model select remains focusable and references the NoModelAlert id", () => {
     renderWindow(
       makeSession({
         noEligibleModels: true,
@@ -157,6 +157,8 @@ describe("AC #2 — disabled controls aria-describedby", () => {
       }),
     );
     const select = screen.getByLabelText("Model");
+    expect(select).not.toHaveAttribute("disabled");
+    expect(select).toHaveAttribute("aria-disabled", "true");
     const describedById = select.getAttribute("aria-describedby");
     expect(describedById).toBeTruthy();
     // The referenced element must exist and contain the alert text.
