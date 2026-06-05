@@ -258,7 +258,14 @@ async function attemptOnce(
   attempt: number,
   rejectionReason: string | undefined,
 ): Promise<AttemptResult> {
-  const messages = buildBugPrompt(report, evidence, pack, workspace.testFramework, rejectionReason);
+  const messages = buildBugPrompt(
+    report,
+    evidence,
+    pack,
+    workspace.testFramework,
+    rejectionReason,
+    state.memoryPromptText,
+  );
   const content = await callModel(state, messages, attempt, pack.usedBytes);
   const candidates = parseBugModelOutputCandidates(content);
   state.emitter.emit({

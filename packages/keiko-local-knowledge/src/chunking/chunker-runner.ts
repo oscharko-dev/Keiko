@@ -20,13 +20,15 @@ import { chunkParsedUnit } from "./chunker.js";
 import {
   countChunksForDocument,
   deleteChunksForDocument,
+  hasStaleChunksForDocument,
   insertChunkRow,
+  selectDocumentSourceId,
   selectParsedUnitsForDocument,
   type ParsedUnitRow,
 } from "./chunker-persist.js";
 import type { KnowledgeStore } from "../store.js";
 import type { ChunkDocumentParams, ChunkDocumentResult, ChunkingOptions } from "./types.js";
-import { ChunkingError } from "./types.js";
+import { CHUNKING_STRATEGY_VERSION, ChunkingError } from "./types.js";
 
 // ─── Row → ParsedUnit reconstitution ──────────────────────────────────────────
 // The parsed_units table is the canonical write surface for #194. We re-hydrate the
@@ -194,12 +196,59 @@ function persistAllChunks(
         orderIndex,
         tokenCount: chunk.tokenCount,
         safeExcerptHash: chunk.safeExcerptHash,
+        chunkingStrategyVersion: CHUNKING_STRATEGY_VERSION,
       });
       chunkIds.push(id);
       orderIndex += 1;
     }
   }
   return chunkIds;
+}
+
+interface ChunkingPreflight {
+  readonly existingCount: number;
+  readonly staleChunks: boolean;
+}
+
+function loadChunkingPreflight(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): ChunkingPreflight {
+  const db = store._internal.db;
+  const existingCount = countChunksForDocument(db, capsuleId, documentId);
+  return {
+    existingCount,
+    staleChunks: existingCount > 0 && hasStaleChunksForDocument(db, capsuleId, documentId),
+  };
+}
+
+function assertDocumentSourceMatches(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+  sourceId: KnowledgeSourceId,
+): void {
+  const documentSourceId = selectDocumentSourceId(store._internal.db, capsuleId, documentId);
+  if (documentSourceId !== undefined && String(documentSourceId) !== String(sourceId)) {
+    throw new ChunkingError(
+      `chunkDocument sourceId ${String(sourceId)} does not match document ${String(documentId)} source ${String(documentSourceId)}`,
+    );
+  }
+}
+
+function shouldReuseExistingChunks(
+  preflight: ChunkingPreflight,
+  force: boolean | undefined,
+): boolean {
+  return preflight.existingCount > 0 && force !== true && !preflight.staleChunks;
+}
+
+function shouldDeleteExistingChunks(
+  preflight: ChunkingPreflight,
+  force: boolean | undefined,
+): boolean {
+  return (force === true || preflight.staleChunks) && preflight.existingCount > 0;
 }
 
 export function chunkDocument(
@@ -211,8 +260,9 @@ export function chunkDocument(
   throwIfAborted(signal);
 
   const db = store._internal.db;
-  const existingCount = countChunksForDocument(db, capsuleId, documentId);
-  if (existingCount > 0 && force !== true) {
+  const preflight = loadChunkingPreflight(store, capsuleId, documentId);
+  assertDocumentSourceMatches(store, capsuleId, documentId, sourceId);
+  if (shouldReuseExistingChunks(preflight, force)) {
     return { capsuleId, documentId, chunkIds: [], skippedExisting: true };
   }
 
@@ -223,7 +273,7 @@ export function chunkDocument(
 
   db.exec("BEGIN");
   try {
-    if (force === true && existingCount > 0) {
+    if (shouldDeleteExistingChunks(preflight, force)) {
       deleteChunksForDocument(db, capsuleId, documentId);
     }
     const ctx: PersistContext = { capsuleId, sourceId, documentId, sourceText };

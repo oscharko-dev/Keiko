@@ -1,0 +1,56 @@
+[
+  {
+    "id": "user-prefs-basic",
+    "description": "A handful of user-scope preferences. Each one is short, public-sensitivity, and explicit-user-instruction sourced. Used by accurate-retrieval to assert the matching preference ranks above unrelated noise.",
+    "memories": [
+      {
+        "id": "pref-dark-mode",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "preference",
+        "body": "always enable dark mode in new chats",
+        "tags": ["theme", "ui"],
+        "confidence": 0.92,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "pref-vitest-runner",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "preference",
+        "body": "use vitest rather than jest for new test files",
+        "tags": ["testing"],
+        "confidence": 0.95,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "pref-tabs-indent",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "preference",
+        "body": "indent yaml files with two spaces",
+        "tags": ["formatting"],
+        "confidence": 0.7,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "pref-unrelated-coffee",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "semantic-fact",
+        "body": "morning standup is at nine local time",
+        "tags": ["schedule"],
+        "confidence": 0.8,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    ]
+  }
+]

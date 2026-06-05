@@ -39,6 +39,24 @@ import {
   handleUpdateMessage,
 } from "./store-handlers.js";
 import { handleCreateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
+import {
+  handleListMemories,
+  handleMemoryReviewQueue,
+  handleGetMemory,
+  handleEditMemory,
+  handlePinMemory,
+  handleUnpinMemory,
+  handleArchiveMemory,
+  handleForgetMemory,
+  handleDeleteMemory,
+  handleCorrectMemory,
+  handleAcceptMemoryProposal,
+  handleRejectMemoryProposal,
+} from "./memory-handlers.js";
+import {
+  handleMemoryRetrieveContext,
+  handleMemoryCaptureFromConversation,
+} from "./memory-conv-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import {
@@ -157,6 +175,34 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/files/directories", handler: handleFilesDirectories },
   { method: "GET", pattern: "/api/files/tree", handler: handleFilesTree },
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
+  // Issue #211 — Memory Center governance routes (Epic #204).
+  { method: "GET", pattern: "/api/memory", handler: handleListMemories },
+  { method: "GET", pattern: "/api/memory/review-queue", handler: handleMemoryReviewQueue },
+  { method: "GET", pattern: "/api/memory/:id", handler: handleGetMemory },
+  { method: "PATCH", pattern: "/api/memory/:id", handler: handleEditMemory },
+  { method: "POST", pattern: "/api/memory/:id/pin", handler: handlePinMemory },
+  { method: "POST", pattern: "/api/memory/:id/unpin", handler: handleUnpinMemory },
+  { method: "POST", pattern: "/api/memory/:id/archive", handler: handleArchiveMemory },
+  { method: "POST", pattern: "/api/memory/:id/forget", handler: handleForgetMemory },
+  { method: "DELETE", pattern: "/api/memory/:id", handler: handleDeleteMemory },
+  { method: "POST", pattern: "/api/memory/:id/correct", handler: handleCorrectMemory },
+  {
+    method: "POST",
+    pattern: "/api/memory/proposals/:id/accept",
+    handler: handleAcceptMemoryProposal,
+  },
+  {
+    method: "POST",
+    pattern: "/api/memory/proposals/:id/reject",
+    handler: handleRejectMemoryProposal,
+  },
+  // Issue #212 — Conversation Center memory wiring.
+  { method: "POST", pattern: "/api/memory/context", handler: handleMemoryRetrieveContext },
+  {
+    method: "POST",
+    pattern: "/api/memory/capture-from-conversation",
+    handler: handleMemoryCaptureFromConversation,
+  },
   // ADR-0017 — browser tool (BYO Chrome over CDP).
   { method: "GET", pattern: "/api/browser/status", handler: handleBrowserStatus },
   { method: "POST", pattern: "/api/browser/sessions", handler: handleCreateBrowserSession },

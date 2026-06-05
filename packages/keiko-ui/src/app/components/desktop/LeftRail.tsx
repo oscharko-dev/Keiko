@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { Icons, type IconName } from "./Icons";
 import type { Theme } from "./hooks/useTheme";
 
@@ -99,6 +100,17 @@ export function LeftRail({
             onClick={() => onTool(tool.id)}
           />
         ))}
+        {/* Issue #211 — Memory Center is a page route, not a window tool */}
+        <Link
+          href="/memory"
+          className="rail-btn"
+          data-active="false"
+          data-side="left"
+          aria-label="Memory Center"
+          title="Memory Center"
+        >
+          <Icons.pin size={19} />
+        </Link>
       </div>
       <div className="rail-div" />
       <button

@@ -30,6 +30,9 @@ import { createRunRegistry } from "./runs.js";
 import { createNodeUiStore, resolveUiDbPath, type UiStore } from "./store/index.js";
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
 import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
+import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { createBffMemoryVault } from "./memory-handlers.js";
+import { createMemoryAuditHandler } from "./memory-audit-handler.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -77,6 +80,9 @@ export interface UiHandlerDeps {
   // ADR-0017 — browser tool session manager (BYO Chrome over CDP). Optional so existing tests
   // that do not exercise /api/browser/* keep their fixtures unchanged.
   readonly browser?: BrowserSessionManager | undefined;
+  // Issue #211 — Memory Center vault. Optional so legacy tests that do not exercise /api/memory/*
+  // keep their fixtures unchanged. Production wiring creates one at buildUiHandlerDeps time.
+  readonly memoryVault?: MemoryVaultStore | undefined;
   // Runtime gateway config supports first-run UI onboarding. It starts from the CLI/env/local config
   // and can be updated after a successful credential test without restarting the loopback server.
   readonly gatewayConfig?: RuntimeGatewayConfig | undefined;
@@ -348,5 +354,12 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
       evidenceStore,
       redactor: liveRedactor,
     }),
+    memoryVault: createBffMemoryVault(
+      redactString,
+      // #214 — wire every successful vault mutation into the audit ledger. The handler
+      // shares the same redactString closure as the live-payload redactor so audit
+      // summaries inherit the same secret-shape scrubbing as wire traffic.
+      createMemoryAuditHandler({ evidenceStore, redactString }),
+    ),
   };
 }

@@ -5,9 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DocumentId, KnowledgeCapsuleId, ParsedUnit } from "@oscharko-dev/keiko-contracts";
 
+import { addSourceToCapsule } from "../source-lifecycle.js";
+import { sampleSourceInput } from "../_support.js";
 import { freshStore } from "../_support.js";
 import { chunkDocument } from "./chunker-runner.js";
-import { countChunksForDocument } from "./chunker-persist.js";
+import { countChunksForDocument, hasStaleChunksForDocument } from "./chunker-persist.js";
 import { seedCapsuleSourceAndDocument, seedParsedUnit, type SeededFixture } from "./_support.js";
 import type { KnowledgeStore } from "../store.js";
 
@@ -191,6 +193,54 @@ describe("chunkDocument", () => {
     ).toBe(2);
   });
 
+  it("re-chunks legacy rows whose chunking_strategy_version is missing", () => {
+    const text = "Hello world.";
+    seedParsedUnit(
+      fixture.store,
+      fixture.seeded.capsuleId,
+      "u-1",
+      pageUnit(0, text.length, fixture.seeded.documentId),
+    );
+    const first = chunkDocument(fixture.store, {
+      capsuleId: fixture.seeded.capsuleId,
+      sourceId: fixture.seeded.sourceId,
+      documentId: fixture.seeded.documentId,
+      sourceText: text,
+    });
+    expect(first.chunkIds).toHaveLength(1);
+
+    fixture.store._internal.db
+      .prepare(
+        "UPDATE chunks SET chunking_strategy_version = NULL WHERE capsule_id = :c AND document_id = :d",
+      )
+      .run({ c: fixture.seeded.capsuleId, d: fixture.seeded.documentId });
+    expect(
+      hasStaleChunksForDocument(
+        fixture.store._internal.db,
+        fixture.seeded.capsuleId,
+        fixture.seeded.documentId,
+      ),
+    ).toBe(true);
+
+    const second = chunkDocument(fixture.store, {
+      capsuleId: fixture.seeded.capsuleId,
+      sourceId: fixture.seeded.sourceId,
+      documentId: fixture.seeded.documentId,
+      sourceText: text,
+    });
+    expect(second.skippedExisting).toBe(false);
+    expect(second.chunkIds).toHaveLength(1);
+
+    const row = fixture.store._internal.db
+      .prepare(
+        "SELECT chunking_strategy_version FROM chunks WHERE capsule_id = :c AND document_id = :d",
+      )
+      .get({ c: fixture.seeded.capsuleId, d: fixture.seeded.documentId }) as {
+      readonly chunking_strategy_version: string | null;
+    };
+    expect(row.chunking_strategy_version).toBe("issue-195-v1");
+  });
+
   it("rolls back the transaction when AbortSignal aborts mid-document", () => {
     // This test must catch a *partial* persist: insert the first unit's chunks, THEN
     // abort, and assert zero rows survive. The transaction rollback is the only thing
@@ -273,6 +323,24 @@ describe("chunkDocument", () => {
         fixture.seeded.documentId,
       ),
     ).toBe(0);
+  });
+
+  it("fails closed when the caller passes a sourceId that does not own the document", () => {
+    addSourceToCapsule(fixture.store, fixture.seeded.capsuleId, sampleSourceInput("src-2"));
+    seedParsedUnit(
+      fixture.store,
+      fixture.seeded.capsuleId,
+      "u-1",
+      pageUnit(0, 5, fixture.seeded.documentId),
+    );
+    expect(() =>
+      chunkDocument(fixture.store, {
+        capsuleId: fixture.seeded.capsuleId,
+        sourceId: "src-2" as never,
+        documentId: fixture.seeded.documentId,
+        sourceText: "hello",
+      }),
+    ).toThrow(/sourceId .* does not match document/);
   });
 
   it("isolates failures to one document — capsule-scoped capsuleId mismatch returns empty", () => {

@@ -237,6 +237,184 @@ module.exports = {
       },
     },
     {
+      name: "adr-0019-direction-3f-memory-vault-only-contracts-security",
+      comment:
+        "ADR-0019 direction rule 3 (memory-vault strict variant): keiko-memory-vault may " +
+        "depend only on keiko-contracts and keiko-security. The dependency on " +
+        "keiko-security carries the redaction primitive that the storage boundary applies " +
+        "before persisting body/tags/free-text fields (defence-in-depth before the " +
+        "capture-policy gate in #207). The layer does NOT depend on keiko-workspace " +
+        "because the memory vault owns its own DB file path resolver (KEIKO_MEMORY_DIR " +
+        "ladder + absolute/non-symlink/outside-cwd guards) and never touches workspace " +
+        "files. Added at error severity by issue #206 because the memory-vault package " +
+        "physically exists. Also fires on the negative-test fixture under " +
+        "tests/architecture/fixtures/memory-vault/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs. The to.path forbids both non-allow-listed " +
+        "packages AND every sibling src/ shim domain (gateway|workspace|tools|harness|" +
+        "workflows|audit|ui|verification|evaluations|cli) so a future deep-import is " +
+        "caught (boundary-weakening gap pattern from issues #160 and #165). pathNot only " +
+        "filters self-references; it must NOT silently exclude sibling-but-still-in-src/ " +
+        "domains (memory lesson from issues #160 and #162).",
+      severity: "error",
+      from: {
+        path: "^(packages/keiko-memory-vault/src/|" + "tests/architecture/fixtures/memory-vault/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-vault)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-vault)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|memory-vault)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+        pathNot: "^packages/keiko-memory-vault/src/",
+      },
+    },
+    {
+      name: "adr-0019-direction-3g-memory-capture-only-contracts-security",
+      comment:
+        "ADR-0019 direction rule 3 (memory-capture strict variant): keiko-memory-capture may " +
+        "depend only on keiko-contracts and keiko-security. The dependency on keiko-security " +
+        "carries the redact() primitive used to harden rejection paths and to avoid surfacing " +
+        "matched secret substrings in errors (defence-in-depth on top of the validator's " +
+        "looksLikeSecretShape audit-summary gate). The layer does NOT depend on keiko-memory-vault: " +
+        "capture produces MemoryProposal / MemoryUpdate / MemoryForget / MemorySupersession " +
+        "envelopes; persistence is a separate downstream step orchestrated by the UI and workflow " +
+        "layers. Added at error severity by issue #207 because the memory-capture package " +
+        "physically exists. Also fires on the negative-test fixture under " +
+        "tests/architecture/fixtures/memory-capture/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs. The to.path forbids both non-allow-listed packages " +
+        "AND every sibling src/ shim domain (gateway|workspace|tools|harness|workflows|audit|" +
+        "ui|verification|evaluations|cli) so a future deep-import is caught (boundary-weakening " +
+        "gap pattern from issues #160 and #165). pathNot only filters self-references; it must " +
+        "NOT silently exclude sibling-but-still-in-src/ domains (memory lesson from issues #160 " +
+        "and #162).",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-memory-capture/src/|" + "tests/architecture/fixtures/memory-capture/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-capture)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-capture)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|memory-capture)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+        pathNot: "^packages/keiko-memory-capture/src/",
+      },
+    },
+    {
+      name: "adr-0019-direction-3h-memory-consolidation-only-contracts-security",
+      comment:
+        "ADR-0019 direction rule 3 (memory-consolidation strict variant): " +
+        "keiko-memory-consolidation may depend only on keiko-contracts and keiko-security. " +
+        "The dependency on keiko-security is reserved for the redact() primitive that a " +
+        "future model-assisted summarisation pass will apply before persisting derived " +
+        "summaries (defence-in-depth on top of the capture-policy gate in #207); v1 does " +
+        "not invoke it. The layer does NOT depend on keiko-memory-vault: consolidation " +
+        "takes a caller-fetched MemoryRecord array and returns ConsolidationResult; " +
+        "persistence is the caller's responsibility. The layer does NOT depend on " +
+        "keiko-model-gateway: model-assisted consolidation lands via a port-only seam on " +
+        "ConsolidationOptions.summaryGenerator that v1 never invokes; the actual wiring " +
+        "lands in a follow-up issue. Added at error severity by issue #208 because the " +
+        "memory-consolidation package physically exists. Also fires on the negative-test " +
+        "fixture under tests/architecture/fixtures/memory-consolidation/ so the gate can " +
+        "be proven live by scripts/arch-check-negative.mjs. The to.path forbids both " +
+        "non-allow-listed packages AND every sibling src/ shim domain (gateway|workspace|" +
+        "tools|harness|workflows|audit|ui|verification|evaluations|cli) so a future deep-" +
+        "import is caught (boundary-weakening gap pattern from issues #160 and #165). " +
+        "pathNot only filters self-references; it must NOT silently exclude sibling-but-" +
+        "still-in-src/ domains (memory lesson from issues #160 and #162).",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-memory-consolidation/src/|" +
+          "tests/architecture/fixtures/memory-consolidation/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-consolidation)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-consolidation)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|memory-consolidation)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+        pathNot: "^packages/keiko-memory-consolidation/src/",
+      },
+    },
+    {
+      name: "adr-0019-direction-3i-memory-governance-only-contracts-security",
+      comment:
+        "ADR-0019 direction rule 3 (memory-governance strict variant): " +
+        "keiko-memory-governance may depend only on keiko-contracts and keiko-security. " +
+        "The dependency on keiko-security is reserved for the redact() primitive that " +
+        "downstream callers may apply when surfacing governance-error messages over a wire " +
+        "boundary (defence-in-depth on top of the contracts validators); v1 does not " +
+        "invoke it. The layer does NOT depend on keiko-memory-vault: governance takes " +
+        "caller-fetched MemoryRecord values and returns MemoryProposal / MemorySupersession / " +
+        "MemoryUpdate / MemoryForget / MemoryPin / MemoryUnpin / MemoryArchive envelopes plus " +
+        "StatusTransition tuples; persistence is the caller's responsibility (vault #206, " +
+        "audit #214). The layer does NOT depend on keiko-memory-capture or " +
+        "keiko-memory-consolidation: those are sibling envelope-producers; cross-imports " +
+        "would invert the dependency direction. Added at error severity by issue #209 " +
+        "because the memory-governance package physically exists. Also fires on the " +
+        "negative-test fixture under tests/architecture/fixtures/memory-governance/ so the " +
+        "gate can be proven live by scripts/arch-check-negative.mjs. The to.path forbids " +
+        "both non-allow-listed packages AND every sibling src/ shim domain (gateway|" +
+        "workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli) so a " +
+        "future deep-import is caught (boundary-weakening gap pattern from issues #160 and " +
+        "#165). pathNot only filters self-references; it must NOT silently exclude " +
+        "sibling-but-still-in-src/ domains (memory lesson from issues #160 and #162).",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-memory-governance/src/|" +
+          "tests/architecture/fixtures/memory-governance/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-governance)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-governance)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|memory-governance)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+        pathNot: "^packages/keiko-memory-governance/src/",
+      },
+    },
+    {
+      name: "adr-0019-direction-3j-memory-retrieval-only-contracts-security",
+      comment:
+        "ADR-0019 direction rule 3 (memory-retrieval strict variant): " +
+        "keiko-memory-retrieval may depend only on keiko-contracts and keiko-security. " +
+        "The dependency on keiko-security is reserved for the redact() primitive that " +
+        "downstream callers may apply when surfacing retrieval-error messages over a wire " +
+        "boundary; v1 does not invoke it. The layer does NOT depend on keiko-memory-vault: " +
+        "callers inject a MemoryQueryPort so the vault stays behind a seam and this package " +
+        "stays pure. The layer does NOT depend on keiko-memory-governance either: the " +
+        "suppression check is duplicated inline (synced with governance's suppression.ts) " +
+        "to keep the dep graph minimal — a future refactor may extract a shared helper. " +
+        "The layer does NOT depend on keiko-memory-capture or keiko-memory-consolidation: " +
+        "those are sibling envelope-producers; cross-imports would invert the dependency " +
+        "direction. Added at error severity by issue #210 because the memory-retrieval " +
+        "package physically exists. Also fires on the negative-test fixture under " +
+        "tests/architecture/fixtures/memory-retrieval/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs. The to.path forbids both non-allow-listed " +
+        "packages AND every sibling src/ shim domain (gateway|workspace|tools|harness|" +
+        "workflows|audit|ui|verification|evaluations|cli) so a future deep-import is " +
+        "caught (boundary-weakening gap pattern from issues #160 and #165). pathNot only " +
+        "filters self-references; it must NOT silently exclude sibling-but-still-in-src/ " +
+        "domains (memory lesson from issues #160 and #162).",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-memory-retrieval/src/|" +
+          "tests/architecture/fixtures/memory-retrieval/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-retrieval)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-retrieval)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|memory-retrieval)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+        pathNot: "^packages/keiko-memory-retrieval/src/",
+      },
+    },
+    {
       name: "adr-0019-direction-4-harness-scope",
       comment:
         "ADR-0019 direction rule 4 (base safety net): keiko-harness may depend only on " +
@@ -343,7 +521,8 @@ module.exports = {
       comment:
         "ADR-0019 direction rule 6 (server strict variant): keiko-server and the src/ui/ " +
         "shim may depend on keiko-contracts, keiko-security, keiko-model-gateway, " +
-        "keiko-workspace, keiko-tools, keiko-harness, keiko-workflows, and keiko-evidence " +
+        "keiko-workspace, keiko-tools, keiko-harness, keiko-workflows, keiko-evidence, " +
+        "keiko-memory-vault, keiko-memory-governance, and keiko-memory-retrieval " +
         "only, and must reach those allowed dependencies through their public package " +
         "surfaces (`@oscharko-dev/keiko-<name>`) — NOT by deep-importing the legacy " +
         "`src/<name>/` shim layers. The to.path therefore forbids both the non-allow-listed " +
@@ -360,16 +539,18 @@ module.exports = {
         "intentionally NOT in the forbidden list: the server depends on the verification " +
         "orchestrator (run-engine.ts via the apply-mode verification gate) and " +
         "verification is not yet a physical package — the boundary will be re-evaluated " +
-        "when verification is extracted in a future issue.",
+        "when verification is extracted in a future issue. memory-vault, memory-governance, " +
+        "and memory-retrieval added by issue #211 (Memory Center UI BFF routes). " +
+        "memory-capture added by issue #212 (Conversation Center in-chat capture BFF route).",
       severity: "error",
       from: {
         path: "^(packages/keiko-server/src/|" + "src/ui/|" + "tests/architecture/fixtures/server/)",
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|server)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|server)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|server)|" +
           "src/(cli|evaluations|gateway|workspace|tools|harness|workflows|audit))",
         pathNot: "^src/ui/",
       },

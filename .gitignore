@@ -155,3 +155,4 @@ packages/keiko-ui/next-env.d.ts
 /only-for-internal-use/
 /Only for Internal Use/
 ui/
+tests/memory-eval/scorecard.json

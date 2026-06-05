@@ -17,7 +17,7 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.7.0" as const;
+export const KEIKO_CONTRACTS_VERSION = "0.8.0" as const;
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -456,3 +456,118 @@ export {
   validateCapsuleRowShape,
   redactPathInDiagnostic,
 } from "./local-knowledge-schema-validation.js";
+
+// ─── Governed Enterprise Memory Vault (Issue #205 / Epic #204) ──────────────────
+// Pure contract surface for durable, scoped, governed memory: scopes, sensitivity,
+// status lifecycle, provenance, validity intervals, edges, operation envelopes, and
+// pure validators. Storage (#206), capture (#207), consolidation (#208), conflict and
+// forget (#209), retrieval (#210), Memory Center UI (#211), Conversation Center
+// integration (#212), workflow integration (#213), audit (#214), evaluation (#215),
+// and final verification (#216) all pin against `MEMORY_SCHEMA_VERSION` and the types
+// re-exported here. A breaking change to the contract introduces a NEW literal member
+// rather than mutating the existing "1" — the same evolution rule as
+// `CONNECTED_CONTEXT_SCHEMA_VERSION` and `LOCAL_KNOWLEDGE_SCHEMA_VERSION`.
+export type {
+  ConversationId as MemoryConversationId,
+  EvidenceManifestId as MemoryEvidenceManifestId,
+  MemoryAcceptance,
+  MemoryArchive,
+  MemoryAuditAction,
+  MemoryAuditActionKind,
+  MemoryAuditEvent,
+  MemoryAuditEventKind,
+  MemoryAuditInitiatorSurface,
+  MemoryAuditRecord,
+  MemoryAuditRecordId,
+  MemoryEdge,
+  MemoryEdgeId,
+  MemoryEdgeKind,
+  MemoryForget,
+  MemoryId,
+  MemoryModelIdentity,
+  MemoryPin,
+  MemoryProposal,
+  MemoryProposalId,
+  MemoryProvenance,
+  MemoryRecord,
+  MemoryRejection,
+  MemoryRetentionHint,
+  MemoryRetrievalRequest,
+  MemoryReviewerId,
+  MemoryScope,
+  MemoryScopeKind,
+  MemorySensitivity,
+  MemorySourceKind,
+  MemoryStatus,
+  MemoryStructuredPayload,
+  MemoryStructuredPayloadKind,
+  MemorySupersession,
+  MemoryType,
+  MemoryUnpin,
+  MemoryUpdate,
+  MemoryUpdateField,
+  MemoryValidation,
+  MemoryValidationFail,
+  MemoryValidationOk,
+  MemoryValidityInterval,
+  ProjectId as MemoryProjectId,
+  StaleModelMetadataInput,
+  StatusTransitionCheck,
+  UserId as MemoryUserId,
+  WorkflowDefinitionId as MemoryWorkflowDefinitionId,
+  WorkflowRunId as MemoryWorkflowRunId,
+  WorkspaceId as MemoryWorkspaceId,
+} from "./memory-barrel.js";
+export {
+  MEMORY_AUDIT_ACTION_KINDS,
+  MEMORY_AUDIT_EVENT_KINDS,
+  MEMORY_AUDIT_EVENT_SCHEMA_VERSION,
+  MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS,
+  MEMORY_AUDIT_INITIATOR_SURFACES,
+  MEMORY_EDGE_KINDS,
+  MEMORY_SCHEMA_VERSION,
+  MEMORY_SCOPE_KINDS,
+  MEMORY_SENSITIVITIES,
+  MEMORY_SOURCE_KINDS,
+  MEMORY_STATUSES,
+  MEMORY_STATUS_TRANSITIONS,
+  MEMORY_STRUCTURED_PAYLOAD_KINDS,
+  MEMORY_TYPES,
+  MEMORY_UPDATE_FIELDS,
+  assertNeverMemoryType,
+  checkStatusTransition,
+  hasStaleModelMetadata,
+  isMemoryEdge,
+  isMemoryRecord,
+  isScopeReachable,
+  looksLikeSecretShape,
+  validateMemoryAcceptance,
+  validateMemoryArchive,
+  validateMemoryAuditRecord,
+  validateMemoryEdge,
+  validateMemoryForget,
+  validateMemoryPin,
+  validateMemoryProposal,
+  validateMemoryProvenance,
+  validateMemoryRecord,
+  validateMemoryRejection,
+  validateMemoryRetrievalRequest,
+  validateMemoryScope,
+  validateMemoryStructuredPayload,
+  validateMemorySupersession,
+  validateMemoryUnpin,
+  validateMemoryUpdate,
+  validateMemoryValidityInterval,
+} from "./memory-barrel.js";
+
+// ─── Workflow memory port (Issue #213 / Epic #204) ──────────────────────────────
+// Optional read-only port that workflow packages compose with to inject scoped memory
+// context before model invocation and emit memory lifecycle events. Memory cannot grant
+// write/execution authority — existing tool gates remain the sole apply surface.
+export type {
+  MemoryOmittedEvent,
+  MemoryUsedEvent,
+  MemoryWorkflowContext,
+  MemoryWorkflowPort,
+  MemoryWriteCandidateEvent,
+} from "./memory-workflow-port.js";

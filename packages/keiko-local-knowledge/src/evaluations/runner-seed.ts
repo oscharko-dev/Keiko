@@ -121,6 +121,7 @@ function seedChunks(
       // 64-hex placeholder — schema requires a non-empty hash; eval never validates
       // content equivalence.
       safeExcerptHash: "b".repeat(64),
+      chunkingStrategyVersion: "issue-195-v1",
     });
     chunkUnitKinds.set(String(chunk.id), requirement);
     orderIndex += 1;
