@@ -1,0 +1,40 @@
+{
+  "_header": "synthetic — no customer data; safe to bundle",
+  "events": [
+    {
+      "eventSchemaVersion": 1,
+      "runId": "run-synthetic-01",
+      "sequence": 0,
+      "timestamp": "2026-06-05T00:00:00Z",
+      "payload": { "kind": "run:queued" }
+    },
+    {
+      "eventSchemaVersion": 1,
+      "runId": "run-synthetic-01",
+      "sequence": 1,
+      "timestamp": "2026-06-05T00:00:01Z",
+      "payload": { "kind": "run:started" }
+    },
+    {
+      "eventSchemaVersion": 1,
+      "runId": "run-synthetic-01",
+      "sequence": 2,
+      "timestamp": "2026-06-05T00:00:02Z",
+      "payload": { "kind": "stage:started", "stageName": "ingest" }
+    },
+    {
+      "eventSchemaVersion": 1,
+      "runId": "run-synthetic-01",
+      "sequence": 3,
+      "timestamp": "2026-06-05T00:00:03Z",
+      "payload": { "kind": "stage:completed", "stageName": "ingest" }
+    },
+    {
+      "eventSchemaVersion": 1,
+      "runId": "run-synthetic-01",
+      "sequence": 4,
+      "timestamp": "2026-06-05T00:00:04Z",
+      "payload": { "kind": "run:succeeded" }
+    }
+  ]
+}

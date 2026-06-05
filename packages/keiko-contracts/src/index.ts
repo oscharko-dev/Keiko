@@ -593,3 +593,14 @@ export type {
   ConversationBudgetPressure,
 } from "./conversation-budget.js";
 export { estimateConversationBudget } from "./conversation-budget.js";
+
+// ─── Quality Intelligence (Issue #277 / Epic #270) ─────────────────────────────
+// QI surface is re-exported under a single namespace because the QI vocabulary
+// (RunId, TestCaseId, finding kinds, etc.) collides with names already used by
+// gateway/workflow/audit modules above. Consumers reach the QI types via
+// `import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";` and then
+// `QualityIntelligence.QualityIntelligenceRunEvent`, or via the subpath barrel.
+// The schema version literal follows the same evolution rule as
+// LOCAL_KNOWLEDGE_SCHEMA_VERSION / MEMORY_SCHEMA_VERSION: a breaking change adds a
+// new literal member instead of mutating the existing one.
+export * as QualityIntelligence from "./qualityIntelligence/index.js";
