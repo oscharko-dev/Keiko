@@ -137,9 +137,28 @@ describe("chooseDefaultModel (AC #4)", () => {
 // AC #1 — ChatWindow renders role="alert" with "Settings" when noEligibleModels
 // ---------------------------------------------------------------------------
 
+// makeChat needed for #146: the no-model alert and send button only appear in
+// the composer footer, which requires activeChat to be defined.
+function makeChat(): ReturnType<typeof Object.assign> {
+  return {
+    id: "chat-1",
+    projectPath: "/proj",
+    title: "t",
+    selectedModel: "example-chat-model",
+    branchLabel: undefined,
+    status: undefined,
+    connectedScope: undefined,
+    createdAt: 1,
+    updatedAt: 2,
+  };
+}
+
 describe("ChatWindow no-eligible-models error (AC #1)", () => {
   it("renders a role=alert message containing 'Settings' when noEligibleModels is true", () => {
-    renderWindow(makeSession({ noEligibleModels: true, selectedModel: undefined }));
+    // activeChat required so the composer footer (containing the alert) renders (#146).
+    renderWindow(
+      makeSession({ noEligibleModels: true, selectedModel: undefined, activeChat: makeChat() }),
+    );
     const alert = screen.getByRole("alert");
     expect(alert).toBeInTheDocument();
     expect(alert.textContent).toMatch(/Settings/i);
@@ -165,18 +184,38 @@ describe("ChatWindow no-eligible-models error (AC #1)", () => {
 
 describe("ChatWindow send button aria-disabled (AC #1)", () => {
   it("send button has aria-disabled=true when noEligibleModels is true", () => {
-    renderWindow(makeSession({ noEligibleModels: true, selectedModel: undefined }));
+    // activeChat required so the composer footer (with send button) renders (#146).
+    renderWindow(
+      makeSession({ noEligibleModels: true, selectedModel: undefined, activeChat: makeChat() }),
+    );
     const sendBtn = screen.getByRole("button", { name: "Send message" });
     expect(sendBtn).toHaveAttribute("aria-disabled", "true");
   });
 
   it("send button does not have aria-disabled when a model is selected and ready", () => {
+    // activeChat + messages: composer footer only renders with activeChat (#146).
+    // Provide a message so we render the messages-log branch (always shows footer).
     renderWindow(
       makeSession({
         noEligibleModels: false,
         selectedModel: "real-model",
         models: [chatModel("real-model")],
         draft: "hello",
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m1",
+            chatId: "chat-1",
+            role: "user" as const,
+            content: "hello",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
       }),
     );
     const sendBtn = screen.getByRole("button", { name: "Send message" });

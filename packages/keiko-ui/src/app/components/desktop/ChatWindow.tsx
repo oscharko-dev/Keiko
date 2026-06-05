@@ -11,6 +11,7 @@ import type {
   ChatMessage,
   GroundedAnswer as GroundedAnswerWire,
   ModelCapability,
+  ProjectWithAvailability,
 } from "@/lib/types";
 
 interface ChatWindowProps {
@@ -18,11 +19,31 @@ interface ChatWindowProps {
   readonly linkedRoot?: string | null;
 }
 
-const SUGGESTIONS: readonly string[] = [
-  "Explain the architecture of this codebase",
-  "Find and fix a bug in the workspace store",
-  "Write tests for the window manager",
-];
+// AC #1 — voice is not yet implemented. Gate on a constant so that when the
+// capability flag arrives the removal is a one-line change, not a search.
+const VOICE_SUPPORTED = false;
+
+// Stable id for the no-model alert so aria-describedby chains can reference it.
+const NO_MODEL_ALERT_ID = "cmp-no-model-alert";
+
+// Stable id for the "type a message" send-button hint for aria-describedby.
+const SEND_HINT_ID = "cmp-send-hint";
+
+// Workspace-aware starter prompts for the empty state.
+function starterPrompts(activeProject: ProjectWithAvailability | undefined): readonly string[] {
+  if (activeProject !== undefined) {
+    return [
+      `Explain the architecture of ${activeProject.name}`,
+      `Find a bug in ${activeProject.name}`,
+      `Write tests for ${activeProject.name}`,
+    ];
+  }
+  return [
+    "Explain the architecture of this codebase",
+    "Find and fix a bug in the workspace store",
+    "Write tests for the window manager",
+  ];
+}
 
 function timeLabel(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -83,11 +104,23 @@ interface ComposerBarProps {
 }
 
 function ComposerBar({ session, ready }: ComposerBarProps): ReactNode {
-  const { models, selectedModel, setSelectedModel, noEligibleModels } = session;
+  const { models, selectedModel, setSelectedModel, noEligibleModels, loading } = session;
   // AC #1 / AC #4: when no eligible model is configured the send button must be
   // focusable (so screen-reader users discover the error) but must not submit.
   // Use aria-disabled rather than the HTML disabled attribute so focus is retained.
   const sendBlocked = noEligibleModels || !ready;
+
+  // AC #2: aria-describedby chains:
+  // - model select → NO_MODEL_ALERT_ID when noEligibleModels
+  // - send button  → NO_MODEL_ALERT_ID when noEligibleModels, else SEND_HINT_ID when !ready
+  const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
+  const sendDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : !ready ? SEND_HINT_ID : undefined;
+
+  // AC #2 / title for disabled model select.
+  const selectTitle = noEligibleModels
+    ? "No conversation-eligible model is configured — connect a gateway in Settings"
+    : "Model";
+
   return (
     <div className="cmp-bar">
       <button type="button" className="cmp-add" aria-label="Attach (coming soon)" title="Attach">
@@ -98,31 +131,59 @@ function ComposerBar({ session, ready }: ComposerBarProps): ReactNode {
         <Icons.chevron size={12} />
       </button>
       <span className="spacer" />
-      <label className="cmp-model mono" title="Model">
+      {/* AC #3: loading state — show a "Loading models…" option while bootstrapping */}
+      <label className="cmp-model mono" title={selectTitle}>
         <Icons.cube size={13} style={{ color: "var(--accent)" }} />
         <select
           className="cmp-model-select"
-          value={selectedModel ?? ""}
+          value={loading ? "" : (selectedModel ?? "")}
           aria-label="Model"
-          disabled={noEligibleModels}
+          aria-disabled={noEligibleModels || loading ? "true" : undefined}
+          aria-describedby={selectDescribedBy}
+          title={selectTitle}
+          disabled={noEligibleModels || loading}
           onChange={(event) => setSelectedModel(event.target.value)}
         >
-          {modelList(models).map((model) => (
-            <option key={model.id} value={model.id}>
-              {model.id}
+          {loading ? (
+            <option value="" disabled>
+              Loading models…
             </option>
-          ))}
+          ) : (
+            modelList(models).map((model) => (
+              <option key={model.id} value={model.id}>
+                {model.id}
+              </option>
+            ))
+          )}
         </select>
         <Icons.chevron size={12} />
       </label>
-      <button type="button" className="cmp-icon" aria-label="Voice (coming soon)" title="Voice">
-        <Icons.mic size={16} />
-      </button>
+      {/* AC #1: voice button omitted — VOICE_SUPPORTED is false.
+          When the capability flag arrives, render this block only when VOICE_SUPPORTED is true. */}
+      {VOICE_SUPPORTED ? (
+        <button type="button" className="cmp-icon" aria-label="Voice" title="Voice">
+          <Icons.mic size={16} />
+        </button>
+      ) : null}
+      {/* AC #2: visually-hidden hint for screen readers when send is blocked by empty draft */}
+      {sendDescribedBy === SEND_HINT_ID ? (
+        <span id={SEND_HINT_ID} className="sr-only">
+          Type a message to send
+        </span>
+      ) : null}
       <button
         type={noEligibleModels ? "button" : "submit"}
         className="cmp-send"
         data-on={!sendBlocked}
         aria-disabled={sendBlocked}
+        aria-describedby={sendDescribedBy}
+        title={
+          noEligibleModels
+            ? "No conversation-eligible model is configured — connect a gateway in Settings"
+            : !ready
+              ? "Type a message to send"
+              : "Send message"
+        }
         disabled={!noEligibleModels && !ready}
         aria-label="Send message"
       >
@@ -135,10 +196,23 @@ function ComposerBar({ session, ready }: ComposerBarProps): ReactNode {
 // AC #1: rendered when no conversation-eligible model is configured. Uses
 // role="alert" so screen readers announce immediately on mount. Uses gw-error
 // CSS class (var(--fg) text) for WCAG AA contrast compliance.
+// Stable id enables aria-describedby wiring from disabled controls (AC #2).
 function NoModelAlert(): ReactNode {
   return (
-    <div role="alert" className="gw-error cmp-no-model">
+    <div id={NO_MODEL_ALERT_ID} role="alert" className="gw-error cmp-no-model">
       No conversation-eligible model is configured. Connect a gateway in Settings to enable chat.
+    </div>
+  );
+}
+
+// AC #3: rendered while session.loading is true. role="status" (polite) so
+// screen-reader users hear the state without interruption. No fake progress
+// percentage — engineering note forbids it.
+function LoadingStatus(): ReactNode {
+  return (
+    <div role="status" className="cmp-loading-status">
+      <span className="cmp-loading-dot" aria-hidden="true" />
+      Connecting to your gateway…
     </div>
   );
 }
@@ -164,6 +238,56 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
         disabled={loading || sending}
       />
       <ComposerBar session={session} ready={ready} />
+    </div>
+  );
+}
+
+// Deliverable: polished empty state when no messages are present and an active
+// chat exists. Shows a welcoming headline, project-aware subhead, and 2–3
+// starter-prompt buttons that prefill the composer draft.
+interface EmptyComposerStateProps {
+  readonly session: ChatSessionApi;
+  readonly noEligibleModels: boolean;
+}
+
+function EmptyComposerState({ session, noEligibleModels }: EmptyComposerStateProps): ReactNode {
+  const { activeProject, setDraft } = session;
+  const prompts = starterPrompts(activeProject);
+  return (
+    <div className="chatw-empty">
+      <h2 className="chatw-empty-headline">Start a Keiko conversation</h2>
+      <p className="chatw-empty-sub">
+        {activeProject !== undefined
+          ? `Working in ${activeProject.name}. What would you like to explore?`
+          : "Pick a project from the sidebar to scope your workspace, or ask anything below."}
+      </p>
+      {/* Starter prompts are only useful when a model is available */}
+      {!noEligibleModels ? (
+        <div className="chatw-empty-prompts" aria-label="Starter prompts">
+          {prompts.map((prompt) => (
+            <button type="button" key={prompt} className="suggest" onClick={() => setDraft(prompt)}>
+              <Icons.spark size={12} style={{ color: "var(--accent)" }} />
+              {prompt}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// Rendered when no chat has been selected yet (activeChat is undefined).
+// Instructs the user to pick or start a chat from the project sidebar.
+function NoChatState(): ReactNode {
+  return (
+    <div className="chatw-empty-no-chat">
+      <div className="chatw-empty-no-chat-icon" aria-hidden="true">
+        <Icons.spark size={20} />
+      </div>
+      <p className="chatw-empty-no-chat-label">Pick or start a chat</p>
+      <p className="chatw-empty-no-chat-hint">
+        Select a conversation from the project sidebar, or create a new one to get started.
+      </p>
     </div>
   );
 }
@@ -208,7 +332,7 @@ function ChatHero({
         </button>
       </div>
       <div className="cmp-suggest">
-        {SUGGESTIONS.map((prompt) => (
+        {starterPrompts(activeProject).map((prompt) => (
           <button type="button" key={prompt} className="suggest" onClick={() => setDraft(prompt)}>
             <Icons.spark size={12} style={{ color: "var(--accent)" }} /> {prompt}
           </button>
@@ -361,9 +485,19 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
           <NoModelAlert />
         </div>
       ) : null}
+      {/* AC #3: loading status — polite live region, non-technical wording */}
+      {loading ? (
+        <div className="chatw-foot">
+          <LoadingStatus />
+        </div>
+      ) : null}
       <div className="chatw-scroll" ref={scrollRef} aria-live="polite">
         {visible.length === 0 ? (
-          <ChatHero session={session} ready={ready} />
+          activeChat !== undefined ? (
+            <EmptyComposerState session={session} noEligibleModels={noEligibleModels} />
+          ) : (
+            <NoChatState />
+          )
         ) : (
           <div className="chatw-log">
             {visible.map((message) => (
@@ -412,7 +546,32 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
         </div>
       ) : null}
 
-      {visible.length === 0 && error !== undefined ? (
+      {/* Composer for empty state with active chat — the EmptyComposerState shows the
+          welcoming content above, and the form wraps the input below. */}
+      {visible.length === 0 && activeChat !== undefined ? (
+        <div className="chatw-foot">
+          <form
+            className="composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendMessage();
+            }}
+          >
+            <ComposerCore
+              session={session}
+              ready={ready}
+              placeholder={loading ? "Connecting to your gateway…" : "Ask Keiko about your code…"}
+            />
+            {error !== undefined ? (
+              <div role="alert" className="cmp-err">
+                {error}
+              </div>
+            ) : null}
+          </form>
+        </div>
+      ) : null}
+
+      {visible.length === 0 && error !== undefined && activeChat === undefined ? (
         <div className="chatw-foot">
           <div role="alert" className="cmp-err">
             {error}
