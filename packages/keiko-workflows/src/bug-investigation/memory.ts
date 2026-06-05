@@ -67,20 +67,24 @@ export async function acquireMemoryContext(
   if (port === undefined) {
     return undefined;
   }
-  const context = await port.getContextForWorkflow(
-    [BUG_INVESTIGATION_SCOPE],
-    memoryQueryText(report),
-    DEFAULT_MEMORY_TOKEN_BUDGET,
-  );
-  if (context.text.length === 0 || context.includedMemoryIds.length === 0) {
+  try {
+    const context = await port.getContextForWorkflow(
+      [BUG_INVESTIGATION_SCOPE],
+      memoryQueryText(report),
+      DEFAULT_MEMORY_TOKEN_BUDGET,
+    );
+    if (context.text.length === 0 || context.includedMemoryIds.length === 0) {
+      return undefined;
+    }
+    port.onMemoryUsed?.({
+      memoryIds: context.includedMemoryIds,
+      scopes: [BUG_INVESTIGATION_SCOPE],
+      reason: "bug-investigation:pre-prompt",
+    });
+    return context;
+  } catch {
     return undefined;
   }
-  port.onMemoryUsed?.({
-    memoryIds: context.includedMemoryIds,
-    scopes: [BUG_INVESTIGATION_SCOPE],
-    reason: "bug-investigation:pre-prompt",
-  });
-  return context;
 }
 
 // Compose the one-line proposal summary. PURE: no IO, no clock, no randomness.
@@ -111,5 +115,9 @@ export function emitMemoryWriteCandidate(
     scope: BUG_INVESTIGATION_SCOPE,
     source: "workflow-success",
   };
-  port.onMemoryWriteCandidate(event);
+  try {
+    port.onMemoryWriteCandidate(event);
+  } catch {
+    // defensive: callback exceptions must not propagate into runPipeline
+  }
 }
