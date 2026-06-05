@@ -142,6 +142,8 @@ export interface VectorRecord {
   readonly id: VectorId;
   readonly chunkId: ChunkId;
   readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: KnowledgeSourceId;
+  readonly documentId: DocumentId;
   readonly embeddingIdentity: EmbeddingModelIdentity;
   readonly vectorDimensions: number;
   // Opaque store identifier (e.g. SQLite rowid, vector-store handle). Validators do not

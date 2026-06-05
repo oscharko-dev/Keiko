@@ -461,6 +461,23 @@ describe("validateKnowledgeSourceScope", () => {
     ).toBe(false);
   });
 
+  it("rejects a files scope with absolute or out-of-root entries", () => {
+    expect(
+      validateKnowledgeSourceScope({
+        kind: "files",
+        rootPath: "knowledge",
+        files: ["/etc/passwd"],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateKnowledgeSourceScope({
+        kind: "files",
+        rootPath: "knowledge",
+        files: ["C:\\Users\\victim\\secret.txt"],
+      }).ok,
+    ).toBe(false);
+  });
+
   it("rejects globs with NUL bytes or empty strings", () => {
     expect(
       validateKnowledgeSourceScope({
@@ -489,6 +506,21 @@ describe("validateKnowledgeCapsule", () => {
 
   it("rejects empty displayName", () => {
     expect(validateKnowledgeCapsule({ ...happyCapsule(), displayName: "   " }).ok).toBe(false);
+  });
+
+  it("rejects browser-unsafe displayName values", () => {
+    expect(validateKnowledgeCapsule({ ...happyCapsule(), displayName: "safe\x00danger" }).ok).toBe(
+      false,
+    );
+    expect(validateKnowledgeCapsule({ ...happyCapsule(), displayName: "bell\x07" }).ok).toBe(
+      false,
+    );
+    expect(
+      validateKnowledgeCapsule({
+        ...happyCapsule(),
+        displayName: "x".repeat(4097),
+      }).ok,
+    ).toBe(false);
   });
 
   it("rejects negative createdAt and updatedAt", () => {
@@ -637,6 +669,47 @@ describe("validateConnectorGraphState", () => {
     expect(result.ok).toBe(false);
   });
 
+  it("rejects malformed node payloads on each node kind", () => {
+    expect(
+      validateConnectorGraphState({
+        ...happyGraph(),
+        nodes: [
+          {
+            kind: "files-window",
+            nodeId: "n-1",
+            scope: { kind: "folder", rootPath: "unsafe\x00path", recursive: true },
+          },
+          {
+            kind: "local-knowledge",
+            nodeId: "n-2",
+            target: { kind: "capsule", capsuleId: "" },
+          },
+          {
+            kind: "conversation-center",
+            nodeId: "n-3",
+            conversationId: "conv-1",
+            route: "",
+          },
+        ],
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("rejects an edge whose referenced kinds do not match the graph nodes", () => {
+    const graph = happyGraph();
+    const result = validateConnectorGraphState({
+      ...graph,
+      edges: [
+        {
+          from: { nodeId: "n-1", kind: "conversation-center" },
+          to: { nodeId: "n-2", kind: "files-window" },
+          createdAt: 1,
+        },
+      ],
+    });
+    expect(result.ok).toBe(false);
+  });
+
   it("rejects a graph whose schemaVersion is not '1'", () => {
     expect(validateConnectorGraphState({ ...happyGraph(), schemaVersion: "2" }).ok).toBe(false);
   });
@@ -698,11 +771,13 @@ describe("Foundry IQ lineage invariants", () => {
     expect(missingDoc.id).toBe(chk("ch-1"));
   });
 
-  it("VectorRecord requires chunkId and capsuleId", () => {
+  it("VectorRecord requires chunkId, capsuleId, sourceId, and documentId", () => {
     // @ts-expect-error — missing chunkId
     const missingChunk: VectorRecord = {
       id: vec("v-1"),
       capsuleId: cap("c-1"),
+      sourceId: src("s-1"),
+      documentId: doc("d-1"),
       embeddingIdentity: happyEmbeddingIdentity() as VectorRecord["embeddingIdentity"],
       vectorDimensions: 1536,
       storageReference: "row-1",
@@ -714,12 +789,40 @@ describe("Foundry IQ lineage invariants", () => {
     const missingCapsule: VectorRecord = {
       id: vec("v-2"),
       chunkId: chk("ch-1"),
+      sourceId: src("s-1"),
+      documentId: doc("d-1"),
       embeddingIdentity: happyEmbeddingIdentity() as VectorRecord["embeddingIdentity"],
       vectorDimensions: 1536,
       storageReference: "row-2",
       createdAt: 0,
     };
     expect(missingCapsule.id).toBe(vec("v-2"));
+
+    // @ts-expect-error — missing sourceId
+    const missingSource: VectorRecord = {
+      id: vec("v-3"),
+      chunkId: chk("ch-2"),
+      capsuleId: cap("c-1"),
+      documentId: doc("d-1"),
+      embeddingIdentity: happyEmbeddingIdentity() as VectorRecord["embeddingIdentity"],
+      vectorDimensions: 1536,
+      storageReference: "row-3",
+      createdAt: 0,
+    };
+    expect(missingSource.id).toBe(vec("v-3"));
+
+    // @ts-expect-error — missing documentId
+    const missingDocument: VectorRecord = {
+      id: vec("v-4"),
+      chunkId: chk("ch-3"),
+      capsuleId: cap("c-1"),
+      sourceId: src("s-1"),
+      embeddingIdentity: happyEmbeddingIdentity() as VectorRecord["embeddingIdentity"],
+      vectorDimensions: 1536,
+      storageReference: "row-4",
+      createdAt: 0,
+    };
+    expect(missingDocument.id).toBe(vec("v-4"));
   });
 
   it("CitationReference requires capsuleId, sourceId, documentId, and chunkId", () => {

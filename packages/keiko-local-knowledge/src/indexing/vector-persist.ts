@@ -143,6 +143,8 @@ export function composeVectorRecord(row: VectorInsertRow): VectorRecord {
     id: row.id,
     chunkId: row.chunkId,
     capsuleId: row.capsuleId,
+    sourceId: row.sourceId,
+    documentId: row.documentId,
     embeddingIdentity: row.identity,
     vectorDimensions: row.identity.vectorDimensions,
     storageReference: row.storageReference,
