@@ -1,0 +1,21 @@
+[
+  {
+    "id": "workflow-lessons-basic",
+    "description": "Workflow-scope procedural lessons captured from past workflow outcomes. Used by test-time-learning to seed a baseline scope, after which a fresh capture from a user message is added and observed on a second retrieval call.",
+    "memories": [
+      {
+        "id": "lesson-investigate-read-first",
+        "scope": { "kind": "workflow", "workflowDefinitionId": "wf-investigate" },
+        "type": "procedural",
+        "body": "investigate workflow should read the failing test before editing source",
+        "tags": ["heuristic"],
+        "sourceKind": "workflow-outcome",
+        "confidence": 0.88,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    ]
+  }
+]

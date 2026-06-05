@@ -1,0 +1,32 @@
+[
+  {
+    "id": "cross-scope-collision-same-topic",
+    "description": "Two memories with structurally identical bodies and types but at different user scopes. A retrieval call requesting only one scope MUST NOT surface the other; the spy port also asserts the other scope was never queried.",
+    "memories": [
+      {
+        "id": "alice-favourite-editor",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "preference",
+        "body": "favourite editor is the terminal one",
+        "tags": ["editor"],
+        "confidence": 0.9,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "bob-favourite-editor",
+        "scope": { "kind": "user", "userId": "user-bob" },
+        "type": "preference",
+        "body": "favourite editor is the terminal one",
+        "tags": ["editor"],
+        "confidence": 0.9,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    ]
+  }
+]
