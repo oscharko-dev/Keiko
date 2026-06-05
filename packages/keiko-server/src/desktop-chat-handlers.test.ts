@@ -120,12 +120,10 @@ function makeMemoryUserId(value: string): MemoryUserId {
 
 function insertAcceptedMemory(vault: MemoryVaultStore, body: string): MemoryRecord {
   const now = Date.now();
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
   const userId: MemoryUserId = makeMemoryUserId("local-operator");
   return vault.insertMemory({
     id: makeMemoryId(`mem-${String(now)}`),
     schemaVersion: "1",
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     scope: { kind: "user", userId },
     type: "preference",
     body,
