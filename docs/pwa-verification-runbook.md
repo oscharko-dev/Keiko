@@ -192,6 +192,7 @@ Row: <Browser> / <Platform> / <Date> / <Tester>
 [ ] Launcher install path: ___
 [ ] Launcher file content (first 5 lines): ___
 [ ] keiko launcher remove confirmation: ___
+[ ] Security review sign-off (ADR-0024 D10): reviewer ___ / date ___
 ```
 
 ---
