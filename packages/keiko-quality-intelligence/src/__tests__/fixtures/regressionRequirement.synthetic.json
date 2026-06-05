@@ -1,0 +1,46 @@
+{
+  "_header": "synthetic — no customer data; safe to bundle",
+  "runId": "qi-run-regression-synthetic-0001",
+  "envelopes": [
+    {
+      "kind": "repository-context",
+      "id": "qi-source-regression-001",
+      "displayLabel": "Smoke release path must complete the login flow",
+      "localRef": "workspace://regression/login-smoke",
+      "provenance": {
+        "origin": "workspace",
+        "registeredAt": "2026-06-05T00:02:00.000Z",
+        "integrityHashSha256Hex": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    },
+    {
+      "kind": "repository-context",
+      "id": "qi-source-regression-002",
+      "displayLabel": "Regression suite shall verify the dashboard rendering",
+      "localRef": "workspace://regression/dashboard",
+      "provenance": {
+        "origin": "workspace",
+        "registeredAt": "2026-06-05T00:02:01.000Z",
+        "integrityHashSha256Hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      }
+    }
+  ],
+  "atoms": [
+    {
+      "kind": "code-fragment",
+      "id": "qi-atom-regression-001",
+      "sourceEnvelopeId": "qi-source-regression-001",
+      "canonicalHashSha256Hex": "5555555555555555555555555555555555555555555555555555555555555555",
+      "redactionStatus": "not-required",
+      "lifecycleStatus": "draft"
+    },
+    {
+      "kind": "design-fragment",
+      "id": "qi-atom-regression-002",
+      "sourceEnvelopeId": "qi-source-regression-002",
+      "canonicalHashSha256Hex": "6666666666666666666666666666666666666666666666666666666666666666",
+      "redactionStatus": "not-required",
+      "lifecycleStatus": "draft"
+    }
+  ]
+}

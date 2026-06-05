@@ -37,6 +37,7 @@ const EXPECTED_RULES = [
   "adr-0019-direction-3h-memory-consolidation-only-contracts-security",
   "adr-0019-direction-3i-memory-governance-only-contracts-security",
   "adr-0019-direction-3j-memory-retrieval-only-contracts-security",
+  "adr-0019-direction-10a-quality-intelligence-only-contracts-security",
   "adr-0019-direction-4a-harness-only-contracts-security-model-gateway-workspace-tools-evidence",
   "adr-0019-direction-5a-workflows-only-contracts-security-model-gateway-workspace-tools-harness-evidence",
   "adr-0019-direction-6a-server-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence",

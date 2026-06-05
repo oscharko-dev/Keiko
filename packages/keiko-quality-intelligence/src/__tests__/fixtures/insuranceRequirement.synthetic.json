@@ -1,0 +1,46 @@
+{
+  "_header": "synthetic — no customer data; safe to bundle",
+  "runId": "qi-run-insurance-synthetic-0001",
+  "envelopes": [
+    {
+      "kind": "repository-context",
+      "id": "qi-source-insurance-001",
+      "displayLabel": "Underwriter shall renew the policy when premium is paid",
+      "localRef": "workspace://insurance/renewal-flow",
+      "provenance": {
+        "origin": "workspace",
+        "registeredAt": "2026-06-05T00:01:00.000Z",
+        "integrityHashSha256Hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    {
+      "kind": "human-context",
+      "id": "qi-source-insurance-002",
+      "displayLabel": "Claim handler must reject duplicate claims within the renewal window",
+      "localRef": "human://insurance/ops-note-3",
+      "provenance": {
+        "origin": "conversation-center",
+        "registeredAt": "2026-06-05T00:01:01.000Z",
+        "integrityHashSha256Hex": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      }
+    }
+  ],
+  "atoms": [
+    {
+      "kind": "requirement",
+      "id": "qi-atom-insurance-001",
+      "sourceEnvelopeId": "qi-source-insurance-001",
+      "canonicalHashSha256Hex": "3333333333333333333333333333333333333333333333333333333333333333",
+      "redactionStatus": "not-required",
+      "lifecycleStatus": "draft"
+    },
+    {
+      "kind": "human-statement",
+      "id": "qi-atom-insurance-002",
+      "sourceEnvelopeId": "qi-source-insurance-002",
+      "canonicalHashSha256Hex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "redactionStatus": "not-required",
+      "lifecycleStatus": "draft"
+    }
+  ]
+}
