@@ -23,6 +23,7 @@
 //
 // Usage: `node scripts/generate-pwa-icons.mjs`. Commit the regenerated assets.
 
+import { Buffer } from "node:buffer";
 import { copyFileSync, writeFileSync, readFileSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -53,8 +54,8 @@ const CRC_TABLE = (() => {
 
 function crc32(buf) {
   let c = 0xffffffff;
-  for (let i = 0; i < buf.length; i += 1) {
-    c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  for (const byte of buf) {
+    c = CRC_TABLE[(c ^ byte) & 0xff] ^ (c >>> 8);
   }
   return (c ^ 0xffffffff) >>> 0;
 }
@@ -119,9 +120,41 @@ function paintCanvas(width, height, background) {
   return buf;
 }
 
+// 4×4 supersample over the boundary pixel at (x,y) — returns coverage in [0, 1].
+// Extracted to keep paintDisc's branching at or below the project complexity ceiling.
+function discCoverage(x, y, cx, cy, radius) {
+  const r2 = radius * radius;
+  let hits = 0;
+  for (let sy = 0; sy < 4; sy += 1) {
+    for (let sx = 0; sx < 4; sx += 1) {
+      const sdx = x + (sx + 0.5) / 4 - cx;
+      const sdy = y + (sy + 0.5) / 4 - cy;
+      if (sdx * sdx + sdy * sdy <= r2) hits += 1;
+    }
+  }
+  return hits / 16;
+}
+
+function blendPixel(buf, idx, color, coverage) {
+  const dstA = buf[idx + 3] / 255;
+  const srcA = (color.a ?? 0xff) / 255;
+  const outA = srcA * coverage + dstA * (1 - srcA * coverage);
+  if (outA <= 0) return;
+  buf[idx] = Math.round(
+    (color.r * srcA * coverage + buf[idx] * dstA * (1 - srcA * coverage)) / outA,
+  );
+  buf[idx + 1] = Math.round(
+    (color.g * srcA * coverage + buf[idx + 1] * dstA * (1 - srcA * coverage)) / outA,
+  );
+  buf[idx + 2] = Math.round(
+    (color.b * srcA * coverage + buf[idx + 2] * dstA * (1 - srcA * coverage)) / outA,
+  );
+  buf[idx + 3] = Math.round(outA * 255);
+}
+
 // Draws an anti-aliased filled disc of `radius` centered at (cx, cy) onto an RGBA buffer.
-// Anti-aliasing is computed by 4×4 supersampling on the boundary band; samples are folded by
-// straight alpha blending so transparent canvases composite cleanly in OS adaptive-icon shaders.
+// Boundary-band coverage and alpha blending are factored into discCoverage/blendPixel so
+// transparent canvases composite cleanly in OS adaptive-icon shaders.
 function paintDisc(buf, width, height, cx, cy, radius, color) {
   const r2outer = (radius + 1) * (radius + 1);
   const r2inner = (radius - 1) * (radius - 1);
@@ -131,34 +164,9 @@ function paintDisc(buf, width, height, cx, cy, radius, color) {
       const dy = y + 0.5 - cy;
       const d2 = dx * dx + dy * dy;
       if (d2 > r2outer) continue;
-      let coverage = 1;
-      if (d2 > r2inner) {
-        let hits = 0;
-        for (let sy = 0; sy < 4; sy += 1) {
-          for (let sx = 0; sx < 4; sx += 1) {
-            const sdx = x + (sx + 0.5) / 4 - cx;
-            const sdy = y + (sy + 0.5) / 4 - cy;
-            if (sdx * sdx + sdy * sdy <= radius * radius) hits += 1;
-          }
-        }
-        coverage = hits / 16;
-      }
+      const coverage = d2 > r2inner ? discCoverage(x, y, cx, cy, radius) : 1;
       if (coverage <= 0) continue;
-      const idx = (y * width + x) * 4;
-      const dstA = buf[idx + 3] / 255;
-      const srcA = (color.a ?? 0xff) / 255;
-      const outA = srcA * coverage + dstA * (1 - srcA * coverage);
-      if (outA <= 0) continue;
-      buf[idx] = Math.round(
-        (color.r * srcA * coverage + buf[idx] * dstA * (1 - srcA * coverage)) / outA,
-      );
-      buf[idx + 1] = Math.round(
-        (color.g * srcA * coverage + buf[idx + 1] * dstA * (1 - srcA * coverage)) / outA,
-      );
-      buf[idx + 2] = Math.round(
-        (color.b * srcA * coverage + buf[idx + 2] * dstA * (1 - srcA * coverage)) / outA,
-      );
-      buf[idx + 3] = Math.round(outA * 255);
+      blendPixel(buf, (y * width + x) * 4, color, coverage);
     }
   }
 }
