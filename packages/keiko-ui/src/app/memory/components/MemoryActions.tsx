@@ -1,0 +1,278 @@
+"use client";
+
+// Issue #211 — Memory action buttons: approve / reject / pin / unpin / archive / forget / delete.
+// Governance gating: pin/unpin are mutually exclusive based on record.pinned.
+// approve/reject only appear for proposed status.
+//
+// WCAG: every button ≥ 24px target size (lk-btn height is 30px).
+// focus-visible rings via .lk-btn:focus-visible in globals.css.
+// aria-busy on in-flight buttons. Destructive actions (forget/delete) gate through
+// dialogs. aria-pressed NOT used here — these are action buttons, not toggles.
+
+import { useCallback, useState } from "react";
+import type { ReactNode } from "react";
+import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
+import {
+  acceptMemoryProposal,
+  archiveMemory,
+  deleteMemory,
+  pinMemory,
+  rejectMemoryProposal,
+  unpinMemory,
+} from "@/lib/memory-api";
+import { ApiError } from "@/lib/api";
+import { EditMemoryDialog } from "./EditMemoryDialog";
+import { ForgetConfirmDialog } from "./ForgetConfirmDialog";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatError(err: unknown): string {
+  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
+  if (err instanceof Error) return err.message;
+  return "An unexpected error occurred.";
+}
+
+type BusyAction = "accept" | "reject" | "pin" | "unpin" | "archive" | "delete" | null;
+
+// ---------------------------------------------------------------------------
+// MemoryActions
+// ---------------------------------------------------------------------------
+
+interface MemoryActionsProps {
+  readonly record: MemoryRecord;
+  readonly onRecordChange: (updated: MemoryRecord | null) => void;
+  // Injectable for tests
+  readonly acceptImpl?: typeof acceptMemoryProposal;
+  readonly rejectImpl?: typeof rejectMemoryProposal;
+  readonly pinImpl?: typeof pinMemory;
+  readonly unpinImpl?: typeof unpinMemory;
+  readonly archiveImpl?: typeof archiveMemory;
+  readonly deleteImpl?: typeof deleteMemory;
+}
+
+export function MemoryActions({
+  record,
+  onRecordChange,
+  acceptImpl = acceptMemoryProposal,
+  rejectImpl = rejectMemoryProposal,
+  pinImpl = pinMemory,
+  unpinImpl = unpinMemory,
+  archiveImpl = archiveMemory,
+  deleteImpl = deleteMemory,
+}: MemoryActionsProps): ReactNode {
+  const [busy, setBusy] = useState<BusyAction>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [showEdit, setShowEdit] = useState(false);
+  const [showForget, setShowForget] = useState(false);
+
+  const run = useCallback(async (action: BusyAction, fn: () => Promise<void>): Promise<void> => {
+    setBusy(action);
+    setError(null);
+    try {
+      await fn();
+    } catch (err) {
+      setError(formatError(err));
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  const handleAccept = useCallback((): void => {
+    void run("accept", async () => {
+      const res = await acceptImpl(record.id as MemoryId);
+      onRecordChange(res.memory);
+    });
+  }, [run, acceptImpl, record.id, onRecordChange]);
+
+  const handleReject = useCallback((): void => {
+    void run("reject", async () => {
+      const res = await rejectImpl(record.id as MemoryId, "rejected by user in Memory Center");
+      onRecordChange(res.memory);
+    });
+  }, [run, rejectImpl, record.id, onRecordChange]);
+
+  const handlePin = useCallback((): void => {
+    void run("pin", async () => {
+      const res = await pinImpl(record.id as MemoryId);
+      onRecordChange(res.memory);
+    });
+  }, [run, pinImpl, record.id, onRecordChange]);
+
+  const handleUnpin = useCallback((): void => {
+    void run("unpin", async () => {
+      const res = await unpinImpl(record.id as MemoryId);
+      onRecordChange(res.memory);
+    });
+  }, [run, unpinImpl, record.id, onRecordChange]);
+
+  const handleArchive = useCallback((): void => {
+    void run("archive", async () => {
+      const res = await archiveImpl(record.id as MemoryId, "archived by user in Memory Center");
+      onRecordChange(res.memory);
+    });
+  }, [run, archiveImpl, record.id, onRecordChange]);
+
+  const handleDelete = useCallback((): void => {
+    void run("delete", async () => {
+      await deleteImpl(record.id as MemoryId);
+      onRecordChange(null);
+    });
+  }, [run, deleteImpl, record.id, onRecordChange]);
+
+  const isProposed = record.status === "proposed";
+  const canArchive =
+    record.status === "accepted" ||
+    record.status === "superseded" ||
+    record.status === "conflicted" ||
+    record.status === "expired";
+  const isForgotten = record.status === "forgotten";
+
+  return (
+    <div className="mc-actions" role="group" aria-label="Memory actions">
+      {/* Accept / Reject — proposed only */}
+      {isProposed ? (
+        <>
+          <button
+            type="button"
+            className="lk-btn lk-btn-primary"
+            disabled={busy !== null}
+            aria-busy={busy === "accept"}
+            onClick={handleAccept}
+            aria-label="Accept this memory proposal"
+          >
+            {busy === "accept" ? "Accepting…" : "Accept"}
+          </button>
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost"
+            disabled={busy !== null}
+            aria-busy={busy === "reject"}
+            onClick={handleReject}
+            aria-label="Reject this memory proposal"
+          >
+            {busy === "reject" ? "Rejecting…" : "Reject"}
+          </button>
+        </>
+      ) : null}
+
+      {/* Edit */}
+      {!isForgotten ? (
+        <button
+          type="button"
+          className="lk-btn lk-btn-ghost"
+          disabled={busy !== null}
+          onClick={() => {
+            setShowEdit(true);
+          }}
+          aria-label="Edit memory body, tags, or sensitivity"
+        >
+          Edit
+        </button>
+      ) : null}
+
+      {/* Pin / Unpin */}
+      {!isForgotten ? (
+        record.pinned ? (
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost"
+            disabled={busy !== null}
+            aria-busy={busy === "unpin"}
+            onClick={handleUnpin}
+            aria-label="Unpin this memory"
+          >
+            {busy === "unpin" ? "Unpinning…" : "Unpin"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost"
+            disabled={busy !== null}
+            aria-busy={busy === "pin"}
+            onClick={handlePin}
+            aria-label="Pin this memory for priority retrieval"
+          >
+            {busy === "pin" ? "Pinning…" : "Pin"}
+          </button>
+        )
+      ) : null}
+
+      {/* Archive */}
+      {canArchive ? (
+        <button
+          type="button"
+          className="lk-btn lk-btn-ghost"
+          disabled={busy !== null}
+          aria-busy={busy === "archive"}
+          onClick={handleArchive}
+          aria-label="Archive this memory"
+        >
+          {busy === "archive" ? "Archiving…" : "Archive"}
+        </button>
+      ) : null}
+
+      {/* Forget (destructive — opens dialog) */}
+      {!isForgotten ? (
+        <button
+          type="button"
+          className="lk-btn lk-btn-danger"
+          disabled={busy !== null}
+          onClick={() => {
+            setShowForget(true);
+          }}
+          aria-label="Forget this memory permanently"
+        >
+          Forget
+        </button>
+      ) : null}
+
+      {/* Delete (hard delete — opens confirmation inline) */}
+      <button
+        type="button"
+        className="lk-btn lk-btn-danger"
+        disabled={busy !== null}
+        aria-busy={busy === "delete"}
+        onClick={handleDelete}
+        aria-label="Hard-delete this memory record"
+      >
+        {busy === "delete" ? "Deleting…" : "Delete"}
+      </button>
+
+      {/* Error banner */}
+      {error !== null ? (
+        <p role="alert" className="mc-action-error">
+          {error}
+        </p>
+      ) : null}
+
+      {/* Dialogs */}
+      {showEdit ? (
+        <EditMemoryDialog
+          record={record}
+          onSave={(updated) => {
+            setShowEdit(false);
+            onRecordChange(updated);
+          }}
+          onClose={() => {
+            setShowEdit(false);
+          }}
+        />
+      ) : null}
+
+      {showForget ? (
+        <ForgetConfirmDialog
+          record={record}
+          onForgotten={() => {
+            setShowForget(false);
+            onRecordChange(null);
+          }}
+          onClose={() => {
+            setShowForget(false);
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
