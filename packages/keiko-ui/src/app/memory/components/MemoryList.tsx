@@ -153,7 +153,6 @@ export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProp
   const [, startTransition] = useTransition();
 
   const [memories, setMemories] = useState<readonly MemoryRecord[]>([]);
-  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -172,7 +171,6 @@ export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProp
       try {
         const res: MemoryListResponse = await fetchMemoriesImpl(f);
         setMemories(res.memories);
-        setTotal(res.total);
       } catch (err) {
         setError(formatError(err));
       } finally {
@@ -210,15 +208,6 @@ export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProp
             className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
           >
             Review queue
-            {total > 0 ? (
-              <span
-                role="status"
-                aria-label={`${total.toString()} memories`}
-                className="mc-badge-count"
-              >
-                {total}
-              </span>
-            ) : null}
           </Link>
         </div>
       </header>

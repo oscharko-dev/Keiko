@@ -37,7 +37,6 @@ import {
   type MemoryId,
   type MemoryRecord,
   type MemoryReviewerId,
-  type MemoryScope,
   type MemoryScopeKind,
   type MemorySensitivity,
   type MemoryStatus,
@@ -196,17 +195,50 @@ function redactMemories(deps: UiHandlerDeps, records: readonly MemoryRecord[]): 
 }
 
 // ─── Scope enumeration helper ──────────────────────────────────────────────────
-// The vault's listMemoriesByScope requires a concrete MemoryScope.
-// For the Memory Center we synthesise a "global" scope for the list routes since the
-// UI does not require the caller to supply exact scope coordinates at this layer — the
-// current user sees all memories via the storage API (the vault does no access-control
-// beyond the scope filter the handler supplies).
-//
-// Callers can narrow by scopeKind; we fold all those to a global wildcard for now.
-// A more granular per-user/workspace scope binding is a follow-up for #212-#213.
+interface ListAcrossScopesOptions {
+  readonly scopeKinds?: readonly MemoryScopeKind[];
+  readonly types?: readonly MemoryType[];
+  readonly statuses?: readonly MemoryStatus[];
+  readonly sensitivities?: readonly MemorySensitivity[];
+}
 
-function globalScope(): MemoryScope {
-  return { kind: "global" };
+function sortMemories(records: readonly MemoryRecord[]): readonly MemoryRecord[] {
+  return [...records].sort((a, b) => {
+    if (b.createdAt !== a.createdAt) return b.createdAt - a.createdAt;
+    if (b.updatedAt !== a.updatedAt) return b.updatedAt - a.updatedAt;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function listMemoriesAcrossScopes(
+  vault: MemoryVaultStore,
+  options: ListAcrossScopesOptions,
+): readonly MemoryRecord[] {
+  const records = vault.listMemories({
+    ...(options.types !== undefined && options.types.length > 0 ? { type: options.types } : {}),
+    ...(options.statuses !== undefined && options.statuses.length > 0
+      ? { status: options.statuses }
+      : {}),
+    includeExpired: true,
+  });
+  const filtered = records.filter((record) => {
+    if (
+      options.scopeKinds !== undefined &&
+      options.scopeKinds.length > 0 &&
+      !options.scopeKinds.includes(record.scope.kind)
+    ) {
+      return false;
+    }
+    if (
+      options.sensitivities !== undefined &&
+      options.sensitivities.length > 0 &&
+      !options.sensitivities.includes(record.provenance.sensitivity)
+    ) {
+      return false;
+    }
+    return true;
+  });
+  return sortMemories(filtered);
 }
 
 // ─── Handler: GET /api/memory ─────────────────────────────────────────────────
@@ -277,26 +309,19 @@ export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): Rout
   const { scopeKinds, types, statuses, sensitivities, limit, offset } = params;
 
   try {
-    // List from the global scope. The vault returns all records regardless of scope kind
-    // when the scope kind is "global". Filtering by scopeKind is applied client-side.
-    const allRecords = vault.listMemoriesByScope(globalScope(), {
-      ...(types.length > 0 ? { type: types as readonly MemoryType[] } : {}),
-      ...(statuses.length > 0 ? { status: statuses as readonly MemoryStatus[] } : {}),
-      limit,
-      offset,
+    const filtered = listMemoriesAcrossScopes(vault, {
+      ...(scopeKinds.length > 0 ? { scopeKinds: scopeKinds as readonly MemoryScopeKind[] } : {}),
+      ...(types.length > 0 ? { types: types as readonly MemoryType[] } : {}),
+      ...(statuses.length > 0 ? { statuses: statuses as readonly MemoryStatus[] } : {}),
+      ...(sensitivities.length > 0
+        ? { sensitivities: sensitivities as readonly MemorySensitivity[] }
+        : {}),
     });
-
-    // Apply post-filter for scopeKind and sensitivity (vault filter options don't include these).
-    const filtered = allRecords.filter((r) => {
-      if (scopeKinds.length > 0 && !scopeKinds.includes(r.scope.kind)) return false;
-      if (sensitivities.length > 0 && !sensitivities.includes(r.provenance.sensitivity))
-        return false;
-      return true;
-    });
+    const page = filtered.slice(offset, offset + limit);
 
     return {
       status: 200,
-      body: { memories: redactMemories(deps, filtered), total: filtered.length, limit, offset },
+      body: { memories: redactMemories(deps, page), total: filtered.length, limit, offset },
     };
   } catch (err) {
     if (err instanceof MemoryStorageError) {
@@ -313,9 +338,8 @@ export function handleMemoryReviewQueue(_ctx: RouteContext, deps: UiHandlerDeps)
   if (isRouteResult(vault)) return vault;
 
   try {
-    const proposed = vault.listMemoriesByScope(globalScope(), {
-      status: REVIEW_QUEUE_STATUSES,
-      limit: MAX_LIST_LIMIT,
+    const proposed = listMemoriesAcrossScopes(vault, {
+      statuses: REVIEW_QUEUE_STATUSES,
     });
     return {
       status: 200,
@@ -805,6 +829,19 @@ function parseRejectInput(raw: Record<string, unknown>): { reason: string } {
   return { reason };
 }
 
+function ensureRejectableMemory(existing: MemoryRecord | undefined): RouteResult | MemoryRecord {
+  if (existing === undefined) {
+    return { status: 404, body: errorBody("NOT_FOUND", "Memory proposal not found.") };
+  }
+  if (existing.status !== "proposed" && existing.status !== "conflicted") {
+    return {
+      status: 409,
+      body: errorBody("CONFLICT", "Memory is not in proposed or conflicted status."),
+    };
+  }
+  return existing;
+}
+
 export async function handleRejectMemoryProposal(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -823,16 +860,8 @@ export async function handleRejectMemoryProposal(
   const { reason } = parseRejectInput(body);
 
   try {
-    const existing = vault.getMemory(id as MemoryId);
-    if (existing === undefined) {
-      return { status: 404, body: errorBody("NOT_FOUND", "Memory proposal not found.") };
-    }
-    if (existing.status !== "proposed") {
-      return {
-        status: 409,
-        body: errorBody("CONFLICT", "Memory is not in proposed status."),
-      };
-    }
+    const existing = ensureRejectableMemory(vault.getMemory(id as MemoryId));
+    if (isRouteResult(existing)) return existing;
     const updated = vault.updateMemory(
       id as MemoryId,
       { status: "rejected", staleReason: reason },

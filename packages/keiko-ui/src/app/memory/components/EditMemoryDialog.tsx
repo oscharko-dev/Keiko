@@ -1,17 +1,17 @@
 "use client";
 
 // Issue #211 — Inline edit form for memory body, tags, and sensitivity.
-// Controlled: caller owns the record; this dialog calls editMemory and reports back.
+// Controlled: caller owns the record; this dialog calls editMemory/correctMemory and reports back.
 //
-// WCAG: focus trapped while open (first field on open, Escape closes).
+// WCAG: focus is trapped while open, first field receives focus on open, Escape closes.
 // focus-visible rings on all interactive elements. aria-modal on the dialog.
 // Sensitivity select uses <select> — native keyboard fully accessible.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ChangeEvent, KeyboardEvent, ReactNode } from "react";
 import type { MemoryId, MemoryRecord, MemorySensitivity } from "@oscharko-dev/keiko-contracts";
 import { MEMORY_SENSITIVITIES } from "@oscharko-dev/keiko-contracts";
-import { editMemory } from "@/lib/memory-api";
+import { correctMemory, editMemory } from "@/lib/memory-api";
 import { ApiError } from "@/lib/api";
 
 const SENSITIVITY_LABELS: Readonly<Record<MemorySensitivity, string>> = {
@@ -20,18 +20,25 @@ const SENSITIVITY_LABELS: Readonly<Record<MemorySensitivity, string>> = {
   restricted: "Restricted",
 };
 
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"]):not([disabled])';
+
 interface EditMemoryDialogProps {
   readonly record: MemoryRecord;
+  readonly mode?: "edit" | "correct";
   readonly onSave: (updated: MemoryRecord) => void;
   readonly onClose: () => void;
   readonly editMemoryImpl?: typeof editMemory;
+  readonly correctMemoryImpl?: typeof correctMemory;
 }
 
 export function EditMemoryDialog({
   record,
+  mode = "edit",
   onSave,
   onClose,
   editMemoryImpl = editMemory,
+  correctMemoryImpl = correctMemory,
 }: EditMemoryDialogProps): ReactNode {
   const [body, setBody] = useState(record.body);
   const [tagsRaw, setTagsRaw] = useState(record.tags.join(", "));
@@ -41,21 +48,53 @@ export function EditMemoryDialog({
 
   const firstRef = useRef<HTMLTextAreaElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  const isCorrectMode = mode === "correct";
 
-  // Focus first field on open
   useEffect(() => {
+    restoreFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     firstRef.current?.focus();
+    return () => {
+      restoreFocusRef.current?.focus();
+    };
   }, []);
 
-  // Escape closes
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLDivElement>): void => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+
+      const focusable = dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR);
+      if (focusable === undefined || focusable.length === 0) {
+        e.preventDefault();
+        dialogRef.current?.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (first === undefined || last === undefined) {
+        e.preventDefault();
+        dialogRef.current?.focus();
+        return;
+      }
+      const active = document.activeElement;
+      if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      }
     },
     [onClose],
   );
 
-  // Click outside closes
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>): void => {
       if (e.target === backdropRef.current) onClose();
@@ -69,6 +108,7 @@ export function EditMemoryDialog({
       setError("Body cannot be empty.");
       return;
     }
+
     const tags = tagsRaw
       .split(",")
       .map((t) => t.trim())
@@ -77,12 +117,17 @@ export function EditMemoryDialog({
     setSaving(true);
     setError(null);
     try {
-      const res = await editMemoryImpl(record.id as MemoryId, {
-        body: trimmedBody,
-        tags,
-        sensitivity,
-      });
-      onSave(res.memory);
+      if (isCorrectMode) {
+        const res = await correctMemoryImpl(record.id as MemoryId, trimmedBody);
+        onSave(res.correction);
+      } else {
+        const res = await editMemoryImpl(record.id as MemoryId, {
+          body: trimmedBody,
+          tags,
+          sensitivity,
+        });
+        onSave(res.memory);
+      }
     } catch (err) {
       if (err instanceof ApiError) {
         setError(`${err.code}: ${err.message}`);
@@ -94,10 +139,18 @@ export function EditMemoryDialog({
     } finally {
       setSaving(false);
     }
-  }, [body, tagsRaw, sensitivity, record.id, editMemoryImpl, onSave]);
+  }, [
+    body,
+    tagsRaw,
+    sensitivity,
+    record.id,
+    isCorrectMode,
+    correctMemoryImpl,
+    editMemoryImpl,
+    onSave,
+  ]);
 
   return (
-    // Backdrop
     <div
       ref={backdropRef}
       className="mc-dialog-backdrop"
@@ -106,20 +159,21 @@ export function EditMemoryDialog({
     >
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WAI-ARIA dialog pattern: role="dialog" is the canonical key-handler host; tabIndex={-1} makes it focusable for Escape capture */}
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="edit-dialog-title"
+        aria-labelledby={titleId}
         tabIndex={-1}
         className="mc-dialog"
         onKeyDown={handleKeyDown}
       >
-        <h2 id="edit-dialog-title" className="mc-dialog-title">
-          Edit memory
+        <h2 id={titleId} className="mc-dialog-title">
+          {isCorrectMode ? "Correct memory" : "Edit memory"}
         </h2>
 
         <div className="mc-dialog-field">
           <label htmlFor="edit-body" className="mc-dialog-label">
-            Body
+            {isCorrectMode ? "Corrected body" : "Body"}
           </label>
           <textarea
             id="edit-body"
@@ -135,42 +189,46 @@ export function EditMemoryDialog({
           />
         </div>
 
-        <div className="mc-dialog-field">
-          <label htmlFor="edit-tags" className="mc-dialog-label">
-            Tags <span className="mc-dialog-hint">(comma-separated)</span>
-          </label>
-          <input
-            id="edit-tags"
-            type="text"
-            className="mc-dialog-input"
-            value={tagsRaw}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => {
-              setTagsRaw(e.target.value);
-            }}
-            disabled={saving}
-          />
-        </div>
+        {isCorrectMode ? null : (
+          <>
+            <div className="mc-dialog-field">
+              <label htmlFor="edit-tags" className="mc-dialog-label">
+                Tags <span className="mc-dialog-hint">(comma-separated)</span>
+              </label>
+              <input
+                id="edit-tags"
+                type="text"
+                className="mc-dialog-input"
+                value={tagsRaw}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                  setTagsRaw(e.target.value);
+                }}
+                disabled={saving}
+              />
+            </div>
 
-        <div className="mc-dialog-field">
-          <label htmlFor="edit-sensitivity" className="mc-dialog-label">
-            Sensitivity
-          </label>
-          <select
-            id="edit-sensitivity"
-            className="mc-dialog-select"
-            value={sensitivity}
-            onChange={(e: ChangeEvent<HTMLSelectElement>) => {
-              setSensitivity(e.target.value as MemorySensitivity);
-            }}
-            disabled={saving}
-          >
-            {MEMORY_SENSITIVITIES.map((s) => (
-              <option key={s} value={s}>
-                {SENSITIVITY_LABELS[s]}
-              </option>
-            ))}
-          </select>
-        </div>
+            <div className="mc-dialog-field">
+              <label htmlFor="edit-sensitivity" className="mc-dialog-label">
+                Sensitivity
+              </label>
+              <select
+                id="edit-sensitivity"
+                className="mc-dialog-select"
+                value={sensitivity}
+                onChange={(e: ChangeEvent<HTMLSelectElement>) => {
+                  setSensitivity(e.target.value as MemorySensitivity);
+                }}
+                disabled={saving}
+              >
+                {MEMORY_SENSITIVITIES.map((s) => (
+                  <option key={s} value={s}>
+                    {SENSITIVITY_LABELS[s]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </>
+        )}
 
         {error !== null ? (
           <p role="alert" className="mc-dialog-error">
@@ -191,7 +249,13 @@ export function EditMemoryDialog({
             disabled={saving}
             aria-busy={saving}
           >
-            {saving ? "Saving…" : "Save"}
+            {saving
+              ? isCorrectMode
+                ? "Submitting…"
+                : "Saving…"
+              : isCorrectMode
+                ? "Submit correction"
+                : "Save"}
           </button>
         </div>
       </div>

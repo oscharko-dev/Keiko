@@ -26,6 +26,7 @@ import {
   deleteMemoryRow,
   getMemoryRow,
   insertMemoryRow,
+  listMemoriesRows,
   listMemoriesByScopeRows,
   updateMemoryRow,
 } from "./memories.js";
@@ -159,7 +160,7 @@ function runDelete(
 
 type MemoryMutators = Pick<
   MemoryVaultStore,
-  "insertMemory" | "updateMemory" | "deleteMemory" | "getMemory" | "listMemoriesByScope"
+  "insertMemory" | "updateMemory" | "deleteMemory" | "getMemory" | "listMemories" | "listMemoriesByScope"
 >;
 
 function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMutators {
@@ -190,6 +191,11 @@ function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMut
       }
     },
     getMemory: (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id),
+    listMemories: (options?: ListMemoriesOptions): readonly MemoryRecord[] => {
+      const effective = options ?? {};
+      const nowMs = effective.nowMs ?? opts.now();
+      return listMemoriesRows(db, effective, nowMs);
+    },
     listMemoriesByScope: (
       scope: MemoryScope,
       options?: ListMemoriesOptions,

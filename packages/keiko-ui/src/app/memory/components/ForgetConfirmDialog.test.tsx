@@ -1,4 +1,4 @@
-// Issue #211 — tests for ForgetConfirmDialog: confirmation flow, cancel, error recovery.
+// Issue #211 — tests for ForgetConfirmDialog: confirmation flow, delete mode, and focus trap.
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -6,10 +6,6 @@ import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 import { ForgetConfirmDialog } from "./ForgetConfirmDialog";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
-
-// ---------------------------------------------------------------------------
-// Fixtures
-// ---------------------------------------------------------------------------
 
 function makeRecord(body = "Use strict mode always."): MemoryRecord {
   return {
@@ -33,49 +29,34 @@ function makeRecord(body = "Use strict mode always."): MemoryRecord {
   };
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 describe("ForgetConfirmDialog — rendering", () => {
   it("renders the memory body in the blockquote", () => {
     render(
       <ForgetConfirmDialog
         record={makeRecord()}
-        onForgotten={vi.fn()}
+        onComplete={vi.fn()}
         onClose={vi.fn()}
         forgetMemoryImpl={vi.fn()}
       />,
     );
-    expect(screen.getByRole("blockquote")).toHaveTextContent("Use strict mode always.");
+    expect(screen.getByLabelText(/memory content to be removed/i)).toHaveTextContent(
+      "Use strict mode always.",
+    );
   });
 
-  it("has Cancel and Forget permanently buttons", () => {
+  it("renders delete mode copy", () => {
     render(
       <ForgetConfirmDialog
+        mode="delete"
         record={makeRecord()}
-        onForgotten={vi.fn()}
+        onComplete={vi.fn()}
         onClose={vi.fn()}
-        forgetMemoryImpl={vi.fn()}
+        deleteMemoryImpl={vi.fn()}
       />,
     );
-    expect(screen.getByRole("button", { name: /cancel/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /forget permanently/i })).toBeInTheDocument();
-  });
-
-  it("truncates long body text in the quote", () => {
-    const longBody = "x".repeat(150);
-    render(
-      <ForgetConfirmDialog
-        record={makeRecord(longBody)}
-        onForgotten={vi.fn()}
-        onClose={vi.fn()}
-        forgetMemoryImpl={vi.fn()}
-      />,
-    );
-    const quote = screen.getByRole("blockquote");
-    expect(quote.textContent?.length).toBeLessThan(130);
-    expect(quote.textContent).toContain("…");
+    expect(screen.getByRole("heading", { name: /delete this memory/i })).toBeInTheDocument();
+    expect(screen.getByText(/hard-deleted without a tombstone audit record/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /delete permanently/i })).toBeInTheDocument();
   });
 });
 
@@ -86,7 +67,7 @@ describe("ForgetConfirmDialog — interaction", () => {
     render(
       <ForgetConfirmDialog
         record={makeRecord()}
-        onForgotten={vi.fn()}
+        onComplete={vi.fn()}
         onClose={onClose}
         forgetMemoryImpl={vi.fn()}
       />,
@@ -101,7 +82,7 @@ describe("ForgetConfirmDialog — interaction", () => {
     render(
       <ForgetConfirmDialog
         record={makeRecord()}
-        onForgotten={vi.fn()}
+        onComplete={vi.fn()}
         onClose={onClose}
         forgetMemoryImpl={vi.fn()}
       />,
@@ -110,34 +91,85 @@ describe("ForgetConfirmDialog — interaction", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it("calls forgetMemoryImpl and then onForgotten when confirmed", async () => {
+  it("traps Tab and Shift+Tab within the dialog", async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <button type="button">Before</button>
+        <ForgetConfirmDialog
+          record={makeRecord()}
+          onComplete={vi.fn()}
+          onClose={vi.fn()}
+          forgetMemoryImpl={vi.fn()}
+        />
+        <button type="button">After</button>
+      </div>,
+    );
+
+    const cancel = screen.getByRole("button", { name: /cancel/i });
+    const confirm = screen.getByRole("button", { name: /forget permanently/i });
+
+    await waitFor(() => {
+      expect(cancel).toHaveFocus();
+    });
+    await user.tab();
+    expect(confirm).toHaveFocus();
+    await user.tab();
+    expect(cancel).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(confirm).toHaveFocus();
+  });
+
+  it("calls forgetMemoryImpl and then onComplete when confirmed", async () => {
     const forgetImpl = vi
       .fn()
       .mockResolvedValue({ forgotten: true as const, memoryId: "mem-forget-1" });
-    const onForgotten = vi.fn();
+    const onComplete = vi.fn();
     const user = userEvent.setup();
     render(
       <ForgetConfirmDialog
         record={makeRecord()}
-        onForgotten={onForgotten}
+        onComplete={onComplete}
         onClose={vi.fn()}
         forgetMemoryImpl={forgetImpl}
       />,
     );
     await user.click(screen.getByRole("button", { name: /forget permanently/i }));
     await waitFor(() => {
-      expect(onForgotten).toHaveBeenCalledOnce();
+      expect(onComplete).toHaveBeenCalledOnce();
     });
     expect(forgetImpl).toHaveBeenCalledWith("mem-forget-1", expect.any(String));
   });
 
-  it("shows error alert when forgetMemoryImpl rejects", async () => {
+  it("calls deleteMemoryImpl and then onComplete in delete mode", async () => {
+    const deleteImpl = vi
+      .fn()
+      .mockResolvedValue({ deleted: true as const, memoryId: "mem-forget-1" });
+    const onComplete = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ForgetConfirmDialog
+        mode="delete"
+        record={makeRecord()}
+        onComplete={onComplete}
+        onClose={vi.fn()}
+        deleteMemoryImpl={deleteImpl}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /delete permanently/i }));
+    await waitFor(() => {
+      expect(onComplete).toHaveBeenCalledOnce();
+    });
+    expect(deleteImpl).toHaveBeenCalledWith("mem-forget-1");
+  });
+
+  it("shows error alert when the destructive action rejects", async () => {
     const forgetImpl = vi.fn().mockRejectedValue(new Error("forget failed"));
     const user = userEvent.setup();
     render(
       <ForgetConfirmDialog
         record={makeRecord()}
-        onForgotten={vi.fn()}
+        onComplete={vi.fn()}
         onClose={vi.fn()}
         forgetMemoryImpl={forgetImpl}
       />,
@@ -155,7 +187,7 @@ describe("ForgetConfirmDialog — a11y", () => {
     const { container } = render(
       <ForgetConfirmDialog
         record={makeRecord()}
-        onForgotten={vi.fn()}
+        onComplete={vi.fn()}
         onClose={vi.fn()}
         forgetMemoryImpl={vi.fn()}
       />,
