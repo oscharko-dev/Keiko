@@ -31,6 +31,7 @@ import type {
   MemoryStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import { memoryScopeKey } from "./memory-scope-sanitizer.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -183,18 +184,20 @@ export interface ApplyMemoryRetentionOptions {
 
 export function applyMemoryRetention(options: ApplyMemoryRetentionOptions): MemoryRetentionResult {
   const { vault, scopes, policy, nowMs } = options;
-  const decisions: MemoryRetentionDecision[] = [];
+  const decisions = new Map<MemoryId, MemoryRetentionDecision>();
   let evaluated = 0;
   let forgottenPurgeBacklog = 0;
-  for (const scope of scopes) {
+  const uniqueScopes = [...new Map(scopes.map((scope) => [memoryScopeKey(scope), scope])).values()];
+  for (const scope of uniqueScopes) {
     const records = vault.listMemoriesByScope(scope, { includeExpired: true });
     evaluated += records.length;
     for (const decision of classifyScope(scope, records, nowMs, policy)) {
-      decisions.push(decision);
+      decisions.set(decision.memoryId, decision);
     }
     forgottenPurgeBacklog += countPurgeBacklog(vault, scope, policy, nowMs);
   }
-  for (const decision of decisions) {
+  const forgotten = [...decisions.values()];
+  for (const decision of forgotten) {
     vault.deleteMemory(decision.memoryId, {
       tombstone: true,
       forgetterSurface: "retention",
@@ -204,9 +207,9 @@ export function applyMemoryRetention(options: ApplyMemoryRetentionOptions): Memo
   }
   return {
     evaluated,
-    forgotten: decisions,
-    kept: evaluated - decisions.length,
-    byReason: countByReason(decisions),
+    forgotten,
+    kept: evaluated - forgotten.length,
+    byReason: countByReason(forgotten),
     forgottenPurgeBacklog,
   };
 }

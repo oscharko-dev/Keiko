@@ -53,6 +53,7 @@ export type MemoryEvent =
   | {
       readonly kind: "memory:deleted";
       readonly memoryId: MemoryId;
+      readonly scope: MemoryScope;
       readonly tombstoned: boolean;
     }
   | { readonly kind: "memory:tombstoned"; readonly tombstone: MemoryTombstone }

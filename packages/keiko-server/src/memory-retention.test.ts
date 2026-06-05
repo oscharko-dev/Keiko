@@ -237,4 +237,19 @@ describe("applyMemoryRetention — result shape", () => {
     expect(result.evaluated).toBe(1);
     expect(result.kept).toBe(1);
   });
+
+  it("deduplicates repeated scopes so the pass stays idempotent", () => {
+    const vault = makeVault();
+    insertRecord(vault, { id: "dup-old", updatedAt: NOW - 10 * ONE_DAY_MS });
+    const result = applyMemoryRetention({
+      vault,
+      scopes: [SCOPE, SCOPE],
+      policy: { maxAgeMs: 7 * ONE_DAY_MS },
+      nowMs: NOW,
+    });
+    expect(result.evaluated).toBe(1);
+    expect(result.forgotten).toHaveLength(1);
+    expect(result.byReason["expire-age"]).toBe(1);
+    expect(vault.getMemory(brandedMemoryId("dup-old"))).toBeUndefined();
+  });
 });

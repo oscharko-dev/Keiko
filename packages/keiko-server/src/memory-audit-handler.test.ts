@@ -14,6 +14,7 @@ import type {
   MemoryId,
   MemoryRecord,
   MemoryUserId,
+  MemoryWorkspaceId,
 } from "@oscharko-dev/keiko-contracts";
 import type { MemoryEvent, MemoryTombstone } from "@oscharko-dev/keiko-memory-vault";
 import {
@@ -33,6 +34,11 @@ function brandedMemoryId(value: string): MemoryId {
 function brandedMemoryUserId(value: string): MemoryUserId {
   const u: unknown = value;
   return u as MemoryUserId;
+}
+
+function brandedMemoryWorkspaceId(value: string): MemoryWorkspaceId {
+  const u: unknown = value;
+  return u as MemoryWorkspaceId;
 }
 
 function makeRecord(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
@@ -177,6 +183,7 @@ describe("createMemoryAuditHandler", () => {
     handler({
       kind: "memory:deleted",
       memoryId: tombstone.memoryId,
+      scope: { kind: "user", userId: brandedMemoryUserId("u-1") },
       tombstoned: true,
     });
     const events = readEvents(store, FIXED_NOW);
@@ -234,6 +241,26 @@ describe("createMemoryAuditHandler", () => {
     const events = readEvents(store, FIXED_NOW);
     expect(events).toHaveLength(1);
     expect(events[0]?.summary).not.toContain(secret);
+  });
+
+  it("masks persisted scope coordinates at the audit boundary", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const record = makeRecord({
+      scope: {
+        kind: "workspace",
+        workspaceId: brandedMemoryWorkspaceId("/private/workspaces/keiko-prod"),
+      },
+      status: "proposed",
+    });
+    handler({ kind: "memory:inserted", record });
+    const json = store.get(auditRunIdFor(FIXED_NOW));
+    expect(json ?? "").not.toContain("/private/workspaces/keiko-prod");
   });
 
   it("never persists the raw memory body", () => {
@@ -299,6 +326,53 @@ describe("createMemoryAuditHandler", () => {
     const events = readEvents(store, FIXED_NOW);
     expect(events).toHaveLength(0);
   });
+
+  it("emits memory:forgotten for a hard delete without a tombstone", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const record = makeRecord({ status: "accepted" });
+    handler({ kind: "memory:inserted", record });
+    handler({
+      kind: "memory:deleted",
+      memoryId: record.id,
+      scope: record.scope,
+      tombstoned: false,
+    });
+    const events = readEvents(store, FIXED_NOW);
+    expect(events).toHaveLength(2);
+    const second = events[1];
+    expect(second?.kind).toBe("memory:forgotten");
+    if (second?.kind === "memory:forgotten") {
+      expect(second.memoryId).toBe(record.id);
+      expect(second.tombstoned).toBe(false);
+    }
+  });
+
+  it("buckets an event using the same captured timestamp as occurredAt", () => {
+    const store = createInMemoryEvidenceStore();
+    const beforeMidnight = Date.UTC(2025, 5, 15, 23, 59, 59, 999);
+    const afterMidnight = beforeMidnight + 1;
+    let calls = 0;
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => {
+        calls += 1;
+        return calls === 1 ? beforeMidnight : afterMidnight;
+      },
+      newEventId: makeIdFactory(),
+    });
+    handler({ kind: "memory:inserted", record: makeRecord({ status: "proposed" }) });
+    const persisted = readEvents(store, beforeMidnight);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.occurredAt).toBe(beforeMidnight);
+    expect(store.get(auditRunIdFor(afterMidnight))).toBeUndefined();
+  });
 });
 
 // ── recordMemoryAudit ────────────────────────────────────────────────────────
@@ -320,6 +394,26 @@ describe("recordMemoryAudit", () => {
     const events = readEvents(store, FIXED_NOW);
     expect(events).toHaveLength(1);
     expect(events[0]?.kind).toBe("memory:retrieved");
+  });
+
+  it("buckets direct-emitted events by event.occurredAt", () => {
+    const store = createInMemoryEvidenceStore();
+    const beforeMidnight = Date.UTC(2025, 5, 15, 23, 59, 59, 999);
+    const afterMidnight = beforeMidnight + 1;
+    const event: MemoryAuditEvent = {
+      schemaVersion: "1",
+      kind: "memory:retrieved",
+      eventId: "evt-retrieved-1",
+      occurredAt: beforeMidnight,
+      initiatorSurface: "workflow",
+      summary: "retrieval returned 3 records",
+      scopes: [{ kind: "user", userId: brandedMemoryUserId("u-1") }],
+      matchedMemoryIds: [brandedMemoryId("mem-test-1")],
+    };
+    recordMemoryAudit({ evidenceStore: store, now: () => afterMidnight }, event);
+    const events = readEvents(store, beforeMidnight);
+    expect(events).toHaveLength(1);
+    expect(store.get(auditRunIdFor(afterMidnight))).toBeUndefined();
   });
 });
 
