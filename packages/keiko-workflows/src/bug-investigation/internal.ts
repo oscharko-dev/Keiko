@@ -22,7 +22,10 @@ export interface BugWorkflowProgress {
   patchRetryCount: number;
 }
 
-// The resolved, defaulted view of input + deps the pipeline stages share.
+// The resolved, defaulted view of input + deps the pipeline stages share. memoryPromptText is
+// optional and MUTABLE (set once in runPipeline before the model loop, never again): defaulting
+// it inside buildBugRunState would require knowing the description before we have validated
+// the evidence precondition, so the pipeline writes it after intake passes (Issue #213).
 export interface BugRunState {
   readonly input: BugInvestigationInput;
   readonly deps: BugInvestigationDeps;
@@ -32,6 +35,7 @@ export interface BugRunState {
   readonly emitter: BugEventEmitter;
   readonly startedAt: number;
   readonly progress: BugWorkflowProgress;
+  memoryPromptText: string | undefined;
 }
 
 // A successful model+validate+guard outcome ready for dry-run or apply.
@@ -90,6 +94,7 @@ export function buildBugRunState(
     emitter: createBugEventEmitter(deps.sink ?? NO_OP_SINK, idSource(), fingerprint, now),
     startedAt: now(),
     progress: { modelCallCount: 0, patchRetryCount: 0 },
+    memoryPromptText: undefined,
   };
 }
 
