@@ -103,6 +103,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     clearPendingAttachments: vi.fn(),
     budget: undefined,
     clearHistory: vi.fn(),
+    launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
     ...overrides,
   };
 }

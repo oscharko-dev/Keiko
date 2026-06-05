@@ -58,6 +58,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     // so the existing cancel-button tests keep their previous semantics.
     budget: undefined,
     clearHistory: vi.fn(),
+    launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
     ...overrides,
   };
 }

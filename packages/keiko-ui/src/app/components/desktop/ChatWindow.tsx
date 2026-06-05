@@ -20,6 +20,7 @@ import {
   AttachmentStrip,
   AttachRejectionAlert,
 } from "./AttachmentStrip";
+import { isRunSummaryMessage, LaunchWorkflowButton, RunSummaryCard } from "./WorkflowHandoff";
 import type { ChatSessionApi, SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
 import type {
@@ -65,8 +66,13 @@ function timeLabel(timestamp: number): string {
   return new Date(timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+// Issue #153 — system messages that carry a workflow runId are rendered inline as
+// RunSummaryCards (the chat-side projection of the run). Other system messages keep
+// the historical "filtered out of the visible log" behaviour.
 function visibleOnly(messages: readonly ChatMessage[]): ChatMessage[] {
-  return messages.filter((m) => m.role === "user" || m.role === "assistant");
+  return messages.filter(
+    (m) => m.role === "user" || m.role === "assistant" || isRunSummaryMessage(m),
+  );
 }
 
 // No fallback to a placeholder model id — when no eligible models are
@@ -87,6 +93,13 @@ function onComposerKeyDown(
 }
 
 function ChatBubble({ message }: { readonly message: ChatMessage }): ReactNode {
+  // Issue #153 — system messages carrying a workflow runId render as a structural run-summary
+  // card rather than a conversation bubble. AC#3: this keeps the run visible in the chat
+  // without weakening evidence semantics (the BFF's persisted runId is still the source of
+  // truth; this surface is read-only and never exposes apply/exec — AC#4).
+  if (isRunSummaryMessage(message)) {
+    return <RunSummaryCard message={message} />;
+  }
   const isUser = message.role === "user";
   return (
     <article className="chat-msg" data-role={message.role}>
@@ -145,6 +158,7 @@ function ComposerBar({
     loading,
     sending,
     cancelSend,
+    launchWorkflowFromConversation,
   } = session;
   // AC #1 / AC #4: when no eligible model is configured the send button must be
   // focusable (so screen-reader users discover the error) but must not submit.
@@ -207,6 +221,13 @@ function ComposerBar({
         </select>
         <Icons.chevron size={12} />
       </label>
+      {/* Issue #153: explicit Launch-workflow affordance. Hidden when no
+          workflow-eligible model is selected (AC#2). Opens the picker dialog
+          only on explicit user click (AC#1). */}
+      <LaunchWorkflowButton
+        selectedModel={selectedModelCapability}
+        launch={launchWorkflowFromConversation}
+      />
       {/* AC #1: voice button omitted — VOICE_SUPPORTED is false.
           When the capability flag arrives, render this block only when VOICE_SUPPORTED is true. */}
       {VOICE_SUPPORTED ? (
