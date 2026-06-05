@@ -56,7 +56,6 @@ import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_BODY_BYTES = 64_000;
-const DEFAULT_USER_ID = "memory-center-ui" as UserId;
 
 // ─── Body reading (mirrors memory-handlers.ts pattern) ────────────────────────
 
@@ -223,6 +222,33 @@ interface ContextInput {
   readonly budgetTokens: number | undefined;
 }
 
+function parseOptionalQueryText(raw: Record<string, unknown>): string | RouteResult | undefined {
+  if (raw.queryText === undefined) return undefined;
+  if (typeof raw.queryText !== "string") {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "queryText must be a string when provided."),
+    };
+  }
+  return raw.queryText;
+}
+
+function parseOptionalBudgetTokens(raw: Record<string, unknown>): number | RouteResult | undefined {
+  if (raw.budgetTokens === undefined) return undefined;
+  if (
+    typeof raw.budgetTokens !== "number" ||
+    !Number.isFinite(raw.budgetTokens) ||
+    !Number.isInteger(raw.budgetTokens) ||
+    raw.budgetTokens < 0
+  ) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "budgetTokens must be a non-negative integer."),
+    };
+  }
+  return raw.budgetTokens;
+}
+
 function parseContextInput(raw: Record<string, unknown>): ContextInput | RouteResult {
   const scopes = parseScopes(raw.scopes);
   if (scopes === null) {
@@ -238,18 +264,15 @@ function parseContextInput(raw: Record<string, unknown>): ContextInput | RouteRe
       body: errorBody("BAD_REQUEST", `types must be an array of: ${MEMORY_TYPES.join(", ")}.`),
     };
   }
-  const queryText = typeof raw.queryText === "string" ? raw.queryText : undefined;
-  const budgetTokens =
-    typeof raw.budgetTokens === "number" &&
-    Number.isFinite(raw.budgetTokens) &&
-    raw.budgetTokens >= 0
-      ? raw.budgetTokens
-      : undefined;
+  const queryText = parseOptionalQueryText(raw);
+  if (isRouteResult(queryText)) return queryText;
+  const budgetTokens = parseOptionalBudgetTokens(raw);
+  if (isRouteResult(budgetTokens)) return budgetTokens;
   return {
     scopes,
-    queryText,
+    queryText: queryText ?? undefined,
     types: types ?? undefined,
-    budgetTokens,
+    budgetTokens: budgetTokens ?? undefined,
   };
 }
 
@@ -307,35 +330,30 @@ interface CaptureInputContext {
   readonly conversationId: ConversationId | undefined;
 }
 
-function parseCaptureContext(raw: unknown): CaptureInputContext {
-  // Caller may omit context entirely; we synthesise a default user id so capture has a valid
-  // scope to infer. Conversation Center is single-user today.
+function optionalId(raw: Record<string, unknown>, key: string): string | undefined {
+  const value = raw[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function parseCaptureContext(raw: unknown): CaptureInputContext | RouteResult {
   if (!isRecord(raw)) {
     return {
-      userId: DEFAULT_USER_ID,
-      workspaceId: undefined,
-      projectId: undefined,
-      conversationId: undefined,
+      status: 400,
+      body: errorBody("BAD_REQUEST", "context must be an object with a non-empty userId."),
     };
   }
-  const userId =
-    typeof raw.userId === "string" && raw.userId.length > 0
-      ? (raw.userId as UserId)
-      : DEFAULT_USER_ID;
+  const userId = typeof raw.userId === "string" && raw.userId.length > 0 ? raw.userId : null;
+  if (userId === null) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "context.userId must be a non-empty string."),
+    };
+  }
   return {
-    userId,
-    workspaceId:
-      typeof raw.workspaceId === "string" && raw.workspaceId.length > 0
-        ? (raw.workspaceId as WorkspaceId)
-        : undefined,
-    projectId:
-      typeof raw.projectId === "string" && raw.projectId.length > 0
-        ? (raw.projectId as ProjectId)
-        : undefined,
-    conversationId:
-      typeof raw.conversationId === "string" && raw.conversationId.length > 0
-        ? (raw.conversationId as ConversationId)
-        : undefined,
+    userId: userId as UserId,
+    workspaceId: optionalId(raw, "workspaceId") as WorkspaceId | undefined,
+    projectId: optionalId(raw, "projectId") as ProjectId | undefined,
+    conversationId: optionalId(raw, "conversationId") as ConversationId | undefined,
   };
 }
 
@@ -349,9 +367,11 @@ function parseCaptureInput(raw: Record<string, unknown>): CaptureInput | RouteRe
   if (text.trim().length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "text must be a non-empty string.") };
   }
+  const context = parseCaptureContext(raw.context);
+  if (isRouteResult(context)) return context;
   return {
     text,
-    context: parseCaptureContext(raw.context),
+    context,
   };
 }
 

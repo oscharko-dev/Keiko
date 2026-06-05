@@ -7,6 +7,7 @@ import {
   CONVERSATION_USER_BLOCK_HEADER,
   CONVERSATION_CONTEXT_BLOCK_HEADER,
   CONVERSATION_DOCUMENT_SEPARATOR,
+  CONVERSATION_MEMORY_BLOCK_HEADER,
   composeConversationPrompt,
 } from "./conversation-prompt.js";
 
@@ -37,6 +38,19 @@ describe("composeConversationPrompt", () => {
     expect(out).toContain(CONVERSATION_CONTEXT_BLOCK_HEADER);
     expect(out).toContain("README.md");
     expect(out).toContain("Some document content.");
+  });
+
+  it("renders the memory block ahead of document context when memory is included", () => {
+    const out = composeConversationPrompt(
+      "explain",
+      [makeDoc()],
+      "- memory-a: prefers strict TypeScript",
+    );
+    expect(out).toContain(CONVERSATION_MEMORY_BLOCK_HEADER);
+    expect(out.indexOf(CONVERSATION_MEMORY_BLOCK_HEADER)).toBeLessThan(
+      out.indexOf(CONVERSATION_CONTEXT_BLOCK_HEADER),
+    );
+    expect(out).toContain("prefers strict TypeScript");
   });
 
   it("renders each attached document on its own labeled block when multiple docs are attached", () => {

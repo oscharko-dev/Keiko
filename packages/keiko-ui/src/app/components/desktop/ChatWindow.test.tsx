@@ -65,6 +65,14 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     // Issue #151 — budget + clear-history fields default to "no known limits"
     // so the existing cancel-button tests keep their previous semantics.
     budget: undefined,
+    memoryEnabled: true,
+    setMemoryEnabled: vi.fn(),
+    memoryBudgetTokens: 1200,
+    setMemoryBudgetTokens: vi.fn(),
+    latestMemory: undefined,
+    clearLatestMemory: vi.fn(),
+    acceptMemoryCandidate: vi.fn(),
+    rejectMemoryCandidate: vi.fn(),
     clearHistory: vi.fn(),
     launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
     ...overrides,
@@ -276,5 +284,46 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
     const options = Array.from(select.querySelectorAll("option")).map((option) => option.value);
     expect(options).not.toContain("test-embedding-1");
     expect(options).toContain("test-chat-1");
+  });
+});
+
+describe("ChatWindow memory controls", () => {
+  it("renders memory disclosure and candidate actions from the latest response", async () => {
+    const acceptMemoryCandidate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "- pref: strict TypeScript",
+            memories: [
+              {
+                memoryId: "mem-1",
+                bodyExcerpt: "Use TypeScript strict mode.",
+                inclusionReason: "top signal: lexical match",
+              },
+            ],
+            budget: { tokens: 1200, used: 180 },
+          },
+          actions: [
+            {
+              kind: "candidate",
+              proposalId: "prop-1",
+              body: "Deploy after the green CI run.",
+              scopeLabel: "User memory",
+              requiresApproval: true,
+            },
+          ],
+        },
+        acceptMemoryCandidate,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /1 memories included/i }));
+    expect(screen.getByText("Use TypeScript strict mode.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() => expect(acceptMemoryCandidate).toHaveBeenCalledWith("prop-1"));
   });
 });

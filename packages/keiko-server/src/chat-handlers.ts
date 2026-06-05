@@ -3,6 +3,7 @@
 // model id, while provider endpoints and keys remain resolved from the local gateway config/.env.
 
 import type { IncomingMessage } from "node:http";
+import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import {
   GatewayError,
@@ -13,6 +14,27 @@ import {
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ConversationDocumentContextWire } from "@oscharko-dev/keiko-contracts";
+import type {
+  ConversationMemoryActionWire,
+  ConversationMemoryRequestWire,
+  ConversationMemoryResultWire,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  ConversationId,
+  MemoryId,
+  MemoryProposalId,
+  MemoryRecord,
+  MemoryScope,
+  ProjectId,
+  UserId,
+  WorkspaceId,
+} from "@oscharko-dev/keiko-contracts/memory";
+import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
+import {
+  extractCandidatesFromUserText,
+  type CaptureContext,
+  type CaptureOutcome,
+} from "@oscharko-dev/keiko-memory-capture";
 import {
   UiStoreError,
   isProjectAvailable,
@@ -31,6 +53,8 @@ import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
+import { createMemoryTargetResolver } from "./memory-target-resolver.js";
+import { vaultAsQueryPort } from "./memory-conv-handlers.js";
 
 const DEFAULT_CHAT_MODEL = "example-chat-model";
 const DEFAULT_CHAT_TITLE = "New chat";
@@ -258,6 +282,123 @@ interface SendDesktopChatRequest {
   // attachments arriving via the conversation send path are kind/mime/size metadata the
   // validator uses to enforce modality+mime+size before the gateway is called).
   readonly attachments: readonly ConversationAttachment[];
+  readonly memory: ConversationMemoryRequestWire | undefined;
+}
+
+interface ConversationMemoryContextInput {
+  readonly userId: UserId;
+  readonly workspaceId: WorkspaceId | undefined;
+  readonly projectId: ProjectId | undefined;
+  readonly conversationId: ConversationId | undefined;
+}
+
+function optionalWireId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function scopeLabel(scope: MemoryScope): string {
+  switch (scope.kind) {
+    case "user":
+      return "User memory";
+    case "workspace":
+      return "Workspace memory";
+    case "project":
+      return "Project memory";
+    case "workflow":
+      return "Workflow memory";
+    case "global":
+      return "Global memory";
+  }
+}
+
+function memoryScopes(context: ConversationMemoryContextInput): readonly MemoryScope[] {
+  const scopes: MemoryScope[] = [{ kind: "user", userId: context.userId }];
+  if (context.projectId !== undefined) {
+    scopes.unshift({ kind: "project", projectId: context.projectId });
+  }
+  if (context.workspaceId !== undefined) {
+    scopes.unshift({ kind: "workspace", workspaceId: context.workspaceId });
+  }
+  return scopes;
+}
+
+function buildMemoryRecordFromProposal(
+  proposalId: MemoryId,
+  outcome: CaptureOutcome,
+): MemoryRecord | null {
+  if (outcome.kind !== "candidate") return null;
+  const { proposal } = outcome;
+  return {
+    id: proposalId,
+    schemaVersion: proposal.schemaVersion,
+    scope: proposal.scope,
+    type: proposal.type,
+    body: proposal.body,
+    tags: proposal.tags,
+    provenance: proposal.provenance,
+    validity: proposal.validity,
+    status: proposal.initialStatus,
+    pinned: false,
+    createdAt: proposal.proposedAt,
+    updatedAt: proposal.proposedAt,
+  };
+}
+
+function parseMemoryContext(value: unknown): ConversationMemoryContextInput | RouteResult {
+  if (!isRecord(value)) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "memory.context must be an object.") };
+  }
+  const userId = pickString(value, "userId")?.trim();
+  if (userId === undefined || userId.length === 0) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "memory.context.userId must be a non-empty string."),
+    };
+  }
+  return {
+    userId: userId as UserId,
+    workspaceId: optionalWireId(value.workspaceId) as WorkspaceId | undefined,
+    projectId: optionalWireId(value.projectId) as ProjectId | undefined,
+    conversationId: optionalWireId(value.conversationId) as ConversationId | undefined,
+  };
+}
+
+function parseMemoryEnabled(raw: Record<string, unknown>): boolean | RouteResult {
+  if (raw.enabled === undefined) return true;
+  if (typeof raw.enabled === "boolean") return raw.enabled;
+  return { status: 400, body: errorBody("BAD_REQUEST", "memory.enabled must be a boolean.") };
+}
+
+function parseMemoryBudget(raw: Record<string, unknown>): number | RouteResult | undefined {
+  const budgetTokens = pickNumber(raw, "budgetTokens");
+  if (budgetTokens === undefined) return undefined;
+  if (Number.isFinite(budgetTokens) && Number.isInteger(budgetTokens) && budgetTokens >= 0) {
+    return budgetTokens;
+  }
+  return {
+    status: 400,
+    body: errorBody("BAD_REQUEST", "memory.budgetTokens must be a non-negative integer."),
+  };
+}
+
+function parseMemoryRequest(
+  value: unknown,
+): ConversationMemoryRequestWire | RouteResult | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "memory must be an object.") };
+  }
+  const context = parseMemoryContext(value.context);
+  if (isRouteResult(context)) return context;
+  const enabled = parseMemoryEnabled(value);
+  if (isRouteResult(enabled)) return enabled;
+  const budgetTokens = parseMemoryBudget(value);
+  if (isRouteResult(budgetTokens)) return budgetTokens;
+  return {
+    enabled,
+    ...(budgetTokens !== undefined ? { budgetTokens } : {}),
+    context,
+  };
 }
 
 const MAX_ATTACHMENT_ENTRIES = 16;
@@ -401,19 +542,22 @@ function parseDocumentContext(value: unknown): readonly ConversationDocumentCont
   return out;
 }
 
+// eslint-disable-next-line complexity
 function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequest | RouteResult {
   const chatId = typeof body.chatId === "string" ? body.chatId : "";
   const projectPath = typeof body.projectPath === "string" ? body.projectPath : "";
-  const content = typeof body.content === "string" ? body.content.trim() : "";
   if (chatId.length === 0 || projectPath.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "chatId and projectPath are required.") };
   }
+  const content = typeof body.content === "string" ? body.content.trim() : "";
   if (content.length === 0 || content.length > MAX_CHAT_INPUT_CHARS) {
     return {
       status: 400,
       body: errorBody("BAD_REQUEST", "content must be between 1 and 16000 characters."),
     };
   }
+  const memory = parseMemoryRequest(body.memory);
+  if (isRouteResult(memory)) return memory;
   return {
     chatId,
     projectPath,
@@ -421,6 +565,7 @@ function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequ
     modelId: typeof body.modelId === "string" && body.modelId.length > 0 ? body.modelId : undefined,
     documentContext: parseDocumentContext(body.documentContext),
     attachments: parseAttachments(body.attachments),
+    memory,
   };
 }
 
@@ -473,11 +618,15 @@ function createAssistantMessage(
 function applyDocumentContextToLatestUserTurn(
   history: readonly GatewayConversationMessage[],
   request: SendDesktopChatRequest,
+  memoryText: string | undefined,
 ): GatewayConversationMessage[] {
-  if (request.documentContext.length === 0) {
+  if (
+    request.documentContext.length === 0 &&
+    (memoryText === undefined || memoryText.length === 0)
+  ) {
     return Array.from(history);
   }
-  const composed = composeConversationPrompt(request.content, request.documentContext);
+  const composed = composeConversationPrompt(request.content, request.documentContext, memoryText);
   // Replace ONLY the last user turn (the one we just persisted). System and assistant turns
   // are untouched. Walking from the end avoids rewriting a same-text earlier turn.
   const out: GatewayConversationMessage[] = Array.from(history);
@@ -491,6 +640,131 @@ function applyDocumentContextToLatestUserTurn(
   return out;
 }
 
+function emptyMemoryResult(enabled: boolean): ConversationMemoryResultWire {
+  return {
+    context: {
+      enabled,
+      text: "",
+      memories: [],
+      budget: { tokens: 0, used: 0 },
+    },
+    actions: [],
+  };
+}
+
+function buildMemoryResult(
+  request: SendDesktopChatRequest,
+  deps: UiHandlerDeps,
+): ConversationMemoryResultWire {
+  const memory = request.memory;
+  if (memory === undefined) {
+    return emptyMemoryResult(false);
+  }
+  if (deps.memoryVault === undefined || memory.enabled === false) {
+    return emptyMemoryResult(memory.enabled ?? false);
+  }
+  const retrieval = retrieveMemoryContext(
+    {
+      scopes: memoryScopes(memory.context as ConversationMemoryContextInput),
+      queryText: request.content,
+      ...(memory.budgetTokens !== undefined ? { budgetTokens: memory.budgetTokens } : {}),
+      nowMs: Date.now(),
+    },
+    vaultAsQueryPort(deps.memoryVault),
+  );
+  return {
+    context: {
+      enabled: true,
+      text: retrieval.contextBlock.text,
+      memories: retrieval.contextBlock.memories.map((item) => ({
+        memoryId: String(item.memoryId),
+        bodyExcerpt: item.bodyExcerpt,
+        inclusionReason: item.inclusionReason,
+      })),
+      budget: retrieval.budget,
+    },
+    actions: [],
+  };
+}
+
+function buildCaptureContext(input: ConversationMemoryContextInput): CaptureContext {
+  const base: {
+    userId: UserId;
+    nowMs: number;
+    newMemoryId: () => MemoryId;
+    newProposalId: () => MemoryProposalId;
+    workspaceId?: WorkspaceId;
+    projectId?: ProjectId;
+    conversationId?: ConversationId;
+  } = {
+    userId: input.userId,
+    nowMs: Date.now(),
+    newMemoryId: () => randomUUID() as MemoryId,
+    newProposalId: () => randomUUID() as MemoryProposalId,
+  };
+  if (input.workspaceId !== undefined) base.workspaceId = input.workspaceId;
+  if (input.projectId !== undefined) base.projectId = input.projectId;
+  if (input.conversationId !== undefined) base.conversationId = input.conversationId;
+  return base;
+}
+
+function captureActionFromOutcome(
+  outcome: CaptureOutcome,
+  deps: UiHandlerDeps,
+): ConversationMemoryActionWire | null {
+  switch (outcome.kind) {
+    case "candidate": {
+      if (deps.memoryVault === undefined) return null;
+      const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+      const record = buildMemoryRecordFromProposal(proposalId, outcome);
+      if (record === null) return null;
+      deps.memoryVault.insertMemory(record);
+      return {
+        kind: "candidate",
+        proposalId: String(record.id),
+        body: record.body,
+        scopeLabel: scopeLabel(record.scope),
+        requiresApproval: outcome.requiresApproval,
+      };
+    }
+    case "update":
+      return {
+        kind: "update",
+        memoryId: String(outcome.operation.memoryId),
+        bodyPatch: outcome.operation.bodyPatch,
+      };
+    case "forget":
+      return {
+        kind: "forget",
+        memoryId: String(outcome.operation.memoryId),
+        requiresConfirmation: outcome.requiresConfirmation,
+      };
+    case "rejected":
+      return { kind: "rejected", reason: outcome.reason };
+    case "supersession":
+      return null;
+  }
+}
+
+function captureMemoryActions(
+  request: SendDesktopChatRequest,
+  deps: UiHandlerDeps,
+): readonly ConversationMemoryActionWire[] {
+  if (request.memory === undefined || deps.memoryVault === undefined) {
+    return [];
+  }
+  const context = request.memory.context as ConversationMemoryContextInput;
+  const outcomes = extractCandidatesFromUserText(request.content, buildCaptureContext(context), {
+    resolver: createMemoryTargetResolver(deps.memoryVault),
+  });
+  const actions: ConversationMemoryActionWire[] = [];
+  for (const outcome of outcomes) {
+    const action = captureActionFromOutcome(outcome, deps);
+    if (action !== null) actions.push(action);
+  }
+  return actions;
+}
+
 async function persistModelChatTurn(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -502,9 +776,10 @@ async function persistModelChatTurn(
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   try {
+    const memory = buildMemoryResult(request, deps);
     const userMessage = createUserMessage(deps, request);
     const history = conversationForGateway(deps.store.listMessages(request.chatId));
-    const messages = applyDocumentContextToLatestUserTurn(history, request);
+    const messages = applyDocumentContextToLatestUserTurn(history, request, memory.context.text);
     const response = await model.call(
       {
         modelId,
@@ -514,6 +789,7 @@ async function persistModelChatTurn(
       new AbortController().signal,
     );
     const assistantMessage = createAssistantMessage(deps, request, response.content);
+    const memoryActions = captureMemoryActions(request, deps);
     const chatPatch =
       chat.title === DEFAULT_CHAT_TITLE
         ? { selectedModel: modelId, title: request.content.slice(0, 60) }
@@ -524,6 +800,7 @@ async function persistModelChatTurn(
         chat: deps.store.updateChat(request.chatId, chatPatch),
         messages: [userMessage, assistantMessage],
         usage: response.usage,
+        memory: { ...memory, actions: memoryActions },
       },
     };
   } catch (error) {
