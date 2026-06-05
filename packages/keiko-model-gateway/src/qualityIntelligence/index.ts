@@ -46,3 +46,42 @@ export {
   makeRedactionFailedError,
   makeTimeoutError,
 } from "./safeError.js";
+
+// ─── M2: routing ─────────────────────────────────────────────────────────────
+export type {
+  QualityIntelligenceModelRegistry,
+  QualityIntelligenceSelectedModel,
+} from "./routing.js";
+export { selectModelForProfile } from "./routing.js";
+
+// ─── M2: budget ──────────────────────────────────────────────────────────────
+export type { QualityIntelligenceBudgetState } from "./budget.js";
+export {
+  createBudget,
+  isExhausted,
+  remainingBudget,
+  releaseBudget,
+  reserveBudget,
+} from "./budget.js";
+
+// ─── M2: circuit breaker ─────────────────────────────────────────────────────
+export type {
+  QualityIntelligenceCircuitBreakerConfig,
+  QualityIntelligenceCircuitBreakerState,
+  QualityIntelligenceCircuitEvent,
+  QualityIntelligenceCircuitState,
+} from "./circuitBreaker.js";
+export {
+  DEFAULT_QUALITY_INTELLIGENCE_CIRCUIT_BREAKER_CONFIG,
+  createCircuitBreakerState,
+  shouldAttempt,
+  transitionOn,
+} from "./circuitBreaker.js";
+
+// ─── M2: replay cache ────────────────────────────────────────────────────────
+export type { QualityIntelligenceReplayCachePort } from "./replayCache.js";
+export { createInMemoryReplayCache, deriveReplayCacheKey, isCacheable } from "./replayCache.js";
+
+// ─── M2: cancellation ────────────────────────────────────────────────────────
+export type { QualityIntelligenceCancellationHandle } from "./cancellation.js";
+export { composeCancellationSignal } from "./cancellation.js";
