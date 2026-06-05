@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseSafeMarkdown } from "./safe-markdown";
+import { parseSafeMarkdown, containsDangerousHtml } from "./safe-markdown";
 
 // ---------------------------------------------------------------------------
 // 1. Plain paragraph
@@ -312,10 +312,8 @@ describe("parseSafeMarkdown — long source", () => {
 // ---------------------------------------------------------------------------
 describe("parseSafeMarkdown — NUL-byte bypass (CodeQL js/bad-tag-filter)", () => {
   it("treats <\\x00script> as text (indexOf scan is byte-aware, not regex)", () => {
-    // A regex like /<script/i could potentially be bypassed by some obfuscations.
-    // Our indexOf scan operates on the literal string characters.
-    // This test verifies the source containing a NUL separator still produces
-    // only plain paragraph/text nodes — never a link or code-block with exec content.
+    // Covers the defence-in-depth path: NUL-obfuscated `<script>` is now caught
+    // by the normalizer and the source falls through to escaped-text rendering.
     const src = "<\x00script>alert(1)</\x00script>";
     const nodes = parseSafeMarkdown(src);
     // Should produce a paragraph node — no link, no code-block
@@ -326,5 +324,22 @@ describe("parseSafeMarkdown — NUL-byte bypass (CodeQL js/bad-tag-filter)", () 
     // The result is purely paragraph-level text
     expect(nodes.length).toBeGreaterThan(0);
     expect(nodes[0]?.kind).toBe("paragraph");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 21. containsDangerousHtml — NUL / whitespace obfuscation variants
+// ---------------------------------------------------------------------------
+describe("containsDangerousHtml — obfuscation normalizer", () => {
+  it("detects NUL byte inside tag: <\\x00script>", () => {
+    expect(containsDangerousHtml("<\x00script>")).toBe(true);
+  });
+
+  it("detects space between < and tag name: < script>", () => {
+    expect(containsDangerousHtml("< script>")).toBe(true);
+  });
+
+  it("detects tab between < and tag name: <\\tscript>", () => {
+    expect(containsDangerousHtml("<\tscript>")).toBe(true);
   });
 });

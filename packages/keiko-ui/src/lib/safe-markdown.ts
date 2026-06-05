@@ -87,13 +87,44 @@ function containsEventHandler(lower: string): boolean {
   return false;
 }
 
-/** Returns true if the string contains a dangerous HTML construct. */
-function containsDangerousHtml(s: string): boolean {
-  const lower = s.toLowerCase();
-  for (const tag of DANGEROUS_TAGS) {
-    if (lower.includes(tag)) return true;
+/**
+ * Normalizes a string before danger scanning:
+ * - lowercases
+ * - strips NUL bytes (defence against `<\x00script>` obfuscation)
+ * - collapses any ASCII whitespace immediately after `<` so `< script` → `<script`
+ * Uses indexOf-based loops — no regex — to stay consistent with the rest of this file.
+ */
+function normalizeForDangerScan(source: string): string {
+  const lower = source.toLowerCase();
+  const noNul = lower.replaceAll("\x00", "");
+  let out = "";
+  for (let i = 0; i < noNul.length; i++) {
+    const ch = noNul[i] ?? "";
+    if (ch === "<") {
+      out += "<";
+      while (
+        i + 1 < noNul.length &&
+        (noNul[i + 1] === " " ||
+          noNul[i + 1] === "\t" ||
+          noNul[i + 1] === "\n" ||
+          noNul[i + 1] === "\r")
+      ) {
+        i++;
+      }
+      continue;
+    }
+    out += ch;
   }
-  return containsEventHandler(lower);
+  return out;
+}
+
+/** Returns true if the string contains a dangerous HTML construct. */
+export function containsDangerousHtml(s: string): boolean {
+  const normalized = normalizeForDangerScan(s);
+  for (const tag of DANGEROUS_TAGS) {
+    if (normalized.includes(tag)) return true;
+  }
+  return containsEventHandler(normalized);
 }
 
 /** Validates that a link href is safe (only http / https). */
