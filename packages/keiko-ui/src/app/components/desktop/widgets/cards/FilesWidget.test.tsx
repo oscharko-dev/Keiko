@@ -59,6 +59,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     activeProject: undefined,
     activeChat: makeChat(),
     selectedModel: "example-chat-model",
+    noEligibleModels: false,
     draft: "",
     loading: false,
     sending: false,
@@ -73,6 +74,11 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     replaceChat: vi.fn(),
     latestGrounded: undefined,
     cancelGrounded: vi.fn(),
+    // Issue #147 — attachment fields
+    pendingAttachments: [],
+    addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
+    removePendingAttachment: vi.fn(),
+    clearPendingAttachments: vi.fn(),
     ...overrides,
   };
 }

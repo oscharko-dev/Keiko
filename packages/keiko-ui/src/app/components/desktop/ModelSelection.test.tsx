@@ -84,6 +84,11 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     replaceChat: vi.fn(),
     latestGrounded: undefined,
     cancelGrounded: vi.fn(),
+    // Issue #147 — attachment fields
+    pendingAttachments: [],
+    addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
+    removePendingAttachment: vi.fn(),
+    clearPendingAttachments: vi.fn(),
     ...overrides,
   };
 }
@@ -91,7 +96,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
 function renderWindow(session: ChatSessionApi, mini?: boolean): void {
   render(
     <ChatSessionProvider value={session}>
-      <ChatWindow mini={mini} />
+      {mini === true ? <ChatWindow mini={true} /> : <ChatWindow />}
     </ChatSessionProvider>,
   );
 }
