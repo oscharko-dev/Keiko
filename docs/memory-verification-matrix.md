@@ -41,8 +41,8 @@ The deterministic evaluation scorecard schema is defined in
 eval runner (`tests/memory-eval/eval-runner.test.ts`) can emit a local
 `tests/memory-eval/scorecard.json` artifact when
 `KEIKO_WRITE_MEMORY_EVAL_SCORECARD=1` is set for PR evidence generation. The
-runner records pass/fail for each synthetic-fixture scenario and asserts
-byte-equal output across two consecutive runs during every test run.
+runner records pass/fail for each synthetic-fixture scenario during every test
+run, and JSON artifact emission remains opt-in.
 
 | Scenario                   | AC covered                                                                       |
 | -------------------------- | -------------------------------------------------------------------------------- |
@@ -56,7 +56,8 @@ byte-equal output across two consecutive runs during every test run.
 | `error-propagation`        | Vault validator + retrieval port wrap invalid input as typed errors, not crashes |
 | `suppressed-memory`        | Low-confidence, expired, rejected, and conflicted memories are omitted           |
 
-Determinism is asserted by running the scorecard twice and comparing byte-equal JSON output.
+Determinism is asserted on every test run by executing the scorecard twice and
+comparing byte-equal JSON output.
 
 ## Integration evidence
 
@@ -83,14 +84,15 @@ count on the merged tree.
 
 Memory test totals at epic-branch HEAD: 3,861 tests + 1 skipped across 278 test files.
 
-## Out-of-scope at epic merge
+## Additional closure notes
 
-The following items are explicitly out of scope for the epic merge into `dev`. They are release-time concerns handled by the publish pipeline:
+The following notes clarify how Issue #216 closure evidence maps to the current
+`dev` integration and release surfaces:
 
-- **Fresh packed-artifact install verification** — the existing root `scripts/installable-package-smoke.mjs` exercises the `@oscharko-dev/keiko` tarball against a clean sandbox. The memory packages are wired into the root `dependencies` and `bundleDependencies` arrays (commit `189a2802` in #211), so a publish-time `npm pack && node scripts/installable-package-smoke.mjs` will exercise the full memory stack. The epic PR does not run a publish.
-- **Studio browser quality gate** — exists in `scripts/check-package-surface.mjs` and is invoked by `prepack`. Not invoked on PRs targeting `dev`.
-- **Final regression evidence as separate artifact** — captured by the eval scorecard JSON (above). The scorecard is generated on every `npm test` run.
-- **Conversation Center memory toggle UI affordance** — documented as a #212 follow-up (the BFF routes ship in this epic; the visible toggle is a UI follow-up). Memory Center (#211) already exposes the full review surface.
+- **Fresh packed-artifact install verification** — the root `scripts/installable-package-smoke.mjs` remains the generic tarball-install gate, and `scripts/installable-memory-smoke.mjs` adds the memory-specific packaged-artifact flow (shipped UI/BFF start, page fetch, create/use/correct/forget/delete, scope isolation, restart persistence). `.github/workflows/ci.yml` runs both `npm run smoke:install` and `npm run smoke:install:memory` for pushes to `dev` and pull requests targeting `dev`.
+- **Package-surface verification** — `scripts/check-package-surface.mjs` remains part of the root release chain (`prepack` / `prepublishOnly`), and `.github/workflows/ci.yml` also runs `npm run check:package-surface` on pull requests targeting `dev`.
+- **Final regression evidence artifact** — the deterministic eval runner executes on every `npm test` run; writing `tests/memory-eval/scorecard.json` is optional and enabled only when `KEIKO_WRITE_MEMORY_EVAL_SCORECARD=1` is set.
+- **Conversation Center memory toggle UI affordance** — the current Conversation Center UI already ships a memory enable/disable toggle and budget control in `packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx`, alongside the BFF routes from #212.
 
 ## Closure request
 

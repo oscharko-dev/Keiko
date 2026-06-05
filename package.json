@@ -41,6 +41,7 @@
     "build:ui": "node scripts/build-ui.mjs",
     "check:package-surface": "node scripts/check-package-surface.mjs",
     "smoke:install": "node scripts/installable-package-smoke.mjs",
+    "smoke:install:memory": "node scripts/installable-memory-smoke.mjs",
     "check:workspace-supply-chain": "node scripts/check-workspace-supply-chain.mjs",
     "check:qi-supply-chain": "node scripts/check-quality-intelligence-supply-chain.mjs",
     "arch:check": "depcruise --validate .dependency-cruiser.cjs src packages",
