@@ -37,7 +37,7 @@ export function projectScope(projectId: string): MemoryScope {
 
 export function ctx(overrides: Partial<GovernanceContext> = {}): GovernanceContext {
   return {
-    reviewerId: (overrides.reviewerId ?? ("rev-1" as MemoryReviewerId)) as MemoryReviewerId,
+    reviewerId: overrides.reviewerId ?? ("rev-1" as MemoryReviewerId),
     nowMs: overrides.nowMs ?? FIXED_NOW_MS,
   };
 }

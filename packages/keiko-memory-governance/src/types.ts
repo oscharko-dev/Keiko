@@ -6,9 +6,7 @@
 
 import type {
   ConversationId,
-  MemoryEdgeId,
   MemoryId,
-  MemoryProposalId,
   MemoryReviewerId,
   MemoryScope,
   MemoryStatus,

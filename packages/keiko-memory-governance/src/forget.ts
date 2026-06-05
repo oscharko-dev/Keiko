@@ -29,22 +29,30 @@ import type {
 
 // ─── Scope coordinate equality ────────────────────────────────────────────────
 // Pure: two scopes match when their discriminator AND coordinate field match exactly.
-function scopeEquals(a: MemoryScope, b: MemoryScope): boolean {
-  if (a.kind !== b.kind) return false;
-  switch (a.kind) {
+// Implemented via a canonical "kind:coordinate" string projection to collapse the
+// per-kind branching (memory pattern from issue #205 scopeCoordinateKey).
+function scopeCoordinateKey(scope: MemoryScope): string {
+  switch (scope.kind) {
     case "user":
-      return b.kind === "user" && a.userId === b.userId;
+      return `user:${scope.userId}`;
     case "workspace":
-      return b.kind === "workspace" && a.workspaceId === b.workspaceId;
+      return `workspace:${scope.workspaceId}`;
     case "project":
-      return b.kind === "project" && a.projectId === b.projectId;
+      return `project:${scope.projectId}`;
     case "workflow":
-      return b.kind === "workflow" && a.workflowDefinitionId === b.workflowDefinitionId;
+      return `workflow:${scope.workflowDefinitionId}`;
     case "global":
-      return b.kind === "global";
-    default:
-      return false;
+      return "global:";
+    default: {
+      const _exhaustive: never = scope;
+      void _exhaustive;
+      return "unknown:";
+    }
   }
+}
+
+function scopeEquals(a: MemoryScope, b: MemoryScope): boolean {
+  return scopeCoordinateKey(a) === scopeCoordinateKey(b);
 }
 
 // ─── Per-selector filter predicates ───────────────────────────────────────────

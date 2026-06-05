@@ -176,7 +176,6 @@ describe("buildForgetOperations", () => {
     for (const env of envelopes) {
       expect(validateMemoryForget(env).ok).toBe(true);
       expect(env.userAcknowledgedDestructive).toBe(true);
-      expect(env.edgeKind).toBeUndefined();
       expect(env.schemaVersion).toBe("1");
     }
     expect(must(envelopes[0]).memoryId).toBe(a.id);

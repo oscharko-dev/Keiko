@@ -48,25 +48,33 @@ import type {
 } from "./types.js";
 
 // ─── Body-normalisation helpers (no regex, no external deps) ──────────────────
-function normalizeBody(body: string): string {
-  let out = "";
-  for (const ch of body.toLowerCase()) {
-    const code = ch.charCodeAt(0);
-    const isLetter = code >= 97 && code <= 122;
-    const isDigit = code >= 48 && code <= 57;
-    const isSpace = ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
-    out += isLetter || isDigit ? ch : isSpace ? " " : "";
-  }
-  // Collapse runs of spaces.
+function mapCharToSafe(ch: string): string {
+  const code = ch.charCodeAt(0);
+  const isLetter = code >= 97 && code <= 122;
+  const isDigit = code >= 48 && code <= 57;
+  if (isLetter || isDigit) return ch;
+  const isSpace = ch === " " || ch === "\t" || ch === "\n" || ch === "\r";
+  return isSpace ? " " : "";
+}
+
+function collapseSpaces(input: string): string {
   let collapsed = "";
   let prevSpace = false;
-  for (const ch of out) {
+  for (const ch of input) {
     const sp = ch === " ";
     if (sp && prevSpace) continue;
     collapsed += ch;
     prevSpace = sp;
   }
   return collapsed.trim();
+}
+
+function normalizeBody(body: string): string {
+  let out = "";
+  for (const ch of body.toLowerCase()) {
+    out += mapCharToSafe(ch);
+  }
+  return collapseSpaces(out);
 }
 
 function tokenize(body: string): readonly string[] {
