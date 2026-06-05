@@ -5,7 +5,7 @@ import { useChatSessionContext } from "./context/ChatSessionContext";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
-import { DEFAULT_MODEL_ID, type ChatSessionApi } from "./hooks/useChatSession";
+import type { ChatSessionApi } from "./hooks/useChatSession";
 import type {
   Chat,
   ChatMessage,
@@ -32,36 +32,10 @@ function visibleOnly(messages: readonly ChatMessage[]): ChatMessage[] {
   return messages.filter((m) => m.role === "user" || m.role === "assistant");
 }
 
-// Conservative default chat capability for the empty-discovery fallback (Issue #143 / AC #2).
-// Mirrors `createDefaultChatCapability` in @oscharko-dev/keiko-model-gateway — duplicated here
-// rather than imported because that package is Node-only (node:fs, node:net) and this module
-// is a Client Component. Unknown discovered chat models stay text-only and not workflow-eligible
-// until a server-side normaliser enriches them.
-function fallbackChatCapability(id: string): ModelCapability {
-  return {
-    id,
-    kind: "chat",
-    contextWindow: 0,
-    maxOutputTokens: 0,
-    toolCalling: true,
-    structuredOutput: true,
-    streaming: true,
-    supportsImageInput: false,
-    supportsDocumentInput: false,
-    workflowEligible: false,
-    costClass: "medium",
-    latencyClass: "standard",
-    throughputHint: "runtime-configured endpoint",
-    preferredUseCases: ["Chat"],
-    knownLimitations: [
-      "Runtime-configured capability; validate against the target endpoint before production use",
-      "Image input, document input, and workflow eligibility require explicit enrichment",
-    ],
-  };
-}
-
+// No fallback to a placeholder model id — when no eligible models are
+// configured the caller renders a noEligibleModels error instead (AC #4).
 function modelList(models: readonly ModelCapability[]): readonly ModelCapability[] {
-  return models.length > 0 ? models : [fallbackChatCapability(DEFAULT_MODEL_ID)];
+  return models;
 }
 
 function onComposerKeyDown(
@@ -109,7 +83,11 @@ interface ComposerBarProps {
 }
 
 function ComposerBar({ session, ready }: ComposerBarProps): ReactNode {
-  const { models, selectedModel, setSelectedModel } = session;
+  const { models, selectedModel, setSelectedModel, noEligibleModels } = session;
+  // AC #1 / AC #4: when no eligible model is configured the send button must be
+  // focusable (so screen-reader users discover the error) but must not submit.
+  // Use aria-disabled rather than the HTML disabled attribute so focus is retained.
+  const sendBlocked = noEligibleModels || !ready;
   return (
     <div className="cmp-bar">
       <button type="button" className="cmp-add" aria-label="Attach (coming soon)" title="Attach">
@@ -124,8 +102,9 @@ function ComposerBar({ session, ready }: ComposerBarProps): ReactNode {
         <Icons.cube size={13} style={{ color: "var(--accent)" }} />
         <select
           className="cmp-model-select"
-          value={selectedModel}
+          value={selectedModel ?? ""}
           aria-label="Model"
+          disabled={noEligibleModels}
           onChange={(event) => setSelectedModel(event.target.value)}
         >
           {modelList(models).map((model) => (
@@ -140,14 +119,26 @@ function ComposerBar({ session, ready }: ComposerBarProps): ReactNode {
         <Icons.mic size={16} />
       </button>
       <button
-        type="submit"
+        type={noEligibleModels ? "button" : "submit"}
         className="cmp-send"
-        data-on={ready}
-        disabled={!ready}
+        data-on={!sendBlocked}
+        aria-disabled={sendBlocked}
+        disabled={!noEligibleModels && !ready}
         aria-label="Send message"
       >
         <Icons.arrowUp size={16} />
       </button>
+    </div>
+  );
+}
+
+// AC #1: rendered when no conversation-eligible model is configured. Uses
+// role="alert" so screen readers announce immediately on mount. Uses gw-error
+// CSS class (var(--fg) text) for WCAG AA contrast compliance.
+function NoModelAlert(): ReactNode {
+  return (
+    <div role="alert" className="gw-error cmp-no-model">
+      No conversation-eligible model is configured. Connect a gateway in Settings to enable chat.
     </div>
   );
 }
@@ -329,13 +320,15 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
     loading,
     sending,
     error,
+    noEligibleModels,
     sendMessage,
     cancelGrounded,
     activeChat,
     replaceChat,
     latestGrounded,
   } = session;
-  const ready = draft.trim().length > 0 && !sending && !loading;
+  // AC #1: block ready when no model is available — do not allow submission.
+  const ready = draft.trim().length > 0 && !sending && !loading && !noEligibleModels;
   const visible = visibleOnly(messages);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -351,6 +344,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
         {activeChat !== undefined ? (
           <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
         ) : null}
+        {noEligibleModels ? <NoModelAlert /> : null}
         <MiniChat session={session} ready={ready} />
       </div>
     );
@@ -361,6 +355,11 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
       {linkedRoot !== null ? <ChatContext root={linkedRoot} /> : null}
       {activeChat !== undefined ? (
         <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
+      ) : null}
+      {noEligibleModels ? (
+        <div className="chatw-foot">
+          <NoModelAlert />
+        </div>
       ) : null}
       <div className="chatw-scroll" ref={scrollRef} aria-live="polite">
         {visible.length === 0 ? (

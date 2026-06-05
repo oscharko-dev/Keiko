@@ -206,8 +206,10 @@ function splitPaths(value: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-function chooseDefaultModel(models: readonly ModelCapability[]): string {
-  return (models.find((model) => model.id === "example-chat-model") ?? models[0])?.id ?? "";
+// AC #4: no longer prefers a placeholder id — use the first available model.
+// When models is empty, returns "" (handled by the caller via `current || ...`).
+export function chooseDefaultModel(models: readonly ModelCapability[]): string {
+  return models[0]?.id ?? "";
 }
 
 export function isAgentWorkflowModel(model: ModelCapability): boolean {

@@ -21,7 +21,6 @@ import type {
 } from "@/lib/types";
 import { isConversationEligibleModel } from "@/lib/types";
 
-export const DEFAULT_MODEL_ID = "example-chat-model";
 export const DEFAULT_CHAT_TITLE = "New chat";
 
 function errorMessage(error: unknown): string {
@@ -34,9 +33,11 @@ function sortChats(chats: readonly Chat[]): Chat[] {
   return [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-function pickChatModelId(models: readonly ModelCapability[]): string {
-  if (models.some((model) => model.id === DEFAULT_MODEL_ID)) return DEFAULT_MODEL_ID;
-  return models[0]?.id ?? DEFAULT_MODEL_ID;
+// Returns the id of the first eligible model, or undefined when no models are
+// available. Callers must NOT fall back to a placeholder id — downstream
+// surfaces branch on undefined to show a clear "no model" error (AC #1 / #4).
+export function pickChatModelId(models: readonly ModelCapability[]): string | undefined {
+  return models[0]?.id;
 }
 
 export type ChatSessionApi = UseChatSessionResult;
@@ -48,7 +49,11 @@ export interface UseChatSessionResult {
   models: ModelCapability[];
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
-  selectedModel: string;
+  // undefined when no conversation-eligible model is configured (AC #1 / #4).
+  // Downstream surfaces must render an accessible error and block submission.
+  selectedModel: string | undefined;
+  // true when loading is complete and no eligible model is available.
+  noEligibleModels: boolean;
   draft: string;
   loading: boolean;
   sending: boolean;
@@ -80,7 +85,7 @@ interface SessionState {
   models: ModelCapability[];
   activeProject: ProjectWithAvailability | undefined;
   activeChat: Chat | undefined;
-  selectedModel: string;
+  selectedModel: string | undefined;
 }
 
 const INITIAL_STATE: SessionState = {
@@ -90,7 +95,7 @@ const INITIAL_STATE: SessionState = {
   models: [],
   activeProject: undefined,
   activeChat: undefined,
-  selectedModel: DEFAULT_MODEL_ID,
+  selectedModel: undefined,
 };
 
 async function bootstrapSession(): Promise<Partial<SessionState>> {
@@ -122,6 +127,19 @@ async function bootstrapSession(): Promise<Partial<SessionState>> {
     }
   }
 
+  // AC #1: when no eligible model exists, set selectedModel to undefined so
+  // downstream surfaces show a clear error instead of a placeholder id.
+  if (defaultModel === undefined) {
+    return {
+      models: chatModels,
+      selectedModel: undefined,
+      projects: Array.from(projectPayload.projects),
+      activeProject: project,
+      chats: [],
+      activeChat: undefined,
+      messages: [],
+    };
+  }
   const input: { modelId: string; title: string; projectPath?: string } = {
     modelId: defaultModel,
     title: DEFAULT_CHAT_TITLE,
@@ -189,6 +207,10 @@ export function useChatSession(): UseChatSessionResult {
 
   const openNewChat = useCallback(
     async (projectOverride?: ProjectWithAvailability): Promise<void> => {
+      if (state.selectedModel === undefined) {
+        setError("No conversation-eligible model is configured. Connect a gateway in Settings.");
+        return;
+      }
       setError(undefined);
       try {
         const input: { modelId: string; title: string; projectPath?: string } = {
@@ -286,13 +308,19 @@ export function useChatSession(): UseChatSessionResult {
   );
 
   const sendUngrounded = useCallback(
-    async (chat: Chat, project: ProjectWithAvailability, content: string, optimisticId: string) => {
+    async (
+      chat: Chat,
+      project: ProjectWithAvailability,
+      content: string,
+      optimisticId: string,
+      modelId: string,
+    ) => {
       try {
         const result = await sendDesktopChat({
           chatId: chat.id,
           projectPath: project.path,
           content,
-          modelId: state.selectedModel,
+          modelId,
         });
         setState((previous) => ({
           ...previous,
@@ -319,7 +347,7 @@ export function useChatSession(): UseChatSessionResult {
         }
       }
     },
-    [state.selectedModel],
+    [],
   );
 
   // Issue #185 — when the active chat carries a connectedScope binding the composer routes the
@@ -327,17 +355,20 @@ export function useChatSession(): UseChatSessionResult {
   // The route persists both messages and returns the redacted citation projection; the hook
   // refetches the message log on success so the bubbles reflect the canonical store state.
   const sendGrounded = useCallback(
-    async (chat: Chat, project: ProjectWithAvailability, content: string, optimisticId: string) => {
+    async (
+      chat: Chat,
+      project: ProjectWithAvailability,
+      content: string,
+      optimisticId: string,
+      modelId: string,
+    ) => {
       // Copilot PR #258 finding: clear the previous answer at the START of a new send so a
       // stale citation block doesn't briefly flash next to the new question.
       setLatestGrounded(undefined);
       const controller = new AbortController();
       groundedControllerRef.current = controller;
       try {
-        const result = await askGrounded(
-          { chatId: chat.id, content, modelId: state.selectedModel },
-          controller.signal,
-        );
+        const result = await askGrounded({ chatId: chat.id, content, modelId }, controller.signal);
         if (activeChatIdRef.current !== chat.id) {
           return;
         }
@@ -373,7 +404,7 @@ export function useChatSession(): UseChatSessionResult {
         groundedControllerRef.current = null;
       }
     },
-    [state.selectedModel],
+    [],
   );
 
   // Issue #185 AC3 — exposed to the UI so the cancel button can abort in-flight grounded
@@ -388,7 +419,15 @@ export function useChatSession(): UseChatSessionResult {
     const content = draft.trim();
     const chat = state.activeChat;
     const project = state.activeProject;
-    if (content.length === 0 || chat === undefined || project === undefined) return;
+    const modelId = state.selectedModel;
+    // AC #1: block submission when no eligible model is configured.
+    if (
+      content.length === 0 ||
+      chat === undefined ||
+      project === undefined ||
+      modelId === undefined
+    )
+      return;
     const optimistic: ChatMessage = {
       id: `local-${String(Date.now())}`,
       chatId: chat.id,
@@ -407,14 +446,21 @@ export function useChatSession(): UseChatSessionResult {
     setState((previous) => ({ ...previous, messages: [...previous.messages, optimistic] }));
     try {
       if (chat.connectedScope !== undefined) {
-        await sendGrounded(chat, project, content, optimistic.id);
+        await sendGrounded(chat, project, content, optimistic.id, modelId);
       } else {
-        await sendUngrounded(chat, project, content, optimistic.id);
+        await sendUngrounded(chat, project, content, optimistic.id, modelId);
       }
     } finally {
       setSending(false);
     }
-  }, [draft, state.activeChat, state.activeProject, sendGrounded, sendUngrounded]);
+  }, [
+    draft,
+    state.activeChat,
+    state.activeProject,
+    state.selectedModel,
+    sendGrounded,
+    sendUngrounded,
+  ]);
 
   // Issue #184 — local cache update after a connected-scope PATCH (or any other surgical wire
   // mutation on the active Chat). Only the matched id is updated; the chat list keeps its
@@ -436,6 +482,7 @@ export function useChatSession(): UseChatSessionResult {
     activeProject: state.activeProject,
     activeChat: state.activeChat,
     selectedModel: state.selectedModel,
+    noEligibleModels: !loading && state.selectedModel === undefined,
     draft,
     loading,
     sending,
