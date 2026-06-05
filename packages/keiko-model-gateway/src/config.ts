@@ -536,7 +536,16 @@ export function parseGatewayConfig(raw: unknown, env: EnvSource = {}): GatewayCo
   // malformed entry fails closed before reaching any consumer.
   const topLevelCapabilities =
     raw.capabilities === undefined ? [] : parseCapabilityList(raw.capabilities, "capabilities");
-  const capabilities: readonly ModelCapability[] = [...inlineCapabilities, ...topLevelCapabilities];
+  const mergedCapabilities = new Map<string, ModelCapability>();
+  for (const capability of inlineCapabilities) {
+    mergedCapabilities.set(capability.id, capability);
+  }
+  // Explicit top-level capability records are the authoritative surface for a
+  // model id. They must override the inline provider defaults when both exist.
+  for (const capability of topLevelCapabilities) {
+    mergedCapabilities.set(capability.id, capability);
+  }
+  const capabilities: readonly ModelCapability[] = [...mergedCapabilities.values()];
   return {
     providers,
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),

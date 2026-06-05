@@ -63,7 +63,7 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
     costClass: "medium",
     latencyClass: "standard",
     throughputHint: "runtime-configured endpoint",
-    preferredUseCases: ["Chat", "Agent workflow"],
+    preferredUseCases: ["Chat"],
     knownLimitations: [
       "Runtime-configured capability; validate against the target endpoint before production use",
       "Image input, document input, and workflow eligibility require explicit enrichment",

@@ -613,4 +613,47 @@ describe("parseGatewayConfig top-level capabilities array", () => {
       expect((error as Error).message).not.toContain("example-test-token-1234567890");
     }
   });
+
+  it("prefers a top-level capability over an inline provider capability with the same id", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-private-chat",
+      capability: {
+        kind: "chat",
+        toolCalling: false,
+        structuredOutput: false,
+        supportsImageInput: false,
+        supportsDocumentInput: false,
+        workflowEligible: false,
+        preferredUseCases: ["Inline default"],
+        knownLimitations: ["inline"],
+      },
+    })) as Record<string, unknown>;
+    raw.capabilities = [
+      {
+        ...validCapability(),
+        id: "example-private-chat",
+        toolCalling: true,
+        structuredOutput: true,
+        supportsImageInput: true,
+        supportsDocumentInput: true,
+        workflowEligible: true,
+        preferredUseCases: ["Top-level explicit"],
+        knownLimitations: ["top-level"],
+      },
+    ];
+
+    const config = parseGatewayConfig(raw);
+    expect(config.capabilities).toHaveLength(1);
+    expect(config.capabilities?.[0]).toMatchObject({
+      id: "example-private-chat",
+      toolCalling: true,
+      structuredOutput: true,
+      supportsImageInput: true,
+      supportsDocumentInput: true,
+      workflowEligible: true,
+      preferredUseCases: ["Top-level explicit"],
+      knownLimitations: ["top-level"],
+    });
+  });
 });

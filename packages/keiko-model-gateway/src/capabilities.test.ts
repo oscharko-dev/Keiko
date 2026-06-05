@@ -90,6 +90,11 @@ describe("capability registry", () => {
     expect(cap.workflowEligible).toBe(false);
   });
 
+  it("does not advertise agent workflow for runtime-configured chat models", () => {
+    const cap = createDefaultChatCapability("example-chat-model");
+    expect(cap.preferredUseCases).toEqual(["Chat"]);
+  });
+
   it("declares the default capability as kind 'chat'", () => {
     const cap = createDefaultChatCapability("example-chat-model");
     expect(cap.kind).toBe("chat");
