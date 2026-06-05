@@ -144,6 +144,31 @@ describe("parseGatewayConfig", () => {
     expect(() => parseGatewayConfig(raw)).toThrow(/capability\.id/);
   });
 
+  // Test B — parseProviderCapability non-chat workflow rejection via inline path (Issue #143 verifier LOW)
+  // Exercises config.ts:323 — the kind !== "chat" && workflowEligible guard inside the
+  // per-provider inline capability parser. This path is distinct from the top-level
+  // parseModelCapability surface tested in the parseModelCapability describe block.
+  it("rejects an inline provider capability with kind: 'embedding' and workflowEligible: true", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      capability: {
+        kind: "embedding",
+        workflowEligible: true,
+      },
+    }));
+    try {
+      parseGatewayConfig(raw);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      const message = (error as ConfigInvalidError).message;
+      expect(message).toContain("providers[0].capability.workflowEligible");
+      expect(message).toMatch(
+        /providers\[0\]\.capability\.workflowEligible must be false when providers\[0\]\.capability\.kind is not "chat"/u,
+      );
+    }
+  });
+
   it("rejects an empty providers array", () => {
     expect(() => parseGatewayConfig({ providers: [], circuitBreaker: {} })).toThrow(
       ConfigInvalidError,
@@ -467,6 +492,63 @@ describe("parseModelCapability", () => {
     const raw = { ...validCapability(), kind: "ocr-vision", workflowEligible: false };
     const parsed = parseModelCapability(raw, "capabilities[0]");
     expect(parsed.kind).toBe("ocr-vision");
+  });
+
+  // Test A — ocr-vision + workflowEligible rejection (top-level parser, Issue #143 verifier LOW)
+  it("rejects kind: 'ocr-vision' with workflowEligible: true", () => {
+    const malformed = {
+      id: "test-vision",
+      kind: "ocr-vision" as const,
+      contextWindow: 8000,
+      maxOutputTokens: 4000,
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: false,
+      supportsImageInput: true,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "medium" as const,
+      latencyClass: "standard" as const,
+      throughputHint: "test",
+      preferredUseCases: [],
+      knownLimitations: [],
+    };
+    expect(() => parseModelCapability(malformed, "capability")).toThrow(ConfigInvalidError);
+    expect(() => parseModelCapability(malformed, "capability")).toThrow(
+      /capability\.workflowEligible must be false when capability\.kind is not "chat"/u,
+    );
+  });
+
+  // Test C — credential-shaped sibling field no-leakage (Issue #143 security-triage MEDIUM, OWASP A09)
+  it("does not echo a credential-shaped sibling field in the rejection message", () => {
+    const credentialShaped = "sk-test-abcdef1234567890";
+    const malformed = {
+      id: "test-chat",
+      kind: "chat" as const,
+      contextWindow: 8000,
+      maxOutputTokens: 4000,
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: false,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: false,
+      costClass: "medium" as const,
+      latencyClass: "standard" as const,
+      throughputHint: "test",
+      preferredUseCases: [],
+      knownLimitations: [],
+      apiKey: credentialShaped,
+    };
+    try {
+      parseModelCapability(malformed, "capability");
+      throw new Error("expected parseModelCapability to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      const message = (error as ConfigInvalidError).message;
+      expect(message).toContain("capability.apiKey");
+      expect(message).not.toContain(credentialShaped);
+    }
   });
 });
 
