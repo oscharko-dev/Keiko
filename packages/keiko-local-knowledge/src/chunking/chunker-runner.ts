@@ -205,6 +205,52 @@ function persistAllChunks(
   return chunkIds;
 }
 
+interface ChunkingPreflight {
+  readonly existingCount: number;
+  readonly staleChunks: boolean;
+}
+
+function loadChunkingPreflight(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): ChunkingPreflight {
+  const db = store._internal.db;
+  const existingCount = countChunksForDocument(db, capsuleId, documentId);
+  return {
+    existingCount,
+    staleChunks: existingCount > 0 && hasStaleChunksForDocument(db, capsuleId, documentId),
+  };
+}
+
+function assertDocumentSourceMatches(
+  store: KnowledgeStore,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+  sourceId: KnowledgeSourceId,
+): void {
+  const documentSourceId = selectDocumentSourceId(store._internal.db, capsuleId, documentId);
+  if (documentSourceId !== undefined && String(documentSourceId) !== String(sourceId)) {
+    throw new ChunkingError(
+      `chunkDocument sourceId ${String(sourceId)} does not match document ${String(documentId)} source ${String(documentSourceId)}`,
+    );
+  }
+}
+
+function shouldReuseExistingChunks(
+  preflight: ChunkingPreflight,
+  force: boolean | undefined,
+): boolean {
+  return preflight.existingCount > 0 && force !== true && !preflight.staleChunks;
+}
+
+function shouldDeleteExistingChunks(
+  preflight: ChunkingPreflight,
+  force: boolean | undefined,
+): boolean {
+  return (force === true || preflight.staleChunks) && preflight.existingCount > 0;
+}
+
 export function chunkDocument(
   store: KnowledgeStore,
   params: ChunkDocumentParams,
@@ -214,15 +260,9 @@ export function chunkDocument(
   throwIfAborted(signal);
 
   const db = store._internal.db;
-  const existingCount = countChunksForDocument(db, capsuleId, documentId);
-  const staleChunks = existingCount > 0 && hasStaleChunksForDocument(db, capsuleId, documentId);
-  const documentSourceId = selectDocumentSourceId(db, capsuleId, documentId);
-  if (documentSourceId !== undefined && String(documentSourceId) !== String(sourceId)) {
-    throw new ChunkingError(
-      `chunkDocument sourceId ${String(sourceId)} does not match document ${String(documentId)} source ${String(documentSourceId)}`,
-    );
-  }
-  if (existingCount > 0 && force !== true && !staleChunks) {
+  const preflight = loadChunkingPreflight(store, capsuleId, documentId);
+  assertDocumentSourceMatches(store, capsuleId, documentId, sourceId);
+  if (shouldReuseExistingChunks(preflight, force)) {
     return { capsuleId, documentId, chunkIds: [], skippedExisting: true };
   }
 
@@ -233,7 +273,7 @@ export function chunkDocument(
 
   db.exec("BEGIN");
   try {
-    if ((force === true || staleChunks) && existingCount > 0) {
+    if (shouldDeleteExistingChunks(preflight, force)) {
       deleteChunksForDocument(db, capsuleId, documentId);
     }
     const ctx: PersistContext = { capsuleId, sourceId, documentId, sourceText };
