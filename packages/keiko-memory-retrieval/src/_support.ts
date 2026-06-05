@@ -64,7 +64,7 @@ export interface BuildRecordOptions {
 
 function buildProvenance(options: BuildRecordOptions): MemoryRecord["provenance"] {
   return {
-    sourceKind: options.sourceKind ?? "user-message",
+    sourceKind: options.sourceKind ?? "explicit-user-instruction",
     capturedAt: options.capturedAt ?? 1_000,
     confidence: options.confidence ?? 0.8,
     sensitivity: options.sensitivity ?? "public",
