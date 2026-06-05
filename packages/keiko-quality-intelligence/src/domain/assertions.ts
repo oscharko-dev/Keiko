@@ -2,10 +2,11 @@
 // (Epic #270, Issue #272).
 //
 // Pure, deterministic, no IO. Inspired structurally by the deterministic
-// guards in @oscharko-dev/test-intelligence packages/core-engine/src/
-// (intent-derivation.ts and coverage-relevance.ts), but rewritten to
-// consume only the contracts surface exposed by
-// @oscharko-dev/keiko-contracts via the QualityIntelligence namespace.
+// guards in the upstream Test Intelligence (TI) reference repo at
+// packages/core-engine/src/intent-derivation.ts and coverage-relevance.ts,
+// but rewritten to consume only the contracts surface exposed by
+// keiko-contracts via the QualityIntelligence namespace. TI is NOT a
+// runtime dependency: ADR-0023 D12 + supply-chain gate forbid it.
 
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 

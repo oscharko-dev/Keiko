@@ -7,7 +7,7 @@
 // #282.
 //
 // Inspired structurally by the per-domain heuristics under
-// @oscharko-dev/test-intelligence packages/core-engine/src/intent-derivation.ts
+// Test Intelligence reference (TI) packages/core-engine/src/intent-derivation.ts
 // — porting the lexical hints, not any provider-specific tuning.
 
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";

@@ -15,7 +15,7 @@
 // ally smallest `id` so the function is order-independent.
 //
 // Structurally inspired by
-// @oscharko-dev/test-intelligence packages/core-engine/src/test-case-dedupe.ts
+// Test Intelligence reference (TI) packages/core-engine/src/test-case-dedupe.ts
 // (`detectTestCaseDuplicatesExtended`), but stripped of the embedding cosine
 // path that issue #279 owns; the deterministic canonical-signature path is
 // what we port here.

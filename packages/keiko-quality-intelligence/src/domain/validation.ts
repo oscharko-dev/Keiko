@@ -13,7 +13,7 @@
 //      in" and expected "user is not logged in").
 //
 // Structurally inspired by
-// @oscharko-dev/test-intelligence packages/core-engine/src/
+// Test Intelligence reference (TI) packages/core-engine/src/
 //   cross-field-invariant-engine.ts and acceptance-criteria.ts — but with
 // the model-judge tier excluded and a Keiko-shaped finding output.
 

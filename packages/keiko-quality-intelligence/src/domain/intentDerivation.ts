@@ -4,7 +4,7 @@
 // deterministic lexical heuristics only — no embeddings, no model calls.
 //
 // Structurally inspired by
-// @oscharko-dev/test-intelligence packages/core-engine/src/intent-derivation.ts
+// Test Intelligence reference (TI) packages/core-engine/src/intent-derivation.ts
 // (deriveBusinessTestIntentIr), but rewritten to consume the Keiko contracts
 // surface. The TI reference performs the same role (turn structured input
 // into a list of business intents) but reaches into UI-specific node trees;

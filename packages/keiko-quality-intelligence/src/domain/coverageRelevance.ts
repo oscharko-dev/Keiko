@@ -6,7 +6,7 @@
 // based coverage scoring lives in #279.
 //
 // Structurally inspired by
-// @oscharko-dev/test-intelligence packages/core-engine/src/coverage-relevance.ts
+// Test Intelligence reference (TI) packages/core-engine/src/coverage-relevance.ts
 // (`isCoverageRelevantElementLike`, `normalizeCoverageText`) — but the TI
 // reference scores UI element coverage; our Keiko port scores atom-to-
 // candidate provenance coverage.

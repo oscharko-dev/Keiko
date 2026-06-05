@@ -6,7 +6,7 @@
 // position based, so the same input always produces the same candidate IDs.
 //
 // Structurally inspired by
-// @oscharko-dev/test-intelligence packages/core-engine/src/intent-derivation.ts
+// Test Intelligence reference (TI) packages/core-engine/src/intent-derivation.ts
 // (the IR → candidate translation phase). The TI reference produces richer
 // UI-oriented candidates with screen/route metadata; our Keiko port stays
 // envelope/atom-shaped and policy-driven.
