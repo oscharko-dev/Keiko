@@ -91,6 +91,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
+    launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
     ...overrides,
   };
 }
