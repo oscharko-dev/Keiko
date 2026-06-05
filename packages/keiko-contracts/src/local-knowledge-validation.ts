@@ -446,6 +446,51 @@ function collectNodeKinds(
   return nodeKinds;
 }
 
+function validateEdgeNodeId(
+  field: "from" | "to",
+  nodeId: unknown,
+  nodeKinds: ReadonlyMap<string, ConnectorNode["kind"]>,
+  errors: string[],
+): string | undefined {
+  if (typeof nodeId !== "string" || !nodeKinds.has(nodeId)) {
+    errors.push(`graph.edges references unknown ${field}.nodeId`);
+    return undefined;
+  }
+  return nodeId;
+}
+
+function validateEdgeNodeKind(
+  field: "from" | "to",
+  kind: unknown,
+  nodeId: string | undefined,
+  nodeKinds: ReadonlyMap<string, ConnectorNode["kind"]>,
+  errors: string[],
+): void {
+  if (typeof kind !== "string" || !(CONNECTOR_NODE_KINDS as readonly string[]).includes(kind)) {
+    errors.push(`graph.edges ${field}.kind must be a known node kind`);
+    return;
+  }
+  if (nodeId !== undefined && nodeKinds.get(nodeId) !== kind) {
+    errors.push(`graph.edges ${field}.kind must match the referenced node kind`);
+  }
+}
+
+function validateEdgeRecord(
+  edge: Record<string, unknown>,
+  nodeKinds: ReadonlyMap<string, ConnectorNode["kind"]>,
+  errors: string[],
+): void {
+  const from = edge.from as Record<string, unknown>;
+  const to = edge.to as Record<string, unknown>;
+  const fromId = validateEdgeNodeId("from", from.nodeId, nodeKinds, errors);
+  const toId = validateEdgeNodeId("to", to.nodeId, nodeKinds, errors);
+  validateEdgeNodeKind("from", from.kind, fromId, nodeKinds, errors);
+  validateEdgeNodeKind("to", to.kind, toId, nodeKinds, errors);
+  if (!isFiniteNonNegativeNumber(edge.createdAt)) {
+    errors.push("graph.edges entry must have a finite non-negative createdAt");
+  }
+}
+
 function validateEdges(
   edges: readonly unknown[],
   nodeKinds: ReadonlyMap<string, ConnectorNode["kind"]>,
@@ -456,33 +501,7 @@ function validateEdges(
       errors.push("graph.edges entry must have from/to objects");
       continue;
     }
-    const fromId = edge.from.nodeId;
-    const toId = edge.to.nodeId;
-    if (typeof fromId !== "string" || !nodeKinds.has(fromId)) {
-      errors.push("graph.edges references unknown from.nodeId");
-    }
-    if (typeof toId !== "string" || !nodeKinds.has(toId)) {
-      errors.push("graph.edges references unknown to.nodeId");
-    }
-    if (
-      typeof edge.from.kind !== "string" ||
-      !(CONNECTOR_NODE_KINDS as readonly string[]).includes(edge.from.kind)
-    ) {
-      errors.push("graph.edges from.kind must be a known node kind");
-    } else if (typeof fromId === "string" && nodeKinds.get(fromId) !== edge.from.kind) {
-      errors.push("graph.edges from.kind must match the referenced node kind");
-    }
-    if (
-      typeof edge.to.kind !== "string" ||
-      !(CONNECTOR_NODE_KINDS as readonly string[]).includes(edge.to.kind)
-    ) {
-      errors.push("graph.edges to.kind must be a known node kind");
-    } else if (typeof toId === "string" && nodeKinds.get(toId) !== edge.to.kind) {
-      errors.push("graph.edges to.kind must match the referenced node kind");
-    }
-    if (!isFiniteNonNegativeNumber(edge.createdAt)) {
-      errors.push("graph.edges entry must have a finite non-negative createdAt");
-    }
+    validateEdgeRecord(edge, nodeKinds, errors);
   }
 }
 
