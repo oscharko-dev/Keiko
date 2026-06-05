@@ -240,6 +240,7 @@ interface SendDesktopChatRequest {
 const MAX_DOCUMENT_CONTEXT_ENTRIES = 16;
 const MAX_DOCUMENT_CONTEXT_TEXT_BYTES = 65_536; // mirrors MAX_EXTRACTED_BYTES per doc
 const MAX_DOCUMENT_DISPLAY_NAME = 256;
+const MAX_DOCUMENT_TRUNCATION_MARKER_BYTES = 256;
 
 interface DocumentContextFields {
   readonly id: string;
@@ -307,6 +308,12 @@ function parseDocumentContextEntry(value: unknown): ConversationDocumentContextW
   if (!fieldsWithinCaps(fields)) return undefined;
   const truncationMarker =
     typeof value.truncationMarker === "string" ? value.truncationMarker : undefined;
+  if (
+    truncationMarker !== undefined &&
+    truncationMarker.length > MAX_DOCUMENT_TRUNCATION_MARKER_BYTES
+  ) {
+    return undefined;
+  }
   return { ...fields, truncationMarker };
 }
 

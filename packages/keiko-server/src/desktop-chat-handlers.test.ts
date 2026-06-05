@@ -318,6 +318,44 @@ describe("desktop chat routes", () => {
     expect(lastTurn?.content).toContain("Some document content.");
   });
 
+  it("rejects a send with a truncationMarker exceeding 256 bytes", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "hello",
+        documentContext: [
+          {
+            id: "doc-1",
+            displayName: "file.txt",
+            mimeType: "text/plain",
+            sizeBytes: 4,
+            extractedBytes: 4,
+            truncated: true,
+            text: "okay",
+            truncationMarker: "x".repeat(257),
+          },
+        ],
+      }),
+    });
+    // The oversized marker causes the entry to be dropped; with no valid document
+    // context the send still succeeds (documentContext is optional), but the model
+    // receives no document block — the prompt must not contain the marker payload.
+    expect(sendRes.status).toBe(200);
+    const lastTurn = seenRequests[0]?.messages.at(-1);
+    expect(lastTurn?.content).not.toContain("x".repeat(257));
+  });
+
   it("ignores malformed documentContext entries instead of rejecting the send", async () => {
     const createRes = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",
