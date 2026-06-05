@@ -50,6 +50,10 @@ export {
   InvalidRunIdError,
   type AuditCode,
 } from "./errors.js";
+// QualityIntelligence sub-module (Issue #274, ADR-0023 D8). Mirrors the contracts barrel layout —
+// callers use it as a namespace import: `import { QualityIntelligence } from '@oscharko-dev/keiko-evidence'`.
+export * as QualityIntelligence from "./qualityIntelligence/index.js";
+
 export {
   EVIDENCE_SCHEMA_VERSION,
   DEFAULT_RETENTION,
