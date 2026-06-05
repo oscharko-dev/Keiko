@@ -105,3 +105,18 @@ export { importGraphAdapter } from "./importGraph.js";
 export { gitHistoryAdapter } from "./gitHistory.js";
 
 export { KEIKO_WORKSPACE_VERSION } from "./version.js";
+
+// ─── Safe document context extraction (Issue #148 / Epic #142) ─────────────────
+export type {
+  DocumentExtractionBudget,
+  DocumentExtractionFailure,
+  DocumentExtractionResult,
+  ExtractedDocumentContext,
+} from "./document-extraction.js";
+export {
+  MAX_EXTRACTED_BYTES,
+  MAX_TOTAL_EXTRACTED_BYTES,
+  SUPPORTED_MIME_LITERALS,
+  SUPPORTED_MIME_PREFIXES,
+  extractDocumentContext,
+} from "./document-extraction.js";

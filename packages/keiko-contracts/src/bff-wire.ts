@@ -191,6 +191,33 @@ export interface DesktopChatSendResponse {
   readonly usage?: DesktopChatSendUsage;
 }
 
+// Issue #148 — Safe document context extraction for conversation inputs.
+// One wire entry per attached document the UI has extracted text from. The server passes the
+// `text` field through into a structured prompt block — it does NOT re-extract from disk
+// (the server-side modality guard is owned by issue #149). `displayName` is the file basename
+// only; absolute filesystem paths NEVER cross this wire (AC #4 of issue #147).
+export interface ConversationDocumentContextWire {
+  readonly id: string;
+  readonly displayName: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly extractedBytes: number;
+  readonly truncated: boolean;
+  readonly truncationMarker?: string | undefined;
+  readonly text: string;
+}
+
+// Issue #148 — wire shape for POST /api/desktop/chat. Authored here (not inside keiko-server)
+// so the UI and the server share a single source of truth for the send payload. Existing
+// callers that omit `documentContext` keep working — the field is optional and additive.
+export interface DesktopChatSendRequestWire {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly content: string;
+  readonly modelId?: string | undefined;
+  readonly documentContext?: readonly ConversationDocumentContextWire[] | undefined;
+}
+
 // ─── Gateway safe-config projection (BFF /api/gateway/config) ─────────────────────
 // Sanitised mirror of GatewayConfig with NO apiKey / NO baseUrl / NO additionalHeaders.
 // Authored here (not in gateway.ts) because the credential-bearing GatewayConfig in
