@@ -52,6 +52,10 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
+    // Issue #151 — budget + clear-history fields default to "no known limits"
+    // so the existing cancel-button tests keep their previous semantics.
+    budget: undefined,
+    clearHistory: vi.fn(),
     ...overrides,
   };
 }

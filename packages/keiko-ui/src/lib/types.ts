@@ -27,6 +27,20 @@ export {
   explainConversationIneligibility,
 } from "@oscharko-dev/keiko-contracts";
 
+// Issue #151 / Epic #142: pure conversation-budget estimator. The Conversation
+// Center context-pressure indicator and "clear history" affordance derive from
+// this on every render. Token counts are APPROXIMATE (bytes/4) by construction
+// — UI copy and tests must state this precisely.
+export type {
+  ConversationBudgetBreakdown,
+  ConversationBudgetDocumentContext,
+  ConversationBudgetEstimate,
+  ConversationBudgetInputs,
+  ConversationBudgetMessage,
+  ConversationBudgetPressure,
+} from "@oscharko-dev/keiko-contracts";
+export { estimateConversationBudget } from "@oscharko-dev/keiko-contracts";
+
 // ─── Workspace summary + context pack ──────────────────────────────────────────────
 export type {
   SelectedScopeKind,

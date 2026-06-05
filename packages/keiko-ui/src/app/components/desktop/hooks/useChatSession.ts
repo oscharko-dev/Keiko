@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError,
   askGrounded,
@@ -15,11 +15,12 @@ import {
 import type {
   Chat,
   ChatMessage,
+  ConversationBudgetEstimate,
   GroundedAnswer as GroundedAnswerWire,
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
-import { isConversationEligibleModel } from "@/lib/types";
+import { estimateConversationBudget, isConversationEligibleModel } from "@/lib/types";
 
 // ─── Attachment types (Issue #147) ────────────────────────────────────────────
 //
@@ -79,7 +80,30 @@ function readDataUrl(file: File): Promise<string> {
 
 export const DEFAULT_CHAT_TITLE = "New chat";
 
+// Issue #151 / AC#3 — user-facing copy when a provider or BFF error reports the
+// conversation exceeded the model's context window. Exported so the test can
+// pin the exact string without duplicating it.
+export const CONTEXT_OVERSIZED_USER_MESSAGE =
+  "The conversation context exceeded the model's window. Clear history or pick a larger-context model.";
+
+const CONTEXT_OVERSIZED_API_CODE = "CONVERSATION_OVERSIZED_CONTEXT";
+const CONTEXT_OVERSIZED_PHRASES = [
+  "context length",
+  "context_length_exceeded",
+  "max_tokens",
+  "too many tokens",
+] as const;
+
+function isContextOversizedError(error: unknown): boolean {
+  if (error instanceof ApiError && error.code === CONTEXT_OVERSIZED_API_CODE) return true;
+  const text = error instanceof Error ? error.message.toLowerCase() : "";
+  if (text.length === 0) return false;
+  return CONTEXT_OVERSIZED_PHRASES.some((phrase) => text.includes(phrase));
+}
+
 function errorMessage(error: unknown): string {
+  // AC#3 — context-overflow provider errors map to a single actionable message.
+  if (isContextOversizedError(error)) return CONTEXT_OVERSIZED_USER_MESSAGE;
   if (error instanceof ApiError) return `${error.code}: ${error.message}`;
   if (error instanceof Error) return error.message;
   return "Unknown error";
@@ -140,6 +164,16 @@ export interface UseChatSessionResult {
   ) => Promise<{ ok: true } | { ok: false; reason: AttachmentRejectionReason }>;
   readonly removePendingAttachment: (id: string) => void;
   readonly clearPendingAttachments: () => void;
+  // Issue #151 — approximate context-window pressure estimate for the active
+  // chat. undefined while the selected model is unresolved. Token counts are
+  // approximate; UI copy must say so.
+  readonly budget: ConversationBudgetEstimate | undefined;
+  // Issue #151 / AC#4 — reset the in-memory history for the next prompt
+  // WITHOUT deleting the conversation row. The chat row in `chats` is
+  // preserved; only `messages` is cleared. Downstream wiring for
+  // connected-context byte counts (#177 / #189 / #204) is a follow-up; the
+  // estimator already carries the fields end-to-end.
+  readonly clearHistory: () => void;
 }
 
 interface SessionState {
@@ -587,6 +621,39 @@ export function useChatSession(): UseChatSessionResult {
     clearPendingAttachments,
   ]);
 
+  // Issue #151 / AC#4 — clear the in-memory history for the next prompt
+  // without deleting the conversation row. The chat row stays in `chats`;
+  // only `messages` is reset so the next send carries no prior history.
+  // TODO(#151 follow-up): when the BFF gains a "history checkpoint" surface
+  // we'll also persist this reset so reloads don't re-fetch the cleared turns.
+  const clearHistory = useCallback(() => {
+    setLatestGrounded(undefined);
+    setState((previous) => ({ ...previous, messages: [] }));
+  }, []);
+
+  // Issue #151 / AC#1 — reactive context-pressure estimate. Derives from the
+  // selected model's capability + current draft + visible history. Connected-
+  // context byte counts from #177/#189/#204 are passed through as zero today;
+  // they wire up to the estimator when those surfaces expose byte budgets in
+  // a follow-up. The fields exist on the contract so consumers (BFF, audit,
+  // UI) can carry the breakdown end-to-end without contract churn.
+  const budget = useMemo<ConversationBudgetEstimate | undefined>(() => {
+    const capability = state.models.find((m) => m.id === state.selectedModel);
+    if (capability === undefined) return undefined;
+    const history: readonly { readonly role: string; readonly content: string }[] = state.messages
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: m.role, content: m.content }));
+    return estimateConversationBudget({
+      modelContextWindow: capability.contextWindow,
+      modelMaxOutputTokens: capability.maxOutputTokens,
+      userDraftText: draft,
+      conversationHistory: history,
+      // TODO(#151 follow-up): wire repoContextPackBytes from #177 surface,
+      // knowledgeCapsuleBytes from #189, memoryContextBytes from #204. The
+      // estimator already counts them; this turn passes zero by omission.
+    });
+  }, [state.models, state.selectedModel, state.messages, draft]);
+
   // Issue #184 — local cache update after a connected-scope PATCH (or any other surgical wire
   // mutation on the active Chat). Only the matched id is updated; the chat list keeps its
   // existing sort order so the pill flip is non-disruptive. activeChat is rewritten when its
@@ -626,5 +693,7 @@ export function useChatSession(): UseChatSessionResult {
     addPendingAttachment,
     removePendingAttachment,
     clearPendingAttachments,
+    budget,
+    clearHistory,
   };
 }
