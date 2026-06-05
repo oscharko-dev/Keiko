@@ -23,6 +23,11 @@ function simpleFs(): ReturnType<typeof memoryFs> {
     { relativePath: "README.md", content: "hello" },
     { relativePath: "src/index.ts", content: "export {};" },
     { relativePath: "src/sub/deep.ts", content: "// deep" },
+    { relativePath: ".git/config", content: "[core]" },
+    { relativePath: ".vscode/settings.json", content: "{}" },
+    { relativePath: ".next/server/app.js", content: "// next" },
+    { relativePath: "node_modules/pkg/index.js", content: "module.exports = {};" },
+    { relativePath: "dist/bundle.js", content: "// bundle" },
     { relativePath: "vendor/lib.js", content: "// vendor" },
     { relativePath: "image.png", content: new Uint8Array([0x89, 0x50, 0x4e, 0x47]) },
   ]);
@@ -34,6 +39,15 @@ describe("walkSource — folder scope", () => {
     expect([...files].sort()).toStrictEqual(
       ["README.md", "image.png", "src/index.ts", "src/sub/deep.ts", "vendor/lib.js"].sort(),
     );
+  });
+
+  it("skips hidden and generated directories by default", () => {
+    const files = collect(folderScope(ROOT));
+    expect(files).not.toContain(".git/config");
+    expect(files).not.toContain(".vscode/settings.json");
+    expect(files).not.toContain(".next/server/app.js");
+    expect(files).not.toContain("node_modules/pkg/index.js");
+    expect(files).not.toContain("dist/bundle.js");
   });
 
   it("respects recursive=false (top-level only)", () => {
@@ -181,6 +195,17 @@ describe("walkSource — files scope", () => {
     };
     const files = collect(scope, fs);
     expect(files).toStrictEqual(["README.md", "src/index.ts"]);
+  });
+
+  it("allows explicit files inside hidden or generated directories", () => {
+    const fs = simpleFs();
+    const scope: KnowledgeSourceScope = {
+      kind: "files",
+      rootPath: ROOT,
+      files: [".git/config", "dist/bundle.js"],
+    };
+    const files = collect(scope, fs);
+    expect(files).toStrictEqual([".git/config", "dist/bundle.js"]);
   });
 });
 

@@ -157,6 +157,19 @@ interface WalkContext {
   filesYielded: number;
 }
 
+const HIDDEN_OR_GENERATED_DIRS: ReadonlySet<string> = new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  ".next",
+  ".turbo",
+  "node_modules",
+  "dist",
+  "build",
+  "coverage",
+  "out",
+]);
+
 function isGlobMatched(bounds: ScopeBounds, relativePath: string): boolean {
   // Exclude wins over include. An empty includeGlobs means "include everything"; an empty
   // excludeGlobs means "exclude nothing".
@@ -164,6 +177,14 @@ function isGlobMatched(bounds: ScopeBounds, relativePath: string): boolean {
     return false;
   }
   return matchesAny(bounds.includeGlobs, relativePath, true);
+}
+
+function shouldDescendIntoDirectory(entryName: string): boolean {
+  return !entryName.startsWith(".") && !HIDDEN_OR_GENERATED_DIRS.has(entryName);
+}
+
+function shouldSkipDirectoryEntry(ctx: WalkContext, entryName: string): boolean {
+  return !ctx.bounds.recursive || !shouldDescendIntoDirectory(entryName);
 }
 
 function* yieldFileIfAllowed(
@@ -240,7 +261,7 @@ function* descend(ctx: WalkContext, absoluteDir: string, depth: number): Generat
     const childAbs = joinAbs(absoluteDir, entry.name);
     const childRel = toPosixRelative(ctx.bounds.rootPath, childAbs);
     if (entry.isDirectory) {
-      if (!ctx.bounds.recursive) continue;
+      if (shouldSkipDirectoryEntry(ctx, entry.name)) continue;
       yield* descend(ctx, childAbs, depth + 1);
       continue;
     }

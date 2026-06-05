@@ -1,6 +1,6 @@
 // Retrieval evaluation runner (Epic #189, Issue #268). Materialises a `RetrievalEvalFixture`
-// into a fresh in-memory tmpdir SQLite store, runs every query through `runLocalKnowledgeRetrieval`
-// (#199) UNCHANGED, scores each query against the five dimensions, and returns an immutable
+// into a fresh temporary SQLite store on disk, runs every query through `runLocalKnowledgeRetrieval`
+// (#199) UNCHANGED, scores each query against the deterministic guardrail dimensions, and returns an immutable
 // `RetrievalEvalScorecard`.
 //
 // Determinism contract:
@@ -33,6 +33,7 @@ import { openKnowledgeStore, type KnowledgeStore } from "../store.js";
 
 import {
   scoreCitationQuality,
+  scoreContextBudgetFit,
   scoreNoEvidenceAccuracy,
   scorePrecision,
   scoreRecall,
@@ -42,11 +43,14 @@ import { seedFixture, type SeededFixture } from "./runner-seed.js";
 import { createScriptedEmbeddingAdapter, withTopicMarker } from "./scripted-embedding-adapter.js";
 import type {
   EvalCapsuleSpec,
+  ModelJudgedRetrievalEvalJudge,
+  ModelJudgedRetrievalEvalScores,
   RetrievalEvalFixture,
   RetrievalEvalQuery,
   RetrievalEvalScorecard,
 } from "./types.js";
 import { PASS_THRESHOLDS } from "./types.js";
+import type { RetrievalNoEvidenceReason } from "../retrieval/types.js";
 
 // ─── Public dependency surface ───────────────────────────────────────────────
 
@@ -57,6 +61,9 @@ export interface RunRetrievalEvalDeps {
   // Optional run id (echoed into the scorecard). Default is a fixed string so two runs of
   // the same fixture produce byte-identical scorecards.
   readonly runId?: string;
+  // Optional hook for non-CI model-judged evaluation. The offline deterministic harness
+  // does not enable this by default; callers must opt in explicitly.
+  readonly modelJudge?: ModelJudgedRetrievalEvalJudge;
 }
 
 // ─── Vector embedding (post-seed) ────────────────────────────────────────────
@@ -132,7 +139,16 @@ interface QueryScores {
   readonly sourceIsolation: number;
   readonly citationQuality: number;
   readonly noEvidenceAccuracy: number;
+  readonly contextBudgetFit: number;
   readonly latencyTicks: number;
+}
+
+interface QueryEvaluation {
+  readonly query: RetrievalEvalQuery;
+  readonly scores: QueryScores;
+  readonly references: Awaited<ReturnType<typeof runLocalKnowledgeRetrieval>>["references"];
+  readonly noEvidence: boolean;
+  readonly reason?: RetrievalNoEvidenceReason;
 }
 
 function scopeCapsuleIds(query: RetrievalEvalQuery): readonly KnowledgeCapsuleId[] {
@@ -163,13 +179,13 @@ async function runOneQuery(
   query: RetrievalEvalQuery,
   seeded: SeededFixture,
   now: () => number,
-): Promise<QueryScores> {
+): Promise<QueryEvaluation> {
   // Wrap the query text in the topic marker so the scripted adapter applies the same
   // topic boost it used at seed time.
   const queryText =
     query.topic !== undefined ? withTopicMarker(query.text, query.topic) : query.text;
   const adapter = createScriptedEmbeddingAdapter({
-    identity: seeded.identity,
+    identity: query.queryEmbeddingIdentity ?? seeded.identity,
     topicBoosts: seeded.topicBoosts,
   });
   const retrievalQuery = buildRetrievalQuery(query, queryText);
@@ -182,16 +198,57 @@ async function runOneQuery(
   const expected = query.expectedChunkIds ?? [];
   const expectedNoEvidence = query.expectedNoEvidence === true;
   return {
-    recall: scoreRecall(result.references, expected),
-    precision: scorePrecision(result.references, expected),
-    sourceIsolation: scoreSourceIsolation(result.references, scopeCapsuleIds(query)),
-    citationQuality: scoreCitationQuality(result.references, seeded.chunkUnitKinds),
-    noEvidenceAccuracy: scoreNoEvidenceAccuracy(result.noEvidence, expectedNoEvidence),
-    latencyTicks: end - start,
+    query,
+    references: result.references,
+    noEvidence: result.noEvidence,
+    ...(result.reason !== undefined ? { reason: result.reason } : {}),
+    scores: {
+      recall: scoreRecall(result.references, expected),
+      precision: scorePrecision(result.references, expected),
+      sourceIsolation: scoreSourceIsolation(result.references, scopeCapsuleIds(query)),
+      citationQuality: scoreCitationQuality(result.references, seeded.chunkUnitKinds),
+      noEvidenceAccuracy: scoreNoEvidenceAccuracy(
+        result.noEvidence,
+        expectedNoEvidence,
+        result.reason,
+        query.expectedNoEvidenceReason,
+      ),
+      contextBudgetFit: scoreContextBudgetFit(
+        result.references,
+        seeded.chunkTokenCounts,
+        query.contextBudgetTokens,
+      ),
+      latencyTicks: end - start,
+    },
   };
 }
 
 // ─── Aggregation ─────────────────────────────────────────────────────────────
+
+async function runModelJudge(
+  modelJudge: ModelJudgedRetrievalEvalJudge | undefined,
+  fixture: RetrievalEvalFixture,
+  perQuery: readonly QueryEvaluation[],
+): Promise<ModelJudgedRetrievalEvalScores | undefined> {
+  if (modelJudge === undefined) return undefined;
+  const judged: ModelJudgedRetrievalEvalScores[] = [];
+  for (const evaluation of perQuery) {
+    judged.push(
+      await modelJudge.judge({
+        fixtureId: fixture.id,
+        queryId: evaluation.query.id,
+        queryText: evaluation.query.text,
+        references: evaluation.references,
+        noEvidence: evaluation.noEvidence,
+        ...(evaluation.reason !== undefined ? { reason: evaluation.reason } : {}),
+      }),
+    );
+  }
+  return {
+    groundedness: meanOf(judged.map((item) => item.groundedness)),
+    faithfulness: meanOf(judged.map((item) => item.faithfulness)),
+  };
+}
 
 function meanOf(values: readonly number[]): number {
   if (values.length === 0) return 0;
@@ -203,23 +260,28 @@ function meanOf(values: readonly number[]): number {
 function buildScorecard(
   fixture: RetrievalEvalFixture,
   runId: string,
-  perQuery: readonly QueryScores[],
+  perQuery: readonly QueryEvaluation[],
+  modelJudged: ModelJudgedRetrievalEvalScores | undefined,
 ): RetrievalEvalScorecard {
   const dimensions = {
-    recall: meanOf(perQuery.map((q) => q.recall)),
-    precision: meanOf(perQuery.map((q) => q.precision)),
-    sourceIsolation: meanOf(perQuery.map((q) => q.sourceIsolation)),
-    citationQuality: meanOf(perQuery.map((q) => q.citationQuality)),
-    noEvidenceAccuracy: meanOf(perQuery.map((q) => q.noEvidenceAccuracy)),
-    latencyMs: perQuery.reduce((acc, q) => acc + q.latencyTicks, 0),
+    recall: meanOf(perQuery.map((q) => q.scores.recall)),
+    precision: meanOf(perQuery.map((q) => q.scores.precision)),
+    sourceIsolation: meanOf(perQuery.map((q) => q.scores.sourceIsolation)),
+    citationQuality: meanOf(perQuery.map((q) => q.scores.citationQuality)),
+    noEvidenceAccuracy: meanOf(perQuery.map((q) => q.scores.noEvidenceAccuracy)),
+    contextBudgetFit: meanOf(perQuery.map((q) => q.scores.contextBudgetFit)),
+    latencyMs: perQuery.reduce((acc, q) => acc + q.scores.latencyTicks, 0),
   };
   const passed =
     dimensions.recall >= PASS_THRESHOLDS.recall &&
     dimensions.precision >= PASS_THRESHOLDS.precision &&
     dimensions.sourceIsolation >= PASS_THRESHOLDS.sourceIsolation &&
     dimensions.citationQuality >= PASS_THRESHOLDS.citationQuality &&
-    dimensions.noEvidenceAccuracy >= PASS_THRESHOLDS.noEvidenceAccuracy;
-  return { fixtureId: fixture.id, runId, dimensions, passed };
+    dimensions.noEvidenceAccuracy >= PASS_THRESHOLDS.noEvidenceAccuracy &&
+    dimensions.contextBudgetFit >= PASS_THRESHOLDS.contextBudgetFit;
+  return modelJudged === undefined
+    ? { fixtureId: fixture.id, runId, dimensions, passed }
+    : { fixtureId: fixture.id, runId, dimensions, passed, modelJudged };
 }
 
 // ─── Default clock ───────────────────────────────────────────────────────────
@@ -247,11 +309,12 @@ export async function runRetrievalEval(
   try {
     const seeded = seedFixture(store, fixture);
     await embedAllChunks(store, fixture, seeded, now);
-    const perQuery: QueryScores[] = [];
+    const perQuery: QueryEvaluation[] = [];
     for (const query of fixture.queries) {
       perQuery.push(await runOneQuery(store, query, seeded, now));
     }
-    return buildScorecard(fixture, runId, perQuery);
+    const modelJudged = await runModelJudge(deps.modelJudge, fixture, perQuery);
+    return buildScorecard(fixture, runId, perQuery, modelJudged);
   } finally {
     store.close();
     rmSync(dir, { recursive: true, force: true });

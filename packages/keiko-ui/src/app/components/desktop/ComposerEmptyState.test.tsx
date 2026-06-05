@@ -372,7 +372,15 @@ describe("AC #4 — keyboard and screen-reader preservation", () => {
     // Focus the body first, then tab through the elements.
     (document.body as HTMLElement).focus();
     await user.tab();
-    // The first focusable element in the composer is the textarea.
+    // Merge-resolution note (PR #355 + Epic #142): the merged ChatScopeHeader
+    // unconditionally renders a Grounding <select> above the message log even
+    // when no scope is bound. Skip past any pre-composer elements until we
+    // reach the composer textarea — that is the element this AC pins.
+    let pre = 0;
+    while (document.activeElement?.tagName.toLowerCase() !== "textarea" && pre < 20) {
+      await user.tab();
+      pre++;
+    }
     const focused = document.activeElement;
     expect(focused?.tagName.toLowerCase()).toBe("textarea");
 

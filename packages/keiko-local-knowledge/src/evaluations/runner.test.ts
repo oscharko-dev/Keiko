@@ -1,16 +1,21 @@
 // Tests for the retrieval eval runner (Epic #189, Issue #268). Each fixture exercises
 // one (or two) dimensions to its pass threshold; the determinism test pins byte-identical
 // scorecards across runs; the mutation-witness test proves the runner's precision score
-// would change if the retrieval-runner's topK clamp were removed.
+// changes when the underlying `topK` changes.
 
 import { describe, expect, it } from "vitest";
 
 import {
   ambiguousQueryFixture,
+  contextBudgetFixture,
   multiCapsuleFixture,
+  multiPageFixture,
   noEvidenceFixture,
   singleTopicFixture,
+  staleIndexFixture,
+  structuredFileFixture,
   sourceIsolationFixture,
+  wrongScopeFixture,
 } from "./fixtures.js";
 import { runRetrievalEval } from "./runner.js";
 import { PASS_THRESHOLDS, type RetrievalEvalFixture } from "./types.js";
@@ -62,6 +67,30 @@ describe("runRetrievalEval — source-isolation fixture", () => {
   });
 });
 
+describe("runRetrievalEval — wrong-scope fixture", () => {
+  it("treats wrong-scope queries as first-class no-evidence cases", async () => {
+    const scorecard = await runRetrievalEval(wrongScopeFixture);
+    expect(scorecard.dimensions.noEvidenceAccuracy).toBe(1);
+    expect(scorecard.passed).toBe(true);
+  });
+});
+
+describe("runRetrievalEval — multi-page fixture", () => {
+  it("preserves page-specific citations for multi-page documents", async () => {
+    const scorecard = await runRetrievalEval(multiPageFixture);
+    expect(scorecard.dimensions.citationQuality).toBe(1);
+    expect(scorecard.passed).toBe(true);
+  });
+});
+
+describe("runRetrievalEval — structured-file fixture", () => {
+  it("scores citation quality across json, csv, and section-backed structured units", async () => {
+    const scorecard = await runRetrievalEval(structuredFileFixture);
+    expect(scorecard.dimensions.citationQuality).toBe(1);
+    expect(scorecard.passed).toBe(true);
+  });
+});
+
 describe("runRetrievalEval — citation quality", () => {
   it("returns citationQuality=1.0 on a fixture where every chunk's parsed unit is a page", async () => {
     const scorecard = await runRetrievalEval(singleTopicFixture);
@@ -99,7 +128,23 @@ describe("runRetrievalEval — determinism", () => {
   });
 });
 
-describe("runRetrievalEval — mutation witness (topK clamp)", () => {
+describe("runRetrievalEval — context budget", () => {
+  it("returns contextBudgetFit=1.0 when the retrieved pack fits exactly", async () => {
+    const scorecard = await runRetrievalEval(contextBudgetFixture);
+    expect(scorecard.dimensions.contextBudgetFit).toBe(1);
+    expect(scorecard.passed).toBe(true);
+  });
+});
+
+describe("runRetrievalEval — stale-index fixture", () => {
+  it("surfaces incompatible embedding identity as a no-evidence success case", async () => {
+    const scorecard = await runRetrievalEval(staleIndexFixture);
+    expect(scorecard.dimensions.noEvidenceAccuracy).toBe(1);
+    expect(scorecard.passed).toBe(true);
+  });
+});
+
+describe("runRetrievalEval — mutation witness (topK sensitivity)", () => {
   it("a smaller topK changes the precision score relative to a larger topK", async () => {
     // Build two fixtures from `singleTopicFixture` differing only in the query's topK:
     //   - topK=1 returns one ref (the top alpha chunk); both expectedChunkIds includes
@@ -107,8 +152,7 @@ describe("runRetrievalEval — mutation witness (topK clamp)", () => {
     //   - topK=3 returns all three chunks (two alpha + the noise chunk). precision =
     //     2/3 ≈ 0.667.
     // The contrast proves that the underlying `topK` value flows through into the
-    // precision computation — removing the `Math.min(topK, MAX_RETRIEVAL_TOP_K)` clamp
-    // (or any other layer that bounds the returned set size) would change the score.
+    // precision computation.
     const baseQuery = singleTopicFixture.queries[0];
     if (baseQuery === undefined) throw new Error("fixture missing query");
     const small: RetrievalEvalFixture = {
@@ -145,6 +189,17 @@ describe("runRetrievalEval — caller-supplied clock", () => {
   });
 });
 
+describe("runRetrievalEval — optional model judge", () => {
+  it("aggregates model-judged scores only when a judge is supplied", async () => {
+    const scorecard = await runRetrievalEval(singleTopicFixture, {
+      modelJudge: {
+        judge: () => Promise.resolve({ groundedness: 0.75, faithfulness: 0.5 }),
+      },
+    });
+    expect(scorecard.modelJudged).toEqual({ groundedness: 0.75, faithfulness: 0.5 });
+  });
+});
+
 describe("runRetrievalEval — pass threshold breakdown", () => {
   it("every shipped fixture meets every pass threshold", async () => {
     const fixtures: readonly RetrievalEvalFixture[] = [
@@ -153,6 +208,11 @@ describe("runRetrievalEval — pass threshold breakdown", () => {
       noEvidenceFixture,
       ambiguousQueryFixture,
       sourceIsolationFixture,
+      wrongScopeFixture,
+      multiPageFixture,
+      structuredFileFixture,
+      contextBudgetFixture,
+      staleIndexFixture,
     ];
     for (const fixture of fixtures) {
       const scorecard = await runRetrievalEval(fixture);
@@ -166,6 +226,9 @@ describe("runRetrievalEval — pass threshold breakdown", () => {
       );
       expect(scorecard.dimensions.noEvidenceAccuracy).toBeGreaterThanOrEqual(
         PASS_THRESHOLDS.noEvidenceAccuracy,
+      );
+      expect(scorecard.dimensions.contextBudgetFit).toBeGreaterThanOrEqual(
+        PASS_THRESHOLDS.contextBudgetFit,
       );
       expect(scorecard.passed).toBe(true);
     }

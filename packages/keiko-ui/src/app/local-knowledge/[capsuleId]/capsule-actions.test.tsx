@@ -32,8 +32,8 @@ function defaultProps(overrides: Partial<CapsuleActionsProps> = {}): CapsuleActi
     capsuleDisplayName: DEFAULT_NAME,
     onActionComplete: vi.fn(),
     deleteCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
-    reindexCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
-    markCapsuleStaleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
+    refreshCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
+    repairCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     ...overrides,
   };
 }
@@ -53,24 +53,26 @@ describe("CapsuleActions — modal open and close", () => {
     expect(screen.getByText(/delete capsule/i)).toBeInTheDocument();
   });
 
-  it("opens the re-index modal when Re-index is clicked", async () => {
+  it("opens the refresh modal when Refresh changed files is clicked", async () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /re-index capsule/i }));
+    await user.click(screen.getByRole("button", { name: /refresh changed files for capsule/i }));
 
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText(/re-index capsule/i)).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText(/refresh changed files/i)).toBeInTheDocument();
   });
 
-  it("opens the mark-stale modal when Mark stale is clicked", async () => {
+  it("opens the repair modal when Repair failed files is clicked", async () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /mark capsule.*stale/i }));
+    await user.click(screen.getByRole("button", { name: /repair failed files for capsule/i }));
 
-    expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText(/mark capsule stale/i)).toBeInTheDocument();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText(/repair failed files/i)).toBeInTheDocument();
   });
 
   it("closes the modal when Cancel is clicked", async () => {
@@ -169,57 +171,57 @@ describe("CapsuleActions — delete typed-name confirmation", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Re-index action
+// Refresh action
 // ---------------------------------------------------------------------------
 
-describe("CapsuleActions — re-index action", () => {
-  it("calls reindexCapsuleImpl when confirmed", async () => {
+describe("CapsuleActions — refresh action", () => {
+  it("calls refreshCapsuleImpl when confirmed", async () => {
     const user = userEvent.setup();
-    const reindexCapsuleImpl = vi.fn().mockImplementation(() => okAction(DEFAULT_ID));
+    const refreshCapsuleImpl = vi.fn().mockImplementation(() => okAction(DEFAULT_ID));
     const onActionComplete = vi.fn();
-    render(<CapsuleActions {...defaultProps({ reindexCapsuleImpl, onActionComplete })} />);
+    render(<CapsuleActions {...defaultProps({ refreshCapsuleImpl, onActionComplete })} />);
 
-    await user.click(screen.getByRole("button", { name: /re-index capsule/i }));
+    await user.click(screen.getByRole("button", { name: /refresh changed files for capsule/i }));
 
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getByRole("button", { name: /re-index/i }));
+    await user.click(within(dialog).getByRole("button", { name: /refresh/i }));
 
     await waitFor(() => {
-      expect(reindexCapsuleImpl).toHaveBeenCalledWith(DEFAULT_ID);
+      expect(refreshCapsuleImpl).toHaveBeenCalledWith(DEFAULT_ID);
     });
     expect(onActionComplete).toHaveBeenCalledOnce();
   });
 
-  it("re-index confirm button is enabled without typing a name", async () => {
+  it("refresh confirm button is enabled without typing a name", async () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /re-index capsule/i }));
+    await user.click(screen.getByRole("button", { name: /refresh changed files for capsule/i }));
 
     const dialog = screen.getByRole("dialog");
-    const confirmBtn = within(dialog).getByRole("button", { name: /re-index/i });
+    const confirmBtn = within(dialog).getByRole("button", { name: /refresh/i });
     expect(confirmBtn).not.toBeDisabled();
   });
 });
 
 // ---------------------------------------------------------------------------
-// Mark stale action
+// Repair action
 // ---------------------------------------------------------------------------
 
-describe("CapsuleActions — mark stale action", () => {
-  it("calls markCapsuleStaleImpl when confirmed", async () => {
+describe("CapsuleActions — repair action", () => {
+  it("calls repairCapsuleImpl when confirmed", async () => {
     const user = userEvent.setup();
-    const markCapsuleStaleImpl = vi.fn().mockImplementation(() => okAction(DEFAULT_ID));
+    const repairCapsuleImpl = vi.fn().mockImplementation(() => okAction(DEFAULT_ID));
     const onActionComplete = vi.fn();
-    render(<CapsuleActions {...defaultProps({ markCapsuleStaleImpl, onActionComplete })} />);
+    render(<CapsuleActions {...defaultProps({ repairCapsuleImpl, onActionComplete })} />);
 
-    await user.click(screen.getByRole("button", { name: /mark capsule.*stale/i }));
+    await user.click(screen.getByRole("button", { name: /repair failed files for capsule/i }));
 
     const dialog = screen.getByRole("dialog");
-    await user.click(within(dialog).getByRole("button", { name: /mark stale/i }));
+    await user.click(within(dialog).getByRole("button", { name: /repair/i }));
 
     await waitFor(() => {
-      expect(markCapsuleStaleImpl).toHaveBeenCalledWith(DEFAULT_ID);
+      expect(repairCapsuleImpl).toHaveBeenCalledWith(DEFAULT_ID);
     });
     expect(onActionComplete).toHaveBeenCalledOnce();
   });
@@ -250,11 +252,11 @@ describe("CapsuleActions — focus trap", () => {
     }
   });
 
-  it("Shift+Tab cycles backwards within the re-index modal", async () => {
+  it("Shift+Tab cycles backwards within the refresh modal", async () => {
     const user = userEvent.setup();
     render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /re-index capsule/i }));
+    await user.click(screen.getByRole("button", { name: /refresh changed files for capsule/i }));
 
     const dialog = screen.getByRole("dialog");
     const focusables = Array.from(
@@ -292,22 +294,22 @@ describe("CapsuleActions — a11y", () => {
     expect(results).toHaveNoViolations();
   });
 
-  it("jest-axe: re-index modal has no violations", async () => {
+  it("jest-axe: refresh modal has no violations", async () => {
     const user = userEvent.setup();
     const { container } = render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /re-index capsule/i }));
+    await user.click(screen.getByRole("button", { name: /refresh changed files for capsule/i }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     const results = await axe(container);
     expect(results).toHaveNoViolations();
   });
 
-  it("jest-axe: mark-stale modal has no violations", async () => {
+  it("jest-axe: repair modal has no violations", async () => {
     const user = userEvent.setup();
     const { container } = render(<CapsuleActions {...defaultProps()} />);
 
-    await user.click(screen.getByRole("button", { name: /mark capsule.*stale/i }));
+    await user.click(screen.getByRole("button", { name: /repair failed files for capsule/i }));
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     const results = await axe(container);

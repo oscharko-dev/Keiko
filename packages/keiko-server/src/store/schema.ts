@@ -4,7 +4,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 interface Migration {
   readonly version: number;
@@ -66,10 +66,18 @@ ALTER TABLE chats ADD COLUMN connected_scope_paths TEXT;
 ALTER TABLE chats ADD COLUMN connected_scope_at INTEGER;
 `;
 
+// V4 (issue #200) adds additive local-knowledge scope state to chats. The JSON payload stores
+// either { kind: "capsule", capsuleId, connectedAtMs } or { kind: "capsule-set", capsuleSetId,
+// connectedAtMs }. NULL means no local-knowledge scope is selected for the chat.
+const V4_SQL = `
+ALTER TABLE chats ADD COLUMN local_knowledge_scope_json TEXT;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
   { version: 3, sql: V3_SQL },
+  { version: 4, sql: V4_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

@@ -80,6 +80,37 @@ export function isSafeDisplaySummary(value: unknown): value is string {
   return !FORBIDDEN_CONTROL_RE.test(value);
 }
 
+function isSafeDisplayString(value: unknown): value is string {
+  return isNonEmptyTrimmedString(value) && isSafeDisplaySummary(value);
+}
+
+function validateSafeDisplayStringField(
+  errors: string[],
+  field: string,
+  value: unknown,
+): void {
+  if (!isSafeDisplayString(value)) {
+    errors.push(`${field} must be a browser-safe non-empty trimmed string`);
+  }
+}
+
+function validateSafeDisplayStringArrayField(
+  errors: string[],
+  field: string,
+  value: unknown,
+): void {
+  if (!Array.isArray(value)) {
+    errors.push(`${field} must be a string array`);
+    return;
+  }
+  for (const entry of value) {
+    if (!isSafeDisplayString(entry)) {
+      errors.push(`${field} entry must be a browser-safe non-empty trimmed string`);
+      return;
+    }
+  }
+}
+
 // ─── EmbeddingModelIdentity ───────────────────────────────────────────────────
 function pushBadEnum(
   errors: string[],
@@ -168,7 +199,7 @@ function validateFilesScope(input: Record<string, unknown>, errors: string[]): v
     return;
   }
   for (const entry of input.files) {
-    if (typeof entry !== "string" || !isSafeScopePath(entry)) {
+    if (typeof entry !== "string" || !isSafeStorageReference(entry)) {
       errors.push("scope.files entry is unsafe or empty");
       return;
     }
@@ -237,6 +268,24 @@ function validateCapsuleSourceLineage(input: Record<string, unknown>, errors: st
   }
 }
 
+function validateKnowledgeCapsuleDisplayMetadata(
+  input: Record<string, unknown>,
+  errors: string[],
+): void {
+  validateSafeDisplayStringField(errors, "capsule.displayName", input.displayName);
+  if (input.description !== undefined) {
+    validateSafeDisplayStringField(errors, "capsule.description", input.description);
+  }
+  if (input.sourceRoutingInstructions !== undefined) {
+    validateSafeDisplayStringField(
+      errors,
+      "capsule.sourceRoutingInstructions",
+      input.sourceRoutingInstructions,
+    );
+  }
+  validateSafeDisplayStringArrayField(errors, "capsule.tags", input.tags);
+}
+
 export function validateKnowledgeCapsule(
   input: unknown,
 ): LocalKnowledgeValidation<KnowledgeCapsule> {
@@ -247,12 +296,7 @@ export function validateKnowledgeCapsule(
   if (!isNonEmptyTrimmedString(input.id)) {
     errors.push("capsule.id must be a non-empty string");
   }
-  if (!isNonEmptyTrimmedString(input.displayName)) {
-    errors.push("capsule.displayName must be a non-empty trimmed string");
-  }
-  if (!isStringArray(input.tags)) {
-    errors.push("capsule.tags must be a string array");
-  }
+  validateKnowledgeCapsuleDisplayMetadata(input, errors);
   validateCapsuleSourceLineage(input, errors);
   validateCapsuleEnums(input, errors);
   const identityResult = validateEmbeddingModelIdentity(input.embeddingModelIdentity);
@@ -313,8 +357,63 @@ export function validateCapsuleSet(input: unknown): LocalKnowledgeValidation<Cap
 }
 
 // ─── ConnectorGraphState ──────────────────────────────────────────────────────
-function collectNodeIds(nodes: readonly unknown[], errors: string[]): Set<string> {
-  const ids = new Set<string>();
+function validateFilesWindowNode(node: Record<string, unknown>, errors: string[]): void {
+  const scopeResult = validateKnowledgeSourceScope(node.scope);
+  if (!scopeResult.ok) {
+    for (const reason of scopeResult.errors) {
+      errors.push(`graph.nodes entry.files-window.${reason}`);
+    }
+  }
+}
+
+function validateLocalKnowledgeNodeTarget(
+  target: unknown,
+  errors: string[],
+): void {
+  if (!isRecord(target)) {
+    errors.push("graph.nodes entry.local-knowledge.target must be an object");
+    return;
+  }
+  if (target.kind === "capsule") {
+    if (!isNonEmptyTrimmedString(target.capsuleId)) {
+      errors.push(
+        "graph.nodes entry.local-knowledge.target.capsuleId must be a non-empty string",
+      );
+    }
+    return;
+  }
+  if (target.kind === "capsule-set") {
+    if (!isNonEmptyTrimmedString(target.capsuleSetId)) {
+      errors.push(
+        "graph.nodes entry.local-knowledge.target.capsuleSetId must be a non-empty string",
+      );
+    }
+    return;
+  }
+  errors.push('graph.nodes entry.local-knowledge.target.kind must be "capsule" or "capsule-set"');
+}
+
+function validateLocalKnowledgeNode(node: Record<string, unknown>, errors: string[]): void {
+  validateLocalKnowledgeNodeTarget(node.target, errors);
+}
+
+function validateConversationCenterNode(
+  node: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (!isNonEmptyTrimmedString(node.conversationId)) {
+    errors.push("graph.nodes entry.conversation-center.conversationId must be a non-empty string");
+  }
+  if (!isNonEmptyTrimmedString(node.route)) {
+    errors.push("graph.nodes entry.conversation-center.route must be a non-empty string");
+  }
+}
+
+function collectNodeKinds(
+  nodes: readonly unknown[],
+  errors: string[],
+): ReadonlyMap<string, ConnectorNode["kind"]> {
+  const nodeKinds = new Map<string, ConnectorNode["kind"]>();
   for (const node of nodes) {
     if (!isRecord(node)) {
       errors.push("graph.nodes entry must be an object");
@@ -324,7 +423,7 @@ function collectNodeIds(nodes: readonly unknown[], errors: string[]): Set<string
       errors.push("graph.nodes entry must have a non-empty nodeId");
       continue;
     }
-    if (ids.has(node.nodeId)) {
+    if (nodeKinds.has(node.nodeId)) {
       errors.push(`graph.nodes contains a duplicate nodeId: ${node.nodeId}`);
       continue;
     }
@@ -335,14 +434,66 @@ function collectNodeIds(nodes: readonly unknown[], errors: string[]): Set<string
       errors.push("graph.nodes entry has an unknown kind");
       continue;
     }
-    ids.add(node.nodeId);
+    nodeKinds.set(node.nodeId, node.kind as ConnectorNode["kind"]);
+    if (node.kind === "files-window") {
+      validateFilesWindowNode(node, errors);
+    } else if (node.kind === "local-knowledge") {
+      validateLocalKnowledgeNode(node, errors);
+    } else {
+      validateConversationCenterNode(node, errors);
+    }
   }
-  return ids;
+  return nodeKinds;
+}
+
+function validateEdgeNodeId(
+  field: "from" | "to",
+  nodeId: unknown,
+  nodeKinds: ReadonlyMap<string, ConnectorNode["kind"]>,
+  errors: string[],
+): string | undefined {
+  if (typeof nodeId !== "string" || !nodeKinds.has(nodeId)) {
+    errors.push(`graph.edges references unknown ${field}.nodeId`);
+    return undefined;
+  }
+  return nodeId;
+}
+
+function validateEdgeNodeKind(
+  field: "from" | "to",
+  kind: unknown,
+  nodeId: string | undefined,
+  nodeKinds: ReadonlyMap<string, ConnectorNode["kind"]>,
+  errors: string[],
+): void {
+  if (typeof kind !== "string" || !(CONNECTOR_NODE_KINDS as readonly string[]).includes(kind)) {
+    errors.push(`graph.edges ${field}.kind must be a known node kind`);
+    return;
+  }
+  if (nodeId !== undefined && nodeKinds.get(nodeId) !== kind) {
+    errors.push(`graph.edges ${field}.kind must match the referenced node kind`);
+  }
+}
+
+function validateEdgeRecord(
+  edge: Record<string, unknown>,
+  nodeKinds: ReadonlyMap<string, ConnectorNode["kind"]>,
+  errors: string[],
+): void {
+  const from = edge.from as Record<string, unknown>;
+  const to = edge.to as Record<string, unknown>;
+  const fromId = validateEdgeNodeId("from", from.nodeId, nodeKinds, errors);
+  const toId = validateEdgeNodeId("to", to.nodeId, nodeKinds, errors);
+  validateEdgeNodeKind("from", from.kind, fromId, nodeKinds, errors);
+  validateEdgeNodeKind("to", to.kind, toId, nodeKinds, errors);
+  if (!isFiniteNonNegativeNumber(edge.createdAt)) {
+    errors.push("graph.edges entry must have a finite non-negative createdAt");
+  }
 }
 
 function validateEdges(
   edges: readonly unknown[],
-  nodeIds: ReadonlySet<string>,
+  nodeKinds: ReadonlyMap<string, ConnectorNode["kind"]>,
   errors: string[],
 ): void {
   for (const edge of edges) {
@@ -350,17 +501,7 @@ function validateEdges(
       errors.push("graph.edges entry must have from/to objects");
       continue;
     }
-    const fromId = edge.from.nodeId;
-    const toId = edge.to.nodeId;
-    if (typeof fromId !== "string" || !nodeIds.has(fromId)) {
-      errors.push("graph.edges references unknown from.nodeId");
-    }
-    if (typeof toId !== "string" || !nodeIds.has(toId)) {
-      errors.push("graph.edges references unknown to.nodeId");
-    }
-    if (!isFiniteNonNegativeNumber(edge.createdAt)) {
-      errors.push("graph.edges entry must have a finite non-negative createdAt");
-    }
+    validateEdgeRecord(edge, nodeKinds, errors);
   }
 }
 
@@ -380,8 +521,8 @@ export function validateConnectorGraphState(
   if (!Array.isArray(input.edges)) {
     return { ok: false, errors: [...errors, "graph.edges must be an array"] };
   }
-  const ids = collectNodeIds(input.nodes, errors);
-  validateEdges(input.edges, ids, errors);
+  const nodeKinds = collectNodeKinds(input.nodes, errors);
+  validateEdges(input.edges, nodeKinds, errors);
   if (!isFiniteNonNegativeNumber(input.updatedAt)) {
     errors.push("graph.updatedAt must be a finite non-negative number");
   }

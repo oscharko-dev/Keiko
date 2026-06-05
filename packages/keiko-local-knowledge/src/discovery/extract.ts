@@ -33,8 +33,9 @@ import type {
   ParserRegistry,
   ParserSelectionInput,
 } from "../parsers/index.js";
-import { buildParserOptions } from "../parsers/index.js";
+import { buildParserOptions, unsupportedParser } from "../parsers/index.js";
 import type { InternalParserResult } from "../parsers/types.js";
+import { redactDiagnosticMessage } from "../privacy/diagnostic-redactor.js";
 import type { KnowledgeStore } from "../store.js";
 import { basenameOf, extensionOf, mediaTypeFor } from "./media-type.js";
 import {
@@ -105,16 +106,49 @@ function safeDisplay(relativePath: string): string {
   return base.length === 0 ? relativePath : base;
 }
 
+function redactionPrefixFor(source: KnowledgeSource): string {
+  return scopeRoot(source);
+}
+
+function redactMessage(message: string, source: KnowledgeSource): string {
+  return redactDiagnosticMessage(message, redactionPrefixFor(source));
+}
+
+function redactDiagnostic(diagnostic: ParserDiagnostic, source: KnowledgeSource): ParserDiagnostic {
+  return {
+    ...diagnostic,
+    message: redactMessage(diagnostic.message, source),
+  };
+}
+
+function redactDiagnostics(
+  diagnostics: readonly ParserDiagnostic[],
+  source: KnowledgeSource,
+): readonly ParserDiagnostic[] {
+  return diagnostics.map((diagnostic) => redactDiagnostic(diagnostic, source));
+}
+
+function redactParserResult(
+  parserResult: InternalParserResult,
+  source: KnowledgeSource,
+): InternalParserResult {
+  return {
+    ...parserResult,
+    diagnostics: redactDiagnostics(parserResult.diagnostics, source),
+  };
+}
+
 // ─── Failure / unsupported helpers ───────────────────────────────────────────
 function buildFailureResult(
   params: ExtractDocumentParams,
   documentId: DocumentId,
   error: DiscoveryError,
 ): ExtractionResult {
+  const redactedMessage = redactMessage(error.message, params.source);
   const diagnostic: ParserDiagnostic = {
     severity: "error",
     code: error.code,
-    message: error.message,
+    message: redactedMessage,
     documentId,
   };
   const document: DocumentRecord = {
@@ -130,7 +164,11 @@ function buildFailureResult(
     status: "failed",
     safeDisplayName: safeDisplay(params.file.relativePath),
   };
-  const outcome: ExtractionOutcome = { kind: "failed", document, error };
+  const outcome: ExtractionOutcome = {
+    kind: "failed",
+    document,
+    error: { ...error, message: redactedMessage },
+  };
   return {
     capsuleId: params.capsuleId,
     sourceId: params.source.id,
@@ -375,31 +413,7 @@ async function runParser(
 ): Promise<InternalParserResult> {
   const input = selectionInput(documentId, params.file.relativePath, bytes);
   const resolution = deps.parserRegistry.resolve(input);
-  const adapter =
-    resolution.kind === "matched"
-      ? resolution.adapter
-      : // resolution.kind === "unsupported" shouldn't happen — the registry's unsupported
-        // sentinel matches any unrecognised input — but guard so a misconfigured registry
-        // doesn't crash the runner.
-        deps.parserRegistry.list().find((a) => a.capability.parserId === "unsupported");
-  if (adapter === undefined) {
-    return {
-      documentId,
-      parser: { parserId: "none", parserVersion: "0" },
-      pages: [],
-      sections: [],
-      units: [],
-      diagnostics: [
-        {
-          severity: "error",
-          code: "UNSUPPORTED_FORMAT",
-          message: "no parser adapter resolved",
-          documentId,
-        },
-      ],
-      extractedAt: options.now(),
-    };
-  }
+  const adapter = resolution.kind === "matched" ? resolution.adapter : unsupportedParser;
   if (hasAsyncParse(adapter)) {
     return adapter.parseAsync(input, options);
   }
@@ -459,22 +473,23 @@ export async function extractDocument(
   const fast = readUnchangedFastPath(deps, params, documentId, contentHash);
   if (fast !== undefined) return fast;
   const parserResult = await runParserForPersistence(deps, documentId, params, bytes, options);
-  const status = statusForResult(parserResult);
+  const redactedParserResult = redactParserResult(parserResult, params.source);
+  const status = statusForResult(redactedParserResult);
   const document = buildDocumentRecord({
     documentId,
     params,
     mediaType: mediaTypeFor(extensionOf(params.file.relativePath)),
     contentHash,
-    parserResult,
+    parserResult: redactedParserResult,
     status,
   });
-  persistExtractedDocument(deps, params, documentId, document, parserResult);
+  persistExtractedDocument(deps, params, documentId, document, redactedParserResult);
   return {
     capsuleId: params.capsuleId,
     sourceId: params.source.id,
     relativePath: params.file.relativePath,
     outcome: { kind: "persisted", document },
-    diagnostics: parserResult.diagnostics,
+    diagnostics: redactedParserResult.diagnostics,
   };
 }
 
@@ -544,10 +559,14 @@ function buildOversizedFailure(
   options: ParserOptions,
 ): ExtractionResult {
   const now = deps.store._internal.now;
+  const message = redactMessage(
+    `file size ${String(params.file.sizeBytes)} exceeds maxBytes=${String(options.maxBytes)}`,
+    params.source,
+  );
   const diagnostic: ParserDiagnostic = {
     severity: "error",
     code: "OVERSIZED_FILE",
-    message: `file size ${String(params.file.sizeBytes)} exceeds maxBytes=${String(options.maxBytes)}`,
+    message,
     documentId,
   };
   const document = oversizedDocumentRecord(params, documentId, now());
@@ -559,7 +578,7 @@ function buildOversizedFailure(
     outcome: {
       kind: "failed",
       document,
-      error: { code: "OVERSIZED_FILE", message: diagnostic.message },
+      error: { code: "OVERSIZED_FILE", message },
     },
     diagnostics: [diagnostic],
   };

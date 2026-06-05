@@ -100,4 +100,6 @@ export * from "./indexing/index.js";
 export * from "./retrieval/index.js";
 export * from "./evaluations/index.js";
 export * from "./conversation/index.js";
+export { readCitationExcerpt } from "./conversation/citation-excerpts.js";
+export { scriptedAdapter, seedCapsuleWithVectors } from "./testing.js";
 export * from "./privacy/index.js";

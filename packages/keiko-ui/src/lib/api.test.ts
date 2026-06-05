@@ -265,6 +265,7 @@ describe("updateChatConnectedScope", () => {
         branchLabel: undefined,
         status: undefined,
         connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 100 },
+        localKnowledgeScope: undefined,
         createdAt: 1,
         updatedAt: 2,
       },
@@ -284,6 +285,7 @@ describe("updateChatConnectedScope", () => {
         method: "PATCH",
         body: JSON.stringify({
           connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 100 },
+          localKnowledgeScope: null,
         }),
         headers: expect.objectContaining({
           Accept: "application/json",

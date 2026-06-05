@@ -57,6 +57,7 @@ export function fnv1a32(input: string): number {
 // adapter strips the marker before hashing so the FNV component remains stable as topics
 // are added or renamed.
 const TOPIC_MARKER_PATTERN = /\[\[topic:([a-zA-Z0-9_-]+)\]\]/g;
+const VALID_TOPIC_PATTERN = /^[a-zA-Z0-9_-]+$/;
 
 interface ExtractedTopics {
   readonly topics: readonly string[];
@@ -206,5 +207,8 @@ export function createScriptedEmbeddingAdapter(
 // Exported so fixtures + runner can apply markers without hard-coding the format.
 
 export function withTopicMarker(text: string, topic: string): string {
+  if (!VALID_TOPIC_PATTERN.test(topic)) {
+    throw new Error(`invalid eval topic marker: ${topic}`);
+  }
   return `[[topic:${topic}]]${text}`;
 }

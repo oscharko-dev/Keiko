@@ -36,6 +36,7 @@ interface AuditRow {
   readonly failed_documents: number | null;
   readonly deleted_vector_count: number | null;
   readonly deleted_extracted_text_count: number | null;
+  readonly details_json: string | null;
   readonly occurred_at: number;
 }
 
@@ -56,7 +57,7 @@ function listAuditEvents(
 ): readonly AuditRow[] {
   return store._internal.db
     .prepare(
-      "SELECT kind, source_id, job_id, error_code, processed_documents, failed_documents, deleted_vector_count, deleted_extracted_text_count, occurred_at FROM capsule_audit_events WHERE capsule_id = :c ORDER BY occurred_at ASC, kind ASC",
+      "SELECT kind, source_id, job_id, error_code, processed_documents, failed_documents, deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at FROM capsule_audit_events WHERE capsule_id = :c ORDER BY occurred_at ASC, kind ASC",
     )
     .all({ c: capsuleId }) as unknown as readonly AuditRow[];
 }
@@ -167,6 +168,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         failed_documents: null,
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
+        details_json: null,
         occurred_at: 1,
       },
       {
@@ -178,6 +180,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         failed_documents: null,
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
+        details_json: null,
         occurred_at: 2,
       },
       {
@@ -189,6 +192,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         failed_documents: null,
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
+        details_json: null,
         occurred_at: 3,
       },
       {
@@ -200,6 +204,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         failed_documents: 0,
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
+        details_json: null,
         occurred_at: 4,
       },
       {
@@ -211,6 +216,7 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         failed_documents: null,
         deleted_vector_count: null,
         deleted_extracted_text_count: null,
+        details_json: null,
         occurred_at: 5,
       },
       {
@@ -222,7 +228,67 @@ describe("emitCapsuleAuditEvent + sqlite sink", () => {
         failed_documents: null,
         deleted_vector_count: 1,
         deleted_extracted_text_count: 0,
+        details_json: null,
         occurred_at: 6,
+      },
+    ]);
+  });
+
+  it("persists metadata-only details for retrieval and model-context audit events", () => {
+    const sink = createSqliteAuditSink(env.store);
+    emitCapsuleAuditEvent(
+      {
+        kind: "retrieval-performed",
+        capsuleId,
+        sourceIds: [sourceId],
+        chunkIds: ["chunk-1"],
+        referenceCount: 1,
+        noEvidence: false,
+        occurredAt: 7,
+      },
+      sink,
+    );
+    emitCapsuleAuditEvent(
+      {
+        kind: "model-context-sent",
+        capsuleId,
+        sourceIds: [sourceId],
+        chunkIds: ["chunk-1"],
+        referenceCount: 1,
+        citationCount: 1,
+        modelId: "gpt-5.4",
+        occurredAt: 8,
+      },
+      sink,
+    );
+
+    expect(listMembershipChanges(env.store, capsuleId)).toHaveLength(0);
+    expect(listAuditEvents(env.store, capsuleId)).toEqual([
+      {
+        kind: "retrieval-performed",
+        source_id: null,
+        job_id: null,
+        error_code: null,
+        processed_documents: null,
+        failed_documents: null,
+        deleted_vector_count: null,
+        deleted_extracted_text_count: null,
+        details_json:
+          '{"sourceIds":["src-audit"],"chunkIds":["chunk-1"],"referenceCount":1,"noEvidence":false}',
+        occurred_at: 7,
+      },
+      {
+        kind: "model-context-sent",
+        source_id: null,
+        job_id: null,
+        error_code: null,
+        processed_documents: null,
+        failed_documents: null,
+        deleted_vector_count: null,
+        deleted_extracted_text_count: null,
+        details_json:
+          '{"sourceIds":["src-audit"],"chunkIds":["chunk-1"],"referenceCount":1,"citationCount":1,"modelId":"gpt-5.4"}',
+        occurred_at: 8,
       },
     ]);
   });

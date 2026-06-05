@@ -46,6 +46,8 @@ const ALLOWED_CHATS_COLUMNS = new Set([
   // V3 adds connected_scope_paths + connected_scope_at (issue #184 additive migration).
   "connected_scope_paths",
   "connected_scope_at",
+  // Issue #200 persists the local knowledge scope selection on the chat row.
+  "local_knowledge_scope_json",
   "created_at",
   "updated_at",
 ]);

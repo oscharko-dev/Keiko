@@ -19,9 +19,11 @@ import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { createCapsule, getCapsule } from "../capsule-lifecycle.js";
 import { createDefaultParserRegistry } from "../parsers/index.js";
 import { PDF_TEXT_LAYER } from "../parsers/parser-test-fixtures.js";
+import { readExistingDocumentRow } from "../discovery/persist.js";
 import { addSourceToCapsule } from "../source-lifecycle.js";
 import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.js";
 import { folderScope, memoryFs } from "../discovery/test-support.js";
+import { documentIdFor } from "../discovery/types.js";
 
 import { runIndexingJob } from "./orchestrator.js";
 import { selectJobById, rowToIndexingJobRecord } from "./job-persist.js";
@@ -258,10 +260,40 @@ describe("runIndexingJob — incremental", () => {
     const secondEvents = await drain(runIndexingJob(buildOptions(fixture)));
     expect(secondEvents.filter((e) => e.kind === "document-embedded").length).toBe(2);
     expect(
-      secondEvents.some(
-        (e) => e.kind === "document-skipped" && e.reason === "already-embedded",
-      ),
+      secondEvents.some((e) => e.kind === "document-skipped" && e.reason === "already-embedded"),
     ).toBe(false);
+  });
+
+  it("removes persisted rows for files deleted from the source on the next clean pass", async () => {
+    await drain(runIndexingJob(buildOptions(fixture)));
+    const deletedDocumentId = documentIdFor({
+      capsuleId: fixture.capsuleId,
+      sourceId: fixture.sourceId,
+      relativePath: "beta.txt",
+    });
+
+    const secondEvents = await drain(
+      runIndexingJob(
+        buildOptions(fixture, {
+          workspaceFs: memoryFs(ROOT, [
+            { relativePath: "alpha.txt", content: fixture.fs.readFileUtf8(`${ROOT}/alpha.txt`) },
+          ]),
+        }),
+      ),
+    );
+
+    expect(secondEvents.filter((e) => e.kind === "document-discovered").length).toBe(1);
+    expect(secondEvents.filter((e) => e.kind === "document-skipped").length).toBe(1);
+    expect(
+      readExistingDocumentRow(fixture.store._internal.db, fixture.capsuleId, deletedDocumentId),
+    ).toBeUndefined();
+    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBeGreaterThan(
+      0,
+    );
+    const remainingDocuments = fixture.store._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c")
+      .get({ c: fixture.capsuleId }) as { readonly n: number };
+    expect(remainingDocuments.n).toBe(1);
   });
 });
 

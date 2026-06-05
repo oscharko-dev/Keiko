@@ -45,6 +45,7 @@ import {
   type OrchestratorOutput,
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
+import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 
 // ─── Body parsing (mirrors store-handlers' bounded reader) ────────────────────
 
@@ -468,6 +469,12 @@ interface AskWorkerCtx {
   readonly signal: AbortSignal;
 }
 
+interface PreparedGroundedAsk {
+  readonly chat: Chat;
+  readonly input: AskInput;
+  readonly signal: AbortSignal;
+}
+
 // Atomic insert via the existing createMessages batch (wraps BEGIN/COMMIT) so a transient
 // failure on the assistant insert rolls back the user insert. Returns both rows.
 function persistGroundedExchange(
@@ -552,6 +559,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
     output.elapsedMs,
   );
   const answer: GroundedAnswer = {
+    groundingKind: "connected-context",
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
     evidenceRunId,
@@ -600,13 +608,10 @@ async function runGroundedRunner(
   }
 }
 
-// ─── Public handler ───────────────────────────────────────────────────────────
-
-export async function handleGroundedAsk(
+async function prepareGroundedAsk(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  runner?: GroundedRunner,
-): Promise<RouteResult> {
+): Promise<PreparedGroundedAsk | RouteResult> {
   const signal = requestAbortSignal(ctx);
   let raw: string;
   try {
@@ -619,27 +624,55 @@ export async function handleGroundedAsk(
   if (parsed.kind === "err") return parsed.result;
   const chat = findChatById(deps, parsed.value.chatId);
   if (chat === undefined) return notFound("Chat not found.");
+  return { chat, input: parsed.value, signal };
+}
+
+function resolveGroundedRunner(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  requestedModelId: string | undefined,
+  signal: AbortSignal,
+  runner: GroundedRunner | undefined,
+): { readonly modelId: string; readonly runner: GroundedRunner } | RouteResult {
+  if (runner !== undefined) {
+    return {
+      modelId: requestedModelId ?? chat.selectedModel,
+      runner,
+    };
+  }
+  const modelId = resolveGroundedModelId(deps, chat, requestedModelId);
+  if (typeof modelId !== "string") return modelId;
+  const builtRunner = defaultRunner(deps, modelId, signal);
+  if (typeof builtRunner !== "function") return builtRunner;
+  return { modelId, runner: builtRunner };
+}
+
+// ─── Public handler ───────────────────────────────────────────────────────────
+
+export async function handleGroundedAsk(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runner?: GroundedRunner,
+): Promise<RouteResult> {
+  const prepared = await prepareGroundedAsk(ctx, deps);
+  if ("status" in prepared) return prepared;
+  const { chat, input, signal } = prepared;
+  if (chat.localKnowledgeScope !== undefined) {
+    return handleLocalKnowledgeGroundedAsk(chat, input, deps, signal);
+  }
   const scope = buildSelectedScope(chat);
   if (scope === undefined) {
     return badRequest("Chat has no connected scope.");
   }
-  let groundedRunner = runner;
-  let modelId = parsed.value.modelId ?? chat.selectedModel;
-  if (groundedRunner === undefined) {
-    const resolvedModelId = resolveGroundedModelId(deps, chat, parsed.value.modelId);
-    if (typeof resolvedModelId !== "string") return resolvedModelId;
-    modelId = resolvedModelId;
-    const builtRunner = defaultRunner(deps, resolvedModelId, signal);
-    if (typeof builtRunner !== "function") return builtRunner;
-    groundedRunner = builtRunner;
-  }
+  const resolved = resolveGroundedRunner(deps, chat, input.modelId, signal, runner);
+  if ("status" in resolved) return resolved;
   return runAsk({
     chat,
     scope,
-    content: parsed.value.content,
-    modelId,
+    content: input.content,
+    modelId: resolved.modelId,
     deps,
-    runner: groundedRunner,
+    runner: resolved.runner,
     signal,
   });
 }

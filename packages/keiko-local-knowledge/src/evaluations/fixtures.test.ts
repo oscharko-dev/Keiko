@@ -8,10 +8,15 @@ import { describe, expect, it } from "vitest";
 import {
   ALL_FIXTURES,
   ambiguousQueryFixture,
+  contextBudgetFixture,
   multiCapsuleFixture,
+  multiPageFixture,
   noEvidenceFixture,
   singleTopicFixture,
+  staleIndexFixture,
+  structuredFileFixture,
   sourceIsolationFixture,
+  wrongScopeFixture,
 } from "./fixtures.js";
 import type { RetrievalEvalFixture } from "./types.js";
 
@@ -41,6 +46,11 @@ describe("fixtures — registry", () => {
       noEvidenceFixture.id,
       ambiguousQueryFixture.id,
       sourceIsolationFixture.id,
+      wrongScopeFixture.id,
+      multiPageFixture.id,
+      structuredFileFixture.id,
+      contextBudgetFixture.id,
+      staleIndexFixture.id,
     ]);
   });
 
@@ -93,12 +103,13 @@ describe("fixtures — internal consistency", () => {
     }
   });
 
-  it("every document declares at least one chunk", () => {
+  it("every document declares at least one chunk and one parsed unit", () => {
     for (const fixture of ALL_FIXTURES) {
       for (const capsule of fixture.capsules) {
         for (const source of capsule.sources) {
           for (const doc of source.documents) {
             expect(doc.chunks.length).toBeGreaterThan(0);
+            expect(doc.parsedUnits.length).toBeGreaterThan(0);
           }
         }
       }
@@ -115,6 +126,22 @@ describe("fixtures — internal consistency", () => {
               const key = String(chunk.id);
               expect(seen.has(key)).toBe(false);
               seen.add(key);
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("every chunk-level parsedUnitId resolves inside its document", () => {
+    for (const fixture of ALL_FIXTURES) {
+      for (const capsule of fixture.capsules) {
+        for (const source of capsule.sources) {
+          for (const doc of source.documents) {
+            const ids = new Set(doc.parsedUnits.map((unit) => unit.id));
+            for (const chunk of doc.chunks) {
+              if (chunk.parsedUnitId === undefined) continue;
+              expect(ids.has(chunk.parsedUnitId)).toBe(true);
             }
           }
         }

@@ -22,6 +22,7 @@ function makeChat(overrides: Partial<Chat> & { id: string; projectPath: string }
     branchLabel: undefined,
     status: undefined,
     connectedScope: undefined,
+    localKnowledgeScope: undefined,
     createdAt: 1000,
     updatedAt: 1000,
     ...overrides,

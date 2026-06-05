@@ -17,6 +17,7 @@ import {
   validateProjectPath,
   type Chat,
   type ChatConnectedScope,
+  type ChatLocalKnowledgeScope,
   type ChatRole,
   type NewChatMessage,
   type Project,
@@ -561,6 +562,62 @@ function validateScopeConnectedAtMs(value: unknown): number {
   return value;
 }
 
+function parseCapsuleLocalKnowledgeScope(
+  scope: Record<string, unknown>,
+  connectedAtMs: number,
+): Extract<ChatLocalKnowledgeScope, { readonly kind: "capsule" }> {
+  if (typeof scope.capsuleId !== "string" || scope.capsuleId.trim().length === 0) {
+    throw new InvalidRequest('Field "localKnowledgeScope.capsuleId" must be a non-empty string.');
+  }
+  return {
+    kind: "capsule",
+    capsuleId: scope.capsuleId.trim() as Extract<
+      ChatLocalKnowledgeScope,
+      { readonly kind: "capsule" }
+    >["capsuleId"],
+    connectedAtMs,
+  };
+}
+
+function parseCapsuleSetLocalKnowledgeScope(
+  scope: Record<string, unknown>,
+  connectedAtMs: number,
+): Extract<ChatLocalKnowledgeScope, { readonly kind: "capsule-set" }> {
+  if (typeof scope.capsuleSetId !== "string" || scope.capsuleSetId.trim().length === 0) {
+    throw new InvalidRequest(
+      'Field "localKnowledgeScope.capsuleSetId" must be a non-empty string.',
+    );
+  }
+  return {
+    kind: "capsule-set",
+    capsuleSetId: scope.capsuleSetId.trim() as Extract<
+      ChatLocalKnowledgeScope,
+      { readonly kind: "capsule-set" }
+    >["capsuleSetId"],
+    connectedAtMs,
+  };
+}
+
+function optionalLocalKnowledgeScope(
+  body: Record<string, unknown>,
+): ChatLocalKnowledgeScope | null | undefined {
+  if (!("localKnowledgeScope" in body)) return undefined;
+  const raw = body.localKnowledgeScope;
+  if (raw === null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new InvalidRequest('Field "localKnowledgeScope" must be an object or null.');
+  }
+  const scope = raw as Record<string, unknown>;
+  const connectedAtMs = validateScopeConnectedAtMs(scope.connectedAtMs);
+  if (scope.kind === "capsule") {
+    return parseCapsuleLocalKnowledgeScope(scope, connectedAtMs);
+  }
+  if (scope.kind === "capsule-set") {
+    return parseCapsuleSetLocalKnowledgeScope(scope, connectedAtMs);
+  }
+  throw new InvalidRequest('Field "localKnowledgeScope.kind" must be "capsule" or "capsule-set".');
+}
+
 // Issue #184 — three return states: undefined → field absent (leave unchanged); null →
 // explicit clear (forward through to the store); ChatConnectedScope → fully validated value.
 // All input has crossed the wire and is `unknown` until proven otherwise.
@@ -586,11 +643,13 @@ function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): Upd
   const branchLabel = optionalString(body, "branchLabel");
   const statusRaw = body.status;
   const connectedScope = optionalConnectedScope(body);
+  const localKnowledgeScope = optionalLocalKnowledgeScope(body);
   const patch: UpdateChatPatch = {
     ...(title !== undefined ? { title } : {}),
     ...(selectedModel !== undefined ? { selectedModel } : {}),
     ...(branchLabel !== undefined ? { branchLabel } : {}),
     ...(connectedScope !== undefined ? { connectedScope } : {}),
+    ...(localKnowledgeScope !== undefined ? { localKnowledgeScope } : {}),
   };
   if (statusRaw === undefined) return patch;
   if (statusRaw !== "open" && statusRaw !== "closed") {

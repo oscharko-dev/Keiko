@@ -7,6 +7,7 @@
 import type {
   BffError,
   ChatConnectedScope,
+  ChatLocalKnowledgeScope,
   ChatResponse,
   ChatsResponse,
   ChatStatus,
@@ -360,6 +361,8 @@ export interface UpdateChatInput {
   selectedModel?: string;
   branchLabel?: string;
   status?: ChatStatus;
+  connectedScope?: ChatConnectedScope | null;
+  localKnowledgeScope?: ChatLocalKnowledgeScope | null;
 }
 
 export async function updateChat(id: string, patch: UpdateChatInput): Promise<ChatResponse> {
@@ -378,7 +381,20 @@ export async function updateChatConnectedScope(
 ): Promise<ChatResponse> {
   return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
     method: "PATCH",
-    body: JSON.stringify({ connectedScope: scope }),
+    body: JSON.stringify({
+      connectedScope: scope,
+      ...(scope !== null ? { localKnowledgeScope: null } : {}),
+    }),
+  });
+}
+
+export async function updateChatLocalKnowledgeScope(
+  chatId: string,
+  scope: ChatLocalKnowledgeScope | null,
+): Promise<ChatResponse> {
+  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ localKnowledgeScope: scope }),
   });
 }
 

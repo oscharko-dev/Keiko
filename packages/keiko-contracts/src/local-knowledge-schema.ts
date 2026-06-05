@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 6 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 7 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -313,7 +313,10 @@ CREATE TABLE capsule_audit_events (
       'indexing-job-started',
       'indexing-job-completed',
       'indexing-job-failed',
-      'retention-applied'
+      'retention-applied',
+      'retrieval-performed',
+      'answer-context-assembled',
+      'model-context-sent'
     )
   ),
   source_id TEXT,
@@ -323,6 +326,7 @@ CREATE TABLE capsule_audit_events (
   failed_documents INTEGER,
   deleted_vector_count INTEGER,
   deleted_extracted_text_count INTEGER,
+  details_json TEXT,
   occurred_at INTEGER NOT NULL
 ) STRICT;
 `.trim();
@@ -436,6 +440,21 @@ SELECT id, capsule_id, kind, source_id, job_id, error_code, processed_documents,
 FROM capsule_audit_events;
 `.trim();
 
+const CREATE_CAPSULE_AUDIT_EVENTS_V7 = CREATE_CAPSULE_AUDIT_EVENTS.replace(
+  "capsule_audit_events",
+  "capsule_audit_events_v7",
+);
+
+const COPY_CAPSULE_AUDIT_EVENTS_TO_V7 = `
+INSERT INTO capsule_audit_events_v7 (
+  id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
+  deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at
+)
+SELECT id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents,
+  deleted_vector_count, deleted_extracted_text_count, NULL, occurred_at
+FROM capsule_audit_events;
+`.trim();
+
 const REBUILD_AUDIT_TABLES_FOR_DELETE_DURABILITY: readonly string[] = [
   CREATE_CAPSULE_MEMBERSHIP_CHANGES_V5,
   COPY_CAPSULE_MEMBERSHIP_CHANGES_TO_V5,
@@ -482,6 +501,18 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
     reason:
       "Persist chunking strategy version so stale chunks and vectors are re-emitted after Issue #195 strategy changes.",
     up: ["ALTER TABLE chunks ADD COLUMN chunking_strategy_version TEXT;"],
+  },
+  {
+    version: 7,
+    reason:
+      "Persist retrieval, answer-context, and model-bound chunk usage audit metadata for Issue #201.",
+    up: [
+      CREATE_CAPSULE_AUDIT_EVENTS_V7,
+      COPY_CAPSULE_AUDIT_EVENTS_TO_V7,
+      "DROP TABLE capsule_audit_events;",
+      "ALTER TABLE capsule_audit_events_v7 RENAME TO capsule_audit_events;",
+      CREATE_CAPSULE_AUDIT_EVENTS_INDEX,
+    ],
   },
 ] as const;
 

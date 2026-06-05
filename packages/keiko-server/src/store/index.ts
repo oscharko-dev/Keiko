@@ -3,6 +3,7 @@
 export type {
   Chat,
   ChatConnectedScope,
+  ChatLocalKnowledgeScope,
   ChatMessage,
   ChatRole,
   CreateChatOptions,

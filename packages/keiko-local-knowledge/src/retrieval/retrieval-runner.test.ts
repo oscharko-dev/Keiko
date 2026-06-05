@@ -91,6 +91,59 @@ describe("runLocalKnowledgeRetrieval — input guards", () => {
     expect(result.noEvidence).toBe(true);
     expect(result.reason).toBe("no-scope");
   });
+
+  it("returns noEvidence 'no-scope' when a capsule's source-routing controls are invalid", async () => {
+    const { store } = getFixture();
+    const capsuleId = createCapsule(
+      store,
+      sampleCapsuleInput({
+        id: "cap-invalid" as KnowledgeCapsuleId,
+        alwaysQuery: true,
+        lifecycleState: "ready",
+        sourceRoutingInstructions: "prefer @ghost",
+      }),
+    ).id;
+    addSourceToCapsule(store, capsuleId, sampleSourceInput("src-1"));
+
+    const result = await runLocalKnowledgeRetrieval(
+      { store, embeddingAdapter: scriptedAdapter() },
+      { capsuleId, text: "query" },
+    );
+
+    expect(result.references).toEqual([]);
+    expect(result.noEvidence).toBe(true);
+    expect(result.reason).toBe("no-scope");
+  });
+
+  it("returns noEvidence 'no-scope' when a capsule-set member has invalid source-routing controls", async () => {
+    const { store } = getFixture();
+    const capsuleId = createCapsule(
+      store,
+      sampleCapsuleInput({
+        id: "cap-invalid" as KnowledgeCapsuleId,
+        alwaysQuery: true,
+        lifecycleState: "ready",
+        sourceRoutingInstructions: "prefer @ghost",
+      }),
+    ).id;
+    addSourceToCapsule(store, capsuleId, sampleSourceInput("src-1"));
+    const setId = "set-invalid" as CapsuleSetId;
+    createCapsuleSet(store, {
+      id: setId,
+      displayName: "Invalid Set",
+      tags: [],
+      capsuleIds: [capsuleId],
+    });
+
+    const result = await runLocalKnowledgeRetrieval(
+      { store, embeddingAdapter: scriptedAdapter() },
+      { capsuleSetId: setId, text: "query" },
+    );
+
+    expect(result.references).toEqual([]);
+    expect(result.noEvidence).toBe(true);
+    expect(result.reason).toBe("no-scope");
+  });
 });
 
 describe("runLocalKnowledgeRetrieval — happy path (single capsule, default policy)", () => {

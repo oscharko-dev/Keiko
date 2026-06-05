@@ -51,4 +51,16 @@ describe("redactDiagnosticMessage", () => {
       "unsupported media type",
     );
   });
+
+  it("redacts non-home absolute POSIX paths embedded in prose", () => {
+    expect(
+      redactDiagnosticMessage("failed to parse /srv/project/secret.pdf at offset 42", "/Users/victim"),
+    ).toBe("failed to parse <path>/secret.pdf at offset 42");
+  });
+
+  it("redacts Windows and UNC paths embedded in prose", () => {
+    expect(
+      redactDiagnosticMessage("failed in C:\\Secrets\\plan.docx and \\\\server\\share\\raw.txt", "/Users/victim"),
+    ).toBe("failed in <drive>/plan.docx and <unc>/raw.txt");
+  });
 });

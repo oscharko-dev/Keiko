@@ -6,7 +6,13 @@ import {
   isValidScopePath,
   type SelectedScopeKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { Chat, ChatConnectedScope, CreateChatOptions, UpdateChatPatch } from "./types.js";
+import type {
+  Chat,
+  ChatConnectedScope,
+  ChatLocalKnowledgeScope,
+  CreateChatOptions,
+  UpdateChatPatch,
+} from "./types.js";
 import { invalidRequest, notFound } from "./errors.js";
 
 const MAX_CONNECTED_SCOPE_PATHS = 50;
@@ -36,6 +42,7 @@ interface ChatRow {
   readonly status: string | null;
   readonly connected_scope_paths: string | null;
   readonly connected_scope_at: number | null;
+  readonly local_knowledge_scope_json: string | null;
   readonly created_at: number;
   readonly updated_at: number;
 }
@@ -114,6 +121,54 @@ function decodeConnectedScope(
   return { kind: payload.kind, relativePaths: payload.relativePaths, connectedAtMs: connectedAt };
 }
 
+function decodeLocalKnowledgeScope(raw: string | null): ChatLocalKnowledgeScope | undefined {
+  if (raw === null) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const scope = parsed as Record<string, unknown>;
+  const connectedAtMs = decodeNonNegativeInteger(scope.connectedAtMs);
+  if (connectedAtMs === undefined) return undefined;
+  return decodeLocalKnowledgeScopePayload(scope, connectedAtMs);
+}
+
+function decodeNonNegativeInteger(value: unknown): number | undefined {
+  return Number.isInteger(value) && (value as number) >= 0 ? (value as number) : undefined;
+}
+
+function decodeLocalKnowledgeScopePayload(
+  scope: Record<string, unknown>,
+  connectedAtMs: number,
+): ChatLocalKnowledgeScope | undefined {
+  if (scope.kind === "capsule" && typeof scope.capsuleId === "string") {
+    return {
+      kind: "capsule",
+      capsuleId: scope.capsuleId as Extract<
+        ChatLocalKnowledgeScope,
+        { readonly kind: "capsule" }
+      >["capsuleId"],
+      connectedAtMs,
+    };
+  }
+  if (scope.kind === "capsule-set" && typeof scope.capsuleSetId === "string") {
+    return {
+      kind: "capsule-set",
+      capsuleSetId: scope.capsuleSetId as Extract<
+        ChatLocalKnowledgeScope,
+        { readonly kind: "capsule-set" }
+      >["capsuleSetId"],
+      connectedAtMs,
+    };
+  }
+  return undefined;
+}
+
 function rowToChat(row: ChatRow): Chat {
   const status = row.status === null ? undefined : (row.status as "open" | "closed");
   return {
@@ -124,6 +179,7 @@ function rowToChat(row: ChatRow): Chat {
     branchLabel: row.branch_label ?? undefined,
     status,
     connectedScope: decodeConnectedScope(row.connected_scope_paths, row.connected_scope_at),
+    localKnowledgeScope: decodeLocalKnowledgeScope(row.local_knowledge_scope_json),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -131,13 +187,13 @@ function rowToChat(row: ChatRow): Chat {
 
 const SELECT_COLUMNS =
   "id, project_path, title, selected_model, branch_label, status, " +
-  "connected_scope_paths, connected_scope_at, created_at, updated_at";
+  "connected_scope_paths, connected_scope_at, local_knowledge_scope_json, created_at, updated_at";
 
 const SQL_LIST = `SELECT ${SELECT_COLUMNS} FROM chats WHERE project_path = ? ORDER BY created_at ASC`;
 const SQL_INSERT = `
 INSERT INTO chats (id, project_path, title, selected_model, branch_label, status,
-  connected_scope_paths, connected_scope_at, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?)
+  connected_scope_paths, connected_scope_at, local_knowledge_scope_json, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)
 RETURNING ${SELECT_COLUMNS}
 `;
 // Issue #184 — the trailing CASE WHEN ? = 1 ... ELSE col END pattern lets the caller signal three
@@ -145,8 +201,10 @@ RETURNING ${SELECT_COLUMNS}
 // scope columns untouched (patch.connectedScope === undefined); apply_scope = 1 → write the two
 // scope parameters verbatim (writing NULL into both clears the binding when patch.connectedScope
 // === null; writing JSON+ms sets it). The statement contains TWO separate `CASE WHEN ? = 1`
-// guards (one per column) so the same apply_scope value is passed twice. Parameter order:
-// title, model, branch, status, updated_at, apply_scope, scope_paths, apply_scope, scope_at, id.
+// guards (one per column) so the same apply_scope value is passed twice. The local-knowledge
+// scope uses the same 3-state encoding against a single JSON column. Parameter order:
+// title, model, branch, status, updated_at, apply_scope, scope_paths, apply_scope, scope_at,
+// apply_local_scope, local_scope_json, id.
 const SQL_UPDATE = `
 UPDATE chats SET
   title = COALESCE(?, title),
@@ -155,7 +213,8 @@ UPDATE chats SET
   status = COALESCE(?, status),
   updated_at = ?,
   connected_scope_paths = CASE WHEN ? = 1 THEN ? ELSE connected_scope_paths END,
-  connected_scope_at    = CASE WHEN ? = 1 THEN ? ELSE connected_scope_at END
+  connected_scope_at    = CASE WHEN ? = 1 THEN ? ELSE connected_scope_at END,
+  local_knowledge_scope_json = CASE WHEN ? = 1 THEN ? ELSE local_knowledge_scope_json END
 WHERE id = ?
 RETURNING ${SELECT_COLUMNS}
 `;
@@ -240,19 +299,54 @@ function validateConnectedScopeShape(scope: ChatConnectedScope): void {
   }
 }
 
+function validateLocalKnowledgeScopeShape(scope: ChatLocalKnowledgeScope): void {
+  if (
+    typeof scope.connectedAtMs !== "number" ||
+    !Number.isInteger(scope.connectedAtMs) ||
+    scope.connectedAtMs < 0
+  ) {
+    throw invalidRequest("localKnowledgeScope.connectedAtMs must be a finite non-negative integer.");
+  }
+  switch (scope.kind) {
+    case "capsule":
+      if (typeof scope.capsuleId !== "string" || scope.capsuleId.length === 0) {
+        throw invalidRequest("localKnowledgeScope.capsuleId must be a non-empty string.");
+      }
+      return;
+    case "capsule-set":
+      if (typeof scope.capsuleSetId !== "string" || scope.capsuleSetId.length === 0) {
+        throw invalidRequest("localKnowledgeScope.capsuleSetId must be a non-empty string.");
+      }
+      return;
+    default:
+      throw invalidRequest("localKnowledgeScope.kind must be capsule or capsule-set.");
+  }
+}
+
+function validatePatchScope(scope: unknown): void {
+  if (scope === undefined || scope === null) return;
+  if (typeof scope !== "object" || Array.isArray(scope)) {
+    throw invalidRequest("connectedScope must be an object or null.");
+  }
+  validateConnectedScopeShape(scope as ChatConnectedScope);
+}
+
+function validatePatchLocalKnowledgeScope(scope: unknown): void {
+  if (scope === undefined || scope === null) return;
+  if (typeof scope !== "object" || Array.isArray(scope)) {
+    throw invalidRequest("localKnowledgeScope must be an object or null.");
+  }
+  validateLocalKnowledgeScopeShape(scope as ChatLocalKnowledgeScope);
+}
+
 function validateChatPatch(patch: UpdateChatPatch): void {
   // Runtime defense: handlers may pass widened (unknown) input cast to UpdateChatPatch.
   const raw: unknown = patch.status;
   if (raw !== undefined && (typeof raw !== "string" || !VALID_CHAT_STATUSES.has(raw))) {
     throw invalidRequest("Invalid status.");
   }
-  const scope: unknown = patch.connectedScope;
-  if (scope !== undefined && scope !== null) {
-    if (typeof scope !== "object" || Array.isArray(scope)) {
-      throw invalidRequest("connectedScope must be an object or null.");
-    }
-    validateConnectedScopeShape(scope as ChatConnectedScope);
-  }
+  validatePatchScope(patch.connectedScope);
+  validatePatchLocalKnowledgeScope(patch.localKnowledgeScope);
 }
 
 // Issue #184 — three-state encoding of the scope patch for SQL parameter binding.
@@ -273,6 +367,36 @@ function scopeUpdateParams(value: ChatConnectedScope | null | undefined): ScopeU
   };
 }
 
+interface LocalKnowledgeScopeUpdateParams {
+  readonly apply: 0 | 1;
+  readonly json: string | null;
+}
+
+function localKnowledgeScopeUpdateParams(
+  value: ChatLocalKnowledgeScope | null | undefined,
+): LocalKnowledgeScopeUpdateParams {
+  if (value === undefined) return { apply: 0, json: null };
+  if (value === null) return { apply: 1, json: null };
+  if (value.kind === "capsule") {
+    return {
+      apply: 1,
+      json: JSON.stringify({
+        kind: "capsule",
+        capsuleId: value.capsuleId,
+        connectedAtMs: value.connectedAtMs,
+      }),
+    };
+  }
+  return {
+    apply: 1,
+    json: JSON.stringify({
+      kind: "capsule-set",
+      capsuleSetId: value.capsuleSetId,
+      connectedAtMs: value.connectedAtMs,
+    }),
+  };
+}
+
 export function updateChat(
   db: DatabaseSync,
   id: string,
@@ -286,6 +410,7 @@ export function updateChat(
   const branchParam = patch.branchLabel ?? null;
   const statusParam = patch.status ?? null;
   const scope = scopeUpdateParams(patch.connectedScope);
+  const localScope = localKnowledgeScopeUpdateParams(patch.localKnowledgeScope);
   const row = db
     .prepare(SQL_UPDATE)
     .get(
@@ -298,6 +423,8 @@ export function updateChat(
       scope.pathsJson,
       scope.apply,
       scope.connectedAtMs,
+      localScope.apply,
+      localScope.json,
       id,
     ) as unknown as ChatRow | undefined;
   if (row === undefined) throw notFound("Chat");

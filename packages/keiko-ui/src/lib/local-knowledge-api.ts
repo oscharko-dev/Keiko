@@ -1,14 +1,11 @@
 // Issue #197 — typed BFF helpers for the Local Knowledge connector graph surface.
 // Issue #198 — capsule detail, sources, health diagnostics, indexing job history, and
-//              destructive actions (delete, re-index, mark-stale).
+//              destructive actions (delete, refresh changed files, repair failed files).
 // All routes hit the same-origin BFF; the CSRF header is added for mutating methods.
-//
-// BFF stub: /api/local-knowledge/capsules is not yet wired in keiko-server — the server
-// returns 404 until issue #198 wires it. Tests override the injectable seam (the last
-// positional argument pattern from ScopeConnectButton / GroundedAnswer).
 
 import { ApiError } from "./api";
 import type {
+  CapsuleSetId,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSource,
@@ -34,6 +31,17 @@ export interface CapsulesResponse {
   readonly capsules: readonly CapsuleListEntry[];
 }
 
+export interface CapsuleSetListEntry {
+  readonly id: CapsuleSetId;
+  readonly displayName: string;
+  readonly capsuleCount: number;
+  readonly composedAt: number;
+}
+
+export interface CapsuleSetsResponse {
+  readonly capsuleSets: readonly CapsuleSetListEntry[];
+}
+
 export interface CapsuleDetailResponse {
   readonly capsule: KnowledgeCapsule;
 }
@@ -41,6 +49,8 @@ export interface CapsuleDetailResponse {
 export interface CapsuleActionResponse {
   readonly ok: true;
   readonly capsuleId: KnowledgeCapsuleId;
+  readonly affectedCapsuleSetIds?: readonly CapsuleSetId[];
+  readonly cleanupVerified?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +102,10 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function fetchCapsules(): Promise<CapsulesResponse> {
   return fetchJson<CapsulesResponse>("/api/local-knowledge/capsules");
+}
+
+export async function fetchCapsuleSets(): Promise<CapsuleSetsResponse> {
+  return fetchJson<CapsuleSetsResponse>("/api/local-knowledge/capsule-sets");
 }
 
 // ---------------------------------------------------------------------------
@@ -199,27 +213,27 @@ export async function deleteCapsule(capsuleId: KnowledgeCapsuleId): Promise<Caps
 }
 
 // ---------------------------------------------------------------------------
-// POST /api/local-knowledge/capsules/:id/reindex — trigger full re-index
+// POST /api/local-knowledge/capsules/:id/reindex — incremental refresh for changed files
 // ---------------------------------------------------------------------------
 
-export async function reindexCapsule(
+export async function refreshCapsuleChangedFiles(
   capsuleId: KnowledgeCapsuleId,
 ): Promise<CapsuleActionResponse> {
   return fetchJson<CapsuleActionResponse>(
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
-    { method: "POST", body: JSON.stringify({ confirm: true }) },
+    { method: "POST", body: JSON.stringify({ mode: "changed-files" }) },
   );
 }
 
 // ---------------------------------------------------------------------------
-// PATCH /api/local-knowledge/capsules/:id — mark capsule stale
+// POST /api/local-knowledge/capsules/:id/reindex — retry failed documents
 // ---------------------------------------------------------------------------
 
-export async function markCapsuleStale(
+export async function repairCapsuleFailedFiles(
   capsuleId: KnowledgeCapsuleId,
 ): Promise<CapsuleActionResponse> {
   return fetchJson<CapsuleActionResponse>(
-    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}`,
-    { method: "PATCH", body: JSON.stringify({ lifecycleState: "stale" }) },
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/reindex`,
+    { method: "POST", body: JSON.stringify({ mode: "repair-failed" }) },
   );
 }

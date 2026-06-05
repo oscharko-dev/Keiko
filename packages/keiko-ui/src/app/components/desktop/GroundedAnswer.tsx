@@ -10,6 +10,8 @@ import type {
   GroundedAnswerContextPackSummary,
   GroundedEvidenceCitation,
   GroundedUncertainty,
+  LocalKnowledgeEvidenceCitation,
+  LocalKnowledgeGroundedAnswerContextSummary,
 } from "@/lib/types";
 
 interface GroundedAnswerProps {
@@ -154,6 +156,29 @@ function CitationList({
   );
 }
 
+function LocalKnowledgeCitationList({
+  citations,
+}: {
+  readonly citations: readonly LocalKnowledgeEvidenceCitation[];
+}): ReactNode {
+  if (citations.length === 0) return null;
+  return (
+    <div className="grounded-citations-wrap">
+      <span className="grounded-citations-label">Knowledge citations</span>
+      <ul className="grounded-citations" aria-label="Knowledge citations">
+        {citations.map((citation) => (
+          <li key={citation.stableId} className="grounded-citations-item">
+            <span className="grounded-citation" title={citation.label}>
+              <span>{`${citation.marker} ${citation.label}`}</span>
+              <span className="grounded-citation-score">{citation.score.toFixed(2)}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function UncertaintyLine({
   markers,
 }: {
@@ -207,11 +232,43 @@ function AuditEvidenceLink({ runId }: { readonly runId: string | undefined }): R
   );
 }
 
+function LocalKnowledgeContextPackSummary({
+  contextPack,
+}: {
+  readonly contextPack: LocalKnowledgeGroundedAnswerContextSummary;
+}): ReactNode {
+  return (
+    <section className="grounded-context-pack" aria-label="Knowledge scope summary">
+      <div className="grounded-context-pack-headline">{`Knowledge scope: ${contextPack.scopeLabel}`}</div>
+      <dl className="grounded-context-pack-dl">
+        <MetricRow label="Mode" value={contextPack.scopeKind} />
+        <MetricRow label="Capsules" value={String(contextPack.capsuleCount)} />
+        <MetricRow label="Sources" value={String(contextPack.sourceCount)} />
+        <MetricRow label="Citations" value={String(contextPack.citationCount)} />
+        <MetricRow
+          label="Context budget"
+          value={`${String(contextPack.referencesUsed)} / ${String(contextPack.referenceBudget)} references`}
+        />
+      </dl>
+    </section>
+  );
+}
+
 export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode {
   if (answer === undefined) {
     return busy ? (
       <div className="grounded-meta">Exploring repository context and asking Keiko…</div>
     ) : null;
+  }
+  if (answer.groundingKind === "local-knowledge") {
+    return (
+      <div className="grounded-answer">
+        <div className="grounded-answer-body">{answer.content}</div>
+        <LocalKnowledgeCitationList citations={answer.citations} />
+        <UncertaintyLine markers={answer.uncertainty} />
+        <LocalKnowledgeContextPackSummary contextPack={answer.contextPack} />
+      </div>
+    );
   }
   return (
     <div className="grounded-answer">

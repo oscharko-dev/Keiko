@@ -18,6 +18,8 @@
 import { redactPathInDiagnostic } from "@oscharko-dev/keiko-contracts";
 
 const HARD_CAP_CHARS = 1024;
+const PATH_BREAK_CHARS = new Set([" ", "\n", "\r", "\t", "\"", "'", "<", ">", "|"]);
+const TRAILING_PUNCTUATION = new Set([".", ",", ";", ":", "!", "?", ")", "]"]);
 
 export function redactDiagnosticMessage(message: string, homePrefix: string): string {
   if (typeof message !== "string") return "";
@@ -27,19 +29,126 @@ export function redactDiagnosticMessage(message: string, homePrefix: string): st
   const sanitised = redactPathInDiagnostic(message, { homePrefix });
   // Step 2: rewrite any in-prose occurrence of the home prefix. The contracts helper only
   // home-rewrites when the prefix matches at offset 0; embedded paths slip through, so we
-  // do an explicit `replaceAll`. Both forward-slash and backslash variants are normalised
-  // by the contracts helper before we get here, but the prefix the caller passes might be
-  // in either form — normalise both before replacing.
+  // additionally redact path-shaped prose tokens.
   const normalisedPrefix = stripTrailingSlash(toForwardSlash(homePrefix));
-  const homeRewritten =
-    normalisedPrefix.length === 0 ? sanitised : sanitised.split(normalisedPrefix).join("~");
+  const homeRewritten = redactPathCandidates(sanitised, normalisedPrefix);
   // Step 3: hard cap. `slice` is O(n) and yields exactly HARD_CAP_CHARS chars on long input.
   if (homeRewritten.length <= HARD_CAP_CHARS) return homeRewritten;
   return homeRewritten.slice(0, HARD_CAP_CHARS);
 }
 
+function redactPathCandidates(message: string, homePrefix: string): string {
+  const parts: string[] = [];
+  let index = 0;
+  while (index < message.length) {
+    const start = pathCandidateStart(message, index);
+    if (start === -1) {
+      parts.push(message.slice(index));
+      break;
+    }
+    parts.push(message.slice(index, start));
+    const end = pathCandidateEnd(message, start);
+    const raw = message.slice(start, end);
+    parts.push(redactCandidate(raw, homePrefix));
+    index = end;
+  }
+  return parts.join("");
+}
+
+function pathCandidateStart(message: string, from: number): number {
+  for (let index = from; index < message.length; index += 1) {
+    const current = message[index];
+    const next = message[index + 1];
+    if (current === "/" && hasPathBoundary(message, index)) return index;
+    if (current === "\\" && next === "\\" && hasPathBoundary(message, index)) return index;
+    if (isDriveLetterPrefix(current, next, message[index + 2]) && hasPathBoundary(message, index)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function pathCandidateEnd(message: string, start: number): number {
+  let end = start;
+  while (end < message.length) {
+    const current = message[end];
+    if (current !== undefined && PATH_BREAK_CHARS.has(current)) break;
+    end += 1;
+  }
+  while (end > start) {
+    const trailing = message[end - 1];
+    if (trailing === undefined || !TRAILING_PUNCTUATION.has(trailing)) break;
+    end -= 1;
+  }
+  return end;
+}
+
+function redactCandidate(candidate: string, homePrefix: string): string {
+  const normalised = toForwardSlash(candidate);
+  const leadingSlash = normalised.startsWith("//");
+  const homeRedacted =
+    homePrefix.length > 0 && isPrefixedPath(normalised, homePrefix)
+      ? `~${normalised.slice(homePrefix.length)}`
+      : normalised;
+  if (homeRedacted.startsWith("~")) {
+    return homeRedacted;
+  }
+  if (leadingSlash) {
+    return `<unc>/${basenameOf(normalised)}`;
+  }
+  if (/^[A-Za-z]:\//.test(normalised)) {
+    return `<drive>/${basenameOf(normalised)}`;
+  }
+  if (normalised.startsWith("/")) {
+    return `<path>/${basenameOf(normalised)}`;
+  }
+  return normalised;
+}
+
 function toForwardSlash(value: string): string {
   return value.replace(/\\/g, "/");
+}
+
+function basenameOf(value: string): string {
+  const trimmed = stripTrailingSlash(value);
+  const lastSlash = trimmed.lastIndexOf("/");
+  return lastSlash === -1 ? trimmed : trimmed.slice(lastSlash + 1);
+}
+
+function isDriveLetterPrefix(
+  current: string | undefined,
+  next: string | undefined,
+  afterColon: string | undefined,
+): boolean {
+  return (
+    current !== undefined &&
+    next === ":" &&
+    afterColon !== undefined &&
+    ((current >= "A" && current <= "Z") || (current >= "a" && current <= "z")) &&
+    (afterColon === "/" || afterColon === "\\")
+  );
+}
+
+function isPrefixedPath(value: string, prefix: string): boolean {
+  if (!value.startsWith(prefix)) return false;
+  const next = value[prefix.length];
+  return next === undefined || next === "/";
+}
+
+function hasPathBoundary(message: string, index: number): boolean {
+  if (index === 0) return true;
+  const previous = message[index - 1];
+  return (
+    previous === " " ||
+    previous === "\n" ||
+    previous === "\r" ||
+    previous === "\t" ||
+    previous === "(" ||
+    previous === "[" ||
+    previous === "{" ||
+    previous === ":" ||
+    previous === "="
+  );
 }
 
 function stripTrailingSlash(value: string): string {
