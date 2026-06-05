@@ -855,6 +855,15 @@ export async function handleRejectMemoryProposal(
 // is the same closure used by the audit redactor; re-using it here keeps redaction in one
 // place (D9).
 
-export function createBffMemoryVault(redactString: (s: string) => string): MemoryVaultStore {
-  return createMemoryVault({ redactString });
+export function createBffMemoryVault(
+  redactString: (s: string) => string,
+  onMemoryEvent?: (event: import("@oscharko-dev/keiko-memory-vault").MemoryEvent) => void,
+): MemoryVaultStore {
+  // Optional onMemoryEvent (#214) wires every successful vault mutation into the audit
+  // ledger. When undefined, the vault still fires its internal NOOP sink, so the absence
+  // of an audit hook is fully backward-compatible with the pre-#214 BFF wiring.
+  if (onMemoryEvent === undefined) {
+    return createMemoryVault({ redactString });
+  }
+  return createMemoryVault({ redactString, onMemoryEvent });
 }
