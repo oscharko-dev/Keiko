@@ -255,7 +255,13 @@ function parseAttachmentEntry(value: unknown): ConversationAttachment | undefine
   const mimeType = pickString(value, "mimeType");
   const sizeBytes = pickNumber(value, "sizeBytes");
   if (mimeType === undefined || mimeType.length === 0) return undefined;
-  if (sizeBytes === undefined || sizeBytes < 0 || !Number.isFinite(sizeBytes)) return undefined;
+  if (
+    sizeBytes === undefined ||
+    sizeBytes < 0 ||
+    !Number.isFinite(sizeBytes) ||
+    !Number.isInteger(sizeBytes)
+  )
+    return undefined;
   return { kind, mimeType, sizeBytes };
 }
 

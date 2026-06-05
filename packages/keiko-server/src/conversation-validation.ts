@@ -88,6 +88,8 @@ function mimeStartsWithAny(mimeType: string, prefixes: readonly string[]): boole
 }
 
 function isAllowedImageMime(mimeType: string): boolean {
+  // SVG can carry inline script — deny both registered variants before the prefix check.
+  if (mimeType === "image/svg+xml" || mimeType === "image/svg") return false;
   return mimeStartsWithAny(mimeType, ALLOWED_IMAGE_MIME_PREFIXES);
 }
 

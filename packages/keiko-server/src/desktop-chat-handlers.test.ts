@@ -538,6 +538,32 @@ describe("desktop chat routes", () => {
     expect(seenRequests).toHaveLength(0);
   });
 
+  it("ignores an attachment entry whose sizeBytes is a decimal (non-integer) instead of rejecting the send", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "hello",
+        // sizeBytes: 1024.5 is a non-integer — the entry must be silently dropped.
+        attachments: [{ kind: "image", mimeType: "image/png", sizeBytes: 1024.5 }],
+      }),
+    });
+    // The malformed entry is dropped; with no valid attachment the send still succeeds.
+    expect(sendRes.status).toBe(200);
+    // Gateway was called once (the message content went through).
+    expect(seenRequests).toHaveLength(1);
+  });
+
   it("ignores malformed documentContext entries instead of rejecting the send", async () => {
     const createRes = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",
