@@ -107,8 +107,11 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
         key: "model",
         label: "Model",
         type: "select",
-        options: ["example-chat-model", "example-fast-model"],
-        def: "example-chat-model",
+        // AC #4: no hard-coded placeholder model ids. The options list is empty
+        // because runtime-configured models are fetched dynamically; the dialog
+        // renders the select as disabled when no options are present.
+        options: [],
+        def: "",
       },
     ],
   },

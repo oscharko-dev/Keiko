@@ -1314,6 +1314,10 @@ button {
 .cmp-send[data-on="true"]:hover {
   transform: translateY(-1px);
 }
+.cmp-send:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 .cmp-context {
   display: flex;
@@ -5221,7 +5225,7 @@ select.dlg-input {
 }
 .gw-error {
   color: var(--fg);
-  background: color-mix(in oklch, var(--danger) 14%, var(--card));
+  background: color-mix(in oklch, var(--danger) 22%, var(--card));
   border-color: color-mix(in oklch, var(--danger) 48%, transparent);
 }
 .gw-success {

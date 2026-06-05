@@ -225,7 +225,7 @@ function AppShellInner(): ReactNode {
             </div>
             <RightRail openTools={openTools} onTool={onTool} />
           </div>
-          <Footer winCount={winCount} mode={twin.mode} />
+          <Footer winCount={winCount} mode={twin.mode} selectedModel={session.selectedModel} />
 
           {pending !== null && (
             <NewWindowDialog
