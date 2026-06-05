@@ -83,4 +83,11 @@ describe("buildCspHeader", () => {
     expect(header).toContain("base-uri 'none'");
     expect(header).toContain("form-action 'none'");
   });
+
+  it("allows the PWA manifest via manifest-src 'self' (issue #123, ADR-0024 D4)", () => {
+    const header = buildCspHeader([]);
+    expect(header).toContain("manifest-src 'self'");
+    const manifestDirective = header.split("; ").find((d) => d.startsWith("manifest-src "));
+    expect(manifestDirective).toBe("manifest-src 'self'");
+  });
 });

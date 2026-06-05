@@ -4,7 +4,7 @@ import { resolve, join, sep } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resolveContainedPath, serveFile } from "./static.js";
+import { contentTypeFor, resolveContainedPath, serveFile } from "./static.js";
 
 const ROOT = resolve("/var/app/dist/ui/static");
 
@@ -105,5 +105,25 @@ describe("serveFile (FIX 5 — symlink-safe static serving)", () => {
 
   it("returns false for a missing path", async () => {
     expect(await serveFile(fakeRes().res, join(dir, "nope.js"))).toBe(false);
+  });
+});
+
+describe("contentTypeFor", () => {
+  it("returns application/manifest+json for .webmanifest (issue #123, ADR-0024 D4)", () => {
+    expect(contentTypeFor("manifest.webmanifest")).toBe("application/manifest+json");
+    expect(contentTypeFor("/srv/dist/ui/static/manifest.webmanifest")).toBe(
+      "application/manifest+json",
+    );
+    expect(contentTypeFor("ANY.WEBMANIFEST")).toBe("application/manifest+json");
+  });
+
+  it("falls back to application/octet-stream for unknown extensions", () => {
+    expect(contentTypeFor("mystery.qqq")).toBe("application/octet-stream");
+  });
+
+  it("returns the expected types for the existing PWA-adjacent extensions", () => {
+    expect(contentTypeFor("a.png")).toBe("image/png");
+    expect(contentTypeFor("a.svg")).toBe("image/svg+xml");
+    expect(contentTypeFor("a.ico")).toBe("image/x-icon");
   });
 });

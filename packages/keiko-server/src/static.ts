@@ -24,9 +24,13 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".woff": "font/woff",
   ".woff2": "font/woff2",
   ".map": "application/json; charset=utf-8",
+  // `.webmanifest` is the W3C Web App Manifest media type; browsers refuse to treat a JSON
+  // payload as a manifest under any other Content-Type, so this mapping is load-bearing for
+  // PWA installability (ADR-0024 D4, issue #123).
+  ".webmanifest": "application/manifest+json",
 };
 
-function contentTypeFor(filePath: string): string {
+export function contentTypeFor(filePath: string): string {
   return CONTENT_TYPES[extname(filePath).toLowerCase()] ?? "application/octet-stream";
 }
 
