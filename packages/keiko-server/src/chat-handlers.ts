@@ -8,6 +8,7 @@ import {
   GatewayError,
   findCapability,
   findConfiguredCapability,
+  listCapabilities,
   listConfiguredCapabilities,
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -20,6 +21,10 @@ import {
   type Project,
 } from "./store/index.js";
 import { composeConversationPrompt } from "./conversation-prompt.js";
+import {
+  validateConversationPayload,
+  type ConversationAttachment,
+} from "./conversation-validation.js";
 import { validateProjectPath } from "./store/validation.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
@@ -235,6 +240,55 @@ interface SendDesktopChatRequest {
   // extraction boundary; the server passes these into a structured prompt block but does NOT
   // re-extract from disk (server-side modality enforcement is owned by issue #149).
   readonly documentContext: readonly ConversationDocumentContextWire[];
+  // Issue #149 — image and document carrier descriptors (no payload bytes on the wire here;
+  // attachments arriving via the conversation send path are kind/mime/size metadata the
+  // validator uses to enforce modality+mime+size before the gateway is called).
+  readonly attachments: readonly ConversationAttachment[];
+}
+
+const MAX_ATTACHMENT_ENTRIES = 16;
+
+function parseAttachmentEntry(value: unknown): ConversationAttachment | undefined {
+  if (!isRecord(value)) return undefined;
+  const kind = value.kind;
+  if (kind !== "image" && kind !== "document") return undefined;
+  const mimeType = pickString(value, "mimeType");
+  const sizeBytes = pickNumber(value, "sizeBytes");
+  if (mimeType === undefined || mimeType.length === 0) return undefined;
+  if (
+    sizeBytes === undefined ||
+    sizeBytes < 0 ||
+    !Number.isFinite(sizeBytes) ||
+    !Number.isInteger(sizeBytes)
+  )
+    return undefined;
+  return { kind, mimeType, sizeBytes };
+}
+
+function parseAttachments(value: unknown): readonly ConversationAttachment[] {
+  if (!Array.isArray(value)) return [];
+  const out: ConversationAttachment[] = [];
+  for (const entry of value.slice(0, MAX_ATTACHMENT_ENTRIES)) {
+    const parsed = parseAttachmentEntry(entry);
+    if (parsed !== undefined) out.push(parsed);
+  }
+  return out;
+}
+
+// Snapshot of the model capability registry the validator inspects. When a gateway config is
+// loaded, the configured-capabilities path takes precedence so private models registered by
+// .env participate in the modality check exactly as they do at chatCapability() lookup time.
+// With no config, we fall back to the static built-in capability list — matches the same
+// resolution semantics chatCapability() uses for the single-id check.
+function modelCapabilityRegistry(deps: UiHandlerDeps): ReadonlyMap<string, ModelCapability> {
+  const config = currentGatewayConfig(deps);
+  const capabilities =
+    config === undefined ? listCapabilities() : listConfiguredCapabilities(config);
+  const registry = new Map<string, ModelCapability>();
+  for (const capability of capabilities) {
+    registry.set(capability.id, capability);
+  }
+  return registry;
 }
 
 const MAX_DOCUMENT_CONTEXT_ENTRIES = 16;
@@ -346,6 +400,7 @@ function sendRequestFromBody(body: Record<string, unknown>): SendDesktopChatRequ
     content,
     modelId: typeof body.modelId === "string" && body.modelId.length > 0 ? body.modelId : undefined,
     documentContext: parseDocumentContext(body.documentContext),
+    attachments: parseAttachments(body.attachments),
   };
 }
 
@@ -497,5 +552,18 @@ export async function handleSendDesktopChat(
   const modelId = request.modelId ?? chat.selectedModel;
   const invalidModel = invalidChatModelResult(modelId, deps);
   if (invalidModel !== undefined) return invalidModel;
+  // Issue #149 — server-side modality guardrails. Run BEFORE any provider adapter call so a
+  // text-only model cannot receive image/document payloads, an embedding/OCR model cannot be
+  // used on the send path, and oversized aggregate context is rejected with a typed wire code.
+  // The validator returns static English messages (no value echo) — safe to render verbatim.
+  const validation = validateConversationPayload({
+    modelId,
+    modelCapabilities: modelCapabilityRegistry(deps),
+    attachments: request.attachments,
+    documentContext: request.documentContext,
+  });
+  if (!validation.ok) {
+    return { status: 400, body: errorBody(validation.code, validation.message) };
+  }
   return persistModelChatTurn(deps, request, chat, modelId);
 }

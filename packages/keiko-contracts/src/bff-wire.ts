@@ -441,6 +441,14 @@ export type BffErrorCode =
   | "WORKSPACE_PATH_DENIED"
   | "WORKSPACE_PATH_ESCAPE"
   | "WORKSPACE_READ_FAILED"
+  // Issue #149 (Epic #142) — Conversation Center server-side modality guardrails. The
+  // browser surfaces these codes via the existing `gw-error` envelope; messages are static
+  // English strings (no echoing of model ids, file names, or byte counts) so they pass
+  // through the BFF redactor without leaking any caller-supplied value.
+  | "CONVERSATION_UNAVAILABLE_MODEL"
+  | "CONVERSATION_UNSUPPORTED_MODALITY"
+  | "CONVERSATION_UNSUPPORTED_FILE_TYPE"
+  | "CONVERSATION_OVERSIZED_CONTEXT"
   | "INTERNAL";
 
 // The wire shape carries `code: string` — the BFF can emit codes outside the BffErrorCode union

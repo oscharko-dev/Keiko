@@ -276,6 +276,8 @@ export type {
   GroundedAnswerContextPackSummary,
   ConversationDocumentContextWire,
   DesktopChatSendRequestWire,
+  BffErrorCode,
+  BffError,
 } from "./bff-wire.js";
 export { buildGroundedAnswerContextPackSummary } from "./bff-wire.js";
 
