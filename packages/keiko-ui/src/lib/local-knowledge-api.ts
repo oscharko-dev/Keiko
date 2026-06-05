@@ -5,6 +5,7 @@
 
 import { ApiError } from "./api";
 import type {
+  CapsuleSetId,
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSource,
@@ -28,6 +29,17 @@ export interface CapsuleListEntry {
 
 export interface CapsulesResponse {
   readonly capsules: readonly CapsuleListEntry[];
+}
+
+export interface CapsuleSetListEntry {
+  readonly id: CapsuleSetId;
+  readonly displayName: string;
+  readonly capsuleCount: number;
+  readonly composedAt: number;
+}
+
+export interface CapsuleSetsResponse {
+  readonly capsuleSets: readonly CapsuleSetListEntry[];
 }
 
 export interface CapsuleDetailResponse {
@@ -88,6 +100,10 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function fetchCapsules(): Promise<CapsulesResponse> {
   return fetchJson<CapsulesResponse>("/api/local-knowledge/capsules");
+}
+
+export async function fetchCapsuleSets(): Promise<CapsuleSetsResponse> {
+  return fetchJson<CapsuleSetsResponse>("/api/local-knowledge/capsule-sets");
 }
 
 // ---------------------------------------------------------------------------

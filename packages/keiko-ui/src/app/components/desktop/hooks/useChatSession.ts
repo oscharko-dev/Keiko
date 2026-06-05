@@ -63,9 +63,9 @@ export interface UseChatSessionResult {
   // The caller is the API client wrapper; the hook only owns the local cache update so the
   // chat header re-renders with the new state without a full refetch.
   replaceChat: (chat: Chat) => void;
-  // Issue #185 — the most recent grounded answer (citations + uncertainty) the ChatWindow
-  // renders alongside the assistant message bubble. undefined when the active chat has no
-  // connectedScope or no grounded turn has happened yet.
+  // The most recent grounded answer (repository or local-knowledge) the ChatWindow renders
+  // alongside the assistant message bubble. Undefined when the active chat has no active
+  // grounding scope or no grounded turn has happened yet.
   latestGrounded: GroundedAnswerWire | undefined;
   // Issue #185 AC3 — aborts the in-flight grounded request and clears the sending state.
   // No-op when no grounded request is in flight.
@@ -319,8 +319,9 @@ export function useChatSession(): UseChatSessionResult {
     [state.selectedModel],
   );
 
-  // Issue #185 — when the active chat carries a connectedScope binding the composer routes the
-  // submission through the grounded BFF orchestrator instead of the gateway-backed chat path.
+  // When the active chat carries either a Files connected scope or a local-knowledge scope,
+  // the composer routes the submission through the grounded BFF path instead of the plain
+  // gateway-backed chat path.
   // The route persists both messages and returns the redacted citation projection; the hook
   // refetches the message log on success so the bubbles reflect the canonical store state.
   const sendGrounded = useCallback(
@@ -403,7 +404,7 @@ export function useChatSession(): UseChatSessionResult {
     setError(undefined);
     setState((previous) => ({ ...previous, messages: [...previous.messages, optimistic] }));
     try {
-      if (chat.connectedScope !== undefined) {
+      if (chat.localKnowledgeScope !== undefined || chat.connectedScope !== undefined) {
         await sendGrounded(chat, project, content, optimistic.id);
       } else {
         await sendUngrounded(chat, project, content, optimistic.id);

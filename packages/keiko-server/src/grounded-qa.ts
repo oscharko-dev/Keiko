@@ -45,6 +45,7 @@ import {
   type OrchestratorOutput,
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
+import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 
 // ─── Body parsing (mirrors store-handlers' bounded reader) ────────────────────
 
@@ -552,6 +553,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
     output.elapsedMs,
   );
   const answer: GroundedAnswer = {
+    groundingKind: "connected-context",
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
     evidenceRunId,
@@ -619,6 +621,9 @@ export async function handleGroundedAsk(
   if (parsed.kind === "err") return parsed.result;
   const chat = findChatById(deps, parsed.value.chatId);
   if (chat === undefined) return notFound("Chat not found.");
+  if (chat.localKnowledgeScope !== undefined) {
+    return handleLocalKnowledgeGroundedAsk(chat, parsed.value, deps, signal);
+  }
   const scope = buildSelectedScope(chat);
   if (scope === undefined) {
     return badRequest("Chat has no connected scope.");

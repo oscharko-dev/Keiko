@@ -23,6 +23,7 @@ import {
   type RetrievalQueryKind,
   type SelectedScopeKind,
 } from "./connected-context.js";
+import type { CapsuleSetId, KnowledgeCapsuleId } from "./local-knowledge.js";
 
 export interface Project {
   readonly path: string;
@@ -45,6 +46,18 @@ export interface ChatConnectedScope {
   readonly connectedAtMs: number;
 }
 
+export type ChatLocalKnowledgeScope =
+  | {
+      readonly kind: "capsule";
+      readonly capsuleId: KnowledgeCapsuleId;
+      readonly connectedAtMs: number;
+    }
+  | {
+      readonly kind: "capsule-set";
+      readonly capsuleSetId: CapsuleSetId;
+      readonly connectedAtMs: number;
+    };
+
 export interface Chat {
   readonly id: string;
   readonly projectPath: string;
@@ -53,6 +66,7 @@ export interface Chat {
   readonly branchLabel: string | undefined;
   readonly status: "open" | "closed" | undefined;
   readonly connectedScope: ChatConnectedScope | undefined;
+  readonly localKnowledgeScope: ChatLocalKnowledgeScope | undefined;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -91,6 +105,7 @@ export interface UpdateChatPatch {
   readonly branchLabel?: string;
   readonly status?: "open" | "closed";
   readonly connectedScope?: ChatConnectedScope | null;
+  readonly localKnowledgeScope?: ChatLocalKnowledgeScope | null;
 }
 
 export interface NewChatMessage {
@@ -338,6 +353,18 @@ export interface GroundedAnswerContextPackSummary {
   readonly elapsedMs: number;
 }
 
+export interface LocalKnowledgeGroundedAnswerContextSummary {
+  readonly kind: "local-knowledge";
+  readonly scopeKind: "capsule" | "capsule-set";
+  readonly scopeId: string;
+  readonly scopeLabel: string;
+  readonly capsuleCount: number;
+  readonly sourceCount: number;
+  readonly citationCount: number;
+  readonly referenceBudget: number;
+  readonly referencesUsed: number;
+}
+
 function buildOmittedCounts(
   pack: ConnectedContextPack,
 ): Readonly<Record<CandidateOmissionReason, number>> {
@@ -388,7 +415,8 @@ export function buildGroundedAnswerContextPackSummary(
   };
 }
 
-export interface GroundedAnswer {
+export interface ConnectedContextGroundedAnswer {
+  readonly groundingKind: "connected-context";
   readonly userMessageId: string;
   readonly assistantMessageId: string;
   readonly evidenceRunId?: string | undefined;
@@ -401,6 +429,30 @@ export interface GroundedAnswer {
   // budget was spent. The summary is REQUIRED so the wire shape pins the privacy contract.
   readonly contextPack: GroundedAnswerContextPackSummary;
 }
+
+export interface LocalKnowledgeEvidenceCitation {
+  readonly stableId: string;
+  readonly marker: string;
+  readonly label: string;
+  readonly score: number;
+}
+
+export interface LocalKnowledgeGroundedAnswer {
+  readonly groundingKind: "local-knowledge";
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
+  readonly evidenceRunId?: string | undefined;
+  readonly content: string;
+  readonly citations: readonly LocalKnowledgeEvidenceCitation[];
+  readonly uncertainty: readonly GroundedUncertainty[];
+  readonly omittedCount: number;
+  readonly elapsedMs: number;
+  readonly noEvidence: boolean;
+  readonly noEvidenceReason?: string | undefined;
+  readonly contextPack: LocalKnowledgeGroundedAnswerContextSummary;
+}
+
+export type GroundedAnswer = ConnectedContextGroundedAnswer | LocalKnowledgeGroundedAnswer;
 
 // ─── BFF error envelope ───────────────────────────────────────────────────────────
 

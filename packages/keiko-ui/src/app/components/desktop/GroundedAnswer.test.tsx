@@ -76,6 +76,7 @@ function contextPack(
 
 function answer(overrides: Partial<GroundedAnswerType> = {}): GroundedAnswerType {
   return {
+    groundingKind: "connected-context",
     userMessageId: "msg-u",
     assistantMessageId: "msg-a",
     content: "Inspected 1 file(s) for: how does MyClass work?",
@@ -102,6 +103,42 @@ describe("GroundedAnswer", () => {
   it("renders the assistant content", () => {
     render(<GroundedAnswer answer={answer()} busy={false} />);
     expect(screen.getByText(/Inspected 1 file/)).toBeInTheDocument();
+  });
+
+  it("renders local knowledge citations and summary when the answer is knowledge-grounded", () => {
+    const a: GroundedAnswerType = {
+      groundingKind: "local-knowledge",
+      userMessageId: "lk-u",
+      assistantMessageId: "lk-a",
+      content: "Alpha is described in the indexed capsule [1].",
+      citations: [
+        {
+          stableId: "lk-1",
+          marker: "[1]",
+          label: "alpha.md · section 1 · chunk ch-1",
+          score: 0.91,
+        },
+      ],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 27,
+      noEvidence: false,
+      contextPack: {
+        kind: "local-knowledge",
+        scopeKind: "capsule",
+        scopeId: "lk-1234",
+        scopeLabel: "Alpha Capsule",
+        capsuleCount: 1,
+        sourceCount: 1,
+        citationCount: 1,
+        referenceBudget: 10,
+        referencesUsed: 1,
+      },
+    };
+    render(<GroundedAnswer answer={a} busy={false} />);
+    expect(screen.getByText("Knowledge scope: Alpha Capsule")).toBeInTheDocument();
+    expect(screen.getByText(/\[1\] alpha\.md/)).toBeInTheDocument();
+    expect(screen.getByText("1 / 10 references")).toBeInTheDocument();
   });
 
   it("renders one static evidence reference per citation with the path:start-end label", () => {

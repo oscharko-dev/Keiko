@@ -5,6 +5,7 @@ import {
   createDefaultParserRegistry,
   deleteCapsule,
   getCapsule,
+  listCapsuleSets,
   listCapsuleSources,
   listCapsules,
   openKnowledgeStore,
@@ -590,6 +591,26 @@ export async function handleListLocalKnowledgeCapsules(
         updatedAt: capsule.updatedAt,
       }));
       return { status: 200, body: { capsules } };
+    } finally {
+      env.close();
+    }
+  });
+}
+
+export async function handleListLocalKnowledgeCapsuleSets(
+  _ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(() => {
+    const env = openStoreForDeps(deps);
+    try {
+      const capsuleSets = listCapsuleSets(env.store).map((capsuleSet) => ({
+        id: capsuleSet.id,
+        displayName: capsuleSet.displayName,
+        capsuleCount: capsuleSet.capsuleIds.length,
+        composedAt: capsuleSet.composedAt,
+      }));
+      return { status: 200, body: { capsuleSets } };
     } finally {
       env.close();
     }

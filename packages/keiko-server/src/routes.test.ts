@@ -26,18 +26,23 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 63 route contract including local-knowledge capsule management", () => {
-    expect(API_ROUTES).toHaveLength(63);
+  it("declares the 64 route contract including local-knowledge capsule management", () => {
+    expect(API_ROUTES).toHaveLength(64);
   });
 
   it("includes the local-knowledge capsule detail routes", () => {
     const localKnowledgeRoutes = API_ROUTES.filter((r) =>
       r.pattern.startsWith("/api/local-knowledge"),
     );
-    expect(localKnowledgeRoutes).toHaveLength(4);
+    expect(localKnowledgeRoutes).toHaveLength(5);
     expect(
       localKnowledgeRoutes.find(
         (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsules",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsule-sets",
       ),
     ).toBeDefined();
     expect(

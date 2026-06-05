@@ -1,14 +1,22 @@
 "use client";
 
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
 import { DEFAULT_MODEL_ID, type ChatSessionApi } from "./hooks/useChatSession";
+import { ApiError, updateChatLocalKnowledgeScope } from "@/lib/api";
+import {
+  fetchCapsules,
+  fetchCapsuleSets,
+  type CapsuleListEntry,
+  type CapsuleSetListEntry,
+} from "@/lib/local-knowledge-api";
 import type {
   Chat,
   ChatMessage,
+  ChatLocalKnowledgeScope,
   GroundedAnswer as GroundedAnswerWire,
   ModelCapability,
 } from "@/lib/types";
@@ -252,6 +260,143 @@ function ChatContext({ root }: { readonly root: string }): ReactNode {
   );
 }
 
+function groundedModeValue(chat: Chat): string {
+  if (chat.localKnowledgeScope?.kind === "capsule") {
+    return `capsule:${chat.localKnowledgeScope.capsuleId}`;
+  }
+  if (chat.localKnowledgeScope?.kind === "capsule-set") {
+    return `capsule-set:${chat.localKnowledgeScope.capsuleSetId}`;
+  }
+  if (chat.connectedScope !== undefined) return "files";
+  return "none";
+}
+
+function formatScopeUpdateError(error: unknown): string {
+  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
+  if (error instanceof Error) return error.message;
+  return "Unable to update knowledge scope.";
+}
+
+function LocalKnowledgeScopeControl({
+  chat,
+  onChatChanged,
+}: {
+  readonly chat: Chat;
+  readonly onChatChanged: (chat: Chat) => void;
+}): ReactNode {
+  const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
+  const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load(): Promise<void> {
+      try {
+        const [capsuleResponse, capsuleSetResponse] = await Promise.all([
+          fetchCapsules(),
+          fetchCapsuleSets().catch(() => ({ capsuleSets: [] })),
+        ]);
+        if (cancelled) return;
+        setCapsules(
+          capsuleResponse.capsules.filter((entry) => entry.lifecycleState === "ready"),
+        );
+        setCapsuleSets(capsuleSetResponse.capsuleSets);
+      } catch (caught) {
+        if (!cancelled) setError(formatScopeUpdateError(caught));
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleChange(value: string): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      if (value === "none" || value === "files") {
+        const response = await updateChatLocalKnowledgeScope(chat.id, null);
+        onChatChanged(response.chat);
+        return;
+      }
+      if (value.startsWith("capsule-set:")) {
+        const response = await updateChatLocalKnowledgeScope(chat.id, {
+          kind: "capsule-set",
+          capsuleSetId: value.slice("capsule-set:".length) as Extract<
+            ChatLocalKnowledgeScope,
+            { readonly kind: "capsule-set" }
+          >["capsuleSetId"],
+          connectedAtMs: Date.now(),
+        });
+        onChatChanged(response.chat);
+        return;
+      }
+      if (value.startsWith("capsule:")) {
+        const response = await updateChatLocalKnowledgeScope(chat.id, {
+          kind: "capsule",
+          capsuleId: value.slice("capsule:".length) as Extract<
+            ChatLocalKnowledgeScope,
+            { readonly kind: "capsule" }
+          >["capsuleId"],
+          connectedAtMs: Date.now(),
+        });
+        onChatChanged(response.chat);
+      }
+    } catch (caught) {
+      setError(formatScopeUpdateError(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const value = groundedModeValue(chat);
+  return (
+    <label
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        fontSize: 12,
+      }}
+    >
+      <span className="mono" style={{ color: "var(--fg-dim)" }}>
+        Grounding
+      </span>
+      <select
+        value={value}
+        disabled={busy}
+        aria-label="Grounding mode"
+        onChange={(event) => {
+          void handleChange(event.target.value);
+        }}
+      >
+        <option value="none">Model only</option>
+        <option value="files" disabled={chat.connectedScope === undefined}>
+          Live Files context
+        </option>
+        {capsules.map((capsule) => (
+          <option key={capsule.id} value={`capsule:${capsule.id}`}>
+            {`Knowledge capsule: ${capsule.displayName}`}
+          </option>
+        ))}
+        {capsuleSets.map((capsuleSet) => (
+          <option key={capsuleSet.id} value={`capsule-set:${capsuleSet.id}`}>
+            {`Capsule set: ${capsuleSet.displayName}`}
+          </option>
+        ))}
+      </select>
+      {error !== null ? (
+        <span role="alert" className="scope-connect-error">
+          {error}
+        </span>
+      ) : null}
+    </label>
+  );
+}
+
 // Issue #184 — surfaces the chat's explicit connected-scope binding (set via the Files-window
 // connector). Rendered above the message log so screen-reader users hear the live-region
 // announce when the binding flips. The pill self-hides when no scope is bound.
@@ -262,10 +407,15 @@ function ChatScopeHeader({
   readonly chat: Chat;
   readonly onChatChanged: (chat: Chat) => void;
 }): ReactNode {
-  if (chat.connectedScope === undefined) return null;
   return (
-    <div className="chat-scope-header" style={{ padding: "6px 12px" }}>
-      <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
+    <div
+      className="chat-scope-header"
+      style={{ padding: "6px 12px", display: "flex", gap: 12, flexWrap: "wrap" }}
+    >
+      {chat.connectedScope !== undefined ? (
+        <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
+      ) : null}
+      <LocalKnowledgeScopeControl chat={chat} onChatChanged={onChatChanged} />
     </div>
   );
 }
@@ -284,7 +434,7 @@ function GroundedAnswerPanel({
   readonly busy: boolean;
 }): ReactNode {
   if (chat === undefined) return null;
-  if (chat.connectedScope === undefined) return null;
+  if (chat.connectedScope === undefined && chat.localKnowledgeScope === undefined) return null;
   if (answer === undefined && !busy) return null;
   return (
     <div className="chatw-grounded" aria-live="polite">
@@ -345,7 +495,8 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
             {sending ? (
               <div className="chatw-typing-row">
                 <TypingBubble />
-                {activeChat?.connectedScope !== undefined ? (
+                {activeChat?.connectedScope !== undefined ||
+                activeChat?.localKnowledgeScope !== undefined ? (
                   <button
                     type="button"
                     className="grounded-cancel-btn"

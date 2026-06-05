@@ -31,6 +31,16 @@ import {
   type GatewayRequest,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
+import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import {
+  openKnowledgeStore,
+  resolveKnowledgeStorePath,
+  updateCapsuleState,
+} from "@oscharko-dev/keiko-local-knowledge";
+import {
+  scriptedAdapter,
+  seedCapsuleWithVectors,
+} from "../../keiko-local-knowledge/src/retrieval/_support.js";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -38,6 +48,11 @@ const GROUNDED_FIXTURE_QUESTION = "Investigate src/foo.ts behaviour of MyClass";
 
 let store: UiStore;
 let tmp: string;
+
+function asConnectedAnswer(answer: GroundedAnswer) {
+  expect(answer.groundingKind).toBe("connected-context");
+  return answer as Extract<GroundedAnswer, { readonly groundingKind: "connected-context" }>;
+}
 
 function fakeReq(body: string): IncomingMessage {
   return Readable.from([Buffer.from(body)]) as unknown as IncomingMessage;
@@ -69,6 +84,14 @@ function customModelConfig(modelId = CHAT_MODEL): GatewayConfig {
         maxRetries: 0,
         retryBaseDelayMs: 500,
       },
+      {
+        modelId: "text-embedding-3-small",
+        baseUrl: "https://provider.example/v1",
+        apiKey: "test-config-secret-value-1234567890",
+        timeoutMs: 30_000,
+        maxRetries: 0,
+        retryBaseDelayMs: 500,
+      },
     ],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
     capabilities: [
@@ -90,7 +113,11 @@ function customModelConfig(modelId = CHAT_MODEL): GatewayConfig {
   };
 }
 
-function deps(model?: ModelPort, env: Record<string, string> = {}): UiHandlerDeps {
+function deps(
+  model?: ModelPort,
+  env: Record<string, string> = {},
+  overrides: Partial<UiHandlerDeps> = {},
+): UiHandlerDeps {
   const config = model === undefined ? undefined : customModelConfig(CHAT_MODEL);
   return {
     config,
@@ -101,6 +128,7 @@ function deps(model?: ModelPort, env: Record<string, string> = {}): UiHandlerDep
     registry: createRunRegistry(),
     modelPortFactory: () => model,
     store,
+    ...overrides,
   };
 }
 
@@ -390,7 +418,7 @@ describe("handleGroundedAsk", () => {
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     expect(seenRequests).toHaveLength(1);
     expectGroundedGatewayRequest(firstGatewayRequest(seenRequests));
-    const answer = result.body as GroundedAnswer;
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.content).toBe("Grounded answer [src/foo.ts:1-3]");
     expect(store.listMessages(chatId).map((message) => message.content)).toContain(
       "Grounded answer [src/foo.ts:1-3]",
@@ -507,7 +535,7 @@ describe("handleGroundedAsk", () => {
     );
 
     expect(result.status).toBe(200);
-    const answer = result.body as GroundedAnswer;
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
     const userMsg = store
       .listMessages(chatId)
       .find((message) => message.id === answer.userMessageId);
@@ -557,7 +585,7 @@ describe("handleGroundedAsk", () => {
       runner(packWithCitations(), "Inspected 2 file(s) ..."),
     );
     expect(result.status).toBe(200);
-    const answer = result.body as GroundedAnswer;
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.content).toBe("Inspected 2 file(s) ...");
     expect(answer.elapsedMs).toBe(42);
     // Citations sorted by score desc — atom-high before atom-low.
@@ -585,10 +613,51 @@ describe("handleGroundedAsk", () => {
       runner(emptyPack(), "ok"),
     );
     expect(result.status).toBe(200);
-    const answer = result.body as GroundedAnswer;
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.citations).toEqual([]);
     expect(answer.uncertainty).toEqual([]);
     expect(answer.omittedCount).toBe(0);
+  });
+
+  it("routes grounded asks through the local knowledge scope when a capsule is selected", async () => {
+    const project = store.createProject(tmp, "demo");
+    const chat = store.createChat(project.path, "Knowledge chat", CHAT_MODEL);
+    const uiDbPath = join(tmp, "keiko-ui.db");
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      capsuleId: "cap-local" as KnowledgeCapsuleId,
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+    store.updateChat(chat.id, {
+      localKnowledgeScope: {
+        kind: "capsule",
+        capsuleId: seeded.capsuleId,
+        connectedAtMs: NOW,
+      },
+    });
+    const requests: GatewayRequest[] = [];
+    const model = fakeModel("Grounded answer from indexed knowledge [1].", requests);
+    const adapter = scriptedAdapter();
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: chat.id, content: "What is alpha?" })),
+      deps(model, {}, { uiDbPath, localKnowledgeEmbeddingRequest: adapter.request }),
+    );
+    expect(result.status).toBe(200);
+    const answer = result.body as GroundedAnswer;
+    expect(answer.groundingKind).toBe("local-knowledge");
+    if (answer.groundingKind !== "local-knowledge") {
+      throw new Error("expected local-knowledge grounded answer");
+    }
+    expect(answer.citations).toHaveLength(1);
+    expect(answer.content).toContain("indexed knowledge");
+    expect(answer.contextPack.kind).toBe("local-knowledge");
+    expect(firstGatewayRequest(requests).messages[1]?.content).toContain("alpha");
+    const messages = store.listMessages(chat.id);
+    expect(messages.some((message) => message.id === answer.userMessageId)).toBe(true);
+    expect(messages.some((message) => message.id === answer.assistantMessageId)).toBe(true);
   });
 
   it("maps ClarificationNeededError to a 400 BAD_REQUEST", async () => {
@@ -621,7 +690,7 @@ describe("handleGroundedAsk", () => {
       runner(packWithCitations(), "ok"),
     );
     expect(result.status).toBe(200);
-    const answer = result.body as GroundedAnswer;
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.contextPack).toBeDefined();
     expect(answer.contextPack.schemaVersion).toBe(CONNECTED_CONTEXT_SCHEMA_VERSION);
     // The summary mirrors the orchestrator pack's scope, not the chat-binding scope —
@@ -643,7 +712,7 @@ describe("handleGroundedAsk", () => {
       runner(packWithCitations(), "ok"),
     );
     expect(result.status).toBe(200);
-    const answer = result.body as GroundedAnswer;
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.evidenceRunId).toMatch(/^grounded-/);
     const manifest = loadEvidence(evidenceStore, answer.evidenceRunId ?? "");
     expect(manifest?.run.taskType).toBe("connected-context");
@@ -672,7 +741,7 @@ describe("handleGroundedAsk", () => {
       deps(),
       runner(packWithCitations(), "ok"),
     );
-    const answer = result.body as GroundedAnswer;
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
     // The orchestrator-supplied pack in this test carries its own scope (kind: "directory"
     // with one path), which is what wires through. We assert the summary mirrors that pack —
     // never the chat-binding — so the BFF stays a thin projection.
@@ -688,7 +757,7 @@ describe("handleGroundedAsk", () => {
       deps(),
       runner(pack, "ok"),
     );
-    const answer = result.body as GroundedAnswer;
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.contextPack.usage).toEqual(pack.usage);
     expect(answer.contextPack.budget).toEqual(pack.budget);
     expect(answer.contextPack.scopeId).toMatch(/^scope-[0-9a-f]{8}$/);
@@ -708,7 +777,7 @@ describe("handleGroundedAsk", () => {
       runner(packWithCitations(), "overview"),
     );
     expect(result.status).toBe(200);
-    const answer = result.body as GroundedAnswer;
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.citations.map((citation) => citation.scopePath)).toEqual(["src/bar.ts", "src/foo.ts"]);
   });
 
@@ -734,7 +803,7 @@ describe("handleGroundedAsk", () => {
       runner(noResultPack, "I found nothing."),
     );
     expect(result.status).toBe(200);
-    const answer = result.body as GroundedAnswer;
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.citations.length).toBe(0);
     expect(answer.uncertainty.length).toBe(1);
     expect(answer.uncertainty[0]?.kind).toBe("no-evidence");
@@ -763,7 +832,7 @@ describe("handleGroundedAsk", () => {
       runner(budgetExhaustedPack, "Partial results only."),
     );
     expect(result.status).toBe(200);
-    const answer = result.body as GroundedAnswer;
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.omittedCount).toBe(1);
     expect(answer.uncertainty[0]?.kind).toBe("budget-clipped");
   });

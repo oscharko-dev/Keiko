@@ -81,6 +81,7 @@ import {
   handleDeleteLocalKnowledgeCapsule,
   handleGetLocalKnowledgeCapsule,
   handleListLocalKnowledgeCapsules,
+  handleListLocalKnowledgeCapsuleSets,
   handleReindexLocalKnowledgeCapsule,
 } from "./local-knowledge-handlers.js";
 
@@ -183,6 +184,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/files/preview", handler: handleFilesPreview },
   // Issue #198 audit fix — live capsule detail/health routes for the Local Knowledge UI.
   { method: "GET", pattern: "/api/local-knowledge/capsules", handler: handleListLocalKnowledgeCapsules },
+  { method: "GET", pattern: "/api/local-knowledge/capsule-sets", handler: handleListLocalKnowledgeCapsuleSets },
   { method: "GET", pattern: "/api/local-knowledge/capsules/:capsuleId", handler: handleGetLocalKnowledgeCapsule },
   { method: "DELETE", pattern: "/api/local-knowledge/capsules/:capsuleId", handler: handleDeleteLocalKnowledgeCapsule },
   {
