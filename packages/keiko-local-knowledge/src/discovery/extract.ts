@@ -365,8 +365,15 @@ function selectionInput(
   };
 }
 
+function isUnsupportedResult(result: ParserResult): boolean {
+  return (
+    result.parser.parserId === "unsupported" ||
+    (result.units.length > 0 && result.units.every((unit) => unit.kind === "unsupported-media"))
+  );
+}
+
 function statusForResult(result: ParserResult): DocumentRecord["status"] {
-  return result.parser.parserId === "unsupported" ? "unsupported" : "extracted";
+  return isUnsupportedResult(result) ? "unsupported" : "extracted";
 }
 
 const SOURCE_TEXT_PARSER_IDS: ReadonlySet<string> = new Set(["text", "json", "csv", "html"]);

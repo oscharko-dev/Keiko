@@ -139,6 +139,10 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
           value={`${embId.provider} / ${embId.modelId} (${embId.vectorDimensions.toString()}d, ${embId.vectorMetric})`}
         />
         <OverviewRow label="Storage size" value={formatBytes(health.storageSizeBytes)} />
+        <OverviewRow
+          label="Unsupported documents"
+          value={health.unsupportedDocuments.toString()}
+        />
         {health.lastIndexedAt !== undefined ? (
           <OverviewRow label="Last indexed" value={formatTs(health.lastIndexedAt)} />
         ) : null}
@@ -153,6 +157,18 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
               <ul className="lkd-stale-reasons" aria-label="Stale reasons">
                 {health.staleReasons.map((r) => (
                   <li key={r}>{r}</li>
+                ))}
+              </ul>
+            }
+          />
+        ) : null}
+        {health.unsupportedGuidance.length > 0 ? (
+          <OverviewRow
+            label="Next steps"
+            value={
+              <ul className="lkd-stale-reasons" aria-label="Unsupported document guidance">
+                {health.unsupportedGuidance.map((guidance) => (
+                  <li key={guidance}>{guidance}</li>
                 ))}
               </ul>
             }

@@ -246,6 +246,8 @@ export interface CapsuleHealth {
   readonly vectorCompatible: boolean;
   readonly failedDocuments: number;
   readonly skippedDocuments: number;
+  readonly unsupportedDocuments: number;
+  readonly unsupportedGuidance: readonly string[];
   readonly staleReasons: readonly string[];
 }
 

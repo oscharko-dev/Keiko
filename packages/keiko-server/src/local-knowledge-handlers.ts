@@ -280,6 +280,43 @@ function loadParserDiagnostics(
   }));
 }
 
+interface UnsupportedReasonRow {
+  readonly unsupported_reason: string | null;
+}
+
+function unsupportedGuidanceFor(reason: string): string {
+  if (reason === "pdf-no-text-layer" || reason === "pdf-not-implemented") {
+    return "Scanned PDFs need an OCR-capable extraction path. Configure a verified OCR or vision adapter, or provide a text-layer PDF.";
+  }
+  if (reason === "image-not-supported") {
+    return "Image-only documents need an OCR-capable extraction path before they can be indexed.";
+  }
+  if (reason.startsWith("ocr-failed:")) {
+    return "OCR extraction failed for at least one document. Review the OCR adapter configuration and retry indexing.";
+  }
+  return "Some documents are unsupported in this build. Review the health diagnostics for the affected formats and next steps.";
+}
+
+function loadUnsupportedGuidance(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: string,
+): readonly string[] {
+  const rows = store._internal.db.prepare(
+    [
+      "SELECT DISTINCT unsupported_reason",
+      "FROM parsed_units",
+      "WHERE capsule_id = :c AND kind = 'unsupported-media'",
+      "ORDER BY unsupported_reason ASC",
+    ].join(" "),
+  ).all({ c: capsuleId }) as unknown as readonly UnsupportedReasonRow[];
+  const guidance = new Set<string>();
+  for (const row of rows) {
+    if (typeof row.unsupported_reason !== "string" || row.unsupported_reason.length === 0) continue;
+    guidance.add(unsupportedGuidanceFor(row.unsupported_reason));
+  }
+  return [...guidance];
+}
+
 interface IndexingJobRow {
   readonly id: string;
   readonly capsule_id: string;
@@ -365,13 +402,17 @@ function countForTable(
 function countDocumentStatus(
   store: ReturnType<typeof openKnowledgeStore>,
   capsuleId: string,
-  status: "failed" | "skipped",
+  status: "failed" | "skipped" | "unsupported",
 ): number {
   const row =
     status === "failed"
       ? (store._internal.db
           .prepare("SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status = 'failed'")
           .get({ c: capsuleId }) as { readonly n: number })
+      : status === "unsupported"
+        ? (store._internal.db
+            .prepare("SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status = 'unsupported'")
+            .get({ c: capsuleId }) as { readonly n: number })
       : (store._internal.db
           .prepare(
             "SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status IN ('skipped', 'unsupported')",
@@ -400,8 +441,13 @@ function buildCapsuleHealth(
   const vectorCount = countForTable(store, "vectors", capsule.id);
   const failedDocuments = countDocumentStatus(store, capsule.id, "failed");
   const skippedDocuments = countDocumentStatus(store, capsule.id, "skipped");
+  const unsupportedDocuments = countDocumentStatus(store, capsule.id, "unsupported");
   const compatibility = vectorCompatibility(deps, capsule);
   const indexedAt = lastIndexedAt(store, capsule.id);
+  const unsupportedGuidance =
+    unsupportedDocuments > 0
+      ? loadUnsupportedGuidance(store, capsule.id)
+      : [];
   return {
     capsuleId: capsule.id,
     lifecycleState: capsule.lifecycleState,
@@ -414,6 +460,13 @@ function buildCapsuleHealth(
     vectorCompatible: compatibility.vectorCompatible,
     failedDocuments,
     skippedDocuments,
+    unsupportedDocuments,
+    unsupportedGuidance:
+      unsupportedDocuments > 0 && unsupportedGuidance.length === 0
+        ? [
+            "Some documents were skipped because this build cannot extract them yet. Review the health diagnostics for the affected formats and next steps.",
+          ]
+        : unsupportedGuidance,
     staleReasons: compatibility.staleReasons,
   };
 }

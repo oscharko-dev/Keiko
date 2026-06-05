@@ -193,7 +193,13 @@ describe("local-knowledge handlers", () => {
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
       capsule: { id: "cap-1", displayName: "Audit Capsule" },
-      health: { capsuleId: "cap-1", failedDocuments: 1, vectorCompatible: true },
+      health: {
+        capsuleId: "cap-1",
+        failedDocuments: 1,
+        unsupportedDocuments: 0,
+        unsupportedGuidance: [],
+        vectorCompatible: true,
+      },
       sources: [{ sourceId: "src-1", displayName: "Policies", failedCount: 1 }],
       parserDiagnostics: [{ code: "PARSE_ERR", message: "Parser failed", pageNumber: 1 }],
       indexingJobs: [{ id: "job-1", status: "failed", failedDocuments: 1 }],
@@ -215,6 +221,11 @@ describe("local-knowledge handlers", () => {
         "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) VALUES ('doc-1', :c, 'src-1', 'policy.bin', 10, 'application/octet-stream', 'aa', 'unsupported', '1', 10, 'unsupported', 'policy.bin')",
       )
       .run({ c: capId });
+    store._internal.db
+      .prepare(
+        "INSERT INTO parsed_units (id, capsule_id, document_id, kind, unsupported_reason, character_start, character_end) VALUES ('unit-1', :c, 'doc-1', 'unsupported-media', 'image-not-supported', NULL, NULL)",
+      )
+      .run({ c: capId });
     store.close();
 
     const result = await handleGetLocalKnowledgeCapsule(
@@ -224,7 +235,13 @@ describe("local-knowledge handlers", () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({
-      health: { skippedDocuments: 1 },
+      health: {
+        skippedDocuments: 1,
+        unsupportedDocuments: 1,
+        unsupportedGuidance: [
+          "Image-only documents need an OCR-capable extraction path before they can be indexed.",
+        ],
+      },
       sources: [{ sourceId: "src-1", skippedCount: 1 }],
     });
   });
