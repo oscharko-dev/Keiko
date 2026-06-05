@@ -22,7 +22,7 @@ import type {
 const INSERT_MEMBERSHIP_SQL =
   "INSERT INTO capsule_membership_changes (id, capsule_id, change_kind, source_id, details_json, occurred_at) VALUES (:id, :capsule_id, :change_kind, :source_id, :details_json, :occurred_at)";
 const INSERT_AUDIT_SQL =
-  "INSERT INTO capsule_audit_events (id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents, deleted_vector_count, deleted_extracted_text_count, occurred_at) VALUES (:id, :capsule_id, :kind, :source_id, :job_id, :error_code, :processed_documents, :failed_documents, :deleted_vector_count, :deleted_extracted_text_count, :occurred_at)";
+  "INSERT INTO capsule_audit_events (id, capsule_id, kind, source_id, job_id, error_code, processed_documents, failed_documents, deleted_vector_count, deleted_extracted_text_count, details_json, occurred_at) VALUES (:id, :capsule_id, :kind, :source_id, :job_id, :error_code, :processed_documents, :failed_documents, :deleted_vector_count, :deleted_extracted_text_count, :details_json, :occurred_at)";
 
 type SqlValue = string | number | null;
 type SqlParams = Record<string, SqlValue>;
@@ -66,8 +66,35 @@ function insertAuditEventRow(statement: RunStatement, event: CapsuleAuditEvent):
     deleted_vector_count: "deletedVectorCount" in event ? event.deletedVectorCount : null,
     deleted_extracted_text_count:
       "deletedExtractedTextCount" in event ? event.deletedExtractedTextCount : null,
+    details_json: buildAuditDetailsJson(event),
     occurred_at: event.occurredAt,
   });
+}
+
+function buildAuditDetails(event: CapsuleAuditEvent): Record<string, unknown> | null {
+  if (event.kind === "retrieval-performed") {
+    return {
+      sourceIds: [...event.sourceIds],
+      chunkIds: [...event.chunkIds],
+      referenceCount: event.referenceCount,
+      noEvidence: event.noEvidence,
+    };
+  }
+  if (event.kind === "answer-context-assembled" || event.kind === "model-context-sent") {
+    return {
+      sourceIds: [...event.sourceIds],
+      chunkIds: [...event.chunkIds],
+      referenceCount: event.referenceCount,
+      citationCount: event.citationCount,
+      ...("modelId" in event ? { modelId: event.modelId } : {}),
+    };
+  }
+  return null;
+}
+
+function buildAuditDetailsJson(event: CapsuleAuditEvent): string | null {
+  const details = buildAuditDetails(event);
+  return details === null ? null : JSON.stringify(details);
 }
 
 function insertMembershipRow(

@@ -49,6 +49,8 @@ export interface CapsuleDetailResponse {
 export interface CapsuleActionResponse {
   readonly ok: true;
   readonly capsuleId: KnowledgeCapsuleId;
+  readonly affectedCapsuleSetIds?: readonly CapsuleSetId[];
+  readonly cleanupVerified?: boolean;
 }
 
 // ---------------------------------------------------------------------------

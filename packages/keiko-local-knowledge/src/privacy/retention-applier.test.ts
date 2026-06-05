@@ -265,4 +265,33 @@ describe("applyRetentionToCapsule", () => {
     expect(parsedUnitIdsForCapsule(env.store, capsuleId)).toEqual(["pu-new"]);
     expect(documentTextIdsForCapsule(env.store, capsuleId)).toEqual(["doc-new"]);
   });
+
+  it("rejects negative or non-finite retention policy values before mutating data", () => {
+    const now = 30 * DAY_MS;
+    const capsuleId = "cap-invalid" as KnowledgeCapsuleId;
+    createCapsule(env.store, sampleCapsuleInput({ id: capsuleId }));
+    const source = sampleSourceInput("src-1");
+    addSourceToCapsule(env.store, capsuleId, source);
+    seedDocWithVector(env.store, {
+      capsuleId,
+      sourceId: source.id,
+      documentId: "doc-1",
+      parsedUnitId: "pu-1",
+      chunkId: "ch-1",
+      vectorId: "vec-1",
+      lastExtractedAt: now - 365 * DAY_MS,
+      vectorCreatedAt: now - 365 * DAY_MS,
+    });
+
+    expect(() =>
+      applyRetentionToCapsule(env.store, capsuleId, { retainVectorsDays: -1 }, now),
+    ).toThrow(/retainVectorsDays must be a finite non-negative number/);
+    expect(() =>
+      applyRetentionToCapsule(env.store, capsuleId, { retainExtractedTextDays: Number.NaN }, now),
+    ).toThrow(/retainExtractedTextDays must be a finite non-negative number/);
+
+    expect(vectorIdsForCapsule(env.store, capsuleId)).toEqual(["vec-1"]);
+    expect(parsedUnitIdsForCapsule(env.store, capsuleId)).toEqual(["pu-1"]);
+    expect(documentTextIdsForCapsule(env.store, capsuleId)).toEqual(["doc-1"]);
+  });
 });

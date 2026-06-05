@@ -207,6 +207,30 @@ function SourcesSection({ sources }: { sources: readonly SourceIndexStats[] }): 
   );
 }
 
+function PrivacySection(): ReactNode {
+  return (
+    <section aria-labelledby="lkd-privacy-heading">
+      <SectionHeading>
+        <span id="lkd-privacy-heading">Privacy and deletion</span>
+      </SectionHeading>
+      <ul className="lkd-list" aria-label="Privacy and deletion details">
+        <li className="lkd-source-row">
+          Indexed text, vectors, diagnostics, and job history stay in Keiko's local runtime state
+          on this machine.
+        </li>
+        <li className="lkd-source-row">
+          Selected chunks may be sent through the configured Model Gateway for embeddings during
+          indexing and for grounded answers when you ask questions against this capsule.
+        </li>
+        <li className="lkd-source-row">
+          Deleting a capsule removes its local index data and capsule-set memberships. Source files
+          on disk are not deleted.
+        </li>
+      </ul>
+    </section>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // HealthDiagnosticsSection
 // Renders ONLY severity, code, message, and page_number.
@@ -398,6 +422,7 @@ export function CapsuleDetail({ fetchDetailImpl }: CapsuleDetailProps = {}): Rea
       </header>
 
       <OverviewSection data={data} />
+      <PrivacySection />
       <SourcesSection sources={data.sources} />
       <HealthDiagnosticsSection diagnostics={data.parserDiagnostics} />
       <IndexingJobsSection jobs={data.indexingJobs} />

@@ -15,6 +15,7 @@ import {
   type CapsuleLifecycleState,
   type CapsuleOutputMode,
   type CapsuleRetrievalEffort,
+  type CapsuleSetId,
   type EmbeddingModelIdentity,
   type EmbeddingVectorMetric,
   type KnowledgeCapsule,
@@ -88,6 +89,28 @@ const SELECT_SOURCE_IDS_FOR_CAPSULE_SQL =
   "SELECT id FROM capsule_sources WHERE capsule_id = :c ORDER BY created_at ASC, id ASC";
 const UPDATE_STATE_SQL =
   "UPDATE capsules SET lifecycle_state = :state, updated_at = :now WHERE id = :id";
+const SELECT_AFFECTED_CAPSULE_SETS_SQL =
+  "SELECT set_id FROM capsule_set_members WHERE capsule_id = :c ORDER BY set_id ASC";
+
+const DELETE_VERIFICATION_TABLES = [
+  "capsule_sources",
+  "capsule_set_members",
+  "documents",
+  "document_texts",
+  "pages",
+  "sections",
+  "parsed_units",
+  "chunks",
+  "vectors",
+  "parser_diagnostics",
+  "indexing_jobs",
+] as const;
+
+export interface DeleteCapsuleResult {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly affectedCapsuleSetIds: readonly CapsuleSetId[];
+  readonly cleanupVerified: true;
+}
 
 function jsonOrEmpty(value: readonly string[]): string {
   return JSON.stringify(value);
@@ -255,9 +278,13 @@ export function deleteCapsule(
   store: KnowledgeStore,
   id: KnowledgeCapsuleId,
   auditSink?: AuditEventSink,
-): void {
+): DeleteCapsuleResult {
   const db = store._internal.db;
   const occurredAt = store._internal.now();
+  const affectedCapsuleSetIds = db
+    .prepare(SELECT_AFFECTED_CAPSULE_SETS_SQL)
+    .all({ c: id })
+    .map((row) => (row as { readonly set_id: string }).set_id as CapsuleSetId);
   db.exec("BEGIN");
   try {
     const result = db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: id });
@@ -265,6 +292,7 @@ export function deleteCapsule(
       db.exec("ROLLBACK");
       throw new KnowledgeNotFoundError(`Capsule not found: ${String(id)}`);
     }
+    verifyDeleteCleanup(db, id);
     db.exec("COMMIT");
   } catch (error) {
     if (!(error instanceof KnowledgeNotFoundError)) {
@@ -273,4 +301,18 @@ export function deleteCapsule(
     throw error;
   }
   auditSink?.emit({ kind: "capsule-deleted", capsuleId: id, occurredAt });
+  return { capsuleId: id, affectedCapsuleSetIds, cleanupVerified: true };
+}
+
+function verifyDeleteCleanup(db: KnowledgeStore["_internal"]["db"], capsuleId: KnowledgeCapsuleId): void {
+  for (const table of DELETE_VERIFICATION_TABLES) {
+    const row = db
+      .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE capsule_id = :c`)
+      .get({ c: capsuleId }) as { readonly n: number };
+    if (row.n !== 0) {
+      throw new KnowledgeStoreError(
+        `capsule delete left residual rows in ${table} for ${String(capsuleId)}`,
+      );
+    }
+  }
 }

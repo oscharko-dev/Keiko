@@ -270,11 +270,22 @@ describe("local-knowledge handlers", () => {
         "SELECT status, processed_documents, skipped_documents FROM indexing_jobs WHERE capsule_id = :c ORDER BY started_at ASC, id ASC",
       )
       .all({ c: "cap-1" }) as unknown as readonly IndexingJobSummaryRow[];
+    const auditKinds = inspect._internal.db
+      .prepare(
+        "SELECT kind FROM capsule_audit_events WHERE capsule_id = :c ORDER BY occurred_at ASC, kind ASC",
+      )
+      .all({ c: "cap-1" }) as unknown as readonly { readonly kind: string }[];
     inspect.close();
 
     expect(jobs).toHaveLength(2);
     expect(jobs[0]).toMatchObject({ status: "succeeded", processed_documents: 1 });
     expect(jobs[1]).toMatchObject({ status: "succeeded", processed_documents: 0, skipped_documents: 0 });
+    expect(auditKinds.map((row) => row.kind).sort()).toEqual([
+      "indexing-job-completed",
+      "indexing-job-completed",
+      "indexing-job-started",
+      "indexing-job-started",
+    ]);
   });
 
   it("limits repair-failed reindex jobs to sources with failed documents", async () => {
@@ -362,6 +373,12 @@ describe("local-knowledge handlers", () => {
       depsFor(tmp),
     );
     expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      ok: true,
+      capsuleId: "cap-1",
+      affectedCapsuleSetIds: [],
+      cleanupVerified: true,
+    });
 
     const verify = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
@@ -369,7 +386,13 @@ describe("local-knowledge handlers", () => {
     const row = verify._internal.db
       .prepare("SELECT COUNT(*) AS n FROM capsules WHERE id = 'cap-1'")
       .get() as { readonly n: number };
+    const auditRow = verify._internal.db
+      .prepare(
+        "SELECT kind FROM capsule_audit_events WHERE capsule_id = 'cap-1' ORDER BY occurred_at DESC LIMIT 1",
+      )
+      .get() as { readonly kind: string } | undefined;
     verify.close();
     expect(row.n).toBe(0);
+    expect(auditRow).toEqual({ kind: "capsule-deleted" });
   });
 });

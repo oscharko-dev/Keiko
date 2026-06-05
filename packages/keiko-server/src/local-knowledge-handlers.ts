@@ -2,6 +2,7 @@ import { statSync } from "node:fs";
 import { dirname } from "node:path";
 import type { IncomingMessage } from "node:http";
 import {
+  createSqliteAuditSink,
   createDefaultParserRegistry,
   deleteCapsule,
   getCapsule,
@@ -486,6 +487,22 @@ function actionResponse(capsuleId: string): RouteResult {
   return { status: 200, body: { ok: true, capsuleId } };
 }
 
+function deleteActionResponse(input: {
+  readonly capsuleId: string;
+  readonly affectedCapsuleSetIds: readonly string[];
+  readonly cleanupVerified: boolean;
+}): RouteResult {
+  return {
+    status: 200,
+    body: {
+      ok: true,
+      capsuleId: input.capsuleId,
+      affectedCapsuleSetIds: input.affectedCapsuleSetIds,
+      cleanupVerified: input.cleanupVerified,
+    },
+  };
+}
+
 function parseCapsuleId(ctx: RouteContext): KnowledgeCapsule["id"] {
   const capsuleId = ctx.params.capsuleId;
   if (capsuleId === undefined) {
@@ -529,6 +546,7 @@ async function runCapsuleIndexingJob(
     parserRegistry: createDefaultParserRegistry(),
     workspaceFs: nodeWorkspaceFs,
     embeddingAdapter: adapter,
+    auditSink: createSqliteAuditSink(store),
     store,
     force: false,
   })) {
@@ -654,8 +672,8 @@ export async function handleDeleteLocalKnowledgeCapsule(
     await readJsonObject(ctx.req);
     const env = openStoreForDeps(deps);
     try {
-      deleteCapsule(env.store, capsuleId);
-      return actionResponse(capsuleId);
+      const result = deleteCapsule(env.store, capsuleId, createSqliteAuditSink(env.store));
+      return deleteActionResponse(result);
     } finally {
       env.close();
     }

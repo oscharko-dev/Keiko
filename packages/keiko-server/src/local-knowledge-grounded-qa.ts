@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
+  createSqliteAuditSink,
   getCapsule,
   getCapsuleSet,
   openKnowledgeStore,
@@ -20,7 +21,7 @@ import type {
   LocalKnowledgeEvidenceCitation,
   LocalKnowledgeGroundedAnswer,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { KnowledgeCapsule } from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsule, KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
 import {
   requestOpenAIEmbedding,
   type OpenAIEmbeddingAdapter,
@@ -35,6 +36,13 @@ import { errorBody } from "./routes.js";
 const DEFAULT_REFERENCE_BUDGET = 10;
 const MAX_EXCERPT_CHARS = 900;
 const MAX_PROMPT_REFERENCES = 8;
+
+interface CapsuleUsageSummary {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceIds: readonly KnowledgeSourceId[];
+  readonly chunkIds: readonly string[];
+  readonly referenceCount: number;
+}
 
 interface AskInput {
   readonly chatId: string;
@@ -275,9 +283,23 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     private readonly model: ModelPort,
     private readonly modelId: string,
     private readonly store: KnowledgeStore,
+    private readonly auditSink: ReturnType<typeof createSqliteAuditSink>,
   ) {}
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
+    const occurredAt = Date.now();
+    for (const usage of summariseReferenceUsage(input.references)) {
+      this.auditSink.emit({
+        kind: "model-context-sent",
+        capsuleId: usage.capsuleId,
+        sourceIds: usage.sourceIds,
+        chunkIds: usage.chunkIds,
+        referenceCount: usage.referenceCount,
+        citationCount: input.references.length,
+        modelId: this.modelId,
+        occurredAt,
+      });
+    }
     const response = await this.model.call(
       {
         modelId: this.modelId,
@@ -360,6 +382,86 @@ function citationStableId(citation: AnswerGeneratorInput["references"][number], 
 
 function selectedSourceCount(selected: SelectedLocalKnowledgeScope): number {
   return new Set(selected.capsules.flatMap((capsule) => capsule.sourceIds)).size;
+}
+
+function summariseReferenceUsage(
+  references: readonly AnswerGeneratorInput["references"][number][],
+): readonly CapsuleUsageSummary[] {
+  const byCapsule = new Map<
+    KnowledgeCapsuleId,
+    { sourceIds: Set<KnowledgeSourceId>; chunkIds: Set<string>; referenceCount: number }
+  >();
+  for (const reference of references) {
+    const current = byCapsule.get(reference.capsuleId) ?? {
+      sourceIds: new Set<KnowledgeSourceId>(),
+      chunkIds: new Set<string>(),
+      referenceCount: 0,
+    };
+    current.sourceIds.add(reference.citation.sourceId);
+    current.chunkIds.add(String(reference.chunkId));
+    current.referenceCount += 1;
+    byCapsule.set(reference.capsuleId, current);
+  }
+  return [...byCapsule.entries()]
+    .sort(([a], [b]) => (String(a) < String(b) ? -1 : 1))
+    .map(([capsuleId, value]) => ({
+      capsuleId,
+      sourceIds: [...value.sourceIds].sort((a, b) => (String(a) < String(b) ? -1 : 1)),
+      chunkIds: [...value.chunkIds].sort(),
+      referenceCount: value.referenceCount,
+    }));
+}
+
+function emitRetrievalAudit(
+  sink: ReturnType<typeof createSqliteAuditSink>,
+  selected: SelectedLocalKnowledgeScope,
+  result: Awaited<ReturnType<typeof runGroundedAnswer>>,
+  occurredAt: number,
+): void {
+  const usage = summariseReferenceUsage(result.references);
+  if (usage.length === 0) {
+    for (const capsule of selected.capsules) {
+      sink.emit({
+        kind: "retrieval-performed",
+        capsuleId: capsule.id,
+        sourceIds: capsule.sourceIds,
+        chunkIds: [],
+        referenceCount: 0,
+        noEvidence: result.noEvidence,
+        occurredAt,
+      });
+    }
+    return;
+  }
+  for (const entry of usage) {
+    sink.emit({
+      kind: "retrieval-performed",
+      capsuleId: entry.capsuleId,
+      sourceIds: entry.sourceIds,
+      chunkIds: entry.chunkIds,
+      referenceCount: entry.referenceCount,
+      noEvidence: result.noEvidence,
+      occurredAt,
+    });
+  }
+}
+
+function emitAnswerContextAudit(
+  sink: ReturnType<typeof createSqliteAuditSink>,
+  result: Awaited<ReturnType<typeof runGroundedAnswer>>,
+  occurredAt: number,
+): void {
+  for (const entry of summariseReferenceUsage(result.references)) {
+    sink.emit({
+      kind: "answer-context-assembled",
+      capsuleId: entry.capsuleId,
+      sourceIds: entry.sourceIds,
+      chunkIds: entry.chunkIds,
+      referenceCount: entry.referenceCount,
+      citationCount: entry.referenceCount,
+      occurredAt,
+    });
+  }
 }
 
 function localKnowledgeQuery(
@@ -503,7 +605,8 @@ async function runScopedGroundedAnswer(
   const modelId = input.modelId ?? chat.selectedModel;
   const model = resolveModel(deps, modelId);
   if ("status" in model) return model;
-  const generator = new StoreBackedAnswerGenerator(model, modelId, env.store);
+  const auditSink = createSqliteAuditSink(env.store);
+  const generator = new StoreBackedAnswerGenerator(model, modelId, env.store, auditSink);
   const startedAt = Date.now();
   const result = await runGroundedAnswer(
     {
@@ -514,6 +617,11 @@ async function runScopedGroundedAnswer(
     localKnowledgeQuery(chat, input),
   );
   const elapsedMs = Date.now() - startedAt;
+  const occurredAt = Date.now();
+  emitRetrievalAudit(auditSink, selected, result, occurredAt);
+  if (result.references.length > 0) {
+    emitAnswerContextAudit(auditSink, result, occurredAt);
+  }
   const noEvidenceReason = enforcedNoEvidenceReason(result);
   const assistantContent =
     noEvidenceReason === undefined

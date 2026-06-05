@@ -184,6 +184,22 @@ describe("CapsuleDetail — overview section", () => {
       ).toBeInTheDocument();
     });
   });
+
+  it("renders privacy and deletion disclosure copy", async () => {
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Privacy and deletion")).toBeInTheDocument();
+    });
+
+    expect(
+      screen.getByText(/stay in Keiko's local runtime state on this machine/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/may be sent through the configured Model Gateway/i),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/source files on disk are not deleted/i)).toBeInTheDocument();
+  });
 });
 
 // ---------------------------------------------------------------------------

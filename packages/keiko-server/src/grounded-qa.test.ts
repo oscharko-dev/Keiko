@@ -657,6 +657,20 @@ describe("handleGroundedAsk", () => {
     const messages = store.listMessages(chat.id);
     expect(messages.some((message) => message.id === answer.userMessageId)).toBe(true);
     expect(messages.some((message) => message.id === answer.assistantMessageId)).toBe(true);
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const auditKinds = verify._internal.db
+      .prepare(
+        "SELECT kind FROM capsule_audit_events WHERE capsule_id = :c ORDER BY occurred_at ASC, kind ASC",
+      )
+      .all({ c: seeded.capsuleId }) as unknown as readonly { readonly kind: string }[];
+    verify.close();
+    expect(auditKinds.map((row) => row.kind).sort()).toEqual([
+      "answer-context-assembled",
+      "model-context-sent",
+      "retrieval-performed",
+    ]);
   });
 
   it("maps ClarificationNeededError to a 400 BAD_REQUEST", async () => {

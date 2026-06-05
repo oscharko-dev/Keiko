@@ -19,6 +19,7 @@
 
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 
+import { KnowledgeStoreError } from "../errors.js";
 import type { KnowledgeStore } from "../store.js";
 
 import type { AuditEventSink, CapsuleRetentionPolicy, RetentionApplyResult } from "./types.js";
@@ -40,15 +41,16 @@ interface ChangesRow {
   readonly changes: number;
 }
 
-function cutoffFor(now: number, days: number | undefined): number {
-  // Caller guards on `hasXyzPolicy` (a `policy.field !== undefined` check) before calling
-  // this, so `days === undefined` indicates a programmer error rather than a runtime
-  // condition. The `?? 0` fallback is defense-in-depth — it returns `now` (zero cutoff,
-  // matches everything) without crashing the transaction.
-  if (days === undefined) {
-    return now;
-  }
+function cutoffFor(now: number, days: number): number {
   return now - days * DAY_MS;
+}
+
+function parseRetentionDays(field: keyof CapsuleRetentionPolicy, value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new KnowledgeStoreError(`${field} must be a finite non-negative number when set`);
+  }
+  return value;
 }
 
 function runDelete(
@@ -75,9 +77,12 @@ export function applyRetentionToCapsule(
   now: number,
   auditSink?: AuditEventSink,
 ): RetentionApplyResult {
-  const hasVectorPolicy = typeof policy.retainVectorsDays === "number";
-  const hasTextPolicy = typeof policy.retainExtractedTextDays === "number";
-  if (!hasVectorPolicy && !hasTextPolicy) {
+  const retainVectorsDays = parseRetentionDays("retainVectorsDays", policy.retainVectorsDays);
+  const retainExtractedTextDays = parseRetentionDays(
+    "retainExtractedTextDays",
+    policy.retainExtractedTextDays,
+  );
+  if (retainVectorsDays === undefined && retainExtractedTextDays === undefined) {
     return { capsuleId, deletedVectorCount: 0, deletedExtractedTextCount: 0, appliedAt: now };
   }
 
@@ -86,12 +91,12 @@ export function applyRetentionToCapsule(
   let deletedExtractedTextCount = 0;
   db.exec("BEGIN");
   try {
-    if (hasVectorPolicy) {
-      const vectorCutoff = cutoffFor(now, policy.retainVectorsDays);
+    if (retainVectorsDays !== undefined) {
+      const vectorCutoff = cutoffFor(now, retainVectorsDays);
       deletedVectorCount = runDelete(store, DELETE_OLD_VECTORS_SQL, capsuleId, vectorCutoff);
     }
-    if (hasTextPolicy) {
-      const textCutoff = cutoffFor(now, policy.retainExtractedTextDays);
+    if (retainExtractedTextDays !== undefined) {
+      const textCutoff = cutoffFor(now, retainExtractedTextDays);
       deletedExtractedTextCount = runDelete(
         store,
         DELETE_OLD_DOCUMENT_TEXTS_SQL,

@@ -12,7 +12,7 @@ Treat the historical PASS rows below as implementation provenance, not as author
 
 - `#194` and `#266`: corrected in this audit branch by adding real PDF and DOCX extraction adapters plus async parser execution in discovery.
 - `#199`: corrected in this audit branch by adding bounded hybrid lexical metadata reranking on top of scoped vector retrieval.
-- `#201`: corrected in this audit branch by persisting all metadata-only audit events and emitting them from lifecycle/indexing/retention paths.
+- `#201`: corrected in this audit branch by persisting metadata-only audit events, wiring them on live lifecycle/indexing/grounded-answer paths, hardening retention validation, and fixing absolute-path redaction.
 - `#197`, `#198`, and `#200`: still require further work before Epic `#189` can be considered fully implemented and closure-ready.
 
 ## Summary
@@ -147,9 +147,9 @@ The local-knowledge surface is a self-contained read/write boundary with no exte
 
 - **Embedding credentials** — The OpenAI embedding adapter lives in `keiko-model-gateway` (#192), which owns API credential handling. The local-knowledge layer receives the injectable adapter and is never exposed to secrets.
 
-- **Audit trail** — #201 `emitCapsuleAuditEvent` and `createSqliteAuditSink` capture source additions/removals and indexing milestones. The audit surface is scoped per capsule; events are structured (no raw excerpts). The `redactDiagnosticMessage` helper at [`packages/keiko-local-knowledge/src/privacy/index.ts:1`](../packages/keiko-local-knowledge/src/privacy/index.ts) caps diagnostic logs to 1024 bytes.
+- **Audit trail** — #201 `emitCapsuleAuditEvent` and `createSqliteAuditSink` capture lifecycle, indexing, retrieval, answer-context assembly, and model-bound chunk usage as metadata-only events. The audit surface is scoped per capsule; events are structured and persist no raw excerpts. The `redactDiagnosticMessage` helper at [`packages/keiko-local-knowledge/src/privacy/index.ts:1`](../packages/keiko-local-knowledge/src/privacy/index.ts) strips control bytes, rewrites local paths, and caps diagnostic logs to 1024 bytes.
 
-- **Retention** — #201 `applyRetentionToCapsule` scoped by capsule_id prunes old vectors and extracted text on a configurable schedule. The test at [`packages/keiko-local-knowledge/src/privacy/retention.test.ts:1`](../packages/keiko-local-knowledge/src/privacy/retention.test.ts) pins the scope with a mutation: removing the capsule_id clause turns the test red.
+- **Retention** — #201 `applyRetentionToCapsule` scoped by capsule_id prunes old vectors and extracted text on a configurable schedule, and it now rejects negative or non-finite retention windows before mutating data. The test at [`packages/keiko-local-knowledge/src/privacy/retention-applier.test.ts:1`](../packages/keiko-local-knowledge/src/privacy/retention-applier.test.ts) pins both scope isolation and fail-closed validation.
 
 - **Architecture** — ADR-0019 direction-3e at [`.dependency-cruiser.cjs:198`](./../.dependency-cruiser.cjs) restricts imports; `npm run arch:check` reports zero violations. The package has no dependency on `keiko-security` (redaction is the responsibility of consumers that call `runGroundedAnswer`).
 
@@ -160,7 +160,7 @@ The local-knowledge surface is a self-contained read/write boundary with no exte
 | 1   | All 16 children merged to epic branch                                | ✓ Verified (table above); 16 SHAs present in `git log`                 |
 | 2   | Verification matrix at `docs/local-knowledge-verification-matrix.md` | This document                                                          |
 | 3   | All eight CI gates PASS at epic HEAD                                 | ✓ Verified (table above); typecheck, lint, arch:check, tests all green |
-| 4   | ADR documenting the privacy/retention contract                       | [ADR-0023](adr/ADR-0023-local-knowledge-privacy-and-retention.md)      |
+| 4   | End-user privacy/deletion disclosure                                | ✓ Verified in capsule detail UI copy and delete-flow text              |
 | 5   | Five regression fixtures with mutation witnesses                     | ✓ All five listed above with file:line evidence                        |
 
 ## Out-of-scope deferrals (explicit follow-ups)
@@ -179,7 +179,7 @@ The local-knowledge surface is a self-contained read/write boundary with no exte
 ## See also
 
 - [Epic #189](https://github.com/oscharko-dev/Keiko/issues/189) — Build Local Knowledge Connector
-- [ADR-0023](adr/ADR-0023-local-knowledge-privacy-and-retention.md) — Local Knowledge privacy and retention contract
+- [`packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-detail.tsx`](../packages/keiko-ui/src/app/local-knowledge/[capsuleId]/capsule-detail.tsx) — Local Knowledge privacy and deletion disclosure copy
 - [ADR-0019](adr/ADR-0019-modular-package-architecture.md) — Modular package architecture (direction-3e)
 - [`docs/connected-context-verification.md`](connected-context-verification.md) — Connected context verification matrix (similar structure)
 - [`docs/architecture-sprint-verification.md`](architecture-sprint-verification.md) — Architecture sprint verification (similar closure pattern)

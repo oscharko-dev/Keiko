@@ -194,8 +194,8 @@ function listSqliteMaster(db: DatabaseSync, type: "table" | "index"): readonly s
 
 // ─── Tests ───────────────────────────────────────────────────────────────────────
 describe("LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION", () => {
-  it("is the integer 6 and is distinct from the contract-surface string version", () => {
-    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(6);
+  it("is the integer 7 and is distinct from the contract-surface string version", () => {
+    expect(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe(7);
     expect(typeof LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION).toBe("number");
     expect(typeof LOCAL_KNOWLEDGE_SCHEMA_VERSION).toBe("string");
     // Same numeric meaning, different *types* — the test pins the distinct kinds so a
@@ -566,6 +566,33 @@ describe("KNOWLEDGE_CAPSULE_MIGRATIONS", () => {
       db.prepare(DELETE_CAPSULE_SQL).run({ capsule_id: "cap-1" });
       expect(countRows(db, "capsule_membership_changes")).toBe(1);
       expect(countRows(db, "capsule_audit_events")).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("applies v7 on top of a v6 database and preserves existing audit rows", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const v7 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 7);
+      if (v7 === undefined) {
+        throw new Error("expected v7 migration");
+      }
+      for (const entry of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (entry.version >= 7) break;
+        for (const stmt of entry.up) db.exec(stmt);
+      }
+      seedFullLineage(db);
+      db.prepare(
+        "INSERT INTO capsule_audit_events (id, capsule_id, kind, occurred_at) VALUES (?, ?, ?, ?)",
+      ).run("a-1", "cap-1", "capsule-deleted", 1235);
+
+      for (const stmt of v7.up) db.exec(stmt);
+
+      const row = db
+        .prepare("SELECT kind, details_json FROM capsule_audit_events WHERE id = 'a-1'")
+        .get() as { readonly kind: string; readonly details_json: string | null } | undefined;
+      expect(row).toEqual({ kind: "capsule-deleted", details_json: null });
     } finally {
       db.close();
     }

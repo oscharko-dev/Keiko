@@ -37,7 +37,10 @@ export type CapsuleAuditEvent =
   | IndexingJobStartedEvent
   | IndexingJobCompletedEvent
   | IndexingJobFailedEvent
-  | RetentionAppliedEvent;
+  | RetentionAppliedEvent
+  | RetrievalPerformedEvent
+  | AnswerContextAssembledEvent
+  | ModelContextSentEvent;
 
 export interface CapsuleCreatedEvent {
   readonly kind: "capsule-created";
@@ -94,6 +97,37 @@ export interface RetentionAppliedEvent {
   readonly capsuleId: KnowledgeCapsuleId;
   readonly deletedVectorCount: number;
   readonly deletedExtractedTextCount: number;
+  readonly occurredAt: number;
+}
+
+export interface RetrievalPerformedEvent {
+  readonly kind: "retrieval-performed";
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceIds: readonly KnowledgeSourceId[];
+  readonly chunkIds: readonly string[];
+  readonly referenceCount: number;
+  readonly noEvidence: boolean;
+  readonly occurredAt: number;
+}
+
+export interface AnswerContextAssembledEvent {
+  readonly kind: "answer-context-assembled";
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceIds: readonly KnowledgeSourceId[];
+  readonly chunkIds: readonly string[];
+  readonly referenceCount: number;
+  readonly citationCount: number;
+  readonly occurredAt: number;
+}
+
+export interface ModelContextSentEvent {
+  readonly kind: "model-context-sent";
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceIds: readonly KnowledgeSourceId[];
+  readonly chunkIds: readonly string[];
+  readonly referenceCount: number;
+  readonly citationCount: number;
+  readonly modelId: string;
   readonly occurredAt: number;
 }
 
