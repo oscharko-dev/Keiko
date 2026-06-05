@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -36,7 +37,7 @@ function run(cmd, args, options) {
 }
 
 function sleep(ms) {
-  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+  return new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, ms));
 }
 
 async function listen(server) {
@@ -180,7 +181,7 @@ async function waitForHealth(baseUrl) {
   let lastError = "health endpoint never answered";
   while (Date.now() < deadline) {
     try {
-      const res = await fetch(`${baseUrl}/api/health`);
+      const res = await globalThis.fetch(`${baseUrl}/api/health`);
       if (res.ok) {
         const body = await res.json();
         if (body.status === "ok") return;
@@ -194,9 +195,11 @@ async function waitForHealth(baseUrl) {
   fail(`UI health check did not pass within ${String(HEALTH_TIMEOUT_MS)}ms: ${lastError}`);
 }
 
+// eslint-disable-next-line max-lines-per-function
 function startInstalledUi(tmp, configPath, uiDbPath, memoryDir) {
   const bin = join(tmp, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js");
   const portServer = createServer((_, res) => res.end("reserved"));
+  // eslint-disable-next-line max-lines-per-function
   return listen(portServer).then(async () => {
     const port = getPort(portServer);
     await new Promise((resolvePromise, reject) => portServer.close((error) => (error ? reject(error) : resolvePromise())));
@@ -224,7 +227,7 @@ function startInstalledUi(tmp, configPath, uiDbPath, memoryDir) {
     );
     const healthPromise = waitForHealth(baseUrl);
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("UI start timed out")), UI_START_TIMEOUT_MS),
+      globalThis.setTimeout(() => reject(new Error("UI start timed out")), UI_START_TIMEOUT_MS),
     );
     try {
       await Promise.race([healthPromise, timeoutPromise]);
@@ -255,7 +258,7 @@ function startInstalledUi(tmp, configPath, uiDbPath, memoryDir) {
 }
 
 async function fetchText(url) {
-  const res = await fetch(url);
+  const res = await globalThis.fetch(url);
   assert(res.ok, `expected ${url} to return 2xx, got ${String(res.status)}`);
   return res.text();
 }
@@ -268,7 +271,7 @@ async function api(baseUrl, path, options = {}) {
     ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
     ...(options.headers ?? {}),
   };
-  const res = await fetch(`${baseUrl}${path}`, {
+  const res = await globalThis.fetch(`${baseUrl}${path}`, {
     ...options,
     method,
     headers,
@@ -356,7 +359,7 @@ async function memoryContext(baseUrl, scopes, queryText) {
 }
 
 async function fetchMemory(baseUrl, memoryId) {
-  const res = await fetch(`${baseUrl}/api/memory/${encodeURIComponent(memoryId)}`, {
+  const res = await globalThis.fetch(`${baseUrl}/api/memory/${encodeURIComponent(memoryId)}`, {
     headers: { Accept: "application/json" },
   });
   const text = await res.text();
@@ -364,6 +367,7 @@ async function fetchMemory(baseUrl, memoryId) {
   return { status: res.status, body };
 }
 
+// eslint-disable-next-line complexity, max-lines-per-function
 async function main() {
   const tarballPath = packRoot();
   const installRoot = mkdtempSync(join(tmpdir(), "keiko-install-memory-smoke-"));
