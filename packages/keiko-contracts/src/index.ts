@@ -578,3 +578,17 @@ export type {
   MemoryWorkflowPort,
   MemoryWriteCandidateEvent,
 } from "./memory-workflow-port.js";
+
+// ─── Conversation budget estimator (Issue #151 / Epic #142) ─────────────────────
+// Pure, deterministic helper for the Conversation Center context-pressure
+// indicator and the "clear history" affordance. Token counts are APPROXIMATE
+// (bytes/4) by design — UI copy and tests must state this precisely.
+export type {
+  ConversationBudgetBreakdown,
+  ConversationBudgetDocumentContext,
+  ConversationBudgetEstimate,
+  ConversationBudgetInputs,
+  ConversationBudgetMessage,
+  ConversationBudgetPressure,
+} from "./conversation-budget.js";
+export { estimateConversationBudget } from "./conversation-budget.js";

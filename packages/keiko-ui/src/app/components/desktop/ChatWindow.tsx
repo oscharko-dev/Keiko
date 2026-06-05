@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
 import { ConnectedScopePill } from "./ConnectedScopePill";
+import { BudgetIndicator, BUDGET_EXCEEDED_ALERT_ID } from "./ContextBudget";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
 import { SafeMarkdown } from "./SafeMarkdown";
@@ -124,6 +125,9 @@ interface ComposerBarProps {
   readonly ready: boolean;
   readonly selectedModelCapability: ModelCapability | undefined;
   readonly onAttachFiles: (files: readonly File[]) => void;
+  // Issue #151 — when true, the budget for the next send exceeds the model's
+  // window and the send button must be focusable but inert.
+  readonly budgetExceeded: boolean;
 }
 
 function ComposerBar({
@@ -131,18 +135,28 @@ function ComposerBar({
   ready,
   selectedModelCapability,
   onAttachFiles,
+  budgetExceeded,
 }: ComposerBarProps): ReactNode {
   const { models, selectedModel, setSelectedModel, noEligibleModels, loading } = session;
   // AC #1 / AC #4: when no eligible model is configured the send button must be
   // focusable (so screen-reader users discover the error) but must not submit.
   // Use aria-disabled rather than the HTML disabled attribute so focus is retained.
-  const sendBlocked = noEligibleModels || !ready;
+  // Issue #151 — budget-exceeded also blocks send.
+  const sendBlocked = noEligibleModels || budgetExceeded || !ready;
 
   // AC #2: aria-describedby chains:
   // - model select → NO_MODEL_ALERT_ID when noEligibleModels
-  // - send button  → NO_MODEL_ALERT_ID when noEligibleModels, else SEND_HINT_ID when !ready
+  // - send button  → NO_MODEL_ALERT_ID when noEligibleModels,
+  //                  BUDGET_EXCEEDED_ALERT_ID when context exceeded,
+  //                  else SEND_HINT_ID when !ready
   const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
-  const sendDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : !ready ? SEND_HINT_ID : undefined;
+  const sendDescribedBy = noEligibleModels
+    ? NO_MODEL_ALERT_ID
+    : budgetExceeded
+      ? BUDGET_EXCEEDED_ALERT_ID
+      : !ready
+        ? SEND_HINT_ID
+        : undefined;
 
   // AC #2 / title for disabled model select.
   const selectTitle = noEligibleModels
@@ -199,7 +213,7 @@ function ComposerBar({
         </span>
       ) : null}
       <button
-        type={noEligibleModels ? "button" : "submit"}
+        type={noEligibleModels || budgetExceeded ? "button" : "submit"}
         className="cmp-send"
         data-on={!sendBlocked}
         aria-disabled={sendBlocked}
@@ -207,11 +221,13 @@ function ComposerBar({
         title={
           noEligibleModels
             ? "No conversation-eligible model is configured — connect a gateway in Settings"
-            : !ready
-              ? "Type a message to send"
-              : "Send message"
+            : budgetExceeded
+              ? "Context exceeds the model's window — clear history or pick a larger-context model"
+              : !ready
+                ? "Type a message to send"
+                : "Send message"
         }
-        disabled={!noEligibleModels && !ready}
+        disabled={!noEligibleModels && !budgetExceeded && !ready}
         aria-label="Send message"
       >
         <Icons.arrowUp size={16} />
@@ -262,7 +278,12 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
     pendingAttachments,
     addPendingAttachment,
     removePendingAttachment,
+    budget,
+    clearHistory,
   } = session;
+  // Issue #151 — budget can be undefined while bootstrapping; treat that as
+  // not-exceeded so the composer remains submittable.
+  const budgetExceeded = budget?.pressure === "exceeded";
 
   // Rejection state for the inline alert (AC #2 / Part 2).
   const [rejectionReason, setRejectionReason] = useState<AttachmentRejectionReason | undefined>();
@@ -311,11 +332,18 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
       />
       {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
       <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
+      {/* Issue #151 — context-pressure indicator + clear-history affordance */}
+      <BudgetIndicator
+        budget={budget}
+        onClearHistory={clearHistory}
+        disabled={sending || loading}
+      />
       <ComposerBar
         session={session}
         ready={ready}
         selectedModelCapability={selectedModelCapability}
         onAttachFiles={handleFiles}
+        budgetExceeded={budgetExceeded}
       />
     </div>
   );
