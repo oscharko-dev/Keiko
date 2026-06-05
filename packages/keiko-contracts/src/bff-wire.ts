@@ -200,10 +200,65 @@ export interface DesktopChatSendUsage {
   readonly latencyMs: number;
 }
 
+export interface ConversationMemoryScopeContextWire {
+  readonly userId: string;
+  readonly workspaceId?: string | undefined;
+  readonly projectId?: string | undefined;
+  readonly conversationId?: string | undefined;
+}
+
+export interface ConversationMemoryRequestWire {
+  readonly enabled?: boolean | undefined;
+  readonly budgetTokens?: number | undefined;
+  readonly context: ConversationMemoryScopeContextWire;
+}
+
+export interface ConversationMemoryContextEntryWire {
+  readonly memoryId: string;
+  readonly bodyExcerpt: string;
+  readonly inclusionReason: string;
+}
+
+export interface ConversationMemoryContextWire {
+  readonly enabled: boolean;
+  readonly text: string;
+  readonly memories: readonly ConversationMemoryContextEntryWire[];
+  readonly budget: {
+    readonly tokens: number;
+    readonly used: number;
+  };
+}
+
+export type ConversationMemoryActionWire =
+  | {
+      readonly kind: "candidate";
+      readonly proposalId: string;
+      readonly body: string;
+      readonly scopeLabel: string;
+      readonly requiresApproval: boolean;
+    }
+  | {
+      readonly kind: "update";
+      readonly memoryId: string;
+      readonly bodyPatch?: string | undefined;
+    }
+  | {
+      readonly kind: "forget";
+      readonly memoryId: string;
+      readonly requiresConfirmation: boolean;
+    }
+  | { readonly kind: "rejected"; readonly reason: string };
+
+export interface ConversationMemoryResultWire {
+  readonly context: ConversationMemoryContextWire;
+  readonly actions: readonly ConversationMemoryActionWire[];
+}
+
 export interface DesktopChatSendResponse {
   readonly chat: Chat;
   readonly messages: readonly ChatMessage[];
   readonly usage?: DesktopChatSendUsage;
+  readonly memory?: ConversationMemoryResultWire;
 }
 
 // Issue #148 — Safe document context extraction for conversation inputs.

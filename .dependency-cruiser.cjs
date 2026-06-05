@@ -577,16 +577,20 @@ module.exports = {
         "verification is not yet a physical package — the boundary will be re-evaluated " +
         "when verification is extracted in a future issue. memory-vault, memory-governance, " +
         "and memory-retrieval added by issue #211 (Memory Center UI BFF routes). " +
-        "memory-capture added by issue #212 (Conversation Center in-chat capture BFF route).",
+        "memory-capture added by issue #212 (Conversation Center in-chat capture BFF route). " +
+        "memory-consolidation added by issue #208 (Memory consolidation jobs); the server " +
+        "wires consolidation lifecycle handlers through packages/keiko-server/src/memory-" +
+        "consolidation-handlers.ts so the package must appear in the allow-list to keep " +
+        "the rule truthful with the source.",
       severity: "error",
       from: {
         path: "^(packages/keiko-server/src/|" + "src/ui/|" + "tests/architecture/fixtures/server/)",
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|quality-intelligence|server)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|quality-intelligence|server)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|quality-intelligence|server)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
           "src/(cli|evaluations|gateway|workspace|tools|harness|workflows|audit))",
         pathNot: "^src/ui/",
       },

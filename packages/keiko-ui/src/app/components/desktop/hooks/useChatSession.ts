@@ -13,11 +13,14 @@ import {
   sendDesktopChat,
   startChatRun,
 } from "@/lib/api";
+import { acceptMemoryProposal, rejectMemoryProposal } from "@/lib/memory-api";
 import { findChatWorkflow } from "@/lib/chat-workflow-catalog";
 import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
 import type {
   Chat,
   ChatMessage,
+  ConversationMemoryRequestWire,
+  ConversationMemoryResultWire,
   ConversationBudgetEstimate,
   GroundedAnswer as GroundedAnswerWire,
   ModelCapability,
@@ -82,6 +85,8 @@ function readDataUrl(file: File): Promise<string> {
 }
 
 export const DEFAULT_CHAT_TITLE = "New chat";
+export const DEFAULT_CONVERSATION_MEMORY_USER_ID = "local-operator";
+export const DEFAULT_MEMORY_BUDGET_TOKENS = 1200;
 
 // Issue #152 — conversation request lifecycle states (memory keiko-issue66).
 // `idle` is the resting state; `queued` is set the moment sendMessage commits
@@ -212,6 +217,14 @@ export interface UseChatSessionResult {
   // chat. undefined while the selected model is unresolved. Token counts are
   // approximate; UI copy must say so.
   readonly budget: ConversationBudgetEstimate | undefined;
+  readonly memoryEnabled: boolean;
+  readonly setMemoryEnabled: (next: boolean) => void;
+  readonly memoryBudgetTokens: number;
+  readonly setMemoryBudgetTokens: (next: number) => void;
+  readonly latestMemory: ConversationMemoryResultWire | undefined;
+  readonly clearLatestMemory: () => void;
+  readonly acceptMemoryCandidate: (proposalId: string) => Promise<void>;
+  readonly rejectMemoryCandidate: (proposalId: string) => Promise<void>;
   // Issue #151 / AC#4 — reset the in-memory history for the next prompt
   // WITHOUT deleting the conversation row. The chat row in `chats` is
   // preserved; only `messages` is cleared. Downstream wiring for
@@ -352,6 +365,9 @@ export function useChatSession(): UseChatSessionResult {
   // Issue #185 — most recent grounded answer for the active chat. Cleared when the active
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
   const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
+  const [latestMemory, setLatestMemory] = useState<ConversationMemoryResultWire | undefined>();
+  const [memoryEnabled, setMemoryEnabled] = useState(true);
+  const [memoryBudgetTokens, setMemoryBudgetTokens] = useState(DEFAULT_MEMORY_BUDGET_TOKENS);
   const activeChatIdRef = useRef<string | undefined>(undefined);
   // Issue #147 — pending-attachment state. Cleared after a successful send (AC #3).
   const [pendingAttachments, setPendingAttachments] = useState<readonly PendingAttachment[]>([]);
@@ -410,6 +426,52 @@ export function useChatSession(): UseChatSessionResult {
   // Clears all pending attachments (called after successful sendMessage).
   const clearPendingAttachments = useCallback(() => {
     setPendingAttachments([]);
+  }, []);
+
+  const clearLatestMemory = useCallback(() => {
+    setLatestMemory(undefined);
+  }, []);
+
+  const buildMemoryRequest = useCallback(
+    (chat: Chat, project: ProjectWithAvailability): ConversationMemoryRequestWire => ({
+      enabled: memoryEnabled,
+      budgetTokens: memoryBudgetTokens,
+      context: {
+        userId: DEFAULT_CONVERSATION_MEMORY_USER_ID,
+        workspaceId: project.path,
+        projectId: project.path,
+        conversationId: chat.id,
+      },
+    }),
+    [memoryBudgetTokens, memoryEnabled],
+  );
+
+  const acceptMemoryCandidate = useCallback(async (proposalId: string): Promise<void> => {
+    await acceptMemoryProposal(proposalId as never);
+    setLatestMemory((previous) =>
+      previous === undefined
+        ? previous
+        : {
+            ...previous,
+            actions: previous.actions.filter(
+              (action) => !(action.kind === "candidate" && action.proposalId === proposalId),
+            ),
+          },
+    );
+  }, []);
+
+  const rejectMemoryCandidate = useCallback(async (proposalId: string): Promise<void> => {
+    await rejectMemoryProposal(proposalId as never);
+    setLatestMemory((previous) =>
+      previous === undefined
+        ? previous
+        : {
+            ...previous,
+            actions: previous.actions.filter(
+              (action) => !(action.kind === "candidate" && action.proposalId === proposalId),
+            ),
+          },
+    );
   }, []);
 
   // Single update site so the ref + state never drift. The ref is the source
@@ -506,6 +568,7 @@ export function useChatSession(): UseChatSessionResult {
           selectedModel: latest.selectedModel,
           messages: Array.from(messagePayload.messages),
         }));
+        setLatestMemory(undefined);
       } catch (caught) {
         setError(errorMessage(caught));
       }
@@ -523,6 +586,7 @@ export function useChatSession(): UseChatSessionResult {
     // Issue #185 — clear any prior grounded answer so the new chat doesn't render stale
     // citations from a previous conversation's last grounded turn.
     setLatestGrounded(undefined);
+    setLatestMemory(undefined);
     try {
       const messagePayload = await fetchChatMessages(chat.id, chat.projectPath);
       setState((previous) => {
@@ -574,7 +638,13 @@ export function useChatSession(): UseChatSessionResult {
         // adds a /api/desktop/chat/stream surface.
         updateSendStatus("contacting");
         const result = await sendDesktopChat(
-          { chatId: chat.id, projectPath: project.path, content, modelId },
+          {
+            chatId: chat.id,
+            projectPath: project.path,
+            content,
+            modelId,
+            memory: buildMemoryRequest(chat, project),
+          },
           signal,
         );
         // Issue #152 — the request may have been cancelled while the response
@@ -593,6 +663,7 @@ export function useChatSession(): UseChatSessionResult {
             ...Array.from(result.messages),
           ],
         }));
+        setLatestMemory(result.memory);
         return "completed";
       } catch (caught) {
         // Aborted ungrounded requests are not errors — silently fall back to
@@ -615,7 +686,7 @@ export function useChatSession(): UseChatSessionResult {
         return "failed";
       }
     },
-    [updateSendStatus],
+    [buildMemoryRequest, updateSendStatus],
   );
 
   // When the active chat carries either a Files connected scope or a local-knowledge scope,
@@ -643,6 +714,7 @@ export function useChatSession(): UseChatSessionResult {
         }
         if (signal.aborted) return "cancelled";
         setLatestGrounded(result);
+        setLatestMemory(undefined);
         // Refresh BOTH messages AND chats so the sidebar reflects the new updated_at and
         // re-sorts the active chat to the top after the assistant reply lands.
         const [messagePayload, chatsPayload] = await Promise.all([
@@ -732,6 +804,7 @@ export function useChatSession(): UseChatSessionResult {
     // any) was either already settled or already aborted via cancelSend.
     const controller = new AbortController();
     sendControllerRef.current = controller;
+    setLatestMemory(undefined);
     try {
       // Merge resolution (PR #355 + Epic #142): route through sendGrounded
       // when EITHER a Files connected scope OR a local-knowledge scope is
@@ -780,6 +853,7 @@ export function useChatSession(): UseChatSessionResult {
   // we'll also persist this reset so reloads don't re-fetch the cleared turns.
   const clearHistory = useCallback(() => {
     setLatestGrounded(undefined);
+    setLatestMemory(undefined);
     setState((previous) => ({ ...previous, messages: [] }));
   }, []);
 
@@ -908,6 +982,14 @@ export function useChatSession(): UseChatSessionResult {
     removePendingAttachment,
     clearPendingAttachments,
     budget,
+    memoryEnabled,
+    setMemoryEnabled,
+    memoryBudgetTokens,
+    setMemoryBudgetTokens,
+    latestMemory,
+    clearLatestMemory,
+    acceptMemoryCandidate,
+    rejectMemoryCandidate,
     clearHistory,
     launchWorkflowFromConversation,
   };

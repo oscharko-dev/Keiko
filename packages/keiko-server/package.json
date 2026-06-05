@@ -38,6 +38,7 @@
     "@oscharko-dev/keiko-memory-vault": "*",
     "@oscharko-dev/keiko-memory-governance": "*",
     "@oscharko-dev/keiko-memory-retrieval": "*",
-    "@oscharko-dev/keiko-memory-capture": "*"
+    "@oscharko-dev/keiko-memory-capture": "*",
+    "@oscharko-dev/keiko-memory-consolidation": "*"
   }
 }
