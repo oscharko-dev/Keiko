@@ -78,9 +78,9 @@ describe("insertVectorRow", () => {
       embedding: toBytes(new Float32Array([1, 2])),
     });
 
-    expect(() => insertVectorRow(fixture.store._internal.db, mismatched)).toThrow(
-      KnowledgeStoreError,
-    );
+    expect(() => {
+      insertVectorRow(fixture.store._internal.db, mismatched);
+    }).toThrow(KnowledgeStoreError);
     expect(
       countVectorsForDocument(
         fixture.store._internal.db,
