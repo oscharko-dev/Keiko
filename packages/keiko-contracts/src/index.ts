@@ -604,9 +604,23 @@ export { estimateConversationBudget } from "./conversation-budget.js";
 // LOCAL_KNOWLEDGE_SCHEMA_VERSION / MEMORY_SCHEMA_VERSION: a breaking change adds a
 // new literal member instead of mutating the existing one.
 export * as QualityIntelligence from "./qualityIntelligence/index.js";
-// Flat re-exports of the QI public surface for downstream packages (Issue #280
-// keiko-ui, Issue #283 keiko-quality-intelligence export adapters, Issue #281
-// keiko-server handoff routes) that prefer non-namespaced imports on hot paths.
-// This subsumes the per-name BFF wire types added during #280 — `export *` already
-// re-exports them.
-export * from "./qualityIntelligence/index.js";
+// Issue #280 introduced flat BFF wire-type re-exports for the UI consumers.
+export type {
+  QualityIntelligenceUiEvidenceRef,
+  QualityIntelligenceUiFindingSummary,
+  QualityIntelligenceUiRunDetail,
+  QualityIntelligenceUiRunSummary,
+  QualityIntelligenceUiRunTotals,
+} from "./qualityIntelligence/bffWire.js";
+// Issue #283 added flat export-adapter consumers.
+export type {
+  QualityIntelligenceExportAdapter,
+  QualityIntelligenceExportBundle,
+  QualityIntelligenceExportBundleEntry,
+  QualityIntelligenceTestCaseCandidate,
+} from "./qualityIntelligence/index.js";
+export {
+  assertExportBundleInvariant,
+  QUALITY_INTELLIGENCE_EXPORT_ADAPTERS,
+  QUALITY_INTELLIGENCE_TMS_ADAPTERS,
+} from "./qualityIntelligence/index.js";
