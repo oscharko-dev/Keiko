@@ -377,6 +377,44 @@ module.exports = {
       },
     },
     {
+      name: "adr-0019-direction-3j-memory-retrieval-only-contracts-security",
+      comment:
+        "ADR-0019 direction rule 3 (memory-retrieval strict variant): " +
+        "keiko-memory-retrieval may depend only on keiko-contracts and keiko-security. " +
+        "The dependency on keiko-security is reserved for the redact() primitive that " +
+        "downstream callers may apply when surfacing retrieval-error messages over a wire " +
+        "boundary; v1 does not invoke it. The layer does NOT depend on keiko-memory-vault: " +
+        "callers inject a MemoryQueryPort so the vault stays behind a seam and this package " +
+        "stays pure. The layer does NOT depend on keiko-memory-governance either: the " +
+        "suppression check is duplicated inline (synced with governance's suppression.ts) " +
+        "to keep the dep graph minimal — a future refactor may extract a shared helper. " +
+        "The layer does NOT depend on keiko-memory-capture or keiko-memory-consolidation: " +
+        "those are sibling envelope-producers; cross-imports would invert the dependency " +
+        "direction. Added at error severity by issue #210 because the memory-retrieval " +
+        "package physically exists. Also fires on the negative-test fixture under " +
+        "tests/architecture/fixtures/memory-retrieval/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs. The to.path forbids both non-allow-listed " +
+        "packages AND every sibling src/ shim domain (gateway|workspace|tools|harness|" +
+        "workflows|audit|ui|verification|evaluations|cli) so a future deep-import is " +
+        "caught (boundary-weakening gap pattern from issues #160 and #165). pathNot only " +
+        "filters self-references; it must NOT silently exclude sibling-but-still-in-src/ " +
+        "domains (memory lesson from issues #160 and #162).",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-memory-retrieval/src/|" +
+          "tests/architecture/fixtures/memory-retrieval/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-retrieval)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-retrieval)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|memory-retrieval)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+        pathNot: "^packages/keiko-memory-retrieval/src/",
+      },
+    },
+    {
       name: "adr-0019-direction-4-harness-scope",
       comment:
         "ADR-0019 direction rule 4 (base safety net): keiko-harness may depend only on " +
