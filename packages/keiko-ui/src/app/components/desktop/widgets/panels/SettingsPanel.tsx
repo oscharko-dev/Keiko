@@ -51,6 +51,8 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
 
 function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): ReactNode {
   const eligible = isConversationEligibleModel(model);
+  const statusClass = eligible ? "connected" : "ineligible";
+  const statusTitle = eligible ? "conversation-eligible" : "not selectable for conversation";
   return (
     <div className="ml-row">
       <span className="ml-ico">
@@ -67,7 +69,7 @@ function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): Rea
           {model.structuredOutput ? "yes" : "no"} · {model.costClass}/{model.latencyClass}
         </div>
       </div>
-      <span className={"ml-status " + (eligible ? "connected" : "untested")} title={model.kind} />
+      <span className={"ml-status " + statusClass} title={statusTitle} />
     </div>
   );
 }
@@ -172,7 +174,19 @@ export function SettingsPanel(): ReactNode {
 
   // Issue #144: source of truth is the helper, not an inline kind check.
   const chatCount = models.filter(isConversationEligibleModel).length;
-  const connected = configPresent && models.length > 0;
+  const gatewayConfigured = configPresent;
+  const hasDiscoveredModels = models.length > 0;
+  const gatewayStatusLabel = !gatewayConfigured
+    ? "Gateway setup required"
+    : hasDiscoveredModels
+      ? "Gateway connected"
+      : "Gateway configured";
+  const gatewayStatusDetail = !gatewayConfigured
+    ? "Enter the gateway base URL and API token before using chat or agent workflows."
+    : hasDiscoveredModels
+      ? "Keiko can use the configured gateway models for chat and agent workflows."
+      : "The gateway is configured, but no conversation-capable models are currently available.";
+  const gatewayStatusTone = gatewayConfigured ? "connected" : "untested";
 
   return (
     <div className="set">
@@ -209,7 +223,7 @@ export function SettingsPanel(): ReactNode {
               </div>
               <button type="button" className="set-add" onClick={() => setSetupOpen(true)}>
                 <Icons.plus size={14} />
-                {connected ? "Update credentials" : "Connect gateway"}
+                {gatewayConfigured ? "Update credentials" : "Connect gateway"}
               </button>
             </div>
 
@@ -220,20 +234,16 @@ export function SettingsPanel(): ReactNode {
               <div className="ml-info">
                 <div className="ml-top">
                   <span className="ml-name">
-                    {connected ? "Gateway connected" : "Gateway setup required"}
+                    {gatewayStatusLabel}
                   </span>
                   <span className="ml-type mono">{models.length.toString()} models</span>
                   <span className="ml-type mono">{chatCount.toString()} chat</span>
                 </div>
-                <div className="ml-url mono">
-                  {connected
-                    ? "Keiko can use the configured gateway models for chat and agent workflows."
-                    : "Enter the gateway base URL and API token before using chat or agent workflows."}
-                </div>
+                <div className="ml-url mono">{gatewayStatusDetail}</div>
               </div>
               <span
-                className={"ml-status " + (connected ? "connected" : "untested")}
-                title={connected ? "connected" : "setup required"}
+                className={"ml-status " + gatewayStatusTone}
+                title={gatewayConfigured ? "gateway configured" : "setup required"}
               />
             </div>
 
@@ -243,8 +253,9 @@ export function SettingsPanel(): ReactNode {
               <div className="set-placeholder">Loading gateway models...</div>
             ) : models.length === 0 ? (
               <div className="set-placeholder">
-                No models are configured yet. Connect the gateway to load configured model
-                capabilities.
+                {gatewayConfigured
+                  ? "No conversation-capable models are currently available. Review the gateway configuration or discovered model set."
+                  : "No models are configured yet. Connect the gateway to load configured model capabilities."}
               </div>
             ) : (
               <div className="set-list">

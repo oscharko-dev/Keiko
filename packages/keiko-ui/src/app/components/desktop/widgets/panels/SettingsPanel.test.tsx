@@ -117,6 +117,17 @@ describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () =
       expect(screen.getByTestId("conv-elig-no")).toHaveTextContent(/ocr\/vision-only/i);
     });
   });
+
+  it("marks intentionally ineligible models with an ineligible status tone", async () => {
+    primeFetches([embeddingCapability("test-embed-1")]);
+    const { container } = render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(screen.getByTestId("conv-elig-no")).toBeInTheDocument();
+    });
+    const status = container.querySelector('.ml-status[title="not selectable for conversation"]');
+    expect(status).not.toBeNull();
+    expect(status?.className).toContain("ineligible");
+  });
 });
 
 describe("SettingsPanel chat-count uses the eligibility helper (Issue #144 AC #1)", () => {
@@ -156,5 +167,19 @@ describe("SettingsPanel does not leak provider URLs or credentials (Issue #144 A
     // ModelCapability does not expose them today.
     expect(container.innerHTML).not.toMatch(/Bearer\s+/u);
     expect(container.innerHTML).not.toMatch(/api[-_]?key/iu);
+  });
+});
+
+describe("SettingsPanel gateway summary semantics", () => {
+  it("distinguishes a configured gateway with zero models from setup-required state", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(screen.getByText("Gateway configured")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/review the gateway configuration or discovered model set/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Gateway setup required")).toBeNull();
   });
 });

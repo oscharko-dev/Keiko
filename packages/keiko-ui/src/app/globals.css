@@ -2451,6 +2451,10 @@ button {
 .ml-status.error {
   background: var(--danger);
 }
+.ml-status.ineligible {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--warn) 22%, transparent);
+}
 .ml-status.untested {
   background: var(--fg-faint);
 }
