@@ -29,7 +29,11 @@ async function listen(s: Server, port: number): Promise<void> {
 }
 
 async function closeServer(s: Server): Promise<void> {
-  await new Promise<void>((resolve) => s.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    s.close(() => {
+      resolve();
+    });
+  });
 }
 
 beforeAll(async () => {
@@ -165,7 +169,7 @@ describe("Gate 3 — CSP wire headers include worker-src and manifest-src (ADR-0
 
 // ─── Gate 4: all seven icon assets are reachable with correct Content-Type ────
 
-const ICON_ASSETS: ReadonlyArray<{ path: string; expectedContentType: string }> = [
+const ICON_ASSETS: readonly { path: string; expectedContentType: string }[] = [
   { path: "/icon-192.png", expectedContentType: "image/png" },
   { path: "/icon-512.png", expectedContentType: "image/png" },
   { path: "/icon-192-maskable.png", expectedContentType: "image/png" },
