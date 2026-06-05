@@ -97,6 +97,24 @@ describe("runCli", () => {
     expect(c.out()).toContain("keiko start|stop|status|restart");
   });
 
+  it("lists the launcher subcommand in help (epic #121 child #125)", () => {
+    const c = makeIo();
+    const code = runCli(["--help"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("keiko launcher");
+    expect(c.out()).toContain("install|remove|status");
+  });
+
+  it("dispatches the launcher subcommand (prints USAGE and returns 0 with no args)", () => {
+    const c = makeIo();
+    // Bare `keiko launcher` is `runLauncherCli([], ...)` which prints USAGE and returns 0
+    // per the launcher dispatcher contract; the runner.ts wiring must forward the empty rest.
+    const code = runCli(["launcher"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("keiko launcher install");
+    expect(c.err()).toBe("");
+  });
+
   it("dispatches the evidence subcommand (usage error 2 with no subcommand, no disk touched)", () => {
     const c = makeIo();
     const code = runCli(["evidence"], c.io);

@@ -9,6 +9,7 @@ import { runEvaluateCli } from "./evaluate.js";
 import { runInitCli } from "./init.js";
 import { runLifecycleCli } from "./lifecycle.js";
 import { runUiCli } from "./ui.js";
+import { runLauncherCli } from "./launcher.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { SDK_VERSION } from "./_sdk-version.js";
 
@@ -37,6 +38,8 @@ Usage:
   keiko evidence <list|show> Inspect redacted evidence manifests written by \`keiko run\`.
   keiko evaluate [OPTIONS]     Run the evaluation harness (offline by default; --live for live model).
   keiko ui [OPTIONS]       Launch the local UI on 127.0.0.1 and print its URL.
+  keiko launcher <install|remove|status> [OPTIONS]
+                           Manage a user-local OS shortcut for \`keiko start --open\`.
 
 Exit codes:
   0  Success
@@ -65,6 +68,7 @@ const COMMAND_HANDLERS: Readonly<Record<string, CommandHandler>> = {
   status: (rest, io, env) => runLifecycleCli("status", rest, io, env),
   restart: (rest, io, env) => runLifecycleCli("restart", rest, io, env),
   ui: runUiCli,
+  launcher: runLauncherCli,
 };
 
 // Dispatches named subcommands; returns undefined when the name is not recognised.
