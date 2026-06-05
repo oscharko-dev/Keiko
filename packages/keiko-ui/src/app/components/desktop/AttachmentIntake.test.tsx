@@ -36,6 +36,7 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     branchLabel: undefined,
     status: undefined,
     connectedScope: undefined,
+    localKnowledgeScope: undefined,
     createdAt: 1,
     updatedAt: 2,
     ...overrides,
@@ -94,6 +95,8 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
+    budget: undefined,
+    clearHistory: vi.fn(),
     launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
     ...overrides,
   };

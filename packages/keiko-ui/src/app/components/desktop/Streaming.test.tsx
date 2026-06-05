@@ -32,6 +32,7 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     branchLabel: undefined,
     status: undefined,
     connectedScope: undefined,
+    localKnowledgeScope: undefined,
     createdAt: 1,
     updatedAt: 2,
     ...overrides,
@@ -254,6 +255,7 @@ function mockBootstrap(): void {
     branchLabel: undefined,
     status: undefined,
     connectedScope: undefined,
+    localKnowledgeScope: undefined,
     createdAt: 1,
     updatedAt: 2,
   };

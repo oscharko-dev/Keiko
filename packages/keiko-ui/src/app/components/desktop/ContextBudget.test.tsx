@@ -44,6 +44,7 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     branchLabel: undefined,
     status: undefined,
     connectedScope: undefined,
+    localKnowledgeScope: undefined,
     createdAt: 1,
     updatedAt: 2,
     ...overrides,
@@ -166,10 +167,10 @@ describe("ChatWindow composer with exceeded context", () => {
         path: "/proj",
         name: "proj",
         available: true,
-        addedAtMs: 1,
-        // ProjectWithAvailability has additional optional fields; the test
-        // only needs the ones above. Cast widens to the structural shape.
-      } as ChatSessionApi["activeProject"],
+        favorite: false,
+        createdAt: 0,
+        lastOpenedAt: 0,
+      },
       models: [model],
       messages: [
         {

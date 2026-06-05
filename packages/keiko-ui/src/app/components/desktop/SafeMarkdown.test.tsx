@@ -96,7 +96,9 @@ describe("SafeMarkdown — script injection", () => {
     // There will be 0 script elements injected by this component
     // (React test renderer may have its own scripts from test harness, but
     // the injected content must not create a new one with our text)
-    const injectedScript = Array.from(scripts).find((s) => s.textContent.includes("alert(1)"));
+    const injectedScript = Array.from(scripts).find((s) =>
+      (s.textContent ?? "").includes("alert(1)"),
+    );
     expect(injectedScript).toBeUndefined();
     // The text content should show the literal characters (angle brackets visible as text)
     expect(document.body.textContent).toContain("script");

@@ -14,7 +14,7 @@ import type { ChatSessionApi } from "./hooks/useChatSession";
 import { pickChatModelId } from "./hooks/useChatSession";
 import { chooseDefaultModel } from "./modals/NewWindowDialog";
 import { isConversationEligibleModel } from "@/lib/types";
-import type { ModelCapability } from "@/lib/types";
+import type { Chat, ModelCapability } from "@/lib/types";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -91,6 +91,8 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
     removePendingAttachment: vi.fn(),
     clearPendingAttachments: vi.fn(),
+    budget: undefined,
+    clearHistory: vi.fn(),
     launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
     ...overrides,
   };
@@ -147,7 +149,7 @@ describe("chooseDefaultModel (AC #4)", () => {
 
 // makeChat needed for #146: the no-model alert and send button only appear in
 // the composer footer, which requires activeChat to be defined.
-function makeChat(): ReturnType<typeof Object.assign> {
+function makeChat(): Chat {
   return {
     id: "chat-1",
     projectPath: "/proj",
@@ -156,6 +158,7 @@ function makeChat(): ReturnType<typeof Object.assign> {
     branchLabel: undefined,
     status: undefined,
     connectedScope: undefined,
+    localKnowledgeScope: undefined,
     createdAt: 1,
     updatedAt: 2,
   };
