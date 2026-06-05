@@ -53,6 +53,10 @@ import {
   handleAcceptMemoryProposal,
   handleRejectMemoryProposal,
 } from "./memory-handlers.js";
+import {
+  handleMemoryRetrieveContext,
+  handleMemoryCaptureFromConversation,
+} from "./memory-conv-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import {
@@ -191,6 +195,13 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/memory/proposals/:id/reject",
     handler: handleRejectMemoryProposal,
+  },
+  // Issue #212 — Conversation Center memory wiring.
+  { method: "POST", pattern: "/api/memory/context", handler: handleMemoryRetrieveContext },
+  {
+    method: "POST",
+    pattern: "/api/memory/capture-from-conversation",
+    handler: handleMemoryCaptureFromConversation,
   },
   // ADR-0017 — browser tool (BYO Chrome over CDP).
   { method: "GET", pattern: "/api/browser/status", handler: handleBrowserStatus },

@@ -36,6 +36,7 @@
     "@oscharko-dev/keiko-workflows": "*",
     "@oscharko-dev/keiko-memory-vault": "*",
     "@oscharko-dev/keiko-memory-governance": "*",
-    "@oscharko-dev/keiko-memory-retrieval": "*"
+    "@oscharko-dev/keiko-memory-retrieval": "*",
+    "@oscharko-dev/keiko-memory-capture": "*"
   }
 }

@@ -540,16 +540,17 @@ module.exports = {
         "orchestrator (run-engine.ts via the apply-mode verification gate) and " +
         "verification is not yet a physical package — the boundary will be re-evaluated " +
         "when verification is extracted in a future issue. memory-vault, memory-governance, " +
-        "and memory-retrieval added by issue #211 (Memory Center UI BFF routes).",
+        "and memory-retrieval added by issue #211 (Memory Center UI BFF routes). " +
+        "memory-capture added by issue #212 (Conversation Center in-chat capture BFF route).",
       severity: "error",
       from: {
         path: "^(packages/keiko-server/src/|" + "src/ui/|" + "tests/architecture/fixtures/server/)",
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|server)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|server)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|server)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|server)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|server)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|server)|" +
           "src/(cli|evaluations|gateway|workspace|tools|harness|workflows|audit))",
         pathNot: "^src/ui/",
       },
