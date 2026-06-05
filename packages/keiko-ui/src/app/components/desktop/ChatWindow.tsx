@@ -20,7 +20,7 @@ import {
   AttachmentStrip,
   AttachRejectionAlert,
 } from "./AttachmentStrip";
-import type { ChatSessionApi } from "./hooks/useChatSession";
+import type { ChatSessionApi, SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
 import type {
   Chat,
@@ -137,7 +137,15 @@ function ComposerBar({
   onAttachFiles,
   budgetExceeded,
 }: ComposerBarProps): ReactNode {
-  const { models, selectedModel, setSelectedModel, noEligibleModels, loading } = session;
+  const {
+    models,
+    selectedModel,
+    setSelectedModel,
+    noEligibleModels,
+    loading,
+    sending,
+    cancelSend,
+  } = session;
   // AC #1 / AC #4: when no eligible model is configured the send button must be
   // focusable (so screen-reader users discover the error) but must not submit.
   // Use aria-disabled rather than the HTML disabled attribute so focus is retained.
@@ -212,26 +220,43 @@ function ComposerBar({
           Type a message to send
         </span>
       ) : null}
-      <button
-        type={noEligibleModels || budgetExceeded ? "button" : "submit"}
-        className="cmp-send"
-        data-on={!sendBlocked}
-        aria-disabled={sendBlocked}
-        aria-describedby={sendDescribedBy}
-        title={
-          noEligibleModels
-            ? "No conversation-eligible model is configured — connect a gateway in Settings"
-            : budgetExceeded
-              ? "Context exceeds the model's window — clear history or pick a larger-context model"
-              : !ready
-                ? "Type a message to send"
-                : "Send message"
-        }
-        disabled={!noEligibleModels && !budgetExceeded && !ready}
-        aria-label="Send message"
-      >
-        <Icons.arrowUp size={16} />
-      </button>
+      {/* Issue #152 — while a send is in flight the primary action button
+          flips to "Cancel response" (AC#1 + AC#3). Type="button" so it never
+          submits the surrounding form; onClick calls cancelSend which is a
+          safe no-op when the status is already terminal. */}
+      {sending ? (
+        <button
+          type="button"
+          className="cmp-send cmp-send-cancel"
+          data-on
+          aria-label="Cancel response"
+          title="Cancel response"
+          onClick={cancelSend}
+        >
+          <Icons.close size={16} />
+        </button>
+      ) : (
+        <button
+          type={noEligibleModels || budgetExceeded ? "button" : "submit"}
+          className="cmp-send"
+          data-on={!sendBlocked}
+          aria-disabled={sendBlocked}
+          aria-describedby={sendDescribedBy}
+          title={
+            noEligibleModels
+              ? "No conversation-eligible model is configured — connect a gateway in Settings"
+              : budgetExceeded
+                ? "Context exceeds the model's window — clear history or pick a larger-context model"
+                : !ready
+                  ? "Type a message to send"
+                  : "Send message"
+          }
+          disabled={!noEligibleModels && !budgetExceeded && !ready}
+          aria-label="Send message"
+        >
+          <Icons.arrowUp size={16} />
+        </button>
+      )}
     </div>
   );
 }
@@ -260,6 +285,44 @@ function LoadingStatus(): ReactNode {
   );
 }
 
+// Issue #152 — user-facing copy per lifecycle state. Engineering note: NO
+// fake progress percentage. The strings here are the only progress signal.
+// Exported so the Streaming.test asserts on canonical copy without
+// duplicating it.
+export function sendStatusLabel(status: SendStatus): string {
+  switch (status) {
+    case "idle":
+      return "";
+    case "queued":
+      return "Submitting your message…";
+    case "contacting":
+      return "Contacting model…";
+    case "streaming":
+      return "Receiving response…";
+    case "completed":
+      return "";
+    case "failed":
+      return "";
+    case "cancelled":
+      return "Response cancelled.";
+  }
+}
+
+// Issue #152 / AC#1 + AC#4 — assistive announcement of the send lifecycle.
+// role="status" + aria-live="polite" so screen-reader users hear transitions
+// without interruption. Hidden when there is nothing to say (idle/completed/
+// failed — the error string carries its own role="alert").
+function SendLifecycleStatus({ status }: { readonly status: SendStatus }): ReactNode {
+  const label = sendStatusLabel(status);
+  if (label.length === 0) return null;
+  return (
+    <div role="status" aria-live="polite" data-send-status={status} className="cmp-send-status">
+      <span className="cmp-loading-dot" aria-hidden="true" />
+      {label}
+    </div>
+  );
+}
+
 interface ComposerCoreProps {
   readonly session: ChatSessionApi;
   readonly ready: boolean;
@@ -271,6 +334,7 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
     draft,
     loading,
     sending,
+    sendStatus,
     setDraft,
     sendMessage,
     models,
@@ -332,6 +396,10 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
       />
       {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
       <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
+      {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
+          adjacent to the textarea so SR users hear the state without losing
+          composer focus. Hidden when there is nothing to announce. */}
+      <SendLifecycleStatus status={sendStatus} />
       {/* Issue #151 — context-pressure indicator + clear-history affordance */}
       <BudgetIndicator
         budget={budget}

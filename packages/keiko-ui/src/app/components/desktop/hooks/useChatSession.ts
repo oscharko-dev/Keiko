@@ -80,6 +80,35 @@ function readDataUrl(file: File): Promise<string> {
 
 export const DEFAULT_CHAT_TITLE = "New chat";
 
+// Issue #152 — conversation request lifecycle states (memory keiko-issue66).
+// `idle` is the resting state; `queued` is set the moment sendMessage commits
+// to a submission (synchronously, so concurrent calls observe it via the ref
+// guard); `contacting` is the wait for the first byte from the gateway;
+// `streaming` is reserved for the streaming-delta UX (today the backend send
+// is non-streaming so we transition from contacting → completed directly, see
+// Part 4 of the spec). `completed | failed | cancelled` are terminal —
+// sendMessage re-arms to idle in those terminal cases on the next render.
+//
+// Engineering note: NO fake progress percentage. The status string is the
+// only progress signal — UI copy must reflect that.
+export type SendStatus =
+  | "idle"
+  | "queued"
+  | "contacting"
+  | "streaming"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+const TERMINAL_SEND_STATUSES: readonly SendStatus[] = ["completed", "failed", "cancelled"] as const;
+
+// True when the hook is mid-flight — i.e. between sendMessage entry and any
+// terminal state. Exposed via the `sending` derived flag for backwards
+// compatibility with existing call sites.
+export function isInFlight(status: SendStatus): boolean {
+  return status !== "idle" && !TERMINAL_SEND_STATUSES.includes(status);
+}
+
 // Issue #151 / AC#3 — user-facing copy when a provider or BFF error reports the
 // conversation exceeded the model's context window. Exported so the test can
 // pin the exact string without duplicating it.
@@ -136,7 +165,14 @@ export interface UseChatSessionResult {
   noEligibleModels: boolean;
   draft: string;
   loading: boolean;
+  // Issue #152 — derived: `sending = isInFlight(sendStatus)`. Kept for
+  // backwards compatibility with call sites that only branch on "is a request
+  // in flight" without caring about the lifecycle state name.
   sending: boolean;
+  // Issue #152 — fine-grained conversation request lifecycle (memory
+  // keiko-issue66). UI surfaces use this to render the right wait message and
+  // to gate cancellation.
+  sendStatus: SendStatus;
   error: string | undefined;
   setDraft: (value: string) => void;
   setSelectedModel: (id: string) => void;
@@ -145,6 +181,11 @@ export interface UseChatSessionResult {
   openChat: (chat: Chat) => Promise<void>;
   addProject: (path: string) => Promise<void>;
   sendMessage: () => Promise<void>;
+  // Issue #152 — cancel the in-flight send (grounded OR ungrounded). No-op
+  // when sendStatus is terminal/idle. Sets sendStatus to "cancelled" and
+  // preserves the user message so the user can retry without retyping.
+  // Per AC#3, no partial assistant content is persisted as a completed answer.
+  cancelSend: () => void;
   // Issue #184 — replaces the cached Chat after a wire mutation (e.g. connected-scope PATCH).
   // The caller is the API client wrapper; the hook only owns the local cache update so the
   // chat header re-renders with the new state without a full refetch.
@@ -259,14 +300,22 @@ export function useChatSession(): UseChatSessionResult {
   const [state, setState] = useState<SessionState>(INITIAL_STATE);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
-  const [sending, setSending] = useState(false);
+  // Issue #152 — lifecycle is the source of truth; `sending` is derived.
+  const [sendStatus, setSendStatus] = useState<SendStatus>("idle");
+  const sending = isInFlight(sendStatus);
+  // Mirror sendStatus in a ref so concurrent sendMessage calls observe the
+  // current value synchronously without waiting for the next render — this is
+  // the idempotency guard for AC#2.
+  const sendStatusRef = useRef<SendStatus>("idle");
+  // Issue #152 — single AbortController for the active send (grounded OR
+  // ungrounded). cancelSend hits this and falls through to the per-path
+  // cancellation paths (grounded uses the controller as signal; ungrounded
+  // adds signal support to sendDesktopChat in this issue).
+  const sendControllerRef = useRef<AbortController | null>(null);
   const [error, setError] = useState<string | undefined>();
   // Issue #185 — most recent grounded answer for the active chat. Cleared when the active
   // chat changes (see openChat) so a stale answer never overhangs into another conversation.
   const [latestGrounded, setLatestGrounded] = useState<GroundedAnswerWire | undefined>();
-  // Issue #185 AC3 — holds the AbortController for the current grounded request so the UI
-  // can cancel in-flight requests. null when no grounded request is in flight.
-  const groundedControllerRef = useRef<AbortController | null>(null);
   const activeChatIdRef = useRef<string | undefined>(undefined);
   // Issue #147 — pending-attachment state. Cleared after a successful send (AC #3).
   const [pendingAttachments, setPendingAttachments] = useState<readonly PendingAttachment[]>([]);
@@ -327,6 +376,13 @@ export function useChatSession(): UseChatSessionResult {
     setPendingAttachments([]);
   }, []);
 
+  // Single update site so the ref + state never drift. The ref is the source
+  // for concurrent-call gating; the state is the source for renders.
+  const updateSendStatus = useCallback((next: SendStatus) => {
+    sendStatusRef.current = next;
+    setSendStatus(next);
+  }, []);
+
   useEffect(() => {
     activeChatIdRef.current = state.activeChat?.id;
   }, [state.activeChat?.id]);
@@ -353,7 +409,7 @@ export function useChatSession(): UseChatSessionResult {
 
   useEffect(() => {
     return () => {
-      groundedControllerRef.current?.abort();
+      sendControllerRef.current?.abort();
     };
   }, []);
 
@@ -423,8 +479,10 @@ export function useChatSession(): UseChatSessionResult {
 
   const openChat = useCallback(async (chat: Chat): Promise<void> => {
     setError(undefined);
-    groundedControllerRef.current?.abort();
-    groundedControllerRef.current = null;
+    // Issue #152 — opening a different chat must abort any in-flight send so
+    // a late response from the prior chat never lands here.
+    sendControllerRef.current?.abort();
+    sendControllerRef.current = null;
     activeChatIdRef.current = chat.id;
     // Issue #185 — clear any prior grounded answer so the new chat doesn't render stale
     // citations from a previous conversation's last grounded turn.
@@ -470,14 +528,23 @@ export function useChatSession(): UseChatSessionResult {
       content: string,
       optimisticId: string,
       modelId: string,
-    ) => {
+      signal: AbortSignal,
+    ): Promise<SendStatus> => {
       try {
-        const result = await sendDesktopChat({
-          chatId: chat.id,
-          projectPath: project.path,
-          content,
-          modelId,
-        });
+        // Issue #152 — non-streaming providers see a stable "contacting" wait
+        // until the response lands (AC#4). When the BFF gains a true streaming
+        // surface we'll transition to "streaming" on the first delta.
+        // TODO(#152 follow-up): wire SSE for true streaming when the BFF
+        // adds a /api/desktop/chat/stream surface.
+        updateSendStatus("contacting");
+        const result = await sendDesktopChat(
+          { chatId: chat.id, projectPath: project.path, content, modelId },
+          signal,
+        );
+        // Issue #152 — the request may have been cancelled while the response
+        // was in flight. Honor the cancel and do NOT persist the assistant
+        // reply as a completed answer (AC#3).
+        if (signal.aborted) return "cancelled";
         setState((previous) => ({
           ...previous,
           activeChat: result.chat,
@@ -490,7 +557,15 @@ export function useChatSession(): UseChatSessionResult {
             ...Array.from(result.messages),
           ],
         }));
+        return "completed";
       } catch (caught) {
+        // Aborted ungrounded requests are not errors — silently fall back to
+        // a cancelled state, preserving the user message (the optimistic row
+        // was the user's own input; AC#3 says we don't persist a fake
+        // assistant answer, but we keep the user's message visible).
+        if (caught instanceof DOMException && caught.name === "AbortError") {
+          return "cancelled";
+        }
         setError(errorMessage(caught));
         try {
           const messagePayload = await fetchChatMessages(chat.id, project.path);
@@ -501,9 +576,10 @@ export function useChatSession(): UseChatSessionResult {
             messages: previous.messages.filter((message) => message.id !== optimisticId),
           }));
         }
+        return "failed";
       }
     },
-    [],
+    [updateSendStatus],
   );
 
   // Issue #185 — when the active chat carries a connectedScope binding the composer routes the
@@ -517,17 +593,18 @@ export function useChatSession(): UseChatSessionResult {
       content: string,
       optimisticId: string,
       modelId: string,
-    ) => {
+      signal: AbortSignal,
+    ): Promise<SendStatus> => {
       // Copilot PR #258 finding: clear the previous answer at the START of a new send so a
       // stale citation block doesn't briefly flash next to the new question.
       setLatestGrounded(undefined);
-      const controller = new AbortController();
-      groundedControllerRef.current = controller;
       try {
-        const result = await askGrounded({ chatId: chat.id, content, modelId }, controller.signal);
+        updateSendStatus("contacting");
+        const result = await askGrounded({ chatId: chat.id, content, modelId }, signal);
         if (activeChatIdRef.current !== chat.id) {
-          return;
+          return "completed";
         }
+        if (signal.aborted) return "cancelled";
         setLatestGrounded(result);
         // Refresh BOTH messages AND chats so the sidebar reflects the new updated_at and
         // re-sorts the active chat to the top after the assistant reply lands.
@@ -542,36 +619,48 @@ export function useChatSession(): UseChatSessionResult {
           chats: sortChats(chatsPayload.chats),
           activeChat: refreshedActive ?? previous.activeChat,
         }));
+        return "completed";
       } catch (caught) {
-        // Aborted requests are not errors from the user's perspective — clear state silently.
+        // Issue #152 — abort preserves the user's optimistic message (AC#3:
+        // no fake assistant content is persisted; the user's prompt remains
+        // visible so they can edit & retry without retyping).
         if (caught instanceof DOMException && caught.name === "AbortError") {
-          setState((previous) => ({
-            ...previous,
-            messages: previous.messages.filter((message) => message.id !== optimisticId),
-          }));
-          return;
+          return "cancelled";
         }
         setError(errorMessage(caught));
         setState((previous) => ({
           ...previous,
           messages: previous.messages.filter((message) => message.id !== optimisticId),
         }));
-      } finally {
-        groundedControllerRef.current = null;
+        return "failed";
       }
     },
-    [],
+    [updateSendStatus],
   );
 
-  // Issue #185 AC3 — exposed to the UI so the cancel button can abort in-flight grounded
-  // requests. Sets sending=false without persisting anything.
-  const cancelGrounded = useCallback(() => {
-    groundedControllerRef.current?.abort();
-    groundedControllerRef.current = null;
-    setSending(false);
-  }, []);
+  // Issue #152 — unified cancel that aborts any in-flight send (grounded OR
+  // ungrounded). Replaces the prior `cancelGrounded`-only surface. When no
+  // request is in flight this is a safe no-op. We flip sendStatus to
+  // "cancelled" immediately so the UI re-renders out of the in-flight state
+  // even before the fetch rejection reaches the awaited site.
+  const cancelSend = useCallback(() => {
+    if (!isInFlight(sendStatusRef.current)) return;
+    sendControllerRef.current?.abort();
+    sendControllerRef.current = null;
+    updateSendStatus("cancelled");
+  }, [updateSendStatus]);
+
+  // Issue #185 → #152: cancelGrounded is preserved as a thin alias so existing
+  // call sites (ChatWindow.tsx grounded TypingBubble) keep working. New code
+  // should call cancelSend.
+  const cancelGrounded = cancelSend;
 
   const sendMessage = useCallback(async (): Promise<void> => {
+    // Issue #152 / AC#2 — idempotent send. Checking the ref (not the React
+    // state) defends against the same tick double-submit (Enter held, click
+    // burst, etc.). The terminal states are treated as "ready to send again"
+    // — only mid-flight states block.
+    if (isInFlight(sendStatusRef.current)) return;
     const content = draft.trim();
     const chat = state.activeChat;
     const project = state.activeProject;
@@ -596,20 +685,39 @@ export function useChatSession(): UseChatSessionResult {
       shortResult: undefined,
       taskType: undefined,
     };
+    // Synchronously commit to "queued" so a re-entrant call in the same tick
+    // hits the isInFlight guard above (AC#2).
+    updateSendStatus("queued");
     setDraft("");
-    setSending(true);
     setError(undefined);
     setState((previous) => ({ ...previous, messages: [...previous.messages, optimistic] }));
+    // Issue #152 — fresh controller per send. The previous controller (if
+    // any) was either already settled or already aborted via cancelSend.
+    const controller = new AbortController();
+    sendControllerRef.current = controller;
     try {
-      if (chat.connectedScope !== undefined) {
-        await sendGrounded(chat, project, content, optimistic.id, modelId);
+      const terminal =
+        chat.connectedScope !== undefined
+          ? await sendGrounded(chat, project, content, optimistic.id, modelId, controller.signal)
+          : await sendUngrounded(chat, project, content, optimistic.id, modelId, controller.signal);
+      // If cancelSend already flipped the status to "cancelled", do not
+      // override it with a stale "completed" — cancellation wins.
+      if (sendStatusRef.current === "cancelled") {
+        // The send path may have written the assistant message between abort
+        // and the cancel registering. Remove the optimistic user-row's
+        // assistant counterpart by trusting the path-returned terminal — but
+        // for cancelled we already preserved the user row, and we did NOT
+        // persist assistant content (signal.aborted check + AbortError
+        // branch). Nothing to do here.
       } else {
-        await sendUngrounded(chat, project, content, optimistic.id, modelId);
+        updateSendStatus(terminal);
       }
-      // AC #3: clear pending attachments after a successful send.
-      clearPendingAttachments();
+      if (terminal === "completed") {
+        // AC #3 (#147): clear pending attachments after a successful send.
+        clearPendingAttachments();
+      }
     } finally {
-      setSending(false);
+      sendControllerRef.current = null;
     }
   }, [
     draft,
@@ -619,6 +727,7 @@ export function useChatSession(): UseChatSessionResult {
     sendGrounded,
     sendUngrounded,
     clearPendingAttachments,
+    updateSendStatus,
   ]);
 
   // Issue #151 / AC#4 — clear the in-memory history for the next prompt
@@ -678,6 +787,7 @@ export function useChatSession(): UseChatSessionResult {
     draft,
     loading,
     sending,
+    sendStatus,
     error,
     setDraft,
     setSelectedModel,
@@ -686,6 +796,7 @@ export function useChatSession(): UseChatSessionResult {
     openChat,
     addProject,
     sendMessage,
+    cancelSend,
     replaceChat,
     latestGrounded,
     cancelGrounded,
