@@ -32,6 +32,7 @@ import { createTerminalExecutionManager, type TerminalExecutionManager } from ".
 import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { createBffMemoryVault } from "./memory-handlers.js";
+import { createMemoryAuditHandler } from "./memory-audit-handler.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -353,6 +354,12 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
       evidenceStore,
       redactor: liveRedactor,
     }),
-    memoryVault: createBffMemoryVault(redactString),
+    memoryVault: createBffMemoryVault(
+      redactString,
+      // #214 — wire every successful vault mutation into the audit ledger. The handler
+      // shares the same redactString closure as the live-payload redactor so audit
+      // summaries inherit the same secret-shape scrubbing as wire traffic.
+      createMemoryAuditHandler({ evidenceStore, redactString }),
+    ),
   };
 }

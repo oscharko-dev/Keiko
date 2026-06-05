@@ -409,6 +409,36 @@ describe("keiko-contracts package surface", () => {
     expect(Object.keys(subpath).length).toBe(0);
   });
 
+  it("memory audit event surface re-exports are reachable through the barrel (#214)", async () => {
+    const mod = await import("./index.js");
+    expect(mod.MEMORY_AUDIT_EVENT_SCHEMA_VERSION).toBe("1");
+    expect(mod.MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS).toBe(240);
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:proposed");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:accepted");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:rejected");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:updated");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:superseded");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:pinned");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:unpinned");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:archived");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:forgotten");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:retrieved");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS).toContain("memory:workflow-used");
+    expect(mod.MEMORY_AUDIT_EVENT_KINDS.length).toBe(11);
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    type _MemoryAuditEvent = import("./index.js").MemoryAuditEvent;
+    type _MemoryAuditEventKind = import("./index.js").MemoryAuditEventKind;
+    pin<_MemoryAuditEvent>();
+    pin<_MemoryAuditEventKind>();
+  });
+
+  it("memory audit event subpath is importable as @oscharko-dev/keiko-contracts/memory-audit-events (#214)", async () => {
+    const subpath = await import("./memory-audit-events.js");
+    expect(subpath.MEMORY_AUDIT_EVENT_SCHEMA_VERSION).toBe("1");
+    expect(subpath.MEMORY_AUDIT_EVENT_KINDS.length).toBe(11);
+    expect(subpath.MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS).toBe(240);
+  });
+
   it("connected-context barrel exports are reachable through the root surface (#178)", () => {
     expect(CONNECTED_CONTEXT_SCHEMA_VERSION).toBe("1");
     expect(SELECTED_SCOPE_KINDS).toContain("files");
