@@ -34,12 +34,10 @@ import {
 import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
-  updateCapsuleState,
-} from "@oscharko-dev/keiko-local-knowledge";
-import {
   scriptedAdapter,
   seedCapsuleWithVectors,
-} from "../../keiko-local-knowledge/src/retrieval/_support.js";
+  updateCapsuleState,
+} from "@oscharko-dev/keiko-local-knowledge";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
