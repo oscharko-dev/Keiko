@@ -116,7 +116,16 @@ async function readJsonObject(req: IncomingMessage): Promise<Record<string, unkn
 }
 
 function parseScope(kind: string, json: string): KnowledgeSourceScope {
-  const parsed = JSON.parse(json) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (cause) {
+    throw new KnowledgeStoreError(
+      `Corrupt capsule_sources.scope_json (kind=${kind}): ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
+  }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
     throw new KnowledgeStoreError(`Corrupt capsule_sources.scope_json (kind=${kind}).`);
   }
@@ -284,8 +293,21 @@ interface IndexingJobRow {
   readonly last_error_message: string | null;
 }
 
+interface FailedSourceIdRow {
+  readonly source_id: string;
+}
+
 function parseSourceIds(json: string): readonly KnowledgeSourceId[] {
-  const parsed = JSON.parse(json) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch (cause) {
+    throw new KnowledgeStoreError(
+      `Corrupt indexing_jobs.source_ids_json: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
+  }
   if (!Array.isArray(parsed)) return [];
   return parsed
     .filter((entry): entry is string => typeof entry === "string")
@@ -343,9 +365,16 @@ function countDocumentStatus(
   capsuleId: string,
   status: "failed" | "skipped",
 ): number {
-  const row = store._internal.db
-    .prepare("SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status = :s")
-    .get({ c: capsuleId, s: status }) as { readonly n: number };
+  const row =
+    status === "failed"
+      ? (store._internal.db
+          .prepare("SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status = 'failed'")
+          .get({ c: capsuleId }) as { readonly n: number })
+      : (store._internal.db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status IN ('skipped', 'unsupported')",
+          )
+          .get({ c: capsuleId }) as { readonly n: number });
   return row.n;
 }
 
@@ -416,10 +445,17 @@ function requestEmbeddingImpl(
 }
 
 function canonicalizeScopeRoot(scope: KnowledgeSourceScope): KnowledgeSourceScope {
+  const safeRealPath = (path: string): string => {
+    try {
+      return nodeWorkspaceFs.realPath(path);
+    } catch {
+      return path;
+    }
+  };
   if (scope.kind === "folder" || scope.kind === "files") {
-    return { ...scope, rootPath: nodeWorkspaceFs.realPath(scope.rootPath) };
+    return { ...scope, rootPath: safeRealPath(scope.rootPath) };
   }
-  return { ...scope, repositoryRoot: nodeWorkspaceFs.realPath(scope.repositoryRoot) };
+  return { ...scope, repositoryRoot: safeRealPath(scope.repositoryRoot) };
 }
 
 function canonicalizeCapsuleSourceRoots(
@@ -469,6 +505,7 @@ async function runCapsuleIndexingJob(
   deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
   capsule: KnowledgeCapsule,
+  mode: "changed-files" | "repair-failed" | undefined,
 ): Promise<
   | { readonly kind: "job-completed"; readonly result: { readonly failedDocuments: number } }
   | { readonly kind: "job-failed" }
@@ -480,12 +517,14 @@ async function runCapsuleIndexingJob(
   }
   canonicalizeCapsuleSourceRoots(store, capsule);
   const adapter = createEmbeddingAdapter(provider, requestEmbeddingImpl(deps));
+  const sourceIds = mode === "repair-failed" ? failedSourceIds(store, capsule.id) : undefined;
   let terminal:
     | { readonly kind: "job-completed"; readonly result: { readonly failedDocuments: number } }
     | { readonly kind: "job-failed" }
     | undefined;
   for await (const event of runIndexingJob({
     capsuleId: capsule.id,
+    ...(sourceIds !== undefined ? { sourceIds } : {}),
     parserRegistry: createDefaultParserRegistry(),
     workspaceFs: nodeWorkspaceFs,
     embeddingAdapter: adapter,
@@ -497,6 +536,23 @@ async function runCapsuleIndexingJob(
     }
   }
   return terminal;
+}
+
+function failedSourceIds(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: KnowledgeCapsule["id"],
+): readonly KnowledgeSourceId[] {
+  const rows = store._internal.db
+    .prepare(
+      [
+        "SELECT DISTINCT source_id",
+        "FROM documents",
+        "WHERE capsule_id = :c AND status = 'failed' AND source_id IS NOT NULL",
+        "ORDER BY source_id ASC",
+      ].join(" "),
+    )
+    .all({ c: capsuleId }) as unknown as readonly FailedSourceIdRow[];
+  return rows.map((row) => row.source_id as KnowledgeSourceId);
 }
 
 async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
@@ -591,7 +647,7 @@ export async function handleReindexLocalKnowledgeCapsule(
 ): Promise<RouteResult> {
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
-    parseReindexMode(await readJsonObject(ctx.req));
+    const mode = parseReindexMode(await readJsonObject(ctx.req));
     const env = openStoreForDeps(deps);
     try {
       const capsule = getCapsule(env.store, capsuleId);
@@ -603,7 +659,7 @@ export async function handleReindexLocalKnowledgeCapsule(
           "No configured embedding model matches this capsule. Update the Model Gateway configuration before refreshing it.",
         );
       }
-      const terminal = await runCapsuleIndexingJob(deps, env.store, capsule);
+      const terminal = await runCapsuleIndexingJob(deps, env.store, capsule, mode);
       if (terminal?.kind === "job-failed") {
         return conflict(
           "Capsule refresh failed. Review the capsule health diagnostics and job history for details.",

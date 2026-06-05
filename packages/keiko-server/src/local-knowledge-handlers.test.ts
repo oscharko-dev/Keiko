@@ -200,6 +200,35 @@ describe("local-knowledge handlers", () => {
     });
   });
 
+  it("counts unsupported documents in skipped health totals", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: join(tmp, "docs"), recursive: true },
+    });
+    store._internal.db
+      .prepare(
+        "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) VALUES ('doc-1', :c, 'src-1', 'policy.bin', 10, 'application/octet-stream', 'aa', 'unsupported', '1', 10, 'unsupported', 'policy.bin')",
+      )
+      .run({ c: capId });
+    store.close();
+
+    const result = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      health: { skippedDocuments: 1 },
+      sources: [{ sourceId: "src-1", skippedCount: 1 }],
+    });
+  });
+
   it("runs incremental refresh and records a skipped second pass for unchanged files", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -245,7 +274,81 @@ describe("local-knowledge handlers", () => {
 
     expect(jobs).toHaveLength(2);
     expect(jobs[0]).toMatchObject({ status: "succeeded", processed_documents: 1 });
-    expect(jobs[1]).toMatchObject({ status: "succeeded", skipped_documents: 1 });
+    expect(jobs[1]).toMatchObject({ status: "succeeded", processed_documents: 0, skipped_documents: 0 });
+  });
+
+  it("limits repair-failed reindex jobs to sources with failed documents", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(join(docsRoot, "failed"), { recursive: true });
+    mkdirSync(join(docsRoot, "healthy"), { recursive: true });
+    writeFileSync(join(docsRoot, "failed", "policy.md"), "# Failed\n\nNeeds retry.\n", "utf8");
+    writeFileSync(join(docsRoot, "healthy", "guide.md"), "# Healthy\n\nAlready indexed.\n", "utf8");
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Failed docs",
+      tags: [],
+      scope: { kind: "folder", rootPath: join(docsRoot, "failed"), recursive: true },
+    });
+    addSourceToCapsule(store, capId, {
+      id: "src-2" as never,
+      displayName: "Healthy docs",
+      tags: [],
+      scope: { kind: "folder", rootPath: join(docsRoot, "healthy"), recursive: true },
+    });
+    store._internal.db
+      .prepare(
+        "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) VALUES ('doc-1', :c, 'src-1', 'policy.md', 10, 'text/markdown', 'aa', 'text', '1', 10, 'failed', 'policy.md')",
+      )
+      .run({ c: capId });
+    store.close();
+
+    const result = await handleReindexLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "POST", { mode: "repair-failed" }), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+    expect(result.status).toBe(200);
+
+    const inspect = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const latestJob = inspect._internal.db
+      .prepare(
+        "SELECT source_ids_json FROM indexing_jobs WHERE capsule_id = :c ORDER BY started_at DESC, id DESC LIMIT 1",
+      )
+      .get({ c: capId }) as { readonly source_ids_json: string };
+    inspect.close();
+
+    expect(JSON.parse(latestJob.source_ids_json)).toEqual(["src-1"]);
+  });
+
+  it("returns a structured error when persisted source metadata is corrupt", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: join(tmp, "docs"), recursive: true },
+    });
+    store._internal.db
+      .prepare("UPDATE capsule_sources SET scope_json = '{' WHERE capsule_id = :c AND id = 'src-1'")
+      .run({ c: capId });
+    store.close();
+
+    const result = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(503);
+    expect(result.body).toMatchObject({
+      error: { code: "LOCAL_KNOWLEDGE_UNAVAILABLE" },
+    });
   });
 
   it("deletes a capsule index explicitly", async () => {
