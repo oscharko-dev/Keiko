@@ -11,3 +11,51 @@
 // invalid envelope cross the API boundary.
 
 export { KEIKO_MEMORY_GOVERNANCE_VERSION } from "./version.js";
+
+// ─── Public type surface ─────────────────────────────────────────────────────
+export type {
+  BuildForgetOperationsOptions,
+  ConflictPair,
+  ConflictReason,
+  ConflictResolution,
+  ForgetSelector,
+  ForgetSelectorKind,
+  GovernanceContext,
+  SelectMemoriesForForgetOptions,
+  StatusTransition,
+} from "./types.js";
+export { FORGET_SELECTOR_KINDS } from "./types.js";
+
+// ─── Errors ──────────────────────────────────────────────────────────────────
+export { GovernanceError, type GovernanceErrorCode } from "./errors.js";
+
+// ─── Correction ──────────────────────────────────────────────────────────────
+export {
+  buildCorrection,
+  type BuildCorrectionInput,
+  type CorrectionEnvelopes,
+} from "./correction.js";
+
+// ─── Conflict ────────────────────────────────────────────────────────────────
+export {
+  buildConflictTransitions,
+  type ConflictTransitionResult,
+  detectConflictPair,
+} from "./conflict.js";
+
+// ─── Forget ──────────────────────────────────────────────────────────────────
+export { buildForgetOperations, selectMemoriesForForget } from "./forget.js";
+
+// ─── Retention ───────────────────────────────────────────────────────────────
+export { buildExpirationUpdate } from "./retention.js";
+
+// ─── Pin / unpin / archive ───────────────────────────────────────────────────
+export { buildArchiveOperation, buildPinOperation, buildUnpinOperation } from "./status-ops.js";
+
+// ─── Retrieval suppression ───────────────────────────────────────────────────
+export {
+  isMemorySuppressedFromRetrieval,
+  type SuppressionOptions,
+  type SuppressionReason,
+  type SuppressionResult,
+} from "./suppression.js";
