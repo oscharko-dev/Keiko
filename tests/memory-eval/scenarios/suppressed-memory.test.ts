@@ -13,6 +13,7 @@ import { describe, expect, it } from "vitest";
 import {
   retrieveMemoryContext,
   type MemoryRetrievalRequest,
+  type OmittedReason,
 } from "@oscharko-dev/keiko-memory-retrieval";
 
 import {
@@ -47,19 +48,38 @@ function loadSuppressionResult(): {
   };
 }
 
-function assertSuppressedResult(
-  result: ReturnType<typeof retrieveMemoryContext>,
-): { passed: boolean; detail: string } {
+type OmittedEntry = ReturnType<typeof retrieveMemoryContext>["omitted"][number];
+type OmittedMap = Map<string, OmittedEntry>;
+
+function checkEntry(
+  omitted: OmittedMap,
+  id: string,
+  detail: string,
+  reason: OmittedReason,
+): boolean {
+  const entry = omitted.get(id);
+  return entry?.suppressionDetail === detail && entry.reason === reason;
+}
+
+function assertSuppressedResult(result: ReturnType<typeof retrieveMemoryContext>): {
+  passed: boolean;
+  detail: string;
+} {
   const includedIds = result.included.map((m) => String(m.memoryId));
-  const omitted = new Map(result.omitted.map((entry) => [String(entry.memoryId), entry]));
+  const omitted: OmittedMap = new Map(
+    result.omitted.map((entry) => [String(entry.memoryId), entry]),
+  );
+  const ss: OmittedReason = "suppressed-by-status";
+  const passed =
+    includedIds.length === 1 &&
+    includedIds[0] === "fresh-fact" &&
+    result.omitted.length === 4 &&
+    checkEntry(omitted, "stale-low-confidence", "stale-low-confidence", ss) &&
+    checkEntry(omitted, "blocked-rejected", "rejected", ss) &&
+    checkEntry(omitted, "blocked-conflicted", "conflicted", ss) &&
+    checkEntry(omitted, "stale-expired", "expired", ss);
   return {
-    passed:
-      includedIds.length === 1 &&
-      includedIds[0] === "fresh-fact" &&
-      omitted.get("stale-low-confidence")?.suppressionDetail === "stale-low-confidence" &&
-      omitted.get("blocked-rejected")?.suppressionDetail === "rejected" &&
-      omitted.get("blocked-conflicted")?.suppressionDetail === "conflicted" &&
-      omitted.get("stale-expired")?.suppressionDetail === "expired",
+    passed,
     detail: `included=[${includedIds.join(",")}] omitted=[${result.omitted
       .map((entry) => `${String(entry.memoryId)}:${entry.suppressionDetail ?? entry.reason}`)
       .join(",")}]`,

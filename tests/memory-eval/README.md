@@ -6,7 +6,7 @@ Synthetic-fixture benchmark for the Governed Enterprise Memory Vault stack
 
 The harness composes the production memory packages (`keiko-memory-vault`,
 `keiko-memory-capture`, `keiko-memory-governance`, `keiko-memory-retrieval`)
-with deterministic clocks and counter-based IDs, then runs eight scenarios
+with deterministic clocks and counter-based IDs, then runs nine scenarios
 that each cover one acceptance criterion of the epic.
 
 ## How to run
@@ -86,15 +86,16 @@ kind requires its matching coordinate field (e.g. `userId` for `user`).
 
 ## What each fixture is for
 
-| File                         | Scenarios that consume it          |
-| ---------------------------- | ---------------------------------- |
-| `user-preferences.json`      | accurate-retrieval, no-memory-mode |
-| `project-decisions.json`     | long-range-understanding           |
-| `workflow-lessons.json`      | test-time-learning                 |
-| `correction-pairs.json`      | correction-handling                |
-| `stale-memories.json`        | suppressed-memory                  |
-| `forget-targets.json`        | selective-forgetting               |
-| `cross-scope-collision.json` | cross-scope-isolation              |
+| File                         | Scenarios that consume it               |
+| ---------------------------- | --------------------------------------- |
+| `user-preferences.json`      | accurate-retrieval, no-memory-mode      |
+| `project-decisions.json`     | long-range-understanding                |
+| `workflow-lessons.json`      | test-time-learning                      |
+| `correction-pairs.json`      | correction-handling                     |
+| `stale-memories.json`        | suppressed-memory                       |
+| `forget-targets.json`        | selective-forgetting                    |
+| `cross-scope-collision.json` | cross-scope-isolation                   |
+| `invalid-scope.json`         | `_support.test.ts` (fixture validation) |
 
 `error-propagation` does not load a fixture; it constructs a malformed record
 inline because the assertion is that the validator REJECTS it.
