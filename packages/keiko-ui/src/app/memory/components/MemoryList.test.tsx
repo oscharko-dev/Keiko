@@ -116,12 +116,12 @@ describe("MemoryList — populated state", () => {
     });
   });
 
-  it("links each row to /memory/:id", async () => {
+  it("links each row to /memory/detail?id=:id", async () => {
     const record = makeRecord({ id: makeMemoryId(42), body: "Linked memory" });
     render(<MemoryList fetchMemoriesImpl={fetchWith([record])} />);
     await waitFor(() => {
       const link = screen.getByRole("link", { name: /memory: linked memory/i });
-      expect(link).toHaveAttribute("href", "/memory/mem-42");
+      expect(link).toHaveAttribute("href", "/memory/detail?id=mem-42");
     });
   });
 });

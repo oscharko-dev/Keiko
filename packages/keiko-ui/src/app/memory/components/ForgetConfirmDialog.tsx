@@ -77,11 +77,13 @@ export function ForgetConfirmDialog({
       role="presentation"
       onClick={handleBackdropClick}
     >
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- WAI-ARIA dialog pattern: role="dialog" is the canonical key-handler host; tabIndex={-1} makes it focusable for Escape capture */}
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="forget-dialog-title"
         aria-describedby="forget-dialog-desc"
+        tabIndex={-1}
         className="mc-dialog"
         onKeyDown={handleKeyDown}
       >

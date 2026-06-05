@@ -98,7 +98,7 @@ function MemoryRow({ record }: { readonly record: MemoryRecord }): ReactNode {
   return (
     <li>
       <Link
-        href={`/memory/${encodeURIComponent(record.id)}`}
+        href={`/memory/detail?id=${encodeURIComponent(record.id)}`}
         className="mc-row"
         aria-label={`Memory: ${record.body.slice(0, 60)}`}
       >
