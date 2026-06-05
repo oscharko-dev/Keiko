@@ -24,6 +24,8 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import type { MicroIndex } from "@oscharko-dev/keiko-workflows";
 
+import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
+
 import {
   ClarificationNeededError,
   echoAnswerer,
@@ -403,6 +405,29 @@ describe("runGroundedExploration", () => {
     expect(out.pack.usage.filesRead).toBe(0);
     expect(out.pack.usage.excerptBytes).toBe(0);
     expect(out.pack.uncertainty.some((u) => u.claim.includes("filesRead"))).toBe(true);
+  });
+
+  it("rejects with CancelledError before the answerer is called when the signal is already aborted", async () => {
+    // Mutation guard: removing the throwIfCancelled call at the orchestrator entry point
+    // must fail this test because the answerer would be invoked instead.
+    const controller = new AbortController();
+    controller.abort();
+    let answererCalls = 0;
+    const trackingAnswerer: GroundedAnswerer = {
+      answer: () => {
+        answererCalls += 1;
+        return Promise.resolve("should not reach here");
+      },
+    };
+    await expect(
+      runGroundedExploration(input(), {
+        answerer: trackingAnswerer,
+        signal: controller.signal,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      }),
+    ).rejects.toBeInstanceOf(CancelledError);
+    expect(answererCalls).toBe(0);
   });
 });
 

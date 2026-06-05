@@ -761,6 +761,22 @@ describe("Copilot finding fixes (memFs)", () => {
     ).rejects.toMatchObject({ reason: "outside-scope" });
   });
 
+  it("readExcerpt rejects a path that shares a prefix but is outside the scoped directory", async () => {
+    // Guards against a startsWith(selectedPath) bug: `src-extra/foo.ts` starts with `src`
+    // but is NOT inside the `src/` directory. The check must use `startsWith(`${path}/`)`.
+    const { scope, fs } = memScope(
+      { "src/a.ts": "alpha\n", "src-extra/foo.ts": "secret\n" },
+      { relativePaths: ["src"] },
+    );
+    await expect(
+      readExcerpt(
+        scope,
+        { scopePath: "src-extra/foo.ts", startLine: 1, endLine: 1, maxBytes: 64 },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toMatchObject({ reason: "outside-scope" });
+  });
+
   it("readExcerpt allows a file explicitly selected in scope.relativePaths", async () => {
     const { scope, fs } = memScope(
       { "src/a.ts": "alpha\n", "docs/b.md": "secret\n" },
