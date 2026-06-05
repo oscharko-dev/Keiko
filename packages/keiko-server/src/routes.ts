@@ -93,6 +93,7 @@ import {
   handleQiDryRunFigma,
   handleQiDryRunJira,
   handleQiSourceSelect,
+  QI_HANDOFF_ROUTE_GROUP,
 } from "./qualityIntelligence/index.js";
 
 export interface ApiError {
@@ -322,6 +323,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/quality-intelligence/sources/capabilities",
     handler: handleQiCapabilities,
   },
+  // Issue #281 (Epic #270) — Conversation Center → QI workflow handoff route group.
+  // Single POST seam; the body is a typed `QualityIntelligenceConversationCenterHandoff`
+  // envelope (refs only, no chat content). Registered as a sibling group so concurrent
+  // QI epic merges (e.g. #280) stay mechanically merge-safe.
+  ...QI_HANDOFF_ROUTE_GROUP,
 ];
 
 // Matches a concrete path against a route pattern, capturing `:name` params. Returns the captured
