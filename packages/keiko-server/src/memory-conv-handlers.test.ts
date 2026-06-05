@@ -109,16 +109,19 @@ function brandedMemoryUserId(value: string): MemoryUserId {
   return u as MemoryUserId;
 }
 
-function insertAcceptedMemory(vault: MemoryVaultStore): MemoryRecord {
+function insertAcceptedMemory(
+  vault: MemoryVaultStore,
+  options: { body?: string; userId?: string } = {},
+): MemoryRecord {
   const id: MemoryId = brandedMemoryId(`mem-${Math.random().toString(36).slice(2, 10)}`);
-  const userId: MemoryUserId = brandedMemoryUserId("u-1");
+  const userId: MemoryUserId = brandedMemoryUserId(options.userId ?? "u-1");
   const now = Date.now();
   const record: MemoryRecord = {
     id,
     schemaVersion: "1",
     scope: { kind: "user", userId },
     type: "preference",
-    body: "User prefers TypeScript strict mode in all packages.",
+    body: options.body ?? "User prefers TypeScript strict mode in all packages.",
     provenance: {
       sourceKind: "explicit-user-instruction",
       capturedAt: now,
@@ -276,6 +279,61 @@ describe("handleMemoryCaptureFromConversation", () => {
     expect(outcomes[0]?.kind).toBe("candidate");
     expect(typeof outcomes[0]?.proposal?.proposalId).toBe("string");
     expect((outcomes[0]?.proposal?.body ?? "").length).toBeGreaterThan(0);
+  });
+
+  it("resolves an explicit forget intent against in-scope memories", async () => {
+    const vault = makeVault();
+    const existing = insertAcceptedMemory(vault, { body: "I prefer dark mode in the editor." });
+    const deps = makeDeps({ memoryVault: vault });
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({ text: "forget about dark mode preference", context: { userId: "u-1" } }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const body = asJson(result);
+    const outcomes = body.outcomes as readonly [
+      { kind: string; operation?: { memoryId: string }; reason?: string },
+    ];
+    const first = outcomes[0];
+    expect(first.kind).toBe("forget");
+    expect(first.operation?.memoryId).toBe(existing.id);
+  });
+
+  it("resolves an explicit update intent against in-scope memories", async () => {
+    const vault = makeVault();
+    const existing = insertAcceptedMemory(vault, { body: "The test runner is jest." });
+    const deps = makeDeps({ memoryVault: vault });
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "update memory about test runner to be vitest",
+        context: { userId: "u-1" },
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const body = asJson(result);
+    const outcomes = body.outcomes as readonly [
+      { kind: string; operation?: { memoryId: string; bodyPatch: string }; reason?: string },
+    ];
+    const first = outcomes[0];
+    expect(first.kind).toBe("update");
+    expect(first.operation?.memoryId).toBe(existing.id);
+    expect(first.operation?.bodyPatch).toBe("vitest");
+  });
+
+  it("returns an ambiguous rejection when multiple memories match a forget target", async () => {
+    const vault = makeVault();
+    insertAcceptedMemory(vault, { body: "I prefer dark mode in the editor." });
+    insertAcceptedMemory(vault, { body: "Dark mode is required in the terminal." });
+    const deps = makeDeps({ memoryVault: vault });
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({ text: "forget about dark mode", context: { userId: "u-1" } }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const body = asJson(result);
+    const outcomes = body.outcomes as readonly [{ kind: string; reason?: string }];
+    expect(outcomes[0]).toEqual({ kind: "rejected", reason: "ambiguous-forget" });
   });
 
   it("rejects oversize bodies with 413", async () => {

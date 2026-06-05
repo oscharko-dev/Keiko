@@ -45,6 +45,7 @@ function emitWorkflowCandidate(
   body: string,
   type: MemoryType,
   runId: WorkflowRunId,
+  capturedAt: number,
   context: CaptureContext,
   policy: CapturePolicyOptions,
 ): CaptureOutcome {
@@ -70,6 +71,8 @@ function emitWorkflowCandidate(
       type,
       sensitivity: decision.sensitivity,
       sourceKind,
+      capturedAt,
+      validFrom: capturedAt,
       sourceWorkflowRunId: runId,
     },
     WORKFLOW_CONFIDENCE,
@@ -93,5 +96,5 @@ export function extractWorkflowOutcomeCandidates(
     return [{ kind: "rejected", reason: "empty-content" }];
   }
   const type: MemoryType = outcome.outcomeKind === "corrected" ? "correction" : "semantic-fact";
-  return [emitWorkflowCandidate(body, type, outcome.runId, context, policy)];
+  return [emitWorkflowCandidate(body, type, outcome.runId, outcome.capturedAt, context, policy)];
 }

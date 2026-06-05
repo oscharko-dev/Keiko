@@ -51,6 +51,7 @@ import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
+import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -391,6 +392,7 @@ export async function handleMemoryCaptureFromConversation(
   const outcomes: readonly CaptureOutcome[] = extractCandidatesFromUserText(
     input.text,
     captureContext,
+    { resolver: createMemoryTargetResolver(vault) },
   );
   // Redact every outcome (proposal bodies may carry user text that needs scrubbing).
   return { status: 200, body: deps.redactor({ outcomes }) };

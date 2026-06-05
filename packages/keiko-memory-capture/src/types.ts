@@ -62,8 +62,9 @@ export interface CapturePolicyOptions {
   // Sensitivity assigned when the body shows no PII/confidentiality markers. Defaults to "public".
   // Set to "confidential" to force every candidate to require explicit approval.
   readonly defaultSensitivity?: MemorySensitivity;
-  // Forget/update ambiguity resolver. When omitted, forget/update emit candidates WITHOUT
-  // ambiguity checking — the storage acceptance layer remains free to perform its own check.
+  // Forget/update target resolver. The capture layer needs a concrete MemoryId before it can emit
+  // a governed MemoryForget or MemoryUpdate operation, so callers that want those intents to work
+  // must provide a scope-limited resolver.
   readonly resolver?: CaptureMemoryResolver;
   // Whether `{ kind: "global" }` scope is allowed. Defaults to false (fail-closed) so a stray
   // scope hint cannot silently elevate a candidate to a cross-user fact.
@@ -78,7 +79,8 @@ export interface CapturePolicyOptions {
 
 // Structured workflow outcome handed to the workflow extractor. Local to this package; full
 // workflow contracts live elsewhere. The structured report is a short caller-rendered summary
-// (a few hundred chars) — NOT the raw run log.
+// (a few hundred chars) — NOT the raw run log. `capturedAt` is the authoritative observation
+// timestamp for the workflow outcome and is copied into proposal provenance / validity.
 export interface WorkflowOutcomeInput {
   readonly runId: WorkflowRunId;
   readonly outcomeKind: "success" | "corrected" | "failed";

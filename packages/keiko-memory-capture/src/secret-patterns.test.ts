@@ -47,6 +47,11 @@ describe("scanForSecrets — credential-shape patterns (looksLikeSecretShape par
     expect(scanForSecrets(value)).toBe("credential-shape");
   });
 
+  it("rejects a lowercase bearer authorization header", () => {
+    const value = "bearer opaque-token-1234567890";
+    expect(scanForSecrets(value)).toBe("credential-shape");
+  });
+
   it("rejects a URL with embedded basic-auth credentials", () => {
     const url = "https://alice:p4ssw0rd@example.com/repo.git";
     expect(scanForSecrets(`clone ${url}`)).toBe("credential-shape");

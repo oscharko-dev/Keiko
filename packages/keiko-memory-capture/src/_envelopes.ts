@@ -28,6 +28,8 @@ interface ProposalBuildInput {
   readonly sensitivity: MemorySensitivity;
   readonly sourceKind: MemorySourceKind;
   readonly captureRationale?: string;
+  readonly capturedAt?: number;
+  readonly validFrom?: number;
   readonly sourceWorkflowRunId?: WorkflowRunId;
 }
 
@@ -39,6 +41,8 @@ interface ProposalBuildInput {
 // signal fully) and 0.6 for workflow-derived candidates. Splitting that choice up to the caller
 // keeps the rule explicit at the call site rather than buried here.
 export function buildProposal(input: ProposalBuildInput, confidence: number): MemoryProposal {
+  const capturedAt = input.capturedAt ?? input.context.nowMs;
+  const validFrom = input.validFrom ?? capturedAt;
   const proposal: MemoryProposal = {
     schemaVersion: "1",
     proposalId: input.context.newProposalId(),
@@ -49,7 +53,7 @@ export function buildProposal(input: ProposalBuildInput, confidence: number): Me
     tags: [],
     provenance: {
       sourceKind: input.sourceKind,
-      capturedAt: input.context.nowMs,
+      capturedAt,
       confidence,
       sensitivity: input.sensitivity,
       ...(input.captureRationale !== undefined && { captureRationale: input.captureRationale }),
@@ -60,7 +64,7 @@ export function buildProposal(input: ProposalBuildInput, confidence: number): Me
         sourceWorkflowRunId: input.sourceWorkflowRunId,
       }),
     },
-    validity: { validFrom: input.context.nowMs },
+    validity: { validFrom },
     initialStatus: "proposed",
   };
   return proposal;
