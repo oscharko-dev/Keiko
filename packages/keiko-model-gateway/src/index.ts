@@ -112,3 +112,8 @@ export {
   UnknownModelError,
   type ErrorCode,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+
+// Quality Intelligence sub-module (Epic #270, Issue #279). Exposed under a namespace so
+// callers reach typed task profiles, the prompt-segmentation seam, the capability gate,
+// the safe-error taxonomy, and (post-M3) the dispatcher via a single import surface.
+export * as QualityIntelligence from "./qualityIntelligence/index.js";
