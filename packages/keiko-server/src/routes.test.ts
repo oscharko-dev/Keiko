@@ -26,8 +26,8 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 68 route contract including local-knowledge capsule management", () => {
-    expect(API_ROUTES).toHaveLength(68);
+  it("declares the 72 route contract including local-knowledge capsule management and Quality Intelligence connector routes", () => {
+    expect(API_ROUTES).toHaveLength(72);
   });
 
   it("includes the local-knowledge capsule detail routes", () => {
@@ -52,22 +52,19 @@ describe("API route contract", () => {
     ).toBeDefined();
     expect(
       localKnowledgeRoutes.find(
-        (r) =>
-          r.method === "GET" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
+        (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
       ),
     ).toBeDefined();
     expect(
       localKnowledgeRoutes.find(
         (r) =>
-          r.method === "POST" &&
-          r.pattern === "/api/local-knowledge/capsules/:capsuleId/index",
+          r.method === "POST" && r.pattern === "/api/local-knowledge/capsules/:capsuleId/index",
       ),
     ).toBeDefined();
     expect(
       localKnowledgeRoutes.find(
         (r) =>
-          r.method === "DELETE" &&
-          r.pattern === "/api/local-knowledge/capsules/:capsuleId/index",
+          r.method === "DELETE" && r.pattern === "/api/local-knowledge/capsules/:capsuleId/index",
       ),
     ).toBeDefined();
     expect(
@@ -85,8 +82,7 @@ describe("API route contract", () => {
     ).toBeDefined();
     expect(
       localKnowledgeRoutes.find(
-        (r) =>
-          r.method === "DELETE" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
+        (r) => r.method === "DELETE" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
       ),
     ).toBeDefined();
   });

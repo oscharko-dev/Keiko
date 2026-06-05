@@ -34,3 +34,8 @@ export {
   isMeaningfulText,
   normaliseText,
 } from "./domain/assertions.js";
+
+// ─── Ingestion sub-namespace (Issue #278) ──────────────────────────────────────
+// Pure-domain ingestion modelling: ADF parsing, untrusted-content normalisation,
+// source-mix planning, source reconciliation. No IO; consumes contract types only.
+export * as QualityIntelligenceIngestion from "./ingestion/index.js";
