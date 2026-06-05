@@ -698,11 +698,13 @@ describe("Foundry IQ lineage invariants", () => {
     expect(missingDoc.id).toBe(chk("ch-1"));
   });
 
-  it("VectorRecord requires chunkId and capsuleId", () => {
+  it("VectorRecord requires chunkId, capsuleId, sourceId, and documentId", () => {
     // @ts-expect-error — missing chunkId
     const missingChunk: VectorRecord = {
       id: vec("v-1"),
       capsuleId: cap("c-1"),
+      sourceId: src("s-1"),
+      documentId: doc("d-1"),
       embeddingIdentity: happyEmbeddingIdentity() as VectorRecord["embeddingIdentity"],
       vectorDimensions: 1536,
       storageReference: "row-1",
@@ -714,12 +716,40 @@ describe("Foundry IQ lineage invariants", () => {
     const missingCapsule: VectorRecord = {
       id: vec("v-2"),
       chunkId: chk("ch-1"),
+      sourceId: src("s-1"),
+      documentId: doc("d-1"),
       embeddingIdentity: happyEmbeddingIdentity() as VectorRecord["embeddingIdentity"],
       vectorDimensions: 1536,
       storageReference: "row-2",
       createdAt: 0,
     };
     expect(missingCapsule.id).toBe(vec("v-2"));
+
+    // @ts-expect-error — missing sourceId
+    const missingSource: VectorRecord = {
+      id: vec("v-3"),
+      chunkId: chk("ch-1"),
+      capsuleId: cap("c-1"),
+      documentId: doc("d-1"),
+      embeddingIdentity: happyEmbeddingIdentity() as VectorRecord["embeddingIdentity"],
+      vectorDimensions: 1536,
+      storageReference: "row-3",
+      createdAt: 0,
+    };
+    expect(missingSource.id).toBe(vec("v-3"));
+
+    // @ts-expect-error — missing documentId
+    const missingDocument: VectorRecord = {
+      id: vec("v-4"),
+      chunkId: chk("ch-1"),
+      capsuleId: cap("c-1"),
+      sourceId: src("s-1"),
+      embeddingIdentity: happyEmbeddingIdentity() as VectorRecord["embeddingIdentity"],
+      vectorDimensions: 1536,
+      storageReference: "row-4",
+      createdAt: 0,
+    };
+    expect(missingDocument.id).toBe(vec("v-4"));
   });
 
   it("CitationReference requires capsuleId, sourceId, documentId, and chunkId", () => {
