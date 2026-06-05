@@ -974,6 +974,7 @@ function MemoryPanel({
   readonly rejectCandidate: (proposalId: string) => Promise<void>;
 }): ReactNode {
   const [open, setOpen] = useState(false);
+  const disclosureId = "chat-memory-disclosure";
   const memoryCount = latestMemory?.context.memories.length ?? 0;
   return (
     <section className="chat-memory-panel" aria-label="Conversation memory">
@@ -998,12 +999,18 @@ function MemoryPanel({
             }
           />
         </label>
-        <button type="button" className="chip" onClick={() => setOpen((current) => !current)}>
+        <button
+          type="button"
+          className="chip"
+          aria-expanded={open}
+          aria-controls={disclosureId}
+          onClick={() => setOpen((current) => !current)}
+        >
           {memoryCount > 0 ? `${String(memoryCount)} memories included` : "No memory included"}
         </button>
       </div>
       {open ? (
-        <div className="chat-memory-disclosure">
+        <div id={disclosureId} className="chat-memory-disclosure">
           <p className="chat-memory-summary">
             {latestMemory === undefined
               ? "Memory disclosure appears after the next response."

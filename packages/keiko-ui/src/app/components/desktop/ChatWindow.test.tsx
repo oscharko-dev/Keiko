@@ -173,6 +173,41 @@ describe("ChatWindow cancel button", () => {
   });
 });
 
+describe("ChatWindow memory disclosure", () => {
+  it("exposes expanded state and disclosure linkage on the memory chip", async () => {
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        draft: "hello",
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "Included memory context:\n- Use pnpm",
+            memories: [
+              {
+                memoryId: "mem-1",
+                bodyExcerpt: "Use pnpm",
+                inclusionReason: "scope-match",
+              },
+            ],
+            budget: { tokens: 1200, used: 42 },
+          },
+          actions: [],
+        },
+      }),
+    );
+
+    const disclosureButton = screen.getByRole("button", { name: /1 memories included/i });
+    expect(disclosureButton).toHaveAttribute("aria-expanded", "false");
+    expect(disclosureButton).toHaveAttribute("aria-controls", "chat-memory-disclosure");
+    await user.click(disclosureButton);
+    expect(disclosureButton).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Use pnpm")).toBeInTheDocument();
+    expect(screen.getByText(/Used 42 of 1200 memory tokens/i)).toBeInTheDocument();
+  });
+});
+
 describe("ChatWindow local knowledge scope disclosure", () => {
   it("keeps the active capsule visible when it is no longer in the ready capsule list", async () => {
     fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });

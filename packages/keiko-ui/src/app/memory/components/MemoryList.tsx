@@ -97,11 +97,7 @@ function StatusBadge({ status }: { readonly status: string }): ReactNode {
 function MemoryRow({ record }: { readonly record: MemoryRecord }): ReactNode {
   return (
     <li>
-      <Link
-        href={`/memory/detail?id=${encodeURIComponent(record.id)}`}
-        className="mc-row"
-        aria-label={`Memory: ${record.body.slice(0, 60)}`}
-      >
+      <Link href={`/memory/detail?id=${encodeURIComponent(record.id)}`} className="mc-row">
         <div className="mc-row-main">
           <span className="mc-row-body">{record.body}</span>
           <div className="mc-row-meta">

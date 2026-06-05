@@ -16,18 +16,13 @@ import {
 import type { ConversationDocumentContextWire } from "@oscharko-dev/keiko-contracts";
 import type {
   ConversationMemoryActionWire,
-  ConversationMemoryRequestWire,
   ConversationMemoryResultWire,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
-  ConversationId,
+  MemoryAuditEvent,
   MemoryId,
   MemoryProposalId,
-  MemoryRecord,
   MemoryScope,
-  ProjectId,
-  UserId,
-  WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
 import {
@@ -55,6 +50,13 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
 import { vaultAsQueryPort } from "./memory-conv-handlers.js";
+import {
+  conversationMemoryScopes,
+  resolveConversationMemoryContext,
+  type ConversationMemoryRuntimeContext,
+} from "./memory-conversation-context.js";
+import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import { recordMemoryAudit } from "./memory-audit-handler.js";
 
 const DEFAULT_CHAT_MODEL = "example-chat-model";
 const DEFAULT_CHAT_TITLE = "New chat";
@@ -282,18 +284,13 @@ interface SendDesktopChatRequest {
   // attachments arriving via the conversation send path are kind/mime/size metadata the
   // validator uses to enforce modality+mime+size before the gateway is called).
   readonly attachments: readonly ConversationAttachment[];
-  readonly memory: ConversationMemoryRequestWire | undefined;
+  readonly memory: ParsedConversationMemoryRequest | undefined;
 }
 
-interface ConversationMemoryContextInput {
-  readonly userId: UserId;
-  readonly workspaceId: WorkspaceId | undefined;
-  readonly projectId: ProjectId | undefined;
-  readonly conversationId: ConversationId | undefined;
-}
-
-function optionalWireId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+interface ParsedConversationMemoryRequest {
+  readonly enabled: boolean;
+  readonly budgetTokens?: number;
+  readonly context: Record<string, unknown>;
 }
 
 function scopeLabel(scope: MemoryScope): string {
@@ -311,56 +308,11 @@ function scopeLabel(scope: MemoryScope): string {
   }
 }
 
-function memoryScopes(context: ConversationMemoryContextInput): readonly MemoryScope[] {
-  const scopes: MemoryScope[] = [{ kind: "user", userId: context.userId }];
-  if (context.projectId !== undefined) {
-    scopes.unshift({ kind: "project", projectId: context.projectId });
-  }
-  if (context.workspaceId !== undefined) {
-    scopes.unshift({ kind: "workspace", workspaceId: context.workspaceId });
-  }
-  return scopes;
-}
-
-function buildMemoryRecordFromProposal(
-  proposalId: MemoryId,
-  outcome: CaptureOutcome,
-): MemoryRecord | null {
-  if (outcome.kind !== "candidate") return null;
-  const { proposal } = outcome;
-  return {
-    id: proposalId,
-    schemaVersion: proposal.schemaVersion,
-    scope: proposal.scope,
-    type: proposal.type,
-    body: proposal.body,
-    tags: proposal.tags,
-    provenance: proposal.provenance,
-    validity: proposal.validity,
-    status: proposal.initialStatus,
-    pinned: false,
-    createdAt: proposal.proposedAt,
-    updatedAt: proposal.proposedAt,
-  };
-}
-
-function parseMemoryContext(value: unknown): ConversationMemoryContextInput | RouteResult {
+function parseMemoryContext(value: unknown): Record<string, unknown> | RouteResult {
   if (!isRecord(value)) {
     return { status: 400, body: errorBody("BAD_REQUEST", "memory.context must be an object.") };
   }
-  const userId = pickString(value, "userId")?.trim();
-  if (userId === undefined || userId.length === 0) {
-    return {
-      status: 400,
-      body: errorBody("BAD_REQUEST", "memory.context.userId must be a non-empty string."),
-    };
-  }
-  return {
-    userId: userId as UserId,
-    workspaceId: optionalWireId(value.workspaceId) as WorkspaceId | undefined,
-    projectId: optionalWireId(value.projectId) as ProjectId | undefined,
-    conversationId: optionalWireId(value.conversationId) as ConversationId | undefined,
-  };
+  return value;
 }
 
 function parseMemoryEnabled(raw: Record<string, unknown>): boolean | RouteResult {
@@ -383,7 +335,7 @@ function parseMemoryBudget(raw: Record<string, unknown>): number | RouteResult |
 
 function parseMemoryRequest(
   value: unknown,
-): ConversationMemoryRequestWire | RouteResult | undefined {
+): ParsedConversationMemoryRequest | RouteResult | undefined {
   if (value === undefined) return undefined;
   if (!isRecord(value)) {
     return { status: 400, body: errorBody("BAD_REQUEST", "memory must be an object.") };
@@ -652,27 +604,52 @@ function emptyMemoryResult(enabled: boolean): ConversationMemoryResultWire {
   };
 }
 
+function recordConversationMemoryRetrieval(
+  deps: UiHandlerDeps,
+  context: ConversationMemoryRuntimeContext,
+  memories: readonly { readonly memoryId: string }[],
+): void {
+  if (memories.length === 0) {
+    return;
+  }
+  const event: MemoryAuditEvent = {
+    schemaVersion: "1",
+    kind: "memory:retrieved",
+    eventId: randomUUID(),
+    occurredAt: Date.now(),
+    initiatorSurface: "conversation-center",
+    summary:
+      memories.length === 1
+        ? "Retrieved 1 memory for a conversation request."
+        : `Retrieved ${String(memories.length)} memories for a conversation request.`,
+    scopes: conversationMemoryScopes(context),
+    matchedMemoryIds: memories.map((memory) => memory.memoryId as MemoryId),
+  };
+  recordMemoryAudit({ evidenceStore: deps.evidenceStore }, event);
+}
+
 function buildMemoryResult(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
+  context: ConversationMemoryRuntimeContext,
 ): ConversationMemoryResultWire {
   const memory = request.memory;
   if (memory === undefined) {
     return emptyMemoryResult(false);
   }
-  if (deps.memoryVault === undefined || memory.enabled === false) {
-    return emptyMemoryResult(memory.enabled ?? false);
+  if (deps.memoryVault === undefined || !memory.enabled) {
+    return emptyMemoryResult(memory.enabled);
   }
   const retrieval = retrieveMemoryContext(
     {
-      scopes: memoryScopes(memory.context as ConversationMemoryContextInput),
+      scopes: conversationMemoryScopes(context),
       queryText: request.content,
       ...(memory.budgetTokens !== undefined ? { budgetTokens: memory.budgetTokens } : {}),
       nowMs: Date.now(),
     },
     vaultAsQueryPort(deps.memoryVault),
   );
-  return {
+  const result = {
     context: {
       enabled: true,
       text: retrieval.contextBlock.text,
@@ -685,27 +662,20 @@ function buildMemoryResult(
     },
     actions: [],
   };
+  recordConversationMemoryRetrieval(deps, context, result.context.memories);
+  return result;
 }
 
-function buildCaptureContext(input: ConversationMemoryContextInput): CaptureContext {
-  const base: {
-    userId: UserId;
-    nowMs: number;
-    newMemoryId: () => MemoryId;
-    newProposalId: () => MemoryProposalId;
-    workspaceId?: WorkspaceId;
-    projectId?: ProjectId;
-    conversationId?: ConversationId;
-  } = {
+function buildCaptureContext(input: ConversationMemoryRuntimeContext): CaptureContext {
+  return {
     userId: input.userId,
     nowMs: Date.now(),
     newMemoryId: () => randomUUID() as MemoryId,
     newProposalId: () => randomUUID() as MemoryProposalId,
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    conversationId: input.conversationId,
   };
-  if (input.workspaceId !== undefined) base.workspaceId = input.workspaceId;
-  if (input.projectId !== undefined) base.projectId = input.projectId;
-  if (input.conversationId !== undefined) base.conversationId = input.conversationId;
-  return base;
 }
 
 function captureActionFromOutcome(
@@ -749,11 +719,15 @@ function captureActionFromOutcome(
 function captureMemoryActions(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
+  context: ConversationMemoryRuntimeContext,
 ): readonly ConversationMemoryActionWire[] {
-  if (request.memory === undefined || deps.memoryVault === undefined) {
+  if (
+    request.memory === undefined ||
+    !request.memory.enabled ||
+    deps.memoryVault === undefined
+  ) {
     return [];
   }
-  const context = request.memory.context as ConversationMemoryContextInput;
   const outcomes = extractCandidatesFromUserText(request.content, buildCaptureContext(context), {
     resolver: createMemoryTargetResolver(deps.memoryVault),
   });
@@ -770,13 +744,17 @@ async function persistModelChatTurn(
   request: SendDesktopChatRequest,
   chat: Chat,
   modelId: string,
+  memoryContext: ConversationMemoryRuntimeContext | undefined,
 ): Promise<RouteResult> {
   const model = deps.modelPortFactory(modelId);
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   try {
-    const memory = buildMemoryResult(request, deps);
+    const memory =
+      memoryContext === undefined
+        ? emptyMemoryResult(false)
+        : buildMemoryResult(request, deps, memoryContext);
     const userMessage = createUserMessage(deps, request);
     const history = conversationForGateway(deps.store.listMessages(request.chatId));
     const messages = applyDocumentContextToLatestUserTurn(history, request, memory.context.text);
@@ -789,7 +767,8 @@ async function persistModelChatTurn(
       new AbortController().signal,
     );
     const assistantMessage = createAssistantMessage(deps, request, response.content);
-    const memoryActions = captureMemoryActions(request, deps);
+    const memoryActions =
+      memoryContext === undefined ? [] : captureMemoryActions(request, deps, memoryContext);
     const chatPatch =
       chat.title === DEFAULT_CHAT_TITLE
         ? { selectedModel: modelId, title: request.content.slice(0, 60) }
@@ -867,5 +846,12 @@ export async function handleSendDesktopChat(
   if (!validation.ok) {
     return { status: 400, body: errorBody(validation.code, validation.message) };
   }
-  return persistModelChatTurn(deps, request, chat, modelId);
+  const memoryContext =
+    request.memory === undefined
+      ? undefined
+      : resolveConversationMemoryContext(deps, normalizedProjectPath, request.chatId);
+  if (memoryContext !== undefined && "status" in memoryContext) {
+    return memoryContext;
+  }
+  return persistModelChatTurn(deps, request, chat, modelId, memoryContext);
 }

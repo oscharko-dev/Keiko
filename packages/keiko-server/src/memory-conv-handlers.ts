@@ -5,12 +5,12 @@
 // the domain). Both routes go through the existing redactor (D9) before serialisation.
 //
 //   POST /api/memory/context
-//     Body: { scopes, queryText?, types?, budgetTokens? }
+//     Body: { projectPath, chatId, queryText?, types?, budgetTokens? }
 //     Returns the MemoryRetrievalResult envelope (contextBlock + included + omitted + budget).
 //     Wraps `retrieveMemoryContext` from keiko-memory-retrieval.
 //
 //   POST /api/memory/capture-from-conversation
-//     Body: { text, context: { userId, workspaceId?, projectId?, conversationId? } }
+//     Body: { text, context: { projectPath, chatId } }
 //     Returns { outcomes: CaptureOutcome[] }. Pure call to keiko-memory-capture's
 //     `extractCandidatesFromUserText`. Persistence of accepted candidates stays on the
 //     existing /api/memory/proposals/:id/accept route from #211 (see follow-up note in the
@@ -33,25 +33,26 @@ import {
   type CaptureContext,
   type CaptureOutcome,
 } from "@oscharko-dev/keiko-memory-capture";
-import { MEMORY_SCOPE_KINDS, MEMORY_TYPES } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_TYPES } from "@oscharko-dev/keiko-contracts";
 import type {
+  MemoryAuditEvent,
   MemoryId,
   MemoryProposalId,
   MemoryRecord,
   MemoryScope,
-  MemoryScopeKind,
   MemoryType,
-  ProjectId,
-  UserId,
-  WorkspaceId,
-  ConversationId,
-  WorkflowDefinitionId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { createMemoryTargetResolver } from "./memory-target-resolver.js";
+import {
+  conversationMemoryScopes,
+  resolveConversationMemoryContext,
+  type ConversationMemoryRuntimeContext,
+} from "./memory-conversation-context.js";
+import { recordMemoryAudit } from "./memory-audit-handler.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -131,59 +132,7 @@ function resolveVault(deps: UiHandlerDeps): MemoryVaultStore | RouteResult {
   return deps.memoryVault;
 }
 
-// ─── /api/memory/context — scope parsing ──────────────────────────────────────
-
-function isScopeKind(value: unknown): value is MemoryScopeKind {
-  return typeof value === "string" && (MEMORY_SCOPE_KINDS as readonly string[]).includes(value);
-}
-
-// Per-kind parsers keep `parseScope` under the complexity cap by isolating each kind's
-// string-typed coordinate read. Each parser receives the already-narrowed record and returns
-// either the typed scope or null when its coordinate is missing or non-string.
-type ScopeParser = (raw: Record<string, unknown>) => MemoryScope | null;
-
-function readString(raw: Record<string, unknown>, key: string): string | null {
-  const value = raw[key];
-  return typeof value === "string" && value.length > 0 ? value : null;
-}
-
-const SCOPE_PARSERS: Readonly<Record<MemoryScopeKind, ScopeParser>> = {
-  user: (raw) => {
-    const id = readString(raw, "userId");
-    return id === null ? null : { kind: "user", userId: id as UserId };
-  },
-  workspace: (raw) => {
-    const id = readString(raw, "workspaceId");
-    return id === null ? null : { kind: "workspace", workspaceId: id as WorkspaceId };
-  },
-  project: (raw) => {
-    const id = readString(raw, "projectId");
-    return id === null ? null : { kind: "project", projectId: id as ProjectId };
-  },
-  workflow: (raw) => {
-    const id = readString(raw, "workflowDefinitionId");
-    return id === null
-      ? null
-      : { kind: "workflow", workflowDefinitionId: id as WorkflowDefinitionId };
-  },
-  global: () => ({ kind: "global" }),
-};
-
-function parseScope(raw: unknown): MemoryScope | null {
-  if (!isRecord(raw) || !isScopeKind(raw.kind)) return null;
-  return SCOPE_PARSERS[raw.kind](raw);
-}
-
-function parseScopes(raw: unknown): readonly MemoryScope[] | null {
-  if (!Array.isArray(raw) || raw.length === 0) return null;
-  const out: MemoryScope[] = [];
-  for (const r of raw) {
-    const scope = parseScope(r);
-    if (scope === null) return null;
-    out.push(scope);
-  }
-  return out;
-}
+// ─── /api/memory/context — request parsing ───────────────────────────────────
 
 function parseTypes(raw: unknown): readonly MemoryType[] | null {
   if (raw === undefined) return null;
@@ -216,10 +165,25 @@ export function vaultAsQueryPort(vault: MemoryVaultStore): MemoryQueryPort {
 }
 
 interface ContextInput {
-  readonly scopes: readonly MemoryScope[];
+  readonly projectPath: string;
+  readonly chatId: string;
   readonly queryText: string | undefined;
   readonly types: readonly MemoryType[] | undefined;
   readonly budgetTokens: number | undefined;
+}
+
+function parseRequiredString(
+  raw: Record<string, unknown>,
+  key: string,
+): string | RouteResult {
+  const value = raw[key];
+  if (typeof value === "string" && value.length > 0) {
+    return value;
+  }
+  return {
+    status: 400,
+    body: errorBody("BAD_REQUEST", `${key} must be a non-empty string.`),
+  };
 }
 
 function parseOptionalQueryText(raw: Record<string, unknown>): string | RouteResult | undefined {
@@ -250,13 +214,10 @@ function parseOptionalBudgetTokens(raw: Record<string, unknown>): number | Route
 }
 
 function parseContextInput(raw: Record<string, unknown>): ContextInput | RouteResult {
-  const scopes = parseScopes(raw.scopes);
-  if (scopes === null) {
-    return {
-      status: 400,
-      body: errorBody("BAD_REQUEST", "scopes must be a non-empty array of valid MemoryScope."),
-    };
-  }
+  const projectPath = parseRequiredString(raw, "projectPath");
+  if (isRouteResult(projectPath)) return projectPath;
+  const chatId = parseRequiredString(raw, "chatId");
+  if (isRouteResult(chatId)) return chatId;
   const types = parseTypes(raw.types);
   if (raw.types !== undefined && types === null) {
     return {
@@ -269,14 +230,18 @@ function parseContextInput(raw: Record<string, unknown>): ContextInput | RouteRe
   const budgetTokens = parseOptionalBudgetTokens(raw);
   if (isRouteResult(budgetTokens)) return budgetTokens;
   return {
-    scopes,
+    projectPath,
+    chatId,
     queryText: queryText ?? undefined,
     types: types ?? undefined,
     budgetTokens: budgetTokens ?? undefined,
   };
 }
 
-function buildRetrievalRequest(input: ContextInput): MemoryRetrievalRequest {
+function buildRetrievalRequest(
+  scopes: readonly MemoryScope[],
+  input: ContextInput,
+): MemoryRetrievalRequest {
   // exactOptionalPropertyTypes: omit undefined fields instead of assigning them.
   const req: {
     scopes: readonly MemoryScope[];
@@ -285,7 +250,7 @@ function buildRetrievalRequest(input: ContextInput): MemoryRetrievalRequest {
     types?: readonly MemoryType[];
     budgetTokens?: number;
   } = {
-    scopes: input.scopes,
+    scopes,
     nowMs: Date.now(),
   };
   if (input.queryText !== undefined) req.queryText = input.queryText;
@@ -305,8 +270,27 @@ export async function handleMemoryRetrieveContext(
   const input = parseContextInput(body);
   if (isRouteResult(input)) return input;
 
+  const context = resolveConversationMemoryContext(deps, input.projectPath, input.chatId);
+  if (isRouteResult(context)) return context;
+  const scopes = conversationMemoryScopes(context);
   const port = vaultAsQueryPort(vault);
-  const result = retrieveMemoryContext(buildRetrievalRequest(input), port);
+  const result = retrieveMemoryContext(buildRetrievalRequest(scopes, input), port);
+  if (result.included.length > 0) {
+    const event: MemoryAuditEvent = {
+      schemaVersion: "1",
+      kind: "memory:retrieved",
+      eventId: randomUUID(),
+      occurredAt: Date.now(),
+      initiatorSurface: "conversation-center",
+      summary:
+        result.included.length === 1
+          ? "Retrieved 1 memory for the conversation memory API."
+          : `Retrieved ${String(result.included.length)} memories for the conversation memory API.`,
+      scopes,
+      matchedMemoryIds: result.included.map((item) => item.memoryId),
+    };
+    recordMemoryAudit({ evidenceStore: deps.evidenceStore }, event);
+  }
   // Redact the entire envelope (contextBlock.text, memory excerpts, inclusion reasons).
   // We deliberately do NOT echo `result.request` back: it carries no fresh info beyond what
   // the caller posted and bloats the wire payload.
@@ -324,10 +308,8 @@ export async function handleMemoryRetrieveContext(
 // ─── /api/memory/capture-from-conversation ────────────────────────────────────
 
 interface CaptureInputContext {
-  readonly userId: UserId;
-  readonly workspaceId: WorkspaceId | undefined;
-  readonly projectId: ProjectId | undefined;
-  readonly conversationId: ConversationId | undefined;
+  readonly projectPath: string;
+  readonly chatId: string;
 }
 
 function optionalId(raw: Record<string, unknown>, key: string): string | undefined {
@@ -339,21 +321,20 @@ function parseCaptureContext(raw: unknown): CaptureInputContext | RouteResult {
   if (!isRecord(raw)) {
     return {
       status: 400,
-      body: errorBody("BAD_REQUEST", "context must be an object with a non-empty userId."),
+      body: errorBody("BAD_REQUEST", "context must be an object with projectPath and chatId."),
     };
   }
-  const userId = typeof raw.userId === "string" && raw.userId.length > 0 ? raw.userId : null;
-  if (userId === null) {
+  const projectPath = optionalId(raw, "projectPath");
+  const chatId = optionalId(raw, "chatId");
+  if (projectPath === undefined || chatId === undefined) {
     return {
       status: 400,
-      body: errorBody("BAD_REQUEST", "context.userId must be a non-empty string."),
+      body: errorBody("BAD_REQUEST", "context.projectPath and context.chatId are required."),
     };
   }
   return {
-    userId: userId as UserId,
-    workspaceId: optionalId(raw, "workspaceId") as WorkspaceId | undefined,
-    projectId: optionalId(raw, "projectId") as ProjectId | undefined,
-    conversationId: optionalId(raw, "conversationId") as ConversationId | undefined,
+    projectPath,
+    chatId,
   };
 }
 
@@ -375,26 +356,17 @@ function parseCaptureInput(raw: Record<string, unknown>): CaptureInput | RouteRe
   };
 }
 
-function buildCaptureContext(input: CaptureInputContext): CaptureContext {
+function buildCaptureContext(input: ConversationMemoryRuntimeContext): CaptureContext {
   // exactOptionalPropertyTypes — only set fields when present.
-  const base: {
-    userId: UserId;
-    nowMs: number;
-    newMemoryId: () => MemoryId;
-    newProposalId: () => MemoryProposalId;
-    workspaceId?: WorkspaceId;
-    projectId?: ProjectId;
-    conversationId?: ConversationId;
-  } = {
+  return {
     userId: input.userId,
     nowMs: Date.now(),
     newMemoryId: () => randomUUID() as MemoryId,
     newProposalId: () => randomUUID() as MemoryProposalId,
+    workspaceId: input.workspaceId,
+    projectId: input.projectId,
+    conversationId: input.conversationId,
   };
-  if (input.workspaceId !== undefined) base.workspaceId = input.workspaceId;
-  if (input.projectId !== undefined) base.projectId = input.projectId;
-  if (input.conversationId !== undefined) base.conversationId = input.conversationId;
-  return base;
 }
 
 export async function handleMemoryCaptureFromConversation(
@@ -407,8 +379,13 @@ export async function handleMemoryCaptureFromConversation(
   if (isRouteResult(body)) return body;
   const input = parseCaptureInput(body);
   if (isRouteResult(input)) return input;
-
-  const captureContext = buildCaptureContext(input.context);
+  const runtimeContext = resolveConversationMemoryContext(
+    deps,
+    input.context.projectPath,
+    input.context.chatId,
+  );
+  if (isRouteResult(runtimeContext)) return runtimeContext;
+  const captureContext = buildCaptureContext(runtimeContext);
   const outcomes: readonly CaptureOutcome[] = extractCandidatesFromUserText(
     input.text,
     captureContext,

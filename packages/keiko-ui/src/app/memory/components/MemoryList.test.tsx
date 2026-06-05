@@ -120,7 +120,7 @@ describe("MemoryList — populated state", () => {
     const record = makeRecord({ id: makeMemoryId(42), body: "Linked memory" });
     render(<MemoryList fetchMemoriesImpl={fetchWith([record])} />);
     await waitFor(() => {
-      const link = screen.getByRole("link", { name: /memory: linked memory/i });
+      const link = screen.getByRole("link", { name: /linked memory/i });
       expect(link).toHaveAttribute("href", "/memory/detail?id=mem-42");
     });
   });

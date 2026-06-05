@@ -9,19 +9,14 @@
 // with the Memory Center routes (#211) and is already covered by routes.test.ts.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { Readable } from "node:stream";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import type {
-  MemoryEdge,
-  MemoryId,
-  MemoryRecord,
-  MemoryUserId,
-} from "@oscharko-dev/keiko-contracts";
+import type { MemoryEdge, MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts";
 import {
   handleMemoryRetrieveContext,
   handleMemoryCaptureFromConversation,
@@ -100,6 +95,18 @@ function makeVault(): MemoryVaultStore {
   return vault;
 }
 
+function registerChat(
+  deps: UiHandlerDeps,
+  label = "memory-conversation",
+): { projectPath: string; chatId: string } {
+  const projectPath = mkdtempSync(join(tmpdir(), `keiko-conv-chat-${label}-`));
+  tmpDirs.push(projectPath);
+  mkdirSync(projectPath, { recursive: true });
+  deps.store.createProject(projectPath, label);
+  const chat = deps.store.createChat(projectPath, `${label} chat`, "example-chat-model");
+  return { projectPath, chatId: chat.id };
+}
+
 // Branded ids are nominally string + phantom symbol; the test rig is the boundary that
 // mints them, so we use a single `as unknown as` cast at construction. The named identifiers
 // document intent; eslint's no-unsafe-assignment is satisfied because the value is typed
@@ -114,6 +121,9 @@ function brandedMemoryUserId(value: string): MemoryUserId {
   const u: unknown = value;
   return u as MemoryUserId;
 }
+function projectScope(projectPath: string): MemoryRecord["scope"] {
+  return { kind: "project", projectId: projectPath } as unknown as MemoryRecord["scope"];
+}
 function brandedEdgeId(value: string): MemoryEdge["id"] {
   const u: unknown = value;
   return u as MemoryEdge["id"];
@@ -121,15 +131,20 @@ function brandedEdgeId(value: string): MemoryEdge["id"] {
 
 function insertAcceptedMemory(
   vault: MemoryVaultStore,
-  options: { body?: string; userId?: string; validUntil?: number } = {},
+  options: {
+    body?: string;
+    userId?: string;
+    scope?: MemoryRecord["scope"];
+    validUntil?: number;
+  } = {},
 ): MemoryRecord {
   const id: MemoryId = brandedMemoryId(`mem-${Math.random().toString(36).slice(2, 10)}`);
-  const userId: MemoryUserId = brandedMemoryUserId(options.userId ?? "u-1");
+  const userId: MemoryUserId = brandedMemoryUserId(options.userId ?? "local-operator");
   const now = Date.now();
   const record: MemoryRecord = {
     id,
     schemaVersion: "1",
-    scope: { kind: "user", userId },
+    scope: options.scope ?? { kind: "user", userId },
     type: "preference",
     body: options.body ?? "User prefers TypeScript strict mode in all packages.",
     provenance: {
@@ -174,37 +189,34 @@ function asJson(result: RouteResult): Record<string, unknown> {
 
 describe("handleMemoryRetrieveContext", () => {
   it("returns 503 when no vault is configured", async () => {
+    const deps = makeDeps();
+    const chat = registerChat(deps, "no-vault");
     const result = await handleMemoryRetrieveContext(
-      makeCtx({ scopes: [{ kind: "user", userId: "u-1" }] }),
-      makeDeps(),
+      makeCtx({ projectPath: chat.projectPath, chatId: chat.chatId }),
+      deps,
     );
     expect(result.status).toBe(503);
   });
 
-  it("returns 400 when scopes is missing or empty", async () => {
+  it("returns 400 when projectPath or chatId is missing", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
+    registerChat(deps, "missing-fields");
     const missing = await handleMemoryRetrieveContext(makeCtx({}), deps);
     expect(missing.status).toBe(400);
-    const empty = await handleMemoryRetrieveContext(makeCtx({ scopes: [] }), deps);
-    expect(empty.status).toBe(400);
-  });
-
-  it("returns 400 when a scope has an invalid kind", async () => {
-    const vault = makeVault();
-    const deps = makeDeps({ memoryVault: vault });
-    const result = await handleMemoryRetrieveContext(
-      makeCtx({ scopes: [{ kind: "not-a-real-kind", userId: "u-1" }] }),
+    const missingChat = await handleMemoryRetrieveContext(
+      makeCtx({ projectPath: "/tmp/project-only" }),
       deps,
     );
-    expect(result.status).toBe(400);
+    expect(missingChat.status).toBe(400);
   });
 
   it("returns an empty contextBlock when the vault has no memories", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "empty");
     const result = await handleMemoryRetrieveContext(
-      makeCtx({ scopes: [{ kind: "user", userId: "u-1" }] }),
+      makeCtx({ projectPath: chat.projectPath, chatId: chat.chatId }),
       deps,
     );
     expect(result.status).toBe(200);
@@ -221,9 +233,11 @@ describe("handleMemoryRetrieveContext", () => {
     const vault = makeVault();
     insertAcceptedMemory(vault);
     const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "included");
     const result = await handleMemoryRetrieveContext(
       makeCtx({
-        scopes: [{ kind: "user", userId: "u-1" }],
+        projectPath: chat.projectPath,
+        chatId: chat.chatId,
         queryText: "TypeScript strict",
       }),
       deps,
@@ -239,13 +253,14 @@ describe("handleMemoryRetrieveContext", () => {
   it("returns 400 when queryText or budgetTokens are invalid", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "invalid-params");
     const badQuery = await handleMemoryRetrieveContext(
-      makeCtx({ scopes: [{ kind: "user", userId: "u-1" }], queryText: 42 }),
+      makeCtx({ projectPath: chat.projectPath, chatId: chat.chatId, queryText: 42 }),
       deps,
     );
     expect(badQuery.status).toBe(400);
     const badBudget = await handleMemoryRetrieveContext(
-      makeCtx({ scopes: [{ kind: "user", userId: "u-1" }], budgetTokens: -1 }),
+      makeCtx({ projectPath: chat.projectPath, chatId: chat.chatId, budgetTokens: -1 }),
       deps,
     );
     expect(badBudget.status).toBe(400);
@@ -259,8 +274,9 @@ describe("handleMemoryRetrieveContext", () => {
       validUntil: Date.now() - 1,
     });
     const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "expired");
     const result = await handleMemoryRetrieveContext(
-      makeCtx({ scopes: [{ kind: "user", userId: "u-1" }] }),
+      makeCtx({ projectPath: chat.projectPath, chatId: chat.chatId }),
       deps,
     );
     expect(result.status).toBe(200);
@@ -292,9 +308,26 @@ describe("handleMemoryRetrieveContext", () => {
   it("rejects oversize bodies with 413", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
-    const oversize = { scopes: [{ kind: "user", userId: "u-1" }], queryText: "x".repeat(70_000) };
+    const chat = registerChat(deps, "oversize");
+    const oversize = {
+      projectPath: chat.projectPath,
+      chatId: chat.chatId,
+      queryText: "x".repeat(70_000),
+    };
     const result = await handleMemoryRetrieveContext(makeCtx(oversize), deps);
     expect(result.status).toBe(413);
+  });
+
+  it("returns 404 when chatId does not belong to the supplied projectPath", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "chat-owner");
+    const other = registerChat(deps, "other-project");
+    const result = await handleMemoryRetrieveContext(
+      makeCtx({ projectPath: other.projectPath, chatId: chat.chatId }),
+      deps,
+    );
+    expect(result.status).toBe(404);
   });
 });
 
@@ -302,12 +335,14 @@ describe("handleMemoryRetrieveContext", () => {
 
 describe("handleMemoryCaptureFromConversation", () => {
   it("returns 503 when no vault is configured", async () => {
+    const deps = makeDeps();
+    const chat = registerChat(deps, "capture-no-vault");
     const result = await handleMemoryCaptureFromConversation(
       makeCtx({
         text: "remember that we deploy on Fridays",
-        context: { userId: "u-1" },
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
       }),
-      makeDeps(),
+      deps,
     );
     expect(result.status).toBe(503);
   });
@@ -315,19 +350,20 @@ describe("handleMemoryCaptureFromConversation", () => {
   it("returns 400 when text is missing or empty", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-text");
     const missing = await handleMemoryCaptureFromConversation(
-      makeCtx({ context: { userId: "u-1" } }),
+      makeCtx({ context: { projectPath: chat.projectPath, chatId: chat.chatId } }),
       deps,
     );
     expect(missing.status).toBe(400);
     const empty = await handleMemoryCaptureFromConversation(
-      makeCtx({ text: "", context: { userId: "u-1" } }),
+      makeCtx({ text: "", context: { projectPath: chat.projectPath, chatId: chat.chatId } }),
       deps,
     );
     expect(empty.status).toBe(400);
   });
 
-  it("returns 400 when context.userId is missing", async () => {
+  it("returns 400 when context.projectPath or context.chatId is missing", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
     const result = await handleMemoryCaptureFromConversation(
@@ -340,8 +376,12 @@ describe("handleMemoryCaptureFromConversation", () => {
   it("returns an empty outcome list when no intent is detected", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-empty");
     const result = await handleMemoryCaptureFromConversation(
-      makeCtx({ text: "what is the weather like?", context: { userId: "u-1" } }),
+      makeCtx({
+        text: "what is the weather like?",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
       deps,
     );
     expect(result.status).toBe(200);
@@ -353,10 +393,11 @@ describe("handleMemoryCaptureFromConversation", () => {
   it("captures an explicit remember intent and returns a candidate outcome", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-remember");
     const result = await handleMemoryCaptureFromConversation(
       makeCtx({
         text: "remember that we use pnpm not npm for installs",
-        context: { userId: "u-1" },
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
       }),
       deps,
     );
@@ -374,10 +415,17 @@ describe("handleMemoryCaptureFromConversation", () => {
 
   it("resolves an explicit forget intent against in-scope memories", async () => {
     const vault = makeVault();
-    const existing = insertAcceptedMemory(vault, { body: "I prefer dark mode in the editor." });
     const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-forget");
+    const existing = insertAcceptedMemory(vault, {
+      body: "I prefer dark mode in the editor.",
+      scope: projectScope(chat.projectPath),
+    });
     const result = await handleMemoryCaptureFromConversation(
-      makeCtx({ text: "forget about dark mode preference", context: { userId: "u-1" } }),
+      makeCtx({
+        text: "forget about dark mode preference",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
       deps,
     );
     expect(result.status).toBe(200);
@@ -392,12 +440,16 @@ describe("handleMemoryCaptureFromConversation", () => {
 
   it("resolves an explicit update intent against in-scope memories", async () => {
     const vault = makeVault();
-    const existing = insertAcceptedMemory(vault, { body: "The test runner is jest." });
     const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-update");
+    const existing = insertAcceptedMemory(vault, {
+      body: "The test runner is jest.",
+      scope: projectScope(chat.projectPath),
+    });
     const result = await handleMemoryCaptureFromConversation(
       makeCtx({
         text: "update memory about test runner to be vitest",
-        context: { userId: "u-1" },
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
       }),
       deps,
     );
@@ -414,11 +466,16 @@ describe("handleMemoryCaptureFromConversation", () => {
 
   it("returns an ambiguous rejection when multiple memories match a forget target", async () => {
     const vault = makeVault();
-    insertAcceptedMemory(vault, { body: "I prefer dark mode in the editor." });
-    insertAcceptedMemory(vault, { body: "Dark mode is required in the terminal." });
     const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-ambiguous");
+    const scope = projectScope(chat.projectPath);
+    insertAcceptedMemory(vault, { body: "I prefer dark mode in the editor.", scope });
+    insertAcceptedMemory(vault, { body: "Dark mode is required in the terminal.", scope });
     const result = await handleMemoryCaptureFromConversation(
-      makeCtx({ text: "forget about dark mode", context: { userId: "u-1" } }),
+      makeCtx({
+        text: "forget about dark mode",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
       deps,
     );
     expect(result.status).toBe(200);
@@ -430,7 +487,11 @@ describe("handleMemoryCaptureFromConversation", () => {
   it("rejects oversize bodies with 413", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
-    const oversize = { text: "x".repeat(70_000), context: { userId: "u-1" } };
+    const chat = registerChat(deps, "capture-oversize");
+    const oversize = {
+      text: "x".repeat(70_000),
+      context: { projectPath: chat.projectPath, chatId: chat.chatId },
+    };
     const result = await handleMemoryCaptureFromConversation(makeCtx(oversize), deps);
     expect(result.status).toBe(413);
   });

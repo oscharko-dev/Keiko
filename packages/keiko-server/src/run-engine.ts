@@ -35,6 +35,7 @@ import type {
 } from "@oscharko-dev/keiko-harness";
 import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-harness";
 import type { EvidenceReport } from "@oscharko-dev/keiko-evidence";
+import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { RunRequest } from "./run-request.js";
 import { QueueEventSink } from "./sink.js";
 import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";
@@ -45,6 +46,7 @@ import {
   type EvidencePersistContext,
   type RunIdentity,
 } from "./evidence.js";
+import { createWorkflowMemoryPort } from "./memory-workflow-port.js";
 
 export interface StartRunResult {
   readonly runId: string;
@@ -69,6 +71,8 @@ interface EngineContext {
   // Where terminated runs persist their redacted evidence manifest (AC5). Optional so the 3-arg
   // engine-context form in older tests still compiles; persistence is simply skipped when absent.
   readonly evidence?: EvidencePersistContext | undefined;
+  readonly memoryVault?: MemoryVaultStore | undefined;
+  readonly memoryAuditRedactString?: ((input: string) => string) | undefined;
 }
 
 // Assembles the workflow/task input by overlaying the request-level fields onto the client `input`
@@ -189,6 +193,16 @@ function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: strin
     sink,
     signal: controller.signal,
     idSource: (): string => runId,
+    ...(ctx.memoryVault !== undefined && ctx.evidence !== undefined
+      ? {
+          memoryPort: createWorkflowMemoryPort({
+            vault: ctx.memoryVault,
+            evidenceStore: ctx.evidence.store,
+            runId,
+            redactString: ctx.memoryAuditRedactString ?? ((input: string): string => input),
+          }),
+        }
+      : {}),
   };
   if (ctx.request.kind === "unit-tests") {
     const result = generateUnitTests(unitTestInput(ctx.request), commonDeps).then((report) => ({

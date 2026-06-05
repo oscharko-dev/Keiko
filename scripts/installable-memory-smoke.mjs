@@ -358,10 +358,10 @@ async function deleteMemory(baseUrl, memoryId) {
   });
 }
 
-async function memoryContext(baseUrl, scopes, queryText) {
+async function memoryContext(baseUrl, projectPath, chatId, queryText) {
   return api(baseUrl, "/api/memory/context", {
     method: "POST",
-    body: JSON.stringify({ scopes, queryText }),
+    body: JSON.stringify({ projectPath, chatId, queryText }),
   });
 }
 
@@ -441,12 +441,11 @@ async function main() {
 
     await ui.stop();
     ui = await startInstalledUi(installRoot, configPath, uiDbPath, memoryDir);
+    const restartChatId = await createChat(ui.baseUrl, projectA);
     const afterRestart = await memoryContext(
       ui.baseUrl,
-      [
-        { kind: "project", projectId: projectA },
-        { kind: "user", userId: USER_ID },
-      ],
+      projectA,
+      restartChatId,
       "Which package manager should I use for installs?",
     );
     assert(
@@ -538,12 +537,11 @@ async function main() {
     );
     await acceptProposal(ui.baseUrl, forgetId);
     await forgetMemory(ui.baseUrl, forgetId);
+    const afterForgetChatId = await createChat(ui.baseUrl, projectA);
     const afterForget = await memoryContext(
       ui.baseUrl,
-      [
-        { kind: "project", projectId: projectA },
-        { kind: "user", userId: USER_ID },
-      ],
+      projectA,
+      afterForgetChatId,
       "Which day are deploys scheduled for?",
     );
     const afterForgetText = JSON.stringify(afterForget);

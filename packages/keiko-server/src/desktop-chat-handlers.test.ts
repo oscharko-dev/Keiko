@@ -18,7 +18,12 @@ import type {
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import type { MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts";
+import type {
+  MemoryId,
+  MemoryRecord,
+  MemoryScope,
+  MemoryUserId,
+} from "@oscharko-dev/keiko-contracts";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
@@ -118,13 +123,16 @@ function makeMemoryUserId(value: string): MemoryUserId {
   return raw as MemoryUserId;
 }
 
-function insertAcceptedMemory(vault: MemoryVaultStore, body: string): MemoryRecord {
+function insertAcceptedMemory(
+  vault: MemoryVaultStore,
+  body: string,
+  scope: MemoryScope = { kind: "user", userId: makeMemoryUserId("local-operator") },
+): MemoryRecord {
   const now = Date.now();
-  const userId: MemoryUserId = makeMemoryUserId("local-operator");
   return vault.insertMemory({
     id: makeMemoryId(`mem-${String(now)}`),
     schemaVersion: "1",
-    scope: { kind: "user", userId },
+    scope,
     type: "preference",
     body,
     provenance: {
@@ -300,12 +308,7 @@ describe("desktop chat routes", () => {
         memory: {
           enabled: true,
           budgetTokens: 900,
-          context: {
-            userId: "local-operator",
-            workspaceId: projectDir,
-            projectId: projectDir,
-            conversationId: created.chat.id,
-          },
+          context: {},
         },
       }),
     });
@@ -344,6 +347,7 @@ describe("desktop chat routes", () => {
     });
     const created = (await createRes.json()) as { chat: { id: string } };
 
+    const beforeCount = memoryVault.listMemories({ includeExpired: true }).length;
     const sendRes = await fetch(`${base()}/api/desktop/chat`, {
       method: "POST",
       headers: POST_JSON_HEADERS,
@@ -351,16 +355,11 @@ describe("desktop chat routes", () => {
         chatId: created.chat.id,
         projectPath: projectDir,
         modelId: CHAT_MODEL,
-        content: "Which package manager should I use?",
+        content: "remember that we deploy after the green CI run",
         memory: {
           enabled: false,
           budgetTokens: 900,
-          context: {
-            userId: "local-operator",
-            workspaceId: projectDir,
-            projectId: projectDir,
-            conversationId: created.chat.id,
-          },
+          context: {},
         },
       }),
     });
@@ -376,6 +375,85 @@ describe("desktop chat routes", () => {
     expect(body.memory?.context.enabled).toBe(false);
     expect(body.memory?.context.memories).toHaveLength(0);
     expect(body.memory?.actions).toHaveLength(0);
+    expect(memoryVault.listMemories({ includeExpired: true })).toHaveLength(beforeCount);
+    memoryVault.close();
+  });
+
+  it("includes accepted global memories in desktop chat retrieval", async () => {
+    const memoryDir = join(tmp, "memory-vault-global");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    insertAcceptedMemory(memoryVault, "All projects use pnpm for installs.", { kind: "global" });
+    await restartWithDeps(deps(fakeModel("global memory response"), { memoryVault }));
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Which package manager should I use?",
+        memory: { enabled: true, context: {} },
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    expect(seenRequests[0]?.messages.at(-1)?.content).toContain("All projects use pnpm");
+    memoryVault.close();
+  });
+
+  it("ignores forged memory.context coordinates and binds memory to the resolved chat context", async () => {
+    const memoryDir = join(tmp, "memory-vault-forged-context");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    insertAcceptedMemory(memoryVault, "Use pnpm instead of npm for installs.");
+    await restartWithDeps(deps(fakeModel("forged memory response"), { memoryVault }));
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "remember that we deploy after the green CI run",
+        memory: {
+          enabled: true,
+          context: {
+            userId: "forged-user",
+            workspaceId: "/tmp/forged-workspace",
+            projectId: "/tmp/forged-project",
+            conversationId: "forged-chat-id",
+          },
+        },
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      memory?: { actions: { kind: string; proposalId?: string }[] };
+    };
+    const proposalId = body.memory?.actions[0]?.proposalId;
+    expect(proposalId).toBeDefined();
+    if (proposalId !== undefined) {
+      const proposal = memoryVault.getMemory(proposalId as MemoryId);
+      expect(proposal?.scope).toEqual({ kind: "project", projectId: projectDir });
+    }
     memoryVault.close();
   });
 
