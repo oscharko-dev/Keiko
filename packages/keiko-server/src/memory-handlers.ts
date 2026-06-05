@@ -211,24 +211,20 @@ function globalScope(): MemoryScope {
 
 // ─── Handler: GET /api/memory ─────────────────────────────────────────────────
 
-export async function handleListMemories(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
-  const vault = resolveVault(deps);
-  if (isRouteResult(vault)) return vault;
+interface ListParams {
+  readonly scopeKinds: string[];
+  readonly types: string[];
+  readonly statuses: string[];
+  readonly sensitivities: string[];
+  readonly limit: number;
+  readonly offset: number;
+}
 
-  const rawScope = ctx.url.searchParams.get("scope");
-  const rawType = ctx.url.searchParams.get("type");
-  const rawStatus = ctx.url.searchParams.get("status");
-  const rawSensitivity = ctx.url.searchParams.get("sensitivity");
-  const rawLimit = ctx.url.searchParams.get("limit");
-  const rawOffset = ctx.url.searchParams.get("offset");
-
-  const scopeKinds = rawScope !== null ? splitComma(rawScope) : [];
-  const types = rawType !== null ? splitComma(rawType) : [];
-  const statuses = rawStatus !== null ? splitComma(rawStatus) : [];
-  const sensitivities = rawSensitivity !== null ? splitComma(rawSensitivity) : [];
+function parseListParams(ctx: RouteContext): ListParams | RouteResult {
+  const scopeKinds = splitComma(ctx.url.searchParams.get("scope"));
+  const types = splitComma(ctx.url.searchParams.get("type"));
+  const statuses = splitComma(ctx.url.searchParams.get("status"));
+  const sensitivities = splitComma(ctx.url.searchParams.get("sensitivity"));
 
   if (scopeKinds.length > 0 && !isScopeKindArray(scopeKinds)) {
     return {
@@ -261,8 +257,24 @@ export async function handleListMemories(
     };
   }
 
-  const limit = parseIntQuery(rawLimit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);
-  const offset = parseIntQuery(rawOffset, 0, Number.MAX_SAFE_INTEGER);
+  return {
+    scopeKinds,
+    types,
+    statuses,
+    sensitivities,
+    limit: parseIntQuery(ctx.url.searchParams.get("limit"), DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT),
+    offset: parseIntQuery(ctx.url.searchParams.get("offset"), 0, Number.MAX_SAFE_INTEGER),
+  };
+}
+
+export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const vault = resolveVault(deps);
+  if (isRouteResult(vault)) return vault;
+
+  const params = parseListParams(ctx);
+  if (isRouteResult(params)) return params;
+
+  const { scopeKinds, types, statuses, sensitivities, limit, offset } = params;
 
   try {
     // List from the global scope. The vault returns all records regardless of scope kind
@@ -284,12 +296,7 @@ export async function handleListMemories(
 
     return {
       status: 200,
-      body: {
-        memories: redactMemories(deps, filtered),
-        total: filtered.length,
-        limit,
-        offset,
-      },
+      body: { memories: redactMemories(deps, filtered), total: filtered.length, limit, offset },
     };
   } catch (err) {
     if (err instanceof MemoryStorageError) {
@@ -301,10 +308,7 @@ export async function handleListMemories(
 
 // ─── Handler: GET /api/memory/review-queue ────────────────────────────────────
 
-export async function handleMemoryReviewQueue(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+export function handleMemoryReviewQueue(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
@@ -330,10 +334,7 @@ export async function handleMemoryReviewQueue(
 
 // ─── Handler: GET /api/memory/:id ─────────────────────────────────────────────
 
-export async function handleGetMemory(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+export function handleGetMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
@@ -358,22 +359,14 @@ export async function handleGetMemory(
 
 // ─── Handler: PATCH /api/memory/:id ───────────────────────────────────────────
 
-export async function handleEditMemory(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
-  const vault = resolveVault(deps);
-  if (isRouteResult(vault)) return vault;
+interface EditInput {
+  readonly newBody: string | undefined;
+  readonly tags: unknown;
+  readonly sensitivity: unknown;
+}
 
-  const { id } = ctx.params;
-  if (id === undefined || id.length === 0) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
-  }
-
-  const body = await readJsonBody(ctx.req);
-  if (isRouteResult(body)) return body;
-
-  const { body: newBody, tags, sensitivity } = body;
+function parseEditInput(raw: Record<string, unknown>): EditInput | RouteResult {
+  const { body: newBody, tags, sensitivity } = raw;
 
   if (newBody === undefined && tags === undefined && sensitivity === undefined) {
     return {
@@ -396,28 +389,52 @@ export async function handleEditMemory(
       ),
     };
   }
+  return {
+    newBody: typeof newBody === "string" ? newBody : undefined,
+    tags,
+    sensitivity,
+  };
+}
+
+function buildEditPatch(input: EditInput, existing: MemoryRecord): Record<string, unknown> {
+  const { newBody, tags, sensitivity } = input;
+  const patch: Record<string, unknown> = {};
+  if (typeof newBody === "string" && newBody.trim().length > 0) {
+    patch.body = newBody.trim();
+  }
+  if (Array.isArray(tags)) {
+    patch.tags = tags.filter((t): t is string => typeof t === "string");
+  }
+  if (isMemorySensitivity(sensitivity)) {
+    patch.provenance = { ...existing.provenance, sensitivity };
+  }
+  return patch;
+}
+
+export async function handleEditMemory(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const vault = resolveVault(deps);
+  if (isRouteResult(vault)) return vault;
+
+  const { id } = ctx.params;
+  if (id === undefined || id.length === 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
+  }
+
+  const body = await readJsonBody(ctx.req);
+  if (isRouteResult(body)) return body;
+
+  const input = parseEditInput(body);
+  if (isRouteResult(input)) return input;
 
   try {
     const existing = vault.getMemory(id as MemoryId);
     if (existing === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-
-    const patch: Record<string, unknown> = {};
-    if (typeof newBody === "string" && newBody.trim().length > 0) {
-      patch["body"] = newBody.trim();
-    }
-    if (Array.isArray(tags)) {
-      patch["tags"] = tags.filter((t): t is string => typeof t === "string");
-    }
-    if (isMemorySensitivity(sensitivity)) {
-      patch["provenance"] = {
-        ...existing.provenance,
-        sensitivity,
-      };
-    }
-
-    const updated = vault.updateMemory(id as MemoryId, patch, Date.now());
+    const updated = vault.updateMemory(id as MemoryId, buildEditPatch(input, existing), Date.now());
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof MemoryStorageError) {
@@ -432,10 +449,7 @@ export async function handleEditMemory(
 
 // ─── Handler: POST /api/memory/:id/pin ────────────────────────────────────────
 
-export async function handlePinMemory(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+export function handlePinMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
@@ -449,7 +463,7 @@ export async function handlePinMemory(
     if (record === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    const _pin = buildPinOperation(record, { reviewerId: DEFAULT_REVIEWER_ID, nowMs: Date.now() });
+    void buildPinOperation(record, { reviewerId: DEFAULT_REVIEWER_ID, nowMs: Date.now() });
     const updated = vault.updateMemory(id as MemoryId, { pinned: true }, Date.now());
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
@@ -468,10 +482,7 @@ export async function handlePinMemory(
 
 // ─── Handler: POST /api/memory/:id/unpin ──────────────────────────────────────
 
-export async function handleUnpinMemory(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+export function handleUnpinMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
@@ -485,10 +496,7 @@ export async function handleUnpinMemory(
     if (record === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    const _unpin = buildUnpinOperation(record, {
-      reviewerId: DEFAULT_REVIEWER_ID,
-      nowMs: Date.now(),
-    });
+    void buildUnpinOperation(record, { reviewerId: DEFAULT_REVIEWER_ID, nowMs: Date.now() });
     const updated = vault.updateMemory(id as MemoryId, { pinned: false }, Date.now());
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
@@ -529,7 +537,7 @@ export async function handleArchiveMemory(
     if (record === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    const _archive = buildArchiveOperation(
+    void buildArchiveOperation(
       record,
       { reviewerId: DEFAULT_REVIEWER_ID, nowMs: Date.now() },
       reason,
@@ -554,6 +562,58 @@ export async function handleArchiveMemory(
 // "forget" transitions the record to status "forgotten" — the storage layer then tombstones it.
 // The user must supply `{ acknowledged: true }` in the request body.
 
+interface ForgetInput {
+  readonly reason: string;
+}
+
+function parseForgetInput(raw: Record<string, unknown>): ForgetInput | RouteResult {
+  if (raw.acknowledged !== true) {
+    return {
+      status: 400,
+      body: errorBody(
+        "BAD_REQUEST",
+        "acknowledged must be true to confirm the destructive operation.",
+      ),
+    };
+  }
+  const reason =
+    typeof raw.reason === "string" && raw.reason.trim().length > 0
+      ? raw.reason.trim()
+      : "user-initiated forget from Memory Center";
+  return { reason };
+}
+
+function executeForget(vault: MemoryVaultStore, id: string, reason: string): RouteResult {
+  const record = vault.getMemory(id as MemoryId);
+  if (record === undefined) {
+    return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
+  }
+  const nowMs = Date.now();
+  const candidates = selectMemoriesForForget(
+    [record],
+    { kind: "by-id", memoryId: id as MemoryId },
+    { nowMs },
+  );
+  if (candidates.length === 0) {
+    return {
+      status: 409,
+      body: errorBody("GOVERNANCE_ERROR", "Memory cannot be forgotten (it may be pinned)."),
+    };
+  }
+  buildForgetOperations(
+    candidates,
+    { reviewerId: DEFAULT_REVIEWER_ID, nowMs },
+    { reason, writeTombstone: true },
+  );
+  vault.deleteMemory(id as MemoryId, {
+    tombstone: true,
+    reason,
+    forgetterSurface: "memory-center",
+    nowMs,
+  });
+  return { status: 200, body: { forgotten: true, memoryId: id } };
+}
+
 export async function handleForgetMemory(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -569,50 +629,11 @@ export async function handleForgetMemory(
   const body = await readJsonBody(ctx.req);
   if (isRouteResult(body)) return body;
 
-  if (body.acknowledged !== true) {
-    return {
-      status: 400,
-      body: errorBody(
-        "BAD_REQUEST",
-        "acknowledged must be true to confirm the destructive operation.",
-      ),
-    };
-  }
-
-  const reason =
-    typeof body.reason === "string" && body.reason.trim().length > 0
-      ? body.reason.trim()
-      : "user-initiated forget from Memory Center";
+  const input = parseForgetInput(body);
+  if (isRouteResult(input)) return input;
 
   try {
-    const record = vault.getMemory(id as MemoryId);
-    if (record === undefined) {
-      return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
-    }
-    const nowMs = Date.now();
-    const candidates = selectMemoriesForForget(
-      [record],
-      { kind: "by-id", memoryId: id as MemoryId },
-      { nowMs },
-    );
-    if (candidates.length === 0) {
-      return {
-        status: 409,
-        body: errorBody("GOVERNANCE_ERROR", "Memory cannot be forgotten (it may be pinned)."),
-      };
-    }
-    buildForgetOperations(
-      candidates,
-      { reviewerId: DEFAULT_REVIEWER_ID, nowMs },
-      { reason, writeTombstone: true },
-    );
-    vault.deleteMemory(id as MemoryId, {
-      tombstone: true,
-      reason,
-      forgetterSurface: "memory-center",
-      nowMs,
-    });
-    return { status: 200, body: { forgotten: true, memoryId: id } };
+    return executeForget(vault, id, input.reason);
   } catch (err) {
     if (err instanceof GovernanceError) {
       return { status: 400, body: errorBody("GOVERNANCE_ERROR", err.message) };
@@ -630,10 +651,7 @@ export async function handleForgetMemory(
 // ─── Handler: DELETE /api/memory/:id ──────────────────────────────────────────
 // Hard delete without a tombstone. Intended for admin / data cleanup.
 
-export async function handleDeleteMemory(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+export function handleDeleteMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
@@ -667,6 +685,43 @@ export async function handleDeleteMemory(
 // ─── Handler: POST /api/memory/:id/correct ────────────────────────────────────
 // A correction creates a new "proposed" correction-type memory and links it to the old one.
 
+function parseCorrectInput(raw: Record<string, unknown>): { correctedBody: string } | RouteResult {
+  const correctedBody = typeof raw.body === "string" ? raw.body.trim() : "";
+  if (correctedBody.length === 0) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "body must be a non-empty string for the corrected memory."),
+    };
+  }
+  return { correctedBody };
+}
+
+function buildCorrectionRecord(
+  existing: MemoryRecord,
+  correctedBody: string,
+  nowMs: number,
+): MemoryRecord {
+  // Note: exactOptionalPropertyTypes is on — omit staleReason rather than assigning undefined.
+  return {
+    id: randomUUID() as MemoryId,
+    schemaVersion: "1",
+    scope: existing.scope,
+    type: "correction",
+    body: correctedBody,
+    provenance: {
+      ...existing.provenance,
+      sourceKind: "accepted-correction",
+      capturedAt: nowMs,
+    },
+    validity: existing.validity,
+    status: "proposed",
+    pinned: false,
+    tags: existing.tags,
+    createdAt: nowMs,
+    updatedAt: nowMs,
+  };
+}
+
 export async function handleCorrectMemory(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -682,51 +737,20 @@ export async function handleCorrectMemory(
   const body = await readJsonBody(ctx.req);
   if (isRouteResult(body)) return body;
 
-  const correctedBody = typeof body.body === "string" ? body.body.trim() : "";
-  if (correctedBody.length === 0) {
-    return {
-      status: 400,
-      body: errorBody("BAD_REQUEST", "body must be a non-empty string for the corrected memory."),
-    };
-  }
+  const input = parseCorrectInput(body);
+  if (isRouteResult(input)) return input;
 
   try {
     const existing = vault.getMemory(id as MemoryId);
     if (existing === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-
-    const nowMs = Date.now();
-    const newMemoryId = randomUUID() as MemoryId;
-
-    // Build a new "correction" type proposed record.
-    // Note: exactOptionalPropertyTypes is on — omit staleReason rather than assigning undefined.
-    const correctionRecord: MemoryRecord = {
-      id: newMemoryId,
-      schemaVersion: "1",
-      scope: existing.scope,
-      type: "correction",
-      body: correctedBody,
-      provenance: {
-        ...existing.provenance,
-        sourceKind: "accepted-correction",
-        capturedAt: nowMs,
-      },
-      validity: existing.validity,
-      status: "proposed",
-      pinned: false,
-      tags: existing.tags,
-      createdAt: nowMs,
-      updatedAt: nowMs,
-    };
-
-    const inserted = vault.insertMemory(correctionRecord);
+    const inserted = vault.insertMemory(
+      buildCorrectionRecord(existing, input.correctedBody, Date.now()),
+    );
     return {
       status: 201,
-      body: {
-        correction: redactMemory(deps, inserted),
-        originalMemoryId: id,
-      },
+      body: { correction: redactMemory(deps, inserted), originalMemoryId: id },
     };
   } catch (err) {
     if (err instanceof MemoryStorageError) {
@@ -738,10 +762,7 @@ export async function handleCorrectMemory(
 
 // ─── Handler: POST /api/memory/proposals/:id/accept ───────────────────────────
 
-export async function handleAcceptMemoryProposal(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): Promise<RouteResult> {
+export function handleAcceptMemoryProposal(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
@@ -776,6 +797,14 @@ export async function handleAcceptMemoryProposal(
 
 // ─── Handler: POST /api/memory/proposals/:id/reject ───────────────────────────
 
+function parseRejectInput(raw: Record<string, unknown>): { reason: string } {
+  const reason =
+    typeof raw.reason === "string" && raw.reason.trim().length > 0
+      ? raw.reason.trim()
+      : "rejected by user";
+  return { reason };
+}
+
 export async function handleRejectMemoryProposal(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -791,10 +820,7 @@ export async function handleRejectMemoryProposal(
   const body = await readJsonBody(ctx.req);
   if (isRouteResult(body)) return body;
 
-  const reason =
-    typeof body.reason === "string" && body.reason.trim().length > 0
-      ? body.reason.trim()
-      : "rejected by user";
+  const { reason } = parseRejectInput(body);
 
   try {
     const existing = vault.getMemory(id as MemoryId);
