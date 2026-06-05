@@ -18,7 +18,7 @@ import type {
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import type { MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
