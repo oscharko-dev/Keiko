@@ -68,6 +68,11 @@ export function buildCspHeader(scriptHashes: readonly string[]): string {
     // under our `default-src 'none'` fallback (browsers will otherwise refuse the fetch). The
     // directive is strictly additive and does not loosen any existing source allow-list.
     "manifest-src 'self'",
+    // `worker-src 'self'` is required for the service worker at /sw.js to register under the
+    // `default-src 'none'` fallback (issue #126, ADR-0024 D6). The SW script itself is loaded
+    // by the existing `script-src 'self'`; this directive controls worker creation. Strictly
+    // additive — no existing source allow-list is loosened.
+    "worker-src 'self'",
     "base-uri 'none'",
     "form-action 'none'",
     "frame-ancestors 'none'",
