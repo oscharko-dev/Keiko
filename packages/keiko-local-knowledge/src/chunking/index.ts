@@ -7,6 +7,7 @@ export { chunkDocument } from "./chunker-runner.js";
 export { mapChunkToCitation } from "./citation-mapper.js";
 export { defaultTokenEstimator, charsForTokenBudget } from "./token-estimator.js";
 export {
+  CHUNKING_STRATEGY_VERSION,
   ChunkingError,
   DEFAULT_MAX_TOKENS,
   DEFAULT_MIN_TOKENS,

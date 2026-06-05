@@ -37,6 +37,7 @@ import type {
 import { verifyEmbeddingCapability } from "@oscharko-dev/keiko-model-gateway";
 
 import { chunkDocument } from "../chunking/chunker-runner.js";
+import { hasStaleChunksForDocument } from "../chunking/chunker-persist.js";
 import { getCapsule, updateCapsuleState } from "../capsule-lifecycle.js";
 import { discoverAndExtract } from "../discovery/discovery-runner.js";
 import { readDocumentTextRow } from "../discovery/persist.js";
@@ -451,6 +452,11 @@ function applyIncrementalFastPath(
   state: RunState,
   documentId: DocumentId,
 ): PersistedHandling | undefined {
+  const staleChunks = hasStaleChunksForDocument(
+    state.options.store._internal.db,
+    state.capsule.id,
+    documentId,
+  );
   if (state.options.force !== true) {
     // Incremental fast-path #2: if vectors already exist for this document AND not in force
     // mode, skip the embedding step entirely. The chunker is also a no-op in this case.
@@ -459,13 +465,16 @@ function applyIncrementalFastPath(
       state.capsule.id,
       documentId,
     );
-    if (existing > 0) {
+    if (existing > 0 && !staleChunks) {
       state.skippedDocuments += 1;
       return {
         events: [
           { kind: "document-skipped", jobId: state.jobId, documentId, reason: "already-embedded" },
         ],
       };
+    }
+    if (existing > 0 && staleChunks) {
+      deleteVectorsForDocument(state.options.store._internal.db, state.capsule.id, documentId);
     }
     return undefined;
   }
@@ -639,7 +648,12 @@ async function handleFileExtracted(
     // orchestrator deleted the vector rows at job-started. Re-shape the skipped outcome
     // as a persisted outcome (the document row exists and is valid) so the standard
     // pipeline runs. Outside force mode, surface the skip as-is.
-    if (state.options.force === true) {
+    const staleChunks = hasStaleChunksForDocument(
+      state.options.store._internal.db,
+      state.capsule.id,
+      result.outcome.document.id,
+    );
+    if (state.options.force === true || staleChunks) {
       const synthetic: ExtractionResult = {
         capsuleId: result.capsuleId,
         sourceId: result.sourceId,

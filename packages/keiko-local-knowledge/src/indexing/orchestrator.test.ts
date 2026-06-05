@@ -248,6 +248,21 @@ describe("runIndexingJob — incremental", () => {
     expect(embeddedSecondPass).toBe(0);
     expect(secondEvents.filter((e) => e.kind === "document-skipped").length).toBe(2);
   });
+
+  it("re-embeds unchanged files when existing chunks are marked stale by strategy version", async () => {
+    await drain(runIndexingJob(buildOptions(fixture)));
+    fixture.store._internal.db
+      .prepare("UPDATE chunks SET chunking_strategy_version = NULL WHERE capsule_id = :c")
+      .run({ c: fixture.capsuleId });
+
+    const secondEvents = await drain(runIndexingJob(buildOptions(fixture)));
+    expect(secondEvents.filter((e) => e.kind === "document-embedded").length).toBe(2);
+    expect(
+      secondEvents.some(
+        (e) => e.kind === "document-skipped" && e.reason === "already-embedded",
+      ),
+    ).toBe(false);
+  });
 });
 
 // ─── Test 4: force ────────────────────────────────────────────────────────────

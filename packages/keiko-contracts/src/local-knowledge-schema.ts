@@ -29,7 +29,7 @@
 // metric). When the active embedding model changes, stale vectors are detected by a single
 // scan against the index `idx_vectors_capsule_identity` without joining back to `capsules`.
 
-export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 5 as const;
+export const LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION = 6 as const;
 
 // ─── DDL statements (applied in declared order) ──────────────────────────────────
 // node:sqlite from Node 22 ships SQLite ≥ 3.45 which supports `STRICT`. Each statement is
@@ -181,6 +181,25 @@ CREATE TABLE parsed_units (
 `.trim();
 
 const CREATE_CHUNKS = `
+CREATE TABLE chunks (
+  id TEXT PRIMARY KEY NOT NULL,
+  capsule_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  parsed_unit_id TEXT NOT NULL,
+  order_index INTEGER NOT NULL,
+  token_count INTEGER NOT NULL,
+  safe_excerpt_hash TEXT NOT NULL,
+  chunking_strategy_version TEXT,
+  FOREIGN KEY (capsule_id) REFERENCES capsules(id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, source_id) REFERENCES capsule_sources(capsule_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, document_id) REFERENCES documents(capsule_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (capsule_id, parsed_unit_id) REFERENCES parsed_units(capsule_id, id) ON DELETE CASCADE,
+  UNIQUE (capsule_id, id)
+) STRICT;
+`.trim();
+
+const CREATE_CHUNKS_V1 = `
 CREATE TABLE chunks (
   id TEXT PRIMARY KEY NOT NULL,
   capsule_id TEXT NOT NULL,
@@ -372,7 +391,7 @@ const V1_DDL_WITHOUT_V2: readonly string[] = [
   CREATE_PAGES,
   CREATE_SECTIONS,
   CREATE_PARSED_UNITS,
-  CREATE_CHUNKS,
+  CREATE_CHUNKS_V1,
   CREATE_VECTORS,
   CREATE_PARSER_DIAGNOSTICS,
   CREATE_INDEXING_JOBS,
@@ -457,6 +476,12 @@ export const KNOWLEDGE_CAPSULE_MIGRATIONS: readonly KnowledgeCapsuleMigration[] 
     version: 5,
     reason: "Keep metadata-only capsule audit rows durable after capsule deletion for Issue #201.",
     up: REBUILD_AUDIT_TABLES_FOR_DELETE_DURABILITY,
+  },
+  {
+    version: 6,
+    reason:
+      "Persist chunking strategy version so stale chunks and vectors are re-emitted after Issue #195 strategy changes.",
+    up: ["ALTER TABLE chunks ADD COLUMN chunking_strategy_version TEXT;"],
   },
 ] as const;
 

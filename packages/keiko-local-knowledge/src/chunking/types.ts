@@ -32,6 +32,7 @@ export interface ChunkingOptions {
 export const DEFAULT_MAX_TOKENS = 400;
 export const DEFAULT_MIN_TOKENS = 64;
 export const DEFAULT_OVERLAP_TOKENS = 32;
+export const CHUNKING_STRATEGY_VERSION = "issue-195-v1" as const;
 
 export interface ResolvedChunkingOptions {
   readonly maxTokens: number;
