@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { fetchConfig, fetchModels } from "@/lib/api";
-import type { ModelCapability } from "@/lib/types";
+import type { ConversationIneligibilityReason, ModelCapability } from "@/lib/types";
+import { explainConversationIneligibility, isConversationEligibleModel } from "@/lib/types";
 import { Icons } from "../../Icons";
 import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
 
@@ -12,7 +13,34 @@ function kindLabel(kind: ModelCapability["kind"]): string {
   return kind;
 }
 
+// Issue #144 AC #3: returns the human-readable explanation for an
+// ineligibility reason. Pure function of the typed reason — never reads
+// model.baseUrl / model.apiKey / anything credential-shaped (those fields do
+// not exist on ModelCapability by design; this comment pins the invariant).
+function conversationIneligibilityLabel(reason: ConversationIneligibilityReason): string {
+  if (reason === "embedding-only") return "Embedding model — not selectable for text conversation";
+  if (reason === "ocr-vision-only") return "OCR/vision-only — not selectable for text conversation";
+  return "Not a chat model — not selectable for text conversation";
+}
+
+function ConversationEligibilityBadge({ model }: { readonly model: ModelCapability }): ReactNode {
+  const reason = explainConversationIneligibility(model);
+  if (reason === undefined) {
+    return (
+      <span className="ml-elig ml-elig-ok" data-testid="conv-elig-ok">
+        Conversation-eligible
+      </span>
+    );
+  }
+  return (
+    <span className="ml-elig ml-elig-no" data-testid="conv-elig-no">
+      Not selectable: {conversationIneligibilityLabel(reason)}
+    </span>
+  );
+}
+
 function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): ReactNode {
+  const eligible = isConversationEligibleModel(model);
   return (
     <div className="ml-row">
       <span className="ml-ico">
@@ -22,16 +50,14 @@ function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): Rea
         <div className="ml-top">
           <span className="ml-name">{model.id}</span>
           <span className="ml-type mono">{kindLabel(model.kind)}</span>
+          <ConversationEligibilityBadge model={model} />
         </div>
         <div className="ml-url mono">
           tools {model.toolCalling ? "yes" : "no"} · structured{" "}
           {model.structuredOutput ? "yes" : "no"} · {model.costClass}/{model.latencyClass}
         </div>
       </div>
-      <span
-        className={"ml-status " + (model.kind === "chat" ? "connected" : "untested")}
-        title={model.kind}
-      />
+      <span className={"ml-status " + (eligible ? "connected" : "untested")} title={model.kind} />
     </div>
   );
 }
@@ -134,7 +160,8 @@ export function SettingsPanel(): ReactNode {
     };
   }, []);
 
-  const chatCount = models.filter((model) => model.kind === "chat").length;
+  // Issue #144: source of truth is the helper, not an inline kind check.
+  const chatCount = models.filter(isConversationEligibleModel).length;
   const connected = configPresent && models.length > 0;
 
   return (

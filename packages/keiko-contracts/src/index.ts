@@ -115,6 +115,8 @@ export type {
   StreamEvent,
 } from "./gateway.js";
 export { CONVERSATION_CAPABILITY_CONTRACT_VERSION } from "./gateway.js";
+export type { ConversationIneligibilityReason } from "./gateway.js";
+export { isConversationEligibleModel, explainConversationIneligibility } from "./gateway.js";
 
 // ─── Tools ──────────────────────────────────────────────────────────────────────
 export type {

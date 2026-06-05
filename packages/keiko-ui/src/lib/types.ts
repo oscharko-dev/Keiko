@@ -12,9 +12,19 @@ export type {
   LatencyClass,
   ModelKind,
   ModelCapability,
+  ConversationIneligibilityReason,
   UsageMetadata,
   WorkflowDescriptor,
   WorkflowInputSpec,
+} from "@oscharko-dev/keiko-contracts";
+
+// Issue #144 / Epic #142: pure conversation-eligibility helpers re-exported
+// from keiko-contracts. UI cannot import from keiko-model-gateway (ADR-0019
+// trust-3, error severity); contracts is the legitimate value-import source
+// for browser-tier code.
+export {
+  isConversationEligibleModel,
+  explainConversationIneligibility,
 } from "@oscharko-dev/keiko-contracts";
 
 // ─── Workspace summary + context pack ──────────────────────────────────────────────

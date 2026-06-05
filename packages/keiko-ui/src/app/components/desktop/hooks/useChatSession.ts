@@ -19,6 +19,7 @@ import type {
   ModelCapability,
   ProjectWithAvailability,
 } from "@/lib/types";
+import { isConversationEligibleModel } from "@/lib/types";
 
 export const DEFAULT_MODEL_ID = "example-chat-model";
 export const DEFAULT_CHAT_TITLE = "New chat";
@@ -94,7 +95,9 @@ const INITIAL_STATE: SessionState = {
 
 async function bootstrapSession(): Promise<Partial<SessionState>> {
   const modelPayload = await fetchModels().catch(() => ({ models: [] }));
-  const chatModels = modelPayload.models.filter((model) => model.kind === "chat");
+  // Issue #144: source of truth is the helper, not an inline kind check. Pin
+  // ACs #1 / #2 — only chat-eligible models reach the conversation dropdown.
+  const chatModels = modelPayload.models.filter(isConversationEligibleModel);
   const defaultModel = pickChatModelId(chatModels);
 
   const projectPayload = await fetchProjects().catch(() => ({ projects: [] }));

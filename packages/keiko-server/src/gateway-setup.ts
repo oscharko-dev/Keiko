@@ -34,7 +34,9 @@ import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 
 const MAX_BODY_BYTES = 64_000;
-const MAX_DISCOVERED_MODELS = 100;
+// Issue #144: exported so discovery-normalization tests can pin the slice cap
+// without hardcoding the number. The discovery surface is a public seam.
+export const MAX_DISCOVERED_MODELS = 100;
 const MAX_DEPLOYMENT_NAMES = 100;
 const MAX_MODEL_ID_LENGTH = 160;
 const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 15_000;
@@ -218,7 +220,10 @@ function modelModeFromDiscoveryItem(item: Record<string, unknown>): string | und
   return undefined;
 }
 
-function isExplicitlyNonChatModel(item: Record<string, unknown>): boolean {
+// Issue #144: exported as part of the discovery-normalization seam so a
+// sibling test file can drive it with synthetic payloads. Behaviour unchanged
+// — only the visibility is widened.
+export function isExplicitlyNonChatModel(item: Record<string, unknown>): boolean {
   const capabilities = isRecord(item.capabilities) ? item.capabilities : undefined;
   if (capabilities?.chat_completion === false) {
     return true;
@@ -227,14 +232,21 @@ function isExplicitlyNonChatModel(item: Record<string, unknown>): boolean {
   return mode !== undefined && !CHAT_COMPATIBLE_MODES.has(mode);
 }
 
-function modelIdFromDiscoveryItem(item: unknown): string | undefined {
+// Issue #144: exported as part of the discovery-normalization seam. Behaviour
+// unchanged. Returns undefined for unknown/non-record/non-chat/malformed input
+// so callers can drop the entry silently and keep healthy peers.
+export function modelIdFromDiscoveryItem(item: unknown): string | undefined {
   if (!isRecord(item) || isExplicitlyNonChatModel(item)) {
     return undefined;
   }
   return modelIdFromKnownFields(item);
 }
 
-function parseModelList(payload: unknown): readonly string[] {
+// Issue #144: exported as part of the discovery-normalization seam. Behaviour
+// unchanged. Throws on schema-level malformation (no data array) and on the
+// "every entry filtered" terminal case so the caller (production path) returns
+// an honest error rather than a silently-empty model list.
+export function parseModelList(payload: unknown): readonly string[] {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw new Error("model discovery response must contain a data array");
   }
@@ -250,6 +262,15 @@ function parseModelList(payload: unknown): readonly string[] {
     throw new Error("model discovery returned no model ids");
   }
   return unique.slice(0, MAX_DISCOVERED_MODELS);
+}
+
+// Issue #144 AC #4: the public discovery-normalization seam. Test target. Pure
+// wrapper around `parseModelList` so the AC ("Discovery handles additional
+// customer gateway models without requiring code changes for each model name")
+// can be pinned against a stable export name even if the internal helper is
+// reshaped later.
+export function normalizeDiscoveryPayload(payload: unknown): readonly string[] {
+  return parseModelList(payload);
 }
 
 async function fetchDiscoveryJson(
@@ -359,43 +380,63 @@ function validateSetupConnection(
   }
 }
 
-async function defaultGatewaySetupTester(
-  config: GatewayConfig,
-  candidateModelIds: readonly string[],
+// Issue #144: pure smoke-test loop extracted from `defaultGatewaySetupTester`
+// for testability. Concurrency is a parameter so callers (tests) can pin peak
+// in-flight count deterministically. Original-order preservation among
+// survivors is part of the observable contract — pinned by gateway-setup tests
+// that assert tested-model-id order matches input order with failed entries
+// dropped.
+//
+// Throws with the exact error message that `defaultGatewaySetupTester` has
+// always thrown so existing call sites and tests keep compiling.
+export async function smokeTestCandidates(
+  candidates: readonly string[],
+  probe: (modelId: string) => Promise<void>,
+  concurrency: number,
 ): Promise<readonly string[]> {
-  const gateway = new Gateway(config);
-  const tested = Array<string | undefined>(candidateModelIds.length).fill(undefined);
+  const tested = Array<string | undefined>(candidates.length).fill(undefined);
   let next = 0;
   async function worker(): Promise<void> {
-    while (next < candidateModelIds.length) {
+    while (next < candidates.length) {
       const index = next;
       next += 1;
-      const modelId = candidateModelIds[index];
+      const modelId = candidates[index];
       if (modelId === undefined) {
         continue;
       }
       try {
-        await gateway.chat({
-          modelId,
-          messages: [{ role: "user", content: "Reply with exactly: OK" }],
-        });
+        await probe(modelId);
         tested[index] = modelId;
       } catch {
-        // Non-chat models can appear in OpenAI-compatible model discovery responses. They are
-        // intentionally ignored so only chat-callable models become selectable in the UI.
+        // Probe rejection is the documented signal that this candidate is not
+        // chat-callable. We drop it silently so healthy peers still surface.
       }
     }
   }
-  await Promise.all(
-    Array.from({ length: Math.min(SETUP_SMOKE_CONCURRENCY, candidateModelIds.length) }, () =>
-      worker(),
-    ),
-  );
+  const workerCount = Math.max(1, Math.min(concurrency, candidates.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   const accepted = tested.filter((modelId): modelId is string => modelId !== undefined);
   if (accepted.length === 0) {
     throw new Error("no discovered model accepted the chat-completions smoke test");
   }
   return accepted;
+}
+
+async function defaultGatewaySetupTester(
+  config: GatewayConfig,
+  candidateModelIds: readonly string[],
+): Promise<readonly string[]> {
+  const gateway = new Gateway(config);
+  return smokeTestCandidates(
+    candidateModelIds,
+    async (modelId) => {
+      await gateway.chat({
+        modelId,
+        messages: [{ role: "user", content: "Reply with exactly: OK" }],
+      });
+    },
+    SETUP_SMOKE_CONCURRENCY,
+  );
 }
 
 function savePrivateJson(path: string, raw: Record<string, unknown>): void {

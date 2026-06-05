@@ -5,6 +5,18 @@
 import { CAPABILITY_DATA } from "./capabilities.data.js";
 import type { CostClass, ModelCapability, ModelKind } from "./types.js";
 
+// Issue #144 / Epic #142: conversation eligibility helpers and reason type.
+// The canonical definitions live in `@oscharko-dev/keiko-contracts/gateway`
+// so the browser-tier `keiko-ui` package can value-import them without
+// crossing ADR-0019 trust rule 3 (UI → model-gateway/src forbidden at error).
+// They are re-exported here so server-tier consumers that already depend on
+// the model-gateway barrel keep a single import path.
+export {
+  isConversationEligibleModel,
+  explainConversationIneligibility,
+} from "@oscharko-dev/keiko-contracts";
+export type { ConversationIneligibilityReason } from "@oscharko-dev/keiko-contracts";
+
 export const CAPABILITY_REGISTRY: readonly ModelCapability[] = CAPABILITY_DATA;
 
 const COST_RANK: Readonly<Record<CostClass, number>> = { low: 0, medium: 1, high: 2 };
