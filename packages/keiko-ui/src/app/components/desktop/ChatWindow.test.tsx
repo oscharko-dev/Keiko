@@ -3,6 +3,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
@@ -80,6 +81,14 @@ function renderWindow(session: ChatSessionApi): void {
 
 const fetchCapsulesMock = vi.mocked(fetchCapsules);
 const fetchCapsuleSetsMock = vi.mocked(fetchCapsuleSets);
+
+function makeCapsuleId(value: string): KnowledgeCapsuleId {
+  return value as KnowledgeCapsuleId;
+}
+
+function makeCapsuleSetId(value: string): CapsuleSetId {
+  return value as CapsuleSetId;
+}
 
 describe("ChatWindow cancel button", () => {
   it("does not render the cancel button when not sending", () => {
@@ -165,7 +174,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
         activeChat: makeChat({
           localKnowledgeScope: {
             kind: "capsule",
-            capsuleId: "cap-stale",
+            capsuleId: makeCapsuleId("cap-stale"),
             connectedAtMs: 1,
           },
         }),
@@ -189,7 +198,7 @@ describe("ChatWindow local knowledge scope disclosure", () => {
         activeChat: makeChat({
           localKnowledgeScope: {
             kind: "capsule-set",
-            capsuleSetId: "set-1",
+            capsuleSetId: makeCapsuleSetId("set-1"),
             connectedAtMs: 1,
           },
         }),
