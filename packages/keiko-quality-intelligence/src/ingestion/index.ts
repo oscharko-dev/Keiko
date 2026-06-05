@@ -36,3 +36,11 @@ export {
   type ReconciledSourceSet,
   type SourceGroup,
 } from "./sourceReconciliation.js";
+
+export {
+  buildWorkspaceSourceEnvelopes,
+  workspaceSourceMixPolicy,
+  WorkspaceAdapterError,
+  type BuildWorkspaceEnvelopesInput,
+  type WorkspaceAdapterErrorCode,
+} from "./workspaceAdapter.js";
