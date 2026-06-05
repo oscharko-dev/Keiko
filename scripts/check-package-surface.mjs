@@ -147,6 +147,16 @@ function assertWorkflowHandoffSubpath(paths) {
   }
 }
 
+function assertLocalKnowledgeDistPath(paths) {
+  const required = "node_modules/@oscharko-dev/keiko-local-knowledge/dist/index.js";
+  if (!paths.includes(required)) {
+    fail(
+      `the tarball does not include ${required} ` +
+        "— keiko-local-knowledge is missing from bundleDependencies (Epic #189 O7).",
+    );
+  }
+}
+
 const files = packFiles();
 const paths = files.map((f) => f.path);
 
@@ -201,5 +211,6 @@ assertServerRuntimeSurface(paths);
 await assertSdkRootExport(paths);
 assertBundledPayload(paths);
 assertWorkflowHandoffSubpath(paths);
+assertLocalKnowledgeDistPath(paths);
 
 console.log(`package-surface check passed: ${String(paths.length)} files, dist/ui/static present.`);
