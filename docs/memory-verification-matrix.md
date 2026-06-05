@@ -8,21 +8,21 @@ the epic branch was opened for human review.
 
 ## Target outcomes (from epic #204)
 
-| #   | Target outcome                                                                                                                                                           | Where satisfied                                                                                    |
-| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| 1   | Local Enterprise Memory Vault with typed records, temporal-graph relationships, optional embeddings, provenance, confidence, sensitivity, namespace scopes               | `@oscharko-dev/keiko-memory-vault` (#206) + `@oscharko-dev/keiko-contracts/memory*` (#205)         |
-| 2   | Durable memory candidate capture from explicit instructions, accepted workflow corrections, repeated preferences, reviewed reflection outputs                            | `@oscharko-dev/keiko-memory-capture` (#207)                                                        |
-| 3   | Consolidate, link, update, supersede, selectively forget without unbounded hidden background activity                                                                    | `@oscharko-dev/keiko-memory-consolidation` (#208) + `@oscharko-dev/keiko-memory-governance` (#209) |
-| 4   | Compact memory context block for Conversation Center and workflows with included-memory explanations                                                                     | `@oscharko-dev/keiko-memory-retrieval` (#210)                                                      |
-| 5   | Inspect, edit, approve, reject, pin, archive, delete, audit memory through a Memory Center UI                                                                            | Memory Center routes + UI (#211)                                                                   |
-| 6   | Conversation Center uses memory before PWA work, without implementing memory logic inside chat UI                                                                        | Conv Center BFF routes (#212)                                                                      |
+| #   | Target outcome                                                                                                                                                                                           | Where satisfied                                                                                    |
+| --- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| 1   | Local Enterprise Memory Vault with typed records, temporal-graph relationships, optional embeddings, provenance, confidence, sensitivity, namespace scopes                                               | `@oscharko-dev/keiko-memory-vault` (#206) + `@oscharko-dev/keiko-contracts/memory*` (#205)         |
+| 2   | Durable memory candidate capture from explicit instructions, accepted workflow corrections, repeated preferences, reviewed reflection outputs                                                            | `@oscharko-dev/keiko-memory-capture` (#207)                                                        |
+| 3   | Consolidate, link, update, supersede, selectively forget without unbounded hidden background activity                                                                                                    | `@oscharko-dev/keiko-memory-consolidation` (#208) + `@oscharko-dev/keiko-memory-governance` (#209) |
+| 4   | Compact memory context block for Conversation Center and workflows with included-memory explanations                                                                                                     | `@oscharko-dev/keiko-memory-retrieval` (#210)                                                      |
+| 5   | Inspect, edit, approve, reject, pin, archive, delete, audit memory through a Memory Center UI                                                                                                            | Memory Center routes + UI (#211)                                                                   |
+| 6   | Conversation Center uses memory before PWA work, without implementing memory logic inside chat UI                                                                                                        | Conv Center BFF routes (#212)                                                                      |
 | 7   | Verification matrix tests accurate retrieval, long-range understanding, test-time learning, selective forgetting, stale-memory, blocked-memory suppression, cross-scope isolation, and error propagation | `tests/memory-eval/` (#215) + this document                                                        |
 
 ## Architecture invariants
 
 | Invariant                                                                                      | Enforcement                                                                                                                                                                                     |
 | ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Existing architecture, quality gates, security, evidence, deterministic verification preserved | ADR-0019 direction rules `3f`–`3j` at `error` severity; `arch:check:negative` pins `EXPECTED_RULES=18`                                                                                          |
+| Existing architecture, quality gates, security, evidence, deterministic verification preserved | ADR-0019 direction rules `3f`–`3j` at `error` severity; `arch:check:negative` pins `EXPECTED_RULES=19`                                                                                          |
 | Productive model calls behind the Model Gateway                                                | Memory packages do not import `keiko-model-gateway` directly; consolidation `summaryGenerator` is a port (no default wiring); see `packages/keiko-memory-consolidation/src/types.ts`            |
 | Workflow authority explicit                                                                    | `MemoryWorkflowPort` is optional on workflow factory options (#213); memory does not grant write or execution authority                                                                         |
 | Memory local to user runtime state                                                             | SQLite file at `KEIKO_MEMORY_DIR/keiko-memory.db`; documented in [`docs/local-runtime-state-contract.md`](local-runtime-state-contract.md) §category 9                                          |
@@ -63,7 +63,7 @@ comparing byte-equal JSON output.
 
 Each child PR ran cold-cache 8/8 from repo root before merge into the
 epic branch (`typecheck` + `lint --max-warnings=0` + `arch:check` +
-`arch:check:negative` with `EXPECTED_RULES=18` + `test` + `build`). The
+`arch:check:negative` with `EXPECTED_RULES=19` + `test` + `build`). The
 final epic PR re-runs the same suite from the epic branch HEAD so the
 integration evidence is the latest test count, file count, and module
 count on the merged tree.

@@ -56,6 +56,13 @@ const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted"
 
 // ─── Type guards / helpers ─────────────────────────────────────────────────────
 
+// Sanitise GovernanceError into a code-keyed safe response body. GovernanceError.message
+// is composed as `GovernanceError(${code}): ${detail}` and can embed memory UUIDs from
+// the inner detail string; the public surface should only expose the stable enum `code`.
+function governanceErrorBody(err: GovernanceError) {
+  return errorBody("GOVERNANCE_ERROR", `Governance constraint violated (${err.code}).`);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -494,7 +501,7 @@ export function handlePinMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
     if (err instanceof GovernanceError) {
       return {
         status: err.code === "idempotent-noop" ? 409 : 400,
-        body: errorBody("GOVERNANCE_ERROR", err.message),
+        body: governanceErrorBody(err),
       };
     }
     if (err instanceof MemoryStorageError) {
@@ -527,7 +534,7 @@ export function handleUnpinMemory(ctx: RouteContext, deps: UiHandlerDeps): Route
     if (err instanceof GovernanceError) {
       return {
         status: err.code === "idempotent-noop" ? 409 : 400,
-        body: errorBody("GOVERNANCE_ERROR", err.message),
+        body: governanceErrorBody(err),
       };
     }
     if (err instanceof MemoryStorageError) {
@@ -572,7 +579,7 @@ export async function handleArchiveMemory(
     if (err instanceof GovernanceError) {
       return {
         status: 400,
-        body: errorBody("GOVERNANCE_ERROR", err.message),
+        body: governanceErrorBody(err),
       };
     }
     if (err instanceof MemoryStorageError) {
@@ -660,7 +667,7 @@ export async function handleForgetMemory(
     return executeForget(vault, id, input.reason);
   } catch (err) {
     if (err instanceof GovernanceError) {
-      return { status: 400, body: errorBody("GOVERNANCE_ERROR", err.message) };
+      return { status: 400, body: governanceErrorBody(err) };
     }
     if (err instanceof MemoryStorageError) {
       return {

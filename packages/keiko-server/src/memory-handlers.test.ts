@@ -16,6 +16,7 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js
 import {
   handleListMemories,
   handleMemoryReviewQueue,
+  handlePinMemory,
   handleRejectMemoryProposal,
 } from "./memory-handlers.js";
 import { createInMemoryUiStore } from "./store/index.js";
@@ -25,7 +26,11 @@ function makeReq(payload: unknown): IncomingMessage {
   return Readable.from([Buffer.from(JSON.stringify(payload))]) as unknown as IncomingMessage;
 }
 
-function makeCtx(path: string, payload: unknown, params: Record<string, string> = {}): RouteContext {
+function makeCtx(
+  path: string,
+  payload: unknown,
+  params: Record<string, string> = {},
+): RouteContext {
   const socket = new Socket();
   return {
     req: makeReq(payload),
@@ -208,5 +213,26 @@ describe("memory handlers", () => {
     const memory = body.memory as MemoryRecord;
     expect(memory.status).toBe("rejected");
     expect(memory.staleReason).toBe("dismissed from queue");
+  });
+
+  it("sanitises GovernanceError responses so the memory id is not leaked", () => {
+    const vault = makeVault();
+    const idValue = "leak-probe-7f3a1c";
+    // Pre-pinned record causes buildPinOperation to throw GovernanceError("idempotent-noop", ...)
+    // whose composed message embeds the memory id; the handler must not forward that message.
+    vault.insertMemory(makeMemory(idValue, "already pinned", { pinned: true }));
+
+    const result = handlePinMemory(
+      makeCtx(`/api/memory/${idValue}/pin`, {}, { id: idValue }),
+      makeDeps({ memoryVault: vault }),
+    );
+
+    expect(result.status).toBe(409);
+    const body = asJson(result);
+    const errorField = body.error as { code: string; message: string };
+    expect(errorField.code).toBe("GOVERNANCE_ERROR");
+    expect(errorField.message).toContain("idempotent-noop");
+    expect(errorField.message).not.toContain("GovernanceError(");
+    expect(errorField.message).not.toContain(idValue);
   });
 });
