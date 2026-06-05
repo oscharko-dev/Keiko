@@ -22,6 +22,7 @@
 import type {
   CapsuleAnswerGroundingPolicy,
   CapsuleSetId,
+  KnowledgeCapsule,
   KnowledgeCapsuleId,
 } from "@oscharko-dev/keiko-contracts";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
@@ -29,6 +30,11 @@ import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import { getCapsule } from "../capsule-lifecycle.js";
 import { buildComposedRetrievalScope } from "../composition.js";
 import { KnowledgeNotFoundError } from "../errors.js";
+import { listCapsuleSources } from "../source-lifecycle.js";
+import {
+  SourceRoutingValidationError,
+  validateSourceRoutingForCapsule,
+} from "../source-routing-validation.js";
 import type { KnowledgeStore } from "../store.js";
 
 import { validateAnswerGrounding } from "./answer-grounding.js";
@@ -105,6 +111,9 @@ function resolveSingleCapsuleScope(
 ): ResolvedScope {
   const capsule = getCapsule(store, capsuleId);
   if (capsule === undefined) return { ok: false, reason: "no-scope" };
+  if (!isCapsuleRetrievalScopeValid(store, capsule)) {
+    return { ok: false, reason: "no-scope" };
+  }
   return {
     ok: true,
     scope: { capsuleIds: [capsule.id] },
@@ -122,6 +131,7 @@ function resolveCapsuleSetScope(store: KnowledgeStore, setId: CapsuleSetId): Res
     scope = buildComposedRetrievalScope(store, setId);
   } catch (cause) {
     if (cause instanceof KnowledgeNotFoundError) return { ok: false, reason: "no-scope" };
+    if (cause instanceof SourceRoutingValidationError) return { ok: false, reason: "no-scope" };
     throw cause;
   }
   if (scope.capsuleIds.length === 0) return { ok: false, reason: "no-scope" };
@@ -152,6 +162,18 @@ function strictestPolicy(
     }
   }
   return strictest;
+}
+
+function isCapsuleRetrievalScopeValid(store: KnowledgeStore, capsule: KnowledgeCapsule): boolean {
+  try {
+    validateSourceRoutingForCapsule(capsule, listCapsuleSources(store, capsule.id));
+    return true;
+  } catch (cause) {
+    if (cause instanceof SourceRoutingValidationError) {
+      return false;
+    }
+    throw cause;
+  }
 }
 
 // ─── Search → grounding bridge ───────────────────────────────────────────────

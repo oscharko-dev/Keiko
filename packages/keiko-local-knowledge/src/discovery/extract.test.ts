@@ -106,6 +106,35 @@ describe("extractDocument — unsupported format", () => {
     const diagCount = count("parser_diagnostics");
     expect(diagCount).toBeGreaterThanOrEqual(1);
   });
+
+  it("treats an unknown file type as unsupported instead of extracted", async () => {
+    const bytes = new TextEncoder().encode("opaque payload");
+    const fs = memoryFs(ROOT, [{ relativePath: "artifact.unknownext", content: bytes }]);
+    const registry = createDefaultParserRegistry();
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "artifact.unknownext", sizeBytes: bytes.byteLength },
+      },
+    );
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.status).toBe("unsupported");
+    expect(result.outcome.document.parser.parserId).toBe("unsupported");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "UNSUPPORTED_FORMAT", severity: "info" }),
+    );
+    const units = store._internal.db
+      .prepare(
+        "SELECT kind FROM parsed_units WHERE capsule_id = :c AND document_id = :d ORDER BY id ASC",
+      )
+      .all({ c: capsuleId, d: result.outcome.document.id }) as unknown as readonly {
+      readonly kind: string;
+    }[];
+    expect(units.map((row) => row.kind)).toContain("unsupported-media");
+  });
 });
 
 describe("extractDocument — normalized binary text", () => {
