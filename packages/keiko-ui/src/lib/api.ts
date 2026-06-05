@@ -488,12 +488,18 @@ export interface SendDesktopChatInput {
   modelId?: string;
 }
 
+// Issue #152 — accepts an optional AbortSignal so the Conversation Center can
+// cancel an in-flight ungrounded send. RequestInit.signal is `AbortSignal |
+// null` under exactOptionalPropertyTypes; convert at the boundary so callers
+// pass `AbortSignal | undefined` like every other API helper here.
 export async function sendDesktopChat(
   input: SendDesktopChatInput,
+  signal?: AbortSignal,
 ): Promise<DesktopChatSendResponse> {
   return fetchJson("/api/desktop/chat", {
     method: "POST",
     body: JSON.stringify(input),
+    signal: signal ?? null,
   });
 }
 
