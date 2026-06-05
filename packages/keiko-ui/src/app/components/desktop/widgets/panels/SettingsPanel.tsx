@@ -27,13 +27,23 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
   const reason = explainConversationIneligibility(model);
   if (reason === undefined) {
     return (
-      <span className="ml-elig ml-elig-ok" data-testid="conv-elig-ok">
+      <span
+        className="ml-elig ml-elig-ok"
+        data-testid="conv-elig-ok"
+        role="status"
+        aria-label="Model eligibility: eligible for conversation"
+      >
         Conversation-eligible
       </span>
     );
   }
   return (
-    <span className="ml-elig ml-elig-no" data-testid="conv-elig-no">
+    <span
+      className="ml-elig ml-elig-no"
+      data-testid="conv-elig-no"
+      role="status"
+      aria-label={"Model eligibility: " + conversationIneligibilityLabel(reason)}
+    >
       Not selectable: {conversationIneligibilityLabel(reason)}
     </span>
   );
