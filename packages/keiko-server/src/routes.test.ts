@@ -26,8 +26,8 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 77 route contract including local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, and the QI Conversation Center handoff route", () => {
-    expect(API_ROUTES).toHaveLength(77);
+  it("declares the 76 route contract including local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, and the QI Conversation Center handoff route", () => {
+    expect(API_ROUTES).toHaveLength(76);
   });
 
   it("includes the Quality Intelligence Conversation Center handoff route (#281)", () => {
