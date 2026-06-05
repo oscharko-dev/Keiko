@@ -11,7 +11,7 @@ import { createCapsule } from "../capsule-lifecycle.js";
 import { freshStore, sampleCapsuleInput } from "../_support.js";
 import type { KnowledgeStore } from "../store.js";
 import { createDefaultParserRegistry, buildParserOptions } from "../parsers/index.js";
-import type { ParserRegistry } from "../parsers/index.js";
+import type { ParserAdapter, ParserOptions, ParserRegistry, ParserSelectionInput } from "../parsers/index.js";
 import { PDF_TEXT_LAYER } from "../parsers/parser-test-fixtures.js";
 
 import { extractDocument } from "./extract.js";
@@ -256,13 +256,13 @@ describe("extractDocument — path containment", () => {
       scope: folderScope(privateRoot),
     });
     const fs = memoryFs(privateRoot, [{ relativePath: "secret.txt", content: "hidden" }]);
-    const adapter = {
+    const adapter: ParserAdapter = {
       capability: {
         parserId: "test-parser",
         parserVersion: "1",
         matches: () => true,
       },
-      parse: (input: { readonly documentId: string }, options: { readonly now: () => number }) => ({
+      parse: (input: ParserSelectionInput, options: ParserOptions) => ({
         documentId: input.documentId,
         parser: { parserId: "test-parser", parserVersion: "1" },
         pages: [],
