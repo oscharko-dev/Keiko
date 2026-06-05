@@ -1,5 +1,5 @@
 // Issue #146 — Redesign Conversation Center composer and empty state.
-// Tests cover all 12 ACs listed in the issue spec.
+// Tests cover the Issue #146 acceptance criteria and empty-state deliverables.
 //
 // IMPORTANT: no module-level vi.mock("@/lib/api", ...) — per architecture
 // invariant that rule pollutes capsule-actions.test.tsx. All session deps are
@@ -223,11 +223,49 @@ describe("AC #2 — disabled controls aria-describedby", () => {
       }),
     );
     const sendBtn = screen.getByRole("button", { name: "Send message" });
+    expect(sendBtn).not.toHaveAttribute("disabled");
+    expect(sendBtn).toHaveAttribute("aria-disabled", "true");
     const describedById = sendBtn.getAttribute("aria-describedby");
     expect(describedById).toBeTruthy();
     const hintEl = document.getElementById(describedById ?? "");
     expect(hintEl).not.toBeNull();
     expect(hintEl?.textContent).toMatch(/type a message/i);
+  });
+
+  it("send button stays focusable and points to the loading status while bootstrapping", () => {
+    renderWindow(
+      makeSession({
+        draft: "hello",
+        loading: true,
+        sending: false,
+        activeChat: makeChat(),
+        selectedModel: "example-chat-model",
+        models: [chatModelCapability("example-chat-model")],
+        messages: [
+          {
+            id: "m1",
+            chatId: "chat-1",
+            role: "user",
+            content: "hello",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+    const sendBtn = screen.getByRole("button", { name: "Send message" });
+    expect(sendBtn).not.toHaveAttribute("disabled");
+    expect(sendBtn).toHaveAttribute("aria-disabled", "true");
+    expect(sendBtn).toHaveAttribute("title", "Connecting to your gateway");
+    const describedById = sendBtn.getAttribute("aria-describedby");
+    expect(describedById).toBe("cmp-loading-status");
+    expect(document.getElementById(describedById ?? "")).toHaveTextContent(
+      /connecting to your gateway/i,
+    );
   });
 });
 
