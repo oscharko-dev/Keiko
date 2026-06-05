@@ -101,7 +101,15 @@ function mergePatch(existing: MemoryRecord, patch: MemoryUpdatePatch, nowMs: num
   // updatedAt is owned by the vault, not the patch, so the caller cannot regress it. createdAt
   // and the scope coordinate are immutable on update (scope changes require supersession +
   // re-insert by design — moving a record across scopes is an audit event, not a field write).
-  const next: MemoryRecord = { ...existing, ...patch, updatedAt: nowMs };
+  const next: MemoryRecord = {
+    ...existing,
+    ...patch,
+    id: existing.id,
+    schemaVersion: existing.schemaVersion,
+    scope: existing.scope,
+    createdAt: existing.createdAt,
+    updatedAt: nowMs,
+  };
   return next;
 }
 

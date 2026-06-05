@@ -6,6 +6,7 @@ import type {
   UserId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
+import { MemoryStorageError } from "./errors.js";
 import { memoryRecordToRow, rowToMemoryRecord, type MemoryRow } from "./serialize.js";
 
 function baseRecord(): MemoryRecord {
@@ -129,5 +130,32 @@ describe("rowToMemoryRecord — defensive parsing", () => {
       tags_json: JSON.stringify(["ok", 123, null, "fine"]),
     };
     expect(rowToMemoryRecord(row).tags).toEqual(["ok", "fine"]);
+  });
+
+  it("throws schema-mismatch when tags_json is invalid JSON", () => {
+    const row: MemoryRow = {
+      ...memoryRecordToRow(baseRecord()),
+      tags_json: "{not-json",
+    };
+    expect(() => rowToMemoryRecord(row)).toThrow(MemoryStorageError);
+    expect(() => rowToMemoryRecord(row)).toThrow(/tags JSON is invalid/i);
+  });
+
+  it("throws schema-mismatch when payload_json is invalid JSON", () => {
+    const row: MemoryRow = {
+      ...memoryRecordToRow(baseRecord()),
+      payload_json: "{not-json",
+    };
+    expect(() => rowToMemoryRecord(row)).toThrow(MemoryStorageError);
+    expect(() => rowToMemoryRecord(row)).toThrow(/payload JSON is invalid/i);
+  });
+
+  it("throws schema-mismatch when scope_kind is not recognized", () => {
+    const row: MemoryRow = {
+      ...memoryRecordToRow(baseRecord()),
+      scope_kind: "bogus",
+    };
+    expect(() => rowToMemoryRecord(row)).toThrow(MemoryStorageError);
+    expect(() => rowToMemoryRecord(row)).toThrow(/scope kind is not recognized/i);
   });
 });

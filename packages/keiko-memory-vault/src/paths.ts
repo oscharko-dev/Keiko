@@ -77,7 +77,7 @@ export function resolveMemoryDir(
   }
   const stateDir = env.KEIKO_STATE_DIR;
   if (stateDir !== undefined && stateDir.length > 0) {
-    return join(guard(stateDir, "KEIKO_STATE_DIR"), MEMORY_DIR_NAME);
+    return guard(join(guard(stateDir, "KEIKO_STATE_DIR"), MEMORY_DIR_NAME), "KEIKO_STATE_DIR/memory");
   }
   return join(homedir(), DEFAULT_STATE_DIR, MEMORY_DIR_NAME);
 }

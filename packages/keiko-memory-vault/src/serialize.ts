@@ -33,6 +33,7 @@ import type {
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
+import { MemoryStorageError } from "./errors.js";
 
 export interface MemoryRow {
   readonly id: string;
@@ -78,6 +79,8 @@ function buildScopeFromRow(kind: string, coord: string): MemoryScope {
       return { kind: "workflow", workflowDefinitionId: coord as WorkflowDefinitionId };
     case "global":
       return { kind: "global" };
+    default:
+      throw new MemoryStorageError("schema-mismatch", "Stored memory scope kind is not recognized.");
   }
 }
 
@@ -138,14 +141,23 @@ function buildRetentionHintFromRow(row: MemoryRow): MemoryRetentionHint | undefi
 }
 
 function parseTagsJson(raw: string): readonly string[] {
-  const parsed: unknown = JSON.parse(raw);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new MemoryStorageError("schema-mismatch", "Stored memory tags JSON is invalid.");
+  }
   if (!Array.isArray(parsed)) return [];
   return parsed.filter((v): v is string => typeof v === "string");
 }
 
 function parsePayloadJson(raw: string | null): MemoryStructuredPayload | undefined {
   if (raw === null) return undefined;
-  return JSON.parse(raw) as MemoryStructuredPayload;
+  try {
+    return JSON.parse(raw) as MemoryStructuredPayload;
+  } catch {
+    throw new MemoryStorageError("schema-mismatch", "Stored memory payload JSON is invalid.");
+  }
 }
 
 export function rowToMemoryRecord(row: MemoryRow): MemoryRecord {

@@ -49,6 +49,23 @@ describe("resolveMemoryDir", () => {
     }
   });
 
+  it("rejects KEIKO_STATE_DIR when the derived memory/ directory is a symlink", () => {
+    const base = freshTmp();
+    const stateDir = join(base, "state");
+    const real = join(base, "real-memory");
+    mkdirSync(stateDir);
+    mkdirSync(real);
+    symlinkSync(real, join(stateDir, MEMORY_DIR_NAME));
+    try {
+      resolveMemoryDir(undefined, { KEIKO_STATE_DIR: stateDir });
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as MemoryStorageError).code).toBe("invalid-path");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
   it("falls back to homedir()/.keiko/memory when nothing configured", () => {
     expect(resolveMemoryDir(undefined, emptyEnv())).toBe(
       join(homedir(), DEFAULT_STATE_DIR, MEMORY_DIR_NAME),

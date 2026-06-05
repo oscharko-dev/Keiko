@@ -32,7 +32,7 @@ Keiko is a local coding assistant. It is designed for reviewable work in regulat
 
 ## Memory
 
-Keiko's Governed Enterprise Memory Vault stores durable, scoped, governed memory records on the local machine. The vault is a SQLite database under the local keiko data directory (resolved through `KEIKO_MEMORY_DIR`, then a project-local default). No memory record ever leaves the machine without an explicit user action.
+Keiko's Governed Enterprise Memory Vault stores durable, scoped, governed memory records on the local machine. The vault is a SQLite database under the local keiko data directory (resolved through the explicit `memoryDir` option, then `KEIKO_MEMORY_DIR`, then `KEIKO_STATE_DIR/memory`, then `~/.keiko/memory`; workspace-local paths are rejected). No memory record ever leaves the machine without an explicit user action.
 
 - **Scope isolation** — every record is scoped to a concrete coordinate (user, workspace, project, workflow, or global). Two records at different scopes are never visible to one another; cross-scope reads require an explicit retrieval that names every scope.
 - **Deletion semantics** — destructive operations are tombstoned: the row is removed from the live memory table and a small append-only tombstone record is written for audit. The tombstone carries the original scope and the forgetter surface; it does not carry the body.

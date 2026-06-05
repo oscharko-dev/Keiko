@@ -243,6 +243,33 @@ describe("validator gate fires BEFORE any SQL touches", () => {
     v.close();
   });
 
+  it("ignores runtime-smuggled immutable patch keys during updateMemory", () => {
+    const dir = freshDir();
+    const v = openVault(dir);
+    v.insertMemory(makeMemory({ id: "m1" as MemoryId, body: "before" }));
+    v.insertMemory(makeMemory({ id: "m2" as MemoryId, body: "target" }));
+    const patch = {
+      id: "m2",
+      scope: { kind: "workspace", workspaceId: "w-2" as WorkspaceId },
+      createdAt: 1,
+      schemaVersion: "999",
+      body: "after",
+    };
+    const updated = v.updateMemory(
+      "m1" as MemoryId,
+      patch,
+      1_700_000_000_077,
+    );
+    expect(updated.id).toBe("m1");
+    expect(updated.scope).toEqual({ kind: "user", userId: "u-1" as UserId });
+    expect(updated.createdAt).toBe(1_700_000_000_000);
+    expect(updated.schemaVersion).toBe("1");
+    expect(updated.body).toBe("after");
+    expect(v.getMemory("m1" as MemoryId)?.body).toBe("after");
+    expect(v.getMemory("m2" as MemoryId)?.body).toBe("target");
+    v.close();
+  });
+
   it("rejects insertEdge with a missing-endpoint record before SQL (FK still defends below)", () => {
     const dir = freshDir();
     const v = openVault(dir);
