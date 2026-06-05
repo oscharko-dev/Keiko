@@ -153,6 +153,14 @@ function fakeModel(content: string, seenRequests: GatewayRequest[]): ModelPort {
   };
 }
 
+function failingModel(message: string): ModelPort {
+  return {
+    call(): Promise<NormalizedResponse> {
+      return Promise.reject(new Error(message));
+    },
+  };
+}
+
 function firstGatewayRequest(requests: readonly GatewayRequest[]): GatewayRequest {
   const request = requests[0];
   if (request === undefined) {
@@ -671,6 +679,43 @@ describe("handleGroundedAsk", () => {
       "model-context-sent",
       "retrieval-performed",
     ]);
+  });
+
+  it("does not record model-context-sent when the model call fails", async () => {
+    const project = store.createProject(tmp, "demo");
+    const chat = store.createChat(project.path, "Knowledge chat", CHAT_MODEL);
+    const uiDbPath = join(tmp, "keiko-ui.db");
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+      capsuleId: "cap-local",
+    });
+    updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
+    knowledgeStore.close();
+    store.updateChat(chat.id, {
+      localKnowledgeScope: {
+        kind: "capsule",
+        capsuleId: seeded.capsuleId,
+        connectedAtMs: NOW,
+      },
+    });
+    const adapter = scriptedAdapter();
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId: chat.id, content: "What is alpha?" })),
+      deps(failingModel("model offline"), {}, { uiDbPath, localKnowledgeEmbeddingRequest: adapter.request }),
+    );
+    expect(result.status).toBe(500);
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const auditKinds = verify._internal.db
+      .prepare(
+        "SELECT kind FROM capsule_audit_events WHERE capsule_id = :c ORDER BY occurred_at ASC, kind ASC",
+      )
+      .all({ c: seeded.capsuleId }) as unknown as readonly { readonly kind: string }[];
+    verify.close();
+    expect(auditKinds.map((row) => row.kind)).toEqual([]);
   });
 
   it("maps ClarificationNeededError to a 400 BAD_REQUEST", async () => {

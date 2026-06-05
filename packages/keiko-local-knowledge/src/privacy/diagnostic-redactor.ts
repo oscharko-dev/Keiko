@@ -38,21 +38,21 @@ export function redactDiagnosticMessage(message: string, homePrefix: string): st
 }
 
 function redactPathCandidates(message: string, homePrefix: string): string {
-  let out = "";
+  const parts: string[] = [];
   let index = 0;
   while (index < message.length) {
     const start = pathCandidateStart(message, index);
     if (start === -1) {
-      out += message.slice(index);
+      parts.push(message.slice(index));
       break;
     }
-    out += message.slice(index, start);
+    parts.push(message.slice(index, start));
     const end = pathCandidateEnd(message, start);
     const raw = message.slice(start, end);
-    out += redactCandidate(raw, homePrefix);
+    parts.push(redactCandidate(raw, homePrefix));
     index = end;
   }
-  return out;
+  return parts.join("");
 }
 
 function pathCandidateStart(message: string, from: number): number {
@@ -84,8 +84,8 @@ function pathCandidateEnd(message: string, start: number): number {
 }
 
 function redactCandidate(candidate: string, homePrefix: string): string {
-  const leadingSlash = candidate.startsWith("//");
   const normalised = toForwardSlash(candidate);
+  const leadingSlash = normalised.startsWith("//");
   const homeRedacted =
     homePrefix.length > 0 && isPrefixedPath(normalised, homePrefix)
       ? `~${normalised.slice(homePrefix.length)}`

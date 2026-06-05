@@ -287,6 +287,14 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   ) {}
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
+    const response = await this.model.call(
+      {
+        modelId: this.modelId,
+        messages: buildLocalKnowledgeMessages(input.query.text, input, this.store),
+        stream: false,
+      },
+      input.signal ?? new AbortController().signal,
+    );
     const occurredAt = Date.now();
     for (const usage of summariseReferenceUsage(input.references)) {
       this.auditSink.emit({
@@ -300,14 +308,6 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
         occurredAt,
       });
     }
-    const response = await this.model.call(
-      {
-        modelId: this.modelId,
-        messages: buildLocalKnowledgeMessages(input.query.text, input, this.store),
-        stream: false,
-      },
-      input.signal ?? new AbortController().signal,
-    );
     return response.content.trim();
   }
 }

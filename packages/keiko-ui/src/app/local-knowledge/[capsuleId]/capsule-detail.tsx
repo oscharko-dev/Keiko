@@ -215,7 +215,8 @@ function PrivacySection(): ReactNode {
       </SectionHeading>
       <ul className="lkd-list" aria-label="Privacy and deletion details">
         <li className="lkd-source-row">
-          Indexed text, vectors, diagnostics, and job history stay in Keiko's local runtime state
+          Indexed text, vectors, diagnostics, and job history stay in Keiko&apos;s local runtime
+          state
           on this machine.
         </li>
         <li className="lkd-source-row">
