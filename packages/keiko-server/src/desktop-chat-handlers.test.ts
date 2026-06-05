@@ -17,6 +17,8 @@ import type {
   GatewayRequest,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
+import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts";
 
 const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": "1" } as const;
 const CHAT_MODEL = "example-chat-model";
@@ -105,6 +107,39 @@ function customModelConfig(modelId = "example-private-chat"): GatewayConfig {
       },
     ],
   };
+}
+
+function makeMemoryId(value: string): MemoryId {
+  return value as MemoryId;
+}
+
+function makeMemoryUserId(value: string): MemoryUserId {
+  const raw: unknown = value;
+  return raw as MemoryUserId;
+}
+
+function insertAcceptedMemory(vault: MemoryVaultStore, body: string): MemoryRecord {
+  const now = Date.now();
+  const userId: MemoryUserId = makeMemoryUserId("local-operator");
+  return vault.insertMemory({
+    id: makeMemoryId(`mem-${String(now)}`),
+    schemaVersion: "1",
+    scope: { kind: "user", userId },
+    type: "preference",
+    body,
+    provenance: {
+      sourceKind: "explicit-user-instruction",
+      capturedAt: now,
+      confidence: 1,
+      sensitivity: "public",
+    },
+    validity: { validFrom: now },
+    status: "accepted",
+    pinned: false,
+    tags: [],
+    createdAt: now,
+    updatedAt: now,
+  });
 }
 
 async function restartWithDeps(handlerDeps: UiHandlerDeps): Promise<void> {
@@ -237,6 +272,62 @@ describe("desktop chat routes", () => {
     const persistedRoles = store.listMessages(created.chat.id).map((message) => message.role);
     expect(persistedRoles).toHaveLength(2);
     expect(persistedRoles).toEqual(expect.arrayContaining(["user", "assistant"]));
+  });
+
+  // eslint-disable-next-line complexity
+  it("injects retrieved memory into the prompt and persists candidate proposals from chat intents", async () => {
+    const memoryDir = join(tmp, "memory-vault");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    insertAcceptedMemory(memoryVault, "Use pnpm instead of npm for installs.");
+    await restartWithDeps(deps(fakeModel("memory response"), { memoryVault }));
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "remember that we deploy after the green CI run",
+        memory: {
+          enabled: true,
+          budgetTokens: 900,
+          context: {
+            userId: "local-operator",
+            workspaceId: projectDir,
+            projectId: projectDir,
+            conversationId: created.chat.id,
+          },
+        },
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      memory?: {
+        context: { enabled: boolean; memories: { bodyExcerpt: string }[] };
+        actions: { kind: string; proposalId?: string }[];
+      };
+    };
+    expect(seenRequests[0]?.messages.at(-1)?.content).toContain("Included memory context:");
+    expect(seenRequests[0]?.messages.at(-1)?.content).toContain("Use pnpm instead of npm");
+    expect(body.memory?.context.enabled).toBe(true);
+    expect(body.memory?.context.memories).toHaveLength(1);
+    expect(body.memory?.actions[0]?.kind).toBe("candidate");
+    const proposalId = body.memory?.actions[0]?.proposalId;
+    expect(proposalId).toBeDefined();
+    if (proposalId !== undefined) {
+      expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
+    }
+    memoryVault.close();
   });
 
   // Issue #174 — on native Windows the desktop bootstrap calls validateProjectPath(process.cwd()),

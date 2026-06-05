@@ -21,6 +21,7 @@ import {
   AttachRejectionAlert,
 } from "./AttachmentStrip";
 import { isRunSummaryMessage, LaunchWorkflowButton, RunSummaryCard } from "./WorkflowHandoff";
+import { Toggle } from "./widgets/shared/Toggle";
 import { type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
 import { ApiError, updateChat } from "@/lib/api";
@@ -34,6 +35,8 @@ import type {
   Chat,
   ChatMessage,
   ChatLocalKnowledgeScope,
+  ConversationMemoryActionWire,
+  ConversationMemoryResultWire,
   GroundedAnswer as GroundedAnswerWire,
   ModelCapability,
   ProjectWithAvailability,
@@ -621,10 +624,7 @@ interface ScopeOption {
   readonly label: string;
 }
 
-function capsuleOptions(
-  chat: Chat,
-  capsules: readonly CapsuleListEntry[],
-): readonly ScopeOption[] {
+function capsuleOptions(chat: Chat, capsules: readonly CapsuleListEntry[]): readonly ScopeOption[] {
   const options = capsules.map((capsule) => ({
     value: `capsule:${capsule.id}`,
     label: `Knowledge capsule: ${capsule.displayName}`,
@@ -695,7 +695,9 @@ function LocalKnowledgeScopeControl({
           throw capsuleResult.reason;
         }
         if (cancelled) return;
-        setCapsules(capsuleResult.value.capsules.filter((entry) => entry.lifecycleState === "ready"));
+        setCapsules(
+          capsuleResult.value.capsules.filter((entry) => entry.lifecycleState === "ready"),
+        );
         if (capsuleSetResult.status === "fulfilled") {
           setCapsuleSets(capsuleSetResult.value.capsuleSets);
         } else {
@@ -859,6 +861,185 @@ function GroundedAnswerPanel({
   );
 }
 
+function MemoryActionCard({
+  action,
+  acceptCandidate,
+  rejectCandidate,
+}: {
+  readonly action: ConversationMemoryActionWire;
+  readonly acceptCandidate: (proposalId: string) => Promise<void>;
+  readonly rejectCandidate: (proposalId: string) => Promise<void>;
+}): ReactNode {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+  if (action.kind === "candidate") {
+    return (
+      <article className="chat-memory-action">
+        <div className="chat-memory-action-head">
+          <strong>{action.scopeLabel}</strong>
+          <span>{action.requiresApproval ? "Approval required" : "Proposed memory"}</span>
+        </div>
+        <p>{action.body}</p>
+        <div className="chat-memory-action-buttons">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError(undefined);
+              void acceptCandidate(action.proposalId)
+                .catch((caught) => {
+                  setError(caught instanceof Error ? caught.message : "Unable to accept memory.");
+                })
+                .finally(() => setBusy(false));
+            }}
+          >
+            Accept
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError(undefined);
+              void rejectCandidate(action.proposalId)
+                .catch((caught) => {
+                  setError(caught instanceof Error ? caught.message : "Unable to reject memory.");
+                })
+                .finally(() => setBusy(false));
+            }}
+          >
+            Reject
+          </button>
+        </div>
+        {error !== undefined ? (
+          <div role="alert" className="cmp-err">
+            {error}
+          </div>
+        ) : null}
+      </article>
+    );
+  }
+  if (action.kind === "update") {
+    return (
+      <article className="chat-memory-action">
+        <div className="chat-memory-action-head">
+          <strong>Memory update detected</strong>
+          <span>{action.memoryId}</span>
+        </div>
+        <p>
+          {action.bodyPatch !== undefined
+            ? `Suggested update: ${action.bodyPatch}`
+            : "Suggested update."}
+        </p>
+      </article>
+    );
+  }
+  if (action.kind === "forget") {
+    return (
+      <article className="chat-memory-action">
+        <div className="chat-memory-action-head">
+          <strong>Memory forget detected</strong>
+          <span>{action.requiresConfirmation ? "Confirmation required" : action.memoryId}</span>
+        </div>
+        <p>{`Matched memory ${action.memoryId} for a forget operation.`}</p>
+      </article>
+    );
+  }
+  return (
+    <article className="chat-memory-action">
+      <div className="chat-memory-action-head">
+        <strong>Memory action not created</strong>
+      </div>
+      <p>{action.reason}</p>
+    </article>
+  );
+}
+
+function MemoryPanel({
+  memoryEnabled,
+  setMemoryEnabled,
+  memoryBudgetTokens,
+  setMemoryBudgetTokens,
+  latestMemory,
+  acceptCandidate,
+  rejectCandidate,
+}: {
+  readonly memoryEnabled: boolean;
+  readonly setMemoryEnabled: (next: boolean) => void;
+  readonly memoryBudgetTokens: number;
+  readonly setMemoryBudgetTokens: (next: number) => void;
+  readonly latestMemory: ConversationMemoryResultWire | undefined;
+  readonly acceptCandidate: (proposalId: string) => Promise<void>;
+  readonly rejectCandidate: (proposalId: string) => Promise<void>;
+}): ReactNode {
+  const [open, setOpen] = useState(false);
+  const memoryCount = latestMemory?.context.memories.length ?? 0;
+  return (
+    <section className="chat-memory-panel" aria-label="Conversation memory">
+      <div className="chat-memory-panel-head">
+        <div className="chat-memory-toggle">
+          <Toggle
+            on={memoryEnabled}
+            onChange={setMemoryEnabled}
+            label="Enable memory for the next request"
+          />
+          <span>Memory {memoryEnabled ? "on" : "off"}</span>
+        </div>
+        <label className="chat-memory-budget">
+          <span>Budget</span>
+          <input
+            type="number"
+            min={0}
+            step={100}
+            value={memoryBudgetTokens}
+            onChange={(event) =>
+              setMemoryBudgetTokens(Math.max(0, Number(event.target.value) || 0))
+            }
+          />
+        </label>
+        <button type="button" className="chip" onClick={() => setOpen((current) => !current)}>
+          {memoryCount > 0 ? `${String(memoryCount)} memories included` : "No memory included"}
+        </button>
+      </div>
+      {open ? (
+        <div className="chat-memory-disclosure">
+          <p className="chat-memory-summary">
+            {latestMemory === undefined
+              ? "Memory disclosure appears after the next response."
+              : latestMemory.context.enabled
+                ? `Used ${String(latestMemory.context.budget.used)} of ${String(latestMemory.context.budget.tokens)} memory tokens.`
+                : "Memory was disabled for the last request."}
+          </p>
+          {latestMemory?.context.memories.map((memory) => (
+            <article key={memory.memoryId} className="chat-memory-item">
+              <div className="chat-memory-item-head">
+                <strong>{memory.memoryId}</strong>
+                <span>{memory.inclusionReason}</span>
+              </div>
+              <p>{memory.bodyExcerpt}</p>
+            </article>
+          ))}
+          {latestMemory?.actions.map((action) => (
+            <MemoryActionCard
+              key={
+                action.kind === "candidate"
+                  ? action.proposalId
+                  : action.kind === "rejected"
+                    ? action.reason
+                    : action.memoryId
+              }
+              action={action}
+              acceptCandidate={acceptCandidate}
+              rejectCandidate={rejectCandidate}
+            />
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps): ReactNode {
   const session = useChatSessionContext();
   const {
@@ -873,6 +1054,13 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
     activeChat,
     replaceChat,
     latestGrounded,
+    latestMemory,
+    memoryEnabled,
+    setMemoryEnabled,
+    memoryBudgetTokens,
+    setMemoryBudgetTokens,
+    acceptMemoryCandidate,
+    rejectMemoryCandidate,
   } = session;
   // AC #1: block ready when no model is available — do not allow submission.
   const ready = draft.trim().length > 0 && !sending && !loading && !noEligibleModels;
@@ -902,6 +1090,17 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
       {linkedRoot !== null ? <ChatContext root={linkedRoot} /> : null}
       {activeChat !== undefined ? (
         <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
+      ) : null}
+      {activeChat !== undefined ? (
+        <MemoryPanel
+          memoryEnabled={memoryEnabled}
+          setMemoryEnabled={setMemoryEnabled}
+          memoryBudgetTokens={memoryBudgetTokens}
+          setMemoryBudgetTokens={setMemoryBudgetTokens}
+          latestMemory={latestMemory}
+          acceptCandidate={acceptMemoryCandidate}
+          rejectCandidate={rejectMemoryCandidate}
+        />
       ) : null}
       {noEligibleModels ? (
         <div className="chatw-foot">

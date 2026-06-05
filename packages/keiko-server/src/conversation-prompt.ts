@@ -9,6 +9,7 @@ import type { ConversationDocumentContextWire } from "@oscharko-dev/keiko-contra
 
 export const CONVERSATION_USER_BLOCK_HEADER = "User message:";
 export const CONVERSATION_CONTEXT_BLOCK_HEADER = "Attached document context:";
+export const CONVERSATION_MEMORY_BLOCK_HEADER = "Included memory context:";
 export const CONVERSATION_DOCUMENT_SEPARATOR = "---";
 
 function renderDocumentBlock(doc: ConversationDocumentContextWire): string {
@@ -22,11 +23,21 @@ function renderDocumentBlock(doc: ConversationDocumentContextWire): string {
 export function composeConversationPrompt(
   draft: string,
   documentContext: readonly ConversationDocumentContextWire[],
+  memoryContextText?: string,
 ): string {
-  if (documentContext.length === 0) {
+  if (
+    documentContext.length === 0 &&
+    (memoryContextText === undefined || memoryContextText.length === 0)
+  ) {
     return draft;
   }
-  const userBlock = `${CONVERSATION_USER_BLOCK_HEADER}\n${draft}`;
-  const contextBlocks = documentContext.map(renderDocumentBlock).join("\n");
-  return `${userBlock}\n\n${CONVERSATION_CONTEXT_BLOCK_HEADER}\n${contextBlocks}`;
+  const blocks = [`${CONVERSATION_USER_BLOCK_HEADER}\n${draft}`];
+  if (memoryContextText !== undefined && memoryContextText.length > 0) {
+    blocks.push(`${CONVERSATION_MEMORY_BLOCK_HEADER}\n${memoryContextText}`);
+  }
+  if (documentContext.length > 0) {
+    const contextBlocks = documentContext.map(renderDocumentBlock).join("\n");
+    blocks.push(`${CONVERSATION_CONTEXT_BLOCK_HEADER}\n${contextBlocks}`);
+  }
+  return blocks.join("\n\n");
 }

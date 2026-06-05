@@ -370,7 +370,7 @@ function RunSummaryPane({
                 <dt className="qi-detail-label">Candidate IDs</dt>
                 <dd className="qi-detail-value">
                   <ul className="qi-ref-list">
-                    {detail.candidateIds.map((id) => (
+                    {detail.candidateIds.map((id: string) => (
                       <li key={id} className="qi-monospace">
                         {id}
                       </li>
@@ -384,7 +384,7 @@ function RunSummaryPane({
                 <dt className="qi-detail-label">Evidence refs</dt>
                 <dd className="qi-detail-value">
                   <ul className="qi-ref-list">
-                    {detail.evidenceRefs.map((ref) => (
+                    {detail.evidenceRefs.map((ref: QualityIntelligenceUiRunDetail["evidenceRefs"][number]) => (
                       <li key={`${ref.envelopeId}:${ref.atomId}`} className="qi-monospace">
                         {ref.envelopeId.slice(0, 16)}…/{ref.atomId.slice(0, 12)}
                       </li>
@@ -437,7 +437,7 @@ function FindingsPane({
           </div>
         ) : (
           <ul className="qi-finding-list" aria-label="Findings list">
-            {findings.map((f) => (
+            {findings.map((f: QualityIntelligenceUiRunDetail["findingRefs"][number]) => (
               <li key={f.id} className="qi-finding-item">
                 <div className="qi-finding-header">
                   <span className="qi-finding-kind">{f.kind}</span>

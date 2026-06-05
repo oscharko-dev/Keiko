@@ -236,6 +236,21 @@ describe("handleMemoryRetrieveContext", () => {
     expect(body.included).toHaveLength(1);
   });
 
+  it("returns 400 when queryText or budgetTokens are invalid", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const badQuery = await handleMemoryRetrieveContext(
+      makeCtx({ scopes: [{ kind: "user", userId: "u-1" }], queryText: 42 }),
+      deps,
+    );
+    expect(badQuery.status).toBe(400);
+    const badBudget = await handleMemoryRetrieveContext(
+      makeCtx({ scopes: [{ kind: "user", userId: "u-1" }], budgetTokens: -1 }),
+      deps,
+    );
+    expect(badBudget.status).toBe(400);
+  });
+
   it("surfaces expired memories as omitted with suppressionDetail=expired", async () => {
     const vault = makeVault();
     insertAcceptedMemory(vault, { body: "Fresh memory remains includable." });
@@ -310,6 +325,16 @@ describe("handleMemoryCaptureFromConversation", () => {
       deps,
     );
     expect(empty.status).toBe(400);
+  });
+
+  it("returns 400 when context.userId is missing", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({ text: "remember that we deploy on Fridays", context: {} }),
+      deps,
+    );
+    expect(result.status).toBe(400);
   });
 
   it("returns an empty outcome list when no intent is detected", async () => {

@@ -10,6 +10,7 @@ import type {
   ChatLocalKnowledgeScope,
   ChatResponse,
   ChatsResponse,
+  ConversationMemoryRequestWire,
   ChatStatus,
   ChatMessageRole,
   ChatWorkflowStatus,
@@ -502,6 +503,7 @@ export interface SendDesktopChatInput {
   projectPath: string;
   content: string;
   modelId?: string;
+  memory?: ConversationMemoryRequestWire;
 }
 
 // Issue #152 — accepts an optional AbortSignal so the Conversation Center can
