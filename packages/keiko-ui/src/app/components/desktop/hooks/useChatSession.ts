@@ -21,6 +21,62 @@ import type {
 } from "@/lib/types";
 import { isConversationEligibleModel } from "@/lib/types";
 
+// ─── Attachment types (Issue #147) ────────────────────────────────────────────
+//
+// Client-side validation only. Server-side modality enforcement is deferred to
+// issue #149. Pending attachments are cleared on successful sendMessage.
+
+export type PendingAttachmentKind = "image" | "document";
+
+// Why: attachment rejection reasons are a closed, typed union so callers can
+// show human-readable messages per reason without string matching.
+export type AttachmentRejectionReason =
+  | "text-only-model" // model capability forbids this attachment kind
+  | "unsupported-type" // MIME not in the image/* / document allowlist
+  | "oversized" // exceeds MAX_ATTACHMENT_BYTES (8 MiB)
+  | "empty"; // file.size === 0
+
+export interface PendingAttachment {
+  readonly id: string;
+  readonly kind: PendingAttachmentKind;
+  // file.name only — NEVER the full path (AC #4)
+  readonly name: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  // Defined for image kind; undefined for document kind (AC #4 — no path leaked)
+  readonly previewDataUrl?: string | undefined;
+}
+
+// Hard 8 MiB byte limit. Server enforces its own limit in #149; this client-side
+// gate provides immediate feedback without a round-trip.
+export const MAX_ATTACHMENT_BYTES = 8_388_608; // 8 MiB
+
+// Document MIME allowlist. `text/*` covers plain text, markdown, CSV, etc.
+// Specific application/* types are whitelisted individually.
+const DOCUMENT_MIME_PREFIXES = ["text/"] as const;
+const DOCUMENT_MIME_ALLOWLIST = new Set([
+  "application/pdf",
+  "application/json",
+  "application/x-yaml",
+  "application/yaml",
+]);
+
+function classifyMime(mimeType: string): PendingAttachmentKind | "unsupported-type" {
+  if (mimeType.startsWith("image/")) return "image";
+  if (DOCUMENT_MIME_PREFIXES.some((prefix) => mimeType.startsWith(prefix))) return "document";
+  if (DOCUMENT_MIME_ALLOWLIST.has(mimeType)) return "document";
+  return "unsupported-type";
+}
+
+function readDataUrl(file: File): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error("FileReader error"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export const DEFAULT_CHAT_TITLE = "New chat";
 
 function errorMessage(error: unknown): string {
@@ -76,6 +132,14 @@ export interface UseChatSessionResult {
   // Issue #185 AC3 — aborts the in-flight grounded request and clears the sending state.
   // No-op when no grounded request is in flight.
   cancelGrounded: () => void;
+  // Issue #147 — client-side attachment intake (AC #1–#4).
+  // Server-side enforcement is deferred to #149.
+  readonly pendingAttachments: readonly PendingAttachment[];
+  readonly addPendingAttachment: (
+    file: File,
+  ) => Promise<{ ok: true } | { ok: false; reason: AttachmentRejectionReason }>;
+  readonly removePendingAttachment: (id: string) => void;
+  readonly clearPendingAttachments: () => void;
 }
 
 interface SessionState {
@@ -170,6 +234,64 @@ export function useChatSession(): UseChatSessionResult {
   // can cancel in-flight requests. null when no grounded request is in flight.
   const groundedControllerRef = useRef<AbortController | null>(null);
   const activeChatIdRef = useRef<string | undefined>(undefined);
+  // Issue #147 — pending-attachment state. Cleared after a successful send (AC #3).
+  const [pendingAttachments, setPendingAttachments] = useState<readonly PendingAttachment[]>([]);
+
+  // addPendingAttachment validates MIME type, model capability, and byte limit before
+  // adding the attachment to state. Returns ok:false + reason on rejection (AC #1/#2).
+  // Never throws — rejections are surfaced as a typed result so callers can render a
+  // role="alert" message (AC #2 / Part 2 implementation).
+  const addPendingAttachment = useCallback(
+    async (
+      file: File,
+    ): Promise<{ ok: true } | { ok: false; reason: AttachmentRejectionReason }> => {
+      if (file.size === 0) return { ok: false, reason: "empty" };
+      if (file.size > MAX_ATTACHMENT_BYTES) return { ok: false, reason: "oversized" };
+
+      const kind = classifyMime(file.type);
+      if (kind === "unsupported-type") return { ok: false, reason: "unsupported-type" };
+
+      // AC #1: validate against the selected model's capabilities. Read state.models
+      // and state.selectedModel inline so no stale closure issues.
+      const selectedModelCapability = state.models.find((m) => m.id === state.selectedModel);
+      if (selectedModelCapability !== undefined) {
+        if (kind === "image" && !selectedModelCapability.supportsImageInput) {
+          return { ok: false, reason: "text-only-model" };
+        }
+        if (kind === "document" && !selectedModelCapability.supportsDocumentInput) {
+          return { ok: false, reason: "text-only-model" };
+        }
+      }
+
+      // AC #4: generate previewDataUrl for images only; never store file.path.
+      let previewDataUrl: string | undefined;
+      if (kind === "image") {
+        previewDataUrl = await readDataUrl(file);
+      }
+
+      const attachment: PendingAttachment = {
+        id: crypto.randomUUID(),
+        kind,
+        name: file.name, // file.name is basename only — no path component (AC #4)
+        mimeType: file.type,
+        sizeBytes: file.size,
+        previewDataUrl,
+      };
+      setPendingAttachments((previous) => [...previous, attachment]);
+      return { ok: true };
+    },
+    [state.models, state.selectedModel],
+  );
+
+  // AC #3: remove a single pending attachment by id.
+  const removePendingAttachment = useCallback((id: string) => {
+    setPendingAttachments((previous) => previous.filter((a) => a.id !== id));
+  }, []);
+
+  // Clears all pending attachments (called after successful sendMessage).
+  const clearPendingAttachments = useCallback(() => {
+    setPendingAttachments([]);
+  }, []);
 
   useEffect(() => {
     activeChatIdRef.current = state.activeChat?.id;
@@ -450,6 +572,8 @@ export function useChatSession(): UseChatSessionResult {
       } else {
         await sendUngrounded(chat, project, content, optimistic.id, modelId);
       }
+      // AC #3: clear pending attachments after a successful send.
+      clearPendingAttachments();
     } finally {
       setSending(false);
     }
@@ -460,6 +584,7 @@ export function useChatSession(): UseChatSessionResult {
     state.selectedModel,
     sendGrounded,
     sendUngrounded,
+    clearPendingAttachments,
   ]);
 
   // Issue #184 — local cache update after a connected-scope PATCH (or any other surgical wire
@@ -497,5 +622,9 @@ export function useChatSession(): UseChatSessionResult {
     replaceChat,
     latestGrounded,
     cancelGrounded,
+    pendingAttachments,
+    addPendingAttachment,
+    removePendingAttachment,
+    clearPendingAttachments,
   };
 }

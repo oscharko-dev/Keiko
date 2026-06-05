@@ -36,6 +36,9 @@ function makeProject(overrides: Partial<ProjectWithAvailability> = {}): ProjectW
     path: "/proj",
     name: "my-project",
     available: true,
+    favorite: false,
+    createdAt: 0,
+    lastOpenedAt: 0,
     ...overrides,
   };
 }
@@ -87,6 +90,11 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     replaceChat: vi.fn(),
     latestGrounded: undefined,
     cancelGrounded: vi.fn(),
+    // Issue #147 — attachment fields
+    pendingAttachments: [],
+    addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
+    removePendingAttachment: vi.fn(),
+    clearPendingAttachments: vi.fn(),
     ...overrides,
   };
 }

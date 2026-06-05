@@ -1,11 +1,25 @@
 "use client";
 
-import { useEffect, useRef, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
+import {
+  AttachButton,
+  AttachDropZone,
+  AttachmentStrip,
+  AttachRejectionAlert,
+} from "./AttachmentStrip";
 import type { ChatSessionApi } from "./hooks/useChatSession";
+import type { AttachmentRejectionReason } from "./hooks/useChatSession";
 import type {
   Chat,
   ChatMessage,
@@ -101,9 +115,16 @@ function TypingBubble(): ReactNode {
 interface ComposerBarProps {
   readonly session: ChatSessionApi;
   readonly ready: boolean;
+  readonly selectedModelCapability: ModelCapability | undefined;
+  readonly onAttachFiles: (files: readonly File[]) => void;
 }
 
-function ComposerBar({ session, ready }: ComposerBarProps): ReactNode {
+function ComposerBar({
+  session,
+  ready,
+  selectedModelCapability,
+  onAttachFiles,
+}: ComposerBarProps): ReactNode {
   const { models, selectedModel, setSelectedModel, noEligibleModels, loading } = session;
   // AC #1 / AC #4: when no eligible model is configured the send button must be
   // focusable (so screen-reader users discover the error) but must not submit.
@@ -123,9 +144,8 @@ function ComposerBar({ session, ready }: ComposerBarProps): ReactNode {
 
   return (
     <div className="cmp-bar">
-      <button type="button" className="cmp-add" aria-label="Attach (coming soon)" title="Attach">
-        <Icons.plus size={16} />
-      </button>
+      {/* Issue #147: real AttachButton replaces the placeholder "Attach (coming soon)" button */}
+      <AttachButton model={selectedModelCapability} onFiles={onAttachFiles} />
       <button type="button" className="cmp-mode" title="Mode">
         <Icons.spark size={14} style={{ color: "var(--accent)" }} /> Build
         <Icons.chevron size={12} />
@@ -224,9 +244,54 @@ interface ComposerCoreProps {
 }
 
 function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): ReactNode {
-  const { draft, loading, sending, setDraft, sendMessage } = session;
+  const {
+    draft,
+    loading,
+    sending,
+    setDraft,
+    sendMessage,
+    models,
+    selectedModel,
+    pendingAttachments,
+    addPendingAttachment,
+    removePendingAttachment,
+  } = session;
+
+  // Rejection state for the inline alert (AC #2 / Part 2).
+  const [rejectionReason, setRejectionReason] = useState<AttachmentRejectionReason | undefined>();
+  const [rejectionMime, setRejectionMime] = useState<string | undefined>();
+
+  const selectedModelCapability = models.find((m) => m.id === selectedModel);
+
+  // Derive whether any attachment kinds are supported by the selected model.
+  const attachEnabled =
+    selectedModelCapability !== undefined &&
+    (selectedModelCapability.supportsImageInput || selectedModelCapability.supportsDocumentInput);
+
+  const handleFiles = useCallback(
+    async (files: readonly File[]) => {
+      // Process each file; show the first rejection encountered.
+      let firstRejectionReason: AttachmentRejectionReason | undefined;
+      let firstRejectionMime: string | undefined;
+      for (const file of files) {
+        const result = await addPendingAttachment(file);
+        if (!result.ok && firstRejectionReason === undefined) {
+          firstRejectionReason = result.reason;
+          firstRejectionMime = file.type;
+        }
+      }
+      setRejectionReason(firstRejectionReason);
+      setRejectionMime(firstRejectionMime);
+    },
+    [addPendingAttachment],
+  );
+
   return (
     <div className="cmp-box">
+      {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
+      <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
+      {/* Chip strip below the textarea, above the composer bar (AC #3) */}
+      <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
       <textarea
         className="cmp-input"
         rows={2}
@@ -237,7 +302,14 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
         onKeyDown={onComposerKeyDown(sendMessage)}
         disabled={loading || sending}
       />
-      <ComposerBar session={session} ready={ready} />
+      {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
+      <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
+      <ComposerBar
+        session={session}
+        ready={ready}
+        selectedModelCapability={selectedModelCapability}
+        onAttachFiles={handleFiles}
+      />
     </div>
   );
 }
