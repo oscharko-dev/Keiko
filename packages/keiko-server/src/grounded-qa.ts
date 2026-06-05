@@ -35,7 +35,7 @@ import {
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig } from "./deps.js";
+import { currentGatewayConfig, currentRedactionSecrets } from "./deps.js";
 import type { Chat, ChatMessage } from "./store/index.js";
 import {
   ClarificationNeededError,
@@ -526,7 +526,10 @@ function persistGroundedAuditEvidence(
     {
       store: workerCtx.deps.evidenceStore,
       env: workerCtx.deps.env,
-      additionalSecrets: workerCtx.deps.redactionSecrets,
+      // Epic #177 audit: read the LIVE gateway-derived secrets list so apiKey/baseUrl values
+      // added via the runtime PATCH /api/gateway/config path are scrubbed by the evidence
+      // persister. `deps.redactionSecrets` is the startup snapshot frozen by buildUiHandlerDeps.
+      additionalSecrets: currentRedactionSecrets(workerCtx.deps),
       costClassResolver: resolveCostClass,
     },
   );
