@@ -70,6 +70,39 @@ describe("retrieveMemoryContext — input validation", () => {
     }
   });
 
+  it("throws RetrievalError('invalid-weight') when a weight is not finite", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext(baseRequest({ recencyWeight: Number.POSITIVE_INFINITY }), port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-weight");
+    }
+  });
+
+  it("throws RetrievalError('invalid-budget') when budgetTokens is not an integer", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext(baseRequest({ budgetTokens: 1.5 }), port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-budget");
+    }
+  });
+
+  it("throws RetrievalError('invalid-budget') when maxIncluded is not finite", () => {
+    const { port } = portReturning({});
+    try {
+      retrieveMemoryContext(baseRequest({ maxIncluded: Number.NaN }), port);
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(RetrievalError);
+      expect((e as RetrievalError).code).toBe("invalid-budget");
+    }
+  });
+
   it("throws RetrievalError('invalid-threshold') when staleConfidenceThreshold is NaN", () => {
     const { port } = portReturning({});
     try {
@@ -196,6 +229,32 @@ describe("retrieveMemoryContext — AC4 stale suppression", () => {
       expect(o.reason).toBe("suppressed-by-status");
       expect(o.suppressionDetail).toBeDefined();
     }
+  });
+
+  it("requests archived, forgotten, and expired rows from the port for explainable omissions", () => {
+    const optionsSeen: unknown[] = [];
+    const expired = buildRecord({ id: "exp", validFrom: 0, validUntil: now - 1 });
+    const port: MemoryQueryPort = {
+      listByScope: (_scope, options) => {
+        optionsSeen.push(options);
+        return [expired];
+      },
+    };
+    const result = retrieveMemoryContext(baseRequest({ budgetTokens: 500 }), port);
+    expect(optionsSeen).toEqual([
+      {
+        includeForgotten: true,
+        includeArchived: true,
+        includeExpired: true,
+        maxResults: 500,
+      },
+    ]);
+    expect(result.included).toEqual([]);
+    expect(result.omitted).toContainEqual({
+      memoryId: memoryId("exp"),
+      reason: "suppressed-by-status",
+      suppressionDetail: "expired",
+    });
   });
 });
 

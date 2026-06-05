@@ -49,14 +49,17 @@ function baselineSubscores(record: MemoryRecord, query: RankMemoriesQuery): Incl
 }
 
 function weightedScore(s: IncludedSubscores, w: RankingWeights): number {
-  return (
+  const raw =
     s.relevance * w.relevance +
     s.recency * w.recency +
     s.confidence * w.confidence +
     s.pinned * w.pinned +
     s.correction * w.correction +
-    s.graph * w.graph
-  );
+    s.graph * w.graph;
+  const totalWeight =
+    w.relevance + w.recency + w.confidence + w.pinned + w.correction + w.graph;
+  if (totalWeight <= 0) return 0;
+  return raw / totalWeight;
 }
 
 function topContributor(s: IncludedSubscores, w: RankingWeights): string {

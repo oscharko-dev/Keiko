@@ -16,10 +16,16 @@ import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { Readable } from "node:stream";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import type { MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts";
+import type {
+  MemoryEdge,
+  MemoryId,
+  MemoryRecord,
+  MemoryUserId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   handleMemoryRetrieveContext,
   handleMemoryCaptureFromConversation,
+  vaultAsQueryPort,
 } from "./memory-conv-handlers.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
@@ -108,10 +114,14 @@ function brandedMemoryUserId(value: string): MemoryUserId {
   const u: unknown = value;
   return u as MemoryUserId;
 }
+function brandedEdgeId(value: string): MemoryEdge["id"] {
+  const u: unknown = value;
+  return u as MemoryEdge["id"];
+}
 
 function insertAcceptedMemory(
   vault: MemoryVaultStore,
-  options: { body?: string; userId?: string } = {},
+  options: { body?: string; userId?: string; validUntil?: number } = {},
 ): MemoryRecord {
   const id: MemoryId = brandedMemoryId(`mem-${Math.random().toString(36).slice(2, 10)}`);
   const userId: MemoryUserId = brandedMemoryUserId(options.userId ?? "u-1");
@@ -128,7 +138,10 @@ function insertAcceptedMemory(
       confidence: 0.9,
       sensitivity: "public",
     },
-    validity: { validFrom: now },
+    validity:
+      options.validUntil === undefined
+        ? { validFrom: now }
+        : { validFrom: now - 10_000, validUntil: options.validUntil },
     status: "accepted",
     pinned: false,
     tags: [],
@@ -136,6 +149,21 @@ function insertAcceptedMemory(
     updatedAt: now,
   };
   return vault.insertMemory(record);
+}
+
+function insertRelatedEdge(
+  vault: MemoryVaultStore,
+  fromMemoryId: MemoryId,
+  toMemoryId: MemoryId,
+): MemoryEdge {
+  return vault.insertEdge({
+    id: brandedEdgeId(`edge-${Math.random().toString(36).slice(2, 10)}`),
+    schemaVersion: "1",
+    fromMemoryId,
+    toMemoryId,
+    kind: "related",
+    createdAt: Date.now(),
+  });
 }
 
 function asJson(result: RouteResult): Record<string, unknown> {
@@ -206,6 +234,44 @@ describe("handleMemoryRetrieveContext", () => {
     expect(block.memories).toHaveLength(1);
     expect(block.text.length).toBeGreaterThan(0);
     expect(body.included).toHaveLength(1);
+  });
+
+  it("surfaces expired memories as omitted with suppressionDetail=expired", async () => {
+    const vault = makeVault();
+    insertAcceptedMemory(vault, { body: "Fresh memory remains includable." });
+    const expired = insertAcceptedMemory(vault, {
+      body: "This memory is past its validity window.",
+      validUntil: Date.now() - 1,
+    });
+    const deps = makeDeps({ memoryVault: vault });
+    const result = await handleMemoryRetrieveContext(
+      makeCtx({ scopes: [{ kind: "user", userId: "u-1" }] }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const body = asJson(result);
+    const omitted = body.omitted as readonly {
+      memoryId: string;
+      reason: string;
+      suppressionDetail?: string;
+    }[];
+    expect(omitted).toContainEqual({
+      memoryId: expired.id,
+      reason: "suppressed-by-status",
+      suppressionDetail: "expired",
+    });
+  });
+
+  it("exposes vault edge lookups through the live query-port adapter", () => {
+    const vault = makeVault();
+    const source = insertAcceptedMemory(vault, { body: "Seed memory." });
+    const target = insertAcceptedMemory(vault, { body: "Linked memory." });
+    const edge = insertRelatedEdge(vault, source.id, target.id);
+
+    const port = vaultAsQueryPort(vault);
+
+    expect(port.listOutgoingEdges?.(source.id)).toEqual([edge]);
+    expect(port.listIncomingEdges?.(target.id)).toEqual([edge]);
   });
 
   it("rejects oversize bodies with 413", async () => {

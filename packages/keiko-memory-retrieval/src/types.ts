@@ -41,6 +41,7 @@ export interface MemoryQueryPort {
 export interface ListByScopeOptions {
   readonly includeForgotten?: boolean;
   readonly includeArchived?: boolean;
+  readonly includeExpired?: boolean;
   readonly maxResults?: number;
 }
 
