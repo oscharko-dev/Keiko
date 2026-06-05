@@ -12,6 +12,7 @@ import { useChatSessionContext } from "./context/ChatSessionContext";
 import { ConnectedScopePill } from "./ConnectedScopePill";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
+import { SafeMarkdown } from "./SafeMarkdown";
 import {
   AttachButton,
   AttachDropZone,
@@ -90,7 +91,13 @@ function ChatBubble({ message }: { readonly message: ChatMessage }): ReactNode {
     <article className="chat-msg" data-role={message.role}>
       <div className="chat-msg-bubble">
         <div className="chat-msg-role">{isUser ? "You" : "Keiko"}</div>
-        {message.content}
+        {isUser ? (
+          message.content
+        ) : (
+          // AC #1 / #2: assistant responses render as safe markdown.
+          // User messages remain plain text — no markdown interpretation.
+          <SafeMarkdown source={message.content} />
+        )}
         <div className="chat-msg-time">{timeLabel(message.timestamp)}</div>
       </div>
     </article>
