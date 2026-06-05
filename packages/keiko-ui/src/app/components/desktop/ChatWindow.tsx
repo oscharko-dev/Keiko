@@ -616,6 +616,61 @@ function formatScopeUpdateError(error: unknown): string {
   return "Unable to update knowledge scope.";
 }
 
+interface ScopeOption {
+  readonly value: string;
+  readonly label: string;
+}
+
+function capsuleOptions(
+  chat: Chat,
+  capsules: readonly CapsuleListEntry[],
+): readonly ScopeOption[] {
+  const options = capsules.map((capsule) => ({
+    value: `capsule:${capsule.id}`,
+    label: `Knowledge capsule: ${capsule.displayName}`,
+  }));
+  const selectedValue = groundedModeValue(chat);
+  if (!selectedValue.startsWith("capsule:")) {
+    return options;
+  }
+  if (options.some((option) => option.value === selectedValue)) {
+    return options;
+  }
+  const capsuleId = selectedValue.slice("capsule:".length);
+  return [
+    ...options,
+    {
+      value: selectedValue,
+      label: `Knowledge capsule: ${capsuleId} (not ready)`,
+    },
+  ];
+}
+
+function capsuleSetOptions(
+  chat: Chat,
+  capsuleSets: readonly CapsuleSetListEntry[],
+): readonly ScopeOption[] {
+  const options = capsuleSets.map((capsuleSet) => ({
+    value: `capsule-set:${capsuleSet.id}`,
+    label: `Capsule set: ${capsuleSet.displayName}`,
+  }));
+  const selectedValue = groundedModeValue(chat);
+  if (!selectedValue.startsWith("capsule-set:")) {
+    return options;
+  }
+  if (options.some((option) => option.value === selectedValue)) {
+    return options;
+  }
+  const capsuleSetId = selectedValue.slice("capsule-set:".length);
+  return [
+    ...options,
+    {
+      value: selectedValue,
+      label: `Capsule set: ${capsuleSetId} (unavailable)`,
+    },
+  ];
+}
+
 function LocalKnowledgeScopeControl({
   chat,
   onChatChanged,
@@ -632,13 +687,21 @@ function LocalKnowledgeScopeControl({
     let cancelled = false;
     async function load(): Promise<void> {
       try {
-        const [capsuleResponse, capsuleSetResponse] = await Promise.all([
+        const [capsuleResult, capsuleSetResult] = await Promise.allSettled([
           fetchCapsules(),
-          fetchCapsuleSets().catch(() => ({ capsuleSets: [] })),
+          fetchCapsuleSets(),
         ]);
+        if (capsuleResult.status !== "fulfilled") {
+          throw capsuleResult.reason;
+        }
         if (cancelled) return;
-        setCapsules(capsuleResponse.capsules.filter((entry) => entry.lifecycleState === "ready"));
-        setCapsuleSets(capsuleSetResponse.capsuleSets);
+        setCapsules(capsuleResult.value.capsules.filter((entry) => entry.lifecycleState === "ready"));
+        if (capsuleSetResult.status === "fulfilled") {
+          setCapsuleSets(capsuleSetResult.value.capsuleSets);
+        } else {
+          setCapsuleSets([]);
+          setError(formatScopeUpdateError(capsuleSetResult.reason));
+        }
       } catch (caught) {
         if (!cancelled) setError(formatScopeUpdateError(caught));
       }
@@ -703,6 +766,8 @@ function LocalKnowledgeScopeControl({
   }
 
   const value = groundedModeValue(chat);
+  const capsuleChoices = capsuleOptions(chat, capsules);
+  const capsuleSetChoices = capsuleSetOptions(chat, capsuleSets);
   return (
     <label
       style={{
@@ -728,14 +793,14 @@ function LocalKnowledgeScopeControl({
         <option value="files" disabled={chat.connectedScope === undefined}>
           Live Files context
         </option>
-        {capsules.map((capsule) => (
-          <option key={capsule.id} value={`capsule:${capsule.id}`}>
-            {`Knowledge capsule: ${capsule.displayName}`}
+        {capsuleChoices.map((capsule) => (
+          <option key={capsule.value} value={capsule.value}>
+            {capsule.label}
           </option>
         ))}
-        {capsuleSets.map((capsuleSet) => (
-          <option key={capsuleSet.id} value={`capsule-set:${capsuleSet.id}`}>
-            {`Capsule set: ${capsuleSet.displayName}`}
+        {capsuleSetChoices.map((capsuleSet) => (
+          <option key={capsuleSet.value} value={capsuleSet.value}>
+            {capsuleSet.label}
           </option>
         ))}
       </select>

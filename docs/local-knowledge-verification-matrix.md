@@ -2,18 +2,18 @@
 
 ## Audit correction (2026-06-04)
 
-This document was used as closure evidence for Epic [#189](https://github.com/oscharko-dev/Keiko/issues/189), but a post-merge audit against `origin/dev` found that several PASS claims in earlier revisions of this matrix did not match the landed code. In particular:
+This document was used as closure evidence for Epic [#189](https://github.com/oscharko-dev/Keiko/issues/189), and a post-merge audit against `origin/dev` found that several PASS claims in earlier revisions of this matrix did not match the landed code at that time. In particular:
 
 - Local Knowledge BFF routes and Conversation Center HTTP wiring were not fully wired in `packages/keiko-server` even though earlier text described them as shipped.
 - Some file references in this matrix pointed to paths that do not exist in the repository.
 - PDF and DOCX ingestion were previously described as complete even though the parser layer still classified them as not implemented before the audit fixes in this branch.
 
-Treat the historical PASS rows below as implementation provenance, not as authoritative release evidence. The authoritative audit status is:
+Treat the historical PASS rows below as implementation provenance, not as authoritative release evidence on their own. The authoritative audit status is:
 
 - `#194` and `#266`: corrected in this audit branch by adding real PDF and DOCX extraction adapters plus async parser execution in discovery.
 - `#199`: corrected in this audit branch by adding bounded hybrid lexical metadata reranking on top of scoped vector retrieval.
 - `#201`: corrected in this audit branch by persisting metadata-only audit events, wiring them on live lifecycle/indexing/grounded-answer paths, hardening retention validation, and fixing absolute-path redaction.
-- `#197`, `#198`, and `#200`: still require further work before Epic `#189` can be considered fully implemented and closure-ready.
+- `#197`, `#198`, and `#200`: the earlier wiring gaps have since been closed on `dev`; use the current `keiko-server` route table and grounded-answer tests as the release evidence instead of the original audit note.
 
 ## Summary
 
@@ -168,7 +168,7 @@ The local-knowledge surface is a self-contained read/write boundary with no exte
 - **PDF parser adapter** — requires a vetted PDF library; deferred to a follow-up issue.
 - **DOCX parser adapter** — requires a vetted Office Open XML library; deferred to a follow-up issue.
 - **Multi-page OCR splitter** — requires a concrete `OcrAdapter` implementation first; #202 ships the port but the implementation is deferred.
-- **Conversation Center HTTP wiring** — the BFF route that calls `runGroundedAnswer` and integrates grounded answers into the chat UI is a `keiko-server` concern, not part of the Local Knowledge Connector package.
+- **Conversation Center HTTP wiring** — historical note only. Current `dev` now includes the `keiko-server` grounded Local Knowledge route and desktop chat integration; this is no longer an open Epic blocker.
 
 ## Limitations
 

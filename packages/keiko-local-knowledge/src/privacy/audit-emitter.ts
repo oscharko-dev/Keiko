@@ -8,7 +8,7 @@
 // mirrors the source membership variants into the narrower `capsule_membership_changes`
 // table that #263 already introduced for composition history.
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import type { KnowledgeStore } from "../store.js";
 
@@ -71,11 +71,17 @@ function insertAuditEventRow(statement: RunStatement, event: CapsuleAuditEvent):
   });
 }
 
+function redactChunkIds(chunkIds: readonly string[]): readonly string[] {
+  return chunkIds.map((chunkId) =>
+    createHash("sha256").update(chunkId).digest("hex").slice(0, 16),
+  );
+}
+
 function buildAuditDetails(event: CapsuleAuditEvent): Record<string, unknown> | null {
   if (event.kind === "retrieval-performed") {
     return {
       sourceIds: [...event.sourceIds],
-      chunkIds: [...event.chunkIds],
+      chunkIds: redactChunkIds(event.chunkIds),
       referenceCount: event.referenceCount,
       noEvidence: event.noEvidence,
     };
@@ -83,7 +89,7 @@ function buildAuditDetails(event: CapsuleAuditEvent): Record<string, unknown> | 
   if (event.kind === "answer-context-assembled" || event.kind === "model-context-sent") {
     return {
       sourceIds: [...event.sourceIds],
-      chunkIds: [...event.chunkIds],
+      chunkIds: redactChunkIds(event.chunkIds),
       referenceCount: event.referenceCount,
       citationCount: event.citationCount,
       ...("modelId" in event ? { modelId: event.modelId } : {}),
