@@ -19,7 +19,6 @@ import type {
   GroundedUncertainty,
   LocalKnowledgeEvidenceCitation,
   LocalKnowledgeGroundedAnswer,
-  LocalKnowledgeGroundedAnswerContextSummary,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { KnowledgeCapsule } from "@oscharko-dev/keiko-contracts";
 import {
@@ -117,7 +116,7 @@ function createEmbeddingAdapter(deps: UiHandlerDeps, modelIds: readonly string[]
   return {
     endpoint: "local-knowledge",
     apiKey: "local-knowledge",
-    request: async (request) => {
+    request: async (request): Promise<OpenAIEmbeddingOutcome> => {
       const provider = config.providers.find((entry) => entry.modelId === request.modelId);
       if (provider === undefined) {
         return { ok: false, kind: "unsupported-model" };
@@ -233,11 +232,10 @@ function sliceExcerpt(text: string, start: number | undefined, end: number | und
   return `${raw.slice(0, MAX_EXCERPT_CHARS).trimEnd()}…`;
 }
 
-function buildLocalKnowledgeMessages(
-  question: string,
+function buildReferenceLines(
   input: AnswerGeneratorInput,
   store: KnowledgeStore,
-): readonly { readonly role: "system" | "user"; readonly content: string }[] {
+): readonly string[] {
   const lines: string[] = [];
   const references = input.references.slice(0, MAX_PROMPT_REFERENCES);
   for (let i = 0; i < references.length; i += 1) {
@@ -266,6 +264,22 @@ function buildLocalKnowledgeMessages(
       lines.push("(No excerpt text available for this citation.)");
     }
   }
+  return lines;
+}
+
+function localKnowledgePromptSummary(input: AnswerGeneratorInput): string {
+  return (
+    `Indexed knowledge scope: ${String(input.pack.scope.capsuleCount)} capsule(s), ` +
+    `${String(input.pack.counts.totalReferences)} retrieved reference(s).`
+  );
+}
+
+function buildLocalKnowledgeMessages(
+  question: string,
+  input: AnswerGeneratorInput,
+  store: KnowledgeStore,
+): readonly { readonly role: "system" | "user"; readonly content: string }[] {
+  const lines = buildReferenceLines(input, store);
   return [
     {
       role: "system",
@@ -279,7 +293,7 @@ function buildLocalKnowledgeMessages(
       content: [
         `Question: ${question}`,
         "",
-        `Indexed knowledge scope: ${input.pack.scope.capsuleCount} capsule(s), ${input.pack.counts.totalReferences} retrieved reference(s).`,
+        localKnowledgePromptSummary(input),
         "",
         "Citations:",
         ...lines,
@@ -374,6 +388,170 @@ function citationStableId(citation: AnswerGeneratorInput["references"][number], 
     .slice(0, 16);
 }
 
+function localKnowledgeQuery(
+  chat: Chat,
+  input: AskInput,
+): Parameters<typeof runGroundedAnswer>[1] {
+  return {
+    conversationId: chat.id,
+    text: input.content,
+    ...(chat.localKnowledgeScope?.kind === "capsule"
+      ? { capsuleId: chat.localKnowledgeScope.capsuleId }
+      : {}),
+    ...(chat.localKnowledgeScope?.kind === "capsule-set"
+      ? { capsuleSetId: chat.localKnowledgeScope.capsuleSetId }
+      : {}),
+  };
+}
+
+function enforcedNoEvidenceReason(
+  result: Awaited<ReturnType<typeof runGroundedAnswer>>,
+): string | undefined {
+  if (result.noEvidence) return result.reason ?? "no-evidence";
+  if (result.answer.trim().length === 0) return "empty-answer";
+  if (result.references.length > 0 && result.citations.length === 0) {
+    return "answer-without-citations";
+  }
+  return undefined;
+}
+
+function buildLocalKnowledgeCitations(
+  result: Awaited<ReturnType<typeof runGroundedAnswer>>,
+  noEvidenceReason: string | undefined,
+): readonly LocalKnowledgeEvidenceCitation[] {
+  if (noEvidenceReason !== undefined) return [];
+  return result.citations.map((entry) => ({
+    stableId: citationStableId(entry.reference, entry.marker),
+    marker: entry.marker,
+    label: renderCitationLabel(entry.citation),
+    score: entry.reference.score,
+  }));
+}
+
+function buildLocalKnowledgeAnswer(
+  chat: Chat,
+  selected: SelectedLocalKnowledgeScope,
+  persisted: readonly [ChatMessage, ChatMessage],
+  result: Awaited<ReturnType<typeof runGroundedAnswer>>,
+  elapsedMs: number,
+): LocalKnowledgeGroundedAnswer {
+  const [user, assistant] = persisted;
+  const noEvidenceReason = enforcedNoEvidenceReason(result);
+  const assistantContent =
+    noEvidenceReason === undefined
+      ? result.answer.trim()
+      : "No evidence found in the selected knowledge scope.";
+  const citations = buildLocalKnowledgeCitations(result, noEvidenceReason);
+  return {
+    groundingKind: "local-knowledge",
+    userMessageId: user.id,
+    assistantMessageId: assistant.id,
+    content: assistantContent,
+    citations,
+    uncertainty:
+      noEvidenceReason === undefined
+        ? []
+        : [
+            {
+              kind: noEvidenceReason,
+              claim: assistantContent,
+            },
+          ],
+    omittedCount: 0,
+    elapsedMs,
+    noEvidence: noEvidenceReason !== undefined,
+    ...(noEvidenceReason !== undefined ? { noEvidenceReason } : {}),
+    contextPack: {
+      kind: "local-knowledge",
+      scopeKind: selected.scopeKind,
+      scopeId: `lk-${hashString32(`${chat.id}|${selected.scopeLabel}`)}`,
+      scopeLabel: selected.scopeLabel,
+      capsuleCount: result.pack.scope.capsuleCount,
+      sourceCount: result.pack.scope.sourceCount,
+      citationCount: citations.length,
+      referenceBudget: DEFAULT_REFERENCE_BUDGET,
+      referencesUsed: result.references.length,
+    },
+  };
+}
+
+function buildStateFailureAnswer(
+  chat: Chat,
+  selected: SelectedLocalKnowledgeScope,
+  persisted: readonly [ChatMessage, ChatMessage],
+  stateFailure: { readonly reason: string; readonly message: string },
+): GroundedAnswer {
+  const [user, assistant] = persisted;
+  const answer = buildNoEvidenceAnswer(
+    chat,
+    stateFailure.message,
+    selected.scopeKind,
+    selected.scopeLabel,
+    stateFailure.reason,
+    [{ kind: stateFailure.reason, claim: stateFailure.message }],
+  );
+  return {
+    ...answer,
+    userMessageId: user.id,
+    assistantMessageId: assistant.id,
+  } satisfies GroundedAnswer;
+}
+
+function resolveModel(
+  deps: UiHandlerDeps,
+  modelId: string,
+): ModelPort | RouteResult {
+  const model = deps.modelPortFactory(modelId);
+  if (model === undefined) {
+    return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
+  }
+  return model;
+}
+
+async function runScopedGroundedAnswer(
+  chat: Chat,
+  input: AskInput,
+  deps: UiHandlerDeps,
+  env: { readonly store: KnowledgeStore },
+  selected: SelectedLocalKnowledgeScope,
+  signal: AbortSignal,
+): Promise<GroundedAnswer | RouteResult> {
+  const embeddingAdapter = createEmbeddingAdapter(
+    deps,
+    Array.from(new Set(selected.capsules.map((capsule) => capsule.embeddingModelIdentity.modelId))),
+  );
+  if ("status" in embeddingAdapter) return embeddingAdapter;
+  const modelId = input.modelId ?? chat.selectedModel;
+  const model = resolveModel(deps, modelId);
+  if ("status" in model) return model;
+  const generator = new StoreBackedAnswerGenerator(model, modelId, env.store);
+  const startedAt = Date.now();
+  const result = await runGroundedAnswer(
+    {
+      retrieval: { store: env.store, embeddingAdapter },
+      answerGenerator: generator,
+      signal,
+    },
+    localKnowledgeQuery(chat, input),
+  );
+  const elapsedMs = Date.now() - startedAt;
+  const answer = buildLocalKnowledgeAnswer(
+    chat,
+    selected,
+    persistGroundedExchange(
+      deps,
+      chat.id,
+      input.content,
+      enforcedNoEvidenceReason(result) === undefined
+        ? result.answer.trim()
+        : "No evidence found in the selected knowledge scope.",
+    ),
+    result,
+    elapsedMs,
+  );
+  return answer satisfies GroundedAnswer;
+}
+
 export async function handleLocalKnowledgeGroundedAsk(
   chat: Chat,
   input: AskInput,
@@ -386,118 +564,19 @@ export async function handleLocalKnowledgeGroundedAsk(
     if ("status" in selected) return selected;
     const stateFailure = scopeStateFailure(selected);
     if (stateFailure !== undefined) {
-      const [user, assistant] = persistGroundedExchange(
-        deps,
-        chat.id,
-        input.content,
-        stateFailure.message,
-      );
-      const answer = buildNoEvidenceAnswer(
-        chat,
-        stateFailure.message,
-        selected.scopeKind,
-        selected.scopeLabel,
-        stateFailure.reason,
-        [{ kind: stateFailure.reason, claim: stateFailure.message }],
-      );
       return {
         status: 200,
-        body: {
-          ...answer,
-          userMessageId: user.id,
-          assistantMessageId: assistant.id,
-        } satisfies GroundedAnswer,
+        body: buildStateFailureAnswer(
+          chat,
+          selected,
+          persistGroundedExchange(deps, chat.id, input.content, stateFailure.message),
+          stateFailure,
+        ),
       };
     }
-
-    const embeddingAdapter = createEmbeddingAdapter(
-      deps,
-      Array.from(
-        new Set(selected.capsules.map((capsule) => capsule.embeddingModelIdentity.modelId)),
-      ),
-    );
-    if ("status" in embeddingAdapter) return embeddingAdapter;
-    const modelId = input.modelId ?? chat.selectedModel;
-    const model = deps.modelPortFactory(modelId);
-    if (model === undefined) {
-      return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
-    }
-
-    const generator = new StoreBackedAnswerGenerator(model, modelId, env.store);
-    const startedAt = Date.now();
-    const result = await runGroundedAnswer(
-      {
-        retrieval: { store: env.store, embeddingAdapter },
-        answerGenerator: generator,
-        signal,
-      },
-      {
-        conversationId: chat.id,
-        text: input.content,
-        ...(chat.localKnowledgeScope?.kind === "capsule"
-          ? { capsuleId: chat.localKnowledgeScope.capsuleId }
-          : {}),
-        ...(chat.localKnowledgeScope?.kind === "capsule-set"
-          ? { capsuleSetId: chat.localKnowledgeScope.capsuleSetId }
-          : {}),
-      },
-    );
-    const elapsedMs = Date.now() - startedAt;
-    const enforcedNoEvidence =
-      result.noEvidence ||
-      result.answer.trim().length === 0 ||
-      (result.references.length > 0 && result.citations.length === 0);
-    const assistantContent = enforcedNoEvidence
-      ? "No evidence found in the selected knowledge scope."
-      : result.answer.trim();
-    const [user, assistant] = persistGroundedExchange(deps, chat.id, input.content, assistantContent);
-    const citations: LocalKnowledgeEvidenceCitation[] = enforcedNoEvidence
-      ? []
-      : result.citations.map((entry) => ({
-          stableId: citationStableId(entry.reference, entry.marker),
-          marker: entry.marker,
-          label: renderCitationLabel(entry.citation),
-          score: entry.reference.score,
-        }));
-    const answer: LocalKnowledgeGroundedAnswer = {
-      groundingKind: "local-knowledge",
-      userMessageId: user.id,
-      assistantMessageId: assistant.id,
-      content: assistantContent,
-      citations,
-      uncertainty: enforcedNoEvidence
-        ? [
-            {
-              kind: result.noEvidence ? result.reason ?? "no-evidence" : "answer-without-citations",
-              claim: assistantContent,
-            },
-          ]
-        : [],
-      omittedCount: 0,
-      elapsedMs,
-      noEvidence: enforcedNoEvidence,
-      ...(enforcedNoEvidence
-        ? {
-            noEvidenceReason: result.noEvidence
-              ? result.reason ?? "no-evidence"
-              : result.answer.trim().length === 0
-                ? "empty-answer"
-                : "answer-without-citations",
-          }
-        : {}),
-      contextPack: {
-        kind: "local-knowledge",
-        scopeKind: selected.scopeKind,
-        scopeId: `lk-${hashString32(`${chat.id}|${selected.scopeLabel}`)}`,
-        scopeLabel: selected.scopeLabel,
-        capsuleCount: result.pack.scope.capsuleCount,
-        sourceCount: result.pack.scope.sourceCount,
-        citationCount: citations.length,
-        referenceBudget: DEFAULT_REFERENCE_BUDGET,
-        referencesUsed: result.references.length,
-      },
-    };
-    return { status: 200, body: answer satisfies GroundedAnswer };
+    const answer = await runScopedGroundedAnswer(chat, input, deps, env, selected, signal);
+    if ("status" in answer) return answer;
+    return { status: 200, body: answer };
   } catch (error) {
     return internalError(error instanceof Error ? error.message : "Local knowledge ask failed.");
   } finally {

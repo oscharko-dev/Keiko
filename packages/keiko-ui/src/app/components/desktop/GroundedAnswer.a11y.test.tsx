@@ -59,6 +59,7 @@ function contextPack(): GroundedAnswerContextPackSummary {
 
 function answer(): GroundedAnswerType {
   return {
+    groundingKind: "connected-context",
     userMessageId: "msg-u",
     assistantMessageId: "msg-a",
     content: "Inspected 2 file(s) for: how does MyClass work?",

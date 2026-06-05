@@ -133,34 +133,37 @@ function decodeLocalKnowledgeScope(raw: string | null): ChatLocalKnowledgeScope 
     return undefined;
   }
   const scope = parsed as Record<string, unknown>;
-  if (
-    scope.kind === "capsule" &&
-    typeof scope.capsuleId === "string" &&
-    Number.isInteger(scope.connectedAtMs) &&
-    (scope.connectedAtMs as number) >= 0
-  ) {
+  const connectedAtMs = decodeNonNegativeInteger(scope.connectedAtMs);
+  if (connectedAtMs === undefined) return undefined;
+  return decodeLocalKnowledgeScopePayload(scope, connectedAtMs);
+}
+
+function decodeNonNegativeInteger(value: unknown): number | undefined {
+  return Number.isInteger(value) && (value as number) >= 0 ? (value as number) : undefined;
+}
+
+function decodeLocalKnowledgeScopePayload(
+  scope: Record<string, unknown>,
+  connectedAtMs: number,
+): ChatLocalKnowledgeScope | undefined {
+  if (scope.kind === "capsule" && typeof scope.capsuleId === "string") {
     return {
       kind: "capsule",
       capsuleId: scope.capsuleId as Extract<
         ChatLocalKnowledgeScope,
         { readonly kind: "capsule" }
       >["capsuleId"],
-      connectedAtMs: scope.connectedAtMs as number,
+      connectedAtMs,
     };
   }
-  if (
-    scope.kind === "capsule-set" &&
-    typeof scope.capsuleSetId === "string" &&
-    Number.isInteger(scope.connectedAtMs) &&
-    (scope.connectedAtMs as number) >= 0
-  ) {
+  if (scope.kind === "capsule-set" && typeof scope.capsuleSetId === "string") {
     return {
       kind: "capsule-set",
       capsuleSetId: scope.capsuleSetId as Extract<
         ChatLocalKnowledgeScope,
         { readonly kind: "capsule-set" }
       >["capsuleSetId"],
-      connectedAtMs: scope.connectedAtMs as number,
+      connectedAtMs,
     };
   }
   return undefined;
@@ -304,19 +307,36 @@ function validateLocalKnowledgeScopeShape(scope: ChatLocalKnowledgeScope): void 
   ) {
     throw invalidRequest("localKnowledgeScope.connectedAtMs must be a finite non-negative integer.");
   }
-  if (scope.kind === "capsule") {
-    if (typeof scope.capsuleId !== "string" || scope.capsuleId.length === 0) {
-      throw invalidRequest("localKnowledgeScope.capsuleId must be a non-empty string.");
-    }
-    return;
+  switch (scope.kind) {
+    case "capsule":
+      if (typeof scope.capsuleId !== "string" || scope.capsuleId.length === 0) {
+        throw invalidRequest("localKnowledgeScope.capsuleId must be a non-empty string.");
+      }
+      return;
+    case "capsule-set":
+      if (typeof scope.capsuleSetId !== "string" || scope.capsuleSetId.length === 0) {
+        throw invalidRequest("localKnowledgeScope.capsuleSetId must be a non-empty string.");
+      }
+      return;
+    default:
+      throw invalidRequest("localKnowledgeScope.kind must be capsule or capsule-set.");
   }
-  if (scope.kind === "capsule-set") {
-    if (typeof scope.capsuleSetId !== "string" || scope.capsuleSetId.length === 0) {
-      throw invalidRequest("localKnowledgeScope.capsuleSetId must be a non-empty string.");
-    }
-    return;
+}
+
+function validatePatchScope(scope: unknown): void {
+  if (scope === undefined || scope === null) return;
+  if (typeof scope !== "object" || Array.isArray(scope)) {
+    throw invalidRequest("connectedScope must be an object or null.");
   }
-  throw invalidRequest("localKnowledgeScope.kind must be capsule or capsule-set.");
+  validateConnectedScopeShape(scope as ChatConnectedScope);
+}
+
+function validatePatchLocalKnowledgeScope(scope: unknown): void {
+  if (scope === undefined || scope === null) return;
+  if (typeof scope !== "object" || Array.isArray(scope)) {
+    throw invalidRequest("localKnowledgeScope must be an object or null.");
+  }
+  validateLocalKnowledgeScopeShape(scope as ChatLocalKnowledgeScope);
 }
 
 function validateChatPatch(patch: UpdateChatPatch): void {
@@ -325,20 +345,8 @@ function validateChatPatch(patch: UpdateChatPatch): void {
   if (raw !== undefined && (typeof raw !== "string" || !VALID_CHAT_STATUSES.has(raw))) {
     throw invalidRequest("Invalid status.");
   }
-  const scope: unknown = patch.connectedScope;
-  if (scope !== undefined && scope !== null) {
-    if (typeof scope !== "object" || Array.isArray(scope)) {
-      throw invalidRequest("connectedScope must be an object or null.");
-    }
-    validateConnectedScopeShape(scope as ChatConnectedScope);
-  }
-  const localScope: unknown = patch.localKnowledgeScope;
-  if (localScope !== undefined && localScope !== null) {
-    if (typeof localScope !== "object" || Array.isArray(localScope)) {
-      throw invalidRequest("localKnowledgeScope must be an object or null.");
-    }
-    validateLocalKnowledgeScopeShape(localScope as ChatLocalKnowledgeScope);
-  }
+  validatePatchScope(patch.connectedScope);
+  validatePatchLocalKnowledgeScope(patch.localKnowledgeScope);
 }
 
 // Issue #184 — three-state encoding of the scope patch for SQL parameter binding.

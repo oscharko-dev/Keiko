@@ -75,7 +75,7 @@ function contextPack(
 }
 
 function answer(overrides: Partial<GroundedAnswerType> = {}): GroundedAnswerType {
-  return {
+  const base: Extract<GroundedAnswerType, { readonly groundingKind: "connected-context" }> = {
     groundingKind: "connected-context",
     userMessageId: "msg-u",
     assistantMessageId: "msg-a",
@@ -85,8 +85,8 @@ function answer(overrides: Partial<GroundedAnswerType> = {}): GroundedAnswerType
     omittedCount: 0,
     elapsedMs: 42,
     contextPack: contextPack(),
-    ...overrides,
   };
+  return { ...base, ...overrides } as GroundedAnswerType;
 }
 
 describe("GroundedAnswer", () => {

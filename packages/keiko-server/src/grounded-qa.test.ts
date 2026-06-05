@@ -31,7 +31,6 @@ import {
   type GatewayRequest,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import {
   openKnowledgeStore,
   resolveKnowledgeStorePath,
@@ -49,7 +48,9 @@ const GROUNDED_FIXTURE_QUESTION = "Investigate src/foo.ts behaviour of MyClass";
 let store: UiStore;
 let tmp: string;
 
-function asConnectedAnswer(answer: GroundedAnswer) {
+function asConnectedAnswer(
+  answer: GroundedAnswer,
+): Extract<GroundedAnswer, { readonly groundingKind: "connected-context" }> {
   expect(answer.groundingKind).toBe("connected-context");
   return answer as Extract<GroundedAnswer, { readonly groundingKind: "connected-context" }>;
 }
@@ -627,7 +628,7 @@ describe("handleGroundedAsk", () => {
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
     });
     const seeded = await seedCapsuleWithVectors(knowledgeStore, {
-      capsuleId: "cap-local" as KnowledgeCapsuleId,
+      capsuleId: "cap-local",
     });
     updateCapsuleState(knowledgeStore, seeded.capsuleId, "ready");
     knowledgeStore.close();

@@ -562,6 +562,42 @@ function validateScopeConnectedAtMs(value: unknown): number {
   return value;
 }
 
+function parseCapsuleLocalKnowledgeScope(
+  scope: Record<string, unknown>,
+  connectedAtMs: number,
+): Extract<ChatLocalKnowledgeScope, { readonly kind: "capsule" }> {
+  if (typeof scope.capsuleId !== "string" || scope.capsuleId.trim().length === 0) {
+    throw new InvalidRequest('Field "localKnowledgeScope.capsuleId" must be a non-empty string.');
+  }
+  return {
+    kind: "capsule",
+    capsuleId: scope.capsuleId.trim() as Extract<
+      ChatLocalKnowledgeScope,
+      { readonly kind: "capsule" }
+    >["capsuleId"],
+    connectedAtMs,
+  };
+}
+
+function parseCapsuleSetLocalKnowledgeScope(
+  scope: Record<string, unknown>,
+  connectedAtMs: number,
+): Extract<ChatLocalKnowledgeScope, { readonly kind: "capsule-set" }> {
+  if (typeof scope.capsuleSetId !== "string" || scope.capsuleSetId.trim().length === 0) {
+    throw new InvalidRequest(
+      'Field "localKnowledgeScope.capsuleSetId" must be a non-empty string.',
+    );
+  }
+  return {
+    kind: "capsule-set",
+    capsuleSetId: scope.capsuleSetId.trim() as Extract<
+      ChatLocalKnowledgeScope,
+      { readonly kind: "capsule-set" }
+    >["capsuleSetId"],
+    connectedAtMs,
+  };
+}
+
 function optionalLocalKnowledgeScope(
   body: Record<string, unknown>,
 ): ChatLocalKnowledgeScope | null | undefined {
@@ -574,32 +610,10 @@ function optionalLocalKnowledgeScope(
   const scope = raw as Record<string, unknown>;
   const connectedAtMs = validateScopeConnectedAtMs(scope.connectedAtMs);
   if (scope.kind === "capsule") {
-    if (typeof scope.capsuleId !== "string" || scope.capsuleId.trim().length === 0) {
-      throw new InvalidRequest('Field "localKnowledgeScope.capsuleId" must be a non-empty string.');
-    }
-    return {
-      kind: "capsule",
-      capsuleId: scope.capsuleId.trim() as Extract<
-        ChatLocalKnowledgeScope,
-        { readonly kind: "capsule" }
-      >["capsuleId"],
-      connectedAtMs,
-    };
+    return parseCapsuleLocalKnowledgeScope(scope, connectedAtMs);
   }
   if (scope.kind === "capsule-set") {
-    if (typeof scope.capsuleSetId !== "string" || scope.capsuleSetId.trim().length === 0) {
-      throw new InvalidRequest(
-        'Field "localKnowledgeScope.capsuleSetId" must be a non-empty string.',
-      );
-    }
-    return {
-      kind: "capsule-set",
-      capsuleSetId: scope.capsuleSetId.trim() as Extract<
-        ChatLocalKnowledgeScope,
-        { readonly kind: "capsule-set" }
-      >["capsuleSetId"],
-      connectedAtMs,
-    };
+    return parseCapsuleSetLocalKnowledgeScope(scope, connectedAtMs);
   }
   throw new InvalidRequest('Field "localKnowledgeScope.kind" must be "capsule" or "capsule-set".');
 }
