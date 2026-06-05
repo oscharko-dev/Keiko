@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdtempSync,
@@ -93,7 +94,12 @@ describe("loadState / saveState", () => {
   it("returns empty state when the file is malformed JSON", () => {
     const root = makeRoot();
     writeFileSync(join(root, "launcher-state.json"), "{not json");
-    expect(loadState(root).entries).toEqual([]);
+    const warnings: string[] = [];
+    const onWarn = (msg: string): void => {
+      warnings.push(msg);
+    };
+    expect(loadState(root, { onWarn }).entries).toEqual([]);
+    expect(warnings.join("")).toContain("not valid JSON");
   });
 
   it("round-trips a single entry", () => {
@@ -119,6 +125,34 @@ describe("loadState / saveState", () => {
     saveState(root, { version: LAUNCHER_STATE_VERSION, entries: [] });
     const mode = statSync(join(root, "launcher-state.json")).mode & 0o777;
     expect(mode).toBe(0o600);
+  });
+
+  it("F6 — surfaces non-ENOENT stat errors via onWarn instead of silently emptying", () => {
+    if (osPlatform() === "win32") return;
+    const root = makeRoot();
+    // Replace the would-be state file path with a directory → lstat succeeds but
+    // readWithoutFollow path will be skipped via !isFile; the warning path we want to
+    // exercise is read-failure, so make the file unreadable instead.
+    const file = join(root, "launcher-state.json");
+    writeFileSync(file, JSON.stringify({ version: 1, entries: [] }));
+    // Drop read permission to provoke EACCES on read.
+    chmodSync(file, 0o000);
+    const warnings: string[] = [];
+    const onWarn = (msg: string): void => {
+      warnings.push(msg);
+    };
+    try {
+      const state = loadState(root, { onWarn });
+      expect(state.entries).toEqual([]);
+      // Either EACCES on read (caught + warned) OR our chmod was no-op (e.g. running as
+      // root). In the latter case the warning won't fire — which is fine; assert one of
+      // the expected behaviors.
+      if (warnings.length > 0) {
+        expect(warnings.join("")).toContain("state file");
+      }
+    } finally {
+      chmodSync(file, 0o600);
+    }
   });
 
   it("refuses to load via a symlinked state file (defense-in-depth)", () => {

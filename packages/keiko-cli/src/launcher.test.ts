@@ -349,6 +349,84 @@ describe("runLauncherCli remove", () => {
   });
 });
 
+// Helper for the parse-time-containment regression tests (F1/F2): plants a state file
+// with attacker-chosen `entry.path` AFTER computing the correct content-hash, so the
+// only thing protecting the user is the containment check (not the hash check).
+function plantTamperedStateFile(
+  stateDir: string,
+  platform: NodeJS.Platform,
+  targetPath: string,
+  targetContent: string,
+): void {
+  mkdirSync(stateDir, { recursive: true });
+  const entry = {
+    path: targetPath,
+    platform,
+    contentSha256: hashContent(targetContent),
+    createdAt: "2026-06-05T00:00:00.000Z",
+  };
+  writeFileSync(
+    join(stateDir, "launcher-state.json"),
+    JSON.stringify({ version: 1, entries: [entry] }) + "\n",
+  );
+}
+
+describe("runLauncherCli — state-file tamper regression (F1/F2)", () => {
+  it("F1 — remove REFUSES to unlink an out-of-bounds path planted in the state file", () => {
+    if (osPlatform() === "win32") return;
+    const h = makeHarness();
+    // Sensitive target lives OUTSIDE the approved installDir; create it via mkdtempSync
+    // so the test never touches a real ~/.ssh path.
+    const sensitiveRoot = makeRoot();
+    const sensitive = join(sensitiveRoot, "authorized_keys");
+    const sensitiveContent = "ssh-rsa AAAA real-user-key\n";
+    writeFileSync(sensitive, sensitiveContent);
+    // Plant tampered state with a CORRECT content hash so only containment can save us.
+    plantTamperedStateFile(h.stateDir, "linux", sensitive, sensitiveContent);
+    const c = makeIo();
+    const code = runLauncherCli(["remove"], c.io, {}, h.deps);
+    // Tampered entry is silently dropped at parse-time → loadState yields no entries →
+    // `cmdRemove` reports "nothing to remove" and exits 0. The KEY assertion is that the
+    // sensitive file is STILL THERE — `unlinkSync` was never reached.
+    expect(existsSync(sensitive)).toBe(true);
+    expect(readFileSync(sensitive, "utf8")).toBe(sensitiveContent);
+    expect(c.err()).toContain("refusing tampered state entry");
+    expect(code).toBe(0);
+  });
+
+  it("F2 — status REFUSES to existsSync/readFileSync an out-of-bounds planted entry", () => {
+    if (osPlatform() === "win32") return;
+    const h = makeHarness();
+    const sensitiveRoot = makeRoot();
+    const sensitive = join(sensitiveRoot, "private.txt");
+    writeFileSync(sensitive, "secret\n");
+    plantTamperedStateFile(h.stateDir, "linux", sensitive, "secret\n");
+    const c = makeIo();
+    const code = runLauncherCli(["status"], c.io, {}, h.deps);
+    // Entry filtered out at parse time → status reports "no shortcuts recorded" and the
+    // sensitive file's path/content/existence is never enumerated on stdout.
+    expect(c.out()).toContain("no shortcuts recorded");
+    expect(c.out()).not.toContain(sensitive);
+    expect(c.err()).toContain("refusing tampered state entry");
+    expect(code).toBe(0);
+    expect(readFileSync(sensitive, "utf8")).toBe("secret\n");
+  });
+
+  it("F2 — status reports 'unreadable' instead of leaking a read error stack", () => {
+    if (osPlatform() === "win32") return;
+    const h = makeHarness();
+    // Install a real shortcut first, then replace the file with a directory (EISDIR on
+    // readFileSync) — forces cmdStatus to take the new catch path.
+    runLauncherCli(["install"], makeIo().io, {}, h.deps);
+    rmSync(h.targetPath);
+    mkdirSync(h.targetPath);
+    const c = makeIo();
+    expect(runLauncherCli(["status"], c.io, {}, h.deps)).toBe(0);
+    expect(c.out()).toContain(`${h.targetPath}\tunreadable`);
+    expect(c.err()).toBe("");
+  });
+});
+
 describe("runLauncherCli status", () => {
   it("returns 0 with a clean message when no shortcuts recorded", () => {
     const h = makeHarness();

@@ -36,13 +36,12 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  realpathSync,
   statSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 import {
@@ -54,6 +53,7 @@ import {
   type Platform,
   type PlatformLauncher,
 } from "./launcher-platforms.js";
+import { assertRealpathContained } from "./launcher-paths.js";
 import {
   hashContent,
   loadState,
@@ -222,55 +222,16 @@ function defaultResolveExe(env: EnvSource): string {
   );
 }
 
-// Walks up `target`'s ancestry, returning the first ancestor whose realpath is the
-// approved dir's realpath. If no ancestor matches we throw PATH_ESCAPE. Walking from the
-// leaf upward lets us handle the case where `target` doesn't exist yet (`realpathSync`
-// would throw): we realpath only the ancestors that DO exist on disk. The walk is
-// bounded by the textual path depth so it cannot loop indefinitely.
-function realpathOrResolve(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    return resolve(p);
-  }
-}
+// Path-containment helpers (realpathSync + ancestor walk) live in `./launcher-paths.ts`
+// so `launcher-state.ts` can apply the same boundary at state-file parse time.
 
-// Walks up `p`'s ancestry until it finds an existing one; returns the realpath of that
-// existing ancestor concatenated with the not-yet-existing tail. This lets us compare
-// paths consistently even when leaves don't exist (mkdir not yet called), without
-// silently following a symlinked ancestor: the realpath is taken of the FIRST existing
-// segment in the chain, so symlinks along the still-textual tail are not resolved.
-function resolveWithExistingAncestor(p: string): string {
-  const absolute = resolve(p);
-  const tail: string[] = [];
-  let current = absolute;
-  for (let i = 0; i < 64; i += 1) {
-    if (existsSync(current)) {
-      return tail.length === 0
-        ? realpathOrResolve(current)
-        : join(realpathOrResolve(current), ...tail.reverse());
-    }
-    tail.push(current.split(sep).pop() ?? "");
-    const parent = dirname(current);
-    if (parent === current) return absolute;
-    current = parent;
-  }
-  return absolute;
-}
-
-// Asserts that `target` is contained within `approvedDir` AFTER both have been resolved
-// against the real filesystem. We realpath the deepest-existing ancestor of BOTH sides
-// so `/tmp` ⇄ `/private/tmp` (macOS) and other symlinked-ancestor cases compare equal,
-// while symlinks at the still-textual tail are NOT silently followed.
-function assertRealpathContained(approvedDir: string, target: string): void {
-  const realApproved = resolveWithExistingAncestor(approvedDir);
-  const realTarget = resolveWithExistingAncestor(target);
-  if (realTarget !== realApproved && !realTarget.startsWith(realApproved + sep)) {
-    throw new LauncherError(
-      "PATH_ESCAPE",
-      `keiko launcher: refusing to write outside the approved directory.\n  approved: ${realApproved}\n  target:   ${realTarget}`,
-    );
-  }
+// Adapts the CliIo writer to the `onWarn(msg)` shape consumed by `loadState`. We wrap
+// in a block body (not an arrow shorthand) because `io.err` returns `void`, and the
+// `no-confusing-void-expression` lint rule forbids implicit-return shorthand-void.
+function ioWarn(io: CliIo): (msg: string) => void {
+  return (msg: string): void => {
+    io.err(msg);
+  };
 }
 
 function assertApprovedDirNotSymlink(approvedDir: string): void {
@@ -387,7 +348,12 @@ function planToEntry(plan: InstallPlan): LauncherStateEntry {
   };
 }
 
-function handleExistingTarget(plan: InstallPlan, stateDir: string, io: CliIo): number {
+function handleExistingTarget(
+  plan: InstallPlan,
+  stateDir: string,
+  homedir: string,
+  io: CliIo,
+): number {
   const existing = readFileSync(plan.targetPath, "utf8");
   if (existing !== plan.content) {
     throw new LauncherError(
@@ -395,7 +361,8 @@ function handleExistingTarget(plan: InstallPlan, stateDir: string, io: CliIo): n
       `keiko launcher: refusing to overwrite ${plan.targetPath}.\nA file with different content already exists. Move or remove it manually before re-running.`,
     );
   }
-  saveState(stateDir, upsertEntry(loadState(stateDir), planToEntry(plan)));
+  const loadOpts = { homedir, onWarn: ioWarn(io) };
+  saveState(stateDir, upsertEntry(loadState(stateDir, loadOpts), planToEntry(plan)));
   io.out(`Keiko launcher already installed at ${plan.targetPath} (idempotent).\n`);
   return 0;
 }
@@ -411,7 +378,8 @@ function cmdInstall(
 ): number {
   const launcher = launcherFor(deps.platform());
   const exe = deps.resolveExe(env);
-  const plan = buildInstallPlan(launcher, deps.homedir(), args, exe);
+  const home = deps.homedir();
+  const plan = buildInstallPlan(launcher, home, args, exe);
   assertRealpathContained(plan.approvedDir, plan.targetPath);
   if (args.dryRun || args.explain) {
     io.out(describePlan(plan, args.explain));
@@ -422,10 +390,11 @@ function cmdInstall(
   assertApprovedDirNotSymlink(plan.approvedDir);
   assertTargetNotSymlink(plan.targetPath);
   if (existsSync(plan.targetPath)) {
-    return handleExistingTarget(plan, deps.stateDir, io);
+    return handleExistingTarget(plan, deps.stateDir, home, io);
   }
   writeAtomicExcl(plan.targetPath, plan.content, plan.fileMode);
-  saveState(deps.stateDir, upsertEntry(loadState(deps.stateDir), planToEntry(plan)));
+  const loadOpts = { homedir: home, onWarn: ioWarn(io) };
+  saveState(deps.stateDir, upsertEntry(loadState(deps.stateDir, loadOpts), planToEntry(plan)));
   io.out(`Installed Keiko launcher at ${plan.targetPath}.\n`);
   io.out("Remove with: keiko launcher remove\n");
   return 0;
@@ -433,7 +402,18 @@ function cmdInstall(
 
 type RemoveOutcome = "missing" | "refused" | "would-delete" | "removed";
 
-function processRemoveEntry(entry: LauncherStateEntry, args: RemoveArgs, io: CliIo): RemoveOutcome {
+// F1 remove-time barrier: even though parseEntry filters out-of-bounds entries at load
+// time, we repeat the containment check here so a state row that bypassed the parser
+// (e.g. via a future call site without homedir context) cannot reach `unlinkSync` with
+// an attacker-controlled path. The throw is caught by `runLauncherCli` and surfaced as
+// a non-zero exit; we never delete or even probe `existsSync` on an out-of-bounds path.
+function processRemoveEntry(
+  entry: LauncherStateEntry,
+  args: RemoveArgs,
+  io: CliIo,
+  homedir: string,
+): RemoveOutcome {
+  assertRealpathContained(launcherFor(entry.platform).installDirFor(homedir), entry.path);
   if (!existsSync(entry.path)) {
     io.out(`missing: ${entry.path} (already gone — state cleared)\n`);
     return "missing";
@@ -454,8 +434,12 @@ function processRemoveEntry(entry: LauncherStateEntry, args: RemoveArgs, io: Cli
   return "removed";
 }
 
-function cmdRemove(args: RemoveArgs, io: CliIo, deps: { readonly stateDir: string }): number {
-  const state = loadState(deps.stateDir);
+function cmdRemove(
+  args: RemoveArgs,
+  io: CliIo,
+  deps: { readonly stateDir: string; readonly homedir: string },
+): number {
+  const state = loadState(deps.stateDir, { homedir: deps.homedir, onWarn: ioWarn(io) });
   if (state.entries.length === 0) {
     io.out("Keiko launcher: nothing to remove (no recorded shortcuts).\n");
     return 0;
@@ -464,7 +448,7 @@ function cmdRemove(args: RemoveArgs, io: CliIo, deps: { readonly stateDir: strin
   let removed = 0;
   let refused = 0;
   for (const entry of state.entries) {
-    const outcome = processRemoveEntry(entry, args, io);
+    const outcome = processRemoveEntry(entry, args, io, deps.homedir);
     if (outcome === "missing" || outcome === "removed") {
       nextState = removeEntry(nextState, entry.path);
     }
@@ -479,8 +463,16 @@ function cmdRemove(args: RemoveArgs, io: CliIo, deps: { readonly stateDir: strin
   return refused > 0 ? 1 : 0;
 }
 
-function cmdStatus(io: CliIo, deps: { readonly stateDir: string }): number {
-  const state = loadState(deps.stateDir);
+function cmdStatus(
+  io: CliIo,
+  deps: { readonly stateDir: string; readonly homedir: string },
+): number {
+  // F2 — parse-time containment in `loadState` already filters out-of-bounds entries
+  // before we reach `existsSync`/`readFileSync`, so a tampered state file cannot turn
+  // `status` into an arbitrary-file-existence/content probe. We additionally wrap the
+  // read in try/catch so an unreadable/EISDIR target classifies as `unreadable` instead
+  // of leaking the OS error (and its stack) onto stderr.
+  const state = loadState(deps.stateDir, { homedir: deps.homedir, onWarn: ioWarn(io) });
   if (state.entries.length === 0) {
     io.out("Keiko launcher: no shortcuts recorded.\n");
     return 0;
@@ -490,7 +482,13 @@ function cmdStatus(io: CliIo, deps: { readonly stateDir: string }): number {
       io.out(`${entry.path}\tmissing\n`);
       continue;
     }
-    const existing = readFileSync(entry.path, "utf8");
+    let existing: string;
+    try {
+      existing = readFileSync(entry.path, "utf8");
+    } catch {
+      io.out(`${entry.path}\tunreadable\n`);
+      continue;
+    }
     const matches = hashContent(existing) === entry.contentSha256;
     io.out(`${entry.path}\t${matches ? "ok" : "modified"}\n`);
   }
@@ -536,10 +534,11 @@ export function runLauncherCli(
   }
   const rest = args.slice(1);
   const r = resolveDeps(env, deps);
+  const home = r.homedir();
   const handlers: Readonly<Record<LauncherSubcommand, () => number>> = {
     install: () => dispatchInstall(rest, io, env, r),
-    remove: () => dispatchRemove(rest, io, { stateDir: r.stateDir }),
-    status: () => cmdStatus(io, { stateDir: r.stateDir }),
+    remove: () => dispatchRemove(rest, io, { stateDir: r.stateDir, homedir: home }),
+    status: () => cmdStatus(io, { stateDir: r.stateDir, homedir: home }),
   };
   try {
     return handlers[first]();
@@ -573,7 +572,7 @@ function dispatchInstall(
 function dispatchRemove(
   rest: readonly string[],
   io: CliIo,
-  ctx: { readonly stateDir: string },
+  ctx: { readonly stateDir: string; readonly homedir: string },
 ): number {
   const parsed = parseRemoveArgs(rest);
   if (!parsed.ok) {
