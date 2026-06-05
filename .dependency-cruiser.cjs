@@ -339,6 +339,44 @@ module.exports = {
       },
     },
     {
+      name: "adr-0019-direction-3i-memory-governance-only-contracts-security",
+      comment:
+        "ADR-0019 direction rule 3 (memory-governance strict variant): " +
+        "keiko-memory-governance may depend only on keiko-contracts and keiko-security. " +
+        "The dependency on keiko-security is reserved for the redact() primitive that " +
+        "downstream callers may apply when surfacing governance-error messages over a wire " +
+        "boundary (defence-in-depth on top of the contracts validators); v1 does not " +
+        "invoke it. The layer does NOT depend on keiko-memory-vault: governance takes " +
+        "caller-fetched MemoryRecord values and returns MemoryProposal / MemorySupersession / " +
+        "MemoryUpdate / MemoryForget / MemoryPin / MemoryUnpin / MemoryArchive envelopes plus " +
+        "StatusTransition tuples; persistence is the caller's responsibility (vault #206, " +
+        "audit #214). The layer does NOT depend on keiko-memory-capture or " +
+        "keiko-memory-consolidation: those are sibling envelope-producers; cross-imports " +
+        "would invert the dependency direction. Added at error severity by issue #209 " +
+        "because the memory-governance package physically exists. Also fires on the " +
+        "negative-test fixture under tests/architecture/fixtures/memory-governance/ so the " +
+        "gate can be proven live by scripts/arch-check-negative.mjs. The to.path forbids " +
+        "both non-allow-listed packages AND every sibling src/ shim domain (gateway|" +
+        "workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli) so a " +
+        "future deep-import is caught (boundary-weakening gap pattern from issues #160 and " +
+        "#165). pathNot only filters self-references; it must NOT silently exclude " +
+        "sibling-but-still-in-src/ domains (memory lesson from issues #160 and #162).",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-memory-governance/src/|" +
+          "tests/architecture/fixtures/memory-governance/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-governance)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-governance)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|memory-governance)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+        pathNot: "^packages/keiko-memory-governance/src/",
+      },
+    },
+    {
       name: "adr-0019-direction-4-harness-scope",
       comment:
         "ADR-0019 direction rule 4 (base safety net): keiko-harness may depend only on " +
