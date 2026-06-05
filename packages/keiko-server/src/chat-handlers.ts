@@ -26,6 +26,7 @@ import {
   type ConversationAttachment,
 } from "./conversation-validation.js";
 import { validateProjectPath } from "./store/validation.js";
+import { redact } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -190,17 +191,30 @@ function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record
   };
 }
 
-function gatewayErrorResult(error: GatewayError): RouteResult {
-  const status = error.code === "GATEWAY_AUTHENTICATION" ? 401 : error.retryable ? 503 : 502;
-  return { status, body: errorBody(error.code, error.message) };
+// Issue #154 — every conversation error message is scrubbed through redact() before it can
+// reach the wire. GatewayError messages may carry the provider base URL, response body excerpts,
+// or `Bearer …` tokens echoed back by the provider; UiStoreError messages may carry user-controlled
+// path fragments. Redaction at this single boundary keeps gateway credentials and provider endpoints
+// out of conversation error envelopes (AC #2 + AC #4). `deps.redactionSecrets` carries the resolved
+// gateway literals (apiKey, baseUrl, env values) so non-standard credential shapes are still scrubbed.
+function redactErrorMessage(message: string, deps: UiHandlerDeps): string {
+  return redact(message, deps.redactionSecrets ?? []);
 }
 
-function desktopChatErrorResult(error: unknown): RouteResult {
+function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResult {
+  const status = error.code === "GATEWAY_AUTHENTICATION" ? 401 : error.retryable ? 503 : 502;
+  return { status, body: errorBody(error.code, redactErrorMessage(error.message, deps)) };
+}
+
+function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): RouteResult {
   if (error instanceof GatewayError) {
-    return gatewayErrorResult(error);
+    return gatewayErrorResult(error, deps);
   }
   if (error instanceof UiStoreError) {
-    return { status: error.status, body: errorBody(error.code, error.message) };
+    return {
+      status: error.status,
+      body: errorBody(error.code, redactErrorMessage(error.message, deps)),
+    };
   }
   throw error;
 }
@@ -507,7 +521,7 @@ async function persistModelChatTurn(
       },
     };
   } catch (error) {
-    return desktopChatErrorResult(error);
+    return desktopChatErrorResult(error, deps);
   }
 }
 
@@ -530,7 +544,12 @@ export async function handleCreateDesktopChat(
     return { status: 201, body: chatEnvelope(deps, project, chat) };
   } catch (error) {
     if (error instanceof UiStoreError) {
-      return { status: error.status, body: errorBody(error.code, error.message) };
+      // Issue #154 — redact at the boundary so user-controlled path fragments cannot
+      // echo configured gateway secrets back to the client.
+      return {
+        status: error.status,
+        body: errorBody(error.code, redactErrorMessage(error.message, deps)),
+      };
     }
     throw error;
   }
