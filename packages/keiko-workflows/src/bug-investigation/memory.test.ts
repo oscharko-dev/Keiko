@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { acquireMemoryContext, emitMemoryWriteCandidate } from "./memory.js";
 import type {
+  MemoryId,
   MemoryWorkflowPort,
   MemoryWorkflowContext,
   MemoryUsedEvent,
@@ -12,7 +13,7 @@ function makePort(overrides: Partial<MemoryWorkflowPort> = {}): MemoryWorkflowPo
   return {
     getContextForWorkflow: vi.fn().mockResolvedValue({
       text: "previous fix: use n / 2",
-      includedMemoryIds: ["mem-1"],
+      includedMemoryIds: ["mem-1" as MemoryId],
     } satisfies MemoryWorkflowContext),
     onMemoryUsed: vi.fn(),
     onMemoryWriteCandidate: vi.fn(),
@@ -51,7 +52,7 @@ describe("acquireMemoryContext", () => {
     const port = makePort({
       getContextForWorkflow: vi.fn().mockResolvedValue({
         text: "",
-        includedMemoryIds: ["mem-1"],
+        includedMemoryIds: ["mem-1" as MemoryId],
       } satisfies MemoryWorkflowContext),
     });
     const result = await acquireMemoryContext(port, { description: "bug" });
@@ -86,8 +87,13 @@ describe("acquireMemoryContext", () => {
     expect(event?.reason).toBe("bug-investigation:pre-prompt");
   });
 
-  it("returns context when onMemoryUsed is undefined on the port", async () => {
-    const port = makePort({ onMemoryUsed: undefined });
+  it("returns context when onMemoryUsed is absent on the port", async () => {
+    const port: MemoryWorkflowPort = {
+      getContextForWorkflow: vi.fn().mockResolvedValue({
+        text: "previous fix: use n / 2",
+        includedMemoryIds: ["mem-1" as MemoryId],
+      } satisfies MemoryWorkflowContext),
+    };
     const result = await acquireMemoryContext(port, { description: "bug" });
     expect(result).toBeDefined();
     expect(result?.text).toBe("previous fix: use n / 2");
@@ -109,8 +115,10 @@ describe("emitMemoryWriteCandidate", () => {
     }).not.toThrow();
   });
 
-  it("is a no-op when onMemoryWriteCandidate is undefined on the port", () => {
-    const port = makePort({ onMemoryWriteCandidate: undefined });
+  it("is a no-op when onMemoryWriteCandidate is absent on the port", () => {
+    const port: MemoryWorkflowPort = {
+      getContextForWorkflow: vi.fn(),
+    };
     expect(() => {
       emitMemoryWriteCandidate(port, makeReport());
     }).not.toThrow();
