@@ -533,6 +533,69 @@ describe("runIndexingJob — partial adapter failure", () => {
   });
 });
 
+// ─── F2: cached capsule sources (no N+1 listCapsuleSources) ──────────────────
+describe("runIndexingJob — capsule-sources query budget", () => {
+  let fixture: Fixture;
+
+  beforeEach(() => {
+    fixture = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor sit amet. ".repeat(8),
+      "beta.txt": "Pack my box with five dozen liquor jugs. ".repeat(8),
+      "gamma.txt": "The quick brown fox jumps over the lazy dog. ".repeat(8),
+    });
+    addSourceToCapsule(fixture.store, fixture.capsuleId, {
+      id: "src-orch-2" as KnowledgeSourceId,
+      displayName: "orch-2",
+      tags: [],
+      scope: folderScope(ROOT, { recursive: true }),
+    });
+    addSourceToCapsule(fixture.store, fixture.capsuleId, {
+      id: "src-orch-3" as KnowledgeSourceId,
+      displayName: "orch-3",
+      tags: [],
+      scope: folderScope(ROOT, { recursive: true }),
+    });
+  });
+
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  it("issues ≤ 2 listCapsuleSources SELECTs per job regardless of document count", async () => {
+    // `listCapsuleSources` emits `SELECT * FROM capsule_sources WHERE capsule_id = :c ORDER BY …`,
+    // which is the only call path that hydrates full source rows. Other capsule_sources reads
+    // (listSourceIdsFor inside getCapsule) issue `SELECT id FROM capsule_sources` and are
+    // unrelated to F2 — we filter to the `SELECT *` shape so a regression in sourceForResult
+    // is the only thing this test can catch.
+    const db = fixture.store._internal.db;
+    const originalPrepare = db.prepare.bind(db);
+    let listCapsuleSourcesCalls = 0;
+    db.prepare = (sql: string): ReturnType<typeof originalPrepare> => {
+      const stmt = originalPrepare(sql);
+      if (/SELECT\s+\*\s+FROM\s+capsule_sources/i.test(sql)) {
+        const originalAll = stmt.all.bind(stmt);
+        stmt.all = ((...args: Parameters<typeof originalAll>): ReturnType<typeof originalAll> => {
+          listCapsuleSourcesCalls += 1;
+          return originalAll(...args);
+        }) as typeof stmt.all;
+      }
+      return stmt;
+    };
+
+    try {
+      const events = await drain(runIndexingJob(buildOptions(fixture)));
+      expect(events.filter((e) => e.kind === "document-embedded").length).toBe(9);
+    } finally {
+      db.prepare = originalPrepare;
+    }
+
+    // Without F2, sourceForResult issued one listCapsuleSources per persisted document
+    // (9 docs × 2 call-sites = 18 + 1 from resolveSources = 19+). With F2, only the
+    // resolveSources call at job start hits the DB.
+    expect(listCapsuleSourcesCalls).toBeLessThanOrEqual(2);
+  });
+});
+
 // ─── Concurrency cap honoured ─────────────────────────────────────────────────
 describe("runIndexingJob — concurrency clamp", () => {
   let fixture: Fixture;

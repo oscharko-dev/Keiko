@@ -111,6 +111,7 @@ interface RunState {
   readonly now: () => number;
   readonly idSource: () => string;
   readonly startedAt: number;
+  readonly sourcesById: ReadonlyMap<string, KnowledgeSource>;
   totalDocuments: number;
   processedDocuments: number;
   failedDocuments: number;
@@ -436,10 +437,10 @@ function chunkedDocumentEvents(
 }
 
 function sourceForResult(state: RunState, result: ExtractionResult): KnowledgeSource {
-  // Resolved once per source by the outer loop; this lookup uses the capsule-scoped list
-  // so we never read across capsule boundaries.
-  const sources = listCapsuleSources(state.options.store, state.capsule.id);
-  const match = sources.find((s) => String(s.id) === String(result.sourceId));
+  // Sources are resolved once at job start (see buildInitialState) and cached on RunState.
+  // The capsule lifecycleState gates concurrent mutation, so the map stays consistent for
+  // the duration of the run — no per-document SELECT against capsule_sources.
+  const match = state.sourcesById.get(String(result.sourceId));
   if (match === undefined) {
     throw new IndexingError(
       "INVALID_OPTIONS",
@@ -791,9 +792,12 @@ function resolveCapsule(options: IndexingOptions): KnowledgeCapsule {
 function buildInitialState(
   options: IndexingOptions,
   capsule: KnowledgeCapsule,
+  sources: readonly KnowledgeSource[],
   jobId: string,
   startedAt: number,
 ): RunState {
+  const sourcesById = new Map<string, KnowledgeSource>();
+  for (const source of sources) sourcesById.set(String(source.id), source);
   return {
     jobId,
     capsule,
@@ -803,6 +807,7 @@ function buildInitialState(
     now: options.now ?? options.store._internal.now,
     idSource: options.idSource ?? ((): string => randomUUID()),
     startedAt,
+    sourcesById,
     totalDocuments: 0,
     processedDocuments: 0,
     failedDocuments: 0,
@@ -858,7 +863,7 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
   const startedAt = (options.now ?? options.store._internal.now)();
   const idSource = options.idSource ?? ((): string => randomUUID());
   const jobId = idSource();
-  const state = buildInitialState(options, capsule, jobId, startedAt);
+  const state = buildInitialState(options, capsule, sources, jobId, startedAt);
 
   // Persist the started row up front. The `idSource` is reused for vector storage refs;
   // the jobId itself is minted from the same source so test fixtures can pin both.
