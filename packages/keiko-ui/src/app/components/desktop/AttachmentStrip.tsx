@@ -159,7 +159,7 @@ export function AttachDropZone({ enabled, onFiles }: AttachDropZoneProps): React
   return (
     <div
       className="attach-drop-zone"
-      aria-label="Drop files here to attach"
+      aria-label={enabled ? "Drop files here to attach" : "Attachments not supported by this model"}
       data-dragover={dragOver ? "true" : undefined}
       data-disabled={!enabled ? "true" : undefined}
       onDragOver={handleDragOver}
