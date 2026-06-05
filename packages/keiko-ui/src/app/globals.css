@@ -3758,7 +3758,6 @@ select.set-input {
   background: oklch(0.1 0.004 160 / 0.55);
   backdrop-filter: blur(2px);
   opacity: 0;
-  transition: opacity 0.16s ease;
 }
 .dlg-overlay.in {
   opacity: 1;
@@ -3775,10 +3774,18 @@ select.set-input {
   box-shadow: var(--shadow-pop);
   overflow: hidden;
   transform: translateY(10px) scale(0.985);
-  transition: transform 0.18s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 .dlg-overlay.in .dlg {
   transform: none;
+}
+/* WCAG 2.3.3 — dialog entry transitions only run when the user has not requested reduced motion */
+@media (prefers-reduced-motion: no-preference) {
+  .dlg-overlay {
+    transition: opacity 0.16s ease;
+  }
+  .dlg {
+    transition: transform 0.18s cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
 }
 .dlg-head {
   display: flex;
@@ -3895,6 +3902,10 @@ select.dlg-input {
 .dlg-btn:hover {
   background: var(--card-2);
   color: var(--fg);
+}
+.dlg-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 .dlg-primary {
   color: #06281b;
@@ -6344,9 +6355,10 @@ select.dlg-input {
   flex-shrink: 0;
 }
 
-/* Destructive confirm button in modal — danger style */
+/* Destructive confirm button in modal — danger style.
+   --ink-inverse on --danger = 6.07:1 (WCAG AA). --fg is near-white = ~2.84:1 (FAIL). */
 .lkd-btn-destructive {
-  color: var(--fg) !important;
+  color: var(--ink-inverse) !important;
   background: var(--danger) !important;
   border-color: var(--danger) !important;
 }

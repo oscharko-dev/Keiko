@@ -31,19 +31,16 @@ import {
 import { buildRedactor, createRunRegistry } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 
-function jsonRequest(
-  body: Record<string, unknown> | undefined,
-  method: string,
-): IncomingMessage {
-  const bytes =
-    body === undefined ? [] : [Buffer.from(JSON.stringify(body), "utf8")];
+function jsonRequest(body: Record<string, unknown> | undefined, method: string): IncomingMessage {
+  const bytes = body === undefined ? [] : [Buffer.from(JSON.stringify(body), "utf8")];
   const req = Readable.from(bytes) as IncomingMessage;
   req.method = method;
   req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };
   return req;
 }
 
-function depsFor(tmp: string): UiHandlerDeps {
+function depsFor(tmp: string, overrideModelId?: string): UiHandlerDeps {
+  const modelId = overrideModelId ?? "text-embedding-3-small";
   const localKnowledgeEmbeddingRequest = vi.fn<
     (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>
   >(() =>
@@ -51,7 +48,7 @@ function depsFor(tmp: string): UiHandlerDeps {
       ok: true as const,
       value: {
         vector: Float32Array.from({ length: 1536 }, (_, index) => index / 1000),
-        modelId: "text-embedding-3-small",
+        modelId,
       },
     }),
   );
@@ -59,7 +56,7 @@ function depsFor(tmp: string): UiHandlerDeps {
     config: {
       providers: [
         {
-          modelId: "text-embedding-3-small",
+          modelId,
           baseUrl: "https://gateway.example.test/v1",
           apiKey: "redacted",
           timeoutMs: 30_000,
@@ -339,7 +336,11 @@ describe("local-knowledge handlers", () => {
 
     expect(jobs).toHaveLength(2);
     expect(jobs[0]).toMatchObject({ status: "succeeded", processed_documents: 1 });
-    expect(jobs[1]).toMatchObject({ status: "succeeded", processed_documents: 0, skipped_documents: 0 });
+    expect(jobs[1]).toMatchObject({
+      status: "succeeded",
+      processed_documents: 0,
+      skipped_documents: 0,
+    });
     expect(auditKinds.map((row) => row.kind).sort()).toEqual([
       "indexing-job-completed",
       "indexing-job-completed",
@@ -559,5 +560,86 @@ describe("local-knowledge handlers", () => {
     verify.close();
     expect(row.n).toBe(0);
     expect(auditRow).toEqual({ kind: "capsule-deleted" });
+  });
+
+  it("reports vectorCompatible=false when the gateway embedding model rotates away from the capsule's pinned model (#189 O2)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store } = seedStore(tmp);
+    store.close();
+
+    const result = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      depsFor(tmp, "text-embedding-3-large"),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      readonly health: {
+        readonly vectorCompatible: boolean;
+        readonly staleReasons: readonly string[];
+      };
+    };
+    expect(body.health.vectorCompatible).toBe(false);
+    expect(body.health.staleReasons.some((reason) => /embedding model/i.test(reason))).toBe(true);
+  });
+
+  it("rejects a reindex request with a non-boolean force field (#189 O2)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store } = seedStore(tmp);
+    store.close();
+
+    const result = await handleReindexLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", { mode: "changed-files", force: "yes" }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("surfaces parserDiagnostics and indexingJobs truncation totals on the detail response (#189 F4)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: join(tmp, "docs"), recursive: true },
+    });
+    store._internal.db
+      .prepare(
+        "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) VALUES ('doc-1', :c, 'src-1', 'policy.txt', 10, 'text/plain', 'aa', 'text', '1', 10, 'failed', 'policy.txt')",
+      )
+      .run({ c: capId });
+    store._internal.db
+      .prepare(
+        "INSERT INTO parser_diagnostics (id, capsule_id, document_id, severity, code, message, page_number, created_at) VALUES ('diag-1', :c, 'doc-1', 'error', 'PARSE_ERR', 'Parser failed', 1, 11)",
+      )
+      .run({ c: capId });
+    store._internal.db
+      .prepare(
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-1', :c, '[\"src-1\"]', 12, 13, 'failed', 1, 0, 1, 0, 'PARSE_ERR', 'Parser failed', NULL, 0)",
+      )
+      .run({ c: capId });
+    store.close();
+
+    const result = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({
+      parserDiagnosticsTotal: 1,
+      parserDiagnosticsTruncated: false,
+      indexingJobsTotal: 1,
+      indexingJobsTruncated: false,
+    });
   });
 });

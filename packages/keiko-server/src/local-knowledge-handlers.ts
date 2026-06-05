@@ -27,15 +27,9 @@ import type {
   ParserDiagnostic,
   KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
-import {
-  KnowledgeNotFoundError,
-  KnowledgeStoreError,
-} from "@oscharko-dev/keiko-local-knowledge";
+import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
 import { validateKnowledgeSourceScope } from "@oscharko-dev/keiko-contracts";
-import {
-  currentGatewayConfig,
-  type UiHandlerDeps,
-} from "./deps.js";
+import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import {
@@ -48,6 +42,10 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const MAX_BODY_BYTES = 32_000;
+// F4 (Epic #189): cap unbounded BFF response collections so a worst-case capsule with
+// thousands of parser diagnostics / job rows cannot inflate a single JSON response.
+const MAX_DIAGNOSTICS_PER_RESPONSE = 500;
+const MAX_JOBS_PER_RESPONSE = 500;
 
 class InvalidRequest extends Error {
   public constructor(message: string) {
@@ -69,6 +67,21 @@ function badRequest(code: string, message: string): RouteResult {
 
 function conflict(message: string): RouteResult {
   return { status: 409, body: errorBody("LOCAL_KNOWLEDGE_CONFLICT", message) };
+}
+
+// LK-001 / LK-003 (Epic #189): structured 409 conflict variants that surface the
+// affected capsule + job so the UI can route the user back to the right run without
+// re-fetching the capsule detail.
+function indexingConflict(
+  code: "indexing-cancelled" | "indexing-already-running",
+  message: string,
+  capsuleId: string,
+  jobId: string,
+): RouteResult {
+  return {
+    status: 409,
+    body: { ...errorBody(code, message), capsuleId, jobId },
+  };
 }
 
 function serviceUnavailable(message: string): RouteResult {
@@ -212,7 +225,10 @@ function vectorCompatibility(
   if (capsule.lifecycleState === "error") {
     reasons.push("The last indexing run ended with errors.");
   }
-  return { vectorCompatible: provider !== undefined || currentGatewayConfig(deps) === undefined, staleReasons: reasons };
+  return {
+    vectorCompatible: provider !== undefined || currentGatewayConfig(deps) === undefined,
+    staleReasons: reasons,
+  };
 }
 
 interface SourceStatsRow {
@@ -225,7 +241,10 @@ interface SourceStatsRow {
   readonly skipped_count: number;
 }
 
-function loadSourceStats(store: ReturnType<typeof openKnowledgeStore>, capsuleId: string): readonly {
+function loadSourceStats(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: string,
+): readonly {
   readonly sourceId: string;
   readonly displayName: string;
   readonly scope: KnowledgeSource["scope"];
@@ -233,19 +252,21 @@ function loadSourceStats(store: ReturnType<typeof openKnowledgeStore>, capsuleId
   readonly failedCount: number;
   readonly skippedCount: number;
 }[] {
-  const rows = store._internal.db.prepare(
-    [
-      "SELECT s.id AS source_id, s.display_name, s.scope_kind, s.scope_json,",
-      "  SUM(CASE WHEN d.status = 'extracted' THEN 1 ELSE 0 END) AS indexed_count,",
-      "  SUM(CASE WHEN d.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,",
-      "  SUM(CASE WHEN d.status IN ('skipped', 'unsupported') THEN 1 ELSE 0 END) AS skipped_count",
-      "FROM capsule_sources AS s",
-      "LEFT JOIN documents AS d ON d.capsule_id = s.capsule_id AND d.source_id = s.id",
-      "WHERE s.capsule_id = :c",
-      "GROUP BY s.id, s.display_name, s.scope_kind, s.scope_json",
-      "ORDER BY s.created_at ASC, s.id ASC",
-    ].join(" "),
-  ).all({ c: capsuleId }) as unknown as readonly SourceStatsRow[];
+  const rows = store._internal.db
+    .prepare(
+      [
+        "SELECT s.id AS source_id, s.display_name, s.scope_kind, s.scope_json,",
+        "  SUM(CASE WHEN d.status = 'extracted' THEN 1 ELSE 0 END) AS indexed_count,",
+        "  SUM(CASE WHEN d.status = 'failed' THEN 1 ELSE 0 END) AS failed_count,",
+        "  SUM(CASE WHEN d.status IN ('skipped', 'unsupported') THEN 1 ELSE 0 END) AS skipped_count",
+        "FROM capsule_sources AS s",
+        "LEFT JOIN documents AS d ON d.capsule_id = s.capsule_id AND d.source_id = s.id",
+        "WHERE s.capsule_id = :c",
+        "GROUP BY s.id, s.display_name, s.scope_kind, s.scope_json",
+        "ORDER BY s.created_at ASC, s.id ASC",
+      ].join(" "),
+    )
+    .all({ c: capsuleId }) as unknown as readonly SourceStatsRow[];
   return rows.map((row) => ({
     sourceId: row.source_id,
     displayName: row.display_name,
@@ -264,25 +285,40 @@ interface ParserDiagnosticRow {
   readonly page_number: number | null;
 }
 
+interface DiagnosticsPage {
+  readonly items: readonly ParserDiagnostic[];
+  readonly total: number;
+}
+
 function loadParserDiagnostics(
   store: ReturnType<typeof openKnowledgeStore>,
   capsuleId: string,
-): readonly ParserDiagnostic[] {
-  const rows = store._internal.db.prepare(
-    [
-      "SELECT severity, code, message, document_id, page_number",
-      "FROM parser_diagnostics",
-      "WHERE capsule_id = :c",
-      "ORDER BY created_at DESC, id DESC",
-    ].join(" "),
-  ).all({ c: capsuleId }) as unknown as readonly ParserDiagnosticRow[];
-  return rows.map((row) => ({
+): DiagnosticsPage {
+  const rows = store._internal.db
+    .prepare(
+      [
+        "SELECT severity, code, message, document_id, page_number",
+        "FROM parser_diagnostics",
+        "WHERE capsule_id = :c",
+        "ORDER BY created_at DESC, id DESC",
+        "LIMIT :limit",
+      ].join(" "),
+    )
+    .all({
+      c: capsuleId,
+      limit: MAX_DIAGNOSTICS_PER_RESPONSE,
+    }) as unknown as readonly ParserDiagnosticRow[];
+  const totalRow = store._internal.db
+    .prepare("SELECT COUNT(*) AS n FROM parser_diagnostics WHERE capsule_id = :c")
+    .get({ c: capsuleId }) as { readonly n: number };
+  const items = rows.map((row) => ({
     severity: row.severity as ParserDiagnostic["severity"],
     code: row.code,
     message: row.message,
     ...(row.document_id !== null ? { documentId: row.document_id as DocumentId } : {}),
     ...(row.page_number !== null ? { pageNumber: row.page_number } : {}),
   }));
+  return { items, total: totalRow.n };
 }
 
 interface UnsupportedReasonRow {
@@ -306,14 +342,16 @@ function loadUnsupportedGuidance(
   store: ReturnType<typeof openKnowledgeStore>,
   capsuleId: string,
 ): readonly string[] {
-  const rows = store._internal.db.prepare(
-    [
-      "SELECT DISTINCT unsupported_reason",
-      "FROM parsed_units",
-      "WHERE capsule_id = :c AND kind = 'unsupported-media'",
-      "ORDER BY unsupported_reason ASC",
-    ].join(" "),
-  ).all({ c: capsuleId }) as unknown as readonly UnsupportedReasonRow[];
+  const rows = store._internal.db
+    .prepare(
+      [
+        "SELECT DISTINCT unsupported_reason",
+        "FROM parsed_units",
+        "WHERE capsule_id = :c AND kind = 'unsupported-media'",
+        "ORDER BY unsupported_reason ASC",
+      ].join(" "),
+    )
+    .all({ c: capsuleId }) as unknown as readonly UnsupportedReasonRow[];
   const guidance = new Set<string>();
   for (const row of rows) {
     if (typeof row.unsupported_reason !== "string" || row.unsupported_reason.length === 0) continue;
@@ -376,21 +414,36 @@ function rowToIndexingJobRecord(row: IndexingJobRow): IndexingJobRecord {
   };
 }
 
+interface IndexingJobsPage {
+  readonly items: readonly IndexingJobRecord[];
+  readonly total: number;
+}
+
 function loadIndexingJobs(
   store: ReturnType<typeof openKnowledgeStore>,
   capsuleId: string,
-): readonly IndexingJobRecord[] {
-  const rows = store._internal.db.prepare(
-    [
-      "SELECT id, capsule_id, source_ids_json, started_at, finished_at, status,",
-      "  total_documents, processed_documents, failed_documents, skipped_documents,",
-      "  last_error_code, last_error_message, resume_token",
-      "FROM indexing_jobs",
-      "WHERE capsule_id = :c",
-      "ORDER BY started_at DESC, id DESC",
-    ].join(" "),
-  ).all({ c: capsuleId }) as unknown as readonly IndexingJobRow[];
-  return rows.map((row) => rowToIndexingJobRecord(row));
+): IndexingJobsPage {
+  const rows = store._internal.db
+    .prepare(
+      [
+        "SELECT id, capsule_id, source_ids_json, started_at, finished_at, status,",
+        "  total_documents, processed_documents, failed_documents, skipped_documents,",
+        "  last_error_code, last_error_message, resume_token",
+        "FROM indexing_jobs",
+        "WHERE capsule_id = :c",
+        "ORDER BY started_at DESC, id DESC",
+        "LIMIT :limit",
+      ].join(" "),
+    )
+    .all({
+      c: capsuleId,
+      limit: MAX_JOBS_PER_RESPONSE,
+    }) as unknown as readonly IndexingJobRow[];
+  const totalRow = store._internal.db
+    .prepare("SELECT COUNT(*) AS n FROM indexing_jobs WHERE capsule_id = :c")
+    .get({ c: capsuleId }) as { readonly n: number };
+  const items = rows.map((row) => rowToIndexingJobRecord(row));
+  return { items, total: totalRow.n };
 }
 
 function countForTable(
@@ -412,21 +465,28 @@ function countDocumentStatus(
   const row =
     status === "failed"
       ? (store._internal.db
-          .prepare("SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status = 'failed'")
+          .prepare(
+            "SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status = 'failed'",
+          )
           .get({ c: capsuleId }) as { readonly n: number })
       : status === "unsupported"
         ? (store._internal.db
-            .prepare("SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status = 'unsupported'")
+            .prepare(
+              "SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status = 'unsupported'",
+            )
             .get({ c: capsuleId }) as { readonly n: number })
-      : (store._internal.db
-          .prepare(
-            "SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status IN ('skipped', 'unsupported')",
-          )
-          .get({ c: capsuleId }) as { readonly n: number });
+        : (store._internal.db
+            .prepare(
+              "SELECT COUNT(*) AS n FROM documents WHERE capsule_id = :c AND status IN ('skipped', 'unsupported')",
+            )
+            .get({ c: capsuleId }) as { readonly n: number });
   return row.n;
 }
 
-function lastIndexedAt(store: ReturnType<typeof openKnowledgeStore>, capsuleId: string): number | undefined {
+function lastIndexedAt(
+  store: ReturnType<typeof openKnowledgeStore>,
+  capsuleId: string,
+): number | undefined {
   const row = store._internal.db
     .prepare(
       "SELECT MAX(finished_at) AS finished_at FROM indexing_jobs WHERE capsule_id = :c AND finished_at IS NOT NULL",
@@ -450,9 +510,7 @@ function buildCapsuleHealth(
   const compatibility = vectorCompatibility(deps, capsule);
   const indexedAt = lastIndexedAt(store, capsule.id);
   const unsupportedGuidance =
-    unsupportedDocuments > 0
-      ? loadUnsupportedGuidance(store, capsule.id)
-      : [];
+    unsupportedDocuments > 0 ? loadUnsupportedGuidance(store, capsule.id) : [];
   return {
     capsuleId: capsule.id,
     lifecycleState: capsule.lifecycleState,
@@ -545,6 +603,30 @@ function actionResponse(capsuleId: string): RouteResult {
   return { status: 200, body: { ok: true, capsuleId } };
 }
 
+// F4 (Epic #189): the response shape for both GET /capsules/:id and POST /capsules
+// includes truncation metadata so a future UI can prompt the user to refine their
+// view when the persisted history grew past the per-response cap.
+function buildCapsuleResponseBody(
+  deps: UiHandlerDeps,
+  store: ReturnType<typeof openKnowledgeStore>,
+  dbPath: string,
+  capsule: KnowledgeCapsule,
+): Record<string, unknown> {
+  const diagnostics = loadParserDiagnostics(store, capsule.id);
+  const jobs = loadIndexingJobs(store, capsule.id);
+  return {
+    capsule,
+    health: buildCapsuleHealth(deps, store, dbPath, capsule),
+    sources: loadSourceStats(store, capsule.id),
+    parserDiagnostics: diagnostics.items,
+    parserDiagnosticsTotal: diagnostics.total,
+    parserDiagnosticsTruncated: diagnostics.total > diagnostics.items.length,
+    indexingJobs: jobs.items,
+    indexingJobsTotal: jobs.total,
+    indexingJobsTruncated: jobs.total > jobs.items.length,
+  };
+}
+
 function deleteActionResponse(input: {
   readonly capsuleId: string;
   readonly affectedCapsuleSetIds: readonly string[];
@@ -569,7 +651,9 @@ function parseCapsuleId(ctx: RouteContext): KnowledgeCapsule["id"] {
   return capsuleId as KnowledgeCapsule["id"];
 }
 
-function parseReindexMode(body: Record<string, unknown>): "changed-files" | "repair-failed" | undefined {
+function parseReindexMode(
+  body: Record<string, unknown>,
+): "changed-files" | "repair-failed" | undefined {
   const mode = body.mode;
   if (mode === undefined || mode === "changed-files" || mode === "repair-failed") {
     return mode;
@@ -577,12 +661,23 @@ function parseReindexMode(body: Record<string, unknown>): "changed-files" | "rep
   throw new InvalidRequest('Field "mode" must be "changed-files" or "repair-failed".');
 }
 
+// O2-GAP-1 (Epic #189): reindex callers can opt into a forced re-embed. Plumbed
+// through to runIndexingJob so a capsule whose embedding model rotated can be
+// rebuilt without manual store surgery.
+function parseReindexForce(body: Record<string, unknown>): boolean {
+  const force = body.force;
+  if (force === undefined) return false;
+  if (typeof force !== "boolean") {
+    throw new InvalidRequest('Field "force" must be a boolean when provided.');
+  }
+  return force;
+}
+
 function parseCreateCapsuleInput(body: Record<string, unknown>): {
   readonly displayName: string;
   readonly description?: string;
 } {
-  const displayName =
-    typeof body.displayName === "string" ? body.displayName.trim() : undefined;
+  const displayName = typeof body.displayName === "string" ? body.displayName.trim() : undefined;
   if (displayName === undefined || displayName.length === 0) {
     throw new InvalidRequest('Field "displayName" must be a non-empty string.');
   }
@@ -663,27 +758,63 @@ function disconnectCapsuleSources(
   updateCapsuleState(store, capsuleId, "draft");
 }
 
+// LK-001 (Epic #189): job-cancelled is a distinct terminal kind. Callers must surface it
+// as 409, not 200, so the UI never reads a cancelled run as a successful one.
+type IndexingTerminal =
+  | {
+      readonly kind: "job-completed";
+      readonly jobId: string;
+      readonly result: { readonly failedDocuments: number };
+    }
+  | { readonly kind: "job-cancelled"; readonly jobId: string }
+  | { readonly kind: "job-failed"; readonly jobId: string };
+
+interface RunCapsuleIndexingJobOptions {
+  readonly mode: "changed-files" | "repair-failed" | undefined;
+  // O2-GAP-1 (Epic #189): reindex callers can request a full re-embed when the embedding
+  // model has rotated. Start-indexing keeps force=false so a first-pass run never wipes
+  // a partially-built index.
+  readonly force: boolean;
+}
+
+// LK-001 (Epic #189): both the start and refresh handlers map a terminal IndexingTerminal
+// to the same 3-way response — cancelled → 409 cancelled, failed → 409 failed-message,
+// any other (completed or absent) → 200 ok. Extracted so each handler stays under the
+// 50-LOC per-function ceiling.
+function indexingCompletionResponse(
+  capsuleId: KnowledgeCapsule["id"],
+  terminal: IndexingTerminal | undefined,
+  failedMessage: string,
+): RouteResult {
+  if (terminal?.kind === "job-cancelled") {
+    return indexingConflict(
+      "indexing-cancelled",
+      "Indexing job was cancelled.",
+      capsuleId,
+      terminal.jobId,
+    );
+  }
+  if (terminal?.kind === "job-failed") {
+    return conflict(failedMessage);
+  }
+  return actionResponse(capsuleId);
+}
+
 async function runCapsuleIndexingJob(
   deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
   capsule: KnowledgeCapsule,
-  mode: "changed-files" | "repair-failed" | undefined,
-): Promise<
-  | { readonly kind: "job-completed"; readonly result: { readonly failedDocuments: number } }
-  | { readonly kind: "job-failed" }
-  | undefined
-> {
+  options: RunCapsuleIndexingJobOptions,
+): Promise<IndexingTerminal | undefined> {
   const provider = configuredProviderForCapsule(deps, capsule);
   if (provider === undefined) {
-    return { kind: "job-failed" };
+    return { kind: "job-failed", jobId: "" };
   }
   canonicalizeCapsuleSourceRoots(store, capsule);
   const adapter = createEmbeddingAdapter(provider, requestEmbeddingImpl(deps));
-  const sourceIds = mode === "repair-failed" ? failedSourceIds(store, capsule.id) : undefined;
-  let terminal:
-    | { readonly kind: "job-completed"; readonly result: { readonly failedDocuments: number } }
-    | { readonly kind: "job-failed" }
-    | undefined;
+  const sourceIds =
+    options.mode === "repair-failed" ? failedSourceIds(store, capsule.id) : undefined;
+  let terminal: IndexingTerminal | undefined;
   for await (const event of runIndexingJob({
     capsuleId: capsule.id,
     ...(sourceIds !== undefined ? { sourceIds } : {}),
@@ -692,9 +823,13 @@ async function runCapsuleIndexingJob(
     embeddingAdapter: adapter,
     auditSink: createSqliteAuditSink(store),
     store,
-    force: false,
+    force: options.force,
   })) {
-    if (event.kind === "job-completed" || event.kind === "job-failed") {
+    if (
+      event.kind === "job-completed" ||
+      event.kind === "job-failed" ||
+      event.kind === "job-cancelled"
+    ) {
       terminal = event;
     }
   }
@@ -723,7 +858,10 @@ async function runHandler(worker: () => Promise<RouteResult> | RouteResult): Pro
     return await worker();
   } catch (error) {
     if (error instanceof BodyTooLargeError) {
-      return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit.") };
+      return {
+        status: 413,
+        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
+      };
     }
     if (error instanceof InvalidRequest) {
       return badRequest("INVALID_REQUEST", error.message);
@@ -812,13 +950,7 @@ export async function handleCreateLocalKnowledgeCapsule(
       );
       return {
         status: 201,
-        body: {
-          capsule,
-          health: buildCapsuleHealth(deps, env.store, env.dbPath, capsule),
-          sources: loadSourceStats(env.store, capsule.id),
-          parserDiagnostics: loadParserDiagnostics(env.store, capsule.id),
-          indexingJobs: loadIndexingJobs(env.store, capsule.id),
-        },
+        body: buildCapsuleResponseBody(deps, env.store, env.dbPath, capsule),
       };
     } finally {
       env.close();
@@ -840,13 +972,7 @@ export async function handleGetLocalKnowledgeCapsule(
       }
       return {
         status: 200,
-        body: {
-          capsule,
-          health: buildCapsuleHealth(deps, env.store, env.dbPath, capsule),
-          sources: loadSourceStats(env.store, capsule.id),
-          parserDiagnostics: loadParserDiagnostics(env.store, capsule.id),
-          indexingJobs: loadIndexingJobs(env.store, capsule.id),
-        },
+        body: buildCapsuleResponseBody(deps, env.store, env.dbPath, capsule),
       };
     } finally {
       env.close();
@@ -872,13 +998,27 @@ export async function handleStartLocalKnowledgeCapsuleIndexing(
           "No configured embedding model matches this capsule. Update the Model Gateway configuration before indexing it.",
         );
       }
-      const terminal = await runCapsuleIndexingJob(deps, env.store, capsule, undefined);
-      if (terminal?.kind === "job-failed") {
-        return conflict(
-          "Capsule indexing failed. Review the capsule health diagnostics and job history for details.",
+      // LK-003 (Epic #189): refuse to start a second concurrent indexer for the same
+      // capsule — the orchestrator persists running jobs, so a duplicate POST would
+      // race the in-flight one and corrupt vector counts.
+      const runningJobId = latestRunningJobId(env.store, capsule.id);
+      if (runningJobId !== undefined) {
+        return indexingConflict(
+          "indexing-already-running",
+          "An indexing job is already running for this capsule.",
+          capsule.id,
+          runningJobId,
         );
       }
-      return actionResponse(capsule.id);
+      const terminal = await runCapsuleIndexingJob(deps, env.store, capsule, {
+        mode: undefined,
+        force: false,
+      });
+      return indexingCompletionResponse(
+        capsule.id,
+        terminal,
+        "Capsule indexing failed. Review the capsule health diagnostics and job history for details.",
+      );
     } finally {
       env.close();
     }
@@ -954,7 +1094,9 @@ export async function handleReindexLocalKnowledgeCapsule(
 ): Promise<RouteResult> {
   return runHandler(async () => {
     const capsuleId = parseCapsuleId(ctx);
-    const mode = parseReindexMode(await readJsonObject(ctx.req));
+    const body = await readJsonObject(ctx.req);
+    const mode = parseReindexMode(body);
+    const force = parseReindexForce(body);
     const env = openStoreForDeps(deps);
     try {
       const capsule = getCapsule(env.store, capsuleId);
@@ -966,13 +1108,25 @@ export async function handleReindexLocalKnowledgeCapsule(
           "No configured embedding model matches this capsule. Update the Model Gateway configuration before refreshing it.",
         );
       }
-      const terminal = await runCapsuleIndexingJob(deps, env.store, capsule, mode);
-      if (terminal?.kind === "job-failed") {
-        return conflict(
-          "Capsule refresh failed. Review the capsule health diagnostics and job history for details.",
+      // LK-003 (Epic #189): same concurrent-run guard as the start handler.
+      const runningJobId = latestRunningJobId(env.store, capsule.id);
+      if (runningJobId !== undefined) {
+        return indexingConflict(
+          "indexing-already-running",
+          "An indexing job is already running for this capsule.",
+          capsule.id,
+          runningJobId,
         );
       }
-      return actionResponse(capsule.id);
+      const terminal = await runCapsuleIndexingJob(deps, env.store, capsule, {
+        mode,
+        force,
+      });
+      return indexingCompletionResponse(
+        capsule.id,
+        terminal,
+        "Capsule refresh failed. Review the capsule health diagnostics and job history for details.",
+      );
     } finally {
       env.close();
     }

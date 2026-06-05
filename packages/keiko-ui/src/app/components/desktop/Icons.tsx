@@ -283,6 +283,13 @@ export const Icons = {
     </Ico>
   ),
   activity: (p: IcoProps): ReactNode => <Ico {...p} d="M3 12h3l2.5-7 5 14 2.5-7H21" />,
+  localKnowledge: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M4 19V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12" />
+      <path d="M4 19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2" />
+      <path d="M9 7v14M9 11h6" />
+    </Ico>
+  ),
 } as const;
 
 export type IconName = keyof typeof Icons;

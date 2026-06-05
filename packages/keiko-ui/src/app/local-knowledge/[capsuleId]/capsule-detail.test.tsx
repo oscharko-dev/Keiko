@@ -371,7 +371,9 @@ describe("CapsuleDetail — indexing jobs section", () => {
       failedDocuments: 0,
       skippedDocuments: 0,
     }));
-    render(<CapsuleDetail fetchDetailImpl={resolveDetail({ ...FULL_DETAIL, indexingJobs: jobs })} />);
+    render(
+      <CapsuleDetail fetchDetailImpl={resolveDetail({ ...FULL_DETAIL, indexingJobs: jobs })} />,
+    );
 
     await waitFor(() => {
       expect(screen.getAllByText("Succeeded")).toHaveLength(25);
@@ -425,6 +427,37 @@ describe("CapsuleDetail — error state", () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Vector-compatible=false branches (Epic #189 AC O6)
+// ---------------------------------------------------------------------------
+
+describe("CapsuleDetail — vectorCompatible=false", () => {
+  it("renders 'No — re-index required' when vectorCompatible is false", async () => {
+    const detail: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      health: { ...BASE_HEALTH, vectorCompatible: false, staleReasons: [] },
+    };
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No — re-index required")).toBeInTheDocument();
+    });
+  });
+
+  it("renders stale-reason list items when staleReasons is non-empty", async () => {
+    const staleReason = "The configured embedding model no longer matches this capsule.";
+    const detail: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      health: { ...BASE_HEALTH, vectorCompatible: false, staleReasons: [staleReason] },
+    };
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    await waitFor(() => {
+      expect(screen.getByText(staleReason)).toBeInTheDocument();
+    });
   });
 });
 

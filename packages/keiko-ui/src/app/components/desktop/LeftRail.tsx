@@ -122,6 +122,17 @@ export function LeftRail({
         >
           <Icons.review size={19} />
         </Link>
+        {/* Issue #189 — Local Knowledge is a page route, not a window tool */}
+        <Link
+          href="/local-knowledge"
+          className="rail-btn"
+          data-active="false"
+          data-side="left"
+          aria-label="Local Knowledge"
+          title="Local Knowledge"
+        >
+          <Icons.localKnowledge size={19} />
+        </Link>
       </div>
       <div className="rail-div" />
       <button
