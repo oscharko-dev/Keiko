@@ -64,6 +64,10 @@ export function buildCspHeader(scriptHashes: readonly string[]): string {
     "img-src 'self' data:",
     "connect-src 'self'",
     "font-src 'self'",
+    // `manifest-src 'self'` is required for the PWA manifest at /manifest.webmanifest to load
+    // under our `default-src 'none'` fallback (browsers will otherwise refuse the fetch). The
+    // directive is strictly additive and does not loosen any existing source allow-list.
+    "manifest-src 'self'",
     "base-uri 'none'",
     "form-action 'none'",
     "frame-ancestors 'none'",
