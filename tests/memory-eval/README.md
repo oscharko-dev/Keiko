@@ -30,10 +30,11 @@ npm test -- tests/memory-eval/scenarios/cross-scope-isolation.test.ts
 
 ## Where the scorecard lands
 
-`tests/memory-eval/scorecard.json` — written by `eval-runner.test.ts` on a
-successful orchestrator run. The runner asserts byte-identical output across
-two consecutive runs as a determinism guard, so the file in git should match
-the file the test produces on a clean checkout.
+`tests/memory-eval/scorecard.json` — optional local evidence artifact written by
+`eval-runner.test.ts` only when `KEIKO_WRITE_MEMORY_EVAL_SCORECARD=1` is set.
+The runner still asserts byte-identical output across two consecutive runs as a
+determinism guard during every test run; the explicit write path exists so a PR
+can attach a fresh JSON scorecard without dirtying ordinary local or CI runs.
 
 ## Fixture format
 
@@ -91,7 +92,7 @@ kind requires its matching coordinate field (e.g. `userId` for `user`).
 | `project-decisions.json`     | long-range-understanding           |
 | `workflow-lessons.json`      | test-time-learning                 |
 | `correction-pairs.json`      | correction-handling                |
-| `stale-memories.json`        | accurate-retrieval (suppression)   |
+| `stale-memories.json`        | suppressed-memory                  |
 | `forget-targets.json`        | selective-forgetting               |
 | `cross-scope-collision.json` | cross-scope-isolation              |
 
@@ -104,7 +105,7 @@ inline because the assertion is that the validator REJECTS it.
 {
   "evalSchemaVersion": "1",
   "generatedAt": 1700000000000,
-  "totals": { "scenarios": 8, "passed": 8, "failed": 0 },
+  "totals": { "scenarios": 9, "passed": 9, "failed": 0 },
   "scenarios": [{ "name": "accurate-retrieval", "passed": true, "evidence": "..." }],
 }
 ```

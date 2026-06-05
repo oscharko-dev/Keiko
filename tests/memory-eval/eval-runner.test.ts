@@ -5,13 +5,14 @@
 //   2. Asserts every scenario passed.
 //   3. Builds the scorecard with a FIXED `generatedAt` (FIXED_NOW_MS from _support.ts) so
 //      two consecutive runs produce a byte-identical serialised JSON.
-//   4. Writes the serialised scorecard to tests/memory-eval/scorecard.json.
+//   4. Optionally writes the serialised scorecard to tests/memory-eval/scorecard.json when
+//      KEIKO_WRITE_MEMORY_EVAL_SCORECARD=1 is set for explicit PR-evidence generation.
 //   5. Re-runs every scenario AGAIN with a fresh accumulator and asserts the second
 //      serialisation is byte-equal to the first — the determinism guard the issue brief
 //      explicitly requires.
 //
-// The scorecard file in git is the canonical artifact for #216 epic verification; this
-// test re-writes it on every run, so a behavioural drift surfaces as a git diff.
+// The runner stays side-effect free by default so ordinary `npm test` runs do not dirty the
+// working tree. PR evidence can opt in to writing a local scorecard artifact explicitly.
 
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -26,6 +27,7 @@ import { run as runSelectiveForgetting } from "./scenarios/selective-forgetting.
 import { run as runCrossScopeIsolation } from "./scenarios/cross-scope-isolation.test.js";
 import { run as runNoMemoryMode } from "./scenarios/no-memory-mode.test.js";
 import { run as runErrorPropagation } from "./scenarios/error-propagation.test.js";
+import { run as runSuppressedMemory } from "./scenarios/suppressed-memory.test.js";
 
 import { createScorecard, serializeScorecard, type Scorecard } from "./scorecard.js";
 import { FIXED_NOW_MS } from "./_support.js";
@@ -44,6 +46,7 @@ const SCENARIOS: readonly {
   { name: "cross-scope-isolation", run: runCrossScopeIsolation },
   { name: "no-memory-mode", run: runNoMemoryMode },
   { name: "error-propagation", run: runErrorPropagation },
+  { name: "suppressed-memory", run: runSuppressedMemory },
 ];
 
 async function runAllScenarios(): Promise<Scorecard> {
@@ -59,7 +62,7 @@ function scorecardPath(): string {
 }
 
 describe("memory evaluation orchestrator", () => {
-  it("runs every scenario, writes a deterministic scorecard, asserts byte-equal across runs", async () => {
+  it("runs every scenario, asserts deterministic output, and only writes evidence on explicit opt-in", async () => {
     const firstScorecard = await runAllScenarios();
     const firstBuilt = firstScorecard.build(FIXED_NOW_MS);
     const firstJson = serializeScorecard(firstBuilt);
@@ -82,8 +85,9 @@ describe("memory evaluation orchestrator", () => {
     const secondJson = serializeScorecard(secondBuilt);
     expect(secondJson).toBe(firstJson);
 
-    // Persist the canonical scorecard. Writing AFTER the determinism check means a
-    // regression in evidence text is caught BEFORE we overwrite the file on disk.
-    writeFileSync(scorecardPath(), firstJson, "utf8");
+    // Persist the scorecard only when the caller explicitly requests a local evidence file.
+    if (process.env.KEIKO_WRITE_MEMORY_EVAL_SCORECARD === "1") {
+      writeFileSync(scorecardPath(), firstJson, "utf8");
+    }
   });
 });

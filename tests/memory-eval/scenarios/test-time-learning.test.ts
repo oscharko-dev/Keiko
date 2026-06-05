@@ -5,10 +5,11 @@
 // retrieval surfaces it.
 //
 // Mutation-robustness controls:
-//  1. POSITIVE: after the capture+insert, retrieval includes the newly-captured memory.
-//  2. NEGATIVE/CONTROL: retrieval BEFORE the insert MUST NOT include the new memory id —
-//     proves the second retrieval is honouring fresh storage state rather than caching
-//     anywhere upstream.
+//  1. POSITIVE: after the capture+insert, retrieval includes the newly-captured memory AND
+//     preserves the seeded workflow lesson from the explicitly requested workflow scope.
+//  2. NEGATIVE/CONTROL: retrieval BEFORE the insert MUST include the seeded workflow lesson
+//     but MUST NOT include the new memory id — proves the second retrieval is honouring
+//     fresh storage state rather than caching anywhere upstream.
 //
 // Composition: real SQLite vault (mkdtemp), capture module, retrieval module. Cleaned up
 // in afterEach.
@@ -39,6 +40,7 @@ import {
   userId,
   userScope,
   vaultPort,
+  workflowScopeOf,
 } from "../_support.js";
 import type { Scorecard } from "../scorecard.js";
 
@@ -105,8 +107,8 @@ function recordFromCapture(body: string): MemoryRecord {
 
 function retrievalRequest(): MemoryRetrievalRequest {
   return {
-    scopes: [userScope("user-alice")],
-    queryText: "deploy step pipeline status",
+    scopes: [userScope("user-alice"), workflowScopeOf("wf-investigate")],
+    queryText: "read the failing test before editing source and deploy step pipeline status",
     nowMs: FIXED_NOW_MS,
   };
 }
@@ -124,8 +126,10 @@ function runTestTimeLearning(): { passed: boolean; evidence: string } {
     const { body } = captureProposal();
     vault.insertMemory(recordFromCapture(body));
     const afterIds = includedIds(retrieveMemoryContext(retrievalRequest(), port).included);
-    const positivePass = afterIds.includes(NEW_ID);
-    const controlPass = !beforeIds.includes(NEW_ID);
+    const positivePass =
+      afterIds.includes(NEW_ID) && afterIds.includes("lesson-investigate-read-first");
+    const controlPass =
+      beforeIds.includes("lesson-investigate-read-first") && !beforeIds.includes(NEW_ID);
     return {
       passed: positivePass && controlPass,
       evidence: `before=[${beforeIds.join(",")}] after=[${afterIds.join(",")}]`,
@@ -142,7 +146,7 @@ export async function run(scorecard: Scorecard): Promise<void> {
 }
 
 describe(SCENARIO_NAME, () => {
-  it("captured memory is absent before insert and present after", () => {
+  it("keeps the workflow baseline before insert and adds the captured memory after", () => {
     const { passed, evidence } = runTestTimeLearning();
     expect(passed, evidence).toBe(true);
   });

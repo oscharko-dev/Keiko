@@ -1,7 +1,7 @@
 [
   {
     "id": "workflow-lessons-basic",
-    "description": "Workflow-scope procedural lessons captured from past workflow outcomes. Used by test-time-learning to seed a baseline scope, after which a fresh capture from a user message is added and observed on a second retrieval call.",
+    "description": "Workflow-scope procedural lessons captured from past workflow outcomes. Used by test-time-learning to seed the workflow portion of a multi-scope retrieval request, after which a fresh user-scope capture is added and observed on the second call.",
     "memories": [
       {
         "id": "lesson-investigate-read-first",
