@@ -1233,7 +1233,7 @@ button {
   padding: 2px;
 }
 .cmp-input::placeholder {
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 .cmp-bar {
   display: flex;
