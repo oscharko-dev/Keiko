@@ -604,3 +604,15 @@ export { estimateConversationBudget } from "./conversation-budget.js";
 // LOCAL_KNOWLEDGE_SCHEMA_VERSION / MEMORY_SCHEMA_VERSION: a breaking change adds a
 // new literal member instead of mutating the existing one.
 export * as QualityIntelligence from "./qualityIntelligence/index.js";
+
+// ─── Quality Intelligence BFF wire types (Issue #280) ─────────────────────────
+// The UI imports these directly (not via the QualityIntelligence namespace) so they
+// are re-exported at root level alongside the memory, local-knowledge, and
+// connected-context shapes that follow the same pattern.
+export type {
+  QualityIntelligenceUiRunTotals,
+  QualityIntelligenceUiRunSummary,
+  QualityIntelligenceUiFindingSummary,
+  QualityIntelligenceUiEvidenceRef,
+  QualityIntelligenceUiRunDetail,
+} from "./qualityIntelligence/bffWire.js";

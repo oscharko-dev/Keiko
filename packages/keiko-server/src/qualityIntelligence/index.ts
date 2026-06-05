@@ -28,3 +28,5 @@ export {
   handleQiDryRunJira,
   handleQiSourceSelect,
 } from "./connectorRoutes.js";
+// Issue #280 — read-only UI routes for the Quality Intelligence panel.
+export { handleListQiRuns, handleGetQiRun } from "./uiRoutes.js";
