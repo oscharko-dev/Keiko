@@ -10,9 +10,16 @@ import { addSourceToCapsule } from "../source-lifecycle.js";
 import { createCapsule } from "../capsule-lifecycle.js";
 import { freshStore, sampleCapsuleInput } from "../_support.js";
 import type { KnowledgeStore } from "../store.js";
-import { createDefaultParserRegistry, buildParserOptions } from "../parsers/index.js";
+import {
+  createDefaultParserRegistry,
+  buildParserOptions,
+  createParserRegistry,
+  createOcrPipelineParser,
+  nullOcrAdapter,
+  registerParser,
+} from "../parsers/index.js";
 import type { ParserAdapter, ParserOptions, ParserRegistry, ParserSelectionInput } from "../parsers/index.js";
-import { PDF_TEXT_LAYER } from "../parsers/parser-test-fixtures.js";
+import { PDF_NO_TEXT_LAYER, PDF_TEXT_LAYER, PNG_MAGIC } from "../parsers/parser-test-fixtures.js";
 
 import { extractDocument } from "./extract.js";
 import { folderScope, memoryFs } from "./test-support.js";
@@ -160,6 +167,49 @@ describe("extractDocument — normalized binary text", () => {
       | { readonly normalized_text?: string }
       | undefined;
     expect(row?.normalized_text).toContain("Hello PDF");
+  });
+});
+
+describe("extractDocument — unsupported OCR and scanned inputs", () => {
+  it("marks a scanned PDF without a text layer as unsupported", async () => {
+    const fs = memoryFs(ROOT, [{ relativePath: "scan.pdf", content: PDF_NO_TEXT_LAYER }]);
+    const registry = createDefaultParserRegistry();
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "scan.pdf", sizeBytes: PDF_NO_TEXT_LAYER.byteLength },
+      },
+    );
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.status).toBe("unsupported");
+    expect(result.outcome.document.parser.parserId).toBe("pdf");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "UNSUPPORTED_FORMAT", severity: "info" }),
+    );
+  });
+
+  it("marks OCR-pipeline fallback results as unsupported instead of extracted", async () => {
+    const fs = memoryFs(ROOT, [{ relativePath: "diagram.png", content: PNG_MAGIC }]);
+    let registry = createParserRegistry();
+    registry = registerParser(registry, createOcrPipelineParser(nullOcrAdapter));
+    const result = await extractDocument(
+      { fs, store, parserRegistry: registry },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "diagram.png", sizeBytes: PNG_MAGIC.byteLength },
+      },
+    );
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.status).toBe("unsupported");
+    expect(result.outcome.document.parser.parserId).toBe("ocr-pipeline");
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "UNSUPPORTED_FORMAT", severity: "info" }),
+    );
   });
 });
 

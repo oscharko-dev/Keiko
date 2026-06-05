@@ -72,6 +72,8 @@ const BASE_HEALTH: CapsuleHealth = {
   vectorCompatible: true,
   failedDocuments: 0,
   skippedDocuments: 0,
+  unsupportedDocuments: 0,
+  unsupportedGuidance: [],
   staleReasons: [],
 };
 
@@ -183,6 +185,28 @@ describe("CapsuleDetail — overview section", () => {
         screen.getByText(/openai \/ text-embedding-3-small \(1536d, cosine\)/i),
       ).toBeInTheDocument();
     });
+  });
+
+  it("renders unsupported-document count and guidance when present", async () => {
+    const detail: CapsuleDetailData = {
+      ...FULL_DETAIL,
+      health: {
+        ...BASE_HEALTH,
+        unsupportedDocuments: 2,
+        unsupportedGuidance: [
+          "Scanned PDFs need an OCR-capable extraction path. Configure a verified OCR or vision adapter, or provide a text-layer PDF.",
+        ],
+      },
+    };
+    render(<CapsuleDetail fetchDetailImpl={resolveDetail(detail)} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("2")).toBeInTheDocument();
+    });
+
+    expect(
+      screen.getByText(/Scanned PDFs need an OCR-capable extraction path/i),
+    ).toBeInTheDocument();
   });
 
   it("renders privacy and deletion disclosure copy", async () => {
