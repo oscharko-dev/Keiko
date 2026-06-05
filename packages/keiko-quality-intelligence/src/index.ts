@@ -40,8 +40,15 @@ export {
 // source-mix planning, source reconciliation. No IO; consumes contract types only.
 export * as QualityIntelligenceIngestion from "./ingestion/index.js";
 
+<<<<<<< HEAD
 // ─── Review sub-namespace (Issue #282) ─────────────────────────────────────────
 // Pure-domain review governance: state machine, lifecycle policy, four-eyes
 // pairing guard, and the producer half of the audit-event envelope. No IO, no
 // persistence; consumes contract types only.
 export * as QualityIntelligenceReview from "./review/index.js";
+=======
+// ─── Hardening sub-namespace (Issue #284) ──────────────────────────────────────
+// Pure adversarial-input predicates: path-safety, oversize guards, prompt-injection
+// scrubber. No IO; layered defence beside `QualityIntelligenceIngestion`.
+export * as QualityIntelligenceHardening from "./hardening/index.js";
+>>>>>>> 9bc4e92a (feat(keiko-quality-intelligence): harden Quality Intelligence security for #284)
