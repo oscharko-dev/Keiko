@@ -11,6 +11,10 @@ import {
   resolveKnowledgeStorePath,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type {
+  OpenAIEmbeddingOutcome,
+  OpenAIEmbeddingRequest,
+} from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "./deps.js";
 import {
   handleDeleteLocalKnowledgeCapsule,
@@ -34,6 +38,15 @@ function jsonRequest(
 }
 
 function depsFor(tmp: string): UiHandlerDeps {
+  const localKnowledgeEmbeddingRequest = vi.fn<
+    (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>
+  >(async () => ({
+    ok: true as const,
+    value: {
+      vector: Float32Array.from({ length: 1536 }, (_, index) => index / 1000),
+      modelId: "text-embedding-3-small",
+    },
+  }));
   return {
     config: {
       providers: [
@@ -60,13 +73,7 @@ function depsFor(tmp: string): UiHandlerDeps {
     modelPortFactory: () => undefined,
     store: createInMemoryUiStore(),
     uiDbPath: join(tmp, "keiko-ui.db"),
-    localKnowledgeEmbeddingRequest: vi.fn(async () => ({
-      ok: true,
-      value: {
-        vector: Float32Array.from({ length: 1536 }, (_, index) => index / 1000),
-        modelId: "text-embedding-3-small",
-      },
-    })),
+    localKnowledgeEmbeddingRequest,
   };
 }
 
@@ -107,6 +114,12 @@ function seedStore(tmp: string) {
 }
 
 const tempDirs: string[] = [];
+
+interface IndexingJobSummaryRow {
+  readonly status: string;
+  readonly processed_documents: number;
+  readonly skipped_documents: number;
+}
 
 afterEach(() => {
   while (tempDirs.length > 0) {
@@ -217,11 +230,7 @@ describe("local-knowledge handlers", () => {
       .prepare(
         "SELECT status, processed_documents, skipped_documents FROM indexing_jobs WHERE capsule_id = :c ORDER BY started_at ASC, id ASC",
       )
-      .all({ c: "cap-1" }) as readonly {
-      readonly status: string;
-      readonly processed_documents: number;
-      readonly skipped_documents: number;
-    }[];
+      .all({ c: "cap-1" }) as unknown as readonly IndexingJobSummaryRow[];
     inspect.close();
 
     expect(jobs).toHaveLength(2);
