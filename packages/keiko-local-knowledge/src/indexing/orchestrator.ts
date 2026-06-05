@@ -34,6 +34,7 @@ import type {
   KnowledgeSource,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { verifyEmbeddingCapability } from "@oscharko-dev/keiko-model-gateway";
 
 import { chunkDocument } from "../chunking/chunker-runner.js";
 import { getCapsule, updateCapsuleState } from "../capsule-lifecycle.js";
@@ -750,6 +751,26 @@ function buildResult(
   };
 }
 
+async function verifyEmbeddingPreflight(
+  state: RunState,
+): Promise<IndexingJobError | undefined> {
+  const result = await verifyEmbeddingCapability(state.options.embeddingAdapter, {
+    modelId: state.capsule.embeddingModelIdentity.modelId,
+    provider: state.capsule.embeddingModelIdentity.provider,
+    vectorMetric: state.capsule.embeddingModelIdentity.vectorMetric,
+    expectedDimensions: state.capsule.embeddingModelIdentity.vectorDimensions,
+    ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
+  });
+  if (result.ok) return undefined;
+  return {
+    code:
+      result.reason === "dimension-mismatch"
+        ? "INCOMPATIBLE_EMBEDDING_IDENTITY"
+        : "EMBEDDING_ADAPTER_FAILED",
+    message: result.safeMessage,
+  };
+}
+
 // ─── Public entrypoint ────────────────────────────────────────────────────────
 export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<IndexingEvent> {
   const capsule = resolveCapsule(options);
@@ -791,6 +812,13 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
     occurredAt: startedAt,
   });
 
+  const preflightFailure = await verifyEmbeddingPreflight(state);
+  if (preflightFailure !== undefined) {
+    state.lastError = preflightFailure;
+    yield* finalize(state, preflightFailure);
+    return;
+  }
+
   // Force mode: tear down ALL vectors for the capsule up front. Per-document teardown
   // still runs in handlePersistedDocument as a defence-in-depth measure.
   if (options.force === true) {
@@ -830,10 +858,10 @@ function emit(state: RunState, event: IndexingEvent): IndexingEvent {
 
 function resolveJobStatus(
   state: RunState,
-  identityFailure: IndexingJobError | undefined,
+  fatalFailure: IndexingJobError | undefined,
 ): "succeeded" | "failed" | "cancelled" {
-  if (identityFailure !== undefined) {
-    state.lastError = identityFailure;
+  if (fatalFailure !== undefined) {
+    state.lastError = fatalFailure;
     return "failed";
   }
   if (aborted(state.options.signal)) return "cancelled";
@@ -843,10 +871,10 @@ function resolveJobStatus(
 
 function* finalize(
   state: RunState,
-  identityFailure: IndexingJobError | undefined,
+  fatalFailure: IndexingJobError | undefined,
 ): Generator<IndexingEvent> {
   const finishedAt = state.now();
-  const status = resolveJobStatus(state, identityFailure);
+  const status = resolveJobStatus(state, fatalFailure);
 
   finalizeJobRow(state.options.store._internal.db, {
     id: state.jobId,

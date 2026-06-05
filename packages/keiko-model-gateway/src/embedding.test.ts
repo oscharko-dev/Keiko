@@ -87,6 +87,23 @@ describe("verifyEmbeddingCapability", () => {
     }
   });
 
+  it("records the gateway-reported model id when the provider canonicalizes the requested alias", async () => {
+    const result = await verifyEmbeddingCapability(
+      adapterReturning({
+        ok: true,
+        value: {
+          vector: new Float32Array(8).fill(0.5),
+          modelId: "text-embedding-3-small@2026-06",
+        },
+      }),
+      PROBE,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.identity.modelId).toBe("text-embedding-3-small@2026-06");
+    }
+  });
+
   it("rejects when expectedDimensions does not match the detected vector length", async () => {
     const result = await verifyEmbeddingCapability(adapterReturning(successOutcome(512)), {
       ...PROBE,

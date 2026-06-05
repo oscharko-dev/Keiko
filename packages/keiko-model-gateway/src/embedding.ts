@@ -105,12 +105,13 @@ function hasCredentials(adapter: OpenAIEmbeddingAdapter): boolean {
 
 function buildIdentity(
   options: EmbeddingProbeOptions,
+  detectedModelId: string,
   detectedDimensions: number,
   modelRevision: string | undefined,
 ): EmbeddingModelIdentity {
   return {
     provider: options.provider,
-    modelId: options.modelId,
+    modelId: detectedModelId,
     vectorDimensions: detectedDimensions,
     vectorMetric: options.vectorMetric,
     ...(modelRevision !== undefined ? { modelRevision } : {}),
@@ -150,7 +151,7 @@ export async function verifyEmbeddingCapability(
   }
   return {
     ok: true,
-    identity: buildIdentity(options, detected, outcome.value.modelRevision),
+    identity: buildIdentity(options, outcome.value.modelId, detected, outcome.value.modelRevision),
   };
 }
 

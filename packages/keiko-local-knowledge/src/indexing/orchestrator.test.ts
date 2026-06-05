@@ -370,6 +370,74 @@ describe("runIndexingJob — identity gate", () => {
   });
 });
 
+describe("runIndexingJob — embedding capability preflight", () => {
+  let fixture: Fixture;
+
+  beforeEach(() => {
+    fixture = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor sit amet. ".repeat(8),
+    });
+  });
+
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  it("fails before discovery when the embedding model is not verified", async () => {
+    let requestCount = 0;
+    const adapter = scriptedAdapter({
+      responder: () => {
+        requestCount += 1;
+        return { ok: false, kind: "wrong-header" };
+      },
+    });
+
+    const events = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter })),
+    );
+
+    expect(requestCount).toBe(1);
+    expect(events[0]?.kind).toBe("job-started");
+    expect(events[1]?.kind).toBe("job-failed");
+    expect(events.some((event) => event.kind === "document-discovered")).toBe(false);
+    const terminal = events.at(-1);
+    expect(terminal?.kind).toBe("job-failed");
+    if (terminal?.kind === "job-failed") {
+      expect(terminal.error.code).toBe("EMBEDDING_ADAPTER_FAILED");
+      expect(terminal.error.message).toBe(
+        "model gateway rejected the request — check API key configuration",
+      );
+      expect(terminal.result.processedDocuments).toBe(0);
+      expect(terminal.result.vectorsPersisted).toBe(0);
+    }
+    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBe(0);
+  });
+
+  it("preserves existing vectors on force=true when preflight fails", async () => {
+    await drain(runIndexingJob(buildOptions(fixture)));
+    const before = countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId);
+    expect(before).toBeGreaterThan(0);
+
+    const adapter = scriptedAdapter({
+      responder: () => ({ ok: false, kind: "unsupported-model" }),
+    });
+    const events = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: adapter, force: true })),
+    );
+
+    const after = countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId);
+    expect(after).toBe(before);
+    expect(events.some((event) => event.kind === "document-discovered")).toBe(false);
+    const terminal = events.at(-1);
+    expect(terminal?.kind).toBe("job-failed");
+    if (terminal?.kind === "job-failed") {
+      expect(terminal.error.message).toBe(
+        "embedding model is not available on the configured gateway",
+      );
+    }
+  });
+});
+
 // ─── Test 6: adapter throws on one batch, job continues for the rest ─────────
 describe("runIndexingJob — partial adapter failure", () => {
   let fixture: Fixture;
