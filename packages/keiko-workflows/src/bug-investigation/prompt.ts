@@ -103,6 +103,14 @@ function contextBlock(pack: ContextPack): string {
   return `\n\nRepository context:\n${entries}`;
 }
 
+// Memory context block (Issue #213). The text comes from the optional MemoryWorkflowPort
+// and is redacted + byte-capped through safePromptText before reaching the model — the
+// port may not be the in-tree retriever, so defence-in-depth is mandatory at this boundary.
+function memoryBlock(memoryText: string | undefined): string {
+  const safe = safePromptText(memoryText);
+  return safe === undefined ? "" : `Memory context (governed, scoped):\n${safe}\n\n`;
+}
+
 function retryBlock(rejectionReason: string | undefined): string {
   const safe = safePromptText(rejectionReason);
   return safe === undefined
@@ -116,23 +124,28 @@ function userContent(
   evidence: FailureEvidence,
   pack: ContextPack,
   rejectionReason: string | undefined,
+  memoryText: string | undefined,
 ): string {
   const evidenceText = evidenceBlock(report, evidence);
   const evidenceSection = evidenceText.length === 0 ? "" : `\n\n${evidenceText}`;
-  return `${descriptionBlock(report.description)}${evidenceSection}${contextBlock(pack)}${retryBlock(rejectionReason)}`;
+  const memorySection = memoryBlock(memoryText);
+  return `${memorySection}${descriptionBlock(report.description)}${evidenceSection}${contextBlock(pack)}${retryBlock(rejectionReason)}`;
 }
 
 // rejectionReason is appended on a retry (D10) so the model can correct an invalid/out-of-scope
-// diff; it is undefined on the first attempt.
+// diff; it is undefined on the first attempt. memoryText is the optional Issue #213 memory
+// block prepended to the user message; undefined when no MemoryWorkflowPort was injected or
+// when the port returned no memories.
 export function buildBugPrompt(
   report: BugReportInput,
   evidence: FailureEvidence,
   pack: ContextPack,
   framework: string,
   rejectionReason?: string,
+  memoryText?: string,
 ): readonly ChatMessage[] {
   return [
     { role: "system", content: systemContent(framework) },
-    { role: "user", content: userContent(report, evidence, pack, rejectionReason) },
+    { role: "user", content: userContent(report, evidence, pack, rejectionReason, memoryText) },
   ];
 }

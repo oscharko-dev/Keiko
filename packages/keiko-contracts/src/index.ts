@@ -554,3 +554,15 @@ export {
   validateMemoryUpdate,
   validateMemoryValidityInterval,
 } from "./memory-barrel.js";
+
+// ─── Workflow memory port (Issue #213 / Epic #204) ──────────────────────────────
+// Optional read-only port that workflow packages compose with to inject scoped memory
+// context before model invocation and emit memory lifecycle events. Memory cannot grant
+// write/execution authority — existing tool gates remain the sole apply surface.
+export type {
+  MemoryOmittedEvent,
+  MemoryUsedEvent,
+  MemoryWorkflowContext,
+  MemoryWorkflowPort,
+  MemoryWriteCandidateEvent,
+} from "./memory-workflow-port.js";

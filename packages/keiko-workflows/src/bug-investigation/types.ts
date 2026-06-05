@@ -4,6 +4,7 @@
 // plain JSON-serializable so the #10 audit ledger can persist it. Names are DISTINCT from the
 // unit-test workflow's (ADR-0009 D5) because both barrels are re-exported from the package root.
 
+import type { MemoryWorkflowPort } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { PatchChangeKind, SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -80,6 +81,10 @@ export interface BugInvestigationDeps {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   // AbortSignal for cancellation.
   readonly signal?: AbortSignal | undefined;
+  // Optional Governed Enterprise Memory Vault port (Issue #213). When provided, the workflow
+  // composes a scoped memory context block into the prompt and emits memory lifecycle events.
+  // Read-only — the port cannot bypass the existing apply gates / scope guard / patch limits.
+  readonly memoryPort?: MemoryWorkflowPort | undefined;
 }
 
 // ─── Report (D3) ─────────────────────────────────────────────────────────────────
