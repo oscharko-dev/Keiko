@@ -245,10 +245,10 @@ function MiniChat({
           disabled={loading || sending}
         />
         <button
-          type="submit"
+          type={ready ? "submit" : "button"}
           className="cmp-send cmp-send-float"
           data-on={ready}
-          disabled={!ready}
+          aria-disabled={!ready}
           aria-label="Send message"
           title="Send"
         >
