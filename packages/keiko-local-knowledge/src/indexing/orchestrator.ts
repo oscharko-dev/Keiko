@@ -607,33 +607,19 @@ async function* runOneSource(
       store: state.options.store,
       parserRegistry: state.options.parserRegistry,
     },
-    {
-      capsuleId: state.capsule.id,
-      source,
-      ...(state.options.discoveryOptions !== undefined
-        ? { discovery: state.options.discoveryOptions }
-        : state.options.signal !== undefined
-          ? { discovery: { maxDepth: 12, maxFiles: 5_000, signal: state.options.signal } }
-          : {}),
-    },
+    sourceDiscoveryParams(state, source),
   );
 
-  let cancelled = false;
-  let sawScopeError = false;
-  let completed = false;
-  const discoveredPaths = new Set<string>();
+  const progress: SourceRunProgress = {
+    cancelled: false,
+    sawScopeError: false,
+    completed: false,
+    discoveredPaths: new Set<string>(),
+  };
   for await (const evt of stream) {
-    if (evt.kind === "file-discovered") {
-      discoveredPaths.add(evt.relativePath);
-    } else if (evt.kind === "scope-error") {
-      sawScopeError = true;
-    } else if (evt.kind === "cancelled") {
-      cancelled = true;
-    } else if (evt.kind === "completed") {
-      completed = true;
-    }
+    observeSourceEvent(progress, evt);
     if (aborted(state.options.signal)) {
-      cancelled = true;
+      progress.cancelled = true;
       break;
     }
     const events = await handleDiscoveryEvent(state, evt);
@@ -646,14 +632,11 @@ async function* runOneSource(
     // After yielding a batch we re-check the signal — the consumer's awaiting iterator
     // may have aborted between events.
     if (aborted(state.options.signal)) {
-      cancelled = true;
+      progress.cancelled = true;
       break;
     }
   }
-  if (cancelled) return;
-  if (completed && !sawScopeError) {
-    pruneDeletedSourceDocuments(state, source, discoveredPaths);
-  }
+  finalizeSourceRun(state, source, progress);
 }
 
 // Routes a file-extracted event: force-skipped docs are re-shaped to persisted so the
@@ -730,6 +713,46 @@ async function handleDiscoveryEvent(
   return handleFileExtracted(state, evt.result);
 }
 
+interface SourceRunProgress {
+  cancelled: boolean;
+  sawScopeError: boolean;
+  completed: boolean;
+  readonly discoveredPaths: Set<string>;
+}
+
+function sourceDiscoveryParams(
+  state: RunState,
+  source: KnowledgeSource,
+): Parameters<typeof discoverAndExtract>[1] {
+  return {
+    capsuleId: state.capsule.id,
+    source,
+    ...(state.options.discoveryOptions !== undefined
+      ? { discovery: state.options.discoveryOptions }
+      : state.options.signal !== undefined
+        ? { discovery: { maxDepth: 12, maxFiles: 5_000, signal: state.options.signal } }
+        : {}),
+  };
+}
+
+function observeSourceEvent(progress: SourceRunProgress, evt: ExtractionEvent): void {
+  if (evt.kind === "file-discovered") {
+    progress.discoveredPaths.add(evt.relativePath);
+    return;
+  }
+  if (evt.kind === "scope-error") {
+    progress.sawScopeError = true;
+    return;
+  }
+  if (evt.kind === "cancelled") {
+    progress.cancelled = true;
+    return;
+  }
+  if (evt.kind === "completed") {
+    progress.completed = true;
+  }
+}
+
 function pruneDeletedSourceDocuments(
   state: RunState,
   source: KnowledgeSource,
@@ -744,6 +767,16 @@ function pruneDeletedSourceDocuments(
     if (discoveredPaths.has(document.document_path)) continue;
     deleteDocumentRow(state.options.store._internal.db, state.capsule.id, document.id);
   }
+}
+
+function finalizeSourceRun(
+  state: RunState,
+  source: KnowledgeSource,
+  progress: SourceRunProgress,
+): void {
+  if (progress.cancelled) return;
+  if (!progress.completed || progress.sawScopeError) return;
+  pruneDeletedSourceDocuments(state, source, progress.discoveredPaths);
 }
 
 // ─── Capsule resolution + job lifecycle ───────────────────────────────────────
