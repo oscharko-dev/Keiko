@@ -117,3 +117,21 @@ export {
 // callers reach typed task profiles, the prompt-segmentation seam, the capability gate,
 // the safe-error taxonomy, and (post-M3) the dispatcher via a single import surface.
 export * as QualityIntelligence from "./qualityIntelligence/index.js";
+// Flat re-exports of the QI dispatcher surface so downstream orchestration packages
+// (Issue #273 keiko-workflows runners) avoid namespace plumbing on hot paths.
+export {
+  QualityIntelligenceSafeErrorException,
+  createInMemoryReplayCache,
+  deriveReplayCacheKey,
+  dispatchQualityIntelligenceRequest,
+  isCacheable,
+  type QualityIntelligenceBudgetState,
+  type QualityIntelligenceCancellationHandle,
+  type QualityIntelligenceReplayCachePort,
+  type QualityIntelligenceSafeError,
+  type QualityIntelligenceSafeErrorCode,
+} from "./qualityIntelligence/index.js";
+export type {
+  QualityIntelligenceDispatcherArgs,
+  QualityIntelligenceDispatcherResult,
+} from "./qualityIntelligence/dispatcher.js";
