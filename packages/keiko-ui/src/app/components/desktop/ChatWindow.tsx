@@ -6,7 +6,7 @@ import { ConnectedScopePill } from "./ConnectedScopePill";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
 import { DEFAULT_MODEL_ID, type ChatSessionApi } from "./hooks/useChatSession";
-import { ApiError, updateChatLocalKnowledgeScope } from "@/lib/api";
+import { ApiError, updateChat } from "@/lib/api";
 import {
   fetchCapsules,
   fetchCapsuleSets,
@@ -316,31 +316,45 @@ function LocalKnowledgeScopeControl({
     setBusy(true);
     setError(null);
     try {
-      if (value === "none" || value === "files") {
-        const response = await updateChatLocalKnowledgeScope(chat.id, null);
+      if (value === "none") {
+        const response = await updateChat(chat.id, {
+          connectedScope: null,
+          localKnowledgeScope: null,
+        });
+        onChatChanged(response.chat);
+        return;
+      }
+      if (value === "files") {
+        const response = await updateChat(chat.id, { localKnowledgeScope: null });
         onChatChanged(response.chat);
         return;
       }
       if (value.startsWith("capsule-set:")) {
-        const response = await updateChatLocalKnowledgeScope(chat.id, {
-          kind: "capsule-set",
-          capsuleSetId: value.slice("capsule-set:".length) as Extract<
-            ChatLocalKnowledgeScope,
-            { readonly kind: "capsule-set" }
-          >["capsuleSetId"],
-          connectedAtMs: Date.now(),
+        const response = await updateChat(chat.id, {
+          connectedScope: null,
+          localKnowledgeScope: {
+            kind: "capsule-set",
+            capsuleSetId: value.slice("capsule-set:".length) as Extract<
+              ChatLocalKnowledgeScope,
+              { readonly kind: "capsule-set" }
+            >["capsuleSetId"],
+            connectedAtMs: Date.now(),
+          },
         });
         onChatChanged(response.chat);
         return;
       }
       if (value.startsWith("capsule:")) {
-        const response = await updateChatLocalKnowledgeScope(chat.id, {
-          kind: "capsule",
-          capsuleId: value.slice("capsule:".length) as Extract<
-            ChatLocalKnowledgeScope,
-            { readonly kind: "capsule" }
-          >["capsuleId"],
-          connectedAtMs: Date.now(),
+        const response = await updateChat(chat.id, {
+          connectedScope: null,
+          localKnowledgeScope: {
+            kind: "capsule",
+            capsuleId: value.slice("capsule:".length) as Extract<
+              ChatLocalKnowledgeScope,
+              { readonly kind: "capsule" }
+            >["capsuleId"],
+            connectedAtMs: Date.now(),
+          },
         });
         onChatChanged(response.chat);
       }

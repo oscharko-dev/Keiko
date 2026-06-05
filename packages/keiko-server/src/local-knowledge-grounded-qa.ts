@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   getCapsule,
   getCapsuleSet,
   openKnowledgeStore,
+  readCitationExcerpt,
   resolveKnowledgeStorePath,
   runGroundedAnswer,
   type AnswerGenerator,
@@ -193,22 +193,6 @@ function scopeStateFailure(
   return undefined;
 }
 
-function readDocumentText(
-  db: DatabaseSync,
-  capsuleId: string,
-  documentId: string,
-): string | undefined {
-  const row = db
-    .prepare(
-      "SELECT normalized_text FROM document_texts WHERE capsule_id = :capsule_id AND document_id = :document_id",
-    )
-    .get({
-      capsule_id: capsuleId,
-      document_id: documentId,
-    }) as { readonly normalized_text?: string } | undefined;
-  return typeof row?.normalized_text === "string" ? row.normalized_text : undefined;
-}
-
 function renderCitationLabel(citation: AnswerGeneratorInput["references"][number]["citation"]): string {
   const parts = [citation.safeDisplayName];
   if (citation.pageLabel !== undefined) {
@@ -223,15 +207,6 @@ function renderCitationLabel(citation: AnswerGeneratorInput["references"][number
   return parts.join(" · ");
 }
 
-function sliceExcerpt(text: string, start: number | undefined, end: number | undefined): string {
-  if (text.length === 0) return "";
-  const safeStart = Math.max(0, Math.min(text.length, start ?? 0));
-  const safeEnd = Math.max(safeStart, Math.min(text.length, end ?? safeStart + MAX_EXCERPT_CHARS));
-  const raw = text.slice(safeStart, safeEnd).trim();
-  if (raw.length <= MAX_EXCERPT_CHARS) return raw;
-  return `${raw.slice(0, MAX_EXCERPT_CHARS).trimEnd()}…`;
-}
-
 function buildReferenceLines(
   input: AnswerGeneratorInput,
   store: KnowledgeStore,
@@ -242,19 +217,12 @@ function buildReferenceLines(
     const reference = references[i];
     if (reference === undefined) continue;
     const label = renderCitationLabel(reference.citation);
-    const documentText = readDocumentText(
-      store._internal.db,
-      String(reference.capsuleId),
-      String(reference.citation.documentId),
+    const excerpt = readCitationExcerpt(
+      store,
+      reference.capsuleId,
+      reference.citation,
+      MAX_EXCERPT_CHARS,
     );
-    const excerpt =
-      documentText === undefined
-        ? ""
-        : sliceExcerpt(
-            documentText,
-            reference.citation.characterStart,
-            reference.citation.characterEnd,
-          );
     lines.push(`[${String(i + 1)}] ${label}`);
     if (excerpt.length > 0) {
       lines.push("```text");
@@ -327,6 +295,8 @@ function buildNoEvidenceAnswer(
   assistantContent: string,
   scopeKind: "capsule" | "capsule-set",
   scopeLabel: string,
+  capsuleCount: number,
+  sourceCount: number,
   reason: string,
   uncertainty: readonly GroundedUncertainty[] = [],
 ): LocalKnowledgeGroundedAnswer {
@@ -346,8 +316,8 @@ function buildNoEvidenceAnswer(
       scopeKind,
       scopeId: `lk-${hashString32(`${chat.id}|${scopeLabel}`)}`,
       scopeLabel,
-      capsuleCount: 0,
-      sourceCount: 0,
+      capsuleCount,
+      sourceCount,
       citationCount: 0,
       referenceBudget: DEFAULT_REFERENCE_BUDGET,
       referencesUsed: 0,
@@ -388,6 +358,10 @@ function citationStableId(citation: AnswerGeneratorInput["references"][number], 
     .slice(0, 16);
 }
 
+function selectedSourceCount(selected: SelectedLocalKnowledgeScope): number {
+  return new Set(selected.capsules.flatMap((capsule) => capsule.sourceIds)).size;
+}
+
 function localKnowledgeQuery(
   chat: Chat,
   input: AskInput,
@@ -395,6 +369,7 @@ function localKnowledgeQuery(
   return {
     conversationId: chat.id,
     text: input.content,
+    topK: MAX_PROMPT_REFERENCES,
     ...(chat.localKnowledgeScope?.kind === "capsule"
       ? { capsuleId: chat.localKnowledgeScope.capsuleId }
       : {}),
@@ -434,13 +409,10 @@ function buildLocalKnowledgeAnswer(
   persisted: readonly [ChatMessage, ChatMessage],
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
   elapsedMs: number,
+  assistantContent: string,
 ): LocalKnowledgeGroundedAnswer {
   const [user, assistant] = persisted;
   const noEvidenceReason = enforcedNoEvidenceReason(result);
-  const assistantContent =
-    noEvidenceReason === undefined
-      ? result.answer.trim()
-      : "No evidence found in the selected knowledge scope.";
   const citations = buildLocalKnowledgeCitations(result, noEvidenceReason);
   return {
     groundingKind: "local-knowledge",
@@ -484,11 +456,13 @@ function buildStateFailureAnswer(
   const [user, assistant] = persisted;
   const answer = buildNoEvidenceAnswer(
     chat,
-    stateFailure.message,
+    assistant.content,
     selected.scopeKind,
     selected.scopeLabel,
+    selected.capsules.length,
+    selectedSourceCount(selected),
     stateFailure.reason,
-    [{ kind: stateFailure.reason, claim: stateFailure.message }],
+    [{ kind: stateFailure.reason, claim: persisted[1].content }],
   );
   return {
     ...answer,
@@ -506,6 +480,11 @@ function resolveModel(
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   return model;
+}
+
+function redactText(deps: UiHandlerDeps, value: string): string {
+  const redacted = deps.redactor(value);
+  return typeof redacted === "string" ? redacted : value;
 }
 
 async function runScopedGroundedAnswer(
@@ -535,19 +514,20 @@ async function runScopedGroundedAnswer(
     localKnowledgeQuery(chat, input),
   );
   const elapsedMs = Date.now() - startedAt;
+  const noEvidenceReason = enforcedNoEvidenceReason(result);
+  const assistantContent =
+    noEvidenceReason === undefined
+      ? result.answer.trim()
+      : "No evidence found in the selected knowledge scope.";
+  const redactedUserContent = redactText(deps, input.content);
+  const redactedAssistantContent = redactText(deps, assistantContent);
   const answer = buildLocalKnowledgeAnswer(
     chat,
     selected,
-    persistGroundedExchange(
-      deps,
-      chat.id,
-      input.content,
-      enforcedNoEvidenceReason(result) === undefined
-        ? result.answer.trim()
-        : "No evidence found in the selected knowledge scope.",
-    ),
+    persistGroundedExchange(deps, chat.id, redactedUserContent, redactedAssistantContent),
     result,
     elapsedMs,
+    redactedAssistantContent,
   );
   return answer satisfies GroundedAnswer;
 }
@@ -564,13 +544,19 @@ export async function handleLocalKnowledgeGroundedAsk(
     if ("status" in selected) return selected;
     const stateFailure = scopeStateFailure(selected);
     if (stateFailure !== undefined) {
+      const redactedMessage = redactText(deps, stateFailure.message);
       return {
         status: 200,
         body: buildStateFailureAnswer(
           chat,
           selected,
-          persistGroundedExchange(deps, chat.id, input.content, stateFailure.message),
-          stateFailure,
+          persistGroundedExchange(
+            deps,
+            chat.id,
+            redactText(deps, input.content),
+            redactedMessage,
+          ),
+          { ...stateFailure, message: redactedMessage },
         ),
       };
     }
