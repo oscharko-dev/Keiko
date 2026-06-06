@@ -41,6 +41,7 @@ export function GatewaySetupDialog({
 }): ReactNode {
   const dialogRef = useRef<HTMLDivElement>(null);
   const baseUrlRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyHeaderName, setApiKeyHeaderName] = useState("");
@@ -50,7 +51,11 @@ export function GatewaySetupDialog({
   const [success, setSuccess] = useState<string | undefined>();
 
   useEffect(() => {
+    triggerRef.current = document.activeElement as HTMLElement | null;
     baseUrlRef.current?.focus();
+    return () => {
+      triggerRef.current?.focus?.();
+    };
   }, []);
 
   const focusableInside = (root: HTMLElement): readonly HTMLElement[] => {

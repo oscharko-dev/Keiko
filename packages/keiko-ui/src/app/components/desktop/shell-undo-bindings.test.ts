@@ -87,16 +87,17 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
 });
 
 describe("SHELL_SHORTCUT_BINDINGS — keyboard binding table", () => {
-  it("claims exactly two chords (undo + redo)", () => {
-    expect(SHELL_SHORTCUT_BINDINGS).toHaveLength(2);
+  it("claims undo, redo, and footer-status focus chords", () => {
+    expect(SHELL_SHORTCUT_BINDINGS).toHaveLength(3);
     const ids = SHELL_SHORTCUT_BINDINGS.map((b) => b.commandId);
-    expect(ids).toEqual(["undo", "redo"]);
+    expect(ids).toEqual(["undo", "redo", "focus-status"]);
   });
 
-  it("uses Cmd+Z and Cmd+Shift+Z", () => {
+  it("uses Cmd+Z, Cmd+Shift+Z, and Alt+S", () => {
     const map = new Map(SHELL_SHORTCUT_BINDINGS.map((b) => [b.commandId, b.chord]));
     expect(map.get("undo")).toEqual({ key: "z", mod: ["cmd"] });
     expect(map.get("redo")).toEqual({ key: "z", mod: ["cmd", "shift"] });
+    expect(map.get("focus-status")).toEqual({ key: "s", mod: ["alt"] });
   });
 
   it("does NOT claim the Cmd+K chord that the inline palette handler owns", () => {

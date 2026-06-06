@@ -1003,7 +1003,8 @@ export function NewWindowDialog({
         className="dlg"
         role="dialog"
         aria-modal="true"
-        aria-label={`New ${t.title} window`}
+        aria-labelledby="new-window-title"
+        aria-describedby="new-window-desc"
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={onKey}
       >
@@ -1012,8 +1013,12 @@ export function NewWindowDialog({
             <Icon size={20} />
           </span>
           <div className="dlg-htext">
-            <span className="dlg-title">New {t.title} window</span>
-            <span className="dlg-sub">{t.desc}</span>
+            <span id="new-window-title" className="dlg-title">
+              New {t.title} window
+            </span>
+            <span id="new-window-desc" className="dlg-sub">
+              {t.desc}
+            </span>
           </div>
           <span className="spacer" />
           <button

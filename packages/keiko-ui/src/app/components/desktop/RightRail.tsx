@@ -24,7 +24,7 @@ interface RightRailProps {
 
 export function RightRail({ openTools, onTool }: RightRailProps): ReactNode {
   return (
-    <div className="rail rail-right">
+    <aside className="rail rail-right" aria-label="Workspace utilities">
       <div className="rail-group">
         {RIGHT_TOOLS.map((tool) => {
           const Icon = Icons[tool.icon];
@@ -44,6 +44,6 @@ export function RightRail({ openTools, onTool }: RightRailProps): ReactNode {
           );
         })}
       </div>
-    </div>
+    </aside>
   );
 }

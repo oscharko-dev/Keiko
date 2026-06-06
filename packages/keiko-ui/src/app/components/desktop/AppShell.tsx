@@ -48,6 +48,38 @@ function deriveOpenTools(wins: readonly AppWindow[] | null): ReadonlySet<string>
   return out;
 }
 
+function branchLabelOrFallback(label: string | undefined): string {
+  return label !== undefined && label.trim().length > 0 ? label : "No branch selected";
+}
+
+function projectNameOrFallback(name: string | undefined, loading: boolean): string {
+  if (loading) return "Loading project...";
+  return name !== undefined && name.trim().length > 0 ? name : "No project selected";
+}
+
+function shellStatusLabel(args: {
+  readonly loading: boolean;
+  readonly error: string | undefined;
+  readonly hasProject: boolean;
+  readonly projectAvailable: boolean;
+  readonly noEligibleModels: boolean;
+}): string {
+  if (args.loading) return "Loading shell";
+  if (args.error !== undefined) return "Shell error";
+  if (!args.hasProject) return "No project selected";
+  if (!args.projectAvailable) return "Project unavailable";
+  if (args.noEligibleModels) return "Gateway setup required";
+  return "Ready";
+}
+
+function evidenceStatusLabel(wins: readonly AppWindow[] | null): string {
+  const reviewWindows = (wins ?? []).filter((win) => win.type === "review");
+  if (reviewWindows.length === 0) return "Open review";
+  return reviewWindows.some((win) => typeof win.cfg.runId === "string" && win.cfg.runId.length > 0)
+    ? "Evidence ready"
+    : "Review open";
+}
+
 const CARD_TYPES: readonly WindowType[] = [
   "chat",
   "files",
@@ -72,6 +104,7 @@ const TOOL_TYPES: readonly WindowType[] = [
 
 export function buildAppShellCommands(
   api: WorkspaceApi,
+  toggleTool: (type: WindowType) => void,
   openPalettePick: (type: WindowType) => void,
   theme: "light" | "dark",
   toggleTheme: () => void,
@@ -95,7 +128,7 @@ export function buildAppShellCommands(
       label: `Open ${t.title}`,
       group: "Tools",
       icon: t.icon,
-      run: () => api.toggleTool(tp),
+      run: () => toggleTool(tp),
     });
   }
   out.push({
@@ -196,6 +229,10 @@ function AppShellInner(): ReactNode {
   );
   const closeDialog = useCallback((): void => setPending(null), []);
   const closeCmdk = useCallback((): void => setCmdkOpen(false), []);
+  const statusRef = useRef<HTMLElement | null>(null);
+  const setStatusRef = useCallback((node: HTMLElement | null): void => {
+    statusRef.current = node;
+  }, []);
 
   // Epic #518 / ADR-0028 — undo stack wired at the shell. The apply
   // dispatcher lives in shell-undo-bindings.ts so the integration is
@@ -231,6 +268,7 @@ function AppShellInner(): ReactNode {
     (commandId: string): void => {
       if (commandId === "undo") undoStack.undo();
       else if (commandId === "redo") undoStack.redo();
+      else if (commandId === "focus-status") statusRef.current?.focus();
     },
     [undoStack],
   );
@@ -248,10 +286,22 @@ function AppShellInner(): ReactNode {
   }, []);
 
   const commands = useMemo(
-    () => buildAppShellCommands(ws.api, pick, theme, toggleTheme, undoStack),
-    [ws.api, pick, theme, toggleTheme, undoStack],
+    () => buildAppShellCommands(ws.api, onTool, pick, theme, toggleTheme, undoStack),
+    [ws.api, onTool, pick, theme, toggleTheme, undoStack],
   );
   const needsGatewaySetup = !session.loading && session.models.length === 0;
+  const projectName = projectNameOrFallback(session.activeProject?.name, session.loading);
+  const hasProject = session.activeProject !== undefined;
+  const projectAvailable = session.activeProject?.available === true;
+  const footerShellStatusLabel = shellStatusLabel({
+    loading: session.loading,
+    error: session.error,
+    hasProject,
+    projectAvailable,
+    noEligibleModels: session.noEligibleModels,
+  });
+  const footerEvidenceStatusLabel = evidenceStatusLabel(ws.wins);
+  const branchLabel = branchLabelOrFallback(session.activeChat?.branchLabel);
 
   const paletteNode = palOpen ? (
     <Palette types={WIN_TYPES} order={CARD_TYPES} onAdd={pick} onClose={closePalette} />
@@ -263,6 +313,7 @@ function AppShellInner(): ReactNode {
         <div className="app">
           <Header
             mode={twin.mode}
+            projectName={projectName}
             onModeChange={twin.setMode}
             openPalette={openPalette}
             onTileAll={ws.api.tileAll}
@@ -282,7 +333,16 @@ function AppShellInner(): ReactNode {
             </div>
             <RightRail openTools={openTools} onTool={onTool} />
           </div>
-          <Footer winCount={winCount} mode={twin.mode} selectedModel={session.selectedModel} />
+          <Footer
+            winCount={winCount}
+            mode={twin.mode}
+            selectedModel={session.selectedModel}
+            projectName={projectName}
+            branchLabel={branchLabel}
+            shellStatusLabel={footerShellStatusLabel}
+            evidenceStatusLabel={footerEvidenceStatusLabel}
+            statusRef={setStatusRef}
+          />
 
           {pending !== null && (
             <NewWindowDialog

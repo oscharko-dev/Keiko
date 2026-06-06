@@ -77,6 +77,13 @@ function eventMatchesChord(
   return true;
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
 export function detectShortcutConflicts(
   bindings: ReadonlyArray<WorkspaceKeyboardShortcutBinding>,
 ): ReadonlyArray<WorkspaceKeyboardShortcutConflict> {
@@ -155,6 +162,7 @@ export function useKeyboardShortcuts(
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent): void {
+      if (isEditableTarget(event.target)) return;
       for (const binding of bindings) {
         if (eventMatchesChord(event, binding.chord, platform)) {
           event.preventDefault();

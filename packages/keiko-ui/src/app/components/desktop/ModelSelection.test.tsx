@@ -276,12 +276,32 @@ describe("ChatWindow send button aria-disabled (AC #1)", () => {
 
 describe("Footer selectedModel display (AC #4)", () => {
   it("shows the selected model id when a model is configured", () => {
-    render(<Footer winCount={1} mode="autonomous" selectedModel="gpt-4o" />);
+    render(
+      <Footer
+        winCount={1}
+        mode="autonomous"
+        selectedModel="gpt-4o"
+        projectName="Keiko"
+        branchLabel="main"
+        shellStatusLabel="Ready"
+        evidenceStatusLabel="Open review"
+      />,
+    );
     expect(screen.getByText(/gpt-4o/i)).toBeInTheDocument();
   });
 
   it("shows 'No model selected' when selectedModel is undefined", () => {
-    render(<Footer winCount={1} mode="autonomous" selectedModel={undefined} />);
+    render(
+      <Footer
+        winCount={1}
+        mode="autonomous"
+        selectedModel={undefined}
+        projectName="Keiko"
+        branchLabel="main"
+        shellStatusLabel="Ready"
+        evidenceStatusLabel="Open review"
+      />,
+    );
     expect(screen.getByText(/No model selected/i)).toBeInTheDocument();
   });
 });

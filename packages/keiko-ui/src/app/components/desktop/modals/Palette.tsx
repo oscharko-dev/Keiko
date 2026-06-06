@@ -16,15 +16,38 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
   // allow Escape to close (the design relies on it; the prior impl had no
   // keyboard handler at all).
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
+    triggerRef.current = document.activeElement as HTMLElement | null;
     const first = ref.current?.querySelector<HTMLButtonElement>(".pal-card");
     first?.focus();
+    return () => {
+      triggerRef.current?.focus?.();
+    };
   }, []);
 
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
     if (e.key === "Escape") {
       e.preventDefault();
       onClose();
+      return;
+    }
+    if (e.key === "Tab") {
+      const focusables = Array.from(
+        ref.current?.querySelectorAll<HTMLElement>(
+          "button:not([disabled]),[tabindex]:not([tabindex='-1'])",
+        ) ?? [],
+      );
+      if (focusables.length === 0) return;
+      const first = focusables[0] as HTMLElement;
+      const last = focusables[focusables.length - 1] as HTMLElement;
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     }
   };
 
@@ -38,7 +61,8 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
       className="palette"
       role="dialog"
       aria-modal="true"
-      aria-label="New window picker"
+      aria-labelledby="palette-title"
+      aria-describedby="palette-desc"
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={onKeyDown}
     >
@@ -47,8 +71,12 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
           <Icons.add size={17} />
         </span>
         <div className="palette-htext">
-          <span className="palette-title">New Window</span>
-          <span className="palette-sub">Pick a card to add to your workspace</span>
+          <span id="palette-title" className="palette-title">
+            New Window
+          </span>
+          <span id="palette-desc" className="palette-sub">
+            Pick a card to add to your workspace
+          </span>
         </div>
         <span className="spacer" />
         <button

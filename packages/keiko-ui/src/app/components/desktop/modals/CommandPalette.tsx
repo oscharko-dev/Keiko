@@ -27,6 +27,7 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps): Reac
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     // capture the element that opened the palette so we can return focus on close
@@ -56,6 +57,27 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps): Reac
   };
 
   const onKey = (e: KeyboardEvent<HTMLDivElement>): void => {
+    if (e.key === "Tab") {
+      const focusables = Array.from(
+        dialogRef.current?.querySelectorAll<HTMLElement>(
+          "button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex='-1'])",
+        ) ?? [],
+      );
+      if (focusables.length > 0) {
+        const first = focusables[0] as HTMLElement;
+        const last = focusables[focusables.length - 1] as HTMLElement;
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+          return;
+        }
+        if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+          return;
+        }
+      }
+    }
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setSel((s) => Math.min(filtered.length - 1, s + 1));
@@ -78,13 +100,21 @@ export function CommandPalette({ commands, onClose }: CommandPaletteProps): Reac
     <div className="cmdk-overlay" onPointerDown={onClose}>
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- modal needs arrow/Enter/Esc key handling */}
       <div
+        ref={dialogRef}
         className="cmdk"
         role="dialog"
         aria-modal="true"
-        aria-label="Command palette"
+        aria-labelledby="cmdk-title"
+        aria-describedby="cmdk-desc"
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={onKey}
       >
+        <h2 id="cmdk-title" className="sr-only">
+          Command palette
+        </h2>
+        <p id="cmdk-desc" className="sr-only">
+          Search commands and press Enter to run the selected action.
+        </p>
         <div className="cmdk-input">
           <Icons.search size={16} />
           <input

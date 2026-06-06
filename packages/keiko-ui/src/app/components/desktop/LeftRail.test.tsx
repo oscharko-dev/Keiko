@@ -35,6 +35,11 @@ function renderRail(): void {
 }
 
 describe("LeftRail — page-route links", () => {
+  it("renders the left rail as a labeled navigation landmark", () => {
+    renderRail();
+    expect(screen.getByRole("navigation", { name: "Primary workspace navigation" })).toBeInTheDocument();
+  });
+
   it("renders the Memory Center link with correct href and accessible name", () => {
     renderRail();
     const link = screen.getByRole("link", { name: "Memory Center" });

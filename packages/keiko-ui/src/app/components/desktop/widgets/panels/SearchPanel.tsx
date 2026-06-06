@@ -3,10 +3,13 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
 import { Icons } from "../../Icons";
+import { useOptionalChatSessionContext } from "../../context/ChatSessionContext";
 import { PROJECT_TREE, TreeNodeComponent } from "../shared/projectTree";
 
 export function SearchPanel(): ReactNode {
   const [active, setActive] = useState("/frontend/src/App.tsx");
+  const session = useOptionalChatSessionContext();
+  const projectName = session?.activeProject?.name ?? "No project selected";
   return (
     <div className="srch">
       <div className="srch-box">
@@ -15,7 +18,7 @@ export function SearchPanel(): ReactNode {
         <span className="kbd">⇧⇧</span>
       </div>
       <div className="tw-label srch-label">
-        example-workspace <span className="srch-meta mono">spring-boot · typescript</span>
+        {projectName} <span className="srch-meta mono">workspace search</span>
       </div>
       <div className="tr">
         {PROJECT_TREE.map((node, i) => (

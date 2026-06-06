@@ -68,7 +68,7 @@ export function LeftRail({
   readonly onToggleTheme: () => void;
 }): ReactNode {
   return (
-    <div className="rail rail-left">
+    <nav className="rail rail-left" aria-label="Primary workspace navigation">
       <button
         type="button"
         className="rail-new"
@@ -165,6 +165,6 @@ export function LeftRail({
       >
         M
       </button>
-    </div>
+    </nav>
   );
 }

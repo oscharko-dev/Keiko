@@ -36,4 +36,5 @@ export function applyShellUndoAction(api: WorkspaceApi, action: WorkspaceUiActio
 export const SHELL_SHORTCUT_BINDINGS: readonly WorkspaceKeyboardShortcutBinding[] = [
   { commandId: "undo", chord: { key: "z", mod: ["cmd"] } },
   { commandId: "redo", chord: { key: "z", mod: ["cmd", "shift"] } },
+  { commandId: "focus-status", chord: { key: "s", mod: ["alt"] } },
 ];

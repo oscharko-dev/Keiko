@@ -64,6 +64,11 @@ function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
 }
 
 describe("Workspace card connections", () => {
+  it("renders the workspace surface as a main landmark", () => {
+    render(<Workspace ws={workspace({})} wsRef={createRef<HTMLDivElement>()} openPalette={() => undefined} />);
+    expect(screen.getByRole("main", { name: "Workspace surface" })).toBeInTheDocument();
+  });
+
   it("confirms a valid target even when a target child stops pointer bubbling", () => {
     const confirmConnect = vi.fn();
     const workspaceApi = api({ confirmConnect });

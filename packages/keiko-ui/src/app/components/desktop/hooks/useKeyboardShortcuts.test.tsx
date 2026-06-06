@@ -128,6 +128,27 @@ describe("useKeyboardShortcuts — substrate contract", () => {
     expect(dispatch).not.toHaveBeenCalled();
   });
 
+  it("does NOT dispatch when the keydown originates from an editable field", () => {
+    const dispatch = vi.fn();
+    renderHook(() =>
+      useKeyboardShortcuts({
+        bindings: [bind("undo", "z", ["cmd"])],
+        dispatch,
+        platform: "other",
+      }),
+    );
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    const event = new KeyboardEvent("keydown", {
+      key: "z",
+      ctrlKey: true,
+      bubbles: true,
+    });
+    input.dispatchEvent(event);
+    expect(dispatch).not.toHaveBeenCalled();
+    input.remove();
+  });
+
   it("returns the bindings, no conflicts, no reserved entries on a clean config", () => {
     const dispatch = vi.fn();
     const { result } = renderHook(() =>

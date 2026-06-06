@@ -42,43 +42,44 @@ No new route is added by #526. The existing `/launch` (returning-user landing) a
 
 These are the load-bearing signals the user uses to orient. The architecture blueprint requires them to be visible at all times in the desktop viewport.
 
-| Indicator          | Footer segment                                                              | Verifier                                                                                                               | Notes                                                                                               |
-| ------------------ | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| Connected project  | `.ft-seg.ft-opt2` with folder icon + workspace name                         | `Footer.test.tsx` it("renders the connected-project indicator")                                                        | Current placeholder value `example-workspace`; live wiring lands in a future issue if one is opened |
-| Model availability | `.ft-seg.ft-opt2` with bolt icon + selected model id or `No model selected` | `Footer.test.tsx` it("renders the model-availability indicator") and it("renders an explicit no-model-selected state") | `selectedModel` prop owned by `AppShell` per ChatSession                                            |
-| Workflow readiness | `.ft-seg.ft-accent` with tile icon + window count (singular/plural)         | `Footer.test.tsx` it("renders the workflow-readiness indicator") and it("singularises the window-count indicator")     | Window count is the workflow readiness proxy (workflows render as windows)                          |
-| Evidence access    | `.ft-seg.ft-accent` autosaved indicator                                     | `Footer.test.tsx` it("renders the evidence-equivalent autosaved indicator")                                            | Autosaved signals durable persistence per #62 + evidence-reference integrity                        |
+| Indicator          | Footer segment                                                              | Verifier                                                                                                               | Notes                                                                         |
+| ------------------ | --------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Connected project  | `.ft-seg.ft-opt2` with folder icon + active project name                    | `Footer.test.tsx` it("renders the connected-project indicator with the live workspace label")                          | Reads the selected project from `useChatSession` through `AppShell`           |
+| Model availability | `.ft-seg.ft-opt2` with bolt icon + selected model id or `No model selected` | `Footer.test.tsx` it("renders the model-availability indicator") and it("renders an explicit no-model-selected state") | `selectedModel` prop owned by `AppShell` per ChatSession                      |
+| Workflow readiness | `.ft-seg.ft-accent` with tile icon + window count (singular/plural)         | `Footer.test.tsx` it("renders the workflow-readiness indicator") and it("singularises the window-count indicator")     | Window count is the workflow readiness proxy (workflows render as windows)    |
+| Shell readiness    | `.ft-seg.ft-opt2` with cube icon + shell state label                        | `Footer.test.tsx` it("renders the shell trust-boundary status indicator")                                              | Reports loading, error, unavailable-project, gateway-setup-required, or ready |
+| Review / evidence  | `.ft-seg.ft-accent` with review icon + review/evidence state label          | `Footer.test.tsx` it("renders the review and evidence-access indicator")                                               | Distinguishes no review window, open review, and evidence-ready review        |
 
 ## Visual state catalogue reachability
 
 The UI blueprint mandates 11 production states. The reachability map below names where each state is exercised in the existing codebase. #530 hardening verifies the catalogue at the shell level.
 
-| State                  | Existing reach                                                                             |
-| ---------------------- | ------------------------------------------------------------------------------------------ |
-| Empty                  | `ComposerEmptyState` for chat; LeftRail without a selected tool; Workspace with no windows |
-| Loading                | `Streaming` test pattern; `useChatSession` loading flag; PWA `InstallBanner` waiting state |
-| Streaming              | `GroundedAnswer` SSE stream; `ChatWindow` `sending` state with `aria-live="polite"`        |
-| Success                | Footer autosaved indicator; Notifications panel quiet success                              |
-| Review-needed          | `AgentGateCard` inside `ReviewWidget`                                                      |
-| Blocked                | `ChatWindow` blocked composer state; `PermControl` denied response                         |
-| Warning                | `lk-alert` warning variant in `connector-graph.tsx`                                        |
-| Error                  | `AlertBanner` in `connector-graph.tsx` (`role="alert"`); `ChatWindow` error state          |
-| Offline / disconnected | Footer "Work locally"; `useWsContext` disconnected state                                   |
-| Stale                  | `connector-graph` stale capsule indicator                                                  |
-| Degraded               | `useChatSession` `noEligibleModels` state                                                  |
+| State                  | Existing reach                                                                               |
+| ---------------------- | -------------------------------------------------------------------------------------------- |
+| Empty                  | `ComposerEmptyState` for chat; LeftRail without a selected tool; Workspace with no windows   |
+| Loading                | `Streaming` test pattern; `useChatSession` loading flag; PWA `InstallBanner` waiting state   |
+| Streaming              | `GroundedAnswer` SSE stream; `ChatWindow` `sending` state with `aria-live="polite"`          |
+| Success                | Footer review/evidence indicator reports `Evidence ready`; Notifications panel quiet success |
+| Review-needed          | `AgentGateCard` inside `ReviewWidget`                                                        |
+| Blocked                | `ChatWindow` blocked composer state; `PermControl` denied response                           |
+| Warning                | `lk-alert` warning variant in `connector-graph.tsx`                                          |
+| Error                  | `AlertBanner` in `connector-graph.tsx` (`role="alert"`); `ChatWindow` error state            |
+| Offline / disconnected | Footer shell readiness indicator reports an unavailable project or setup requirement         |
+| Stale                  | `connector-graph` stale capsule indicator                                                    |
+| Degraded               | `useChatSession` `noEligibleModels` state                                                    |
 
 ## Keyboard reach map (minimum, per #523)
 
 The shell must satisfy the minimum keyboard contract. The substrate behind these chords is wired by #527 (interaction substrate); the shell merely surfaces them.
 
-| Region    | Reach pattern                                                       |
-| --------- | ------------------------------------------------------------------- |
-| Header    | `Tab` from page entry; `Cmd/Ctrl+K` opens palette                   |
-| LeftRail  | `Tab` from Header; arrow keys cycle rail entries; `Enter` activates |
-| Workspace | `Tab` enters windows; arrow keys pan; `+/-` zoom; `f` fit-to-view   |
-| RightRail | `Alt+I` toggles; `Tab` reaches inspector controls                   |
-| Footer    | `Alt+S` focuses status surface; status segments are not interactive |
-| Modal     | `Esc` closes; focus trap inside; `Enter` confirms                   |
+| Region    | Reach pattern                                                                                    |
+| --------- | ------------------------------------------------------------------------------------------------ |
+| Header    | `Tab` from page entry; `Cmd/Ctrl+K` opens the command palette                                    |
+| LeftRail  | `Tab` from Header; `Enter` or `Space` activates navigation buttons                               |
+| Workspace | `Tab` enters windows; `Cmd/Ctrl+Arrow` moves the front window; `Alt+Arrow` resizes it            |
+| RightRail | `Tab` reaches inspector and utility controls                                                     |
+| Footer    | `Alt+S` focuses the status surface; status segments remain non-interactive                       |
+| Modal     | `Esc` closes; focus is trapped inside supported shell dialogs; `Enter` confirms where applicable |
 
 ## Regression-prone state transitions
 
@@ -96,12 +97,14 @@ When implementation lands additional behavior on the shell, the following transi
 
 Targeted tests for the shell-level contract introduced by #526:
 
-- `packages/keiko-ui/src/app/components/desktop/Footer.test.tsx` — nine assertions covering all four shell-level status indicators, the governance pill, and the single semantic footer landmark.
+- `packages/keiko-ui/src/app/components/desktop/Footer.test.tsx` — shell status indicators, governance pill, footer landmark, and focusable status surface.
 
 Existing tests already cover region renderings:
 
-- `LeftRail.test.tsx` — page-route links + accessible names.
-- `Workspace.test.tsx` — workspace canvas card connections.
+- `LeftRail.test.tsx` — page-route links, accessible names, and navigation landmark.
+- `RightRail.test.tsx` — complementary landmark for workspace utilities.
+- `Workspace.test.tsx` — workspace canvas card connections and the main workspace landmark.
+- `ProjectPanel.test.tsx` — live project and chat context rendering without placeholder workspace data.
 - `ChatWindow.test.tsx`, `ComposerEmptyState.test.tsx`, `ConnectedScopePill.test.tsx`, `Streaming.test.tsx`, `GroundedAnswer.test.tsx`, `GroundedAnswer.a11y.test.tsx` — chat surface rendering and a11y.
 
 ## Acceptance Criteria evidence

@@ -126,9 +126,10 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
   const empty = wins !== null && wins.length === 0;
 
   return (
-    <div
+    <main
       className="workspace"
       ref={wsRef}
+      aria-label="Workspace surface"
       data-connecting={connecting !== null ? "true" : undefined}
       onPointerDownCapture={onWorkspacePointerDownCapture}
       onPointerDown={onBgPointerDown}
@@ -214,6 +215,6 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       </button>
 
       {palette ?? null}
-    </div>
+    </main>
   );
 }
