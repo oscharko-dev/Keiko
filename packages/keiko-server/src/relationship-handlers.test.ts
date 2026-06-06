@@ -958,6 +958,69 @@ describe("GET /api/relationships/:id/dependencies + impact + health + explain + 
     expect(totals.active).toBeGreaterThanOrEqual(1);
   });
 
+  // Issue #542 GAP-1 — the top-level back-compat `truncated` field must derive
+  // from per-category `findings.*Truncated` flags so a pre-#542 client polling
+  // only the legacy signal still observes a truncation event. The stub
+  // `graphHealth` sets `staleRelationshipsTruncated: true`; a single-line
+  // mutation in `anyFindingTruncated` (e.g. dropping the stale OR clause,
+  // hard-coding `false`) would flip the top-level assertion and fail this
+  // test without affecting any other test in the suite.
+  it("health top-level truncated derives from per-category findings flags", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const stub: typeof store = {
+      ...store,
+      graphHealth: () => ({
+        checkedAt: 1234,
+        totals: {
+          active: 0,
+          draft: 0,
+          archived: 0,
+          superseded: 0,
+          revoked: 0,
+          blocked: 0,
+          stale: 0,
+        },
+        truncated: false,
+        findings: {
+          orphanedEndpoints: [],
+          orphanedEndpointsTruncated: false,
+          staleRelationships: [],
+          staleRelationshipsTruncated: true,
+          blockedRelationships: [],
+          blockedRelationshipsTruncated: false,
+          failedRelationships: [],
+          failedRelationshipsTruncated: false,
+          invalidReferences: [],
+          invalidReferencesTruncated: false,
+          cycleParticipants: [],
+          cycleScanTruncated: false,
+        },
+      }),
+    };
+    const deps = buildDeps("ws-a", stub, redactor);
+    const req = makeReq({ method: "GET", url: "/api/relationships/health" });
+    const res = await handleRelationshipHealth(makeCtx(req), deps);
+    expect(res.status).toBe(200);
+    const body = res.body as {
+      truncated: boolean;
+      findings: { staleRelationshipsTruncated: boolean; cycleScanTruncated: boolean };
+    };
+    expect(body.truncated).toBe(true);
+    expect(body.findings.staleRelationshipsTruncated).toBe(true);
+    expect(body.findings.cycleScanTruncated).toBe(false);
+  });
+
+  it("health top-level truncated stays false when no findings category is capped", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const req = makeReq({ method: "GET", url: "/api/relationships/health" });
+    const res = await handleRelationshipHealth(makeCtx(req), deps);
+    expect(res.status).toBe(200);
+    expect((res.body as { truncated: boolean }).truncated).toBe(false);
+  });
+
   // #543 hardening: idempotency-key was 3 chars ("e-1") and failed
   // IDEMPOTENCY_HEADER_RE → seed returned a 400 denial body (no `.relationship` field)
   // and the test crashed reading `.id` on undefined. Use a contract-conforming key.
