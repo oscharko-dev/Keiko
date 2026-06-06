@@ -3,8 +3,14 @@ import { generateUnitTests } from "./workflow.js";
 import type { UnitTestWorkflowDeps, UnitTestWorkflowInput } from "./types.js";
 import { SKIP_UNRESOLVED } from "./verify-stage.js";
 import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
-import { recordingSpawn, scriptChildClose } from "../../../../tests/verification/_support.js";
-import { recordingSink, recordingWriter, response, scriptedModel } from "./_support.js";
+import {
+  recordingSink,
+  recordingSpawn,
+  recordingWriter,
+  response,
+  scriptChildClose,
+  scriptedModel,
+} from "./_support.js";
 
 const ROOT = "/repo";
 

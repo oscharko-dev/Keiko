@@ -55,7 +55,7 @@ export {
   type VerificationStatus,
   type VerificationStep,
   type VerificationSummary,
-} from "../verification/index.js";
+} from "@oscharko-dev/keiko-verification";
 
 // Reviewable developer-assist workflows (ADR-0008). The unit-test generation workflow is the first
 // programmatic workflow surface: generateUnitTests is the single entry, the descriptor lets a UI

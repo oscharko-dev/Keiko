@@ -2,10 +2,12 @@
 // builders, a scripted ModelPort, a recording WorkspaceWriter, a recording event sink, and a canned
 // NormalizedResponse. No real timers, network, or fs. Mirrors the unit-test workflow's _support.ts.
 
+import { EventEmitter } from "node:events";
+import type { ChildProcess } from "node:child_process";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { ContextEntry, ContextPack, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import type { WorkspaceWriter } from "@oscharko-dev/keiko-tools";
+import type { SpawnFn, SpawnOptions, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import type { BugInvestigationEvent, BugWorkflowEventSink } from "./events.js";
 
 export function makeWorkspaceInfo(overrides: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
@@ -119,4 +121,67 @@ export function recordingSink(): {
     events: () => events,
     sink: { emit: (event): void => void events.push(event) },
   };
+}
+
+export interface FakeChild extends EventEmitter {
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  pid: number;
+  kill: (signal?: NodeJS.Signals) => boolean;
+  killed: NodeJS.Signals[];
+}
+
+export function makeFakeChild(pid = 4242): FakeChild {
+  const child = new EventEmitter() as FakeChild;
+  child.stdout = new EventEmitter();
+  child.stderr = new EventEmitter();
+  child.pid = pid;
+  child.killed = [];
+  child.kill = (signal?: NodeJS.Signals): boolean => {
+    child.killed.push(signal ?? "SIGTERM");
+    return true;
+  };
+  return child;
+}
+
+export interface SpawnRecorder {
+  readonly fn: SpawnFn;
+  readonly calls: () => readonly {
+    command: string;
+    args: readonly string[];
+    options: SpawnOptions;
+  }[];
+  readonly child: FakeChild;
+}
+
+export function recordingSpawn(child: FakeChild = makeFakeChild()): SpawnRecorder {
+  const calls: { command: string; args: readonly string[]; options: SpawnOptions }[] = [];
+  return {
+    child,
+    calls: () => calls,
+    fn: (command, args, options): ChildProcess => {
+      calls.push({ command, args: [...args], options });
+      return child as unknown as ChildProcess;
+    },
+  };
+}
+
+export function scriptChildClose(
+  child: FakeChild,
+  opts: {
+    stdout?: string;
+    stderr?: string;
+    exitCode?: number | null;
+    signal?: NodeJS.Signals | null;
+  },
+): void {
+  queueMicrotask(() => {
+    if (opts.stdout !== undefined) {
+      child.stdout.emit("data", Buffer.from(opts.stdout, "utf8"));
+    }
+    if (opts.stderr !== undefined) {
+      child.stderr.emit("data", Buffer.from(opts.stderr, "utf8"));
+    }
+    child.emit("close", opts.exitCode ?? 0, opts.signal ?? null);
+  });
 }
