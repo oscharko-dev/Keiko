@@ -34,6 +34,7 @@
     "@oscharko-dev/keiko-workspace": "*",
     "@oscharko-dev/keiko-tools": "*",
     "@oscharko-dev/keiko-evidence": "*",
+    "@oscharko-dev/keiko-verification": "*",
     "@oscharko-dev/keiko-harness": "*",
     "@oscharko-dev/keiko-workflows": "*",
     "@oscharko-dev/keiko-memory-vault": "*",

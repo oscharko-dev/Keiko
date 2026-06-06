@@ -7,7 +7,7 @@
 
 import { redact } from "@oscharko-dev/keiko-security";
 import type { PatchFileChange } from "@oscharko-dev/keiko-tools";
-import type { VerificationAuditSummary } from "../../../../src/verification/index.js";
+import type { VerificationAuditSummary } from "@oscharko-dev/keiko-verification";
 import type { AddedTestFile, UnitTestWorkflowReport, WorkflowStatus } from "./types.js";
 
 const TEST_CASE_PREFIXES: readonly string[] = ["test(", "it(", "describe("];

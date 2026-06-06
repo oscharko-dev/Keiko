@@ -15,7 +15,7 @@ import {
   DEFAULT_VERIFICATION_LIMITS,
   type VerificationAuditSummary,
   type VerificationPlan,
-} from "../../../../src/verification/index.js";
+} from "@oscharko-dev/keiko-verification";
 import type { RunState } from "./internal.js";
 import type { UnitTestTarget } from "./types.js";
 
