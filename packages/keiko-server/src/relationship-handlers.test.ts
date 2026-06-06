@@ -1025,7 +1025,7 @@ describe("GET /api/relationships/:id/dependencies + impact + health + explain + 
     expect(result).toBe(STREAMING);
     const body = (ctx.res as unknown as { _sse: { body(): string } })._sse.body();
     expect(body).toContain("event: relationship:activity");
-    const match = body.match(/data: (.+)\n/u);
+    const match = /data: (.+)\n/u.exec(body);
     expect(match).not.toBeNull();
     const payload = JSON.parse(match?.[1] ?? "{}") as Record<string, unknown>;
     expect(payload).toMatchObject({

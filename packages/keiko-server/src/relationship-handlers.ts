@@ -741,6 +741,32 @@ function relevantRunEvents(record: RunRecord, now: number): readonly { readonly 
     .map((event) => ({ ts: event.ts, type: event.type }));
 }
 
+function activitySnapshot(
+  state: RelationshipActivitySnapshot["state"],
+  timestamp: number,
+  count?: number,
+): RelationshipActivitySnapshot {
+  return {
+    kind: "relationship:activity",
+    id: "",
+    state,
+    timestamp,
+    ...(count !== undefined ? { count } : {}),
+  };
+}
+
+function runningActivity(
+  events: readonly { readonly ts: number; readonly type: string }[],
+): RelationshipActivitySnapshot["state"] {
+  if (events.some((event) => RUN_PROCESSING_EVENT_TYPES.has(event.type))) {
+    return "processing";
+  }
+  if (events.some((event) => RUN_ACTIVE_EVENT_TYPES.has(event.type))) {
+    return "active";
+  }
+  return "queued";
+}
+
 function activityFromRun(record: RunRecord, now: number): RelationshipActivitySnapshot | undefined {
   const events = relevantRunEvents(record, now);
   const latestTimestamp =
@@ -749,28 +775,16 @@ function activityFromRun(record: RunRecord, now: number): RelationshipActivitySn
     return undefined;
   }
   if (events.length > ACTIVITY_HIGH_THROUGHPUT_THRESHOLD) {
-    return {
-      kind: "relationship:activity",
-      id: "",
-      state: "high-throughput",
-      timestamp: latestTimestamp,
-      count: events.length,
-    };
+    return activitySnapshot("high-throughput", latestTimestamp, events.length);
   }
   if (record.status === "running") {
-    if (events.some((event) => RUN_PROCESSING_EVENT_TYPES.has(event.type))) {
-      return { kind: "relationship:activity", id: "", state: "processing", timestamp: latestTimestamp };
-    }
-    if (events.some((event) => RUN_ACTIVE_EVENT_TYPES.has(event.type))) {
-      return { kind: "relationship:activity", id: "", state: "active", timestamp: latestTimestamp };
-    }
-    return { kind: "relationship:activity", id: "", state: "queued", timestamp: latestTimestamp };
+    return activitySnapshot(runningActivity(events), latestTimestamp);
   }
   if (record.status === "failed") {
-    return { kind: "relationship:activity", id: "", state: "failed", timestamp: latestTimestamp };
+    return activitySnapshot("failed", latestTimestamp);
   }
   if (record.status === "completed") {
-    return { kind: "relationship:activity", id: "", state: "completed", timestamp: latestTimestamp };
+    return activitySnapshot("completed", latestTimestamp);
   }
   return undefined;
 }
