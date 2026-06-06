@@ -1,6 +1,6 @@
-# Epic #532 — semantic relationship engine closure evidence (DRAFT for #544)
+# Epic #532 — semantic relationship engine closure evidence
 
-Status: DRAFT prepared during issue [#543](https://github.com/oscharko-dev/Keiko/issues/543) hardening. Issue [#544](https://github.com/oscharko-dev/Keiko/issues/544) finalizes this document with the final epic PR URL, the maintainer-recorded merge SHA, and any final review-disposition notes.
+Status: Finalized during issue [#544](https://github.com/oscharko-dev/Keiko/issues/544). All twelve child issues have been integrated into the epic branch `claude/epic-532-semantic-relationship-engine` and the final epic PR is open against `dev` as `Ready for Human Review`.
 
 ## Epic outcome
 
@@ -20,8 +20,8 @@ The semantic relationship engine is in place across `@oscharko-dev/keiko-contrac
 | [#540](https://github.com/oscharko-dev/Keiko/issues/540) | Relationship inspector + controlled graph visualization               | [#580](https://github.com/oscharko-dev/Keiko/pull/580) | `3b062274`   | Ready for Human Review |
 | [#541](https://github.com/oscharko-dev/Keiko/issues/541) | Privacy-preserving activity visualization                             | [#581](https://github.com/oscharko-dev/Keiko/pull/581) | `0f792772`   | Ready for Human Review |
 | [#542](https://github.com/oscharko-dev/Keiko/issues/542) | Bounded impact analysis + dependency view + health checks (backend)   | [#586](https://github.com/oscharko-dev/Keiko/pull/586) | `dfd5af2b`   | Ready for Human Review |
-| [#543](https://github.com/oscharko-dev/Keiko/issues/543) | Hardening pass (security, a11y, perf, evidence, no-dep)               | (this PR)                                              | (pending)    | In flight              |
-| [#544](https://github.com/oscharko-dev/Keiko/issues/544) | Final closure evidence + docs + verification                          | (final epic PR)                                        | (pending)    | Pending                |
+| [#543](https://github.com/oscharko-dev/Keiko/issues/543) | Hardening pass (security, a11y, perf, evidence, no-dep)               | [#588](https://github.com/oscharko-dev/Keiko/pull/588) | (merged)     | Ready for Human Review |
+| [#544](https://github.com/oscharko-dev/Keiko/issues/544) | Final closure evidence + docs + verification                          | (this PR)                                              | (pending)    | In flight              |
 
 ## Architecture decisions
 
@@ -71,6 +71,8 @@ Hardening (#543): `security-review.md`, `accessibility-review.md`, `performance-
 
 ## Closure request
 
-The epic stays **open** in `Ready for Human Review` until the final epic PR is merged into `dev` by the human maintainer or Codex. The final epic PR will use closing keywords for #533–#544 in its body.
+The epic stays **open** in `Ready for Human Review` until the final epic PR is merged into `dev` by the human maintainer or Codex. The final epic PR uses closing keywords for #533–#544 in its body so that the GitHub merge closes every child issue and the epic in one step.
 
-**Final epic PR**: to be opened once #543 lands on the epic branch. Body will be authored by the #544 closure-evidence agent based on the matrix above and the verification table.
+**Final epic PR**: opened from `claude/epic-532-semantic-relationship-engine` into `dev` (URL filled in by the coordinator after `gh pr create`). The PR body inlines the child issue matrix and the verification table above so the maintainer can audit closure without reading every child PR.
+
+The human maintainer or Codex performs the final integration merge. Claude does NOT autonomously merge the final epic PR.
