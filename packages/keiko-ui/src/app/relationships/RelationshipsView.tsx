@@ -19,7 +19,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { RelationshipFilters } from "../components/desktop/widgets/panels/RelationshipListPanel";
@@ -52,6 +52,8 @@ export function RelationshipsView(): ReactNode {
 
   // ─── Create dialog ───────────────────────────────────────────────────────
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const createButtonRef = useRef<HTMLButtonElement | null>(null);
+  const restoreCreateButtonFocusRef = useRef(false);
 
   // ─── URL writes ──────────────────────────────────────────────────────────
 
@@ -103,6 +105,7 @@ export function RelationshipsView(): ReactNode {
 
   const handleCreateClose = useCallback(
     (created: ApiRelationship | null) => {
+      restoreCreateButtonFocusRef.current = true;
       setCreateDialogOpen(false);
       if (created !== null) {
         // Select the newly created relationship in the inspector
@@ -111,6 +114,12 @@ export function RelationshipsView(): ReactNode {
     },
     [applyFilters],
   );
+
+  useEffect(() => {
+    if (createDialogOpen || !restoreCreateButtonFocusRef.current) return;
+    restoreCreateButtonFocusRef.current = false;
+    createButtonRef.current?.focus();
+  }, [createDialogOpen]);
 
   // ─── Global keyboard shortcuts ────────────────────────────────────────────
   // inspector-spec.md keyboard map: F=FocusMode, Escape=ClearFocus
@@ -173,6 +182,7 @@ export function RelationshipsView(): ReactNode {
             Relationships
           </h1>
           <button
+            ref={createButtonRef}
             type="button"
             className="arun-btn primary"
             onClick={() => setCreateDialogOpen(true)}

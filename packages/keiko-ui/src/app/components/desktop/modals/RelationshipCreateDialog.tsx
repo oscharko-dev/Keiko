@@ -57,6 +57,18 @@ function initialForm(): FormState {
   };
 }
 
+const SECURITY_DENIAL_CODES = new Set([
+  "denied/path-not-contained",
+  "denied/cross-workspace",
+  "denied/payload-content-not-permitted",
+]);
+
+function isSecurityDenial(
+  denial: { codes: readonly string[] } | null,
+): boolean {
+  return denial?.codes.some((code) => SECURITY_DENIAL_CODES.has(code)) === true;
+}
+
 // ─── Props ─────────────────────────────────────────────────────────────────────
 
 export interface RelationshipCreateDialogProps {
@@ -72,6 +84,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
   const [form, setForm] = useState<FormState>(initialForm);
   const [clientHints, setClientHints] = useState<readonly string[]>([]);
   const [serverDenial, setServerDenial] = useState<{
+    source: "preview" | "submit";
     codes: readonly string[];
     messages: readonly string[];
   } | null>(null);
@@ -160,13 +173,24 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
 
   // ─── Debounced server-side preview (at most one call per 250 ms) ──────────
   const serverPreviewTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestPreviewRequestId = useRef(0);
 
   useEffect(() => {
-    if (form.sourceId.length === 0 || form.targetId.length === 0) return;
-    // Only run server preview when client hints are empty
-    if (clientHints.length > 0) return;
+    latestPreviewRequestId.current += 1;
+    const previewRequestId = latestPreviewRequestId.current;
 
     if (serverPreviewTimer.current !== null) clearTimeout(serverPreviewTimer.current);
+
+    if (form.sourceId.length === 0 || form.targetId.length === 0) {
+      setPreviewLoading(false);
+      return;
+    }
+    // Only run server preview when client hints are empty
+    if (clientHints.length > 0) {
+      setPreviewLoading(false);
+      return;
+    }
+
     serverPreviewTimer.current = setTimeout(async () => {
       setPreviewLoading(true);
       try {
@@ -176,10 +200,16 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           target: { kind: form.targetKind, id: form.targetId },
           summary: form.summary.length > 0 ? form.summary : undefined,
         });
-        setServerDenial(null);
+        if (previewRequestId !== latestPreviewRequestId.current) return;
+        setServerDenial((current) => {
+          if (current?.source === "submit") return current;
+          return isSecurityDenial(current) ? current : null;
+        });
       } catch (err) {
+        if (previewRequestId !== latestPreviewRequestId.current) return;
         if (err instanceof RelationshipApiError && err.reasons.length > 0) {
           setServerDenial({
+            source: "preview",
             codes: err.reasons.map((r) => r.code),
             messages: err.reasons.map((r) => r.message),
           });
@@ -187,7 +217,9 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           setServerDenial(null);
         }
       } finally {
-        setPreviewLoading(false);
+        if (previewRequestId === latestPreviewRequestId.current) {
+          setPreviewLoading(false);
+        }
       }
     }, 250);
 
@@ -218,18 +250,21 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
       if (err instanceof RelationshipApiError) {
         if (err.reasons.length > 0) {
           setServerDenial({
+            source: "submit",
             codes: err.reasons.map((r) => r.code),
             // Verbatim server messages per error-and-denial-ux.md
             messages: err.reasons.map((r) => r.message),
           });
         } else {
           setServerDenial({
+            source: "submit",
             codes: [err.code],
             messages: [err.message],
           });
         }
       } else {
         setServerDenial({
+          source: "submit",
           codes: ["relationship/network-error"],
           messages: ["Unable to reach the local backend. Check that `keiko serve` is running."],
         });
@@ -259,12 +294,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
     !submitting;
 
   // Security-class denials must not be auto-dismissed (error-and-denial-ux.md §"Forbidden patterns")
-  const securityDenialCodes = new Set([
-    "denied/path-not-contained",
-    "denied/cross-workspace",
-    "denied/payload-content-not-permitted",
-  ]);
-  const hasSecurityDenial = serverDenial?.codes.some((c) => securityDenialCodes.has(c)) === true;
+  const hasSecurityDenial = isSecurityDenial(serverDenial);
 
   return (
     <div

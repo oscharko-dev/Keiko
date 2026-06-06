@@ -43,11 +43,18 @@ vi.mock("../../../../relationships/api.js", () => ({
   },
 }));
 
-import { getRelationship, getExplain, patchRelationship } from "../../../../relationships/api";
+import {
+  deleteRelationship,
+  getExplain,
+  getRelationship,
+  patchRelationship,
+  RelationshipApiError,
+} from "../../../../relationships/api";
 
 const mockGetRelationship = vi.mocked(getRelationship);
 const mockGetExplain = vi.mocked(getExplain);
 const mockPatchRelationship = vi.mocked(patchRelationship);
+const mockDeleteRelationship = vi.mocked(deleteRelationship);
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -87,6 +94,14 @@ function renderInspector(id: string | null = "rel-abc", overrides: Record<string
       {...overrides}
     />,
   );
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -159,6 +174,14 @@ describe("RelationshipInspectorPanel", () => {
       });
     });
 
+    it("exposes section labels as level-3 headings", async () => {
+      renderInspector("rel-abc");
+      await waitFor(() => {
+        expect(screen.getByRole("heading", { name: "Relationship", level: 3 })).toBeDefined();
+        expect(screen.getByRole("heading", { name: "Activity", level: 3 })).toBeDefined();
+      });
+    });
+
     // TODO(#543): the kind text appears in both the source row and the impact preview,
     // producing a multi-match; #543 hardening scopes the query to the source-row container.
     it.skip("renders the source endpoint kind", async () => {
@@ -166,6 +189,15 @@ describe("RelationshipInspectorPanel", () => {
       await waitFor(() => {
         expect(screen.getByText(/workflow-run/i)).toBeDefined();
       });
+    });
+
+    it("passes the relationship type through to the activity badge label", async () => {
+      mockGetRelationship.mockResolvedValue({ ...BASE_REL, type: "depends-on" });
+      renderInspector("rel-abc");
+      await waitFor(() => {
+        expect(screen.getByLabelText(/depends on/i)).toBeDefined();
+      });
+      expect(screen.queryByLabelText(/reads context/i)).toBeNull();
     });
   });
 
@@ -269,6 +301,158 @@ describe("RelationshipInspectorPanel", () => {
       );
       // "Denial reason" only appears when codes.length > 0
       expect(labels).not.toContain("Denial reason");
+    });
+
+    it.each(["blocked", "revoked"] as const)(
+      "renders authoritative explain denial reasons verbatim for %s relationships",
+      async (lifecycle) => {
+        mockGetRelationship.mockResolvedValue({ ...BASE_REL, lifecycle });
+        mockGetExplain.mockResolvedValue({
+          ...BASE_EXPLAIN,
+          decision: {
+            allowed: false,
+            reasons: [
+              {
+                code: "denied/authority-insufficient",
+                message: "Policy engine denied this relationship exactly as written.",
+              },
+            ],
+          },
+        });
+        renderInspector("rel-abc");
+        await waitFor(() => {
+          expect(screen.getByTestId("denial-section")).toBeDefined();
+        });
+        expect(screen.getByText("denied/authority-insufficient")).toBeDefined();
+        expect(
+          screen.getByText("Policy engine denied this relationship exactly as written."),
+        ).toBeDefined();
+      },
+    );
+  });
+
+  describe("mutation-time denial handling", () => {
+    it.each([
+      {
+        name: "archive",
+        lifecycle: "active" as const,
+        buttonName: /archive/i,
+        expectedMessage: "Archive transition denied verbatim by the server.",
+      },
+      {
+        name: "reconnect",
+        lifecycle: "blocked" as const,
+        buttonName: /reconnect/i,
+        expectedMessage: "Reconnect transition denied verbatim by the server.",
+      },
+    ])("keeps %s denial reasons visible after a failed patch mutation", async ({
+      lifecycle,
+      buttonName,
+      expectedMessage,
+    }) => {
+      mockGetRelationship.mockResolvedValue({ ...BASE_REL, lifecycle });
+      mockGetExplain.mockResolvedValue(BASE_EXPLAIN);
+      mockPatchRelationship.mockRejectedValue(
+        new RelationshipApiError("relationship/denied", "Transition denied.", 409, [
+          {
+            code: "denied/lifecycle-illegal-transition",
+            message: expectedMessage,
+          },
+        ]),
+      );
+      renderInspector("rel-abc");
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: buttonName })).toBeDefined();
+      });
+      fireEvent.click(screen.getByRole("button", { name: buttonName }));
+      await waitFor(() => {
+        expect(screen.getByTestId("denial-section")).toBeDefined();
+      });
+      expect(screen.getByText(expectedMessage)).toBeDefined();
+      fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+      expect(screen.queryByText("Transition denied.")).toBeNull();
+      expect(screen.getByText(expectedMessage)).toBeDefined();
+    });
+
+    it("keeps revoke denial reasons visible after a failed delete mutation", async () => {
+      mockGetRelationship.mockResolvedValue({ ...BASE_REL, lifecycle: "active" });
+      mockGetExplain.mockResolvedValue(BASE_EXPLAIN);
+      mockDeleteRelationship.mockRejectedValue(
+        new RelationshipApiError("relationship/denied", "Revoke denied.", 409, [
+          {
+            code: "denied/authority-insufficient",
+            message: "Revoke denied verbatim by the server.",
+          },
+        ]),
+      );
+      vi.spyOn(window, "confirm").mockReturnValue(true);
+      renderInspector("rel-abc");
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /revoke/i })).toBeDefined();
+      });
+      fireEvent.click(screen.getByRole("button", { name: /revoke/i }));
+      await waitFor(() => {
+        expect(screen.getByTestId("denial-section")).toBeDefined();
+      });
+      expect(screen.getByText("denied/authority-insufficient")).toBeDefined();
+      expect(screen.getByText("Revoke denied verbatim by the server.")).toBeDefined();
+    });
+  });
+
+  describe("stale response protection", () => {
+    it("ignores a slower prior fetch when relationshipId changes quickly", async () => {
+      const relOne = {
+        ...BASE_REL,
+        id: "rel-one",
+        source: { kind: "workflow-run" as const, id: "run-slow" },
+      };
+      const relTwo = {
+        ...BASE_REL,
+        id: "rel-two",
+        source: { kind: "workflow-run" as const, id: "run-fast" },
+      };
+      const relOneResponse = deferred<typeof relOne>();
+      const relTwoResponse = deferred<typeof relTwo>();
+      const explainOneResponse = deferred<typeof BASE_EXPLAIN>();
+      const explainTwoResponse = deferred<typeof BASE_EXPLAIN>();
+      mockGetRelationship.mockImplementation((id) =>
+        id === "rel-one" ? relOneResponse.promise : relTwoResponse.promise,
+      );
+      mockGetExplain.mockImplementation((id) =>
+        id === "rel-one" ? explainOneResponse.promise : explainTwoResponse.promise,
+      );
+      const onClearFocus = vi.fn();
+      const onViewImpact = vi.fn();
+      const view = render(
+        <RelationshipInspectorPanel
+          relationshipId="rel-one"
+          densityMode="standard"
+          onClearFocus={onClearFocus}
+          onViewImpact={onViewImpact}
+        />,
+      );
+
+      view.rerender(
+        <RelationshipInspectorPanel
+          relationshipId="rel-two"
+          densityMode="standard"
+          onClearFocus={onClearFocus}
+          onViewImpact={onViewImpact}
+        />,
+      );
+
+      relTwoResponse.resolve(relTwo);
+      explainTwoResponse.resolve(BASE_EXPLAIN);
+      await waitFor(() => {
+        expect(screen.getByLabelText("Reference id: run-fast")).toBeDefined();
+      });
+
+      relOneResponse.resolve(relOne);
+      explainOneResponse.resolve(BASE_EXPLAIN);
+      await waitFor(() => {
+        expect(screen.getByLabelText("Reference id: run-fast")).toBeDefined();
+      });
+      expect(screen.queryByLabelText("Reference id: run-slow")).toBeNull();
     });
   });
 
