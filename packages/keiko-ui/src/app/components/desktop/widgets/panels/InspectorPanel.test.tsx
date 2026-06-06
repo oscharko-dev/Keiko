@@ -40,7 +40,10 @@ function renderWithFocus(active: AppWindow | null): void {
 describe("InspectorPanel — governance section (epic #518 #528 / ADR-0029)", () => {
   it("renders the governance section when a window is focused", () => {
     renderWithFocus(makeWindow({ id: "w-1", type: "review" }));
-    expect(screen.getByTestId("insp-governance")).toBeInTheDocument();
+    const govContainer = screen.getByTestId("insp-governance");
+    expect(govContainer).toBeInTheDocument();
+    // Issue #527 — scoping class required for WCAG contrast override in globals.css
+    expect(govContainer).toHaveClass("insp-governance");
     expect(screen.getByText("Authority")).toBeInTheDocument();
     expect(screen.getByText("Persistence")).toBeInTheDocument();
     expect(screen.getByText("Trust")).toBeInTheDocument();
