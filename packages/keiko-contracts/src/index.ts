@@ -630,3 +630,35 @@ export {
   QUALITY_INTELLIGENCE_EXPORT_ADAPTERS,
   QUALITY_INTELLIGENCE_TMS_ADAPTERS,
 } from "./qualityIntelligence/index.js";
+
+// ─── Workspace UI interaction substrate (Epic #518 / Issue #527; ADR-0028) ──
+// Typed Command + Action + KeyChord contracts consumed by @oscharko-dev/keiko-ui.
+// The WorkspaceUiAction discriminated union declares constructors only for
+// ui.* state mutations; there is no constructor for evidence/patch/
+// verification/model-call/tool/memory/fs/durable-config kinds — the
+// compile-time refusal that makes ADR-0028's undo boundary load-bearing.
+export type {
+  WorkspaceUiRect,
+  WorkspaceUiView,
+  WorkspaceUiSelectionState,
+  WorkspaceCommandAuthority,
+  WorkspaceCommandCategory,
+  WorkspaceKeyChord,
+  WorkspaceKeyChordModifier,
+  WorkspaceCommandContext,
+  WorkspaceCommand,
+  WorkspaceUiWindowSnapshot,
+  WorkspaceUiAction,
+  WorkspaceUiActionKind,
+  WorkspaceUndoStackApi,
+  WorkspaceKeyboardShortcutBinding,
+  WorkspaceKeyboardShortcutConflict,
+} from "./workspace-ui.js";
+export {
+  WORKSPACE_RESERVED_CHORDS,
+  workspaceActionLabel,
+  workspaceChordKey,
+  workspaceChordsEqual,
+  isWorkspaceReservedChord,
+  workspaceInverseAction,
+} from "./workspace-ui.js";
