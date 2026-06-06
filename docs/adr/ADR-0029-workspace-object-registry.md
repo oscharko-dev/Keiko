@@ -113,3 +113,7 @@ No change to `WindowsRegistry.ts` other than the new window-type entry is requir
 - ADR-0030 — Workspace security, evidence, and trust boundaries.
 - [518-product-boundaries.md](../workspace/518-product-boundaries.md) — First-class taxonomy with the four fields.
 - Issue #528 — Object registry implementation.
+
+## Date
+
+2026-06-06

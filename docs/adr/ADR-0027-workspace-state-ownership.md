@@ -14,16 +14,16 @@ Wave 4 implementation must not introduce a new persistence store. The current wo
 
 Workspace state is partitioned into the classes below. Each class has exactly one owner package and exactly one storage backend.
 
-| State class | Owner package | Backend | Lifetime |
-|---|---|---|---|
-| Browser UI transient state (window position, focus, selection, palette open, hover, in-flight stream, modal stack) | `keiko-ui` hooks | React in-memory | Tab session |
-| UI durable layout (per-project window arrangement, last focused panel, current wins/conns/view snapshot) | `keiko-ui` `useWorkspace` hook | browser `localStorage` | Browser-local; restored on next session in the same browser profile |
-| Server runtime state (BFF cache, in-flight run state, WebSocket session) | `keiko-server` | In-memory | Process lifetime |
-| Workspace FS state (project files) | `keiko-workspace` + OS | OS file system | OS-managed |
-| Durable local config (model gateway config, paired devices, user preferences) | `keiko-server` config seam | JSON config file | User-managed |
-| Evidence manifests (run ledger, redacted evidence) | `keiko-evidence` | Atomic file writes, realpath-contained, redacted | Retention policy `maxRuns:50`, always-keep-newest |
-| Memory state (capture envelopes, governance, vault) | `keiko-memory-vault` | `node:sqlite` memory vault | Governance policy |
-| Object registry (window-type definitions, renderers) | `keiko-ui` build-time registry | TypeScript constant + in-memory `registerWindowRender` map | Build-time + module-evaluation |
+| State class                                                                                                        | Owner package                  | Backend                                                    | Lifetime                                                            |
+| ------------------------------------------------------------------------------------------------------------------ | ------------------------------ | ---------------------------------------------------------- | ------------------------------------------------------------------- |
+| Browser UI transient state (window position, focus, selection, palette open, hover, in-flight stream, modal stack) | `keiko-ui` hooks               | React in-memory                                            | Tab session                                                         |
+| UI durable layout (per-project window arrangement, last focused panel, current wins/conns/view snapshot)           | `keiko-ui` `useWorkspace` hook | browser `localStorage`                                     | Browser-local; restored on next session in the same browser profile |
+| Server runtime state (BFF cache, in-flight run state, WebSocket session)                                           | `keiko-server`                 | In-memory                                                  | Process lifetime                                                    |
+| Workspace FS state (project files)                                                                                 | `keiko-workspace` + OS         | OS file system                                             | OS-managed                                                          |
+| Durable local config (model gateway config, paired devices, user preferences)                                      | `keiko-server` config seam     | JSON config file                                           | User-managed                                                        |
+| Evidence manifests (run ledger, redacted evidence)                                                                 | `keiko-evidence`               | Atomic file writes, realpath-contained, redacted           | Retention policy `maxRuns:50`, always-keep-newest                   |
+| Memory state (capture envelopes, governance, vault)                                                                | `keiko-memory-vault`           | `node:sqlite` memory vault                                 | Governance policy                                                   |
+| Object registry (window-type definitions, renderers)                                                               | `keiko-ui` build-time registry | TypeScript constant + in-memory `registerWindowRender` map | Build-time + module-evaluation                                      |
 
 ### Object descriptor persistence expectation
 
@@ -68,5 +68,9 @@ Workspace objects often reference state owned by another class (e.g., a `review`
 - ADR-0028 — Workspace commands, events, selection, undo/redo.
 - ADR-0029 — Workspace object registry and extension contract.
 - ADR-0030 — Workspace security, evidence, and trust boundaries.
-- Issue #62 / ADR-0013 — possible future server-owned UI persistence seam; not the current workspace-shell implementation on `dev`.
+- Issue #62 — possible future server-owned UI persistence seam (not the current workspace-shell implementation on `dev`; no dedicated ADR file exists for this seam today).
 - Issue #525 — Architecture blueprint.
+
+## Date
+
+2026-06-06

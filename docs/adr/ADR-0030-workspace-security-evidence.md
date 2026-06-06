@@ -37,10 +37,11 @@ The workspace foundation must satisfy all five rules. Each rule is enforced by a
    - The `arch:check:negative` fixture proves the absence of constructors.
    - The undo command's tooltip and palette entry note the boundary.
 
-5. **No raw secrets, customer data, private logs, or token-bearing artifacts in UI durable state.**
-   - The descriptor validator enforces only metadata consistency (`authority`, `trustBoundary`, `persistence`); it does not inspect config defaults or renderer output.
-   - The current workspace shell persists layout through browser `localStorage` in `useWorkspace`; Epic #518 did not introduce a new persistence backend or a BFF redaction seam for workspace layout.
-   - Evidence content is still represented through `evidence-reference` metadata in the object-governance table, but durable-state hardening beyond that metadata classification remains a separate concern.
+5. **Credential and durable-state policy.** Split into two sub-rules because enforcement scope differs.
+
+   5a. **Enforced — no new credential surface.** Epic #518 introduces no new credential store, no new redaction surface, and no new outbound network surface. API tokens, OAuth secrets, and pairing tokens continue to live only in the OS-protected stores already used by `keiko-server` config and `keiko-memory-vault`. The `keiko-security` redactor continues to scrub incidental matches before persistence.
+
+   5b. **Deferred — durable-state secret hardening is not yet a closed gate.** The descriptor validator enforces only metadata consistency (`authority`, `trustBoundary`, `persistence`); it does not inspect renderer output, config defaults, or what `useWorkspace` writes into browser `localStorage`. The current workspace shell persists layout through browser `localStorage` in `useWorkspace`; Epic #518 did not introduce a new persistence backend or a BFF redaction seam for workspace layout. Evidence content is represented through `evidence-reference` metadata in the object-governance table; durable-state hardening beyond that metadata classification remains a separate concern, tracked as a follow-up.
 
 ### Credential handling
 
@@ -106,3 +107,7 @@ When Wave 4 implementation lands, the following gates run (existing — no new g
 - ADR-0029 — Workspace object registry and extension contract.
 - [518-product-boundaries.md](../workspace/518-product-boundaries.md) — Authority model.
 - Issue #530 — Hardening pass.
+
+## Date
+
+2026-06-06
