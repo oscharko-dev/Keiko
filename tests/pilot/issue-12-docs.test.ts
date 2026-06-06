@@ -13,15 +13,17 @@ function readPackageJson(): { scripts: Record<string, string> } {
   return JSON.parse(readText("package.json")) as { scripts: Record<string, string> };
 }
 
-// Issue #287 extended the chain with `check:qi-supply-chain` (ADR-0023 D5/D11/D12). The
-// pin stays "exact" against the live `package.json`; it does not lock the chain to the
-// pre-#287 length.
+// Issue #287 extended the chain with `check:qi-supply-chain` (ADR-0023 D5/D11/D12); issue
+// #433 (Epic #423) added `check:version-consistency` so the packed artifact cannot ship with
+// a manifest/version mismatch. The pin stays "exact" against the live `package.json`; it does
+// not lock the chain to a particular historical length.
 const PACKAGE_SURFACE_CHAIN = [
   "npm run clean",
   "npm run build",
   "npm run prepare:bin",
   "npm run build:ui",
   "npm run check:package-surface",
+  "npm run check:version-consistency",
   "npm run check:qi-supply-chain",
 ].join(" && ");
 
