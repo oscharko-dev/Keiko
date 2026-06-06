@@ -153,7 +153,13 @@ function captureCliHelp(
 // would express a forbidden reverse edge. The dynamic import resolves at runtime only and is
 // invisible to dependency-cruiser as a static edge.
 async function checkCliFlags(): Promise<readonly SurfaceParityCheckResult[]> {
-  const cli = (await import("@oscharko-dev/keiko-cli")) as {
+  // Variable-string target so TypeScript's composite project resolution does not pull the
+  // keiko-cli package into the keiko-evaluations program. On a clean CI build the workspace
+  // chain builds evaluations BEFORE cli, so a literal-string dynamic import would fail
+  // resolution at eval's tsc step even though the runtime symlink is in place.
+  const cliPath = "@oscharko-dev/keiko-cli";
+  const cliModule: unknown = await import(cliPath);
+  const cli = cliModule as {
     runGenTestsCli: CliSurfaceRunner;
     runInvestigateCli: CliSurfaceRunner;
   };
