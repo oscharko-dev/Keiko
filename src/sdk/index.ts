@@ -1,5 +1,9 @@
-// Single-sourced package version; CLI and SDK both read this to avoid drift.
-export const SDK_VERSION = "0.1.7";
+// Re-exported product version. The authoritative source is KEIKO_PRODUCT_VERSION in
+// @oscharko-dev/keiko-contracts (leaf package); SDK_VERSION is the SDK-facing alias kept
+// for backward compatibility. Bump KEIKO_PRODUCT_VERSION in lockstep with the root
+// package.json "version" field as part of every release.
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";
+export const SDK_VERSION: string = KEIKO_PRODUCT_VERSION;
 
 // The typed agent surface. AgentConfig, the session factory, the run result, and the
 // session handle all live in the harness module (ADR-0004); the SDK re-exports them so
