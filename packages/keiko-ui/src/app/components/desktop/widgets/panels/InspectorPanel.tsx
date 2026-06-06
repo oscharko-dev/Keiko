@@ -65,8 +65,8 @@ export function InspectorPanel(): ReactNode {
               </div>
             </>
           )}
-          <div className="rb-section-label">Governance</div>
-          <div className="rb-rows" data-testid="insp-governance">
+          <div className="rb-section-label insp-governance">Governance</div>
+          <div className="rb-rows insp-governance" data-testid="insp-governance">
             <div className="rb-row">
               <span className="rb-row-k">Authority</span>
               <span className="rb-row-v mono">{WIN_META[active.type].authority}</span>

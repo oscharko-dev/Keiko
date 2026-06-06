@@ -14,6 +14,7 @@
 //       WorkspaceUiActionKind members and asserts each starts with the
 //       "ui." prefix.
 
+import { StrictMode } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceUiAction, WorkspaceUiActionKind } from "@oscharko-dev/keiko-contracts";
@@ -127,6 +128,31 @@ describe("useUndoStack — contract (epic #518 #527 / ADR-0028)", () => {
     act(() => result.current.undo());
     // The third-from-top would have been the first push, but it was trimmed.
     expect(result.current.canUndo).toBe(false);
+  });
+
+  it("StrictMode: undo calls apply exactly once (not twice) per invocation", () => {
+    // React StrictMode double-invokes updaters in dev. If apply() is called
+    // inside the setState updater the side-effect fires twice, silently
+    // cancelling the user's intent. This test guards against regression.
+    const apply = vi.fn();
+    const { result } = renderHook(() => useUndoStack({ apply }), {
+      wrapper: ({ children }) => <StrictMode>{children}</StrictMode>,
+    });
+    act(() => result.current.push(moveAction()));
+    act(() => result.current.undo());
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("StrictMode: redo calls apply exactly once (not twice) per invocation", () => {
+    const apply = vi.fn();
+    const { result } = renderHook(() => useUndoStack({ apply }), {
+      wrapper: ({ children }) => <StrictMode>{children}</StrictMode>,
+    });
+    act(() => result.current.push(moveAction()));
+    act(() => result.current.undo());
+    apply.mockClear();
+    act(() => result.current.redo());
+    expect(apply).toHaveBeenCalledTimes(1);
   });
 
   it("ADR-0028 refusal: every Action kind starts with 'ui.' (no evidence/patch/verification/model-call/tool/memory/fs/config constructor exists)", () => {

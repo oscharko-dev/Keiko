@@ -44,6 +44,11 @@ export function useUndoStack(options: UseUndoStackOptions): WorkspaceUndoStackAp
   // and avoids re-binding the hook every time the parent re-renders.
   const applyRef = useRef(apply);
   applyRef.current = apply;
+  // Mirror of the current state kept in a ref so that undo/redo can read
+  // the latest value synchronously without depending on the `state` variable
+  // (which would force re-memoisation of the callbacks on every push).
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   const push = useCallback(
     (action: WorkspaceUiAction): void => {
@@ -57,28 +62,33 @@ export function useUndoStack(options: UseUndoStackOptions): WorkspaceUndoStackAp
   );
 
   const undo = useCallback((): void => {
-    setState((prev) => {
-      if (prev.undoStack.length === 0) return prev;
-      const last = prev.undoStack[prev.undoStack.length - 1] as WorkspaceUiAction;
-      const inverse = workspaceInverseAction(last);
-      applyRef.current(inverse);
-      return {
-        undoStack: prev.undoStack.slice(0, -1),
-        redoStack: [...prev.redoStack, last],
-      };
+    // Read state from the ref (not from the updater) so that the side-effect
+    // fires exactly once in the callback body — never inside the setState
+    // updater. React StrictMode double-invokes pure updaters in dev, which
+    // would call applyRef.current() twice and silently cancel the user's
+    // intent. Callbacks like undo() are NOT double-invoked by StrictMode.
+    const current = stateRef.current;
+    if (current.undoStack.length === 0) return;
+    const last = current.undoStack[current.undoStack.length - 1] as WorkspaceUiAction;
+    const inverse = workspaceInverseAction(last);
+    setState({
+      undoStack: current.undoStack.slice(0, -1),
+      redoStack: [...current.redoStack, last],
     });
+    applyRef.current(inverse);
   }, []);
 
   const redo = useCallback((): void => {
-    setState((prev) => {
-      if (prev.redoStack.length === 0) return prev;
-      const last = prev.redoStack[prev.redoStack.length - 1] as WorkspaceUiAction;
-      applyRef.current(last);
-      return {
-        undoStack: [...prev.undoStack, last],
-        redoStack: prev.redoStack.slice(0, -1),
-      };
+    // Same pattern: read from the ref, set state with a plain object (not an
+    // updater), then call apply exactly once in the callback body.
+    const current = stateRef.current;
+    if (current.redoStack.length === 0) return;
+    const last = current.redoStack[current.redoStack.length - 1] as WorkspaceUiAction;
+    setState({
+      undoStack: [...current.undoStack, last],
+      redoStack: current.redoStack.slice(0, -1),
     });
+    applyRef.current(last);
   }, []);
 
   const clear = useCallback((): void => {

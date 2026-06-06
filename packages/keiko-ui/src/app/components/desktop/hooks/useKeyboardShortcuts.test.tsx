@@ -55,6 +55,18 @@ describe("useKeyboardShortcuts — pure helpers", () => {
     const reserved = detectReservedBindings([bind("reload", "r", ["ctrl"])]);
     expect(reserved).toHaveLength(1);
   });
+
+  it("detectReservedBindings flags Cmd+W as reserved (ADR-0028 §4 — closes tab)", () => {
+    const reserved = detectReservedBindings([bind("closePanel", "w", ["cmd"])]);
+    expect(reserved).toHaveLength(1);
+    expect(reserved[0]?.commandId).toBe("closePanel");
+  });
+
+  it("detectReservedBindings flags Ctrl+W as reserved (ADR-0028 §4 — closes tab)", () => {
+    const reserved = detectReservedBindings([bind("closePanel", "w", ["ctrl"])]);
+    expect(reserved).toHaveLength(1);
+    expect(reserved[0]?.commandId).toBe("closePanel");
+  });
 });
 
 describe("useKeyboardShortcuts — substrate contract", () => {
@@ -76,6 +88,30 @@ describe("useKeyboardShortcuts — substrate contract", () => {
       renderHook(() =>
         useKeyboardShortcuts({
           bindings: [bind("newTab", "t", ["cmd"])],
+          dispatch,
+        }),
+      ),
+    ).toThrow(WorkspaceShortcutReservedError);
+  });
+
+  it("throws WorkspaceShortcutReservedError for Cmd+W (ADR-0028 §4 — closes tab)", () => {
+    const dispatch = vi.fn();
+    expect(() =>
+      renderHook(() =>
+        useKeyboardShortcuts({
+          bindings: [bind("closePanel", "w", ["cmd"])],
+          dispatch,
+        }),
+      ),
+    ).toThrow(WorkspaceShortcutReservedError);
+  });
+
+  it("throws WorkspaceShortcutReservedError for Ctrl+W (ADR-0028 §4 — closes tab)", () => {
+    const dispatch = vi.fn();
+    expect(() =>
+      renderHook(() =>
+        useKeyboardShortcuts({
+          bindings: [bind("closePanel", "w", ["ctrl"])],
           dispatch,
         }),
       ),
@@ -153,7 +189,7 @@ describe("useKeyboardShortcuts — substrate contract", () => {
     const dispatch = vi.fn();
     const { result } = renderHook(() =>
       useKeyboardShortcuts({
-        bindings: [bind("palette", "k", ["ctrl"]), bind("close", "w", ["ctrl"])],
+        bindings: [bind("palette", "k", ["ctrl"]), bind("jump", "j", ["ctrl"])],
         dispatch,
         platform: "other",
       }),

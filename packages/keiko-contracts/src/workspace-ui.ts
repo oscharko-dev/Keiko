@@ -152,6 +152,13 @@ export type WorkspaceUiAction =
 // The `WorkspaceUiActionKind` literal union ONLY contains ui.* members.
 export type WorkspaceUiActionKind = WorkspaceUiAction["kind"];
 
+// Compile-time refusal witness (ADR-0028 §5 / ADR-0030 rule 4): every
+// WorkspaceUiAction kind MUST be `ui.`-prefixed. Adding an evidence/patch/
+// verification/model/tool/memory/fs/config kind makes this fail `tsc`,
+// before any test runs.
+type AssertUiPrefixed<K extends `ui.${string}`> = K;
+export type WorkspaceUiActionKindChecked = AssertUiPrefixed<WorkspaceUiActionKind>;
+
 // ─── Undo stack API ──────────────────────────────────────────────────────
 
 export interface WorkspaceUndoStackApi {
@@ -184,6 +191,8 @@ export const WORKSPACE_RESERVED_CHORDS: readonly WorkspaceKeyChord[] = [
   { key: "r", mod: ["ctrl"] },
   { key: "n", mod: ["cmd", "shift"] },
   { key: "n", mod: ["ctrl", "shift"] },
+  { key: "w", mod: ["cmd"] },
+  { key: "w", mod: ["ctrl"] },
 ];
 
 // ─── Pure helpers ─────────────────────────────────────────────────────────

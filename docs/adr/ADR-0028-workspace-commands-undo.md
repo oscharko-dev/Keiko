@@ -46,7 +46,7 @@ interface Command {
 ```
 
 - The `disabled()` return is the reason rendered in palette and tooltip when the command is unavailable. The substrate never hides disabled commands; it shows them with their reason (per WCAG 3.3.1).
-- The substrate refuses to call `run()` on a `user-confirm` command without explicit confirmation captured in the command context.
+- The substrate refuses to call `run()` on a `user-confirm` command without explicit confirmation captured in the command context. **Delivery status (Issue #527):** the `WorkspaceCommand` contract (`authority`, `disabled()`, `WorkspaceCommandContext`) is provided as the reusable substrate. The current shell command palette registers only UI-only commands (open/toggle/tile/cascade/theme/undo/redo), and every privileged confirmation (model/tool/patch/agent-proposal) is owned by the widget authority layer (`PermControl` / `AgentGateCard` / `ReviewWidget`). Gating palette `run()` on `WorkspaceCommandContext.userConfirmed` is wired when the first privileged command is registered in the palette; until then the command-level `authority` field is advisory and no privileged action is reachable through the palette.
 - Each command is registered once at startup. Contextual commands contributed by a focused window are registered when the window opens and removed when it closes.
 
 ### 2. Event boundary
@@ -74,7 +74,7 @@ The `useKeyboardShortcuts` hook wires the minimum shortcut set declared in the [
 
 - Normalization: `Cmd` on macOS, `Ctrl` on Windows/Linux, detected via `navigator.platform`. Cross-platform commands declare `mod: ["cmd"]` and the hook substitutes `Ctrl` where appropriate.
 - Conflict detection: at startup the hook builds a `Map<chord-string, commandId>`; duplicate chord declarations crash the build at module-evaluation. This is the substrate's first-user-action fail-closed.
-- Browser-reserved chords (`Cmd/Ctrl+T`, `Cmd/Ctrl+R`, `Cmd/Ctrl+W` on browsers that intercept it, browser back/forward) are never claimed by workspace commands. The hook refuses to bind them.
+- Browser-reserved chords (`Cmd/Ctrl+T`, `Cmd/Ctrl+R`, `Cmd/Ctrl+W`, and `Cmd/Ctrl+Shift+N`) are never claimed by workspace commands. The hook refuses to bind them; `WORKSPACE_RESERVED_CHORDS` in `keiko-contracts` is the source of truth.
 - Modifier matching is exact: `Ctrl+K` does not match `Ctrl+Shift+K`.
 
 ### 5. Undo/redo boundary (the refusal contract)
@@ -108,7 +108,7 @@ There is **no** Action variant for:
 - Workspace FS writes.
 - Durable config writes.
 
-Because no constructor exists, the undo stack cannot record any of these actions and cannot reverse them. The refusal is **not** a runtime guard. It is the absence of the constructor in the discriminated union. A future contributor adding such a constructor would have to amend this ADR; PR review and the corresponding `arch:check:negative` test catch the attempt.
+Because no constructor exists, the undo stack cannot record any of these actions and cannot reverse them. The primary refusal is **not** a runtime guard — it is the absence of the constructor in the discriminated union, backed by a compile-time assertion that every `WorkspaceUiActionKind` is `ui.`-prefixed (a non-`ui.` kind fails `tsc`). A future contributor adding such a constructor would have to amend this ADR; PR review, the compile-time assertion, and the `useUndoStack.test.tsx` refusal test catch the attempt. There is no dedicated `arch:check:negative` fixture for this invariant; `arch:check:negative` enforces the ADR-0019 package-direction rules.
 
 The `useUndoStack` hook exposes:
 
@@ -131,9 +131,9 @@ When an authority moment that is _not_ reversible completes (a patch is applied,
 
 ### 6. Wiring
 
-- `AppShell.tsx` provides the `useUndoStack` instance via React context to `Workspace.tsx` and the command palette.
-- `useWorkspace` calls `push()` whenever it mutates a state slice that has an Action variant.
-- The `clear()` method is called on project switch (to prevent cross-project undo) and on shell teardown.
+- `AppShell.tsx` owns the `useUndoStack` instance and routes the undo / redo / `focus-status` shortcuts through `useKeyboardShortcuts`; the undo and redo commands are contributed to the command palette under the "Edit" group.
+- **Current wiring (Issue #527):** `AppShell` pushes `ui.panel.toggle` actions, so tool-panel open/close is reversible via `Cmd/Ctrl+Z`. The remaining `ui.*` Action variants (window move/resize/zorder/open/close, workspace pan/zoom/fit, selection, tab) are declared in the union and reversible-by-construction through `workspaceInverseAction`, but their mutating call sites do not yet call `push()`, and `applyShellUndoAction` is intentionally a no-op for those kinds. Instrumenting each remaining mutation is additive, cannot weaken the refusal boundary, and is tracked as a follow-up.
+- The `clear()` method is available to drop the stack on project switch (to prevent cross-project undo) and on shell teardown; the current single-project shell discards the stack when `AppShellInner` unmounts.
 
 ## Consequences
 

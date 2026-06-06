@@ -33,8 +33,8 @@ The workspace foundation must satisfy all five rules. Each rule is enforced by a
    - The descriptor `trustBoundary: "tool"` flags tool-executing objects.
 
 4. **No undo rewrite of evidence, applied patches, verification records, or model calls.**
-   - Enforced at compile time: the Action discriminated union in `keiko-contracts` has no constructor for these classes (per ADR-0028).
-   - The `arch:check:negative` fixture proves the absence of constructors.
+   - Enforced at compile time: the `WorkspaceUiAction` discriminated union in `keiko-contracts` has no constructor for these classes (per ADR-0028), and a compile-time assertion that every `WorkspaceUiActionKind` is `ui.`-prefixed fails `tsc` if a non-`ui.` kind is ever added.
+   - The runtime witness is the refusal test in `useUndoStack.test.tsx`, which asserts every Action `kind` is `ui.*` and that no `evidence.` / `patch.` / `verification.` / `model.` / `tool.` / `memory.` / `fs.` / `config.durable.` constructor exists. (No dedicated `arch:check:negative` fixture pins this invariant; `arch:check:negative` covers the ADR-0019 package-direction rules.)
    - The undo command's tooltip and palette entry note the boundary.
 
 5. **Credential and durable-state policy.** Split into two sub-rules because enforcement scope differs.
@@ -80,7 +80,7 @@ When Wave 4 implementation lands, the following gates run (existing — no new g
 - `npm run lint` — including a new lint rule (if needed) preventing `keiko-ui` from importing provider SDK code.
 - `npm run typecheck` — strict mode, `verbatimModuleSyntax`, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`.
 - `npm run arch:check` — direction rules from ADR-0019.
-- `npm run arch:check:negative` — negative fixtures including the absence of Action constructors for evidence/patch/verification/model-call.
+- `npm run arch:check:negative` — ADR-0019 package-direction negative fixtures. (The undo Action-union refusal is pinned by the `useUndoStack.test.tsx` refusal test plus the compile-time `ui.`-prefix assertion, not by an `arch:check:negative` fixture.)
 - `npm run build` — produces the static UI export and the bundled root tarball.
 - `npm pack` smoke — installable artifact still bundles correctly.
 
