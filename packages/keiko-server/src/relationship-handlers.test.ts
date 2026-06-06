@@ -347,7 +347,7 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
     expect(validateRes.status).toBe(200);
     const decision = (
       validateRes.body as {
-        decision: { allowed: boolean; reasons: Array<{ code: string }> };
+        decision: { allowed: boolean; reasons: { code: string }[] };
       }
     ).decision;
     expect(decision.allowed).toBe(false);
@@ -375,7 +375,7 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
     });
     const secondRes = await handleRelationshipCreate(makeCtx(secondReq), deps);
     expect(secondRes.status).toBe(422);
-    const reasons = (secondRes.body as { reasons: Array<{ code: string }> }).reasons;
+    const reasons = (secondRes.body as { reasons: { code: string }[] }).reasons;
     expect(reasons.map((r) => r.code)).toContain("denied/cardinality-exceeded");
 
     const stored = store.listRelationships({
@@ -490,7 +490,7 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
     expect(res.status).toBe(422);
     const reasons = (
-      res.body as { reasons: Array<{ code: string; field?: string; message: string }> }
+      res.body as { reasons: { code: string; field?: string; message: string }[] }
     ).reasons;
     expect(reasons).toContainEqual({
       code: "denied/lifecycle-illegal-transition",
@@ -521,7 +521,7 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
     expect(res.status).toBe(422);
     const reasons = (
-      res.body as { reasons: Array<{ code: string; field?: string; message: string }> }
+      res.body as { reasons: { code: string; field?: string; message: string }[] }
     ).reasons;
     expect(reasons).toContainEqual({
       code: "denied/lifecycle-illegal-transition",
@@ -578,7 +578,7 @@ describe("PATCH /api/relationships/:id reconnect contract", () => {
     const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
     expect(res.status).toBe(422);
     const reasons = (
-      res.body as { reasons: Array<{ code: string; field?: string; message: string }> }
+      res.body as { reasons: { code: string; field?: string; message: string }[] }
     ).reasons;
     expect(reasons).toContainEqual({
       code: "denied/lifecycle-illegal-transition",
