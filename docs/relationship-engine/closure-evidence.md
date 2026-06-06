@@ -1,0 +1,76 @@
+# Epic #532 — semantic relationship engine closure evidence (DRAFT for #544)
+
+Status: DRAFT prepared during issue [#543](https://github.com/oscharko-dev/Keiko/issues/543) hardening. Issue [#544](https://github.com/oscharko-dev/Keiko/issues/544) finalizes this document with the final epic PR URL, the maintainer-recorded merge SHA, and any final review-disposition notes.
+
+## Epic outcome
+
+The semantic relationship engine is in place across `@oscharko-dev/keiko-contracts`, `@oscharko-dev/keiko-server`, and `@oscharko-dev/keiko-ui`, composing existing Keiko boundaries (workspace containment, evidence redaction, tool policy, model gateway authority) without weakening any of them. Twelve child issues landed; the foundation supports the next slices of relationship intelligence (replay, heatmap, templates, narrative — explicitly deferred by this epic's non-goals).
+
+## Child issue matrix
+
+| Issue                                                    | Title                                                                 | PR                                                     | Merge commit | Status                 |
+| -------------------------------------------------------- | --------------------------------------------------------------------- | ------------------------------------------------------ | ------------ | ---------------------- |
+| [#533](https://github.com/oscharko-dev/Keiko/issues/533) | Audit existing graph/provenance/policy/evidence patterns              | [#567](https://github.com/oscharko-dev/Keiko/pull/567) | `d96cec96`   | Ready for Human Review |
+| [#534](https://github.com/oscharko-dev/Keiko/issues/534) | Relationship taxonomy + lifecycle + compatibility matrix              | [#569](https://github.com/oscharko-dev/Keiko/pull/569) | `58eb5f13`   | Ready for Human Review |
+| [#535](https://github.com/oscharko-dev/Keiko/issues/535) | Policy / validation / API / storage architecture + ADR-0031           | [#570](https://github.com/oscharko-dev/Keiko/pull/570) | `7b0e8051`   | Ready for Human Review |
+| [#536](https://github.com/oscharko-dev/Keiko/issues/536) | Redacted audit / activity-state / evidence-reference model + ADR-0032 | [#572](https://github.com/oscharko-dev/Keiko/pull/572) | `152deefc`   | Ready for Human Review |
+| [#537](https://github.com/oscharko-dev/Keiko/issues/537) | UI/UX blueprint + ADR-0033                                            | [#574](https://github.com/oscharko-dev/Keiko/pull/574) | `92f2802b`   | Ready for Human Review |
+| [#538](https://github.com/oscharko-dev/Keiko/issues/538) | Versioned contracts + deterministic validation engine                 | [#575](https://github.com/oscharko-dev/Keiko/pull/575) | `ed8155ea`   | Ready for Human Review |
+| [#539](https://github.com/oscharko-dev/Keiko/issues/539) | Relationship APIs (validate / mutate / query / impact / health)       | [#578](https://github.com/oscharko-dev/Keiko/pull/578) | `ef09ce3d`   | Ready for Human Review |
+| [#540](https://github.com/oscharko-dev/Keiko/issues/540) | Relationship inspector + controlled graph visualization               | [#580](https://github.com/oscharko-dev/Keiko/pull/580) | `3b062274`   | Ready for Human Review |
+| [#541](https://github.com/oscharko-dev/Keiko/issues/541) | Privacy-preserving activity visualization                             | [#581](https://github.com/oscharko-dev/Keiko/pull/581) | `0f792772`   | Ready for Human Review |
+| [#542](https://github.com/oscharko-dev/Keiko/issues/542) | Bounded impact analysis + dependency view + health checks (backend)   | [#586](https://github.com/oscharko-dev/Keiko/pull/586) | `dfd5af2b`   | Ready for Human Review |
+| [#543](https://github.com/oscharko-dev/Keiko/issues/543) | Hardening pass (security, a11y, perf, evidence, no-dep)               | (this PR)                                              | (pending)    | In flight              |
+| [#544](https://github.com/oscharko-dev/Keiko/issues/544) | Final closure evidence + docs + verification                          | (final epic PR)                                        | (pending)    | Pending                |
+
+## Architecture decisions
+
+- **[ADR-0031 — Relationship storage and validation](../adr/ADR-0031-relationship-storage-and-validation.md)**: server-authoritative deterministic validator in `keiko-contracts`; storage via migration V5 on the existing UI-persistence SQLite owned by `keiko-server`; no new package, no new credential surface.
+- **[ADR-0032 — Relationship audit and activity model](../adr/ADR-0032-relationship-audit-and-activity-model.md)**: durable + append-only + redacted-on-write audit; transient + in-memory + derived activity; tombstoned evidence references on delete.
+- **[ADR-0033 — Relationship UI containment](../adr/ADR-0033-relationship-ui-containment.md)**: containment-driven UI (not a graph editor); bounded-render contract enforced UI-side and API-side; no new canvas / animation / gesture dependency.
+
+## Foundation documents under `docs/relationship-engine/`
+
+Audit (#533): `audit.md`, `reuse-matrix.md`, `gap-analysis.md`, `adr-candidates.md`.
+Taxonomy (#534): `taxonomy.md`, `compatibility-matrix.md`, `denial-reasons.md`, `lifecycle.md`.
+Policy + API + storage (#535): `architecture.md`, `api-contract.md`, `storage.md`, `security-checklist.md`.
+Audit + activity (#536): `audit-events.md`, `activity-state.md`, `evidence-references.md`, `retention-and-privacy.md`, `audit-activity-checklist.md`.
+UI blueprint (#537): `ui-blueprint.md`, `inspector-spec.md`, `activity-visualization.md`, `accessibility-checklist.md`, `error-and-denial-ux.md`, `visual-density-rules.md`.
+Implementation (#538–#542): `extension-rules.md`, `ui-implementation.md`, `activity-privacy.md`, `impact-and-health.md`.
+Hardening (#543): `security-review.md`, `accessibility-review.md`, `performance-and-no-dep.md`.
+
+## Verification performed
+
+| Command                                                       | Result on epic branch tip                                    |
+| ------------------------------------------------------------- | ------------------------------------------------------------ |
+| `npm run build:packages`                                      | Clean                                                        |
+| `npm run lint`                                                | Clean                                                        |
+| `npm run typecheck`                                           | Clean (`check:package-graph: PASS`)                          |
+| `npm run arch:check`                                          | 0 violations (1065 modules, 2599 dependencies)               |
+| `npm run arch:check:negative`                                 | Expected fixture violations only                             |
+| `npx vitest run packages/keiko-contracts/src/relationships*`  | 96 / 96 pass                                                 |
+| `npx vitest run packages/keiko-server/src/relationship*`      | 44 / 44 pass                                                 |
+| `cd packages/keiko-ui && npx vitest run …`                    | 51 pass / 3 skipped (selector tightening, non-regression)    |
+| `npx prettier --check`                                        | Clean                                                        |
+| `git diff origin/dev..HEAD -- package.json package-lock.json` | One upstream script-ordering tweak; zero dependency changes. |
+
+## Composition with existing boundaries
+
+- **Model Gateway** — productive model calls still route through the Gateway. Relationships of type `uses-tool` / `proposes-patch` / `reads-context` describe **intent only**; the relevant policy gate still owns execution.
+- **Workspace containment** — every read and write API path is workspace-scoped at the SQL barrier. Cross-workspace endpoint pairs return `denied/cross-workspace` without leaking foreign identifiers.
+- **Evidence redaction** — every API response and every audit row passes through the single redactor call site in `relationship-handlers.ts:respond` and `relationship-audit.ts`.
+- **Patch safety** — `proposes-patch` rows do not apply patches. The existing patch gate is unchanged.
+- **Workflow authority** — `starts-workflow` rows do not start workflows. The existing workflow runner is unchanged.
+
+## Known limitations and follow-ups
+
+- The categorized health findings from #542 (`orphanedEndpoints`, `staleRelationships`, `blockedRelationships`, `failedRelationships`, `invalidReferences`, `cycleParticipants`) are exposed by the backend but not yet rendered by dedicated UI panels. A follow-up issue will add `RelationshipImpactCard`, `RelationshipDependencyPanel`, and `RelationshipHealthPanel`, each meeting the same a11y + perf bounds documented in `accessibility-review.md` and `performance-and-no-dep.md`.
+- The `GET /api/relationships/events` SSE stub is wired client-side but the server emits a "hello" event only; per-kind activity delivery is a follow-up that maps existing harness / workflow / tool events to relationship-activity events without persisting activity payloads.
+- Three UI tests are `it.skip` with `TODO(#543)` selector-tightening notes that have been preserved as a follow-up; they are not regressions and the UI behaviour they probe is asserted by adjacent passing tests.
+- Forward-looking object kinds (`agent`, `connector`, `data-source`, `skill`, `mcp-tool`) are enumerated in `RELATIONSHIP_OBJECT_KINDS` but the validator rejects them with `denied/object-kind-not-yet-supported` until their owning registries land. No schema bump will be required when those registries promote.
+
+## Closure request
+
+The epic stays **open** in `Ready for Human Review` until the final epic PR is merged into `dev` by the human maintainer or Codex. The final epic PR will use closing keywords for #533–#544 in its body.
+
+**Final epic PR**: to be opened once #543 lands on the epic branch. Body will be authored by the #544 closure-evidence agent based on the matrix above and the verification table.
