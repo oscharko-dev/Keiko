@@ -12,6 +12,15 @@ Parent Epic: #<epic_number>
 
 Describe the goal of this issue and the user, developer, platform, or governance outcome it must create.
 
+## Epic And Board Placement
+
+- [ ] `Parent Epic: #<epic_number>` is present and points to the governing open epic.
+- [ ] This issue is linked as a GitHub sub-issue of the parent epic, not only referenced in Markdown.
+- [ ] This issue appears under the parent epic swimlane on the public `Keiko Product Delivery` board.
+- [ ] Project fields are set before handoff: `Classification: Task`, `Status: Open Issues`, `Workflow State: New` or `Triaged`, inherited or explicit `Priority`, and `Human Review Required: Yes`.
+- [ ] The parent epic remains `Classification: Epic`, `Status: Open Epics`, and positioned in the board's top-to-bottom implementation order.
+- [ ] Card Chat or conversation-card work uses this same parent/sub-issue and board placement flow; do not create loose chat/card issues outside an epic swimlane.
+
 ## Agent Execution Mode
 
 - [ ] Single-agent
@@ -29,10 +38,19 @@ Describe the goal of this issue and the user, developer, platform, or governance
 - Primary area label: `area:...`.
 - Expected write ownership: list files/modules that may be edited, or say `TBD by coordinator`.
 
+## Existing Capability Review
+
+- [ ] Existing Keiko packages, UI surfaces, server routes, contracts, validation helpers, evidence models, memory/local-knowledge graph patterns, workflow state, and tool/workspace boundaries were inspected before implementation.
+- [ ] The issue identifies what will be reused, extended, generalized, or left untouched.
+- [ ] Any new implementation is justified as a real capability gap, not a parallel implementation of existing behavior.
+- [ ] Refactoring or consolidation was considered when existing functionality is close but not yet shaped for this issue.
+
 ## Delivery Board Workflow
 
 - [ ] Add this issue to the public `Keiko Product Delivery` project before work starts.
+- [ ] Set project `Classification` to `Task`.
 - [ ] Set project `Status` to `Open Issues` while the issue is open and unclaimed.
+- [ ] Confirm this issue is visible under the parent epic swimlane through the GitHub sub-issue relationship.
 - [ ] Keep `Workflow State` current: `New`, `Triaged`, `In Progress`, `PR Open`, `Ready for Human Review`, `Blocked`, `Waiting for User`, or `Done`.
 - [ ] When an agent starts work, set the issue label to `status: in progress`, set project `Status` and `Workflow State` to `In Progress`, and fill `Owner / Agent`.
 - [ ] When implementation starts, fill the `Branch` field with the active branch name.
@@ -43,6 +61,7 @@ Describe the goal of this issue and the user, developer, platform, or governance
 ## Expected Verification
 
 - [ ] Required GitHub check: `ci`.
+- [ ] Reuse/extension/generalization evidence or gap rationale is documented in the issue or linked PR.
 - [ ] Studio browser quality gate when Studio UI or BFF browser behavior changes.
 - [ ] Studio performance and memory gates when editor performance, Monaco, rendering, or large-output behavior changes.
 - [ ] Studio visual regression when visible UI structure changes.
@@ -67,6 +86,7 @@ Describe the goal of this issue and the user, developer, platform, or governance
 - [ ] Stop if required acceptance criteria are missing, contradictory, or no longer match the linked epic.
 - [ ] Stop if the work requires secrets, customer data, private runtime logs, or token-bearing artifacts.
 - [ ] Stop if two parallel agents would need to edit the same file scope.
+- [ ] Stop if existing Keiko functionality can satisfy the issue outcome through reuse, extension, or generalization; update the issue or PR with the reuse plan instead of implementing a duplicate subsystem.
 - [ ] Stop if the change would weaken architecture boundaries, quality gates, security posture, evidence semantics, deterministic verification, or required `ci` guarantees.
 - [ ] Stop after three CI or review-finding repair attempts with different root causes and report the blocker.
 
