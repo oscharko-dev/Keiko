@@ -4,6 +4,9 @@
 // inside a vetted allow-list. Also asserts every workspace package's own `license` field is
 // `Apache-2.0` so a sub-package never drifts from the root license at the manifest level.
 //
+// Retained separately from the QI supply-chain gate because this script owns bundle-wide SBOM and
+// license evidence, while the QI script owns the migration-specific deny-list and manifest policy.
+//
 // Run via `npm run check:workspace-supply-chain`. Wired into the CI release job after the root
 // SBOM step so the per-workspace artifacts can be uploaded alongside the root SBOM.
 

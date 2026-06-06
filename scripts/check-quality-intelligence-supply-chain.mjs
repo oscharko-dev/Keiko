@@ -1,5 +1,8 @@
 // Quality Intelligence supply-chain gate (Issue #287, ADR-0023 D5/D11/D12).
 //
+// Retained separately from the workspace supply-chain gate because this script enforces the
+// QI-specific deny-list, lifecycle-hook, telemetry, and decision-matrix contract rather than SBOMs.
+//
 // Fail-closed checks that the native Quality Intelligence migration does not bloat Keiko's public
 // package surface or runtime dependency graph. Six checks, in order:
 //

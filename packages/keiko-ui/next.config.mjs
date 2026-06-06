@@ -16,7 +16,7 @@ const nextConfig = {
   images: { unoptimized: true },
   reactStrictMode: true,
   // Pin the file-tracing root to this package so Next does not climb to the repo root and pull
-  // unrelated workspace files into its trace (issue #167: single root lockfile post-extraction).
+  // unrelated workspace files into its trace.
   outputFileTracingRoot: here,
 };
 

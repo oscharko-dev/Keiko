@@ -1,46 +1,53 @@
 # Security Boundaries
 
-Keiko is a local coding assistant. It is designed for reviewable work in regulated engineering environments, not for unattended code changes.
+Keiko is a local coding assistant. It is designed for reviewable work in regulated engineering
+environments, not for unattended code changes or hosted multi-user operation.
 
-## Enforced Controls
+## Enforced controls
 
-| Area              | Boundary                                                                                                 |
-| ----------------- | -------------------------------------------------------------------------------------------------------- |
-| UI                | Binds to `127.0.0.1` and rejects non-loopback hosts.                                                     |
-| Credentials       | Loaded from local config, local environment, or the first-run UI flow; never accepted through CLI flags. |
-| Browser responses | Never return API tokens or raw provider credentials.                                                     |
-| Workspace reads   | Stay inside the selected local project path with deny-list and realpath checks.                          |
-| Commands          | Use an allowlist, run without a shell, and write redacted evidence for supported surfaces.               |
-| Patches           | Dry-run by default and require explicit local review before application.                                 |
-| Evidence          | Redacted before writing and kept in contained local paths.                                               |
+| Area | Boundary |
+| ---- | -------- |
+| UI network surface | The product binds to loopback only. No remote listener is part of the supported runtime model. |
+| Model access | Productive model calls route through `@oscharko-dev/keiko-model-gateway` only. UI and workspace surfaces do not bypass the gateway or import provider SDKs directly. |
+| Workspace containment | Repository reads and writes stay inside the selected project path and pass through containment and `realpath` checks. |
+| Command execution | Verification and tool execution route through `@oscharko-dev/keiko-tools` terminal-policy allowlists. Arbitrary shell execution is not an approved UI or workspace surface. |
+| Patch application | Generated patches are dry-run by default and require explicit review before application. |
+| Evidence | Evidence is redacted before persistence and written only through approved evidence surfaces. |
+| Durable UI state | Raw secrets, customer data, private logs, and evidence payloads must not be stored in durable UI state. UI persistence may store only approved metadata such as evidence references. |
+| Undo scope | Undo/redo must not rewrite evidence, applied patches, verification records, or model-call records. |
+| Credentials | API tokens and related secrets are accepted only from local configuration, local environment, or explicit local setup flows. They are never returned to the browser, logged intentionally, or serialized into evidence. |
+| Memory | The memory vault is local-only and uses approved Keiko state locations. Workspace-local memory paths are rejected. Audit events are redacted before persistence. |
 
-## User Responsibilities
+## Workspace trust-boundary rules
+
+ADR-0030 adds five non-negotiable workspace rules:
+
+1. No UI bypass of the Model Gateway.
+2. No escape of workspace path containment.
+3. No arbitrary shell commands.
+4. No undo rewrite of evidence, patches, verification, or model-call records.
+5. No raw secrets or token-bearing artifacts in durable UI state.
+
+These rules are enforced by the existing package boundaries, descriptor validation, terminal policy,
+redaction primitives, and architecture/test gates.
+
+## Operator responsibilities
 
 - Run Keiko only on repositories you are allowed to inspect.
-- Keep tokens, gateway config files, `.env`, and `.keiko/` out of version control.
+- Keep tokens, gateway config files, `.env`, `.keiko/`, and exported evidence out of version control unless your process explicitly requires them.
 - Review every proposed diff before applying it.
-- Treat evidence as project review material and handle it according to your delivery process.
+- Treat evidence and memory diagnostics as review material and handle them under your delivery process.
 - Stop immediately if a credential appears in output or evidence.
 
-## Known Limits
+## Known limits
 
 - Keiko is not a sandbox and does not provide OS-level isolation.
-- Verification can run repository-authored scripts, such as project test commands.
+- Verification can execute repository-authored scripts.
 - Evidence files are ordinary local files; they are not encrypted or tamper-evident.
-- Keiko does not authenticate multiple users and is not a hosted web service.
-- Offline evaluation does not prove model quality for every repository.
+- The workspace foundation does not introduce WebRTC; that surface is not approved.
+- Keiko is not a hosted web service and does not provide multi-user authentication.
 
-## Memory
+## Practical rule
 
-Keiko's Governed Enterprise Memory Vault stores durable, scoped, governed memory records on the local machine. The vault is a SQLite database under the local keiko data directory (resolved through the explicit `memoryDir` option, then `KEIKO_MEMORY_DIR`, then `KEIKO_STATE_DIR/memory`, then `~/.keiko/memory`; workspace-local paths are rejected). No memory record ever leaves the machine without an explicit user action.
-
-- **Scope isolation** — every record is scoped to a concrete coordinate (user, workspace, project, workflow, or global). Two records at different scopes are never visible to one another; cross-scope reads require an explicit retrieval that names every scope.
-- **Deletion semantics** — destructive operations are tombstoned: the row is removed from the live memory table and a small append-only tombstone record is written for audit. The tombstone carries the original scope and the forgetter surface; it does not carry the body.
-- **Audit event categories** — every vault mutation produces one of eleven audit events: `memory:proposed`, `memory:accepted`, `memory:rejected`, `memory:updated`, `memory:superseded`, `memory:pinned`, `memory:unpinned`, `memory:archived`, `memory:forgotten`, `memory:retrieved`, `memory:workflow-used`. Events are appended to a date-bucketed JSON manifest in the same evidence ledger used by other Keiko surfaces.
-- **Redaction guarantee** — every audit event's summary string is redacted at the persist boundary with the same secret-shape redactor used by the live-payload redactor. The audit ledger never carries a raw memory body or payload.
-- **Retention levers** — a programmatic retention pass enforces four optional policy fields: maximum record age, maximum records per scope, proposal expiry age, and a forgotten-purge backlog count. Pinned records are never eligible for retention.
-- **Diagnostics export** — a body-free support snapshot is available with per-scope counts, status histogram, redacted storage path, and the last N audit events. The snapshot never includes a memory body or payload.
-
-## Practical Rule
-
-Use Keiko as an assistant that prepares reviewable work. Do not use it as an autonomous release, merge, or approval system.
+Use Keiko as an assistant that prepares reviewable work. Do not use it as an autonomous release,
+merge, approval, or secret-handling system.

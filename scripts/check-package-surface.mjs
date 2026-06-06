@@ -12,6 +12,13 @@ import { pathToFileURL } from "node:url";
 // this script audits the packed UI bundle against the same set.
 import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
 
+const EXPECTED_BUNDLE_EXCLUSIONS = new Map([
+  [
+    "@oscharko-dev/keiko-ui",
+    "build-time-only workspace whose runtime artifact is copied into dist/ui/static",
+  ],
+]);
+
 function packFiles() {
   // `--ignore-scripts` prevents the prepack hook from re-running this check recursively (npm runs
   // prepack on `npm pack`); the build steps already ran before this check in the prepack chain.
@@ -47,6 +54,20 @@ function collectHtmlFiles(dir) {
 function readJsonArray(path) {
   const parsed = JSON.parse(readFileSync(path, "utf8"));
   return Array.isArray(parsed) ? parsed : [];
+}
+
+function listPrivateWorkspacePackages() {
+  const packagesDir = "packages";
+  const workspaces = [];
+  for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const manifestPath = join(packagesDir, entry.name, "package.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    if (manifest.private === true && typeof manifest.name === "string") {
+      workspaces.push(manifest.name);
+    }
+  }
+  return workspaces.sort();
 }
 
 function assertCspHashesMatchStaticHtml() {
@@ -137,6 +158,35 @@ function assertBundledPayload(paths) {
   }
 }
 
+function assertRootWorkspaceContract() {
+  const manifest = JSON.parse(readFileSync("package.json", "utf8"));
+  const dependencies =
+    manifest.dependencies && typeof manifest.dependencies === "object" ? manifest.dependencies : {};
+  const bundled = new Set(
+    Array.isArray(manifest.bundleDependencies) ? manifest.bundleDependencies : [],
+  );
+  for (const workspaceName of listPrivateWorkspacePackages()) {
+    const excludedBecause = EXPECTED_BUNDLE_EXCLUSIONS.get(workspaceName);
+    const inDependencies = Object.prototype.hasOwnProperty.call(dependencies, workspaceName);
+    const inBundle = bundled.has(workspaceName);
+    if (excludedBecause !== undefined) {
+      if (inDependencies || inBundle) {
+        fail(
+          `${workspaceName} is marked as an explicit bundle exclusion (${excludedBecause}) ` +
+            "but is still listed in the root published-package contract.",
+        );
+      }
+      continue;
+    }
+    if (!inDependencies || !inBundle) {
+      fail(
+        `${workspaceName} must appear in root dependencies and bundleDependencies ` +
+          `(dependencies=${String(inDependencies)}, bundleDependencies=${String(inBundle)}).`,
+      );
+    }
+  }
+}
+
 function assertWorkflowHandoffSubpath(paths) {
   for (const required of WORKFLOW_HANDOFF_DIST_FILES) {
     if (!paths.includes(required)) {
@@ -210,6 +260,7 @@ for (const path of paths) {
 assertCspHashesMatchStaticHtml();
 assertServerRuntimeSurface(paths);
 await assertSdkRootExport(paths);
+assertRootWorkspaceContract();
 assertBundledPayload(paths);
 assertWorkflowHandoffSubpath(paths);
 assertLocalKnowledgeDistPath(paths);

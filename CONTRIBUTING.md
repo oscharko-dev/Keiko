@@ -1,22 +1,22 @@
 # Contributing to Keiko
 
 Keiko is built to a production-ready, enterprise quality bar: strict TypeScript (no `any`), tested behavior,
-minimal runtime dependencies, and reviewable, evidence-backed changes. The toolchain and CI/supply-chain
-rationale are recorded in the [Architecture Decision Records](docs/adr/); read them before opening a pull request.
+minimal runtime dependencies, and reviewable, evidence-backed changes. The architecture and release constraints
+are recorded in the [Architecture Decision Records](docs/adr/); read the current decisions before opening a pull request.
 
 ## Local development
 
 ```bash
 npm install        # install dev tooling and generate package-lock.json
-npm run build      # compile src -> dist
+npm run build      # compile TypeScript outputs
 npm test           # run the unit test suite
 npm run lint       # ESLint, zero-warning policy
-npm run typecheck  # type-check src + tests
+npm run typecheck  # strict type-checking for src + tests
 ```
 
 ## Pull requests
 
-All seven required CI status checks must pass before a change can merge into `dev`:
+All eight required CI status checks must pass before a change can merge into `dev`:
 
 1. `ci`
 2. `actionlint`
@@ -25,9 +25,15 @@ All seven required CI status checks must pass before a change can merge into `de
 5. `Analyze (javascript-typescript)`
 6. `Build, scan, SBOM, smoke`
 7. `Review dependency diff (dev/main)`
+8. `ui`
 
-The rationale for the CI and supply-chain security baseline is recorded in
-[ADR-0002](docs/adr/README.md#adr-0002).
+The rationale for the package architecture, workspace gate, bundled publish model, and 0.2.0 baseline is recorded in
+[ADR-0019](docs/adr/ADR-0019-modular-package-architecture.md),
+[ADR-0020](docs/adr/ADR-0020-workspace-tooling-and-architecture-gate.md),
+[ADR-0021](docs/adr/ADR-0021-publish-strategy-bundled-monorepo-product.md), and
+[ADR-0025](docs/adr/ADR-0025-forward-only-0-2-0-modular-baseline.md).
+
+Published release notes live in GitHub Releases. This repository intentionally does not maintain a root `CHANGELOG.md`.
 
 ## Troubleshooting documentation
 

@@ -2,11 +2,6 @@
 // row keiko-server). The browser tier stays presentation-only: model, filesystem,
 // PTY, and harness authority remain in the loopback Node process behind JSON, SSE,
 // and token-scoped WebSocket seams.
-//
-// After issue #166 the BFF runtime lives in `packages/keiko-server/`; the legacy
-// `src/ui/` directory now contains only an enumerated re-export shim so existing
-// consumers (`src/cli/ui.ts`, `src/cli/lifecycle.ts`, in-repo SDK callers) keep
-// resolving their `from "../ui/index.js"` imports unchanged.
 
 export { createUiServer, DEFAULT_UI_PORT, UI_HOST, type UiServerDeps } from "./server.js";
 export { buildCspHeader, extractInlineScriptHashes } from "./csp.js";

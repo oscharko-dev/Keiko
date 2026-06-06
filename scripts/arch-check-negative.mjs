@@ -46,6 +46,7 @@ const EXPECTED_RULES = [
   "adr-0019-direction-7a-cli-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evaluations-evidence-server-verification",
   "adr-0019-direction-8-ui-not-node-domain-values",
   "adr-0019-direction-9-root-product-composition-only",
+  "adr-0019-trust-7-cli-server-no-port-bypass",
 ];
 
 // `npx --no-install` keeps CI hermetic by refusing to fetch from the registry when the

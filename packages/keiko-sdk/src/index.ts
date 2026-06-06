@@ -154,9 +154,7 @@ export {
   type RetentionPolicy,
 } from "@oscharko-dev/keiko-evidence";
 
-// Cost-class resolver (relocated to the model gateway in issue #163 so the evidence package stays
-// leaf-clean against ADR-0019 rule 3d). Re-exported on the SDK surface here to preserve the
-// pre-#163 public API for downstream callers that imported `resolveCostClass` from "keiko".
+// Cost-class resolver. Re-exported explicitly so the SDK keeps a stable named export.
 export { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 
 // Wave 1 evaluation harness (ADR-0012 D11). The deterministic offline runner, the product-code

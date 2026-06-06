@@ -1,17 +1,21 @@
 // Installable-package smoke (Issue #169 D2, AC2). Packs the root, installs the tarball into a
 // fresh tmpdir, and asserts that (a) every bundleDependencies workspace ships under
 // node_modules/@oscharko-dev/keiko/node_modules/@oscharko-dev/keiko-<name>/dist/, (b) the CLI bin
-// is executable end-to-end (`--version`, `--help`), and (c) the SDK root export resolves with the
-// bundle in place. This is the runtime mirror of `scripts/check-package-surface.mjs`'s static
-// tarball assertions, intended to fire BEFORE publish so a broken bundle can never reach users.
+// is executable end-to-end (`--version`, `--help`), (c) the SDK root export resolves with the
+// bundle in place, and (d) the packaged UI static export resolves through `keiko ui`. This is the
+// runtime mirror of `scripts/check-package-surface.mjs`'s static tarball assertions, intended to
+// fire BEFORE publish so a broken bundle can never reach users.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const NPM_INSTALL_TIMEOUT_MS = 90_000;
+const UI_HEALTH_TIMEOUT_MS = 30_000;
+const UI_HEALTH_POLL_INTERVAL_MS = 250;
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
 const rootVersion = rootPackageJson.version;
@@ -28,6 +32,10 @@ function run(cmd, args, options) {
     fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
   }
   return result;
+}
+
+function sleep(ms) {
+  return new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, ms));
 }
 
 function packRoot() {
@@ -127,7 +135,107 @@ function assertSdkRootImport(tmp) {
   }
 }
 
-function main() {
+async function reserveUiPort() {
+  return await new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("could not reserve a loopback TCP port for keiko ui"));
+        return;
+      }
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolvePort(address.port);
+      });
+    });
+  });
+}
+
+async function waitForHealth(baseUrl, child, stdoutChunks, stderrChunks) {
+  const deadline = Date.now() + UI_HEALTH_TIMEOUT_MS;
+  let lastError = "health endpoint did not respond";
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      fail(
+        `keiko ui exited ${String(child.exitCode)} before /api/health was reachable.\n` +
+          `stdout:\n${stdoutChunks.join("")}\n` +
+          `stderr:\n${stderrChunks.join("")}`,
+      );
+    }
+    try {
+      const res = await globalThis.fetch(`${baseUrl}/api/health`);
+      if (res.ok) return;
+      lastError = `/api/health returned ${String(res.status)}`;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    await sleep(UI_HEALTH_POLL_INTERVAL_MS);
+  }
+  fail(
+    `keiko ui did not become healthy within ${String(UI_HEALTH_TIMEOUT_MS)}ms: ${lastError}\n` +
+      `stdout:\n${stdoutChunks.join("")}\n` +
+      `stderr:\n${stderrChunks.join("")}`,
+  );
+}
+
+async function stopChild(child) {
+  if (child.exitCode !== null) return;
+  child.kill("SIGTERM");
+  await Promise.race([
+    new Promise((resolvePromise) => child.once("exit", () => resolvePromise())),
+    sleep(5_000).then(() => {
+      if (child.exitCode === null) {
+        child.kill("SIGKILL");
+      }
+    }),
+  ]);
+}
+
+async function assertPackagedUi(tmp) {
+  const packageRoot = join(tmp, "node_modules", "@oscharko-dev", "keiko");
+  const staticRoot = join(packageRoot, "dist", "ui", "static");
+  const hashesFile = join(packageRoot, "dist", "ui", "csp-hashes.json");
+  if (!existsSync(staticRoot)) {
+    fail(`installed tarball missing packaged UI static root at ${staticRoot}`);
+  }
+  if (readdirSync(staticRoot).length === 0) {
+    fail(`installed packaged UI static root is empty: ${staticRoot}`);
+  }
+  if (!existsSync(hashesFile)) {
+    fail(`installed tarball missing packaged UI CSP hashes at ${hashesFile}`);
+  }
+  const bin = join(packageRoot, "dist", "cli", "index.js");
+  const port = await reserveUiPort();
+  const baseUrl = `http://127.0.0.1:${String(port)}`;
+  const stdoutChunks = [];
+  const stderrChunks = [];
+  const child = spawn("node", [bin, "ui", "--port", String(port)], {
+    cwd: tmp,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout?.on("data", (chunk) => stdoutChunks.push(String(chunk)));
+  child.stderr?.on("data", (chunk) => stderrChunks.push(String(chunk)));
+  try {
+    await waitForHealth(baseUrl, child, stdoutChunks, stderrChunks);
+    const home = await globalThis.fetch(`${baseUrl}/`);
+    if (!home.ok) {
+      fail(`keiko ui GET / exited with HTTP ${String(home.status)}`);
+    }
+    const html = await home.text();
+    if (!html.includes("Keiko")) {
+      fail("keiko ui home page did not contain the Keiko shell marker");
+    }
+  } finally {
+    await stopChild(child);
+  }
+}
+
+async function main() {
   const tarballPath = packRoot();
   const tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
   try {
@@ -136,8 +244,9 @@ function main() {
     assertBundledPayload(tmp);
     assertCliVersionAndHelp(tmp);
     assertSdkRootImport(tmp);
+    await assertPackagedUi(tmp);
     console.log(
-      `installable-smoke ok: tarball installed, ${String(bundled.length)} bundled packages present, CLI + SDK reachable.`,
+      `installable-smoke ok: tarball installed, ${String(bundled.length)} bundled packages present, CLI + SDK + UI reachable.`,
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -145,4 +254,4 @@ function main() {
   }
 }
 
-main();
+void main();

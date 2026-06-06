@@ -6,6 +6,10 @@ epic-level acceptance criterion to the package, file, and test that
 satisfies it, and records the integration evidence that was run before
 the epic branch was opened for human review.
 
+It is retained as historical closure evidence. It does not replace the
+current modular-baseline verification index or the current local runtime
+state contract for the live `0.2.0` product.
+
 ## Target outcomes (from epic #204)
 
 | #   | Target outcome                                                                                                                                                                                           | Where satisfied                                                                                    |

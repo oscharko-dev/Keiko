@@ -1,7 +1,0 @@
-# Fixture trees mirror a representative customer install. The pre-modular fixture
-# includes a `.env` whose values are all the literal `REDACTED-FIXTURE-VALUE`; the
-# root `.gitignore` ignores `.env` everywhere by default, so this negation makes the
-# fixture override explicit. Reviewers can read why a `.env` is tracked here without
-# inspecting git's force-add history. Scoped to the one tracked fixture file so a
-# future `.env` accidentally dropped elsewhere under this tree stays ignored.
-!pre-modular-0.1.x/.env

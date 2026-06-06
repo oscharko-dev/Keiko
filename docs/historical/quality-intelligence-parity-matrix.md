@@ -801,7 +801,7 @@ This parity matrix and release-gate evidence are complete and ready for PR merge
 ## Related Documents
 
 - `docs/adr/ADR-0023-quality-intelligence-migration-architecture.md` — Architecture decision and migration map
-- `docs/migration/quality-intelligence-test-intelligence-inventory.md` — TI reference inventory and defect catalog
-- `docs/migration/quality-intelligence-keiko-baseline.md` — Keiko reuse baseline (#362)
+- `docs/historical/quality-intelligence-test-intelligence-inventory.md` — TI reference inventory and defect catalog
+- `docs/historical/quality-intelligence-keiko-baseline.md` — Keiko reuse baseline (#362)
 - `docs/release/quality-intelligence-dependency-decision-matrix.md` — Supply-chain approval matrix (#287)
-- `docs/migration/quality-intelligence-test-intelligence-compatibility.md` — Standalone TI compatibility (#286)
+- `docs/historical/quality-intelligence-test-intelligence-compatibility.md` — Standalone TI compatibility (#286)
