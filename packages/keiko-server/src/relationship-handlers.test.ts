@@ -408,6 +408,10 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
     const result = await handleRelationshipCreate(makeCtx(req), deps);
     expect(result.status).toBe(201);
     expect(calls.count).toBeGreaterThanOrEqual(1);
+    expect(
+      JSON.stringify(result.body),
+      "redactor's scrubbed output must reach the response body — bypass would leave the secret token visible",
+    ).not.toContain("sk-ABCDEFGHIJKL");
   });
 
   it("validate denies duplicate starts-workflow with a cardinality reason before persistence", async () => {
@@ -575,7 +579,7 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
   // `respond(... etag)` in relationship-handlers.ts:352. `seed()` now returns that.
   it("transitions lifecycle with a matching If-Match and bumps etag", async () => {
     const store = freshStore();
-    const { redactor } = trackingRedactor();
+    const { redactor, calls } = trackingRedactor();
     const deps = buildDeps("ws-a", store, redactor);
     const { id, etag } = await seed(store, deps);
     const patch = makeReq({
@@ -588,6 +592,10 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     expect(res.status).toBe(200);
     const newEtag = (res.body as { etag: string }).etag;
     expect(newEtag).not.toBe(etag);
+    expect(
+      calls.count,
+      "PATCH transition response body must pass through the wire-boundary redactor",
+    ).toBeGreaterThanOrEqual(1);
   });
 
   it("rejects client-initiated active -> stale transitions", async () => {
@@ -837,7 +845,7 @@ describe("DELETE /api/relationships/:id soft-deletes to revoked", () => {
   // #543 hardening: same root cause as the PATCH counterpart — read the opaque etag from
   // the TOP-LEVEL `body.etag`, not `body.relationship.etag` (legacy numeric field).
   it("transitions lifecycle to revoked and emits an audit row", async () => {
-    const store = freshStore();
+    const { store, db } = freshStoreBundle();
     const { redactor } = trackingRedactor();
     const deps = buildDeps("ws-a", store, redactor);
     const seedReq = makeReq({
@@ -859,6 +867,9 @@ describe("DELETE /api/relationships/:id soft-deletes to revoked", () => {
     expect((res.body as { relationship: { lifecycle: string } }).relationship.lifecycle).toBe(
       "revoked",
     );
+    const auditEntries = listRelationshipAuditEntries(db, "ws-a", 16);
+    const revokeEntry = auditEntries.find((r) => r.kind === "relationship.deleted");
+    expect(revokeEntry, "DELETE must emit a relationship.deleted audit entry").toBeDefined();
   });
 });
 
