@@ -5,9 +5,9 @@ import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { createUiServer, UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
-import { SDK_VERSION } from "./_sdk-version.js";
 
 let server: Server;
 let staticRoot: string;

@@ -13,9 +13,9 @@
 //
 // Path conventions used in rules:
 //   - Owned package source lives under `packages/keiko-<name>/src/**`.
-//   - The root product retains only `src/index.ts`, `src/sdk/**` (the explicitly approved root
-//     SDK surface), and `src/cli/index.ts` (the installed `keiko` bin entrypoint). Every other
-//     legacy `src/<domain>/` shim was deleted in Epic #423 / issue #426.
+//   - The root product retains only `src/index.ts` and `src/cli/index.ts` (the installed `keiko`
+//     bin entrypoint). The SDK moved to packages/keiko-sdk/ in Issue #426, and every other legacy
+//     `src/<domain>/` shim was deleted in Epic #423 / issue #426.
 //   - The fixtures under `tests/architecture/fixtures/<name>/` are targeted by the negative test
 //     (`scripts/arch-check-negative.mjs`). They are excluded from root tsconfig/build and ESLint.
 
@@ -616,7 +616,7 @@ module.exports = {
         "ADR-0019 direction rule 6 (server strict variant): keiko-server and the src/ui/ " +
         "shim may depend on keiko-contracts, keiko-security, keiko-model-gateway, " +
         "keiko-workspace, keiko-tools, keiko-harness, keiko-workflows, keiko-evidence, " +
-        "keiko-memory-vault, keiko-memory-governance, and keiko-memory-retrieval " +
+        "keiko-sdk, keiko-memory-vault, keiko-memory-governance, and keiko-memory-retrieval " +
         "only, and must reach those allowed dependencies through their public package " +
         "surfaces (`@oscharko-dev/keiko-<name>`) — NOT by deep-importing the legacy " +
         "`src/<name>/` shim layers. The to.path therefore forbids both the non-allow-listed " +
@@ -646,9 +646,9 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
           "src/(cli|evaluations|gateway|workspace|tools|harness|workflows|audit|verification))",
       },
     },
@@ -693,7 +693,7 @@ module.exports = {
         "ADR-0019 direction rule 7 (cli strict variant): keiko-cli and the src/cli/ bin shim " +
         "may depend on keiko-contracts, keiko-security, keiko-model-gateway, keiko-workspace, " +
         "keiko-tools, keiko-harness, keiko-workflows, keiko-evaluations, keiko-evidence, " +
-        "keiko-server, and keiko-verification only, and must reach those allowed dependencies " +
+        "keiko-sdk, keiko-server, and keiko-verification only, and must reach those allowed dependencies " +
         "through their public package surfaces (`@oscharko-dev/keiko-<name>`) — NOT by deep-" +
         "importing the legacy `src/<name>/` shim layers. The to.path therefore forbids both " +
         "the non-allow-listed siblings (browser-tier `keiko-ui`) AND the allow-listed " +
@@ -717,9 +717,9 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|server|cli|quality-intelligence)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|server|cli|quality-intelligence)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|server|cli|quality-intelligence)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|quality-intelligence)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|quality-intelligence)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|sdk|server|cli|quality-intelligence)|" +
           "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations))",
         pathNot: "^src/cli/",
       },
@@ -739,8 +739,8 @@ module.exports = {
       },
       to: {
         path:
-          "^(packages/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|server)/|" +
-          "node_modules/@oscharko-dev/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|server)|" +
+          "^(packages/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|sdk|server)/|" +
+          "node_modules/@oscharko-dev/keiko-(model-gateway|workspace|tools|harness|workflows|evidence|sdk|server)|" +
           "src/(gateway|workspace|tools|harness|workflows|audit|verification|evaluations))",
         dependencyTypesNot: ["type-only"],
       },

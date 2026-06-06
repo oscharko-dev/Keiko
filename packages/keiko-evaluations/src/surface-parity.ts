@@ -209,16 +209,11 @@ function checkCliExpectation(expectation: CliExpectation): SurfaceParityCheckRes
   return passed("cli-flags", expectation.kind);
 }
 
-// The SDK named exports each workflow must surface. Both expected exports live in
-// @oscharko-dev/keiko-workflows (the SDK barrel re-exports them), so we query the workflows
-// package directly. Using the workflows package as the SDK proxy avoids two real layout problems:
-// (a) the root @oscharko-dev/keiko package is not a workspace member, so a dynamic import of the
-// root package name fails in dev, and (b) the dev-time relative path ../../../src/index.js maps
-// to a .ts file that has no compiled .js sibling under src/, so it fails in installable smoke too.
-// The contract still holds: if keiko-workflows is missing the symbol, the root SDK barrel is
-// missing the symbol — they go together by ADR-0019.
+// The SDK named exports each workflow must surface. Issue #426 moved the SDK into its own
+// workspace package, so parity can import that public surface directly instead of probing a
+// surviving root src/ path.
 async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
-  const sdkPath = "@oscharko-dev/keiko-workflows";
+  const sdkPath = "@oscharko-dev/keiko-sdk";
   const sdkModule: unknown = await import(sdkPath);
   const sdk = sdkModule as Record<string, unknown>;
   return SDK_EXPORT_EXPECTATIONS.map((expectation) => {

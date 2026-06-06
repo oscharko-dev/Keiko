@@ -11,7 +11,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { SDK_VERSION } from "./_sdk-version.js";
+import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-server";
 import type { CliIo } from "./runner.js";
 

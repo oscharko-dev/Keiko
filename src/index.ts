@@ -1,12 +1,12 @@
-// Package-root boundary: the public surface is the agent harness, the model gateway, and
-// the SDK version constant. The harness barrel already re-exports the session/run API the
-// SDK surfaces, so we pull SDK_VERSION explicitly and avoid duplicate star re-exports.
+// Package-root boundary: the root package is an intentional facade over workspace package
+// surfaces. The SDK now lives in @oscharko-dev/keiko-sdk, so the root keeps only the minimal
+// 0.2.0 product facade plus the installed CLI entrypoint under src/cli/index.ts.
 export {
   SDK_VERSION,
   runAgent,
   type SdkAgentConfig,
   type SdkEvidenceOptions,
-} from "./sdk/index.js";
+} from "@oscharko-dev/keiko-sdk";
 export * from "@oscharko-dev/keiko-harness";
 export * from "@oscharko-dev/keiko-model-gateway";
 export * from "@oscharko-dev/keiko-workspace";

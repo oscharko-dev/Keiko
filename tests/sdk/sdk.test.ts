@@ -10,7 +10,7 @@ import {
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
   isSensitivePath,
   summarizeForAudit,
-} from "../../src/sdk/index.js";
+} from "@oscharko-dev/keiko-sdk";
 import * as root from "../../src/index.js";
 import { memFs } from "../../packages/keiko-workspace/src/_memfs.js";
 import { DryRunToolPort, MemoryEventSink } from "@oscharko-dev/keiko-harness";
