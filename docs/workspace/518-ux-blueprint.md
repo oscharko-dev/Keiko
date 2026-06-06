@@ -27,7 +27,7 @@ The blueprint is **deliberately conservative** about what the workspace foundati
 When the workspace opens with no connected project and no prior layout:
 
 - Shell renders with LeftRail (Keiko / Project / Search / Plugins on the primary group; Automations / Keiko mobile on secondary), Header, an empty Workspace surface with a project-connect call to action, RightRail in default state, and Footer status indicators in their `unknown` state.
-- The Workspace surface's empty state is a short, scannable instruction: "Connect a project to begin." with the `Project` keyboard hint (`g p` or whatever the matrix below allocates).
+- The Workspace surface's empty state is a short, scannable instruction: "Connect a project to begin." with the same visible keyboard hint the active `Project` command exposes in the shell.
 - Focus lands on the project-connect call to action.
 
 ### Returning-user behavior
@@ -44,16 +44,30 @@ When the workspace opens with prior durable state:
 - The panel lists recent projects, an "Open folder" command, and the active project's connected scope.
 - Selecting a project triggers `keiko-workspace` validation and updates the Footer's connected-project indicator.
 
+## Primary journey UX flows
+
+The UX blueprint owns the interaction flow for each primary journey defined in [518-product-boundaries.md](518-product-boundaries.md#primary-journeys). The product-boundary document defines the journey sequence; this document defines how the user navigates, selects, confirms, recovers, and returns within each one.
+
+| Primary journey from #522                  | UX flow in this blueprint                                                                                                                                                                               |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Journey 1 — Connect a project**          | "First-run continuation", "Project selection", "Navigation model", and "State patterns" define the entry CTA, the `ProjectPanel` path, footer feedback, and empty/loading/error behavior.               |
+| **Journey 2 — Inspect repository context** | "Navigation model", "Selection model", "Object inspection", and "Accessibility contract" define how the user reaches repository surfaces, focuses them, inspects metadata, and stays keyboard-complete. |
+| **Journey 3 — Ask for assistance**         | "Command palette", "Authority-gated commands", "State patterns", and "Error recovery" define command discovery, confirmation boundaries, streaming/error behavior, and retry paths.                     |
+| **Journey 4 — Review generated output**    | "Authority-gated commands", "Object inspection", "State patterns", and "Error recovery" define the review surface, apply/dismiss/verify/escalate actions, and patch-conflict handling.                  |
+| **Journey 5 — Run verification**           | "Authority-gated commands", "State patterns", and "Error recovery" define how verification starts, how blocked/unavailable states surface, and how results stay outside undo/redo.                      |
+| **Journey 6 — Review evidence**            | "Object inspection", "Undo / redo boundary", "State patterns", and "Error recovery" define how evidence is opened, why it is read-only, how stale references surface, and how refresh works.            |
+| **Journey 7 — Return to prior work**       | "Returning-user behavior", "Workspace tabs", and "Selection model" define durable restore, transient-state refusal, and how focus/selection resume without rewriting evidence-bearing state.            |
+
 ## Navigation model
 
-| Region                                                           | Owner             | Keyboard reach                                              | Behavior                                                                                                       |
-| ---------------------------------------------------------------- | ----------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **LeftRail**                                                     | `AppShell`        | `Alt+1..7` (selectable cycle), `g <letter>` shortcut prefix | Tabs to global tools (Project, Search, Plugins, Automations, Keiko mobile) and to the Keiko Twin (top of rail) |
-| **Header tabs**                                                  | `Header`          | `Ctrl+1..9` cycles tabs                                     | Switches workspace tabs (multi-workspace, per memory #64)                                                      |
-| **Workspace**                                                    | `Workspace`       | `Tab` enters windows; `Shift+Tab` exits                     | Pan/zoom via keyboard (`Arrow` + `+/-`); fit-to-view via `f`                                                   |
-| **RightRail**                                                    | `RightRail`       | `Alt+i` toggles inspector visibility                        | Inspector and supplemental panels                                                                              |
-| **Footer**                                                       | `Footer`          | `Alt+s` focuses status surface                              | Indicators for connected project, model availability, workflow readiness, evidence access                      |
-| **Modals (palette / new window / gateway setup / perm control)** | `AppShell.modals` | `Esc` closes; focus trap inside                             | Standard modal patterns                                                                                        |
+| Region                                                           | Owner             | Keyboard reach                          | Behavior                                                                                                       |
+| ---------------------------------------------------------------- | ----------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| **LeftRail**                                                     | `AppShell`        | `Alt+1..7` by visible rail order        | Tabs to global tools (Project, Search, Plugins, Automations, Keiko mobile) and to the Keiko Twin (top of rail) |
+| **Header tabs**                                                  | `Header`          | `Ctrl+1..9` cycles tabs                 | Switches workspace tabs (multi-workspace, per memory #64)                                                      |
+| **Workspace**                                                    | `Workspace`       | `Tab` enters windows; `Shift+Tab` exits | Pan/zoom via keyboard (`Arrow` + `+/-`); fit-to-view via `f`                                                   |
+| **RightRail**                                                    | `RightRail`       | `Alt+i` toggles inspector visibility    | Inspector and supplemental panels                                                                              |
+| **Footer**                                                       | `Footer`          | `Alt+s` focuses status surface          | Indicators for connected project, model availability, workflow readiness, evidence access                      |
+| **Modals (palette / new window / gateway setup / perm control)** | `AppShell.modals` | `Esc` closes; focus trap inside         | Standard modal patterns                                                                                        |
 
 ### Command palette
 
@@ -66,6 +80,22 @@ When the workspace opens with prior durable state:
 
 - Per memory #64, project tabs are persisted in the URL (`?project=`, `?chat=`). Tab list lives in the Header.
 - New tab button creates a new project context (gated to existing project list).
+
+## Structured workspace vs optional canvas / graph behavior
+
+The workspace foundation is a **structured workspace first**. Canvas and graph behavior are subordinate visualizations, not independent products, modes, or authority systems.
+
+| Surface class                | What it means in Keiko                                                                                                                                      | Required interaction rule                                                                                                                      |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Structured workspace**     | The shell, rails, header tabs, windows, review surfaces, inspector, footer, and command palette that govern the primary journeys.                           | Every required journey, authority moment, keyboard path, and recovery path must work here without a canvas-only affordance.                    |
+| **Optional canvas behavior** | Spatial pan/zoom, window placement, and relationship layout on the existing `Workspace` substrate. It is a view mechanic, not a drawing or whiteboard mode. | Canvas mechanics may change viewport or object position, but they may not introduce free-draw tools, hidden modes, or separate undo semantics. |
+| **Optional graph behavior**  | Relationship views such as the connector graph or workspace connection lines that visualize already-governed objects and edges.                             | Graph views inherit the same selection, inspection, authority, accessibility, and evidence rules as the structured workspace.                  |
+
+Additional constraints:
+
+- No gesture, drawing, or marquee behavior is required for #523. If a later issue adds one, it must extend this contract explicitly rather than relying on implication.
+- Canvas or graph affordances may help users inspect or arrange objects, but they do not own project connection, review approval, verification, evidence export, archive, or escalation.
+- Any future independent canvas/graph substrate proposal remains deferred behind the reuse decision recorded in [ADR-0026](../adr/ADR-0026-workspace-substrate.md).
 
 ## Selection model
 
@@ -277,16 +307,16 @@ Beyond the seven candidates already named:
 
 ## Acceptance Criteria evidence
 
-| #523 AC                                                                                          | Where in this document                                                                                                                             |
-| ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Every primary journey has a defined UX flow                                                      | "Primary journeys" cross-reference + per-section coverage of navigation, selection, command, recovery                                              |
-| Decisions distinguish structured workspace, optional canvas, optional graph                      | "Selection model" addresses windows separately from canvas/graph; canvas/graph deferred to existing substrate per [audit](518-capability-audit.md) |
-| User authority moments defined: consent, review, apply, verify, dismiss, archive, escalation     | "Command model — Authority-gated commands" + "Object inspection" + "Error recovery"                                                                |
-| Keyboard behavior: focus, activation, cancellation, escape, conflict rules, minimum shortcut set | "Minimum shortcut set" + "Conflict rules"                                                                                                          |
-| Undo/redo: what is and is not reversible; evidence preserved                                     | "Undo / redo boundary"                                                                                                                             |
-| Error and blocked states preserve user trust                                                     | "State patterns" + "Error recovery"                                                                                                                |
-| Accessibility expectations explicit enough to verify                                             | "Accessibility contract"                                                                                                                           |
-| No new third-party dependency                                                                    | Implicit throughout — every behavior is `useWorkspace` + React + browser native                                                                    |
+| #523 AC                                                                                          | Where in this document                                                                                                    |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| Every primary journey has a defined UX flow                                                      | "Primary journey UX flows" + the cited sections for entry, navigation, selection, command, recovery, and restore behavior |
+| Decisions distinguish structured workspace, optional canvas, optional graph                      | "Structured workspace vs optional canvas / graph behavior"                                                                |
+| User authority moments defined: consent, review, apply, verify, dismiss, archive, escalation     | "Command model — Authority-gated commands" + "Object inspection" + "Error recovery"                                       |
+| Keyboard behavior: focus, activation, cancellation, escape, conflict rules, minimum shortcut set | "Minimum shortcut set" + "Conflict rules"                                                                                 |
+| Undo/redo: what is and is not reversible; evidence preserved                                     | "Undo / redo boundary"                                                                                                    |
+| Error and blocked states preserve user trust                                                     | "State patterns" + "Error recovery"                                                                                       |
+| Accessibility expectations explicit enough to verify                                             | "Accessibility contract"                                                                                                  |
+| No new third-party dependency                                                                    | Implicit throughout — every behavior is `useWorkspace` + React + browser native                                           |
 
 ## References
 
