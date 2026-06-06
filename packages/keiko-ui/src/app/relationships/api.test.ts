@@ -11,8 +11,8 @@ import {
 
 const PROPOSAL = {
   type: "depends-on" as const,
-  source: { kind: "project" as const, id: "src-1" },
-  target: { kind: "project" as const, id: "tgt-1" },
+  source: { kind: "workflow-run" as const, id: "src-1" },
+  target: { kind: "workspace-path" as const, id: "tgt-1" },
 };
 
 function jsonResponse(body: unknown, status = 200): Response {
