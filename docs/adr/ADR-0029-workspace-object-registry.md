@@ -18,7 +18,7 @@ The object taxonomy remains `WindowTypeDef` in `WindowsRegistry.ts`. Governance 
 type LifecycleState =
   | "draft" | "connecting" | "connected" | "degraded" | "disconnected"
   | "streaming" | "final" | "archived"
-  | "proposed" | "running" | "blocked" | "needs review" | "verified" | "cancelled"
+  | "proposed" | "running" | "blocked" | "needs-review" | "verified" | "cancelled"
   | "applied" | "reverted" | "passed" | "failed"
   | "idle" | "live" | "error"
   | "viewing" | "editing" | "unsaved" | "saved"
@@ -72,6 +72,7 @@ A pure function `validateWorkspaceDescriptorMeta(objectType, meta): ValidationEr
 3. **Evidence persistence inconsistency.** A descriptor with `persistence: "evidence-reference"` whose `trustBoundary` omits `"evidence"`.
 4. **FS persistence inconsistency.** A descriptor with `persistence: "fs-reference"` whose `trustBoundary` omits `"fs"`.
 5. **Memory persistence inconsistency.** A descriptor with `persistence: "memory-reference"` whose `trustBoundary` omits `"memory"`.
+6. **Durable-UI persistence inconsistency.** A descriptor with `persistence: "durable.ui"` whose `trustBoundary` omits `"ui"`.
 
 The validator is fail-closed in dev/test: a violation throws at module evaluation. In production builds it is a unit test assertion that fails CI before the build is published.
 

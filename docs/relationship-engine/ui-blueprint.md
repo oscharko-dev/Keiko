@@ -31,7 +31,7 @@ Three corollaries follow:
 
 1. **No new substrate.** Per [ADR-0026](../adr/ADR-0026-workspace-substrate.md) and the [#529 deferral evidence](../workspace/518-canvas-graph-deferral.md), the relationship UI reuses `Workspace.tsx`, `ConnectionsLayer.tsx`, and `connector-graph.tsx`. No `react-flow`, `d3`, `cytoscape`, `framer-motion`, or any other library is added.
 2. **No invented copy.** Every user-visible denial string is the message column from [denial-reasons.md](denial-reasons.md). Every activity badge label comes from [activity-state.md §6](activity-state.md). Lifecycle pill text comes from [lifecycle.md §1](lifecycle.md).
-3. **Bounded everywhere.** Every visible list, edge set, animation, and aggregation is capped. The UI never renders more than the API can return ([api-contract.md §3.5](api-contract.md) `X-Truncated` header is honoured everywhere).
+3. **Bounded everywhere.** Every visible list, edge set, animation, and aggregation is capped. The UI never renders more than the API can return; in-band `truncated` / `truncationReason` response fields are honoured everywhere (per [api-contract.md §3.5](api-contract.md)).
 
 ## Surface ownership
 
@@ -83,7 +83,7 @@ The existing `CommandPalette.tsx` exposes a typed `relationship.create` command.
 1. Operator presses the existing palette chord (configured in `useKeyboardShortcuts`).
 2. Operator types or selects `Create relationship…`.
 3. A two-step prompt collects source then target by typed endpoint reference (kind, id). The prompt is the existing palette result-list UI; **no new modal is added**.
-4. On submit, the BFF call from §(a) runs; denial / acceptance is announced via `aria-live="polite"`.
+4. On submit, the BFF call from §(a) runs; acceptance is announced via `aria-live="polite"` and denial via `aria-live="assertive"`.
 
 The command-palette path is the **only fully keyboard-accessible** creation flow, and is therefore the WCAG 2.1.1 compliance path. The other two are pointer-driven affordances with this fallback.
 
@@ -108,7 +108,7 @@ A denial during the validation preview surfaces in **one** location: a transient
 
 - Renders the user-facing message from [denial-reasons.md](denial-reasons.md) **verbatim** — no UI-side text invention.
 - Carries `role="alert"` and `aria-live="assertive"` (matches the existing `connector-graph.tsx` `AlertBanner` pattern).
-- Auto-dismisses on the next valid target or after 5 seconds of inactivity during preview.
+- Auto-dismisses on the next valid target or after 5 seconds of inactivity during preview, except for security-class denials (`denied/path-not-contained`, `denied/cross-workspace`, `denied/payload-content-not-permitted`), which persist until operator dismissal.
 - Includes a "Why?" link that focuses the inspector on the denial-reason summary (the inspector's denial section per [inspector-spec.md](inspector-spec.md)).
 
 A denial in the commit phase (the operator released the pointer on an invalid target) surfaces in the same banner location but is **persistent** — it dismisses only on operator action — and is mirrored in the inspector's denial section.
@@ -117,11 +117,11 @@ A denial in the commit phase (the operator released the pointer on an invalid ta
 
 The relationship surface supports three density modes. The default is **minimal**.
 
-| Mode                  | Purpose                                                                                           | Per-mode caps (see [visual-density-rules.md](visual-density-rules.md))                                                                                                             |
-| --------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Minimal** (default) | Operator is doing other work; relationships are visible only when relevant to the focused window. | Visible edges: only those touching the focused workspace window. Animated badges: at most 5. No bundle expansion shown unless explicit click.                                      |
-| **Standard**          | Operator is investigating relationships for the active project.                                   | Visible edges: per active-project filter, capped at 25 ([activity-state.md §5.3](activity-state.md) `N_VISIBLE = 25`). Animated badges: at most 25.                                |
-| **Dense**             | Operator is reviewing a relationship audit; the inspector is open and impact is being analysed.   | Visible edges: capped at the API hard ceiling — `maxRelationships = 512` (default), `2048` (max) per [api-contract.md §4.8](api-contract.md). Animated badges: still capped at 25. |
+| Mode                  | Purpose                                                                                           | Per-mode caps (see [visual-density-rules.md](visual-density-rules.md))                                                                                                           |
+| --------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Minimal** (default) | Operator is doing other work; relationships are visible only when relevant to the focused window. | Visible edges: only those touching the focused workspace window. Animated badges: at most 5. No bundle expansion shown unless explicit click.                                    |
+| **Standard**          | Operator is investigating relationships for the active project.                                   | Visible edges: per active-project filter, capped at 25 ([activity-state.md §5.3](activity-state.md) `N_VISIBLE = 25`). Animated badges: at most 25.                              |
+| **Dense**             | Operator is reviewing a relationship audit; the inspector is open and impact is being analysed.   | Visible edges: capped at 512 per [visual-density-rules.md](visual-density-rules.md) even when the impact API supports deeper bounded walks. Animated badges: still capped at 25. |
 
 Density mode persists in `localStorage` under the existing Keiko `keiko.*` prefix (per [#63 workspace shell precedent](https://github.com/oscharko-dev/Keiko/issues/63), e.g. `keiko.shell.sidebarCollapsed`): the key is `keiko.relationships.density`. The default ("minimal") is the value on first load and is the value rendered server-side under the static-export contract.
 
@@ -180,7 +180,7 @@ The thresholds correspond to the existing `.ws-zoom` chrome at `globals.css:696`
 The bounded-render contract has three layers, in order of authority:
 
 1. **API-side cap.** The BFF refuses unbounded queries: `relationship/bounded-query-required` ([api-contract.md §4.3](api-contract.md)) on bare `GET /api/relationships`; `relationship/bounded-query-exceeded` ([api-contract.md "Limit caps"](api-contract.md)) when caller-requested limits exceed the per-endpoint hard cap (list: `256`; impact `maxNodes`: `1024`; impact `maxRelationships`: `2048`).
-2. **UI-side cap.** Even when the API returns the full hard cap, the UI renders at most the density-mode cap. The `X-Truncated` response header drives a "Showing first N of M" footer line; see [error-and-denial-ux.md](error-and-denial-ux.md) §"Bounded-query-exceeded UX".
+2. **UI-side cap.** Even when the API returns the full hard cap, the UI renders at most the density-mode cap. The in-band `truncated` / `truncationReason` body fields drive the "Showing first N …" footer line; see [error-and-denial-ux.md](error-and-denial-ux.md) §"Bounded-query-exceeded UX".
 3. **Animation cap.** At most **25** animated badges concurrently (`N_VISIBLE` from [activity-state.md §5.3](activity-state.md)). Beyond, a static aggregate count replaces the per-edge badge — never the per-edge edge.
 
 The three caps compose: `min(API_hard_cap, density_mode_cap, animation_cap_for_animated_subset_only)`. The UI never renders more edges than the API returned and never animates more than 25 badges, regardless of how many edges are visible.
