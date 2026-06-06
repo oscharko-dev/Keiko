@@ -122,6 +122,10 @@ export interface UiHandlerDeps {
   // that do not exercise /api/relationships/* keep their fixtures unchanged. Production
   // wiring composes a sqlite-backed RelationshipStore inside buildUiHandlerDeps.
   readonly relationship?: RelationshipHandlerDeps | undefined;
+  // Resolved evidence directory path (same precedence as the CLI: explicit → KEIKO_EVIDENCE_DIR →
+  // default). Consumed by QI read routes that pass evidenceDir to listQualityIntelligenceRuns /
+  // loadQualityIntelligenceRun (which require either options.store or options.evidenceDir).
+  readonly evidenceDir?: string | undefined;
 }
 
 export interface BuildHandlerDepsOptions {
@@ -454,6 +458,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     config,
     configPresent,
     evidenceStore,
+    evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),
     env: options.env,
     redactor: liveRedactor,
     registry: options.registry ?? createRunRegistry(),

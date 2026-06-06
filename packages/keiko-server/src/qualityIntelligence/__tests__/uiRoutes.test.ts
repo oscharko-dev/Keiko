@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RouteContext, RouteResult } from "../../routes.js";
 import { STREAMING } from "../../routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../index.js";
@@ -203,5 +206,77 @@ describe("handleGetQiRun", () => {
     const serialised = JSON.stringify(result.body);
     expect(serialised).not.toContain(SECRET_FS_PATH);
     expect(serialised).not.toContain("EACCES");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Issue #620 regression — evidenceDir wiring
+//
+// With deps.evidenceDir populated, the handlers must pass the dir through to
+// listQualityIntelligenceRuns / loadQualityIntelligenceRun.  Before the fix,
+// resolveEvidenceDir(deps) returned undefined unconditionally, which caused
+// resolveLoadStore to throw EvidenceReadError on every call:
+//   LIST  → 200 _listError:LIST_FAILED   (instead of 200 runs:[])
+//   GET   → 500 INTERNAL                  (instead of 404 NOT_FOUND)
+// ---------------------------------------------------------------------------
+
+describe("evidenceDir wiring (issue #620)", () => {
+  // Use the real keiko-evidence implementations so the fix is observable end-to-end.
+  // The module-level vi.mock still intercepts the calls; we configure them to call
+  // through to the actual implementations here.
+  let actualList: (opts: { evidenceDir?: string }) => readonly string[];
+  let actualLoad: (id: string, opts: { evidenceDir?: string }) => unknown;
+  let evidenceDir: string;
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import("@oscharko-dev/keiko-evidence")>(
+      "@oscharko-dev/keiko-evidence",
+    );
+    actualList = actual.listQualityIntelligenceRuns;
+    actualLoad = actual.loadQualityIntelligenceRun;
+
+    listMock.mockImplementation((opts: { evidenceDir?: string }): readonly string[] =>
+      actualList(opts),
+    );
+    loadMock.mockImplementation((id: string, opts: { evidenceDir?: string }): unknown =>
+      actualLoad(id, opts),
+    );
+
+    evidenceDir = mkdtempSync(join(tmpdir(), "keiko-qi-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(evidenceDir, { recursive: true, force: true });
+    listMock.mockReset();
+    loadMock.mockReset();
+  });
+
+  it("handleListQiRuns returns 200 {runs:[]} (not LIST_FAILED) when evidenceDir is wired", () => {
+    const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
+
+    const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), depsWithDir));
+
+    expect(result.status).toBe(200);
+    const body = result.body as { runs: unknown[]; _listError?: unknown };
+    expect(body.runs).toEqual([]);
+    // Regression: before the fix this key would be present with code "LIST_FAILED"
+    expect(body._listError).toBeUndefined();
+  });
+
+  it("handleGetQiRun returns 404 NOT_FOUND (not 500 INTERNAL) for an unknown id when evidenceDir is wired", () => {
+    const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
+
+    const result = asResult(
+      handleGetQiRun(
+        ctx("/api/quality-intelligence/runs/unknown-id", { id: "unknown-id" }),
+        depsWithDir,
+      ),
+    );
+
+    // Regression: before the fix this was 500 INTERNAL because resolveLoadStore threw
+    expect(result.status).toBe(404);
+    expect(result.body).toEqual({
+      error: { code: "NOT_FOUND", message: "Quality Intelligence run not found" },
+    });
   });
 });

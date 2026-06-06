@@ -30,12 +30,7 @@ import type { UiHandlerDeps } from "../deps.js";
 // ---------------------------------------------------------------------------
 
 function resolveEvidenceDir(deps: UiHandlerDeps): string | undefined {
-  // The BFF stores the evidence dir path in env under KEIKO_EVIDENCE_DIR
-  // (same precedence rule as the CLI; `resolveEvidenceDir` in keiko-evidence handles it).
-  // We pass `undefined` here so the store falls back to env-resolved defaults
-  // via the listQualityIntelligenceRuns / loadQualityIntelligenceRun options.
-  void deps;
-  return undefined;
+  return deps.evidenceDir;
 }
 
 // ---------------------------------------------------------------------------
