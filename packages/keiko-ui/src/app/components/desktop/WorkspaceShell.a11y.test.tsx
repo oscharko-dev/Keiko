@@ -127,4 +127,27 @@ describe("Workspace shell accessibility", () => {
     const results = await axe(container);
     expect(results).toHaveNoViolations();
   });
+
+  // Autonomous mode swaps the footer governance pill to the accent-bordered
+  // "Keiko governing" variant (orca glyph + accent-dim fill). Render that path
+  // so jest-axe exercises the autonomous footer structure. Note: axe-core
+  // cannot resolve oklch()/color-mix() contrast under jsdom, so the pill's text
+  // ratio is verified separately (the fix uses the theme-adaptive --fg-muted
+  // label color, AA in both themes) and recorded in the PR.
+  it("passes jest-axe for the autonomous-mode footer governance pill", async () => {
+    const { container } = render(
+      <Footer
+        winCount={2}
+        mode="autonomous"
+        selectedModel="gpt-5.5"
+        projectName="Keiko"
+        branchLabel="dev"
+        shellStatusLabel="Ready"
+        evidenceStatusLabel="Evidence ready"
+      />,
+    );
+
+    const results = await axe(container);
+    expect(results).toHaveNoViolations();
+  });
 });

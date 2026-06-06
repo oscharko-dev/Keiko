@@ -2,7 +2,7 @@
 
 Status: Wave 6 deliverable for [issue #530](https://github.com/oscharko-dev/Keiko/issues/530) under parent epic [#518](https://github.com/oscharko-dev/Keiko/issues/518), refreshed against current `origin/dev`.
 
-Date: 2026-06-06. Verified on `origin/dev` at `99fda2b3` after epic merge [#563](https://github.com/oscharko-dev/Keiko/pull/563) and follow-up PRs [#565](https://github.com/oscharko-dev/Keiko/pull/565), [#597](https://github.com/oscharko-dev/Keiko/pull/597), [#598](https://github.com/oscharko-dev/Keiko/pull/598), and [#599](https://github.com/oscharko-dev/Keiko/pull/599).
+Date: 2026-06-06. Verified on `origin/dev` at `6ba594db` after epic merge [#563](https://github.com/oscharko-dev/Keiko/pull/563) and the subsequent #518 audit follow-up PRs [#565](https://github.com/oscharko-dev/Keiko/pull/565), [#597](https://github.com/oscharko-dev/Keiko/pull/597), [#598](https://github.com/oscharko-dev/Keiko/pull/598), [#599](https://github.com/oscharko-dev/Keiko/pull/599), [#601](https://github.com/oscharko-dev/Keiko/pull/601), [#602](https://github.com/oscharko-dev/Keiko/pull/602), and [#603](https://github.com/oscharko-dev/Keiko/pull/603).
 
 ## Purpose
 
@@ -32,8 +32,8 @@ The epic does not introduce a new visual surface. The hardening contract is ther
 ### Run
 
 - `npx vitest run src/app/components/desktop/Footer.test.tsx src/app/components/desktop/AppShell.commands.test.ts src/app/components/desktop/LeftRail.test.tsx src/app/components/desktop/RightRail.test.tsx src/app/components/desktop/Workspace.test.tsx src/app/components/desktop/widgets/panels/ProjectPanel.test.tsx` (run from `packages/keiko-ui`) — 6 files, 32 tests passing.
-- `npx vitest run src/app/components/desktop/WorkspaceShell.a11y.test.tsx src/app/components/desktop/modals/GatewaySetupDialog.test.tsx` (run from `packages/keiko-ui`) — 2 files, 8 tests passing, including shell `jest-axe` coverage and dialog focus restoration.
-- `npm -w @oscharko-dev/keiko-ui test -- --run` — package suite passes with 67 files, 773 tests passing, 3 skipped.
+- `npx vitest run src/app/components/desktop/WorkspaceShell.a11y.test.tsx src/app/components/desktop/modals/GatewaySetupDialog.test.tsx` (run from `packages/keiko-ui`) — 2 files, 6 tests passing, including shell `jest-axe` coverage and dialog focus restoration.
+- `npm -w @oscharko-dev/keiko-ui test -- --run` — package suite passes with 67 files, 779 tests passing, 3 skipped.
 
 ### Outcome
 
@@ -51,7 +51,7 @@ PASS for the shell and workspace surfaces exercised above. This is evidence of r
 
 ### Run
 
-- `npx vitest run src/app/components/desktop/hooks/useUndoStack.test.tsx src/app/components/desktop/hooks/useKeyboardShortcuts.test.tsx src/app/components/desktop/AppShell.commands.test.ts src/app/components/desktop/shell-undo-bindings.test.ts` (run from `packages/keiko-ui`) — 4 files, 36 tests passing.
+- `npx vitest run src/app/components/desktop/hooks/useUndoStack.test.tsx src/app/components/desktop/hooks/useKeyboardShortcuts.test.tsx src/app/components/desktop/AppShell.commands.test.ts src/app/components/desktop/shell-undo-bindings.test.ts` (run from `packages/keiko-ui`) — 4 files, 42 tests passing.
 - `npx vitest run src/app/components/desktop/windows/descriptor-meta.test.ts src/app/components/desktop/widgets/panels/InspectorPanel.test.tsx src/app/components/desktop/hooks/workspace-persistence.test.ts` (run from `packages/keiko-ui`) — 3 files, 20 tests passing.
 - No dedicated microbenchmark or browser-profile run was performed for this refresh.
 
@@ -141,8 +141,8 @@ PASS. No new runtime, devtime, or vendored code dependency introduced. No `bundl
 | `npm -w @oscharko-dev/keiko-contracts run typecheck` | PASS   | `tsc -b tsconfig.json --noEmit`        |
 | `npm -w @oscharko-dev/keiko-ui run typecheck`        | PASS   | `tsc --noEmit`                         |
 | `npm -w @oscharko-dev/keiko-contracts run build`     | PASS   | `tsc -b tsconfig.json`                 |
-| `npm -w @oscharko-dev/keiko-contracts test -- --run` | PASS   | 21 files, 869 tests                    |
-| `npm -w @oscharko-dev/keiko-ui test -- --run`        | PASS   | 67 files, 773 tests passing, 3 skipped |
+| `npm -w @oscharko-dev/keiko-contracts test -- --run` | PASS   | 21 files, 872 tests                    |
+| `npm -w @oscharko-dev/keiko-ui test -- --run`        | PASS   | 67 files, 779 tests passing, 3 skipped |
 | `npm run arch:check`                                 | PASS   | 1070 modules, 2620 deps, 0 violations  |
 | `npm run arch:check:negative`                        | PASS   | gate fired on 23 expected fixtures     |
 | `npm run lint`                                       | PASS   | repository-wide eslint now green       |

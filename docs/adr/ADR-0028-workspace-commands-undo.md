@@ -86,8 +86,8 @@ type Action =
   | { kind: "ui.window.move"; windowId: string; before: Rect; after: Rect }
   | { kind: "ui.window.resize"; windowId: string; before: Rect; after: Rect }
   | { kind: "ui.window.zorder"; windowId: string; before: number; after: number }
-  | { kind: "ui.window.close"; window: AppWindow }
-  | { kind: "ui.window.open"; window: AppWindow }
+  | { kind: "ui.window.close"; windowId: string; windowSnapshot: WindowSnapshot }
+  | { kind: "ui.window.open"; windowId: string; windowSnapshot: WindowSnapshot }
   | { kind: "ui.workspace.pan"; before: View; after: View }
   | { kind: "ui.workspace.zoom"; before: View; after: View }
   | { kind: "ui.workspace.fit"; before: View; after: View }

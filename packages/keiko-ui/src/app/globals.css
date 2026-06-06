@@ -2862,7 +2862,11 @@ select.set-input {
   color: var(--fg-muted);
 }
 .ft-gov[data-mode="autonomous"] {
-  color: var(--accent);
+  /* Intentionally inherits the theme-adaptive --fg-muted label color from
+     .ft-gov above. --accent (#4eba87) as the label color fails WCAG 1.4.3 on
+     the light theme's pale --surface (~1.97:1); the green identity stays via
+     the accent border, accent-dim fill, and the green orca glyph. Do not set
+     `color: var(--accent)` here. */
   border-color: var(--accent-line);
   background: var(--accent-dim);
 }

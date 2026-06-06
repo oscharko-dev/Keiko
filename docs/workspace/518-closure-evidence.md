@@ -106,18 +106,20 @@ Zero changes to `package.json`, `package-lock.json`, or `bundleDependencies`.
 
 ## Verification performed
 
-Recorded in detail by [#530 hardening evidence](518-hardening-evidence.md). Summary on current `origin/dev`:
+Recorded in detail by [#530 hardening evidence](518-hardening-evidence.md). Summary verified on `origin/dev` at `6ba594db` (current dev HEAD):
 
 | Command                                              | Result                                        |
 | ---------------------------------------------------- | --------------------------------------------- |
 | `npm -w @oscharko-dev/keiko-contracts run typecheck` | PASS                                          |
 | `npm -w @oscharko-dev/keiko-ui run typecheck`        | PASS                                          |
 | `npm -w @oscharko-dev/keiko-contracts run build`     | PASS                                          |
-| `npm -w @oscharko-dev/keiko-contracts test -- --run` | PASS — 21 files, 869 tests                    |
+| `npm -w @oscharko-dev/keiko-contracts test -- --run` | PASS — 21 files, 872 tests                    |
 | `npm -w @oscharko-dev/keiko-ui test -- --run`        | PASS — 67 files, 779 tests passing, 3 skipped |
 | `npm run arch:check`                                 | PASS — 1070 modules, 2620 deps, 0 violations  |
 | `npm run arch:check:negative`                        | PASS — gate fired on 23 expected fixtures     |
 | `npm run lint`                                       | PASS — repository-wide eslint green           |
+
+The full-suite totals above are a point-in-time snapshot at the pinned SHA and move with ordinary repository activity (for example, the keiko-contracts total includes tests from unrelated areas); the stable #518-specific addition is the 16 keiko-contracts descriptor tests plus the UI slices recorded in the child-issue matrix.
 
 The final epic PR to `dev` was [#563](https://github.com/oscharko-dev/Keiko/pull/563). This document now serves as post-merge closure evidence rather than a pre-merge handoff.
 
