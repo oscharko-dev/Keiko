@@ -7,9 +7,10 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-// `extractInlineScriptHashes` lives in `@oscharko-dev/keiko-server` after issue #166; the legacy
-// `dist/ui/index.js` shim re-exports it without changing the runtime contract.
-import { extractInlineScriptHashes } from "../dist/ui/index.js";
+// Inline-script SHA-256 helper for the CSP-hash audit. Lives on the BFF package
+// (@oscharko-dev/keiko-server) — the BFF folds the hashes into script-src at request time, and
+// this script audits the packed UI bundle against the same set.
+import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
 
 function packFiles() {
   // `--ignore-scripts` prevents the prepack hook from re-running this check recursively (npm runs
@@ -77,7 +78,7 @@ const WORKFLOW_HANDOFF_DIST_FILES = [
 ];
 
 function assertServerRuntimeSurface(paths) {
-  for (const required of ["dist/ui/index.js", "dist/ui/index.d.ts", "dist/ui/csp-hashes.json"]) {
+  for (const required of ["dist/ui/csp-hashes.json"]) {
     if (!paths.includes(required)) {
       fail(
         `the tarball does not include ${required} ` +
