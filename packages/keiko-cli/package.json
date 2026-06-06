@@ -31,6 +31,7 @@
     "@oscharko-dev/keiko-model-gateway": "*",
     "@oscharko-dev/keiko-workspace": "*",
     "@oscharko-dev/keiko-tools": "*",
+    "@oscharko-dev/keiko-evaluations": "*",
     "@oscharko-dev/keiko-evidence": "*",
     "@oscharko-dev/keiko-verification": "*",
     "@oscharko-dev/keiko-harness": "*",

@@ -13,7 +13,6 @@
   },
   "include": [
     "src",
-    "../../src/evaluations/**/*.ts",
     "../../src/workspace/**/*.ts",
     "../../src/gateway/**/*.ts",
     "../../src/tools/**/*.ts",

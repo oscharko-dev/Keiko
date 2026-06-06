@@ -19,7 +19,7 @@ import {
   type EvalRunnerDeps,
   type EvalScorecard,
   type EvaluationFixture,
-} from "../../../src/evaluations/index.js";
+} from "@oscharko-dev/keiko-evaluations";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:
