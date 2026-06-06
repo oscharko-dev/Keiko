@@ -147,6 +147,24 @@ describe("validateRelationship — happy paths (one per relationship type)", () 
     expect(r.ok).toBe(true);
   });
 
+  it("depends-on: capsule → capsule", () => {
+    const r = validateRelationship(
+      happy("depends-on", endpoint("capsule", "cap-1"), endpoint("capsule", "cap-2")),
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("depends-on: capsule-set → workspace-path", () => {
+    const r = validateRelationship(
+      happy(
+        "depends-on",
+        endpoint("capsule-set", "cs-1"),
+        endpoint("workspace-path", "docs/spec.md"),
+      ),
+    );
+    expect(r.ok).toBe(true);
+  });
+
   it("depends-on: workflow-run → evidence-run", () => {
     const r = validateRelationship(
       happy("depends-on", endpoint("workflow-run", "run-1"), endpoint("evidence-run", "ev-1")),
@@ -157,16 +175,11 @@ describe("validateRelationship — happy paths (one per relationship type)", () 
 
 // ─── Compatibility matrix denied examples ─────────────────────────────────────
 describe("validateRelationship — compatibility matrix §3 explicit denials", () => {
-  it("chat → chat is denied/source-kind-not-allowed", () => {
+  it("chat → chat is denied/target-kind-not-allowed", () => {
     const r = validateRelationship(
       happy("reads-context", endpoint("chat", "c1"), endpoint("chat", "c2")),
     );
     expect(codesFrom(r)).toContain("denied/target-kind-not-allowed");
-    // Source kind "chat" IS allowed for reads-context, target kind "chat" is not.
-    // The matrix names the same outcome (`denied/source-kind-not-allowed`) for the
-    // chat→chat cell. Validator returns the per-resolution-order more-specific code; the
-    // exact field-level code follows from the per-type validSourceKinds / validTargetKinds
-    // sets: source is allowed, target is not → target-kind-not-allowed.
   });
 
   it("workspace-path → workspace-path is denied/source-kind-not-allowed", () => {
@@ -180,7 +193,7 @@ describe("validateRelationship — compatibility matrix §3 explicit denials", (
     expect(codesFrom(r)).toContain("denied/source-kind-not-allowed");
   });
 
-  it("capsule → capsule is denied/source-kind-not-allowed (cross-domain engine does not duplicate connector-graph edges)", () => {
+  it("capsule → capsule via reads-context is denied/source-kind-not-allowed", () => {
     const r = validateRelationship(
       happy("reads-context", endpoint("capsule", "cap-1"), endpoint("capsule", "cap-2")),
     );
@@ -329,6 +342,13 @@ describe("validateRelationship — forward-looking object kinds", () => {
   it("rejects forward-looking target kind", () => {
     const r = validateRelationship(
       happy("uses-tool", endpoint("workflow-run", "r1"), endpoint("mcp-tool", "mt-1")),
+    );
+    expect(codesFrom(r)).toContain("denied/object-kind-not-yet-supported");
+  });
+
+  it("rejects workflow-run → skill with denied/object-kind-not-yet-supported", () => {
+    const r = validateRelationship(
+      happy("uses-tool", endpoint("workflow-run", "r1"), endpoint("skill", "skill-1")),
     );
     expect(codesFrom(r)).toContain("denied/object-kind-not-yet-supported");
   });

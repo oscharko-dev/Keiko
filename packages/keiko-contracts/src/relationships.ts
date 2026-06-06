@@ -255,10 +255,10 @@ export const RELATIONSHIP_TYPE_DEFINITIONS: Readonly<
       "A chat or a parent workflow run initiates a workflow run. The relationship records the origin; run identity belongs to the workflow ledger.",
     validSourceKinds: ["chat", "workflow-run"],
     validTargetKinds: ["workflow-run"],
-    // The target side is 1:1 (each run has exactly one origin); the validator enforces
-    // this when ctx.cardinalityCounts is supplied. Source side is 1:N (one chat starts
-    // many runs over time).
-    cardinality: "1:1",
+    // The exported cardinality is source-centric for UI display and contract summaries:
+    // one chat / parent run may start many runs over time. The validator still enforces
+    // the target-side 1:1 invariant separately via startsWorkflowForTarget.
+    cardinality: "1:N",
     direction: "directed",
     lifecycle: {
       creatable: true,

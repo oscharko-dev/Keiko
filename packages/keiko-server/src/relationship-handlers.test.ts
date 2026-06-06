@@ -116,7 +116,9 @@ function buildDeps(
   } as unknown as UiHandlerDeps;
 }
 
-function freshStore(): ReturnType<typeof createRelationshipStorePort> {
+function freshStore(opts?: {
+  readonly redactString?: (input: string) => string;
+}): ReturnType<typeof createRelationshipStorePort> {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
   runMigrations(db);
@@ -124,7 +126,8 @@ function freshStore(): ReturnType<typeof createRelationshipStorePort> {
   let n = 0;
   return createRelationshipStorePort({
     db,
-    redactString: (s: string): string => s.replace(/sk-[A-Za-z0-9]+/g, "[REDACTED]"),
+    redactString:
+      opts?.redactString ?? ((s: string): string => s.replace(/sk-[A-Za-z0-9]+/g, "[REDACTED]")),
     now: () => ++t,
     newId: () => `rel-${String(++n)}`,
   });
@@ -148,6 +151,28 @@ const validProposalWithSecret = JSON.stringify({
     summary: "leaked sk-ABCDEFGHIJKL hint",
   },
 });
+
+function startsWorkflowBody(sourceId: string, targetId: string): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    proposal: {
+      type: "starts-workflow",
+      source: { kind: "chat", id: sourceId },
+      target: { kind: "workflow-run", id: targetId },
+    },
+  });
+}
+
+function producesEvidenceBody(sourceId: string, targetId: string): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    proposal: {
+      type: "produces-evidence",
+      source: { kind: "workflow-run", id: sourceId },
+      target: { kind: "evidence-run", id: targetId },
+    },
+  });
+}
 
 beforeEach(() => {
   _resetIdempotencyStoreForTests();
@@ -299,6 +324,84 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
     expect(result.status).toBe(201);
     expect(calls.count).toBeGreaterThanOrEqual(1);
   });
+
+  it("validate denies duplicate starts-workflow with a cardinality reason before persistence", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const seedReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "sw-seed-1" },
+      body: startsWorkflowBody("chat-1", "run-1"),
+    });
+    const seedRes = await handleRelationshipCreate(makeCtx(seedReq), deps);
+    expect(seedRes.status).toBe(201);
+
+    const validateReq = makeReq({
+      method: "POST",
+      url: "/api/relationships/validate",
+      body: startsWorkflowBody("chat-2", "run-1"),
+    });
+    const validateRes = await handleRelationshipValidate(makeCtx(validateReq), deps);
+    expect(validateRes.status).toBe(200);
+    const decision = (
+      validateRes.body as {
+        decision: { allowed: boolean; reasons: Array<{ code: string }> };
+      }
+    ).decision;
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasons.map((r) => r.code)).toContain("denied/cardinality-exceeded");
+  });
+
+  it("create denies duplicate produces-evidence with a cardinality reason before the DB write", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const firstReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "pe-seed-1" },
+      body: producesEvidenceBody("run-1", "evidence-1"),
+    });
+    const firstRes = await handleRelationshipCreate(makeCtx(firstReq), deps);
+    expect(firstRes.status).toBe(201);
+
+    const secondReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "pe-seed-2" },
+      body: producesEvidenceBody("run-1", "evidence-2"),
+    });
+    const secondRes = await handleRelationshipCreate(makeCtx(secondReq), deps);
+    expect(secondRes.status).toBe(422);
+    const reasons = (secondRes.body as { reasons: Array<{ code: string }> }).reasons;
+    expect(reasons.map((r) => r.code)).toContain("denied/cardinality-exceeded");
+
+    const stored = store.listRelationships({
+      workspaceId: "ws-a",
+      type: "produces-evidence",
+      sourceId: "run-1",
+      limit: 10,
+    });
+    expect(stored.entries).toHaveLength(1);
+  });
+
+  it("sanitizes the create summary before persistence using deps.redactor", async () => {
+    const store = freshStore({ redactString: (input: string): string => input });
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const req = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "persist-1" },
+      body: validProposalWithSecret,
+    });
+    const res = await handleRelationshipCreate(makeCtx(req), deps);
+    expect(res.status).toBe(201);
+    const id = (res.body as { relationship: { id: string } }).relationship.id;
+    expect(store.getRelationship("ws-a", id)?.summary).toBe("leaked [REDACTED] hint");
+  });
 });
 
 describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () => {
@@ -371,6 +474,149 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     expect(res.status).toBe(200);
     const newEtag = (res.body as { etag: string }).etag;
     expect(newEtag).not.toBe(etag);
+  });
+
+  it("rejects client-initiated active -> stale transitions", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const { id, etag } = await seed(store, deps);
+    const patch = makeReq({
+      method: "PATCH",
+      url: `/api/relationships/${id}`,
+      headers: { "idempotency-key": "patch-stale", "if-match": etag },
+      body: JSON.stringify({ schemaVersion: "1", transition: { to: "stale" } }),
+    });
+    const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
+    expect(res.status).toBe(422);
+    const reasons = (
+      res.body as { reasons: Array<{ code: string; field?: string; message: string }> }
+    ).reasons;
+    expect(reasons).toContainEqual({
+      code: "denied/lifecycle-illegal-transition",
+      field: "transition.to",
+      message: "client-initiated transitions to stale are reserved for health checks",
+    });
+  });
+
+  it("rejects client-initiated stale -> active transitions", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const seeded = store.createRelationship({
+      workspaceId: "ws-a",
+      scope: { kind: "workspace", workspaceId: "ws-a" },
+      type: "depends-on",
+      source: { kind: "capsule", id: "cap-stale-1" },
+      target: { kind: "capsule", id: "cap-stale-2" },
+      lifecycleState: "stale",
+    });
+    const id = seeded.relationship.id;
+    const patch = makeReq({
+      method: "PATCH",
+      url: `/api/relationships/${id}`,
+      headers: { "idempotency-key": "patch-unstale", "if-match": seeded.etag },
+      body: JSON.stringify({ schemaVersion: "1", transition: { to: "active" } }),
+    });
+    const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
+    expect(res.status).toBe(422);
+    const reasons = (
+      res.body as { reasons: Array<{ code: string; field?: string; message: string }> }
+    ).reasons;
+    expect(reasons).toContainEqual({
+      code: "denied/lifecycle-illegal-transition",
+      field: "transition.to",
+      message: "client-initiated stale reactivation is reserved for health checks",
+    });
+  });
+
+  it("sanitizes transition summaries before persistence", async () => {
+    const store = freshStore({ redactString: (input: string): string => input });
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const { id, etag } = await seed(store, deps);
+    const patch = makeReq({
+      method: "PATCH",
+      url: `/api/relationships/${id}`,
+      headers: { "idempotency-key": "patch-redact", "if-match": etag },
+      body: JSON.stringify({
+        schemaVersion: "1",
+        transition: { to: "archived", summary: "moved sk-TRANSITION1234 into archive" },
+      }),
+    });
+    const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
+    expect(res.status).toBe(200);
+    expect(store.getRelationship("ws-a", id)?.summary).toBe("moved [REDACTED] into archive");
+  });
+});
+
+describe("PATCH /api/relationships/:id reconnect contract", () => {
+  it("rejects reconnect for a non-reconnectable relationship type", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const createReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "reconnect-1" },
+      body: startsWorkflowBody("chat-r", "run-r"),
+    });
+    const createRes = await handleRelationshipCreate(makeCtx(createReq), deps);
+    expect(createRes.status).toBe(201);
+    const id = (createRes.body as { relationship: { id: string } }).relationship.id;
+    const etag = (createRes.body as { etag: string }).etag;
+
+    const patch = makeReq({
+      method: "PATCH",
+      url: `/api/relationships/${id}`,
+      headers: { "idempotency-key": "reconnect-2", "if-match": etag },
+      body: JSON.stringify({
+        schemaVersion: "1",
+        reconnect: { target: { kind: "workflow-run", id: "run-r-2" } },
+      }),
+    });
+    const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
+    expect(res.status).toBe(422);
+    const reasons = (
+      res.body as { reasons: Array<{ code: string; field?: string; message: string }> }
+    ).reasons;
+    expect(reasons).toContainEqual({
+      code: "denied/lifecycle-illegal-transition",
+      field: "reconnect.target",
+      message: 'relationship type "starts-workflow" does not permit reconnect',
+    });
+  });
+
+  it("sanitizes reconnect summaries before persistence", async () => {
+    const store = freshStore({ redactString: (input: string): string => input });
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const createReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "reconnect-3" },
+      body: validProposalBody,
+    });
+    const createRes = await handleRelationshipCreate(makeCtx(createReq), deps);
+    expect(createRes.status).toBe(201);
+    const id = (createRes.body as { relationship: { id: string } }).relationship.id;
+    const etag = (createRes.body as { etag: string }).etag;
+
+    const patch = makeReq({
+      method: "PATCH",
+      url: `/api/relationships/${id}`,
+      headers: { "idempotency-key": "reconnect-4", "if-match": etag },
+      body: JSON.stringify({
+        schemaVersion: "1",
+        reconnect: {
+          target: { kind: "capsule", id: "cap-9" },
+          summary: "relinked sk-RECONNECT1234 target",
+        },
+      }),
+    });
+    const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
+    expect(res.status).toBe(200);
+    expect(store.getRelationship("ws-a", id)?.summary).toBe("relinked [REDACTED] target");
   });
 });
 

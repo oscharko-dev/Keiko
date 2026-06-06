@@ -10,9 +10,9 @@ This document specifies the durable semantic contract for the Keiko relationship
 
 The taxonomy is the binding input for issues:
 
-- [#535](https://github.com/oscharko-dev/Keiko/issues/535) — policy / validation / API / storage architecture (ADR-0031 / ADR-0032);
-- [#536](https://github.com/oscharko-dev/Keiko/issues/536) — audit and activity model (ADR-0033);
-- [#537](https://github.com/oscharko-dev/Keiko/issues/537) — UI blueprint (ADR-0034);
+- [#535](https://github.com/oscharko-dev/Keiko/issues/535) — policy / validation / API / storage architecture (ADR-0031);
+- [#536](https://github.com/oscharko-dev/Keiko/issues/536) — audit and activity model (ADR-0032);
+- [#537](https://github.com/oscharko-dev/Keiko/issues/537) — UI blueprint (ADR-0033);
 - [#538](https://github.com/oscharko-dev/Keiko/issues/538) — versioned contracts and deterministic validation engine.
 
 The taxonomy is reuse-first: every relationship type is anchored to an existing Keiko subsystem that already models the same edge (cited as `file.ts:line`) or, where no such subsystem exists, to a `new-capability-gap` row enumerated in [gap-analysis.md](gap-analysis.md). The taxonomy does not introduce a new package, a new dependency, a new credential surface, or a new persistence backend.
@@ -49,7 +49,7 @@ Every relationship-engine contract (the relationship record, the activity event,
 The taxonomy evolves additively:
 
 - A new relationship type, object kind, lifecycle state, or denial-reason code is added by extending the closed set, never by repurposing an existing member.
-- A breaking change (renaming, narrowing, or removing a member) introduces a new literal `schemaVersion` (e.g. `"2"`) and lands an ADR that supersedes ADR-0031. Readers of an older schema version receive a typed schema-mismatch error rather than silently coercing the new shape into the old shape. The same rule already applies to `EvidenceManifest` ([adr-candidates.md ADR-0033 §4](adr-candidates.md)).
+- A breaking change (renaming, narrowing, or removing a member) introduces a new literal `schemaVersion` (e.g. `"2"`) and lands an ADR that supersedes ADR-0031. Readers of an older schema version receive a typed schema-mismatch error rather than silently coercing the new shape into the old shape. The same rule already applies to `EvidenceManifest` (see [adr-candidates.md](adr-candidates.md)).
 
 ### 3.3 Deprecation policy
 
@@ -291,7 +291,7 @@ The following relationship types are flagged as `new-capability-gap` because no 
 
 | Relationship type     | Gap-analysis row                                                                                       | Why                                                                                                                                                                                                                                           |
 | --------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `depends-on`          | [Gap 1](gap-analysis.md), [Gap 4](gap-analysis.md), [Gap 5](gap-analysis.md), [Gap 8](gap-analysis.md) | Existing edges express within-domain dependencies (`MemoryEdgeKind "derived-from"` for memory-to-memory, `importGraph` for file-to-file). A cross-domain "X depends on Y" is the leaf-engine concern that ADR-0032 records.                   |
+| `depends-on`          | [Gap 1](gap-analysis.md), [Gap 4](gap-analysis.md), [Gap 5](gap-analysis.md), [Gap 8](gap-analysis.md) | Existing edges express within-domain dependencies (`MemoryEdgeKind "derived-from"` for memory-to-memory, `importGraph` for file-to-file). A cross-domain "X depends on Y" is the leaf-engine concern that ADR-0031 records.                   |
 | `references-document` | [Gap 1](gap-analysis.md), [Gap 4](gap-analysis.md)                                                     | `ConnectorEdge` covers UI surface adjacency only; workspace `Connection` is type-free and substrate-locked (ADR-0026). A typed `references` edge from chat or workflow-run to a document needs the cross-domain endpoint contract from Gap 1. |
 
 The other five types (`reads-context`, `proposes-patch`, `uses-tool`, `starts-workflow`, `produces-evidence`) name **structural views** over edges that already exist in evidence sections (`connectedContext`, `patch`, `toolCalls`, the run-id pivot, and the manifest itself respectively). The relationship store reifies them at the cross-domain layer so a single query surface can answer "show me everything this run touched" without dipping into each evidence section.
@@ -394,7 +394,7 @@ The relationship record carries a `scope: MemoryScope` field. The validator reje
 1. **Additive evolution** is the default. New types, new object kinds, new lifecycle states, and new denial-reason codes extend the closed sets. The `schemaVersion: "1"` literal does not change.
 2. **Breaking evolution** (renaming, narrowing, removing a member) requires a new `schemaVersion` literal (e.g. `"2"`) AND an ADR amending or superseding ADR-0031. Readers of the old version reject the new envelope with `SchemaError`, mirroring the audit-store typed read errors in [`packages/keiko-evidence/src/index-api.ts`](../../packages/keiko-evidence/src/index-api.ts) (Issue #10 memory entry).
 3. **Forward-looking object kinds** (§4.2) are enumerated in `schemaVersion: "1"` so the schema is stable when they land. The validator rejects until the owning registry lands, gated on `denied/object-kind-not-yet-supported`.
-4. **Persistence migration** follows the `PRAGMA user_version` pattern from `keiko-memory-vault` ([`schema.ts`](../../packages/keiko-memory-vault/src/schema.ts)), restated in [gap-analysis.md Gap 5](gap-analysis.md). The relationship store records its own user_version; the storage ADR is ADR-0032.
+4. **Persistence migration** follows the `PRAGMA user_version` pattern from `keiko-memory-vault` ([`schema.ts`](../../packages/keiko-memory-vault/src/schema.ts)), restated in [gap-analysis.md Gap 5](gap-analysis.md). The relationship store records its own user_version; the storage ADR is ADR-0031.
 5. **Backwards-compatibility** for activity events: an old subscriber that does not recognise a new `relationship:*` kind name discards the event without raising; a new subscriber that receives an old-schema envelope upgrades the missing fields to absent. The SSE event-name discipline (per-kind `addEventListener`) means an unknown kind is structurally never delivered to an old subscriber — restated from the [Epic #13 memory entry](../workspace/518-canvas-graph-deferral.md) and [audit.md §"Cross-cutting risks"](audit.md).
 
 ## 11. Non-authority invariant restatement

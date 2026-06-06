@@ -200,6 +200,7 @@ describe("RELATIONSHIP_TYPE_DEFINITIONS", () => {
     expect(startsWorkflow.validSourceKinds).toContain("chat");
     expect(startsWorkflow.validSourceKinds).toContain("workflow-run");
     expect(startsWorkflow.validTargetKinds).toEqual(["workflow-run"]);
+    expect(startsWorkflow.cardinality).toBe("1:N");
 
     const producesEvidence = RELATIONSHIP_TYPE_DEFINITIONS["produces-evidence"];
     expect(producesEvidence.validSourceKinds).toEqual(["workflow-run"]);
@@ -212,8 +213,20 @@ describe("RELATIONSHIP_TYPE_DEFINITIONS", () => {
     expect(referencesDocument.validTargetKinds).toContain("capsule");
 
     const dependsOn = RELATIONSHIP_TYPE_DEFINITIONS["depends-on"];
-    expect(dependsOn.validSourceKinds).toContain("memory");
-    expect(dependsOn.validTargetKinds).toContain("memory");
+    expect(dependsOn.validSourceKinds).toEqual([
+      "capsule",
+      "capsule-set",
+      "workflow-run",
+      "memory",
+    ]);
+    expect(dependsOn.validTargetKinds).toEqual([
+      "capsule",
+      "capsule-set",
+      "workflow-run",
+      "memory",
+      "evidence-run",
+      "workspace-path",
+    ]);
   });
 });
 
