@@ -13,15 +13,44 @@
 // publish path depends on; tarball contents are separately enforced by check:package-surface and
 // the install/runtime smoke gates.
 
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
+const APPROVED_ROOT_SRC_FILES = ["src/cli/index.ts", "src/index.ts"];
+const APPROVED_ROOT_SRC_SHA256 = new Map([
+  ["src/index.ts", "751c1c0fae45a8bf68ba099ecd0706a74d64661f8fc1b9bd7f05d4abd1beb20b"],
+  ["src/cli/index.ts", "35b598c19db4adcd9fe40618f289200463d361d109f951c9e70b99db8db25863"],
+]);
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function listFilesRecursively(rootDir, prefix = "") {
+  const dirPath = join(rootDir, prefix);
+  const entries = readdirSync(dirPath, { withFileTypes: true }).sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+  const files = [];
+  for (const entry of entries) {
+    const relativePath = prefix === "" ? entry.name : join(prefix, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...listFilesRecursively(rootDir, relativePath));
+      continue;
+    }
+    if (entry.isFile()) {
+      files.push(relativePath.replaceAll("\\", "/"));
+    }
+  }
+  return files;
+}
+
+function sha256(relativePath) {
+  return createHash("sha256").update(readFileSync(join(repoRoot, relativePath))).digest("hex");
 }
 
 function fail(message) {
@@ -71,6 +100,22 @@ const REMOVED_PATHS = [
 for (const target of REMOVED_PATHS) {
   if (existsSync(join(repoRoot, target))) {
     fail(`${target}: legacy Issue #426 path still exists.`);
+  }
+}
+
+const rootSrcFiles = listFilesRecursively(join(repoRoot, "src")).map((relativePath) =>
+  `src/${relativePath}`,
+);
+if (JSON.stringify(rootSrcFiles) !== JSON.stringify(APPROVED_ROOT_SRC_FILES)) {
+  fail(
+    `root src/ must stay minimal: expected ${APPROVED_ROOT_SRC_FILES.join(", ")} but found ${rootSrcFiles.join(", ")}`,
+  );
+}
+
+for (const [relativePath, approvedHash] of APPROVED_ROOT_SRC_SHA256) {
+  const actualHash = sha256(relativePath);
+  if (actualHash !== approvedHash) {
+    fail(`${relativePath}: root facade drifted beyond the approved minimal facade.`);
   }
 }
 
