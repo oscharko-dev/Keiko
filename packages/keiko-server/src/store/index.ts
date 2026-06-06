@@ -39,4 +39,10 @@ export {
   UI_DB_DIRNAME,
 } from "./paths.js";
 export { runMigrations, SCHEMA_VERSION } from "./schema.js";
-export { createInMemoryUiStore, createNodeUiStore, isProjectAvailable } from "./db.js";
+export {
+  buildUiStoreOverDatabase,
+  createInMemoryUiStore,
+  createNodeUiStore,
+  isProjectAvailable,
+  openNodeUiDatabase,
+} from "./db.js";

@@ -14,6 +14,7 @@
 // handlers cite the same numbers.
 
 import type { DatabaseSync } from "node:sqlite";
+import { randomUUID } from "node:crypto";
 import type {
   Relationship,
   RelationshipLifecycleState,
@@ -386,9 +387,11 @@ export function insertRelationship(db: DatabaseSync, rel: NewRelationship): Stor
     throw error;
   }
   // History row for the initial state (draft → active is one common case; for any other
-  // initial lifecycle the row records draft → <initial> per lifecycle.md §3).
+  // initial lifecycle the row records draft → <initial> per lifecycle.md §3). The PK pairs the
+  // relationship id with a `randomUUID` suffix so re-creation under a recycled id (or two events
+  // arriving at the same `Date.now()` millisecond) cannot collide on the history PK.
   insertHistoryRow(db, {
-    id: `${rel.id}-h-0`,
+    id: nextHistoryRowId(rel.id),
     relationshipId: rel.id,
     fromState: "draft",
     toState: rel.lifecycleState,
@@ -438,8 +441,12 @@ export function updateRelationshipLifecycle(
     .prepare(SQL_UPDATE_LIFECYCLE)
     .run(args.to, args.updatedAt, args.newEtag, args.summary ?? null, args.id, args.workspaceId);
   if (info.changes === 0) throw notFound("Relationship");
+  // Issue #539 audit: a deterministic `${id}-h-${updatedAt}` PK collides when two transitions
+  // share a `Date.now()` millisecond (frequent in tests with a pinned clock; possible in
+  // production at fast clock ticks). UNIQUE-violation would roll back the entire UPDATE — a
+  // silent lifecycle revert. The randomUUID-suffixed PK below stays unique within a workspace.
   insertHistoryRow(db, {
-    id: `${args.id}-h-${String(args.updatedAt)}`,
+    id: nextHistoryRowId(args.id),
     relationshipId: args.id,
     fromState: args.previous,
     toState: args.to,
@@ -869,6 +876,10 @@ function selectOrphanedEndpoints(
 function computeHealthFindings(db: DatabaseSync, workspaceId: string): RelationshipHealthFindings {
   const stale = selectFindingsByLifecycle(db, workspaceId, "stale");
   const blocked = selectFindingsByLifecycle(db, workspaceId, "blocked");
+  // `failedRelationships` is the public field name on the health response; the underlying query
+  // selects `lifecycle='revoked'` rows (the lifecycle.md "failure" terminal state). The field
+  // alias is intentional — the public health surface speaks "failed" / the lifecycle state is
+  // `revoked`.
   const failed = selectFindingsByLifecycle(db, workspaceId, "revoked");
   const invalid = selectInvalidReferences(db, workspaceId);
   const cycle = selectCycleParticipants(db, workspaceId);
@@ -924,6 +935,13 @@ function insertHistoryRow(
     row.occurredAt,
     row.summary ?? null,
   );
+}
+
+// Stable history-row PK builder: `<relationshipId>-h-<8 hex chars>`. The relationship id is the
+// owning row; the random suffix avoids same-millisecond collisions that a deterministic clock
+// (test fixtures, fast production clock ticks) would otherwise produce.
+function nextHistoryRowId(relationshipId: string): string {
+  return `${relationshipId}-h-${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 }
 
 function validateWalkBounds(o: {

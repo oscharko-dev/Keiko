@@ -12,8 +12,12 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
+import { promises as fs } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runMigrations } from "./store/schema.js";
+import { listRelationshipAuditEntries } from "./store/relationship-audit.js";
 import {
   createRelationshipStorePort,
   handleRelationshipCreate,
@@ -30,7 +34,7 @@ import {
   _resetIdempotencyStoreForTests,
   type RelationshipHandlerDeps,
 } from "./relationship-handlers.js";
-import type { UiHandlerDeps } from "./deps.js";
+import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { STREAMING } from "./routes.js";
 
@@ -116,21 +120,35 @@ function buildDeps(
   } as unknown as UiHandlerDeps;
 }
 
-function freshStore(opts?: {
+interface FreshStoreBundle {
+  readonly store: ReturnType<typeof createRelationshipStorePort>;
+  readonly db: DatabaseSync;
+}
+
+function freshStoreBundle(opts?: {
   readonly redactString?: (input: string) => string;
-}): ReturnType<typeof createRelationshipStorePort> {
+}): FreshStoreBundle {
   const db = new DatabaseSync(":memory:");
   db.exec("PRAGMA foreign_keys = ON");
   runMigrations(db);
   let t = 1000;
   let n = 0;
-  return createRelationshipStorePort({
+  const store = createRelationshipStorePort({
     db,
     redactString:
       opts?.redactString ?? ((s: string): string => s.replace(/sk-[A-Za-z0-9]+/g, "[REDACTED]")),
     now: () => ++t,
-    newId: () => `rel-${String(++n)}`,
+    // Padded so every id satisfies the api-contract.md §3.2 / handler regex
+    // `^[A-Za-z0-9._-]{8,128}$` — short test fixtures would now hit `relationship/bad-request`.
+    newId: () => `rel-${String(++n).padStart(8, "0")}`,
   });
+  return { store, db };
+}
+
+function freshStore(opts?: {
+  readonly redactString?: (input: string) => string;
+}): ReturnType<typeof createRelationshipStorePort> {
+  return freshStoreBundle(opts).store;
 }
 
 const validProposalBody = JSON.stringify({
@@ -177,7 +195,13 @@ function producesEvidenceBody(sourceId: string, targetId: string): string {
 function dependsOnBody(
   sourceKind: "capsule" | "capsule-set" | "workflow-run" | "memory",
   sourceId: string,
-  targetKind: "capsule" | "capsule-set" | "workflow-run" | "memory" | "evidence-run" | "workspace-path",
+  targetKind:
+    | "capsule"
+    | "capsule-set"
+    | "workflow-run"
+    | "memory"
+    | "evidence-run"
+    | "workspace-path",
   targetId: string,
 ): string {
   return JSON.stringify({
@@ -579,9 +603,8 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     });
     const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
     expect(res.status).toBe(422);
-    const reasons = (
-      res.body as { reasons: { code: string; field?: string; message: string }[] }
-    ).reasons;
+    const reasons = (res.body as { reasons: { code: string; field?: string; message: string }[] })
+      .reasons;
     expect(reasons).toContainEqual({
       code: "denied/lifecycle-illegal-transition",
       field: "transition.to",
@@ -610,9 +633,8 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     });
     const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
     expect(res.status).toBe(422);
-    const reasons = (
-      res.body as { reasons: { code: string; field?: string; message: string }[] }
-    ).reasons;
+    const reasons = (res.body as { reasons: { code: string; field?: string; message: string }[] })
+      .reasons;
     expect(reasons).toContainEqual({
       code: "denied/lifecycle-illegal-transition",
       field: "transition.to",
@@ -731,9 +753,8 @@ describe("PATCH /api/relationships/:id reconnect contract", () => {
     });
     const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
     expect(res.status).toBe(422);
-    const reasons = (
-      res.body as { reasons: { code: string; field?: string; message: string }[] }
-    ).reasons;
+    const reasons = (res.body as { reasons: { code: string; field?: string; message: string }[] })
+      .reasons;
     expect(reasons).toContainEqual({
       code: "denied/lifecycle-illegal-transition",
       field: "reconnect.target",
@@ -1032,5 +1053,203 @@ describe("Schema version is enforced", () => {
     });
     const res: RouteResult = await handleRelationshipValidate(makeCtx(req), deps);
     expect(res.status).toBe(422);
+  });
+});
+
+// Issue #539 audit pass — regressions for the in-scope gaps surfaced after merge.
+describe("Issue #539 audit regressions", () => {
+  // Architect GAP-1 / security C1: the BFF wiring must compose `relationship` into UiHandlerDeps
+  // so production calls (`keiko ui`) reach the handlers instead of HTTP 500.
+  it("BFF buildUiHandlerDeps wires the relationship deps with a scopeResolver", async () => {
+    const tmpDir = await fs.mkdtemp(join(tmpdir(), "keiko-issue539-"));
+    const dbPath = join(tmpDir, "ui.db");
+    try {
+      const env: Record<string, string> = { KEIKO_UI_DATA_DIR: tmpDir };
+      const built = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmpDir,
+        env,
+        uiDbPath: dbPath,
+      });
+      const wired = built.relationship;
+      if (wired === undefined) throw new Error("relationship deps were not wired");
+      expect(wired.scopeResolver({} as unknown as IncomingMessage)?.workspaceId).toBe("local");
+      // KEIKO_WORKSPACE_ID overrides the loopback default.
+      const customDbPath = join(tmpDir, "ui-custom.db");
+      const customEnv: Record<string, string> = {
+        KEIKO_UI_DATA_DIR: tmpDir,
+        KEIKO_WORKSPACE_ID: "ws-explicit",
+      };
+      const customBuilt = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmpDir,
+        env: customEnv,
+        uiDbPath: customDbPath,
+      });
+      const customWired = customBuilt.relationship;
+      if (customWired === undefined) throw new Error("relationship deps were not wired (custom)");
+      expect(customWired.scopeResolver({} as unknown as IncomingMessage)).toEqual({
+        workspaceId: "ws-explicit",
+      });
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  // Security M1: `/:id` routes must reject ids that fall outside the wire schema.
+  it("rejects /:id routes when the id violates the wire schema", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const tooShort = "abc"; // < 8 chars
+    const req = makeReq({ method: "GET", url: `/api/relationships/${tooShort}` });
+    const res = await handleRelationshipGet(makeCtx(req, { id: tooShort }), deps);
+    expect(res.status).toBe(400);
+    expect((res.body as { error: { code: string } }).error.code).toBe("relationship/bad-request");
+  });
+
+  it("rejects /:id routes when the id contains forbidden characters", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const bad = "rel-with/slash";
+    const req = makeReq({ method: "GET", url: `/api/relationships/${bad}` });
+    const res = await handleRelationshipGet(makeCtx(req, { id: bad }), deps);
+    expect(res.status).toBe(400);
+  });
+
+  // Architect GAP-4: list response `limit` echoes the requested cap, not entries.length.
+  it("list response limit echoes the requested cap, not entries.length", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    // Seed one relationship.
+    const seedReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "list-cap-1" },
+      body: validProposalBody,
+    });
+    await handleRelationshipCreate(makeCtx(seedReq), deps);
+    // Query with explicit limit=128, but the seed only contains 1 row.
+    const listReq = makeReq({
+      method: "GET",
+      url: "/api/relationships?type=depends-on&limit=128",
+    });
+    const res = await handleRelationshipList(makeCtx(listReq), deps);
+    expect(res.status).toBe(200);
+    const body = res.body as { limit: number; entries: readonly unknown[] };
+    expect(body.entries).toHaveLength(1);
+    expect(body.limit).toBe(128);
+    // When no limit is supplied, the default cap (64) is echoed.
+    const defaultReq = makeReq({ method: "GET", url: "/api/relationships?type=depends-on" });
+    const defaultRes = await handleRelationshipList(makeCtx(defaultReq), deps);
+    expect((defaultRes.body as { limit: number }).limit).toBe(64);
+  });
+
+  // Architect GAP-3: reconnect emits `relationship.updated` with the closed-set `changedFields`.
+  it("reconnect audit payload includes changedFields (audit-events.md §4.2)", async () => {
+    const { store, db } = freshStoreBundle();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const seedReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "reconnect-audit-1" },
+      body: validProposalBody,
+    });
+    const seedRes = await handleRelationshipCreate(makeCtx(seedReq), deps);
+    expect(seedRes.status).toBe(201);
+    const id = (seedRes.body as { relationship: { id: string } }).relationship.id;
+    const etag = (seedRes.body as { etag: string }).etag;
+    const patchReq = makeReq({
+      method: "PATCH",
+      url: `/api/relationships/${id}`,
+      headers: { "idempotency-key": "reconnect-audit-2", "if-match": etag },
+      body: JSON.stringify({
+        schemaVersion: "1",
+        reconnect: { target: { kind: "capsule", id: "cap-reconnected" } },
+      }),
+    });
+    const res = await handleRelationshipPatch(makeCtx(patchReq, { id }), deps);
+    expect(res.status).toBe(200);
+    const rows = listRelationshipAuditEntries(db, "ws-a", 16);
+    const updated = rows.find((r) => r.kind === "relationship.updated");
+    if (updated === undefined) throw new Error("expected a relationship.updated audit row");
+    expect(updated.payload.changedFields).toEqual([]);
+    expect(updated.payload).toHaveProperty("previousEtag");
+    expect(updated.payload).toHaveProperty("newEtag");
+  });
+
+  // Architect GAP-5: impact-truncated audit row carries `originRelationshipId` and the response
+  // shape no longer leaks the dependency-walk-only rootRelationshipId placeholder.
+  it("impact truncation audit carries originRelationshipId", async () => {
+    const { store, db } = freshStoreBundle();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    // Force truncation by asking for the smallest legal node budget — maxNodes=1.
+    const impactReq = makeReq({
+      method: "GET",
+      url: "/api/relationships/impact?endpointKind=capsule&endpointId=cap-focal&maxNodes=1",
+    });
+    const res = await handleRelationshipImpact(makeCtx(impactReq), deps);
+    expect(res.status).toBe(200);
+    // Response: no `rootRelationshipId` placeholder; echoes the requested origin endpoint.
+    const reportBody = res.body as { report: Record<string, unknown> };
+    expect(reportBody.report).not.toHaveProperty("rootRelationshipId");
+    expect(reportBody.report).toHaveProperty("origin");
+    // Audit obligation: when the walk is bounded, a row should record the origin endpoint
+    // (encoded as `<kind>:<id>` in the `originRelationshipId` field per audit-events.md §4.8).
+    if ((reportBody.report as { truncated: boolean }).truncated) {
+      const rows = listRelationshipAuditEntries(db, "ws-a", 16);
+      const audit = rows.find((r) => r.kind === "relationship.impact-analysis-bounded");
+      if (audit === undefined) {
+        throw new Error("expected a relationship.impact-analysis-bounded audit row");
+      }
+      expect(audit.payload.originRelationshipId).toBe("capsule:cap-focal");
+    }
+  });
+
+  // PR-reviewer M1: history PK collision under a pinned clock. Two transitions sharing a
+  // `Date.now()` millisecond must NOT roll back the second UPDATE with a UNIQUE violation.
+  it("lifecycle history PK is collision-safe under a pinned clock", () => {
+    // Build a store with a NON-monotonic clock so two updates report the same updatedAt.
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    const pinned = createRelationshipStorePort({
+      db,
+      redactString: (s: string): string => s,
+      now: () => 9000, // identical every call
+      newId: (() => {
+        let i = 0;
+        return (): string => `rel-pinned-${String(++i).padStart(4, "0")}`;
+      })(),
+    });
+    const { relationship } = pinned.createRelationship({
+      workspaceId: "ws-a",
+      scope: { kind: "workspace", workspaceId: "ws-a" },
+      type: "depends-on",
+      source: { kind: "capsule", id: "cap-x" },
+      target: { kind: "capsule", id: "cap-y" },
+      lifecycleState: "active",
+    });
+    // Two lifecycle changes under the SAME clock — both must succeed.
+    expect(() =>
+      pinned.updateLifecycle({
+        workspaceId: "ws-a",
+        id: relationship.id,
+        currentEtag: "ignored", // store does not check here
+        to: "archived",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      pinned.updateLifecycle({
+        workspaceId: "ws-a",
+        id: relationship.id,
+        currentEtag: "ignored",
+        to: "superseded",
+      }),
+    ).not.toThrow();
   });
 });

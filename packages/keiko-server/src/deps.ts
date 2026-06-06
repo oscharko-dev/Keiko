@@ -27,7 +27,12 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { dirname, join } from "node:path";
 import type { RunRegistry } from "./runs.js";
 import { createRunRegistry } from "./runs.js";
-import { createNodeUiStore, resolveUiDbPath, type UiStore } from "./store/index.js";
+import {
+  buildUiStoreOverDatabase,
+  openNodeUiDatabase,
+  resolveUiDbPath,
+  type UiStore,
+} from "./store/index.js";
 import { createTerminalExecutionManager, type TerminalExecutionManager } from "./terminal.js";
 import { createBrowserSessionManager, type BrowserSessionManager } from "@oscharko-dev/keiko-tools";
 import { type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -41,7 +46,10 @@ import type {
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
-import type { RelationshipHandlerDeps } from "./relationship-handlers.js";
+import {
+  createRelationshipStorePort,
+  type RelationshipHandlerDeps,
+} from "./relationship-handlers.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -349,6 +357,70 @@ function buildMemoryVault(
   );
 }
 
+// Issue #539: the relationship engine runs server-authoritative scope checks on every route.
+// In the loopback `keiko ui` BFF there is exactly one workspace per process; the resolver
+// returns that workspace identifier from `KEIKO_WORKSPACE_ID` (set), or a stable default
+// otherwise. The constant matches the empty-but-non-zero-length contract of `scope()` so
+// every route resolves a workspaceId instead of returning 403.
+const DEFAULT_LOOPBACK_WORKSPACE_ID = "local";
+
+function resolveLoopbackWorkspaceId(env: EnvSource): string {
+  const explicit = env.KEIKO_WORKSPACE_ID;
+  if (typeof explicit === "string" && explicit.length > 0) return explicit;
+  return DEFAULT_LOOPBACK_WORKSPACE_ID;
+}
+
+// When no UiStore is injected, open one DatabaseSync against the resolved UI-DB and share it
+// with the relationship-engine store so V5 sibling tables share the UI-store transaction model
+// (issue #539, storage.md §3.1). When tests inject a UiStore we leave `relationship` undefined;
+// relationship-engine tests inject their own deps.
+function composePersistence(
+  injected: UiStore | undefined,
+  resolvedUiDbPath: string,
+  redactString: (value: string) => string,
+  env: EnvSource,
+): { readonly store: UiStore; readonly relationship: RelationshipHandlerDeps | undefined } {
+  if (injected !== undefined) return { store: injected, relationship: undefined };
+  const db = openNodeUiDatabase(resolvedUiDbPath);
+  const store = buildUiStoreOverDatabase(db, { redactString });
+  const relationship: RelationshipHandlerDeps = {
+    scopeResolver: (): { readonly workspaceId: string } => ({
+      workspaceId: resolveLoopbackWorkspaceId(env),
+    }),
+    store: createRelationshipStorePort({ db, redactString }),
+  };
+  return { store, relationship };
+}
+
+interface PeripheralManagers {
+  readonly terminal: TerminalExecutionManager;
+  readonly browser: BrowserSessionManager;
+  readonly memoryVault: MemoryVaultStore;
+}
+
+function buildPeripherals(
+  options: BuildHandlerDepsOptions,
+  uiStore: UiStore,
+  evidenceStore: EvidenceStore,
+  redactString: (value: string) => string,
+  liveRedactor: Redactor,
+): PeripheralManagers {
+  return {
+    terminal: buildTerminalManager({
+      store: uiStore,
+      evidenceStore,
+      env: options.env,
+      liveRedactor,
+    }),
+    browser: buildBrowserManager({
+      evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),
+      evidenceStore,
+      redactor: liveRedactor,
+    }),
+    memoryVault: buildMemoryVault(redactString, evidenceStore),
+  };
+}
+
 // Assembles the handler deps for the real `keiko ui` process, mirroring the CLI config/evidence
 // wiring (loadConfigFromFile / resolveEvidenceDir / createNodeEvidenceStore). The UI store is
 // created at the resolved UI-DB path (explicit → KEIKO_UI_DATA_DIR → ~/.keiko/keiko-ui.db) unless
@@ -371,7 +443,13 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
       options.env,
     )(value);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
-  const uiStore = options.store ?? createNodeUiStore(resolvedUiDbPath, { redactString });
+  const { store: uiStore, relationship } = composePersistence(
+    options.store,
+    resolvedUiDbPath,
+    redactString,
+    options.env,
+  );
+  const peripherals = buildPeripherals(options, uiStore, evidenceStore, redactString, liveRedactor);
   return {
     config,
     configPresent,
@@ -386,18 +464,8 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     gatewayConfig: runtimeConfig,
     gatewaySetupTester: options.gatewaySetupTester,
     gatewayModelDiscovery: options.gatewayModelDiscovery,
-    terminal: buildTerminalManager({
-      store: uiStore,
-      evidenceStore,
-      env: options.env,
-      liveRedactor,
-    }),
-    browser: buildBrowserManager({
-      evidenceDir: resolveEvidenceDir(options.evidenceDir, options.env),
-      evidenceStore,
-      redactor: liveRedactor,
-    }),
-    memoryVault: buildMemoryVault(redactString, evidenceStore),
+    ...peripherals,
     consolidationJobs: createConsolidationJobRegistry(),
+    ...(relationship === undefined ? {} : { relationship }),
   };
 }

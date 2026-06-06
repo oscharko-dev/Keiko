@@ -246,7 +246,11 @@ function chmodIfPresent(path: string, mode: number): void {
   }
 }
 
-export function createNodeUiStore(dbPath: string, opts?: UiStoreFactoryOptions): UiStore {
+// Issue #539: deps.ts needs the raw DatabaseSync to compose the relationship-engine store on
+// the same UI database file. The relationship V5 schema lives in this DB (schema.ts §V5);
+// keeping a single connection avoids WAL-coordination overhead. `createNodeUiStore` stays a
+// one-shot convenience for callers that do not need the underlying handle.
+export function openNodeUiDatabase(dbPath: string): DatabaseSync {
   ensureDirHardened(dirname(dbPath));
   let db = preparedDatabase(dbPath);
   try {
@@ -263,5 +267,13 @@ export function createNodeUiStore(dbPath: string, opts?: UiStoreFactoryOptions):
   chmodIfPresent(dbPath, 0o600);
   chmodIfPresent(`${dbPath}-wal`, 0o600);
   chmodIfPresent(`${dbPath}-shm`, 0o600);
+  return db;
+}
+
+export function buildUiStoreOverDatabase(db: DatabaseSync, opts?: UiStoreFactoryOptions): UiStore {
   return buildStore(db, resolveOptions(opts));
+}
+
+export function createNodeUiStore(dbPath: string, opts?: UiStoreFactoryOptions): UiStore {
+  return buildUiStoreOverDatabase(openNodeUiDatabase(dbPath), opts);
 }
