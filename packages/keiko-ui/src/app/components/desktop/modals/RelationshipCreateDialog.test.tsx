@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RelationshipDenialCode } from "@oscharko-dev/keiko-contracts";
 import { RelationshipCreateDialog } from "./RelationshipCreateDialog";
 
 vi.mock("../../../relationships/api", () => ({
@@ -8,13 +9,19 @@ vi.mock("../../../relationships/api", () => ({
   RelationshipApiError: class RelationshipApiError extends Error {
     readonly code: string;
     readonly status: number;
-    readonly reasons: ReadonlyArray<{ readonly code: string; readonly message: string }>;
+    readonly reasons: ReadonlyArray<{
+      readonly code: RelationshipDenialCode;
+      readonly message: string;
+    }>;
 
     constructor(
       code: string,
       message: string,
       status: number,
-      reasons: ReadonlyArray<{ readonly code: string; readonly message: string }> = [],
+      reasons: ReadonlyArray<{
+        readonly code: RelationshipDenialCode;
+        readonly message: string;
+      }> = [],
     ) {
       super(message);
       this.name = "RelationshipApiError";
@@ -42,7 +49,7 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function makePreviewDenial(code: string, message: string) {
+function makePreviewDenial(code: RelationshipDenialCode, message: string) {
   return new RelationshipApiError("relationship/policy-denied", message, 422, [{ code, message }]);
 }
 
