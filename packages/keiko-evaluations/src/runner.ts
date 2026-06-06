@@ -23,7 +23,7 @@ import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { createEvaluationModelProvider } from "./model-provider.js";
 import { aggregateScorecard, scoreFixture, summarizeScorecard } from "./scorer.js";
-import { checkSurfaceParity } from "./surface-parity.js";
+import { checkSurfaceParity, type SurfaceParityDeps } from "./surface-parity.js";
 import {
   buildBugInput,
   buildUnitTestInput,
@@ -58,6 +58,9 @@ export interface EvalRunnerDeps {
   readonly now?: (() => number) | undefined;
   // Fixed run-id source so persisted evidence filenames are stable across runs.
   readonly idSource?: (() => string) | undefined;
+  // Higher-layer adapters used by the surface-parity check. Injected by the CLI so the evaluations
+  // package does not reach up into keiko-cli or keiko-server on its own.
+  readonly surfaceParity?: SurfaceParityDeps | undefined;
 }
 
 export interface EvalRunOptions {
@@ -275,6 +278,15 @@ function liveContext(
   };
 }
 
+function requireSurfaceParityDeps(deps: EvalRunnerDeps): SurfaceParityDeps {
+  if (deps.surfaceParity === undefined) {
+    throw new Error(
+      "runEvaluationSuite requires injected surfaceParity adapters for CLI and BFF contract checks.",
+    );
+  }
+  return deps.surfaceParity;
+}
+
 export async function runEvaluationSuite(
   options: EvalRunOptions,
   deps: EvalRunnerDeps = {},
@@ -289,7 +301,7 @@ export async function runEvaluationSuite(
     evidenceRefs.push(fixtureRun.evidenceRef);
   }
   const dimensions = aggregateScorecard(fixtureResults);
-  const surfaceParity = await checkSurfaceParity();
+  const surfaceParity = await checkSurfaceParity(requireSurfaceParityDeps(deps));
   const live = liveContext(options, evidenceRefs);
   return {
     schemaVersion: EVAL_SCORECARD_SCHEMA_VERSION,

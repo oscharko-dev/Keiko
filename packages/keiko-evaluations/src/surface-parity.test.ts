@@ -1,35 +1,39 @@
 // Surface-parity tests (ADR-0012 D7, AC#3). Verifies that the four surfaces for each workflow —
 // descriptor, CLI flags, SDK exports, and the UI RunRequest shape — present consistent contracts.
 // allPassed must be true on the real codebase (structural regression guard). No network or model.
-//
-// Dynamic imports against the legacy src/sdk and src/ui paths avoid pulling those trees into the
-// keiko-evaluations TypeScript program (the same load-time-cycle break the production code uses).
 
 import { describe, expect, it } from "vitest";
-import { checkSurfaceParity } from "./surface-parity.js";
+import { checkSurfaceParity, type SurfaceParityDeps } from "./surface-parity.js";
 import {
   UNIT_TEST_WORKFLOW_DESCRIPTOR,
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
 } from "@oscharko-dev/keiko-workflows";
 import { runGenTestsCli, runInvestigateCli, type CliIo } from "@oscharko-dev/keiko-cli";
+import { parseRunRequest } from "@oscharko-dev/keiko-server";
+
+const SURFACE_PARITY_DEPS: SurfaceParityDeps = {
+  runGenTestsCli,
+  runInvestigateCli,
+  parseRunRequest,
+};
 
 // ─── Full checkSurfaceParity result on the real codebase ──────────────────────
 
 describe("checkSurfaceParity (real codebase)", () => {
   it("allPassed is true — all structural invariants hold", async () => {
-    const result = await checkSurfaceParity();
+    const result = await checkSurfaceParity(SURFACE_PARITY_DEPS);
     const failedChecks = result.checks.filter((c) => !c.passed);
     expect(failedChecks, JSON.stringify(failedChecks)).toHaveLength(0);
     expect(result.allPassed).toBe(true);
   });
 
   it("returns exactly 8 checks (2 descriptor + 2 cli-flags + 2 sdk-exports + 2 run-request)", async () => {
-    const result = await checkSurfaceParity();
+    const result = await checkSurfaceParity(SURFACE_PARITY_DEPS);
     expect(result.checks).toHaveLength(8);
   });
 
   it("all checks have a non-empty check name and a workflowKind", async () => {
-    const result = await checkSurfaceParity();
+    const result = await checkSurfaceParity(SURFACE_PARITY_DEPS);
     for (const check of result.checks) {
       expect(check.check.length).toBeGreaterThan(0);
       expect(["unit-tests", "bug-investigation"]).toContain(check.workflowKind);
