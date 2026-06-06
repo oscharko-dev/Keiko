@@ -17,6 +17,12 @@ import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import type { UseWorkspaceResult, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
 import {
+  parsePersistedConnections,
+  parsePersistedWindows,
+  sanitizePersistedConnections,
+  sanitizePersistedWindows,
+} from "./workspace-persistence";
+import {
   makeConnectActions,
   makeLayoutActions,
   makeMutations,
@@ -89,28 +95,6 @@ function persistList<T>(key: string, value: T): void {
   } catch {
     /* ignore */
   }
-}
-
-function parseWinArray(raw: string | null): AppWindow[] | null {
-  if (raw === null) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed as AppWindow[];
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
-
-function parseConns(raw: string | null): Connection[] {
-  if (raw === null) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed as Connection[];
-  } catch {
-    /* ignore */
-  }
-  return [];
 }
 
 interface ArrowState {
@@ -257,7 +241,7 @@ function useHydrate({ wsRef, setWins, setConns, zc }: UseHydrateArgs): void {
     const r = el.getBoundingClientRect();
     let init: AppWindow[] | null = null;
     try {
-      init = parseWinArray(window.localStorage.getItem(WS_LS));
+      init = parsePersistedWindows(window.localStorage.getItem(WS_LS));
     } catch {
       init = null;
     }
@@ -265,7 +249,7 @@ function useHydrate({ wsRef, setWins, setConns, zc }: UseHydrateArgs): void {
     zc.current = Math.max(1, ...init.map((w) => w.z));
     setWins(init);
     try {
-      setConns(parseConns(window.localStorage.getItem(CONN_LS)));
+      setConns(parsePersistedConnections(window.localStorage.getItem(CONN_LS), init));
     } catch {
       /* ignore */
     }
@@ -410,13 +394,14 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
   useHydrate({ wsRef, setWins, setConns, zc });
 
   useEffect(() => {
-    persistList(CONN_LS, conns);
-  }, [conns]);
+    if (wins === null) return;
+    persistList(CONN_LS, sanitizePersistedConnections(conns, wins));
+  }, [conns, wins]);
 
   useConnectionPrune(wins, setConns);
 
   useEffect(() => {
-    if (wins !== null) persistList(WS_LS, wins);
+    if (wins !== null) persistList(WS_LS, sanitizePersistedWindows(wins));
   }, [wins]);
 
   useKeyboardCtrls({ setWins, rect, cancelConnectRef });
