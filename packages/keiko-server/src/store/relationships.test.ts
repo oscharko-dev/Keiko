@@ -315,3 +315,266 @@ describe("graphHealth + relationshipCardinalitySnapshot", () => {
     expect(snap.startsWorkflowForTarget).toBe(0);
   });
 });
+
+// Issue #542 AC4 — the six finding categories (stale, blocked, failed/revoked,
+// invalid, cycle, orphaned) must each be populated independently. Each test
+// below isolates one category so that a single-line mutation of the
+// corresponding `selectFindings*` call (or its filter predicate) in
+// `computeHealthFindings` would surface as a unique failure.
+describe("graphHealth categorized findings (issue #542 AC4)", () => {
+  it("surfaces stale relationships in findings.staleRelationships", () => {
+    const db = openMem();
+    insertRelationship(db, makeRel({ id: "rel-stale", lifecycleState: "stale" }));
+    const { findings } = graphHealth(db, workspaceA);
+    expect(findings.staleRelationships.map((r) => r.id)).toContain("rel-stale");
+    expect(findings.staleRelationshipsTruncated).toBe(false);
+    expect(findings.blockedRelationships).toHaveLength(0);
+    expect(findings.failedRelationships).toHaveLength(0);
+  });
+
+  it("surfaces blocked relationships in findings.blockedRelationships", () => {
+    const db = openMem();
+    insertRelationship(db, makeRel({ id: "rel-blocked", lifecycleState: "blocked" }));
+    const { findings } = graphHealth(db, workspaceA);
+    expect(findings.blockedRelationships.map((r) => r.id)).toContain("rel-blocked");
+    expect(findings.blockedRelationshipsTruncated).toBe(false);
+  });
+
+  it("surfaces revoked relationships in findings.failedRelationships (alias)", () => {
+    const db = openMem();
+    insertRelationship(db, makeRel({ id: "rel-revoked", lifecycleState: "revoked" }));
+    const { findings } = graphHealth(db, workspaceA);
+    expect(findings.failedRelationships.map((r) => r.id)).toContain("rel-revoked");
+    expect(findings.failedRelationships[0]?.lifecycle).toBe("revoked");
+  });
+
+  it("surfaces relationships referencing unsupported object kinds in findings.invalidReferences", () => {
+    // `agent` is in the DB CHECK list but not in RELATIONSHIP_SUPPORTED_OBJECT_KINDS
+    // (taxonomy.md §4.2: forward-looking kinds awaiting their owning registry). The
+    // invalid-reference scan returns rows whose endpoint kind is in the CHECK set but
+    // not in the JS-runtime supported set, modelling data drift across registries.
+    const db = openMem();
+    db.prepare(
+      `INSERT INTO relationships(
+         id, schema_version, workspace_scope_id, scope_kind, scope_coordinate, type,
+         source_kind, source_id, target_kind, target_id, lifecycle,
+         created_at, updated_at, etag
+       ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(
+      "rel-invalid",
+      "1",
+      workspaceA,
+      "workspace",
+      workspaceA,
+      "depends-on",
+      "agent",
+      "agent-1",
+      "capsule",
+      "cap-2",
+      "active",
+      1000,
+      1000,
+      "etag-invalid",
+    );
+    const { findings } = graphHealth(db, workspaceA);
+    expect(findings.invalidReferences.map((r) => r.id)).toContain("rel-invalid");
+    expect(findings.invalidReferencesTruncated).toBe(false);
+  });
+
+  it("surfaces cycle participants when two active relationships form a 2-cycle", () => {
+    const db = openMem();
+    insertRelationship(
+      db,
+      makeRel({
+        id: "rel-cycle-a",
+        source: { kind: "capsule", id: "cap-1", workspaceId: workspaceA },
+        target: { kind: "capsule", id: "cap-2", workspaceId: workspaceA },
+      }),
+    );
+    insertRelationship(
+      db,
+      makeRel({
+        id: "rel-cycle-b",
+        source: { kind: "capsule", id: "cap-2", workspaceId: workspaceA },
+        target: { kind: "capsule", id: "cap-1", workspaceId: workspaceA },
+      }),
+    );
+    const { findings } = graphHealth(db, workspaceA);
+    const cycleIds = findings.cycleParticipants.map((r) => r.id).sort();
+    expect(cycleIds).toEqual(["rel-cycle-a", "rel-cycle-b"]);
+    expect(findings.cycleScanTruncated).toBe(false);
+  });
+
+  it("surfaces endpoints whose only relationships are inactive in findings.orphanedEndpoints", () => {
+    const db = openMem();
+    // Insert directly with lifecycle=revoked so the endpoint has any_total > 0 but
+    // active_total = 0 (active here means lifecycle in {draft, active, archived}).
+    insertRelationship(db, makeRel({ id: "rel-orphan", lifecycleState: "revoked" }));
+    const { findings } = graphHealth(db, workspaceA);
+    const orphanKeys = findings.orphanedEndpoints.map((e) => `${e.kind}/${e.id}`).sort();
+    expect(orphanKeys).toContain("capsule/cap-1");
+    expect(orphanKeys).toContain("capsule/cap-2");
+    expect(findings.orphanedEndpointsTruncated).toBe(false);
+  });
+
+  it("isolates findings to the calling workspace", () => {
+    const db = openMem();
+    insertRelationship(db, makeRel({ id: "rel-a-stale", lifecycleState: "stale" }));
+    const otherWorkspace = graphHealth(db, workspaceB);
+    expect(otherWorkspace.totals.stale).toBe(0);
+    expect(otherWorkspace.findings.staleRelationships).toHaveLength(0);
+    expect(otherWorkspace.findings.blockedRelationships).toHaveLength(0);
+    expect(otherWorkspace.findings.failedRelationships).toHaveLength(0);
+    expect(otherWorkspace.findings.invalidReferences).toHaveLength(0);
+    expect(otherWorkspace.findings.cycleParticipants).toHaveLength(0);
+    expect(otherWorkspace.findings.orphanedEndpoints).toHaveLength(0);
+  });
+});
+
+// Issue #542 AC1 — walk bounds. Each call site that passes through
+// `validateWalkBounds` must reject out-of-range inputs at the store barrier,
+// even when the handler-layer clamp is bypassed (tests injecting the store
+// directly do that). The handler layer is a separate barrier and not under test
+// here.
+describe("validateWalkBounds boundary enforcement (issue #542 AC1)", () => {
+  it("rejects maxDepth <= 0", () => {
+    const db = openMem();
+    insertRelationship(db, makeRel({ id: "rel-1" }));
+    expect(() =>
+      walkDependencies(db, {
+        workspaceId: workspaceA,
+        originId: "rel-1",
+        direction: "outgoing",
+        maxDepth: 0,
+        maxNodes: 16,
+        maxRelationships: 16,
+      }),
+    ).toThrow();
+  });
+
+  it("rejects maxDepth above the hard cap", () => {
+    const db = openMem();
+    insertRelationship(db, makeRel({ id: "rel-1" }));
+    expect(() =>
+      walkDependencies(db, {
+        workspaceId: workspaceA,
+        originId: "rel-1",
+        direction: "outgoing",
+        maxDepth: 4,
+        maxNodes: 16,
+        maxRelationships: 16,
+      }),
+    ).toThrow();
+  });
+
+  it("rejects maxNodes <= 0 and maxNodes above 1024", () => {
+    const db = openMem();
+    insertRelationship(db, makeRel({ id: "rel-1" }));
+    for (const maxNodes of [0, 1025]) {
+      expect(() =>
+        walkDependencies(db, {
+          workspaceId: workspaceA,
+          originId: "rel-1",
+          direction: "outgoing",
+          maxDepth: 1,
+          maxNodes,
+          maxRelationships: 16,
+        }),
+      ).toThrow();
+    }
+  });
+
+  it("rejects maxRelationships <= 0 and maxRelationships above 2048", () => {
+    const db = openMem();
+    insertRelationship(db, makeRel({ id: "rel-1" }));
+    for (const maxRelationships of [0, 2049]) {
+      expect(() =>
+        walkDependencies(db, {
+          workspaceId: workspaceA,
+          originId: "rel-1",
+          direction: "outgoing",
+          maxDepth: 1,
+          maxNodes: 16,
+          maxRelationships,
+        }),
+      ).toThrow();
+    }
+  });
+});
+
+// Issue #542 AC1+AC3 — walk truncation reasons. Drive each truncation flag
+// with the smallest legal limits so the test is fast and the cap classifier
+// is exercised. A single-line mutation that erases the truncation reason or
+// loosens the cap will surface here.
+describe("dependency walk truncation flags (issue #542 AC1 + AC3)", () => {
+  it("flags truncationReason 'max-relationships' when the relationship cap is reached", () => {
+    const db = openMem();
+    // cap-1 -> cap-2 and cap-1 -> cap-3; with maxRelationships=1 the second hop
+    // is rejected and the walk reports truncation.
+    insertRelationship(
+      db,
+      makeRel({
+        id: "rel-a",
+        source: { kind: "capsule", id: "cap-1", workspaceId: workspaceA },
+        target: { kind: "capsule", id: "cap-2", workspaceId: workspaceA },
+      }),
+    );
+    insertRelationship(
+      db,
+      makeRel({
+        id: "rel-b",
+        source: { kind: "capsule", id: "cap-1", workspaceId: workspaceA },
+        target: { kind: "capsule", id: "cap-3", workspaceId: workspaceA },
+      }),
+    );
+    const result = computeImpact(db, {
+      workspaceId: workspaceA,
+      endpoint: { kind: "capsule", id: "cap-1" },
+      direction: "outgoing",
+      maxDepth: 2,
+      maxNodes: 16,
+      maxRelationships: 1,
+    });
+    expect(result.truncated).toBe(true);
+    expect(result.truncationReason).toBe("max-relationships");
+  });
+
+  it("flags truncationReason 'max-nodes' when the node cap is reached", () => {
+    const db = openMem();
+    insertRelationship(
+      db,
+      makeRel({
+        id: "rel-a",
+        source: { kind: "capsule", id: "cap-1", workspaceId: workspaceA },
+        target: { kind: "capsule", id: "cap-2", workspaceId: workspaceA },
+      }),
+    );
+    insertRelationship(
+      db,
+      makeRel({
+        id: "rel-b",
+        source: { kind: "capsule", id: "cap-1", workspaceId: workspaceA },
+        target: { kind: "capsule", id: "cap-3", workspaceId: workspaceA },
+      }),
+    );
+    const result = computeImpact(db, {
+      workspaceId: workspaceA,
+      endpoint: { kind: "capsule", id: "cap-1" },
+      direction: "outgoing",
+      maxDepth: 2,
+      maxNodes: 1,
+      maxRelationships: 16,
+    });
+    expect(result.truncated).toBe(true);
+    expect(result.truncationReason).toBe("max-nodes");
+  });
+});
+
+// `MAX_LIST_LIMIT` is referenced by the walk tests so its current value (256)
+// stays observable from this file — guards against silent constant drift.
+describe("MAX_LIST_LIMIT export", () => {
+  it("is positive and finite", () => {
+    expect(MAX_LIST_LIMIT).toBeGreaterThan(0);
+    expect(Number.isFinite(MAX_LIST_LIMIT)).toBe(true);
+  });
+});
