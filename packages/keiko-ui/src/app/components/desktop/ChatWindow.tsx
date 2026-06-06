@@ -13,7 +13,7 @@ import { ConnectedScopePill } from "./ConnectedScopePill";
 import { BudgetIndicator, BUDGET_EXCEEDED_ALERT_ID } from "./ContextBudget";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
-import { SafeMarkdown } from "./SafeMarkdown";
+import { SafeMarkdownBoundary } from "./SafeMarkdown";
 import {
   AttachButton,
   AttachDropZone,
@@ -22,7 +22,7 @@ import {
 } from "./AttachmentStrip";
 import { isRunSummaryMessage, LaunchWorkflowButton, RunSummaryCard } from "./WorkflowHandoff";
 import { Toggle } from "./widgets/shared/Toggle";
-import { type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
+import { isBudgetExceeded, type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
 import { ApiError, updateChat } from "@/lib/api";
 import {
@@ -124,7 +124,9 @@ function ChatBubble({ message }: { readonly message: ChatMessage }): ReactNode {
         ) : (
           // AC #1 / #2: assistant responses render as safe markdown.
           // User messages remain plain text — no markdown interpretation.
-          <SafeMarkdown source={message.content} />
+          // SM-1: wrapped in a per-message boundary so a parser/render defect
+          // degrades this one bubble to plain text instead of crashing the view.
+          <SafeMarkdownBoundary source={message.content} />
         )}
         <div className="chat-msg-time">{timeLabel(message.timestamp)}</div>
       </div>
@@ -196,8 +198,8 @@ function ComposerBar({
       : loading
         ? LOADING_STATUS_ID
         : draftEmpty
-        ? SEND_HINT_ID
-        : undefined;
+          ? SEND_HINT_ID
+          : undefined;
 
   // AC #2 / title for disabled model select.
   const selectTitle = noEligibleModels
@@ -296,8 +298,8 @@ function ComposerBar({
                 : loading
                   ? "Connecting to your gateway"
                   : draftEmpty
-                  ? "Type a message to send"
-                  : "Send message"
+                    ? "Type a message to send"
+                    : "Send message"
           }
           aria-label="Send message"
         >
@@ -393,8 +395,12 @@ function ComposerCore({ session, ready, placeholder }: ComposerCoreProps): React
     clearHistory,
   } = session;
   // Issue #151 — budget can be undefined while bootstrapping; treat that as
-  // not-exceeded so the composer remains submittable.
-  const budgetExceeded = budget?.pressure === "exceeded";
+  // not-exceeded so the composer remains submittable. CB-F1: a runtime-configured
+  // model with contextWindow 0 reports pressure "exceeded" from the estimator but
+  // has no real window — it must NOT block send (and BudgetIndicator self-hides),
+  // so we gate on contextWindowTokens > 0 via the shared predicate. This also keeps
+  // aria-describedby from dangling at a BudgetIndicator that renders nothing.
+  const budgetExceeded = isBudgetExceeded(budget);
 
   // Rejection state for the inline alert (AC #2 / Part 2).
   const [rejectionReason, setRejectionReason] = useState<AttachmentRejectionReason | undefined>();
@@ -571,7 +577,7 @@ function MiniChat({
   readonly session: ChatSessionApi;
   readonly ready: boolean;
 }): ReactNode {
-  const { draft, loading, sending, setDraft, sendMessage } = session;
+  const { draft, loading, sending, sendStatus, cancelSend, setDraft, sendMessage } = session;
   return (
     <form
       className="composer composer-fill"
@@ -590,17 +596,35 @@ function MiniChat({
           onKeyDown={onComposerKeyDown(sendMessage)}
           disabled={loading || sending}
         />
-        <button
-          type={ready ? "submit" : "button"}
-          className="cmp-send cmp-send-float"
-          data-on={ready}
-          aria-disabled={!ready}
-          aria-label="Send message"
-          title="Send"
-        >
-          <Icons.arrowUp size={16} />
-        </button>
+        {/* ST-F1 — match ComposerBar: while a send is in flight the primary
+            action flips to "Cancel response" (#152 AC#3) so the mini composer
+            offers the same cancel affordance as the full composer. */}
+        {sending ? (
+          <button
+            type="button"
+            className="cmp-send cmp-send-float cmp-send-cancel"
+            data-on
+            aria-label="Cancel response"
+            title="Cancel response"
+            onClick={cancelSend}
+          >
+            <Icons.close size={16} />
+          </button>
+        ) : (
+          <button
+            type={ready ? "submit" : "button"}
+            className="cmp-send cmp-send-float"
+            data-on={ready}
+            aria-disabled={!ready}
+            aria-label="Send message"
+            title="Send"
+          >
+            <Icons.arrowUp size={16} />
+          </button>
+        )}
       </div>
+      {/* ST-F1 — #152 AC#3 lifecycle status region for the mini composer. */}
+      <SendLifecycleStatus status={sendStatus} />
     </form>
   );
 }

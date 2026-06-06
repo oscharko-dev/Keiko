@@ -3,13 +3,19 @@
 // component directly (no provider wiring needed) and the ChatWindow
 // integration for send-blocking when pressure is "exceeded".
 
-import { render, screen } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BudgetIndicator } from "./ContextBudget";
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
-import { CONTEXT_OVERSIZED_USER_MESSAGE, type ChatSessionApi } from "./hooks/useChatSession";
+import {
+  CONTEXT_OVERSIZED_USER_MESSAGE,
+  isBudgetExceeded,
+  useChatSession,
+  type ChatSessionApi,
+} from "./hooks/useChatSession";
+import * as api from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import type { Chat, ConversationBudgetEstimate, ModelCapability } from "@/lib/types";
 
@@ -225,5 +231,198 @@ describe("context-overflow error mapping (AC#3)", () => {
     // Sanity-check the ApiError shape used by the hook's classifier.
     const apiError = new ApiError("CONVERSATION_OVERSIZED_CONTEXT", "raw", 413);
     expect(apiError.code).toBe("CONVERSATION_OVERSIZED_CONTEXT");
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// CB-F1 — a runtime-configured model with contextWindow 0 must NOT be treated
+// as over budget (the estimator reports "exceeded" for a zero window). The
+// shared isBudgetExceeded predicate guards on contextWindowTokens > 0.
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("isBudgetExceeded (CB-F1 guard)", () => {
+  it("returns false for a contextWindow:0 model even when pressure is 'exceeded'", () => {
+    expect(isBudgetExceeded(makeBudget({ contextWindowTokens: 0, pressure: "exceeded" }))).toBe(
+      false,
+    );
+  });
+
+  it("returns false when budget is undefined", () => {
+    expect(isBudgetExceeded(undefined)).toBe(false);
+  });
+
+  it("returns true only when window > 0 AND pressure is 'exceeded'", () => {
+    expect(
+      isBudgetExceeded(makeBudget({ contextWindowTokens: 10_000, pressure: "exceeded" })),
+    ).toBe(true);
+    expect(isBudgetExceeded(makeBudget({ contextWindowTokens: 10_000, pressure: "high" }))).toBe(
+      false,
+    );
+  });
+});
+
+describe("ChatWindow with a contextWindow:0 model (CB-F1)", () => {
+  it("does not block send and hides the budget indicator and its dangling describedby", () => {
+    const session = makeSession({
+      activeChat: makeChat(),
+      activeProject: {
+        path: "/proj",
+        name: "proj",
+        available: true,
+        favorite: false,
+        createdAt: 0,
+        lastOpenedAt: 0,
+      },
+      models: [makeModel({ contextWindow: 0 })],
+      messages: [
+        {
+          id: "m1",
+          chatId: "chat-1",
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: undefined,
+          shortResult: undefined,
+          taskType: undefined,
+        },
+      ],
+      draft: "anything",
+      // Estimator output for a zero window: pressure exceeded but no real limit.
+      budget: makeBudget({ contextWindowTokens: 0, pressure: "exceeded" }),
+    });
+    render(
+      <ChatSessionProvider value={session}>
+        <ChatWindow />
+      </ChatSessionProvider>,
+    );
+    // No exceeded alert is rendered (BudgetIndicator self-hides at window <= 0).
+    expect(screen.queryByText(/Context exceeds the selected model/)).toBeNull();
+    const sendButton = screen.getByRole("button", { name: "Send message" });
+    // Send is NOT blocked by budget — aria-disabled must not be "true".
+    expect(sendButton.getAttribute("aria-disabled")).not.toBe("true");
+    // The send button's aria-describedby must not point at the (absent)
+    // budget-exceeded alert element.
+    const describedBy = sendButton.getAttribute("aria-describedby");
+    if (describedBy !== null) {
+      expect(describedBy).not.toContain("budget-exceeded");
+    }
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// CB-F2 / CB-F3 — real-hook integration. Bootstrap a single chat + model so the
+// hook reaches a sendable state.
+// ───────────────────────────────────────────────────────────────────────────
+
+const CB_PROJECT_PATH = "/cb-proj";
+
+function mockBootstrap(model: ModelCapability): void {
+  const chat = makeChat({ projectPath: CB_PROJECT_PATH, selectedModel: model.id });
+  vi.spyOn(api, "fetchModels").mockResolvedValue({ models: [model] });
+  vi.spyOn(api, "fetchProjects").mockResolvedValue({
+    projects: [
+      {
+        path: CB_PROJECT_PATH,
+        name: "proj",
+        favorite: false,
+        createdAt: 0,
+        lastOpenedAt: 0,
+        available: true,
+      },
+    ],
+  });
+  vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [chat] });
+  vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+}
+
+describe("useChatSession context-overflow classification (CB-F2)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    api.clearModelCacheForTests();
+    mockBootstrap(makeModel({ id: "cb-model", contextWindow: 10_000 }));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("maps a GATEWAY_CONTEXT_OVERFLOW ApiError to the CONTEXT_OVERSIZED_USER_MESSAGE copy", async () => {
+    vi.spyOn(api, "sendDesktopChat").mockRejectedValue(
+      new ApiError(
+        "GATEWAY_CONTEXT_OVERFLOW",
+        "provider reported context overflow for 'cb-model'",
+        413,
+      ),
+    );
+
+    const view = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(view.result.current.loading).toBe(false);
+      expect(view.result.current.activeChat).toBeDefined();
+    });
+
+    act(() => view.result.current.setDraft("hi"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(view.result.current.error).toBe(CONTEXT_OVERSIZED_USER_MESSAGE);
+  });
+});
+
+describe("useChatSession Enter-key budget guard (CB-F3)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    api.clearModelCacheForTests();
+    // A tiny real window so any non-empty draft tips pressure to "exceeded".
+    mockBootstrap(makeModel({ id: "cb-tiny", contextWindow: 8, maxOutputTokens: 0 }));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("does not call sendDesktopChat when the budget is exceeded (window > 0)", async () => {
+    const sendSpy = vi.spyOn(api, "sendDesktopChat");
+
+    const view = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(view.result.current.loading).toBe(false);
+      expect(view.result.current.activeChat).toBeDefined();
+    });
+
+    // Sanity: this draft does push the estimator to exceeded with a real window.
+    act(() => view.result.current.setDraft("this draft is comfortably over an 8-token window"));
+    expect(isBudgetExceeded(view.result.current.budget)).toBe(true);
+
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(view.result.current.error).toBe(CONTEXT_OVERSIZED_USER_MESSAGE);
+  });
+
+  it("DOES send when the window is 0 (unknown limits — CB-F1/CB-F3 interplay)", async () => {
+    vi.restoreAllMocks();
+    api.clearModelCacheForTests();
+    mockBootstrap(makeModel({ id: "cb-zero", contextWindow: 0, maxOutputTokens: 0 }));
+    const sendSpy = vi.spyOn(api, "sendDesktopChat").mockResolvedValue({
+      chat: makeChat({ projectPath: CB_PROJECT_PATH, selectedModel: "cb-zero" }),
+      messages: [],
+    });
+
+    const view = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(view.result.current.loading).toBe(false);
+      expect(view.result.current.activeChat).toBeDefined();
+    });
+
+    act(() => view.result.current.setDraft("anything at all"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
   });
 });

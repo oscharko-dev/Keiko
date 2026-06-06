@@ -343,3 +343,54 @@ describe("containsDangerousHtml — obfuscation normalizer", () => {
     expect(containsDangerousHtml("<\tscript>")).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// SM-1 — recursion depth bound. Adversarial assistant output (deeply nested
+// blockquotes / lists / emphasis) must parse without throwing (no stack blow)
+// and produce a bounded AST. Reverting MAX_MARKDOWN_DEPTH / the depth threading
+// would either RangeError (stack overflow) on a large input or run unbounded.
+// ---------------------------------------------------------------------------
+describe("parseSafeMarkdown — SM-1 recursion depth bound", () => {
+  function maxNestingDepth(node: { children?: readonly unknown[] }): number {
+    const children = node.children;
+    if (children === undefined || children.length === 0) return 0;
+    let deepest = 0;
+    for (const child of children) {
+      const d = maxNestingDepth(child as { children?: readonly unknown[] });
+      if (d > deepest) deepest = d;
+    }
+    return deepest + 1;
+  }
+
+  it("parses 100 nested blockquotes without throwing and bounds the nesting", () => {
+    const source = `${"> ".repeat(100)}deeply quoted`;
+    let nodes: readonly { kind: string; children?: readonly unknown[] }[] | undefined;
+    expect(() => {
+      nodes = parseSafeMarkdown(source);
+    }).not.toThrow();
+    expect(nodes?.[0]?.kind).toBe("blockquote");
+    // Blockquote → block re-entry is capped at MAX_MARKDOWN_DEPTH (16); the AST
+    // must not be 100 levels deep.
+    const depth = maxNestingDepth(nodes?.[0] ?? {});
+    expect(depth).toBeLessThan(40);
+  });
+
+  it("parses a 100-level indented list without throwing and bounds the nesting", () => {
+    const lines: string[] = [];
+    for (let i = 0; i < 100; i++) {
+      lines.push(`${" ".repeat(i * 2)}- item ${String(i)}`);
+    }
+    let nodes: readonly { kind: string; children?: readonly unknown[] }[] | undefined;
+    expect(() => {
+      nodes = parseSafeMarkdown(lines.join("\n"));
+    }).not.toThrow();
+    expect(nodes?.[0]?.kind).toBe("ul");
+    const depth = maxNestingDepth(nodes?.[0] ?? {});
+    expect(depth).toBeLessThan(60);
+  });
+
+  it("parses deeply nested emphasis without throwing", () => {
+    const source = `${"*".repeat(200)}x${"*".repeat(200)}`;
+    expect(() => parseSafeMarkdown(source)).not.toThrow();
+  });
+});

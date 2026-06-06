@@ -358,8 +358,11 @@ export async function correctMemory(
 // Accept / reject proposal
 // ---------------------------------------------------------------------------
 
+// `id` is the proposal/record identifier the route encodes into the path. It is typed as a
+// plain string because both call sites supply a branded id (chat: MemoryProposalId, review
+// queue: MemoryId) and this HTTP boundary only needs the URL path segment, not the brand.
 export async function acceptMemoryProposal(
-  id: MemoryId,
+  id: string,
   fetchImpl = fetchJson<MemoryActionResponse>,
 ): Promise<MemoryActionResponse> {
   return fetchImpl(`/api/memory/proposals/${encodeURIComponent(id)}/accept`, {
@@ -369,7 +372,7 @@ export async function acceptMemoryProposal(
 }
 
 export async function rejectMemoryProposal(
-  id: MemoryId,
+  id: string,
   reason?: string,
   fetchImpl = fetchJson<MemoryActionResponse>,
 ): Promise<MemoryActionResponse> {

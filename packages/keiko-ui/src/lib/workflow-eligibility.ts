@@ -10,6 +10,14 @@
 //
 // Pure, total, no side effects. Pinned by WorkflowHandoff.test.tsx (workflow handoff suite) and
 // NewWindowDialog.test.tsx (legacy launcher) for cross-surface drift detection.
+//
+// ELIG-F1: eligibility is INTENTIONALLY DERIVED from kind + toolCalling +
+// structuredOutput, the three runtime capabilities a workflow run actually needs.
+// `ModelCapability.workflowEligible` is descriptive provider/registry metadata and
+// is deliberately NOT consulted here: it defaults to `false` for unknown discovered
+// models, so gating on it would silently break ALL handoff for capable models whose
+// provider never set the flag. The derived predicate is the single source of truth;
+// `workflowEligible` is a hint, not a gate. Pinned by workflow-eligibility.test.ts.
 import type { ModelCapability } from "./types";
 
 export function isWorkflowEligibleModel(model: ModelCapability): boolean {

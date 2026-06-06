@@ -11,7 +11,7 @@
  * - Links always carry rel="noopener noreferrer" target="_blank".
  */
 
-import { useCallback, useState, type ReactNode } from "react";
+import { Component, useCallback, useState, type ReactNode } from "react";
 import { parseSafeMarkdown, type SafeMarkdownNode } from "@/lib/safe-markdown";
 
 export interface SafeMarkdownProps {
@@ -264,4 +264,42 @@ function renderNode(node: SafeMarkdownNode, key: string): ReactNode {
 export function SafeMarkdown({ source }: SafeMarkdownProps): ReactNode {
   const tree = parseSafeMarkdown(source);
   return <div className="sm-root">{tree.map((node, i) => renderNode(node, String(i)))}</div>;
+}
+
+// ---------------------------------------------------------------------------
+// SM-1: per-message error boundary. A parser/render defect in one assistant
+// message must degrade THAT message to plain text rather than crashing the whole
+// conversation view (which has no enclosing boundary). The fallback preserves the
+// AST-only / no-dangerouslySetInnerHTML invariant — it renders the raw source as
+// React-escaped text.
+// ---------------------------------------------------------------------------
+
+interface SafeMarkdownBoundaryProps {
+  readonly source: string;
+}
+
+interface SafeMarkdownBoundaryState {
+  readonly failed: boolean;
+}
+
+export class SafeMarkdownBoundary extends Component<
+  SafeMarkdownBoundaryProps,
+  SafeMarkdownBoundaryState
+> {
+  public override state: SafeMarkdownBoundaryState = { failed: false };
+
+  public static getDerivedStateFromError(): SafeMarkdownBoundaryState {
+    return { failed: true };
+  }
+
+  public override render(): ReactNode {
+    if (this.state.failed) {
+      return (
+        <div className="sm-root sm-fallback" data-markdown-fallback="true">
+          {this.props.source}
+        </div>
+      );
+    }
+    return <SafeMarkdown source={this.props.source} />;
+  }
 }

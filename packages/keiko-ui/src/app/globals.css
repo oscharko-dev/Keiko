@@ -7037,6 +7037,19 @@ select.dlg-input {
   outline-offset: 2px;
   border-radius: 2px;
 }
+/* Light theme override: --accent / --accent-bright are tuned for the dark --card and drop
+   to ~1.9:1 (link) and ~2.4:1 (hover/outline) on the light theme's white --card, failing
+   WCAG 1.4.3 / 1.4.11. Darken to on-brand greens that meet >=4.5:1 (text) and >=3:1 (focus)
+   on white. Dark theme keeps --accent-bright (8.78:1 on the dark card) untouched. */
+[data-theme="light"] .sm-link {
+  color: oklch(0.5 0.13 160); /* 5.51:1 on white --card */
+}
+[data-theme="light"] .sm-link:hover {
+  color: oklch(0.45 0.13 160); /* 6.74:1 on white --card */
+}
+[data-theme="light"] .sm-link:focus-visible {
+  outline-color: oklch(0.5 0.13 160); /* >=3:1 focus indicator on white --card */
+}
 
 /* Table */
 .sm-table-wrapper {

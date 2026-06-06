@@ -172,3 +172,50 @@ describe("SafeMarkdown — table", () => {
     expect(document.body.textContent).toContain("30");
   });
 });
+
+// ---------------------------------------------------------------------------
+// SM-1 — per-message error boundary. A render/parse defect in one assistant
+// message must degrade THAT message to plain text, not crash the conversation.
+// We make the parser throw for a sentinel source and assert SafeMarkdownBoundary
+// renders the raw source as plain text (React-escaped, no dangerouslySetInnerHTML)
+// instead of propagating the error. Reverting the boundary makes render() throw.
+// ---------------------------------------------------------------------------
+describe("SafeMarkdownBoundary — SM-1 plain-text fallback", () => {
+  it("renders the raw source as a plain-text fallback when the renderer throws", async () => {
+    vi.resetModules();
+    const THROWING_SOURCE = "::sm-boundary-throws::";
+    vi.doMock("@/lib/safe-markdown", async () => {
+      const actual =
+        await vi.importActual<typeof import("@/lib/safe-markdown")>("@/lib/safe-markdown");
+      return {
+        ...actual,
+        parseSafeMarkdown: (source: string) => {
+          if (source === THROWING_SOURCE) {
+            throw new Error("forced parser defect");
+          }
+          return actual.parseSafeMarkdown(source);
+        },
+      };
+    });
+
+    const { SafeMarkdownBoundary } = await import("./SafeMarkdown");
+    // Silence React's expected error-boundary console noise for this render.
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    render(<SafeMarkdownBoundary source={THROWING_SOURCE} />);
+    errorSpy.mockRestore();
+
+    const fallback = document.querySelector('[data-markdown-fallback="true"]');
+    expect(fallback).not.toBeNull();
+    expect(fallback?.textContent).toBe(THROWING_SOURCE);
+
+    vi.doUnmock("@/lib/safe-markdown");
+    vi.resetModules();
+  });
+
+  it("renders parsed markdown normally when the renderer does not throw", async () => {
+    const { SafeMarkdownBoundary } = await import("./SafeMarkdown");
+    render(<SafeMarkdownBoundary source="# Boundary Heading" />);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Boundary Heading");
+    expect(document.querySelector('[data-markdown-fallback="true"]')).toBeNull();
+  });
+});

@@ -465,6 +465,50 @@ describe("setSelectedModel PATCH persistence (AC #3 integration)", () => {
     expect(view.result.current.error).toMatch(/network error/i);
   });
 
+  // MS-F4 — cross-chat rollback regression. A rejected PATCH for chat A must NOT
+  // clobber the selection of chat B after the user navigates away. Reverting the
+  // `activeChatIdRef.current !== activeChatId` guard in setSelectedModel's catch
+  // makes B's selection revert to A's old model and surfaces an error on B.
+  it("does not roll back the now-active chat when an earlier chat's PATCH rejects (MS-F4)", async () => {
+    const chatB = makeHookChat({ id: "hook-chat-2", selectedModel: "model-b", updatedAt: 1 });
+
+    let rejectFirst!: (reason: Error) => void;
+    const firstPatch = new Promise<ChatResponse>((_res, rej) => {
+      rejectFirst = rej;
+    });
+    vi.spyOn(api, "updateChat").mockReturnValue(firstPatch);
+    // openChat(B) refetches B's messages; return an empty log.
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+
+    const view = await bootChatHook();
+    // Chat A boots with model-a selected.
+    expect(view.result.current.selectedModel).toBe("model-a");
+
+    // User switches A to model-b (optimistic), firing a PATCH that will reject.
+    act(() => {
+      view.result.current.setSelectedModel("model-b");
+    });
+    expect(view.result.current.selectedModel).toBe("model-b");
+
+    // User navigates to chat B (persisted on model-b → resolves to model-b).
+    await act(async () => {
+      await view.result.current.openChat(chatB);
+    });
+    expect(view.result.current.activeChat?.id).toBe("hook-chat-2");
+    expect(view.result.current.selectedModel).toBe("model-b");
+
+    // Now A's PATCH rejects. B is active — the rollback must be skipped.
+    await act(async () => {
+      rejectFirst(new Error("network error"));
+      await firstPatch.catch(() => undefined);
+    });
+
+    // B's selection is intact and no error was surfaced on B.
+    expect(view.result.current.activeChat?.id).toBe("hook-chat-2");
+    expect(view.result.current.selectedModel).toBe("model-b");
+    expect(view.result.current.error).toBeUndefined();
+  });
+
   it("last-write-wins: a stale PATCH response from an earlier call does not overwrite a later selection", async () => {
     const chat = makeHookChat();
     let resolveFirst!: (v: ChatResponse) => void;

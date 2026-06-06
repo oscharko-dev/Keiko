@@ -477,6 +477,72 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
     expect(assistants).toHaveLength(0);
   });
+
+  // ST-F2 — grounded cancel path at the hook level. A chat with a connectedScope
+  // routes through sendGrounded (askGrounded); cancelSend must abort it, land in
+  // sendStatus "cancelled", and persist NO partial answer as a completed turn.
+  it("cancels an in-flight grounded request without persisting a partial answer (ST-F2)", async () => {
+    // Re-bootstrap with a connected-scope chat so sendMessage routes to grounded.
+    vi.restoreAllMocks();
+    api.clearModelCacheForTests();
+    const groundedChat = makeChat({
+      connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
+    });
+    vi.spyOn(api, "fetchModels").mockResolvedValue({
+      models: [chatModelCapability("example-chat-model")],
+    });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({
+      projects: [
+        {
+          path: PROJECT_PATH,
+          name: "proj",
+          favorite: false,
+          createdAt: 0,
+          lastOpenedAt: 0,
+          available: true,
+        },
+      ],
+    });
+    vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [groundedChat] });
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+
+    let rejectGrounded: ((reason: unknown) => void) | undefined;
+    const groundedPromise = new Promise((_res, rej) => {
+      rejectGrounded = rej;
+    });
+    const askSpy = vi.spyOn(api, "askGrounded").mockImplementation((_req, signal) => {
+      signal?.addEventListener("abort", () => {
+        rejectGrounded?.(new DOMException("aborted", "AbortError"));
+      });
+      return groundedPromise as ReturnType<typeof api.askGrounded>;
+    });
+
+    const view = await bootHook();
+    expect(view.result.current.activeChat?.connectedScope).toBeDefined();
+
+    act(() => view.result.current.setDraft("ground this"));
+    let sendPromise: Promise<void> | undefined;
+    act(() => {
+      sendPromise = view.result.current.sendMessage();
+    });
+    await waitFor(() => {
+      expect(view.result.current.sendStatus).toBe("contacting");
+    });
+    expect(askSpy).toHaveBeenCalledOnce();
+
+    act(() => view.result.current.cancelSend());
+    await sendPromise;
+
+    expect(view.result.current.sendStatus).toBe("cancelled");
+    expect(view.result.current.sending).toBe(false);
+    // No grounded answer persisted, and no assistant message landed.
+    expect(view.result.current.latestGrounded).toBeUndefined();
+    const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(0);
+    // The user's prompt remains so they can retry without retyping (AC#3).
+    const users = view.result.current.messages.filter((m) => m.role === "user");
+    expect(users.length).toBeGreaterThanOrEqual(1);
+  });
 });
 
 // ─── useChatSession bootstrap eligibility filter (Issue #144 AC #1/#2) ─────────

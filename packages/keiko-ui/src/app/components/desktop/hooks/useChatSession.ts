@@ -76,6 +76,20 @@ function classifyMime(mimeType: string): PendingAttachmentKind | "unsupported-ty
   return "unsupported-type";
 }
 
+// COMP-5: true when the model identified by `modelId` accepts the attachment's
+// kind. A model that is absent from `models` (unresolved) is treated as
+// permissive so we never silently drop a chip during a transient bootstrap gap.
+function isAttachmentSupported(
+  attachment: PendingAttachment,
+  modelId: string,
+  models: readonly ModelCapability[],
+): boolean {
+  const capability = models.find((m) => m.id === modelId);
+  if (capability === undefined) return true;
+  if (attachment.kind === "image") return capability.supportsImageInput;
+  return capability.supportsDocumentInput;
+}
+
 function readDataUrl(file: File): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -124,7 +138,13 @@ export function isInFlight(status: SendStatus): boolean {
 export const CONTEXT_OVERSIZED_USER_MESSAGE =
   "The conversation context exceeded the model's window. Clear history or pick a larger-context model.";
 
-const CONTEXT_OVERSIZED_API_CODE = "CONVERSATION_OVERSIZED_CONTEXT";
+// A typed BFF overflow surfaces under the conversation-layer code; a raw provider
+// overflow surfaces under the gateway-layer code (CB-F2). Both map to the single
+// actionable user message below.
+const CONTEXT_OVERSIZED_API_CODES = new Set([
+  "CONVERSATION_OVERSIZED_CONTEXT",
+  "GATEWAY_CONTEXT_OVERFLOW",
+]);
 const CONTEXT_OVERSIZED_PHRASES = [
   "context length",
   "context_length_exceeded",
@@ -133,10 +153,17 @@ const CONTEXT_OVERSIZED_PHRASES = [
 ] as const;
 
 function isContextOversizedError(error: unknown): boolean {
-  if (error instanceof ApiError && error.code === CONTEXT_OVERSIZED_API_CODE) return true;
+  if (error instanceof ApiError && CONTEXT_OVERSIZED_API_CODES.has(error.code)) return true;
   const text = error instanceof Error ? error.message.toLowerCase() : "";
   if (text.length === 0) return false;
   return CONTEXT_OVERSIZED_PHRASES.some((phrase) => text.includes(phrase));
+}
+
+// CB-F1 / CB-F3 — the single unknown-limits-safe "over budget" predicate. A
+// model with contextWindowTokens <= 0 (runtime-configured, unknown window) is
+// NEVER treated as exceeded, mirroring BudgetIndicator's own self-hide guard.
+export function isBudgetExceeded(budget: ConversationBudgetEstimate | undefined): boolean {
+  return budget !== undefined && budget.contextWindowTokens > 0 && budget.pressure === "exceeded";
 }
 
 function errorMessage(error: unknown): string {
@@ -385,6 +412,9 @@ export function useChatSession(): UseChatSessionResult {
   const [memoryBudgetTokens, setMemoryBudgetTokens] = useState(DEFAULT_MEMORY_BUDGET_TOKENS);
   const activeChatIdRef = useRef<string | undefined>(undefined);
   const selectedModelPersistRef = useRef(0);
+  // COMP-5 — synchronous read of the current model list inside setSelectedModel
+  // (which is intentionally `useCallback(..., [])`) without recreating the callback.
+  const modelsRef = useRef<readonly ModelCapability[]>([]);
   // Issue #147 — pending-attachment state. Cleared after a successful send (AC #3).
   const [pendingAttachments, setPendingAttachments] = useState<readonly PendingAttachment[]>([]);
 
@@ -415,9 +445,15 @@ export function useChatSession(): UseChatSessionResult {
       }
 
       // AC #4: generate previewDataUrl for images only; never store file.path.
+      // ATT-F2: readDataUrl rejects on FileReader.onerror — the addPendingAttachment
+      // contract is "never throws", so a failed read becomes a typed rejection.
       let previewDataUrl: string | undefined;
       if (kind === "image") {
-        previewDataUrl = await readDataUrl(file);
+        try {
+          previewDataUrl = await readDataUrl(file);
+        } catch {
+          return { ok: false, reason: "unsupported-type" };
+        }
       }
 
       const attachment: PendingAttachment = {
@@ -463,7 +499,7 @@ export function useChatSession(): UseChatSessionResult {
   );
 
   const acceptMemoryCandidate = useCallback(async (proposalId: string): Promise<void> => {
-    await acceptMemoryProposal(proposalId as never);
+    await acceptMemoryProposal(proposalId);
     setLatestMemory((previous) =>
       previous === undefined
         ? previous
@@ -477,7 +513,7 @@ export function useChatSession(): UseChatSessionResult {
   }, []);
 
   const rejectMemoryCandidate = useCallback(async (proposalId: string): Promise<void> => {
-    await rejectMemoryProposal(proposalId as never);
+    await rejectMemoryProposal(proposalId);
     setLatestMemory((previous) =>
       previous === undefined
         ? previous
@@ -500,6 +536,10 @@ export function useChatSession(): UseChatSessionResult {
   useEffect(() => {
     activeChatIdRef.current = state.activeChat?.id;
   }, [state.activeChat?.id]);
+
+  useEffect(() => {
+    modelsRef.current = state.models;
+  }, [state.models]);
 
   useEffect(() => {
     let cancelled = false;
@@ -554,6 +594,12 @@ export function useChatSession(): UseChatSessionResult {
         ),
       };
     });
+    // COMP-5: drop pending attachments the newly selected model can no longer
+    // accept so an image chip queued under an image-capable model doesn't persist
+    // after switching to a text-only model (the "blocked" invariant).
+    setPendingAttachments((previous) =>
+      previous.filter((a) => isAttachmentSupported(a, id, modelsRef.current)),
+    );
     const activeChatId = activeChatIdRef.current;
     if (activeChatId === undefined) return;
     const requestId = selectedModelPersistRef.current + 1;
@@ -572,18 +618,32 @@ export function useChatSession(): UseChatSessionResult {
       })
       .catch((caught) => {
         if (selectedModelPersistRef.current !== requestId) return;
+        // MS-F1: skip the rollback when the user has navigated to a different
+        // chat since this PATCH was issued — restoring this chat's old model
+        // would clobber the now-active chat's selection.
+        if (activeChatIdRef.current !== activeChatId) return;
         setError(errorMessage(caught));
         // Roll back optimistic update so UI stays consistent with the server.
         if (snapshot !== undefined) {
           const rollback = snapshot;
+          // MS-F2: restore ONLY the affected chat's selectedModel so concurrent
+          // chat-list updates (re-sorts, new chats) are not discarded by replacing
+          // the whole snapshot array.
           setState((previous) => ({
             ...previous,
-            selectedModel: rollback.selectedModel,
+            selectedModel:
+              previous.activeChat?.id === activeChatId
+                ? rollback.selectedModel
+                : previous.selectedModel,
             activeChat:
-              previous.activeChat?.id === rollback.activeChat?.id
-                ? rollback.activeChat
-                : previous.activeChat,
-            chats: rollback.chats,
+              previous.activeChat?.id === activeChatId ? rollback.activeChat : previous.activeChat,
+            chats: previous.chats.map((chat) => {
+              if (chat.id !== activeChatId) return chat;
+              const restored = rollback.chats.find((c) => c.id === activeChatId);
+              return restored !== undefined
+                ? { ...chat, selectedModel: restored.selectedModel }
+                : chat;
+            }),
           }));
         }
       });
@@ -862,6 +922,22 @@ export function useChatSession(): UseChatSessionResult {
       modelId === undefined
     )
       return;
+    // CB-F3: Enter / form-submit must honor the same exceeded-budget block the
+    // send button enforces — otherwise the keyboard path bypasses the gate. Uses
+    // the unknown-limits-safe guard (contextWindowTokens > 0) so a runtime
+    // chat model with contextWindow: 0 is never blocked.
+    const submitBudget = estimateConversationBudget({
+      modelContextWindow: state.models.find((m) => m.id === modelId)?.contextWindow ?? 0,
+      modelMaxOutputTokens: state.models.find((m) => m.id === modelId)?.maxOutputTokens ?? 0,
+      userDraftText: content,
+      conversationHistory: state.messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({ role: m.role, content: m.content })),
+    });
+    if (isBudgetExceeded(submitBudget)) {
+      setError(CONTEXT_OVERSIZED_USER_MESSAGE);
+      return;
+    }
     const optimistic: ChatMessage = {
       id: `local-${String(Date.now())}`,
       chatId: chat.id,
@@ -921,6 +997,7 @@ export function useChatSession(): UseChatSessionResult {
     state.activeProject,
     state.selectedModel,
     state.models,
+    state.messages,
     sendGrounded,
     sendUngrounded,
     clearPendingAttachments,
@@ -974,6 +1051,12 @@ export function useChatSession(): UseChatSessionResult {
     async (
       input: LaunchWorkflowFromConversationInput,
     ): Promise<LaunchWorkflowFromConversationResult> => {
+      // WH-04: a workflow launch replaces the messages array on success, so a
+      // duplicate submit while a send/launch is in flight risks clobbering the
+      // optimistic state. Mirror sendMessage's idempotency guard.
+      if (isInFlight(sendStatusRef.current)) {
+        return { ok: false, reason: "request-failed", message: "A request is already in flight." };
+      }
       const trimmed = input.text.trim();
       if (trimmed.length === 0) return { ok: false, reason: "missing-input" };
 

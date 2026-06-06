@@ -47,6 +47,8 @@ export function LaunchWorkflowButton({
   launch,
 }: LaunchWorkflowButtonProps): ReactNode {
   const [pickerOpen, setPickerOpen] = useState(false);
+  // WH-02 (WCAG 2.4.3): return focus to the trigger when the dialog closes.
+  const triggerRef = useRef<HTMLButtonElement>(null);
   // Hidden affordance when the selected model isn't workflow-eligible — AC#2 stricter filter.
   if (selectedModel === undefined || !isWorkflowEligibleModel(selectedModel)) {
     return null;
@@ -54,6 +56,7 @@ export function LaunchWorkflowButton({
   return (
     <>
       <button
+        ref={triggerRef}
         type="button"
         className="cmp-mode"
         title="Launch a governed workflow with the current model"
@@ -68,7 +71,10 @@ export function LaunchWorkflowButton({
         <WorkflowPickerDialog
           modelId={selectedModel.id}
           launch={launch}
-          onClose={() => setPickerOpen(false)}
+          onClose={() => {
+            setPickerOpen(false);
+            triggerRef.current?.focus();
+          }}
         />
       ) : null}
     </>
@@ -81,6 +87,16 @@ interface WorkflowPickerDialogProps {
     input: LaunchWorkflowFromConversationInput,
   ) => Promise<LaunchWorkflowFromConversationResult>;
   readonly onClose: () => void;
+}
+
+// WH-03: enabled, in-DOM-order focusable descendants used for the modal focus
+// loop. Excludes the dialog container's own tabIndex={-1} and any disabled or
+// explicitly-removed (tabindex="-1") controls.
+const FOCUSABLE_SELECTOR =
+  'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function getFocusable(container: HTMLElement): readonly HTMLElement[] {
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
 }
 
 // Two-step dialog: pick a workflow, then provide the single free-text input the catalog entry
@@ -102,10 +118,35 @@ function WorkflowPickerDialog({ modelId, launch, onClose }: WorkflowPickerDialog
     dialogRef.current?.focus();
   }, []);
 
-  // Close on Escape — WCAG 2.1.2 modal-dismissal compliance.
+  // Close on Escape (WCAG 2.1.2) and trap Tab focus within the dialog (WH-03,
+  // WCAG 2.1.2 "No Keyboard Trap" applied as a modal focus loop): Tab past the
+  // last focusable wraps to the first, Shift+Tab before the first wraps to the
+  // last, so keyboard focus never escapes the modal to the obscured background.
   useEffect(() => {
     function onKey(event: KeyboardEvent): void {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const dialog = dialogRef.current;
+      if (dialog === null) return;
+      const focusables = getFocusable(dialog);
+      if (focusables.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || active === dialog)) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first?.focus();
+      }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

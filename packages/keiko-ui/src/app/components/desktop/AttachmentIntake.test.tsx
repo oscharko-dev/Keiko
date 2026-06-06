@@ -11,18 +11,20 @@
 //   - Static top-level imports from "@/lib/types" only.
 //   - All session deps injected via ChatSessionProvider.
 
-import { render, screen } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import type { ChatSessionApi } from "./hooks/useChatSession";
 import {
   MAX_ATTACHMENT_BYTES,
+  useChatSession,
   type AttachmentRejectionReason,
   type PendingAttachment,
 } from "./hooks/useChatSession";
 import { AttachRejectionAlert, buildAcceptString, rejectionMessage } from "./AttachmentStrip";
+import * as api from "@/lib/api";
 import type { Chat, ModelCapability } from "@/lib/types";
 
 // ─── Fixtures ──────────────────────────────────────────────────────────────────
@@ -301,33 +303,62 @@ describe("AC #3 — pending attachment removal", () => {
     expect(removePendingAttachment).toHaveBeenCalledWith("att-42");
   });
 
-  it("clearPendingAttachments is called after a successful sendMessage (via session mock)", async () => {
-    // clearPendingAttachments is called inside sendMessage in the real hook.
-    // We test that the session wire up is correct: sendMessage is called when Enter pressed.
-    const sendMessage = vi.fn().mockResolvedValue(undefined);
-    const clearPendingAttachments = vi.fn();
-    const session = makeSession({
-      draft: "hello",
-      sendMessage,
-      clearPendingAttachments,
-      activeChat: makeChat(),
-      activeProject: {
-        path: "/proj",
-        name: "proj",
-        available: true,
-        favorite: false,
-        createdAt: 0,
-        lastOpenedAt: 0,
-      },
+  // ATT-F4 — drive the REAL hook so we actually assert that pending attachments
+  // are CLEARED after a successful send (the prior version only asserted that a
+  // mocked sendMessage was invoked, never that the clear happened). Reverting the
+  // `if (terminal === "completed") clearPendingAttachments();` line in the hook
+  // leaves the attachment in pendingAttachments and fails this test.
+  it("clears pending attachments after a successful send (ATT-F4)", async () => {
+    const projectPath = "/att-proj";
+    const model = makeModelCapability({ id: "att-model" });
+    const bootChat = makeChat({ id: "att-chat", projectPath, selectedModel: "att-model" });
+
+    vi.spyOn(api, "fetchModels").mockResolvedValue({ models: [model] });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({
+      projects: [
+        {
+          path: projectPath,
+          name: "proj",
+          favorite: false,
+          createdAt: 0,
+          lastOpenedAt: 0,
+          available: true,
+        },
+      ],
+    });
+    vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [bootChat] });
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+    vi.spyOn(api, "sendDesktopChat").mockResolvedValue({ chat: bootChat, messages: [] });
+
+    const view = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(view.result.current.loading).toBe(false);
+      expect(view.result.current.activeChat).toBeDefined();
     });
 
-    renderWindow(session);
+    // Queue a document attachment (document kind avoids the FileReader preview path).
+    const file = new File(["report"], "report.txt", { type: "text/plain" });
+    await act(async () => {
+      const result = await view.result.current.addPendingAttachment(file);
+      expect(result.ok).toBe(true);
+    });
+    expect(view.result.current.pendingAttachments).toHaveLength(1);
 
-    const textarea = screen.getByRole("textbox", { name: "Chat message" });
-    const user = userEvent.setup();
-    await user.type(textarea, "{Enter}");
+    act(() => view.result.current.setDraft("here is my file"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
 
-    expect(sendMessage).toHaveBeenCalledOnce();
+    expect(view.result.current.sendStatus).toBe("completed");
+    expect(view.result.current.pendingAttachments).toHaveLength(0);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  beforeEach(() => {
+    api.clearModelCacheForTests();
   });
 });
 

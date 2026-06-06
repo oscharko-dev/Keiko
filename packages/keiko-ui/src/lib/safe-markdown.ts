@@ -10,6 +10,13 @@
  *   (javascript:, data:, vbscript:, file:, etc.) falls through to plain text.
  */
 
+// SM-1: bound on recursive descent (blockquote → block parse, nested lists,
+// nested inline emphasis). Past this depth the remaining content is emitted as a
+// plain text/paragraph node instead of recursing, so an adversarial assistant
+// response (e.g. 100 nested blockquotes) cannot blow the call stack and crash the
+// whole chat view. 16 is well beyond any legible human-authored nesting.
+const MAX_MARKDOWN_DEPTH = 16;
+
 export interface SafeMarkdownNode {
   readonly kind:
     | "paragraph"
@@ -160,7 +167,13 @@ function tryInlineCode(
 }
 
 /** Try to parse **bold** or __bold__ starting at pos. Returns new pos or -1. */
-function tryBold(nodes: SafeMarkdownNode[], raw: string, pos: number, textStart: number): number {
+function tryBold(
+  nodes: SafeMarkdownNode[],
+  raw: string,
+  pos: number,
+  textStart: number,
+  depth: number,
+): number {
   const ch = raw[pos];
   const next = raw[pos + 1];
   if (pos + 1 >= raw.length) return -1;
@@ -170,7 +183,7 @@ function tryBold(nodes: SafeMarkdownNode[], raw: string, pos: number, textStart:
   if (closeIdx === -1) return -1;
   flushText(nodes, raw, textStart, pos);
   const inner = raw.slice(pos + 2, closeIdx);
-  nodes.push({ kind: "strong", children: parseInline(inner) });
+  nodes.push({ kind: "strong", children: parseInline(inner, depth + 1) });
   return closeIdx + 2;
 }
 
@@ -185,7 +198,13 @@ function findItalicClose(raw: string, ch: string, from: number): number {
 }
 
 /** Try to parse *italic* or _italic_ (single marker) starting at pos. Returns new pos or -1. */
-function tryItalic(nodes: SafeMarkdownNode[], raw: string, pos: number, textStart: number): number {
+function tryItalic(
+  nodes: SafeMarkdownNode[],
+  raw: string,
+  pos: number,
+  textStart: number,
+  depth: number,
+): number {
   const ch = raw[pos];
   if (ch !== "*" && ch !== "_") return -1;
   if (raw[pos + 1] === ch) return -1; // double-marker handled by tryBold
@@ -193,7 +212,7 @@ function tryItalic(nodes: SafeMarkdownNode[], raw: string, pos: number, textStar
   const closeIdx = findItalicClose(raw, ch, pos + 1);
   if (closeIdx === -1) return -1;
   flushText(nodes, raw, textStart, pos);
-  nodes.push({ kind: "em", children: parseInline(raw.slice(pos + 1, closeIdx)) });
+  nodes.push({ kind: "em", children: parseInline(raw.slice(pos + 1, closeIdx), depth + 1) });
   return closeIdx + 1;
 }
 
@@ -250,7 +269,12 @@ function tryAutoLink(
   return end;
 }
 
-function parseInline(raw: string): readonly SafeMarkdownNode[] {
+function parseInline(raw: string, depth = 0): readonly SafeMarkdownNode[] {
+  // SM-1: past the cap, stop recursing into nested emphasis and emit the rest as
+  // a single plain-text node so deeply nested *_*_… cannot blow the stack.
+  if (depth >= MAX_MARKDOWN_DEPTH) {
+    return raw.length > 0 ? [{ kind: "text", text: raw }] : [];
+  }
   const nodes: SafeMarkdownNode[] = [];
   let pos = 0;
   let textStart = 0;
@@ -263,14 +287,14 @@ function parseInline(raw: string): readonly SafeMarkdownNode[] {
       continue;
     }
 
-    newPos = tryBold(nodes, raw, pos, textStart);
+    newPos = tryBold(nodes, raw, pos, textStart, depth);
     if (newPos !== -1) {
       textStart = newPos;
       pos = newPos;
       continue;
     }
 
-    newPos = tryItalic(nodes, raw, pos, textStart);
+    newPos = tryItalic(nodes, raw, pos, textStart, depth);
     if (newPos !== -1) {
       textStart = newPos;
       pos = newPos;
@@ -393,7 +417,7 @@ function isOrderedBullet(
   return { match: true, indent: m[1]?.length ?? 0, text: m[2] ?? "" };
 }
 
-function buildListNodes(items: ListItemRaw[], ordered: boolean): SafeMarkdownNode {
+function buildListNodes(items: ListItemRaw[], ordered: boolean, depth: number): SafeMarkdownNode {
   const listKind = ordered ? ("ol" as const) : ("ul" as const);
   const children: SafeMarkdownNode[] = [];
   let i = 0;
@@ -416,8 +440,12 @@ function buildListNodes(items: ListItemRaw[], ordered: boolean): SafeMarkdownNod
     }
 
     const liChildren: SafeMarkdownNode[] = [...(parseInline(item.text) as SafeMarkdownNode[])];
-    if (nestedItems.length > 0) {
-      liChildren.push(buildListNodes(nestedItems, ordered));
+    // SM-1: only descend into a nested list while under the depth cap; otherwise
+    // flatten the nested items into this item's text so we stop recursing.
+    if (nestedItems.length > 0 && depth < MAX_MARKDOWN_DEPTH) {
+      liChildren.push(buildListNodes(nestedItems, ordered, depth + 1));
+    } else if (nestedItems.length > 0) {
+      liChildren.push({ kind: "text", text: nestedItems.map((n) => n.text).join("\n") });
     }
     children.push({ kind: "li", children: liChildren });
   }
@@ -441,6 +469,9 @@ function isHrLine(line: string): boolean {
 interface ParseContext {
   lines: string[];
   i: number;
+  // SM-1: recursive descent depth (incremented when a blockquote re-enters the
+  // block parser). Bounds stack growth on adversarial nested input.
+  depth: number;
 }
 
 function consumeCodeBlock(
@@ -479,7 +510,16 @@ function consumeBlockquote(ctx: ParseContext): SafeMarkdownNode {
       break;
     }
   }
-  const innerNodes = parseSafeMarkdown(quoteLines.join("\n"));
+  const inner = quoteLines.join("\n");
+  // SM-1: past the cap, stop re-entering the block parser — emit the quoted body
+  // as a plain paragraph so deeply nested blockquotes cannot blow the stack.
+  if (ctx.depth >= MAX_MARKDOWN_DEPTH) {
+    return {
+      kind: "blockquote",
+      children: [{ kind: "paragraph", children: [{ kind: "text", text: inner }] }],
+    };
+  }
+  const innerNodes = parseBlocks(inner, ctx.depth + 1);
   return { kind: "blockquote", children: [...innerNodes] };
 }
 
@@ -513,7 +553,7 @@ function consumeList(ctx: ParseContext, ordered: boolean): SafeMarkdownNode {
       break;
     }
   }
-  return buildListNodes(items, ordered);
+  return buildListNodes(items, ordered, ctx.depth);
 }
 
 function isBlockStarter(line: string): boolean {
@@ -616,11 +656,17 @@ function dispatchBlock(ctx: ParseContext, nodes: SafeMarkdownNode[]): void {
 // Main export
 // ---------------------------------------------------------------------------
 
-export function parseSafeMarkdown(source: string): readonly SafeMarkdownNode[] {
+// SM-1: depth-aware block parser. `parseSafeMarkdown` is the public depth-0 entry;
+// `consumeBlockquote` re-enters here with an incremented depth.
+function parseBlocks(source: string, depth: number): readonly SafeMarkdownNode[] {
   const nodes: SafeMarkdownNode[] = [];
-  const ctx: ParseContext = { lines: source.split("\n"), i: 0 };
+  const ctx: ParseContext = { lines: source.split("\n"), i: 0, depth };
   while (ctx.i < ctx.lines.length) {
     dispatchBlock(ctx, nodes);
   }
   return nodes;
+}
+
+export function parseSafeMarkdown(source: string): readonly SafeMarkdownNode[] {
+  return parseBlocks(source, 0);
 }

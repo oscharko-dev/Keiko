@@ -21,7 +21,9 @@ import type { ModelCapability } from "@/lib/types";
 export function rejectionMessage(reason: AttachmentRejectionReason, mimeType?: string): string {
   switch (reason) {
     case "text-only-model":
-      return "The selected model does not accept image input. Choose a different model to attach images.";
+      // ATT-F3: a single accurate message covers both image and document
+      // rejections (the prior copy always said "image input" even for documents).
+      return "The selected model can't accept this attachment type. Choose a model that supports images or documents.";
     case "unsupported-type":
       return `Unsupported file type${mimeType !== undefined && mimeType.length > 0 ? `: ${mimeType}` : ""}. Supported types: images (image/*), PDF, plain text, markdown, JSON, YAML.`;
     case "oversized":

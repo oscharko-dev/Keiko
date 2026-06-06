@@ -398,4 +398,68 @@ describe("useChatSession.launchWorkflowFromConversation (Issue #153)", () => {
     expect(outcome?.ok).toBe(false);
     expect(startChatRun).not.toHaveBeenCalled();
   });
+
+  // WH-05 — hook error paths. Each asserts the exact discriminated reason and that
+  // no run is started. Mutation note: these pin the guard branches at the top of
+  // launchWorkflowFromConversation.
+  it("returns reason 'missing-input' when the text is blank (WH-05)", async () => {
+    const startChatRun = vi.spyOn(api, "startChatRun");
+    const { result } = renderHook(() => useChatSession());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let outcome: { ok: true; runId: string } | { ok: false; reason: string } | undefined;
+    await act(async () => {
+      outcome = await result.current.launchWorkflowFromConversation({
+        workflowId: "unit-test-generation",
+        modelId: "wf-model",
+        text: "   ",
+      });
+    });
+
+    expect(outcome).toEqual({ ok: false, reason: "missing-input" });
+    expect(startChatRun).not.toHaveBeenCalled();
+  });
+
+  it("returns reason 'unknown-workflow' for an id absent from the catalog (WH-05)", async () => {
+    const startChatRun = vi.spyOn(api, "startChatRun");
+    const { result } = renderHook(() => useChatSession());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let outcome: { ok: true; runId: string } | { ok: false; reason: string } | undefined;
+    await act(async () => {
+      outcome = await result.current.launchWorkflowFromConversation({
+        workflowId: "this-workflow-does-not-exist",
+        modelId: "wf-model",
+        text: "src/example.ts",
+      });
+    });
+
+    expect(outcome?.ok).toBe(false);
+    expect(outcome).toMatchObject({ reason: "unknown-workflow" });
+    expect(startChatRun).not.toHaveBeenCalled();
+  });
+
+  it("returns reason 'missing-chat' when no active chat exists (WH-05)", async () => {
+    // No eligible model → bootstrap creates no chat, leaving activeChat undefined.
+    // missing-chat is checked before model eligibility, so we still reach it.
+    vi.spyOn(api, "fetchModels").mockResolvedValue({ models: [] });
+    vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [] });
+    const startChatRun = vi.spyOn(api, "startChatRun");
+
+    const { result } = renderHook(() => useChatSession());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeChat).toBeUndefined();
+
+    let outcome: { ok: true; runId: string } | { ok: false; reason: string } | undefined;
+    await act(async () => {
+      outcome = await result.current.launchWorkflowFromConversation({
+        workflowId: "unit-test-generation",
+        modelId: "wf-model",
+        text: "src/example.ts",
+      });
+    });
+
+    expect(outcome).toMatchObject({ reason: "missing-chat" });
+    expect(startChatRun).not.toHaveBeenCalled();
+  });
 });
