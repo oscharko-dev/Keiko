@@ -1,52 +1,69 @@
-// Graph-derived clean: discover every workspace package's emit directory from
-// packages/* and delete it, plus root dist/ and coverage/. Keeps the cleaned-path
-// list in sync with the workspace topology automatically (no hand-maintained list).
+// Graph-derived clean: discover every workspace package's emit directory from the
+// root workspace manifest and delete it, plus root dist/ and coverage/.
 //
 // Per-package emit conventions:
 //   - keiko-* tsc packages emit to dist/
 //   - keiko-ui (Next.js) emits to .next/ and out/
 
-import { readdir, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, realpath, rm } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 
-const ROOT = process.cwd();
-const PACKAGES_DIR = join(ROOT, "packages");
 const ROOT_TARGETS = ["dist", "coverage"];
 const UI_TARGETS = [".next", "out"];
 
-async function exists(path) {
-  try {
-    await stat(path);
-    return true;
-  } catch {
-    return false;
-  }
+import { collectWorkspacePackages } from "./workspace-graph.mjs";
+
+function isWithin(rootPath, candidatePath) {
+  const relativePath = relative(rootPath, candidatePath);
+  return relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !isAbsolute(relativePath);
 }
 
-async function rmIfExists(path) {
-  if (await exists(path)) {
-    await rm(path, { recursive: true, force: true });
-    console.log(`removed ${path}`);
-  }
+function parseArgs(argv) {
+  const rootArg = argv.find((arg) => arg.startsWith("--root="));
+  return {
+    root: resolve(rootArg ? rootArg.slice("--root=".length) : process.cwd()),
+  };
 }
 
-async function main() {
-  for (const target of ROOT_TARGETS) {
-    await rmIfExists(join(ROOT, target));
-  }
-
-  const entries = await readdir(PACKAGES_DIR);
-  for (const name of entries) {
-    const pkgDir = join(PACKAGES_DIR, name);
-    if (!(await stat(pkgDir)).isDirectory()) continue;
-    if (name === "keiko-ui") {
+export async function planCleanTargets(root) {
+  const packages = await collectWorkspacePackages(root);
+  const targets = ROOT_TARGETS.map((target) => join(root, target));
+  for (const pkg of packages) {
+    if (pkg.name === "@oscharko-dev/keiko-ui") {
       for (const target of UI_TARGETS) {
-        await rmIfExists(join(pkgDir, target));
+        targets.push(join(pkg.dir, target));
       }
       continue;
     }
-    await rmIfExists(join(pkgDir, "dist"));
+    targets.push(join(pkg.dir, "dist"));
+  }
+  return targets;
+}
+
+export async function rmIfExistsSafe(rootReal, targetPath) {
+  const stats = await lstat(targetPath).catch(() => null);
+  if (!stats) {
+    return false;
+  }
+  const resolvedTarget = stats.isSymbolicLink() ? await realpath(targetPath) : resolve(targetPath);
+  if (!isWithin(rootReal, resolvedTarget)) {
+    throw new Error(`refusing to delete path outside repository: ${targetPath} -> ${resolvedTarget}`);
+  }
+  await rm(targetPath, { recursive: true, force: true });
+  console.log(`removed ${targetPath}`);
+  return true;
+}
+
+export async function main(argv = process.argv.slice(2)) {
+  const { root } = parseArgs(argv);
+  const rootReal = await realpath(root);
+  const targets = await planCleanTargets(root);
+  for (const target of targets) {
+    await rmIfExistsSafe(rootReal, target);
   }
 }
 
-await main();
+const invokedDirectly = process.argv[1] && resolve(process.argv[1]).endsWith("clean.mjs");
+if (invokedDirectly) {
+  await main();
+}

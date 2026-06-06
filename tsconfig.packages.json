@@ -1,0 +1,25 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/keiko-contracts" },
+    { "path": "./packages/keiko-security" },
+    { "path": "./packages/keiko-quality-intelligence" },
+    { "path": "./packages/keiko-model-gateway" },
+    { "path": "./packages/keiko-workspace" },
+    { "path": "./packages/keiko-tools" },
+    { "path": "./packages/keiko-evidence" },
+    { "path": "./packages/keiko-harness" },
+    { "path": "./packages/keiko-verification" },
+    { "path": "./packages/keiko-local-knowledge" },
+    { "path": "./packages/keiko-memory-vault" },
+    { "path": "./packages/keiko-memory-capture" },
+    { "path": "./packages/keiko-memory-consolidation" },
+    { "path": "./packages/keiko-memory-governance" },
+    { "path": "./packages/keiko-memory-retrieval" },
+    { "path": "./packages/keiko-workflows" },
+    { "path": "./packages/keiko-evaluations" },
+    { "path": "./packages/keiko-sdk" },
+    { "path": "./packages/keiko-server" },
+    { "path": "./packages/keiko-cli" }
+  ]
+}

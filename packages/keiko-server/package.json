@@ -5,17 +5,17 @@
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal server package: local loopback BFF runtime (HTTP/SSE/WebSocket router, CSP, host check, CSRF gate, terminal, browser, files, run engine, SQLite-backed UI store) that mediates the browser presentation tier and the Node-side domain packages (ADR-0019). Not published independently.",
-  "main": "./dist/packages/keiko-server/src/index.js",
-  "types": "./dist/packages/keiko-server/src/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/packages/keiko-server/src/index.d.ts",
-      "import": "./dist/packages/keiko-server/src/index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "files": [

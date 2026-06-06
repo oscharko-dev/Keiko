@@ -5,17 +5,17 @@
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workflows package: reviewable developer-assist workflows (unit-test generation, bug investigation), prompts/parsers/guards/report rendering, apply-mode verification gating, and UI descriptors (ADR-0008 + ADR-0009 + ADR-0019). Not published independently.",
-  "main": "./dist/packages/keiko-workflows/src/index.js",
-  "types": "./dist/packages/keiko-workflows/src/index.d.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "types": "./dist/packages/keiko-workflows/src/index.d.ts",
-      "import": "./dist/packages/keiko-workflows/src/index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "files": [
