@@ -37,6 +37,8 @@
   --accent-dim: color-mix(in oklch, #4eba87 18%, transparent);
   --accent-line: color-mix(in oklch, #4eba87 40%, transparent);
   --accent-glow: color-mix(in oklch, #4eba87 26%, transparent);
+  /* text-tone alias — equals --accent in dark theme; overridden to ≥4.5:1 on white in light */
+  --accent-text: var(--accent);
 
   /* status */
   --ok: #4eba87;
@@ -187,6 +189,14 @@ button {
   --fg-muted: oklch(0.42 0.011 160);
   --fg-dim: oklch(0.54 0.01 160);
   --fg-faint: oklch(0.66 0.008 160);
+
+  /* WCAG 1.4.3 text-tone overrides — all ≥4.5:1 on white (--card: oklch(1 0 0)).
+     --accent #4eba87 = 2.41:1 FAIL; oklch(0.5 0.13 160) ≈ 5.51:1 PASS.
+     --danger oklch(0.68 0.16 25) = 3.11:1 FAIL; oklch(0.50 0.18 25) ≈ 5.46:1 PASS.
+     --warn oklch(0.78 0.13 75) = 2.04:1 FAIL; oklch(0.43 0.14 75) ≈ 5.82:1 PASS. */
+  --accent-text: oklch(0.5 0.13 160);
+  --danger: oklch(0.5 0.18 25);
+  --warn: oklch(0.43 0.14 75);
 
   --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.7) inset, 0 6px 18px -12px rgba(20, 30, 25, 0.22);
   --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.26), 0 0 0 1px var(--line);
@@ -397,7 +407,12 @@ button {
   color: var(--accent);
   display: grid;
   place-items: center;
-  animation: spin 1.6s linear infinite;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chat-spin {
+    animation: spin 1.6s linear infinite;
+  }
 }
 
 .sb-settings {
@@ -663,7 +678,8 @@ button {
   opacity: 0.8;
 }
 .ft-accent {
-  color: var(--accent);
+  /* uses --accent-text so light theme gets a darkened shade that meets WCAG 1.4.3 (≥4.5:1) */
+  color: var(--accent-text);
 }
 .ft-dim {
   color: var(--fg-faint);
@@ -1690,7 +1706,12 @@ button {
   fill: var(--accent);
   opacity: 0.95;
   filter: drop-shadow(0 0 4px var(--accent));
-  animation: conn-dot-pulse 1s ease-in-out infinite;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .conn-dot {
+    animation: conn-dot-pulse 1s ease-in-out infinite;
+  }
 }
 @keyframes conn-dot-pulse {
   0%,
@@ -1773,7 +1794,12 @@ button {
 /* Source-port pulse while connecting — signals which port started the flow */
 .workspace[data-connecting="true"] .window[data-conn="source"] .win-port {
   opacity: 1;
-  animation: port-pulse 1s ease-in-out infinite;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .workspace[data-connecting="true"] .window[data-conn="source"] .win-port {
+    animation: port-pulse 1s ease-in-out infinite;
+  }
 }
 @keyframes port-pulse {
   0%,
@@ -2012,11 +2038,16 @@ button {
   display: grid;
   place-items: center;
   color: var(--accent);
-  animation: spin 1.4s linear infinite;
+  animation: none;
 }
 .arun-spin[data-paused="true"] {
   animation: none;
   color: var(--warn);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .arun-spin:not([data-paused="true"]) {
+    animation: spin 1.4s linear infinite;
+  }
 }
 .arun-log {
   flex: 1;
@@ -2170,8 +2201,13 @@ button {
   text-align: center;
 }
 .arun .dot[data-live="true"] {
-  animation: pulse 1.3s infinite;
+  animation: none;
   background: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .arun .dot[data-live="true"] {
+    animation: pulse 1.3s infinite;
+  }
 }
 
 /* activity timeline */
@@ -4224,13 +4260,18 @@ select.dlg-input {
   height: 6px;
   border-radius: 50%;
   background: var(--fg-faint);
-  animation: pulse 1.2s infinite;
+  animation: none;
 }
-.chat-typing i:nth-child(2) {
-  animation-delay: 0.2s;
-}
-.chat-typing i:nth-child(3) {
-  animation-delay: 0.4s;
+@media (prefers-reduced-motion: no-preference) {
+  .chat-typing i {
+    animation: pulse 1.2s infinite;
+  }
+  .chat-typing i:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  .chat-typing i:nth-child(3) {
+    animation-delay: 0.4s;
+  }
 }
 /* functional model picker, styled as the design's static .cmp-model chip */
 .cmp-model-select {
@@ -4281,7 +4322,12 @@ select.dlg-input {
   border-radius: 50%;
   background: var(--accent);
   flex: none;
-  animation: pulse 1.4s infinite;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cmp-loading-dot {
+    animation: pulse 1.4s infinite;
+  }
 }
 
 /* ---------- COMPOSER: VISUALLY-HIDDEN HINT (Issue #146 AC #2) ---------- */
@@ -4369,7 +4415,12 @@ select.dlg-input {
   flex: 1;
   padding: 32px 24px;
   text-align: center;
-  animation: fadeUp 0.25s ease both;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chatw-empty {
+    animation: fadeUp 0.25s ease both;
+  }
 }
 .chatw-empty-headline {
   font-size: 22px;
@@ -4400,7 +4451,12 @@ select.dlg-input {
   flex: 1;
   padding: 40px 24px;
   text-align: center;
-  animation: fadeUp 0.25s ease both;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chatw-empty-no-chat {
+    animation: fadeUp 0.25s ease both;
+  }
 }
 .chatw-empty-no-chat-icon {
   width: 40px;
@@ -5067,7 +5123,12 @@ select.dlg-input {
   height: 14px;
   border-radius: 6px;
   background: var(--inset);
-  animation: pulse 1.4s ease-in-out infinite;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rv-skel {
+    animation: pulse 1.4s ease-in-out infinite;
+  }
 }
 .rv-skel-sm {
   width: 60%;
@@ -5088,8 +5149,14 @@ select.dlg-input {
   font-size: 12.5px;
   color: var(--fg-muted);
 }
-/* focus ring on the Apply button inside rv-controls (WCAG 2.4.7) */
-.rv-controls .arun-btn:focus-visible {
+/* focus ring on .arun-btn globally (WCAG 2.4.7) — previously scoped to .rv-controls only */
+.arun-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* focus rings for nav rail icon buttons (WCAG 2.4.7) */
+.rail-btn:focus-visible,
+.rail-new:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -5162,7 +5229,12 @@ select.dlg-input {
   height: 15px;
   background: var(--accent);
   vertical-align: text-bottom;
-  animation: pulse 1s steps(2) infinite;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tm-cursor {
+    animation: pulse 1s steps(2) infinite;
+  }
 }
 
 /* Terminal widget — bounded exec surface (ADR-0018) */
@@ -5532,7 +5604,12 @@ select.dlg-input {
     linear-gradient(145deg, color-mix(in oklch, var(--card) 96%, var(--accent) 4%), var(--surface)),
     var(--surface);
   box-shadow: var(--shadow-pop);
-  animation: fadeUp 0.22s ease-out;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .gw-setup {
+    animation: fadeUp 0.22s ease-out;
+  }
 }
 .gw-setup-badge {
   display: inline-flex;
