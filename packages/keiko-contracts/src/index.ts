@@ -685,3 +685,50 @@ export {
   WORKSPACE_PERSISTENCE_EXPECTATIONS,
   validateWorkspaceDescriptorMeta,
 } from "./workspace-descriptors.js";
+
+// ─── Relationship engine (Epic #532 / Issue #538) ───────────────────────────────
+// Versioned contracts for the cross-domain relationship engine. Pure types + frozen
+// constant tables; the deterministic validator lives in `relationships-validation.ts`
+// and is pure (no IO, no clock, no random). Storage / API composition lands in #539;
+// inspector + graph in #540; impact + health in #542.
+export type {
+  ObjectReference,
+  Relationship,
+  RelationshipActivityState,
+  RelationshipCardinality,
+  RelationshipCardinalityCounts,
+  RelationshipDenialCode,
+  RelationshipDirection,
+  RelationshipEndpointResolverResult,
+  RelationshipEndpointStatus,
+  RelationshipEvidenceRelevance,
+  RelationshipForbiddenMetadataKeySubstring,
+  RelationshipLifecycleState,
+  RelationshipObjectKind,
+  RelationshipSupportedObjectKind,
+  RelationshipType,
+  RelationshipTypeDefinition,
+  RelationshipTypeLifecycleFlags,
+  RelationshipValidationContext,
+  RelationshipValidationError,
+} from "./relationships.js";
+export {
+  RELATIONSHIP_ACTIVITY_STATES,
+  RELATIONSHIP_DENIAL_CODES,
+  RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS,
+  RELATIONSHIP_LIFECYCLE_STATES,
+  RELATIONSHIP_OBJECT_KINDS,
+  RELATIONSHIP_SCHEMA_VERSION,
+  RELATIONSHIP_SUPPORTED_OBJECT_KINDS,
+  RELATIONSHIP_TYPE_DEFINITIONS,
+  RELATIONSHIP_TYPES,
+} from "./relationships.js";
+export type {
+  ValidationOk as RelationshipValidationOk,
+  ValidationFail as RelationshipValidationFail,
+  RelationshipValidation,
+} from "./relationships-validation.js";
+export {
+  assertRelationshipTypeAllowsKinds,
+  validateRelationship,
+} from "./relationships-validation.js";
