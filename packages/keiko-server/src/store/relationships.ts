@@ -20,7 +20,10 @@ import type {
   RelationshipObjectKind,
   RelationshipType,
 } from "@oscharko-dev/keiko-contracts";
-import { RELATIONSHIP_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import {
+  RELATIONSHIP_SCHEMA_VERSION,
+  RELATIONSHIP_SUPPORTED_OBJECT_KINDS,
+} from "@oscharko-dev/keiko-contracts";
 import { invalidRequest, notFound, UiStoreError } from "./errors.js";
 
 // ─── Bounded-query caps (api-contract.md §7) ──────────────────────────────────
@@ -33,6 +36,10 @@ export const DEFAULT_IMPACT_NODES = 256;
 export const MAX_IMPACT_RELATIONSHIPS = 2048;
 export const DEFAULT_IMPACT_RELATIONSHIPS = 512;
 export const LIFECYCLE_HISTORY_RETAIN = 32;
+// Alias used by #542 health surface — counts in every finding category are hard-capped at
+// this number. It is the same hard cap as MAX_IMPACT_RELATIONSHIPS; the alias is exported
+// so callers can name the contract intent.
+export const MAX_RELATIONSHIPS_PER_QUERY = MAX_IMPACT_RELATIONSHIPS;
 
 // ─── Wire types ───────────────────────────────────────────────────────────────
 // Scope shapes mirror `MemoryScope` in @oscharko-dev/keiko-contracts (api-contract.md §3.3).
@@ -110,10 +117,46 @@ export interface RelationshipLifecycleHistoryRow {
   readonly summary?: string | undefined;
 }
 
+// ─── Issue #542 — categorized health findings ─────────────────────────────────
+// Six finding categories surface graph hygiene defects to the inspector. Every list is
+// hard-capped at MAX_RELATIONSHIPS_PER_QUERY entries — when the cap is hit the corresponding
+// `*Truncated` flag is `true` and the list contains the first N matches in deterministic
+// order (lifecycle / endpoint kind / endpoint id ascending). `cycleScanTruncated` covers
+// the more expensive cycle pass: when set, the cycle list reflects partial coverage and
+// the UI surfaces a "cycle scan incomplete" notice.
+export interface RelationshipHealthEndpointRef {
+  readonly kind: RelationshipObjectKind;
+  readonly id: string;
+}
+
+export interface RelationshipHealthRelationshipRef {
+  readonly id: string;
+  readonly type: RelationshipType;
+  readonly source: RelationshipHealthEndpointRef;
+  readonly target: RelationshipHealthEndpointRef;
+  readonly lifecycle: RelationshipLifecycleState;
+}
+
+export interface RelationshipHealthFindings {
+  readonly orphanedEndpoints: readonly RelationshipHealthEndpointRef[];
+  readonly orphanedEndpointsTruncated: boolean;
+  readonly staleRelationships: readonly RelationshipHealthRelationshipRef[];
+  readonly staleRelationshipsTruncated: boolean;
+  readonly blockedRelationships: readonly RelationshipHealthRelationshipRef[];
+  readonly blockedRelationshipsTruncated: boolean;
+  readonly failedRelationships: readonly RelationshipHealthRelationshipRef[];
+  readonly failedRelationshipsTruncated: boolean;
+  readonly invalidReferences: readonly RelationshipHealthRelationshipRef[];
+  readonly invalidReferencesTruncated: boolean;
+  readonly cycleParticipants: readonly RelationshipHealthRelationshipRef[];
+  readonly cycleScanTruncated: boolean;
+}
+
 export interface RelationshipHealthSummary {
   readonly checkedAt: number;
   readonly totals: Readonly<Record<RelationshipLifecycleState, number>>;
   readonly truncated: boolean;
+  readonly findings: RelationshipHealthFindings;
 }
 
 // ─── Row type ─────────────────────────────────────────────────────────────────
@@ -271,6 +314,45 @@ const SQL_HEALTH_COUNTS = `
 SELECT lifecycle, COUNT(*) AS n FROM relationships
 WHERE workspace_scope_id = ?
 GROUP BY lifecycle
+`;
+// Stale / blocked / revoked / invalid SQL — each is workspace-scoped, hard-capped, and
+// deterministically ordered by (lifecycle, source_kind, source_id, target_kind, target_id).
+// The limit is bound at execute-time; no user input enters SQL text.
+const SQL_HEALTH_FINDINGS_BY_LIFECYCLE = `
+SELECT id, type, source_kind, source_id, target_kind, target_id, lifecycle
+FROM relationships
+WHERE workspace_scope_id = ? AND lifecycle = ?
+ORDER BY source_kind ASC, source_id ASC, target_kind ASC, target_id ASC, id ASC
+LIMIT ?
+`;
+// Active relationships used for cycle detection + invalid-reference detection. Bounded by
+// the same cap; we cap both the scan input and the result list at MAX_RELATIONSHIPS_PER_QUERY
+// so an oversized graph degrades gracefully via `cycleScanTruncated = true`.
+const SQL_HEALTH_ACTIVE_RELATIONSHIPS = `
+SELECT id, type, source_kind, source_id, target_kind, target_id, lifecycle
+FROM relationships
+WHERE workspace_scope_id = ? AND lifecycle IN ('draft','active','archived')
+ORDER BY source_kind ASC, source_id ASC, target_kind ASC, target_id ASC, id ASC
+LIMIT ?
+`;
+// Endpoint participation count. Used to detect orphans: an endpoint that previously
+// participated in a relationship (so it appears in the relationships table) but is no
+// longer referenced by any active relationship. Bounded.
+const SQL_HEALTH_ENDPOINT_PARTICIPATION = `
+SELECT kind, id, SUM(active_count) AS active_total, SUM(any_count) AS any_total FROM (
+  SELECT source_kind AS kind, source_id AS id,
+         CASE WHEN lifecycle IN ('draft','active','archived') THEN 1 ELSE 0 END AS active_count,
+         1 AS any_count
+  FROM relationships WHERE workspace_scope_id = ?
+  UNION ALL
+  SELECT target_kind AS kind, target_id AS id,
+         CASE WHEN lifecycle IN ('draft','active','archived') THEN 1 ELSE 0 END AS active_count,
+         1 AS any_count
+  FROM relationships WHERE workspace_scope_id = ?
+)
+GROUP BY kind, id
+ORDER BY kind ASC, id ASC
+LIMIT ?
 `;
 
 // ─── Public mutating + reading API ────────────────────────────────────────────
@@ -572,6 +654,15 @@ export function computeImpact(db: DatabaseSync, options: ImpactWalkOptions): Dep
 }
 
 export function graphHealth(db: DatabaseSync, workspaceId: string): RelationshipHealthSummary {
+  const totals = computeLifecycleTotals(db, workspaceId);
+  const findings = computeHealthFindings(db, workspaceId);
+  return { checkedAt: Date.now(), totals, truncated: false, findings };
+}
+
+function computeLifecycleTotals(
+  db: DatabaseSync,
+  workspaceId: string,
+): Record<RelationshipLifecycleState, number> {
   const rows = db.prepare(SQL_HEALTH_COUNTS).all(workspaceId) as {
     lifecycle: string;
     n: number;
@@ -590,7 +681,212 @@ export function graphHealth(db: DatabaseSync, workspaceId: string): Relationship
       totals[r.lifecycle as RelationshipLifecycleState] = r.n;
     }
   }
-  return { checkedAt: Date.now(), totals, truncated: false };
+  return totals;
+}
+
+interface RawHealthRow {
+  readonly id: string;
+  readonly type: string;
+  readonly source_kind: string;
+  readonly source_id: string;
+  readonly target_kind: string;
+  readonly target_id: string;
+  readonly lifecycle: string;
+}
+
+function rawRowToRef(r: RawHealthRow): RelationshipHealthRelationshipRef {
+  return {
+    id: r.id,
+    type: r.type as RelationshipType,
+    source: { kind: r.source_kind as RelationshipObjectKind, id: r.source_id },
+    target: { kind: r.target_kind as RelationshipObjectKind, id: r.target_id },
+    lifecycle: r.lifecycle as RelationshipLifecycleState,
+  };
+}
+
+function selectFindingsByLifecycle(
+  db: DatabaseSync,
+  workspaceId: string,
+  lifecycle: RelationshipLifecycleState,
+): { rows: readonly RelationshipHealthRelationshipRef[]; truncated: boolean } {
+  // Over-fetch by one to detect truncation without a separate COUNT round-trip.
+  const cap = MAX_RELATIONSHIPS_PER_QUERY;
+  const raw = db
+    .prepare(SQL_HEALTH_FINDINGS_BY_LIFECYCLE)
+    .all(workspaceId, lifecycle, cap + 1) as unknown as RawHealthRow[];
+  const truncated = raw.length > cap;
+  const sliced = truncated ? raw.slice(0, cap) : raw;
+  return { rows: sliced.map(rawRowToRef), truncated };
+}
+
+const SUPPORTED_OBJECT_KIND_SET: ReadonlySet<string> = new Set(
+  RELATIONSHIP_SUPPORTED_OBJECT_KINDS as readonly string[],
+);
+
+function selectInvalidReferences(
+  db: DatabaseSync,
+  workspaceId: string,
+): { rows: readonly RelationshipHealthRelationshipRef[]; truncated: boolean } {
+  const cap = MAX_RELATIONSHIPS_PER_QUERY;
+  // Scan up to cap+1 rows; an endpoint kind not in the supported set marks the
+  // relationship as referencing an unsupported object kind.
+  const raw = db
+    .prepare(SQL_HEALTH_ACTIVE_RELATIONSHIPS)
+    .all(workspaceId, cap + 1) as unknown as RawHealthRow[];
+  const scanTruncated = raw.length > cap;
+  const sliced = scanTruncated ? raw.slice(0, cap) : raw;
+  const out: RelationshipHealthRelationshipRef[] = [];
+  for (const row of sliced) {
+    if (
+      !SUPPORTED_OBJECT_KIND_SET.has(row.source_kind) ||
+      !SUPPORTED_OBJECT_KIND_SET.has(row.target_kind)
+    ) {
+      out.push(rawRowToRef(row));
+    }
+  }
+  return { rows: out, truncated: scanTruncated };
+}
+
+function selectCycleParticipants(
+  db: DatabaseSync,
+  workspaceId: string,
+): { rows: readonly RelationshipHealthRelationshipRef[]; scanTruncated: boolean } {
+  const cap = MAX_RELATIONSHIPS_PER_QUERY;
+  const raw = db
+    .prepare(SQL_HEALTH_ACTIVE_RELATIONSHIPS)
+    .all(workspaceId, cap + 1) as unknown as RawHealthRow[];
+  const scanTruncated = raw.length > cap;
+  const sliced = scanTruncated ? raw.slice(0, cap) : raw;
+  // Build adjacency keyed by endpoint, then DFS to find back-edges. Detection is
+  // O(V + E) over the bounded scan input.
+  const refs = sliced.map(rawRowToRef);
+  const participantIds = detectCycleParticipantIds(refs);
+  const rows = refs.filter((r) => participantIds.has(r.id));
+  return { rows, scanTruncated };
+}
+
+function detectCycleParticipantIds(
+  refs: readonly RelationshipHealthRelationshipRef[],
+): Set<string> {
+  // Adjacency: node-key -> list of {nextNodeKey, relId}. Self-loops are cycles too.
+  const adjacency = new Map<string, { nextKey: string; relId: string }[]>();
+  for (const ref of refs) {
+    const fromKey = nodeKey(ref.source);
+    const toKey = nodeKey(ref.target);
+    const list = adjacency.get(fromKey) ?? [];
+    list.push({ nextKey: toKey, relId: ref.id });
+    adjacency.set(fromKey, list);
+  }
+  const participants = new Set<string>();
+  const state = new Map<string, "visiting" | "done">();
+  // Iterative DFS to avoid stack blow-up on deep graphs.
+  for (const startKey of adjacency.keys()) {
+    if (state.get(startKey) !== undefined) continue;
+    dfsFromStart(startKey, adjacency, state, participants);
+  }
+  return participants;
+}
+
+interface DfsFrame {
+  readonly key: string;
+  index: number;
+  readonly viaRelId: string | null;
+}
+
+function dfsFromStart(
+  startKey: string,
+  adjacency: Map<string, { nextKey: string; relId: string }[]>,
+  state: Map<string, "visiting" | "done">,
+  participants: Set<string>,
+): void {
+  const stack: DfsFrame[] = [{ key: startKey, index: 0, viaRelId: null }];
+  state.set(startKey, "visiting");
+  while (stack.length > 0) {
+    const frame = stack[stack.length - 1];
+    if (frame === undefined) break;
+    const neighbours = adjacency.get(frame.key) ?? [];
+    if (frame.index >= neighbours.length) {
+      state.set(frame.key, "done");
+      stack.pop();
+      continue;
+    }
+    const edge = neighbours[frame.index];
+    frame.index += 1;
+    if (edge === undefined) continue;
+    const neighbourState = state.get(edge.nextKey);
+    if (neighbourState === "visiting") {
+      // Back-edge: every relationship on the current path from edge.nextKey down
+      // is a cycle participant.
+      markBackEdgeParticipants(stack, edge, participants);
+      continue;
+    }
+    if (neighbourState === "done") continue;
+    state.set(edge.nextKey, "visiting");
+    stack.push({ key: edge.nextKey, index: 0, viaRelId: edge.relId });
+  }
+}
+
+function markBackEdgeParticipants(
+  stack: readonly DfsFrame[],
+  closingEdge: { nextKey: string; relId: string },
+  participants: Set<string>,
+): void {
+  // Walk the stack from top down to the frame whose key matches closingEdge.nextKey,
+  // marking the relationship that brought us into each frame as a participant.
+  participants.add(closingEdge.relId);
+  for (let i = stack.length - 1; i >= 0; i--) {
+    const frame = stack[i];
+    if (frame === undefined) break;
+    if (frame.viaRelId !== null) participants.add(frame.viaRelId);
+    if (frame.key === closingEdge.nextKey) break;
+  }
+}
+
+function selectOrphanedEndpoints(
+  db: DatabaseSync,
+  workspaceId: string,
+): { rows: readonly RelationshipHealthEndpointRef[]; truncated: boolean } {
+  const cap = MAX_RELATIONSHIPS_PER_QUERY;
+  const raw = db
+    .prepare(SQL_HEALTH_ENDPOINT_PARTICIPATION)
+    .all(workspaceId, workspaceId, cap + 1) as unknown as {
+    kind: string;
+    id: string;
+    active_total: number;
+    any_total: number;
+  }[];
+  const truncated = raw.length > cap;
+  const sliced = truncated ? raw.slice(0, cap) : raw;
+  const out: RelationshipHealthEndpointRef[] = [];
+  for (const r of sliced) {
+    if (r.active_total === 0 && r.any_total > 0) {
+      out.push({ kind: r.kind as RelationshipObjectKind, id: r.id });
+    }
+  }
+  return { rows: out, truncated };
+}
+
+function computeHealthFindings(db: DatabaseSync, workspaceId: string): RelationshipHealthFindings {
+  const stale = selectFindingsByLifecycle(db, workspaceId, "stale");
+  const blocked = selectFindingsByLifecycle(db, workspaceId, "blocked");
+  const failed = selectFindingsByLifecycle(db, workspaceId, "revoked");
+  const invalid = selectInvalidReferences(db, workspaceId);
+  const cycle = selectCycleParticipants(db, workspaceId);
+  const orphan = selectOrphanedEndpoints(db, workspaceId);
+  return {
+    orphanedEndpoints: orphan.rows,
+    orphanedEndpointsTruncated: orphan.truncated,
+    staleRelationships: stale.rows,
+    staleRelationshipsTruncated: stale.truncated,
+    blockedRelationships: blocked.rows,
+    blockedRelationshipsTruncated: blocked.truncated,
+    failedRelationships: failed.rows,
+    failedRelationshipsTruncated: failed.truncated,
+    invalidReferences: invalid.rows,
+    invalidReferencesTruncated: invalid.truncated,
+    cycleParticipants: cycle.rows,
+    cycleScanTruncated: cycle.scanTruncated,
+  };
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
