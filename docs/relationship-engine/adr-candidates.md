@@ -4,6 +4,8 @@ Status: Wave 1 deliverable for [issue #533](https://github.com/oscharko-dev/Keik
 
 Audit date: 2026-06-06.
 
+Historical note: these are Wave 1 candidate scopes, not the final adopted ADRs. On current `dev`, the implemented decisions are captured in [ADR-0031](../adr/ADR-0031-relationship-storage-and-validation.md), [ADR-0032](../adr/ADR-0032-relationship-audit-and-activity-model.md), and [ADR-0033](../adr/ADR-0033-relationship-ui-containment.md).
+
 ## Purpose
 
 This document lists the ADRs whose decisions cannot be safely inferred from current code or existing ADRs. Each candidate is numbered to follow the present ADR series (latest accepted: [ADR-0030](../adr/ADR-0030-workspace-security-evidence.md)). The candidates here are **scope statements**, not the ADRs themselves — drafting the ADR bodies is the work of issues #535, #536, and #537.
@@ -53,7 +55,7 @@ Decide where relationship records live, how the schema evolves, and how cross-do
 3. **Schema evolution**: confirm `PRAGMA user_version` migration pattern is reused unchanged.
 4. **`node:sqlite` `--experimental-sqlite` flag strategy**: confirm the three-site activation strategy (CLI re-exec, vitest `execArgv`, no flag for `tsc`) is reused unchanged.
 5. **Cross-database endpoint liveness**: lock the `RelationshipEndpointResolver` port (Gap 2) as the chokepoint; specify the resolver implementations each owning package exposes.
-6. **Corrupt-DB handling**: confirm the `.corrupt.<iso>` quarantine pattern from the Epic #62 memory entry is reused.
+6. **Corrupt-DB handling**: confirm the `.corrupt.<iso>` quarantine pattern from the existing `keiko-server` / `keiko-memory-vault` stores is reused.
 7. **Atomic-write convention**: confirm the realpath-contained + `O_EXCL` convention from [`packages/keiko-evidence/src/store.ts`](../../packages/keiko-evidence/src/store.ts) is reused for any non-DB ledger surfaces.
 
 ### Options being weighed
@@ -75,7 +77,9 @@ Decide where relationship records live, how the schema evolves, and how cross-do
 - [gap-analysis.md](gap-analysis.md) Gaps 1, 2, 5, 9
 - [reuse-matrix.md](reuse-matrix.md) rows 4, 5, 23, 24
 - [`packages/keiko-memory-vault/src/schema.ts:68`](../../packages/keiko-memory-vault/src/schema.ts)
-- Epic #62 memory entry
+- [`docs/workspace/518-architecture-blueprint.md`](../workspace/518-architecture-blueprint.md)
+- [`packages/keiko-server/src/store/schema.ts`](../../packages/keiko-server/src/store/schema.ts)
+- [`packages/keiko-server/src/store/db.ts`](../../packages/keiko-server/src/store/db.ts)
 
 ## ADR-0033 — Relationship Audit / Activity Model
 
@@ -128,8 +132,8 @@ Lock the UI surface for the relationship inspector and the controlled relationsh
 5. **Inspector last-viewed state**: stored in the existing UI persistence DB as `persistence: "durable.ui"`, id-only.
 6. **Accessibility floor**: WCAG 2.2 AA, ≥30×30 hit targets, focus rings, `aria-live="assertive"` error alerts, keyboard-reachable controls — explicit per the audit lessons from Epics #63, #66, #67.
 7. **Redaction at the BFF boundary**: every string the UI receives is already redacted server-side; the UI MUST NOT re-fetch raw endpoint content.
-8. **Static-export route convention**: relationship inspector deep links use query-param routes (Epic #62 memory entry), not dynamic routes.
-9. **SSE consumer pattern**: `addEventListener(kind, …)` per relationship-activity kind (Epic #13 memory entry).
+8. **Static-export route convention**: relationship inspector deep links use query-param routes (see [`docs/workspace/518-architecture-blueprint.md`](../workspace/518-architecture-blueprint.md)), not dynamic routes.
+9. **SSE consumer pattern**: `addEventListener(kind, …)` per relationship-activity kind (see [`packages/keiko-ui/src/lib/useSSE.ts`](../../packages/keiko-ui/src/lib/useSSE.ts)).
 
 ### Options being weighed
 

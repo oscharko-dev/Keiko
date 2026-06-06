@@ -4,6 +4,8 @@ Status: Wave 1 deliverable for [issue #533](https://github.com/oscharko-dev/Keik
 
 Audit date: 2026-06-06.
 
+Historical note: this document captures the Wave 1 gap analysis before the implementation issues landed. On current `dev`, open choices recorded here are superseded where later documents adopted a final decision; see [ADR-0031](../adr/ADR-0031-relationship-storage-and-validation.md), [ADR-0032](../adr/ADR-0032-relationship-audit-and-activity-model.md), [ADR-0033](../adr/ADR-0033-relationship-ui-containment.md), and the later `docs/relationship-engine/*` implementation docs.
+
 ## Scope
 
 This document enumerates every `new-capability-gap` and `generalize-port` row in the [reuse matrix](reuse-matrix.md) — the work that cannot be served by adopting an existing surface unchanged. For each, the analysis records:
@@ -241,8 +243,8 @@ The hosting choice itself is recorded by `ADR-0032` (see [adr-candidates.md](adr
 
 - STRICT mode, deterministic indexes, schema evolution via `PRAGMA user_version`.
 - No FK across databases; liveness comes from the endpoint-resolver port (Gap 2).
-- `node:sqlite` is activated via `--experimental-sqlite` at the same three sites the Epic #62 memory entry already documents.
-- Atomic writes; corrupt-DB quarantine pattern from the Epic #62 memory entry (`.corrupt.<iso>` rename).
+- `node:sqlite` is activated via `--experimental-sqlite` at the same three sites already documented in [`docs/workspace/518-architecture-blueprint.md`](../workspace/518-architecture-blueprint.md) and exercised by the existing `keiko-server` / `keiko-memory-vault` stores.
+- Atomic writes; corrupt-DB quarantine pattern reused from [`packages/keiko-server/src/store/db.ts`](../../packages/keiko-server/src/store/db.ts) and [`packages/keiko-memory-vault/src/db.ts`](../../packages/keiko-memory-vault/src/db.ts) (`.corrupt.<iso>` rename).
 - Realpath-contained file location, mirroring the [`EvidenceStore`](../../packages/keiko-evidence/src/store.ts) atomic-file convention.
 - Relationship records persisted to this database flow through `createAuditRedactor` on write.
 
@@ -282,7 +284,7 @@ interface RelationshipActivityEvent {
 }
 ```
 
-The BFF SSE route enumerates each kind by name so the UI subscribes per-kind (Epic #13 memory entry).
+The BFF SSE route enumerates each kind by name so the UI subscribes per-kind, matching the existing `EventSource.addEventListener(...)` pattern in [`packages/keiko-ui/src/lib/useSSE.ts`](../../packages/keiko-ui/src/lib/useSSE.ts).
 
 ### Invariants the new surface must preserve
 
