@@ -36,7 +36,7 @@ Taxonomy (#534): `taxonomy.md`, `compatibility-matrix.md`, `denial-reasons.md`, 
 Policy + API + storage (#535): `architecture.md`, `api-contract.md`, `storage.md`, `security-checklist.md`.
 Audit + activity (#536): `audit-events.md`, `activity-state.md`, `evidence-references.md`, `retention-and-privacy.md`, `audit-activity-checklist.md`.
 UI blueprint (#537): `ui-blueprint.md`, `inspector-spec.md`, `activity-visualization.md`, `accessibility-checklist.md`, `error-and-denial-ux.md`, `visual-density-rules.md`.
-Implementation (#538–#542): `extension-rules.md`, `ui-implementation.md`, `activity-privacy.md`, `impact-and-health.md`.
+Implementation (#538–#542): `extension-rules.md`, `ui-implementation.md`, `activity-privacy.md`.
 Hardening (#543): `security-review.md`, `accessibility-review.md`, `performance-and-no-dep.md`.
 
 ## Verification performed
@@ -46,10 +46,10 @@ Hardening (#543): `security-review.md`, `accessibility-review.md`, `performance-
 | `npm run build:packages`                                      | Clean                                                        |
 | `npm run lint`                                                | Clean                                                        |
 | `npm run typecheck`                                           | Clean (`check:package-graph: PASS`)                          |
-| `npm run arch:check`                                          | 0 violations (1065 modules, 2599 dependencies)               |
+| `npm run arch:check`                                          | 0 violations (1071 modules, 2623 dependencies)               |
 | `npm run arch:check:negative`                                 | Expected fixture violations only                             |
 | `npx vitest run packages/keiko-contracts/src/relationships*`  | 96 / 96 pass                                                 |
-| `npx vitest run packages/keiko-server/src/relationship*`      | 44 / 44 pass                                                 |
+| `npx vitest run packages/keiko-server/src/relationship*`      | 45 / 45 pass                                                 |
 | `cd packages/keiko-ui && npx vitest run …`                    | 51 pass / 3 skipped (selector tightening, non-regression)    |
 | `npx prettier --check`                                        | Clean                                                        |
 | `git diff origin/dev..HEAD -- package.json package-lock.json` | One upstream script-ordering tweak; zero dependency changes. |
@@ -71,10 +71,6 @@ Hardening (#543): `security-review.md`, `accessibility-review.md`, `performance-
 - Three UI tests are `it.skip` with `TODO(#543)` selector-tightening notes that have been preserved as a follow-up; they are not regressions and the UI behaviour they probe is asserted by adjacent passing tests.
 - Forward-looking object kinds (`agent`, `connector`, `data-source`, `skill`, `mcp-tool`) are enumerated in `RELATIONSHIP_OBJECT_KINDS` but the validator rejects them with `denied/object-kind-not-yet-supported` until their owning registries land. No schema bump will be required when those registries promote.
 
-## Closure request
+## Closure outcome
 
-The epic stays **open** in `Ready for Human Review` until the final epic PR is merged into `dev` by the human maintainer or Codex. The final epic PR uses closing keywords for #533–#544 in its body so that the GitHub merge closes every child issue and the epic in one step.
-
-**Final epic PR**: opened from `claude/epic-532-semantic-relationship-engine` into `dev` (URL filled in by the coordinator after `gh pr create`). The PR body inlines the child issue matrix and the verification table above so the maintainer can audit closure without reading every child PR.
-
-The human maintainer or Codex performs the final integration merge. Claude does NOT autonomously merge the final epic PR.
+Epic #532 was closed on 2026-06-06 by the merge of PR [#590](https://github.com/oscharko-dev/Keiko/pull/590) (commit `24634dfb`) into `dev`. The closing keywords in PR #590 closed all twelve child issues (#533–#544) in the same step. The human maintainer (Codex) performed the final integration merge. The "Ready for Human Review" column above reflects the per-child PR status at the moment the epic PR opened; the actual merge state is captured here and in [PR #590](https://github.com/oscharko-dev/Keiko/pull/590).

@@ -223,22 +223,12 @@ function rowToRelationship(row: RelationshipRow): StoredRelationship {
     lifecycleState: row.lifecycle as RelationshipLifecycleState,
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
-    etag: row.updated_at, // legacy numeric etag in the contract; we expose the opaque string via storedEtag()
+    etag: row.updated_at, // legacy numeric etag in the contract; we expose the opaque string via getRelationshipEtag(id, workspaceId)
     scope: rebuildScope(row),
     ...(row.confidence === null ? {} : { confidence: row.confidence }),
     ...(row.summary === null ? {} : { summary: row.summary }),
   };
   return stored;
-}
-
-// The storage column `etag` is the canonical optimistic-concurrency token (storage.md §3.2
-// describes `printf('%016x', updated_at) || '-' || lower(hex(randomblob(3)))`). The contract
-// also exposes a numeric `etag` field for legacy callers; the helper returns the canonical
-// opaque token for `ETag` / `If-Match`.
-export function storedEtag(row: StoredRelationship, db: DatabaseSync): string {
-  const direct = db.prepare(SQL_GET_ETAG).get(row.id) as { etag?: string } | undefined;
-  if (!direct?.etag) throw notFound("Relationship");
-  return direct.etag;
 }
 
 // ─── SQL ──────────────────────────────────────────────────────────────────────
@@ -257,7 +247,6 @@ SELECT id, schema_version, workspace_scope_id, scope_kind, scope_coordinate, typ
 FROM relationships
 WHERE id = ? AND workspace_scope_id = ?
 `;
-const SQL_GET_ETAG = "SELECT etag FROM relationships WHERE id = ?";
 const SQL_GET_ETAG_SCOPED =
   "SELECT etag FROM relationships WHERE id = ? AND workspace_scope_id = ?";
 const SQL_UPDATE_LIFECYCLE = `
