@@ -49,11 +49,12 @@ describe("RelationshipEdgeBadge", () => {
       expect(hidden?.textContent?.toLowerCase()).toContain("fail");
     });
 
-    it("blocked state renders the word 'blocked' in its ARIA description", () => {
+    it("blocked state renders a denial description in its ARIA description", () => {
       render(<RelationshipEdgeBadge type="reads-context" lifecycle="active" activity="blocked" />);
       const badge = screen.getByRole("status");
       const hidden = badge.querySelector(".visually-hidden");
-      expect(hidden?.textContent?.toLowerCase()).toContain("block");
+      // Spec-exact description from activity-state.md §6: mentions "validator denied"
+      expect(hidden?.textContent?.toLowerCase()).toContain("denied");
     });
   });
 
@@ -135,7 +136,8 @@ describe("RelationshipEdgeBadge", () => {
       );
       const badge = screen.getByRole("status");
       const hidden = badge.querySelector(".visually-hidden");
-      expect(hidden?.textContent?.toLowerCase()).toContain("throughput");
+      // Spec-exact description from activity-state.md §6 uses "events" (not the word "throughput")
+      expect(hidden?.textContent?.toLowerCase()).toContain("events");
     });
   });
 

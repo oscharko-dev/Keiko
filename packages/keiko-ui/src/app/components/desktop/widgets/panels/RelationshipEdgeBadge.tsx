@@ -1,4 +1,5 @@
 // Issue #540 (Epic #532) — single relationship edge badge.
+// Extended in Issue #541 (Epic #532) — per-state visual treatment + prefers-contrast support.
 //
 // Renders a labeled chip for one relationship with non-color-only state:
 //   text label + ARIA aria-label + icon (activity-visualization.md per-state table).
@@ -6,9 +7,16 @@
 // CSS variables come exclusively from globals.css tokens — no new tokens introduced.
 // Motion only via `motion-safe` Tailwind prefix (activity-visualization.md §"Motion rules").
 // prefers-reduced-motion: static segmented circle replaces rotation (§"Reduced-motion").
+// prefers-contrast: more → high-contrast override per activity-visualization.md §"Contrast".
 //
 // Reuses existing keyframes: @keyframes spin (globals.css:146), @keyframes pulse (globals.css:151).
 // No new @keyframes rule is introduced.
+//
+// #541 adds:
+//   • Spec-exact ARIA descriptions from activity-state.md §6
+//   • animateOverride prop (false = static; from useRelationshipActivityStream animate flag)
+//   • highContrast prop (true when prefers-contrast: more)
+//   • data-activity-state attribute for CSS targeting
 
 "use client";
 
@@ -44,7 +52,8 @@ interface ActivityVisual {
 const ACTIVITY_VISUALS: Readonly<Record<RelationshipActivityState, ActivityVisual>> = {
   inactive: {
     label: "Inactive",
-    ariaDescription: "Relationship is inactive",
+    // activity-state.md §6 exact wording
+    ariaDescription: "No recent activity for this relationship.",
     iconShape: "hollow-circle",
     textColor: "var(--fg-muted)",
     bgColor: "var(--inset)",
@@ -52,7 +61,7 @@ const ACTIVITY_VISUALS: Readonly<Record<RelationshipActivityState, ActivityVisua
   },
   queued: {
     label: "Queued",
-    ariaDescription: "Relationship is queued",
+    ariaDescription: "A workflow run referencing this relationship is queued.",
     iconShape: "clock",
     textColor: "var(--fg-muted)",
     bgColor: "var(--inset)",
@@ -60,7 +69,7 @@ const ACTIVITY_VISUALS: Readonly<Record<RelationshipActivityState, ActivityVisua
   },
   active: {
     label: "Active",
-    ariaDescription: "Relationship is active",
+    ariaDescription: "A model call referencing this relationship is in progress.",
     iconShape: "filled-circle",
     textColor: "var(--accent)",
     bgColor: "var(--accent-dim)",
@@ -69,7 +78,7 @@ const ACTIVITY_VISUALS: Readonly<Record<RelationshipActivityState, ActivityVisua
   },
   processing: {
     label: "Processing",
-    ariaDescription: "Relationship is processing",
+    ariaDescription: "A tool or command referencing this relationship is executing.",
     iconShape: "spinning-circle",
     textColor: "var(--accent)",
     bgColor: "var(--accent-dim)",
@@ -78,7 +87,7 @@ const ACTIVITY_VISUALS: Readonly<Record<RelationshipActivityState, ActivityVisua
   },
   completed: {
     label: "Completed",
-    ariaDescription: "Relationship completed",
+    ariaDescription: "The most recent run referencing this relationship completed successfully.",
     iconShape: "check",
     textColor: "var(--accent)",
     bgColor: "var(--accent-dim)",
@@ -86,15 +95,18 @@ const ACTIVITY_VISUALS: Readonly<Record<RelationshipActivityState, ActivityVisua
   },
   failed: {
     label: "Failed",
-    ariaDescription: "Relationship failed",
+    ariaDescription: "The most recent run referencing this relationship failed.",
     iconShape: "triangle-exclamation",
+    // activity-visualization.md §"Failure, blocked, degraded" — var(--danger) on 12%-mix bg.
+    // NEVER bg-red-600 (3.47:1). This CSS-variable-based danger pair passes 4.5:1 AA.
     textColor: "var(--danger)",
     bgColor: "color-mix(in oklch, var(--danger) 12%, var(--card))",
     animated: false,
   },
   blocked: {
     label: "Blocked",
-    ariaDescription: "Relationship is blocked",
+    ariaDescription:
+      "The validator denied a recent proposal referencing this relationship; see the inspector for the reason.",
     iconShape: "filled-square",
     textColor: "var(--warn)",
     bgColor: "color-mix(in oklch, var(--warn) 12%, var(--card))",
@@ -102,7 +114,8 @@ const ACTIVITY_VISUALS: Readonly<Record<RelationshipActivityState, ActivityVisua
   },
   degraded: {
     label: "Degraded",
-    ariaDescription: "Relationship is degraded",
+    ariaDescription:
+      "The health check flagged at least one endpoint of this relationship as not currently live.",
     iconShape: "broken-line",
     textColor: "var(--warn)",
     bgColor: "color-mix(in oklch, var(--warn) 8%, var(--card))",
@@ -110,10 +123,12 @@ const ACTIVITY_VISUALS: Readonly<Record<RelationshipActivityState, ActivityVisua
   },
   "high-throughput": {
     label: "High throughput",
-    ariaDescription: "Relationship is processing high throughput",
+    ariaDescription:
+      "More than fifty events referenced this relationship in the last sixty seconds.",
     iconShape: "stacked-lines",
     textColor: "var(--accent)",
     bgColor: "var(--accent-dim)",
+    // High-throughput is a count update, never a fast pulse — no animation.
     animated: false,
   },
 };
@@ -336,6 +351,19 @@ export interface RelationshipEdgeBadgeProps {
   readonly activity: RelationshipActivityState;
   /** Optional count for high-throughput aggregate display. */
   readonly throughputCount?: number;
+  /**
+   * Override from useRelationshipActivityStream.animate.
+   * When false, the processing spinning-circle is rendered statically
+   * (prefers-reduced-motion or user disabled animations).
+   * Defaults to true (animate if the state supports it).
+   */
+  readonly animateOverride?: boolean;
+  /**
+   * When true, renders high-contrast variant: drops color-mix backgrounds,
+   * uses full-opacity state color + border. For prefers-contrast: more.
+   * Defaults to false.
+   */
+  readonly highContrast?: boolean;
   /** Called when the badge is clicked (e.g. to focus the inspector). */
   readonly onClick?: () => void;
   /** Additional CSS class names. */
@@ -349,11 +377,15 @@ export function RelationshipEdgeBadge({
   lifecycle,
   activity,
   throughputCount,
+  animateOverride = true,
+  highContrast = false,
   onClick,
   className = "",
 }: RelationshipEdgeBadgeProps): ReactNode {
   const visual = ACTIVITY_VISUALS[activity];
   const def = RELATIONSHIP_TYPE_DEFINITIONS[type];
+
+  // High-throughput label includes the numeric count (activity-state.md §5.4).
   const displayLabel =
     activity === "high-throughput" && throughputCount !== undefined
       ? `${visual.label} (${String(throughputCount)})`
@@ -362,11 +394,23 @@ export function RelationshipEdgeBadge({
   // aria-label combines relationship type + activity description for screen readers.
   const ariaLabel = `${def.displayName} — ${visual.ariaDescription}`;
 
-  const badgeStyle: React.CSSProperties = {
-    color: visual.textColor,
-    background: visual.bgColor,
-    border: visual.borderColor !== undefined ? `1px solid ${visual.borderColor}` : undefined,
-  };
+  // Whether this badge should actually animate: visual says animated AND caller allows it.
+  const shouldAnimate = visual.animated && animateOverride;
+
+  // High-contrast override (activity-visualization.md §"prefers-contrast: more"):
+  //   • Drop color-mix background → use var(--card) + full-opacity border in the state color.
+  //   • Keep text in the state's color token.
+  const badgeStyle: React.CSSProperties = highContrast
+    ? {
+        color: visual.textColor,
+        background: "var(--card)",
+        border: `1px solid ${visual.textColor}`,
+      }
+    : {
+        color: visual.textColor,
+        background: visual.bgColor,
+        border: visual.borderColor !== undefined ? `1px solid ${visual.borderColor}` : undefined,
+      };
 
   return (
     // role="status" aria-live="polite" aria-atomic="true" per activity-visualization.md §"Per-state ARIA wiring"
@@ -375,6 +419,7 @@ export function RelationshipEdgeBadge({
       aria-live="polite"
       aria-atomic="true"
       className={`rb-edge-badge ${className}`.trim()}
+      data-activity-state={activity}
     >
       {onClick !== undefined ? (
         <button
@@ -388,7 +433,7 @@ export function RelationshipEdgeBadge({
             <ActivityIcon
               shape={visual.iconShape}
               color={visual.textColor}
-              animated={visual.animated}
+              animated={shouldAnimate}
             />
           </span>
           {/* visually-hidden aria description per activity-visualization.md §"Per-state ARIA wiring" */}
@@ -405,7 +450,7 @@ export function RelationshipEdgeBadge({
             <ActivityIcon
               shape={visual.iconShape}
               color={visual.textColor}
-              animated={visual.animated}
+              animated={shouldAnimate}
             />
           </span>
           <span className="visually-hidden">{visual.ariaDescription}</span>
