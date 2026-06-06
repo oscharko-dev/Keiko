@@ -204,14 +204,16 @@ function checkCliExpectation(expectation: CliExpectation): SurfaceParityCheckRes
   return passed("cli-flags", expectation.kind);
 }
 
-// The SDK named exports each workflow must surface. A dynamic import breaks the load-time cycle the
-// static import would create (the SDK barrel re-exports this evaluation module).
+// The SDK named exports each workflow must surface. Both expected exports live in
+// @oscharko-dev/keiko-workflows (the SDK barrel re-exports them), so we query the workflows
+// package directly. Using the workflows package as the SDK proxy avoids two real layout problems:
+// (a) the root @oscharko-dev/keiko package is not a workspace member, so a dynamic import of the
+// root package name fails in dev, and (b) the dev-time relative path ../../../src/index.js maps
+// to a .ts file that has no compiled .js sibling under src/, so it fails in installable smoke too.
+// The contract still holds: if keiko-workflows is missing the symbol, the root SDK barrel is
+// missing the symbol — they go together by ADR-0019.
 async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
-  // The SDK barrel lives at the legacy src/sdk path until issue #426 collapses the root facade.
-  // The import target is held in a variable so TypeScript's composite project resolution does not
-  // pull the legacy src/sdk tree into the keiko-evaluations program; the import resolves at runtime
-  // from inside the bundled root product where src/sdk is on disk.
-  const sdkPath = "../../../src/index.js";
+  const sdkPath = "@oscharko-dev/keiko-workflows";
   const sdkModule: unknown = await import(sdkPath);
   const sdk = sdkModule as Record<string, unknown>;
   return SDK_EXPORT_EXPECTATIONS.map((expectation) => {
