@@ -4,7 +4,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 interface Migration {
   readonly version: number;
@@ -73,11 +73,137 @@ const V4_SQL = `
 ALTER TABLE chats ADD COLUMN local_knowledge_scope_json TEXT;
 `;
 
+// V5 (issue #539, epic #532) — relationship engine tables. STRICT mode. The schema follows
+// docs/relationship-engine/storage.md §3.1 (relationships, lifecycle history) and
+// docs/relationship-engine/audit-events.md §5.5 (relationship_audit_entries sibling table).
+// No FOREIGN KEY from relationships → projects: endpoint liveness is resolved at the API edge
+// through the RelationshipEndpointResolver port (storage.md §2.2). Indexes serve the bounded
+// query patterns from api-contract.md §4.3; partial unique indexes enforce 1:1 cardinality at
+// the DB layer as a second barrier alongside the validator (storage.md §3.3, §4.1).
+const V5_SQL = `
+CREATE TABLE relationships (
+  id                  TEXT NOT NULL PRIMARY KEY,
+  schema_version      TEXT NOT NULL,
+  workspace_scope_id  TEXT NOT NULL,
+  scope_kind          TEXT NOT NULL,
+  scope_coordinate    TEXT NOT NULL,
+  type                TEXT NOT NULL,
+  source_kind         TEXT NOT NULL,
+  source_id           TEXT NOT NULL,
+  target_kind         TEXT NOT NULL,
+  target_id           TEXT NOT NULL,
+  lifecycle           TEXT NOT NULL,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL,
+  etag                TEXT NOT NULL,
+  confidence          REAL,
+  summary             TEXT,
+  CHECK (
+    schema_version IN ('1')
+    AND type IN (
+      'reads-context','proposes-patch','uses-tool','starts-workflow',
+      'produces-evidence','references-document','depends-on'
+    )
+    AND lifecycle IN (
+      'draft','active','archived','superseded','revoked','blocked','stale'
+    )
+    AND scope_kind IN ('user','workspace','project','workflow','global')
+    AND source_kind IN (
+      'memory','capsule','capsule-set','workflow-run','evidence-run',
+      'workspace-path','chat','tool','patch-proposal',
+      'agent','connector','data-source','skill','mcp-tool'
+    )
+    AND target_kind IN (
+      'memory','capsule','capsule-set','workflow-run','evidence-run',
+      'workspace-path','chat','tool','patch-proposal',
+      'agent','connector','data-source','skill','mcp-tool'
+    )
+    AND created_at >= 0
+    AND updated_at >= created_at
+    AND (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0))
+    AND (summary IS NULL OR length(summary) <= 240)
+  )
+) STRICT;
+
+CREATE INDEX idx_relationships_source
+  ON relationships(workspace_scope_id, source_kind, source_id);
+CREATE INDEX idx_relationships_target
+  ON relationships(workspace_scope_id, target_kind, target_id);
+CREATE INDEX idx_relationships_type
+  ON relationships(workspace_scope_id, type, lifecycle);
+CREATE INDEX idx_relationships_lifecycle
+  ON relationships(workspace_scope_id, lifecycle, updated_at);
+
+CREATE UNIQUE INDEX uniq_relationships_produces_evidence_source
+  ON relationships(workspace_scope_id, source_kind, source_id)
+  WHERE type = 'produces-evidence' AND lifecycle IN ('draft','active','archived');
+
+CREATE UNIQUE INDEX uniq_relationships_starts_workflow_target
+  ON relationships(workspace_scope_id, target_kind, target_id)
+  WHERE type = 'starts-workflow' AND lifecycle IN ('draft','active','archived');
+
+CREATE TABLE relationship_lifecycle_history (
+  id              TEXT NOT NULL PRIMARY KEY,
+  relationship_id TEXT NOT NULL REFERENCES relationships(id) ON DELETE CASCADE,
+  from_state      TEXT NOT NULL,
+  to_state        TEXT NOT NULL,
+  occurred_at     INTEGER NOT NULL,
+  summary         TEXT,
+  CHECK (
+    from_state IN ('draft','active','archived','superseded','revoked','blocked','stale')
+    AND to_state IN ('draft','active','archived','superseded','revoked','blocked','stale')
+    AND occurred_at >= 0
+    AND (summary IS NULL OR length(summary) <= 240)
+  )
+) STRICT;
+
+CREATE INDEX idx_relationship_lifecycle_relationship
+  ON relationship_lifecycle_history(relationship_id, occurred_at);
+
+CREATE TABLE relationship_audit_entries (
+  event_id                       TEXT NOT NULL PRIMARY KEY,
+  relationship_audit_schema_ver  TEXT NOT NULL,
+  workspace_id                   TEXT NOT NULL,
+  sequence                       INTEGER NOT NULL,
+  occurred_at                    INTEGER NOT NULL,
+  kind                           TEXT NOT NULL,
+  relationship_id                TEXT,
+  actor_surface                  TEXT NOT NULL,
+  redacted_actor_id              TEXT NOT NULL,
+  redaction_state                TEXT NOT NULL,
+  summary                        TEXT NOT NULL,
+  payload_json                   TEXT NOT NULL,
+  CHECK (
+    relationship_audit_schema_ver IN ('1')
+    AND kind IN (
+      'relationship.created','relationship.updated','relationship.deleted',
+      'relationship.reconnected','relationship.validation-denied',
+      'relationship.policy-denied','relationship.activity-transitioned',
+      'relationship.impact-analysis-bounded','relationship.health-finding'
+    )
+    AND actor_surface IN ('chat','inspector','workflow','health-check','system')
+    AND redaction_state IN ('redacted-on-write','redacted-on-write-and-persist')
+    AND sequence >= 0
+    AND occurred_at >= 0
+    AND length(summary) <= 240
+  )
+) STRICT;
+
+CREATE UNIQUE INDEX uniq_relationship_audit_workspace_sequence
+  ON relationship_audit_entries(workspace_id, sequence);
+CREATE INDEX idx_relationship_audit_workspace_occurred_at
+  ON relationship_audit_entries(workspace_id, occurred_at);
+CREATE INDEX idx_relationship_audit_relationship
+  ON relationship_audit_entries(workspace_id, relationship_id, occurred_at)
+  WHERE relationship_id IS NOT NULL;
+`;
+
 const MIGRATIONS: readonly Migration[] = [
   { version: 1, sql: V1_SQL },
   { version: 2, sql: V2_SQL },
   { version: 3, sql: V3_SQL },
   { version: 4, sql: V4_SQL },
+  { version: 5, sql: V5_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {
