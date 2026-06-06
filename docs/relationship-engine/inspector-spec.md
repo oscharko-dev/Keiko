@@ -20,7 +20,7 @@ The inspector enters relationship mode when **any** of these become true:
 2. The URL state has `?relFocus=<relationshipId>` (per the URL-state model in [visual-density-rules.md](visual-density-rules.md)).
 3. The activity timeline ([`TimelinePanel.tsx:26`](../../packages/keiko-ui/src/app/components/desktop/widgets/panels/TimelinePanel.tsx)) row carrying a relationship reference is activated (Enter / Space on the row).
 
-The inspector exits relationship mode when the operator presses `Escape` (existing chord substrate) or selects a workspace window that is not an endpoint of the focused relationship.
+The inspector exits relationship mode when the operator presses `Escape` (existing chord substrate) or selects a workspace window that is not an endpoint of the focused relationship. Focus returns to the originating edge `.conn-badge` when one exists; if relationship mode was entered from `?relFocus=` or a timeline row, focus falls back to the timeline row that launched it, else to the inspector panel container.
 
 ## Section order
 
@@ -66,7 +66,7 @@ A single chip rendering the value from the closed `RelationshipLifecycle` set in
 | `superseded` | `var(--inset)`                                        | `var(--fg-dim)`   | arrow-right    |
 | `revoked`    | `color-mix(in oklch, var(--danger) 14%, var(--card))` | `var(--danger)`   | filled X       |
 | `blocked`    | `color-mix(in oklch, var(--warn) 12%, var(--card))`   | `var(--warn)`     | warning-square |
-| `stale`      | `var(--inset)`                                        | `var(--fg-faint)` | hollow square  |
+| `stale`      | `var(--inset)`                                        | `var(--fg-muted)` | hollow square  |
 
 The exact background/text token tuples reuse existing Keiko semantic tokens (`globals.css:5-50`). No new color is introduced.
 
@@ -166,13 +166,13 @@ Network-class errors (offline, fetch failure) render the same banner shape but w
 
 Five action buttons are rendered at the bottom of the relationship section. Each is gated by lifecycle rules from [lifecycle.md §3](lifecycle.md). The button row uses existing `arun-btn` chrome (`globals.css:1972`); the primary action uses `arun-btn.primary` (`globals.css:1986`).
 
-| Action            | Visible when (lifecycle)                        | Issues                                                                            | Disabled-reason copy when not visible            |
-| ----------------- | ----------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------------ |
-| **Reconnect**     | `blocked`                                       | `PATCH /api/relationships/:id` with `lifecycle: "draft"` (replays validation)     | "Only blocked relationships can be reconnected." |
-| **Archive**       | `active`                                        | `PATCH /api/relationships/:id` with `lifecycle: "archived"`                       | "Only active relationships can be archived."     |
-| **Revoke**        | `active`, `blocked`, `archived`                 | `DELETE /api/relationships/:id` (server transitions to `revoked`; tombstone kept) | "Already revoked or superseded."                 |
-| **View Impact**   | `active`                                        | Switches inspector to dependency tab (#542)                                       | "Impact analysis is unavailable in this state."  |
-| **View Evidence** | (always when ≥ 1 evidence reference is present) | Focuses Evidence viewer on the first reference                                    | "No evidence references for this relationship."  |
+| Action            | Visible when (lifecycle)                        | Issues                                                                                                                                                                   | Disabled-reason copy when not visible            |
+| ----------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------ |
+| **Reconnect**     | `blocked`                                       | `PATCH /api/relationships/:id` with `reconnect: { target: { ... }, summary? }` (rebinds the endpoint and re-runs validation per [api-contract.md §4.5](api-contract.md)) | "Only blocked relationships can be reconnected." |
+| **Archive**       | `active`                                        | `PATCH /api/relationships/:id` with `transition: { to: "archived", summary? }` per [api-contract.md §4.5](api-contract.md)                                               | "Only active relationships can be archived."     |
+| **Revoke**        | `active`, `blocked`, `archived`                 | `DELETE /api/relationships/:id` (server transitions to `revoked`; tombstone kept)                                                                                        | "Already revoked or superseded."                 |
+| **View Impact**   | `active`                                        | Switches inspector to dependency tab (#542)                                                                                                                              | "Impact analysis is unavailable in this state."  |
+| **View Evidence** | (always when ≥ 1 evidence reference is present) | Focuses Evidence viewer on the first reference                                                                                                                           | "No evidence references for this relationship."  |
 
 Disabled buttons render with `aria-disabled="true"` and surface their disabled-reason via the existing `title` tooltip plus a palette-discoverable disabled label (per the [518-ui-blueprint.md "Accessibility-driven UI requirements"](../workspace/518-ui-blueprint.md) item 2).
 
