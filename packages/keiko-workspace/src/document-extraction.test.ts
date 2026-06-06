@@ -111,6 +111,49 @@ describe("extractDocumentContext — truncation", () => {
     expect(result.context.truncationMarker).toContain("truncated");
   });
 
+  it("does NOT classify as binary-file when a multibyte char straddles the byte cap", async () => {
+    // Construct a file: (MAX_EXTRACTED_BYTES - 1) ASCII bytes followed by a 3-byte CJK
+    // character '中' (U+4E2D, encoded as E4 B8 AD). The per-doc cap reads exactly
+    // MAX_EXTRACTED_BYTES bytes, slicing the CJK char after its first byte. Without the
+    // validUtf8PrefixLength fix the fatal UTF-8 decoder would throw and misclassify this
+    // valid text file as binary-file. With the fix the incomplete tail byte is trimmed and
+    // the file extracts cleanly as truncated TEXT.
+    //
+    // Mutation robustness: each assertion targets a distinct observable — ok:true rules out
+    // binary-file, truncated:true rules out treating the capped slice as the whole file,
+    // extractedBytes pins the reported count, and the ASCII prefix in the text body confirms
+    // the decoder received the correct pre-trim content.
+    const asciiPrefix = "A".repeat(MAX_EXTRACTED_BYTES - 1);
+    const cjkChar = "中"; // '中' — 3 UTF-8 bytes: E4 B8 AD
+    const fullText = asciiPrefix + cjkChar + "trailing content beyond the cap";
+    const allBytes = new TextEncoder().encode(fullText);
+    // Sanity: verify the byte layout. asciiPrefix is MAX_EXTRACTED_BYTES-1 bytes (indices
+    // 0..65534), then CJK starts at index 65535. The cap reads MAX_EXTRACTED_BYTES = 65536
+    // bytes total, so the capped slice ends at index 65535 — capturing only the first byte
+    // of the 3-byte CJK char, leaving an incomplete sequence.
+    expect(allBytes.length).toBeGreaterThan(MAX_EXTRACTED_BYTES);
+    expect(allBytes[MAX_EXTRACTED_BYTES - 2]).toBe(0x41); // last ASCII 'A' (index 65534)
+    expect(allBytes[MAX_EXTRACTED_BYTES - 1]).toBe(0xe4); // first byte of CJK at index 65535
+
+    const absPath = `${ROOT}/multibyte.txt`;
+    const fs = binaryFs(absPath, allBytes);
+    const result = await extractDocumentContext(fs, ROOT, "multibyte.txt", fullBudget());
+
+    // Must succeed as TEXT — not binary-file.
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      // Fail with a diagnostic: which kind was returned?
+      expect(result.failure.kind).toBe("ok (expected success, got failure)");
+      return;
+    }
+    expect(result.context.truncated).toBe(true);
+    // extractedBytes is the raw cap read from disk (before codepoint-trim).
+    expect(result.context.extractedBytes).toBe(MAX_EXTRACTED_BYTES);
+    // The text body must contain the full ASCII prefix but NOT the CJK char (it was trimmed).
+    expect(result.context.text).toContain("AAAA");
+    expect(result.context.text).not.toContain(cjkChar);
+  });
+
   it("respects total-budget remaining when smaller than perDocBytes", async () => {
     const content = "A".repeat(5000);
     const fs = memFs(ROOT, { "doc.txt": content });

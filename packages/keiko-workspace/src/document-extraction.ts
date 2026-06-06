@@ -282,6 +282,39 @@ function buildTruncationMarker(extractedBytes: number, originalBytes: number): s
   return `[…truncated to first ${String(extractedBytes)} of ${String(originalBytes)} bytes]`;
 }
 
+// Returns the expected byte-length of the UTF-8 sequence starting with `lead`, or 0 when
+// the byte is not a valid UTF-8 leading byte.
+function utf8LeadByteSeqLen(lead: number): number {
+  if ((lead & 0x80) === 0x00) return 1; // ASCII
+  if ((lead & 0xe0) === 0xc0) return 2;
+  if ((lead & 0xf0) === 0xe0) return 3;
+  if ((lead & 0xf8) === 0xf0) return 4;
+  return 0; // continuation byte or invalid — not a lead byte
+}
+
+// Returns the length of the valid UTF-8 prefix of `bytes`, backing off any incomplete
+// multibyte sequence at the tail. A full file that is valid UTF-8 will have its entire
+// length returned unchanged; a capped slice that was cut mid-codepoint will have at most
+// 3 bytes trimmed (the maximum tail of an incomplete 4-byte sequence).
+//
+// Algorithm: scan backward from the end for the first byte that is NOT a UTF-8 continuation
+// byte (0x80–0xBF). That byte is the start of the last (possibly incomplete) sequence.
+// If the sequence is incomplete, exclude it; otherwise keep the full slice.
+function validUtf8PrefixLength(bytes: Uint8Array): number {
+  const len = bytes.length;
+  if (len === 0) return 0;
+  // Walk back over continuation bytes (0x80–0xBF), up to 3.
+  let i = len - 1;
+  const limit = Math.max(len - 4, -1);
+  while (i > limit && ((bytes[i] ?? 0) & 0xc0) === 0x80) {
+    i -= 1;
+  }
+  const seqLen = utf8LeadByteSeqLen(bytes[i] ?? 0);
+  if (seqLen === 0) return i; // not a lead byte — exclude it
+  // If the sequence started at i extends past the slice end, exclude it.
+  return i + seqLen <= len ? len : i;
+}
+
 function decodeUtf8(bytes: Uint8Array): StepResult<{ readonly text: string }> {
   // fatal: true makes the decoder throw on invalid UTF-8 byte sequences. This is the
   // second binary-classification gate after the NUL-byte probe — a file that survives the
@@ -339,11 +372,19 @@ async function readAndCap(
   if (!isStepOk(read)) {
     return read;
   }
-  const decoded = decodeUtf8(read.bytes);
+  // When the byte slice was capped below the file size a multibyte codepoint may straddle
+  // the boundary. Back the slice to the last complete UTF-8 codepoint so the fatal decoder
+  // does not mistake a clean text file for binary. A file that is genuinely NOT at a
+  // codepoint boundary due to truncation will have at most 3 bytes trimmed.
+  const isCapped = read.bytes.length < file.size;
+  const bytes = isCapped ? read.bytes.subarray(0, validUtf8PrefixLength(read.bytes)) : read.bytes;
+  const decoded = decodeUtf8(bytes);
   if (!isStepOk(decoded)) {
     return decoded;
   }
   const text = trimTrailingWhitespace(decoded.text);
+  // Report the number of bytes actually read from disk (before the codepoint trim) so the
+  // truncation marker quotes an honest byte count rather than the post-trim length.
   const extractedBytes = read.bytes.length;
   const truncated = extractedBytes < file.size;
   return { step: "ok", value: { text, extractedBytes, truncated } };
