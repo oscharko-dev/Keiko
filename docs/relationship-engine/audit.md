@@ -180,12 +180,12 @@ Issue #535 records the storage choice in an ADR (`ADR-0032` candidate, see [adr-
 
 ### What is missing or cannot be safely generalized
 
-- The relationship-engine audit shape (which manifest section embeds relationship audit fields, and how `evidenceSchemaVersion` reacts to its addition) is not defined.
-- A new `EvidenceManifest` section is the natural home; bumping `evidenceSchemaVersion` is a breaking change and requires an ADR (issue #536).
+- The relationship-engine audit shape (which manifest section embeds relationship audit fields, and whether that section should exist at all in the first shipped slice) was not defined at Wave 1.
+- A new `EvidenceManifest` section was one plausible seam, but current `dev` ships the sibling-table audit writer first and leaves manifest embedding as a follow-up seam.
 
 ### Recommended reuse path
 
-- **Adopt** `EvidenceManifest` unchanged; add a new optional `relationships?` section the same way `connectedContext?` was added in `EvidenceConnectedContextAudit` ([`evidence.ts:249`](../../packages/keiko-contracts/src/evidence.ts)) — the addition is backwards-compatible because the field is optional, but bumping `evidenceSchemaVersion` is still recommended for forward compatibility.
+- **Adopt** `EvidenceManifest` unchanged for the shipped implementation. If a `relationships?` section is added later, keep it additive under `evidenceSchemaVersion: "1"` rather than treating it as a required schema-version bump.
 - **Adopt** `createAuditRedactor` + `deepRedactStrings` as the redaction primitive — _do not_ introduce a second redactor.
 - **Adopt** the body-free invariant from `MemoryAuditRecord`. Relationship-engine audit records reference relationship ids, endpoint ids, and short summary strings only. Endpoint _content_ (memory body, file content, evidence excerpt) is never duplicated into the relationship audit.
 
@@ -221,12 +221,12 @@ Issue #535 records the storage choice in an ADR (`ADR-0032` candidate, see [adr-
 ### What is missing or cannot be safely generalized
 
 - ADR-0026 explicitly **forbids** an "independent graph substrate". The existing `ConnectionsLayer` + connector-graph patterns must cover the relationship visualization need; a parallel substrate would re-trigger the #529 deferral analysis.
-- A capsule-graph-style "controlled graph view" rendering relationship edges between memories, capsules, workflow runs, and evidence runs is not yet implemented. It must be a new registered window type, not a new substrate.
+- A capsule-graph-style "controlled graph view" rendering relationship edges between memories, capsules, workflow runs, and evidence runs was a Wave 1 option. Current `dev` instead ships relationship UI through existing panels and routes.
 
 ### Recommended reuse path
 
-- **Adopt** ADR-0026's substrate decisions unchanged. The relationship inspector is a new `WindowType` entry; the controlled relationship graph view is a new `WindowType` entry; both reuse the existing renderer + camera + viewport + hit-test seams.
-- **Extend with contract** for the descriptor fields: each new window type declares its closed `lifecycle`, `trustBoundary`, `authority`, and `persistence` per ADR-0029.
+- **Adopt** ADR-0026's substrate decisions unchanged. Current `dev` reuses the existing workspace shell without introducing relationship-specific `WindowType` enum members; ADR-0033 and the shipped UI docs are the authoritative source for that containment decision.
+- **Extend with contract** for descriptor metadata only where the existing registry-based shell actually requires it; do not assume new registry types as a default extension path.
 - **Adopt** WCAG-conformant focus-ring + ≥30×30 hit-target patterns from `connector-graph.tsx` per [518-canvas-graph-deferral.md](../workspace/518-canvas-graph-deferral.md).
 
 ## Existing graph model that cannot be safely generalized
@@ -303,17 +303,17 @@ The dependency lists in `packages/keiko-contracts/package.json`, `packages/keiko
 
 These briefs are the original Wave 1 constraints that framed child issues #534–#542. On current `dev`, later ADRs and implementation docs are authoritative where they narrowed or overrode an open option recorded here.
 
-| Issue                                  | Constraint summary from this audit                                                                                                                                                                                                                                                                                     |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| #534 — taxonomy                        | Closed `RelationshipKind` set + companion runtime-iterable array; compatibility matrix as a pure function returning `ValidationOk<T> \| ValidationFail`; lifecycle vocabulary aligned with [ADR-0029 LifecycleState](../adr/ADR-0029-workspace-object-registry.md).                                                    |
-| #535 — policy/API/storage              | Storage schema modelled on `memory_edges` (STRICT, FK where in-store, FK-resolver port where cross-domain); policy result shape `TerminalCommandDecision`; `node:sqlite` + `--experimental-sqlite`; new ADR `ADR-0032 Relationship Storage` recommended.                                                               |
-| #536 — audit/activity                  | Add an optional `relationships?` section to `EvidenceManifest`; bump `evidenceSchemaVersion`; reuse `BaseWorkflowEvent` envelope; body-free audit invariant from [`memory-audit-events.ts:19`](../../packages/keiko-contracts/src/memory-audit-events.ts); new ADR `ADR-0033 Relationship Audit/Activity` recommended. |
-| #537 — UI blueprint                    | New `WindowType` entries (relationship inspector, controlled relationship graph); reuse ADR-0026 substrate; reuse `connector-graph.tsx` a11y patterns; new ADR `ADR-0034 Relationship UI Containment` recommended.                                                                                                     |
-| #538 — contracts + validation engine   | Deterministic, single-pass validator; ReDoS-safe by construction; `ValidationOk<T> \| ValidationFail` result shape.                                                                                                                                                                                                    |
-| #539 — APIs                            | BFF route family additive to existing routes; SSE event-name discipline; redaction at both write and response boundaries; no new credential surface.                                                                                                                                                                   |
-| #540 — inspector + viz                 | New `WindowsRegistry` entries; ADR-0029 descriptor validator gates registration; ≥30×30 hit targets; focus rings; WCAG 2.2 AA.                                                                                                                                                                                         |
-| #541 — privacy-preserving activity     | Body-free events; redaction at SSE-emit; activity vs. audit ledger separation; visible only what `MemoryAuditEventKind` would already permit at the same scope.                                                                                                                                                        |
-| #542 — impact analysis + health checks | Bounded single-hop primitive modelled on `graphProximityScore`; explicit budget exhaustion; no shell execution outside `keiko-tools` terminal policy.                                                                                                                                                                  |
+| Issue                                  | Constraint summary from this audit                                                                                                                                                                                                                                                  |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| #534 — taxonomy                        | Closed `RelationshipKind` set + companion runtime-iterable array; compatibility matrix as a pure function returning `ValidationOk<T> \| ValidationFail`; lifecycle vocabulary aligned with [ADR-0029 LifecycleState](../adr/ADR-0029-workspace-object-registry.md).                 |
+| #535 — policy/API/storage              | Storage schema modelled on `memory_edges` (STRICT, FK where in-store, FK-resolver port where cross-domain); policy result shape `TerminalCommandDecision`; `node:sqlite` + `--experimental-sqlite`; new ADR `ADR-0032 Relationship Storage` recommended.                            |
+| #536 — audit/activity                  | Reuse `BaseWorkflowEvent` envelope and the body-free audit invariant from [`memory-audit-events.ts:19`](../../packages/keiko-contracts/src/memory-audit-events.ts); evaluate optional evidence-manifest embedding as an additive seam, not a required `evidenceSchemaVersion` bump. |
+| #537 — UI blueprint                    | Reuse ADR-0026 substrate and `connector-graph.tsx` a11y patterns. The Wave 1 assumption about new `WindowType` entries was later superseded by ADR-0033 and the current panel-based UI.                                                                                             |
+| #538 — contracts + validation engine   | Deterministic, single-pass validator; ReDoS-safe by construction; `ValidationOk<T> \| ValidationFail` result shape.                                                                                                                                                                 |
+| #539 — APIs                            | BFF route family additive to existing routes; SSE event-name discipline; redaction at both write and response boundaries; no new credential surface.                                                                                                                                |
+| #540 — inspector + viz                 | Existing-shell, panel-based integration; ADR-0029 descriptor validator gates any required shell metadata; ≥30×30 hit targets; focus rings; WCAG 2.2 AA.                                                                                                                             |
+| #541 — privacy-preserving activity     | Body-free events; redaction at SSE-emit; activity vs. audit ledger separation; visible only what `MemoryAuditEventKind` would already permit at the same scope.                                                                                                                     |
+| #542 — impact analysis + health checks | Bounded single-hop primitive modelled on `graphProximityScore`; explicit budget exhaustion; no shell execution outside `keiko-tools` terminal policy.                                                                                                                               |
 
 ## References
 

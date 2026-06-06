@@ -6,11 +6,19 @@ Date: 2026-06-06.
 
 ## 1. Purpose
 
-The relationship engine MUST be able to point at evidence artifacts (workflow runs, verification results, patches, command executions, browser captures, connected-context audits) without duplicating the evidence content. This document specifies the `RelationshipEvidenceRef` type, the rules that govern its creation and deletion, the workspace-scope invariant, the read API obligation, and the tombstoning rule when a relationship is deleted while still referenced by an evidence manifest.
+The relationship engine should eventually be able to point at evidence artifacts (workflow runs, verification results, patches, command executions, browser captures, connected-context audits) without duplicating the evidence content. This document specifies the intended `RelationshipEvidenceRef` seam, the rules that should govern its creation and deletion, the workspace-scope invariant, the read API obligation, and the tombstoning rule to preserve if relationship-backed evidence references are added.
 
 The contract binds issues [#538](https://github.com/oscharko-dev/Keiko/issues/538), [#539](https://github.com/oscharko-dev/Keiko/issues/539), [#542](https://github.com/oscharko-dev/Keiko/issues/542), [#543](https://github.com/oscharko-dev/Keiko/issues/543), and is recorded normatively in [ADR-0032](../adr/ADR-0032-relationship-audit-and-activity-model.md).
 
 No new database, no new package, no new third-party dependency.
+
+## 1.1 Current implementation note
+
+Current `dev` does not yet ship the evidence-reference surface described here:
+
+- `EvidenceManifest` has no `relationships` section ([`../../packages/keiko-contracts/src/evidence.ts`](../../packages/keiko-contracts/src/evidence.ts)).
+- Relationship APIs do not expose `RelationshipEvidenceRef`; `GET /api/relationships/:id/explain` currently returns only a validator decision plus lifecycle history ([`../../packages/keiko-ui/src/app/relationships/api.ts`](../../packages/keiko-ui/src/app/relationships/api.ts)).
+- The shipped audit writer records all rows in `relationship_audit_entries` and leaves manifest embedding as a follow-up seam ([`../../packages/keiko-server/src/store/relationship-audit.ts`](../../packages/keiko-server/src/store/relationship-audit.ts)).
 
 ## 2. The `RelationshipEvidenceRef` type
 
@@ -46,10 +54,10 @@ This is the "point at the existing evidence artifact instead of duplicating the 
 
 ## 3. Creation rule
 
-A `RelationshipEvidenceRef` is **created** exactly when one of the two lifecycle transitions from [lifecycle.md §6](lifecycle.md) fires:
+A `RelationshipEvidenceRef` should be **created** when one of the following lifecycle transitions from [lifecycle.md §6](lifecycle.md) fires:
 
-1. `draft → active` or `blocked → active`: a new entry is appended to `EvidenceManifest.relationships?` (per [gap-analysis.md Gap 7](gap-analysis.md)) for the originating run AND the corresponding `RelationshipEvidenceRef` is set on the relationship row's `evidenceRef` field for `relationship.created` and `relationship.updated` audit events (per [audit-events.md §4.1 / §4.2](audit-events.md)).
-2. `active → superseded` or `active → revoked`: a new entry is appended to `EvidenceManifest.relationships?` recording the change. The relationship row's `evidenceRef` is updated to point at the new manifest entry.
+1. `draft → active` or `blocked → active`: a new entry would be appended to `EvidenceManifest.relationships?` for the originating run, and the corresponding `RelationshipEvidenceRef` could be attached to the relevant audit payload.
+2. `active → superseded` or `active → revoked`: a new entry would be appended to `EvidenceManifest.relationships?` recording the change, and any new pointer would refer to that latest manifest entry.
 
 The original ref is **not** back-mutated. The audit invariant from [audit-events.md §9](audit-events.md) holds: rows are append-only.
 
@@ -63,7 +71,7 @@ The deep-redact pass at [`packages/keiko-evidence/src/persist.ts:50`](../../pack
 
 1. **The evidence store directory is per-workspace.** The default Node store resolves the directory through `resolveEvidenceDir` ([`packages/keiko-evidence/src/store.ts`](../../packages/keiko-evidence/src/store.ts) per [`packages/keiko-evidence/src/persist.ts:34`](../../packages/keiko-evidence/src/persist.ts)). The relationship engine constructs refs only against the workspace's own resolved dir.
 2. **The validator's path-containment check.** Per [denial-reasons.md `denied/path-not-contained`], a proposed evidence-bearing relationship whose `manifestPath` escapes the current workspace's evidence root is rejected at validation time.
-3. **The read API filters by workspace.** `GET /api/relationships/:id/explain` (per [api-contract.md §4.9](api-contract.md)) loads the relationship row under the caller's workspace; if the row's `evidenceRef.evidenceRunId` resolves to a manifest outside the workspace store, the API returns `relationship/scope-not-permitted` (HTTP 403) and does NOT reveal the ref.
+3. **The read API should filter by workspace.** If a future `GET /api/relationships/:id/explain` response includes evidence refs, it must load the relationship row under the caller's workspace and refuse to reveal refs that resolve outside the workspace store.
 
 ### 4.2 No cross-workspace dereferencing
 
@@ -75,7 +83,7 @@ When a relationship is deleted (soft-delete via `DELETE /api/relationships/:id`,
 
 1. The relationship row transitions to `lifecycle = "revoked"` per [storage.md §5.1](storage.md). The row is **not** removed.
 2. A `relationship.deleted` audit row is written per [audit-events.md §4.3](audit-events.md), with `tombstoned: true`.
-3. The retention sweep at [storage.md §5.3](storage.md) MUST NOT evict the `revoked` row while any non-retired `EvidenceManifest.relationships?` entry references it.
+3. If `EvidenceManifest.relationships?` is added, the retention sweep at [storage.md §5.3](storage.md) MUST NOT evict the `revoked` row while any non-retired entry references it.
 4. The relationship row is retained until **the last referencing evidence manifest itself ages out** under the evidence retention policy (`DEFAULT_RETENTION: maxRuns: 50` at [`packages/keiko-contracts/src/evidence.ts:315`](../../packages/keiko-contracts/src/evidence.ts)).
 5. Once the last referencing manifest is evicted, the next retention sweep evicts the row.
 
@@ -91,9 +99,9 @@ There is no operator-facing hard-delete API. The only path that removes a `revok
 
 ## 6. Query API obligation
 
-`GET /api/relationships/:id/explain` (per [api-contract.md §4.9](api-contract.md)) MAY return the relationship's evidence refs but MUST NEVER inline evidence content. The contract:
+`GET /api/relationships/:id/explain` does not currently return evidence refs. If that route is extended, it MAY return the relationship's evidence refs but MUST NEVER inline evidence content. The contract:
 
-1. The response body includes a `evidenceRefs: readonly RelationshipEvidenceRef[]` field when refs are present.
+1. The response body includes a `evidenceRefs: readonly RelationshipEvidenceRef[]` field only once refs are implemented.
 2. The response body does NOT include any field from `EvidenceManifest` beyond the version/identity already in the ref.
 3. The UI navigates to the existing evidence viewer (e.g. `/evidence/<runId>`) to render the manifest; the BFF's relationships routes never proxy evidence bytes.
 
@@ -101,7 +109,7 @@ This keeps the privacy boundary explicit: relationship reads return relationship
 
 ### 6.1 Bounded reference list
 
-`evidenceRefs` is bounded to the last **32 refs** per relationship (one ref per lifecycle transition that wrote to a manifest; per [lifecycle.md §6](lifecycle.md), only `* → active`, `* → superseded`, and `* → revoked` write). Beyond 32 the list is truncated with a `truncated: true` flag in the response; the inspector links to the full history through the evidence-store browse page.
+If `evidenceRefs` is introduced, it should be bounded to the last **32 refs** per relationship (one ref per lifecycle transition that wrote to a manifest; per [lifecycle.md §6](lifecycle.md), only `* → active`, `* → superseded`, and `* → revoked` write). Beyond 32 the list should truncate with a `truncated: true` flag in the response.
 
 ### 6.2 No content embedding even on inspector deep-link
 
@@ -109,13 +117,13 @@ Even when a user follows the inspector's "Open evidence run" deep-link, the rela
 
 ## 7. Audit-row embedding of `RelationshipEvidenceRef`
 
-A `RelationshipEvidenceRef` MAY appear on the `relationship.created` and `relationship.updated` audit payload (per [audit-events.md §4.1 / §4.2](audit-events.md)) as the optional `evidenceRef` field. When present, it carries the same four-field shape as §2. The ref is part of the audit row's `payload_json` and inherits the redaction-on-write pass (per [audit-events.md §7](audit-events.md)) — the redactor finds nothing to redact in opaque ids, but the pass runs.
+A `RelationshipEvidenceRef` MAY eventually appear on the `relationship.created` and `relationship.updated` audit payload as the optional `evidenceRef` field. When present, it carries the same four-field shape as §2. The ref would be part of the audit row's `payload_json` and inherit the redaction-on-write pass.
 
 `relationship.deleted` does NOT carry an `evidenceRef`. The deletion is signalled by `tombstoned: true` per [audit-events.md §4.3](audit-events.md). The historical refs are reachable through the relationship row's lifecycle history; the audit row records the deletion event itself.
 
 ## 8. Evidence-side schema contract
 
-The `EvidenceManifest.relationships?` section (per [gap-analysis.md Gap 7](gap-analysis.md) and [storage.md §4.3](storage.md)) carries entries shaped as:
+If the `EvidenceManifest.relationships?` section is added in a later change, it should carry entries shaped as:
 
 ```ts
 interface EvidenceManifestRelationshipEntry {
@@ -131,7 +139,7 @@ interface EvidenceManifestRelationshipEntry {
 }
 ```
 
-Adding this `relationships?` field to `EvidenceManifest` is an **additive** schema evolution under the existing `evidenceSchemaVersion: "1"` invariant ([evidence.ts:21](../../packages/keiko-contracts/src/evidence.ts)). Old readers continue to ignore the field; new readers parse it. The build wiring is owned by [`packages/keiko-evidence/src/build.ts`](../../packages/keiko-evidence/src/build.ts) (issue #539 extends the builder to assemble the section from in-flight relationship mutations).
+Adding this `relationships?` field to `EvidenceManifest` would be an **additive** schema evolution under the existing `evidenceSchemaVersion: "1"` invariant ([evidence.ts:21](../../packages/keiko-contracts/src/evidence.ts)). Old readers should continue to ignore the field; new readers can parse it. This does not require a schema-version bump by itself.
 
 The section is **redacted-by-construction** at build time (the builder receives already-redacted `summary` strings from the relationship mutation handler) and **redacted again** by the persist-time deep-redact pass at [`packages/keiko-evidence/src/persist.ts:50`](../../packages/keiko-evidence/src/persist.ts).
 

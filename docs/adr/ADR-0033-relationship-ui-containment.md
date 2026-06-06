@@ -55,7 +55,7 @@ The bounded-render contract has three layers, composed as `min(API hard cap, den
 | UI-side visible cap | [visual-density-rules.md "Per-density rendering caps"](../relationship-engine/visual-density-rules.md): Minimal = incident only; Standard = 25; Dense = 512. |
 | Animation cap    | [activity-state.md §5.3](../relationship-engine/activity-state.md) `N_VISIBLE = 25` animated badges concurrently. |
 
-Both layers fail closed: a bare `GET /api/relationships` returns `relationship/bounded-query-required` ([api-contract.md §4.3](../relationship-engine/api-contract.md)); a caller-requested cap above the hard ceiling returns `relationship/bounded-query-exceeded`. The UI surfaces server-applied caps via the `X-Truncated` header and the in-band `truncated` / `truncationReason` body fields, rendered as a "Showing first N of M …" footer line per [error-and-denial-ux.md "Bounded-query-exceeded UX"](../relationship-engine/error-and-denial-ux.md).
+Both layers fail closed: a bare `GET /api/relationships` returns `relationship/bounded-query-required` ([api-contract.md §4.3](../relationship-engine/api-contract.md)); a caller-requested cap above the hard ceiling returns `relationship/bounded-query-exceeded`. The UI surfaces server-applied caps via the in-band `truncated` / `truncationReason` body fields, rendered as a "Showing first N …" footer line per [error-and-denial-ux.md "Bounded-query-exceeded UX"](../relationship-engine/error-and-denial-ux.md).
 
 This double-layer guarantees the UI never renders more than the API can return and never animates more than the perception cap allows, even if the API hard ceiling were raised.
 
