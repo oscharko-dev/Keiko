@@ -32,6 +32,7 @@ const EXPECTED_RULES = [
   "adr-0019-direction-3c-tools-only-contracts-security-workspace",
   "adr-0019-direction-3d-evidence-only-contracts-security-workspace",
   "adr-0019-direction-3e-local-knowledge-only-contracts",
+  "adr-0019-direction-3k-verification-only-contracts-security-workspace-tools",
   "adr-0019-direction-3f-memory-vault-only-contracts-security",
   "adr-0019-direction-3g-memory-capture-only-contracts-security",
   "adr-0019-direction-3h-memory-consolidation-only-contracts-security",
