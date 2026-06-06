@@ -21,9 +21,12 @@ This script runs, in order:
 1. `npm run typecheck`
 2. `npm run lint`
 3. `npm run arch:check` and `npm run arch:check:negative`
-4. `npm test` (vitest across every workspace package, including the
-   release-gate file)
-5. A smoke confirmation that the installed-package binary boots
+4. `npm test` (vitest across the server, root, and non-UI workspace
+   packages, including the release-gate file; keiko-ui tests are
+   intentionally excluded from this suite and are gated instead by the
+   separate CI `ui` job — see `.github/workflows/ci.yml`)
+5. `tsc -p tsconfig.build.json` to produce `dist/cli/index.js`,
+   followed by a smoke confirmation that the binary boots
    (`node dist/cli/index.js --version`)
 
 A green run of `conversation:release-check` plus a manual pass of the

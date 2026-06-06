@@ -12,7 +12,8 @@ configured model gateway, what is never transmitted, and how to delete it.
   [packages/keiko-server/src/store/paths.ts](../packages/keiko-server/src/store/paths.ts).
 - **Pending attachments.** Files you attach to the composer live in browser
   memory only. They are never written to disk by Keiko and are dropped when you
-  close the tab, switch chats, send the message, or click "Clear attachments".
+  close the tab, switch chats, send the message, or remove each chip
+  individually using the per-attachment remove button in the strip.
 - **Document extraction context.** Issue #148 extracted text from documents you
   attach is composed into the model request body once and is not stored on the
   chat row. It travels with the next send and is then forgotten by the BFF.
@@ -57,16 +58,24 @@ Keiko-hosted relay, no telemetry beacon, no analytics ping.
 
 ## How to delete conversation data
 
-The Conversation Center exposes three retention controls inline in the chat:
+The Conversation Center exposes the following retention controls inline in the chat:
 
-1. **Clear pending attachments.** Removes every attachment chip from the
-   composer before send. Does not touch chat history.
-2. **Clear conversation history.** Empties the in-memory message list for the
-   next prompt so no prior turns are replayed to the model. The chat row
-   stays so you can keep the topic open.
-3. **Delete conversation.** Removes the entire chat row and every persisted
-   message from `keiko-ui.db`. The corresponding evidence runs are intentionally
-   kept — deletion of a chat must not erase the audit trail. See
+1. **Remove pending attachment.** Each pending attachment chip in the
+   composer strip carries an individual remove button. Clicking it removes
+   that attachment before send. There is no bulk "clear all" affordance;
+   each attachment must be removed individually. Does not touch chat history.
+2. **Clear conversation history.** The context-budget indicator in the
+   composer includes a "Clear history" button. Clicking it empties the
+   in-memory message list for the next prompt so no prior turns are replayed
+   to the model. The chat row is retained so you can keep the topic open.
+   This control is visible only when a model with a known context-window limit
+   is selected and the budget indicator is shown.
+3. **Delete conversation** _(API only — not yet surfaced in the UI)._
+   The `deleteChat` API (`DELETE /api/chats?id=…`) exists and removes the
+   entire chat row and every persisted message from `keiko-ui.db`. The
+   corresponding evidence runs are intentionally kept — deletion of a chat
+   must not erase the audit trail. A visible affordance (delete button) is a
+   documented follow-up. See
    [docs/connected-context-privacy.md](./connected-context-privacy.md#cleanup)
    for the broader cleanup contract.
 
