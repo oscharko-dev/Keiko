@@ -11,9 +11,9 @@ jobs they reference.
 | Concern | Source of truth | What it proves |
 | ------- | --------------- | -------------- |
 | Package boundaries | [ADR-0019](adr/ADR-0019-modular-package-architecture.md), [ADR-0020](adr/ADR-0020-workspace-tooling-and-architecture-gate.md), `npm run arch:check`, `npm run arch:check:negative` | Dependency-direction and trust-boundary rules remain enforced in the live package graph. |
-| Root public surface | [`docs/PUBLIC_API_SURFACE.md`](PUBLIC_API_SURFACE.md), `npm run check:package-surface` | The packed product exports only the approved root barrel, CLI bin, and bundled UI runtime assets. |
+| Root public surface | [`docs/PUBLIC_API_SURFACE.md`](PUBLIC_API_SURFACE.md), [`scripts/root-package-surface.contract.json`](../scripts/root-package-surface.contract.json), `npm run check:package-surface` | The packed product exposes only the approved root barrel, CLI bin, and bundled UI runtime assets as customer-facing contract; bundled private workspace packages remain internal implementation detail. |
 | Version consistency | `npm run check:version-consistency` | Workspace package versions stay aligned, `KEIKO_PRODUCT_VERSION` matches the root version, legacy shim removals remain enforced, and SDK version sourcing stays consistent. |
-| Installable artifact | `npm run smoke:install`, `npm run smoke:install:memory` | A packed artifact installs cleanly and the bundled runtime packages are usable after installation. |
+| Installable artifact | `npm run smoke:install`, `npm run smoke:install:memory` | A packed artifact installs cleanly as one self-contained product without requiring separately published workspace packages. |
 | Supply chain | `npm run check:workspace-supply-chain`, `npm run check:qi-supply-chain` | Workspace license/SBOM requirements and Quality Intelligence deny-list rules hold before publish. |
 | Functional regression | `npm test`, `npm run lint`, `npm run typecheck` | Current implementation changes still satisfy the repo's executable and static correctness gates. |
 | Local runtime state | [`docs/local-runtime-state-contract.md`](local-runtime-state-contract.md) | The approved local config, evidence, lifecycle, and memory surfaces are documented in one current-state contract. |
