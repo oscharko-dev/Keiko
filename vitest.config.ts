@@ -16,7 +16,6 @@ export default defineConfig({
     exclude: [
       "**/node_modules/**",
       "tests/fixtures/**",
-      "tests/upgrade-smoke/fixture/**",
       "packages/keiko-ui/**",
     ],
     // ADR-0013 D2 site 2 — `node:sqlite` requires --experimental-sqlite on Node 22.0–22.11 builds

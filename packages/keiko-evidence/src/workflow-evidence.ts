@@ -2,13 +2,11 @@
 // PURE, surface-agnostic core that folds a terminated workflow run (its typed report + buffered
 // events) into a redacted, versioned EvidenceManifest and writes it through the #10 EvidenceStore.
 //
-// It was extracted from src/ui/evidence.ts so BOTH the UI BFF and the evaluation harness build the
-// manifest from one implementation. After issue #163 this module lives in @oscharko-dev/keiko-
-// evidence and stays leaf-clean against ADR-0019 rule 3d: gateway lookups (the model cost class)
-// are accepted through the injected `EvidencePersistContext.costClassResolver` port rather than
-// imported from the gateway capability registry. It defines its own narrow `WorkflowRunKind` /
-// `WorkflowTerminalStatus` so it never depends on src/ui types. The UI re-exports it
-// (behaviour-preserving); the evaluation runner imports it directly.
+// Both the UI BFF and the evaluation harness build the manifest from this shared
+// implementation. Gateway lookups (the model cost class) are accepted through the
+// injected `EvidencePersistContext.costClassResolver` port rather than imported from
+// the gateway capability registry. It defines its own narrow `WorkflowRunKind` /
+// `WorkflowTerminalStatus` so it never depends on UI-local types.
 //
 import { buildEvidenceReport, type EvidenceReport } from "./report.js";
 import { createAuditRedactor, deepRedactStrings } from "./redaction.js";
@@ -33,9 +31,8 @@ export interface EvidencePersistContext {
   readonly store: EvidenceStore;
   readonly env: EnvSource;
   readonly additionalSecrets?: readonly string[] | undefined;
-  // Cost-class lookup port (issue #163). Mirrors EvidenceDeps.costClassResolver — the evidence
-  // package never imports the gateway capability registry directly. Caller wires the default from
-  // @oscharko-dev/keiko-model-gateway's resolveCostClass. Absent → "unknown".
+  // Cost-class lookup port. Mirrors EvidenceDeps.costClassResolver so the evidence
+  // package never imports the gateway capability registry directly. Absent → "unknown".
   readonly costClassResolver?: ((modelId: string) => CostClass | "unknown") | undefined;
 }
 

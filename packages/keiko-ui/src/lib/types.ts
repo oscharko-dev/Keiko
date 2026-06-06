@@ -1,5 +1,5 @@
-// Browser-safe contract seam for the UI (issue #167 ADR-0019 rule 8). Every name in this file
-// is a pure re-export — zero type DEFINITIONS live here. The wire entity shapes come from
+// Browser-safe contract seam for the UI (ADR-0019 rule 8). Every name in this file
+// is a pure re-export; zero type definitions live here. The wire entity shapes come from
 // @oscharko-dev/keiko-contracts/bff-wire; evidence and verification-summary shapes come from
 // their respective subpaths; everything else comes from the contracts root barrel. The SSE
 // stream aggregation (HarnessEvent/SseStatus/ALL_SSE_EVENT_TYPES/TERMINAL_EVENT_TYPES) is

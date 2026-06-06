@@ -5,8 +5,8 @@
 // minimum reason metadata callers need to branch on. The `message` field is a short,
 // statically-derived phrase — never templated with a value from the request.
 //
-// The QI namespace deliberately uses a flat, code-prefixed error taxonomy ("qi/*") so the
-// audit ledger (issue #10) and the BFF (issue #166) can route safely without parsing.
+// The QI namespace deliberately uses a flat, code-prefixed error taxonomy ("qi/*")
+// so downstream audit and BFF code can route safely without parsing.
 
 export type QualityIntelligenceSafeErrorCode =
   | "qi/capability-mismatch"

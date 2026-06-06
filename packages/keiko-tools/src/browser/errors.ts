@@ -20,8 +20,8 @@ export const BROWSER_ERROR_CODES = {
   BAD_REQUEST: "BAD_REQUEST",
   NO_PENDING_SCREENSHOT: "NO_PENDING_SCREENSHOT",
   PAYLOAD_TOO_LARGE: "PAYLOAD_TOO_LARGE",
-  // Issue #162: the BFF must inject a side-file writer when evidenceStore is set. Without one,
-  // applyScreenshot refuses to drop binary evidence on the floor — fail-closed.
+  // The BFF must inject a side-file writer when evidence storage is enabled.
+  // Without one, applyScreenshot fails closed rather than dropping binary evidence.
   SIDE_FILE_WRITER_MISSING: "SIDE_FILE_WRITER_MISSING",
 } as const;
 

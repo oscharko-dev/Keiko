@@ -268,11 +268,11 @@ function childEnv(env: EnvSource): NodeJS.ProcessEnv {
 }
 
 function cliEntryPath(): string {
-  // The root bin shim (`dist/cli/index.js`) surfaces `KEIKO_CLI_BIN_PATH` so
+  // The root bin entry (`dist/cli/index.js`) surfaces `KEIKO_CLI_BIN_PATH` so
   // re-exec'd children spawned by `keiko start` invoke the published bin rather
   // than the cli package barrel (which is not executable). The
-  // import.meta.url fallback preserves the pre-extraction behaviour for callers
-  // that invoke runLifecycleCli without going through the bin shim.
+  // import.meta.url fallback preserves direct package-local invocation for callers
+  // that invoke runLifecycleCli without going through the published bin entry.
   const fromEnv = process.env.KEIKO_CLI_BIN_PATH;
   if (fromEnv !== undefined && fromEnv !== "") return fromEnv;
   return join(dirname(fileURLToPath(import.meta.url)), "index.js");

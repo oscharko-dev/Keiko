@@ -19,10 +19,8 @@ import { EvidenceWriteError } from "./errors.js";
 
 const MAX_NAME_LENGTH = 128;
 
-// SideFileWriteResult moved to @oscharko-dev/keiko-contracts in issue #162 so the
-// tools package can consume an injected side-file writer without depending on src/audit.
-// Re-exported here so every existing `import { SideFileWriteResult } from "../audit/side-file.js"`
-// keeps resolving unchanged.
+// Re-export the shared result type from contracts so side-file users can import it
+// from the evidence package entry point.
 export type { SideFileWriteResult };
 
 export interface SideFileWriterOptions {

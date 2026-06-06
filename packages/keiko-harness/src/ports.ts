@@ -2,10 +2,9 @@
 // abstractions, never on the concrete Gateway, file system, or terminal. Issues #6,
 // #10, and #13 each plug in their own implementations without touching the harness.
 //
-// The tool ports (ToolPort, ToolCallRequest, ToolCallResult, ToolCallMetadata) moved to
-// @oscharko-dev/keiko-contracts in issue #162: they are SHARED between the harness consumer
-// and the tools-package implementer, so both sides import from contracts. Re-exported here
-// so every existing `import ... from "../harness/ports.js"` keeps resolving unchanged.
+// The tool ports (ToolPort, ToolCallRequest, ToolCallResult, ToolCallMetadata) are
+// shared with the tools package via contracts. Re-export them here as part of the
+// harness package surface.
 
 import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type {

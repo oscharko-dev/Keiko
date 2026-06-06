@@ -18,7 +18,6 @@ export default tseslint.config(
       "only-for-internal-use/**",
       "Only for Internal Use/**",
       "tests/architecture/fixtures/**",
-      "tests/upgrade-smoke/fixture/**",
     ],
   },
   js.configs.recommended,

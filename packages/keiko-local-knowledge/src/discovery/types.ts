@@ -15,7 +15,7 @@ import type {
   ParserDiagnostic,
 } from "@oscharko-dev/keiko-contracts";
 
-// ─── Discovered file (pre-extraction) ────────────────────────────────────────
+// ─── Discovered file (before parsing/persistence) ────────────────────────────
 export interface DiscoveredFile {
   // POSIX-style path relative to the scope's rootPath. Never starts with `/`.
   readonly relativePath: string;

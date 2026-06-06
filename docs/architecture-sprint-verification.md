@@ -1,9 +1,12 @@
-# Architecture Verification Baseline
+# Architecture Verification Record
 
-This document names the current automated checks that keep the `0.2.0` modular architecture valid.
-It is not a sprint diary or release-history log.
+This document is the retained verification record for the modularization work that established the
+`0.2.0` package baseline. It is not the live release gate for current builds. Current operational
+contracts live in [`docs/local-runtime-state-contract.md`](local-runtime-state-contract.md),
+[ADR-0025](adr/ADR-0025-forward-only-0-2-0-modular-baseline.md), and the package scripts and CI
+jobs they reference.
 
-## Current verification surfaces
+## Verification surfaces captured by the record
 
 | Concern | Source of truth | What it proves |
 | ------- | --------------- | -------------- |
@@ -15,9 +18,9 @@ It is not a sprint diary or release-history log.
 | Functional regression | `npm test`, `npm run lint`, `npm run typecheck` | Current implementation changes still satisfy the repo's executable and static correctness gates. |
 | Local runtime state | [`docs/local-runtime-state-contract.md`](local-runtime-state-contract.md) | The approved local config, evidence, lifecycle, and memory surfaces are documented in one current-state contract. |
 
-## Release-pack baseline
+## Historical publishable-build baseline
 
-For any publishable build, the minimum baseline is:
+At the time this record was written, the minimum publishable-build baseline was:
 
 1. `npm run lint`
 2. `npm run typecheck`
@@ -33,5 +36,6 @@ For any publishable build, the minimum baseline is:
 ## Historical note
 
 Historical closure evidence for the earlier modularization sprint remains in git history and issue
-threads. This page now records only the current verification baseline used to keep the repository
-coherent at `0.2.0`.
+threads. Other docs may cite this page as background for the modularization rollout, but current
+release expectations should come from the live package scripts, CI, and current-state contract
+docs rather than this retained record.

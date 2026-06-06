@@ -41,5 +41,5 @@ or compatibility playbook.
   silently re-home or re-export them.
 - Evidence is redacted before persistence and stored separately from UI durable state.
 - Memory audit events are persisted without raw memory bodies or payloads.
-- Historical upgrade evidence for earlier package layouts is intentionally not repeated here; this
-  page is limited to the current 0.2.0 runtime contract.
+- This page keeps migration-sensitive path and precedence details only where they remain part of
+  the live product contract; it does not document retired compatibility or upgrade-only steps.
