@@ -14,11 +14,11 @@ The user-facing strings come **verbatim** from [denial-reasons.md](denial-reason
 
 The relationship surface distinguishes three error categories. Each renders differently.
 
-| Category                    | Source                                                                                 | Render location                                                              | ARIA live                                           | Persistence                                            |
-| --------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------ |
-| **Validator denial**        | `POST /api/relationships/validate` or `POST /api/relationships` returns a denial code. | Creation banner during preview; inspector "Denial reason" section on commit. | `assertive` during creation, `polite` in inspector. | Banner: transient. Inspector: until lifecycle changes. |
-| **API error envelope**      | Typed error from any BFF route (per [api-contract.md §3.4](api-contract.md)).          | Inspector banner; toast for action errors.                                   | `assertive`                                         | Until operator dismisses or retries.                   |
-| **Network / runtime error** | `fetch` rejection, JSON parse failure, timeout, offline.                               | Inspector banner; toast for action errors.                                   | `assertive`                                         | Until network returns.                                 |
+| Category                    | Source                                                                                 | Render location                                                              | ARIA live                                           | Persistence                                                                                                                                 |
+| --------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Validator denial**        | `POST /api/relationships/validate` or `POST /api/relationships` returns a denial code. | Creation banner during preview; inspector "Denial reason" section on commit. | `assertive` during creation, `polite` in inspector. | Preview banner: transient unless the denial is security-class. Commit banner: until operator dismisses. Inspector: until lifecycle changes. |
+| **API error envelope**      | Typed error from any BFF route (per [api-contract.md §3.4](api-contract.md)).          | Inspector banner; toast for action errors.                                   | `assertive`                                         | Until operator dismisses or retries.                                                                                                        |
+| **Network / runtime error** | `fetch` rejection, JSON parse failure, timeout, offline.                               | Inspector banner; toast for action errors.                                   | `assertive`                                         | Until network returns.                                                                                                                      |
 
 All three reuse the existing `.lk-alert` chrome (`globals.css:5890`) for the banner shape and `.lk-alert-retry` (`globals.css:5898`) for the retry control. No new error chrome is introduced.
 
@@ -118,12 +118,14 @@ This case is expected to be **rare** because the UI never sends caller-requested
 
 ### (b) Server applied the bounded-query cap and returned a partial result
 
-The response carries `X-Truncated: true` header and `truncated: true` + `nextCursor` body fields ([api-contract.md §3.5](api-contract.md)). The UI:
+The response carries `truncated: true` plus `nextCursor` / `truncationReason` body fields ([api-contract.md §3.5](api-contract.md), [api-contract.md §4.8](api-contract.md)). The UI:
 
 - Renders a **footer line** below the rendered list: "Showing first N of M relationships." Token N is the rendered count; M is `N` (from `entries.length`) **plus an estimate from `nextCursor` page count** if available — never a fabricated total.
 - If the impact endpoint returns `truncationReason: "max-depth"` / `"max-nodes"` / `"max-relationships"`, the footer line also names the reason: "Impact analysis bounded at maximum depth (3)." / "Impact analysis bounded at 1024 nodes." / "Impact analysis bounded at 2048 relationships." — each verbatim from the [api-contract.md §4.7](api-contract.md) reason vocabulary.
 - A "Load more" link issues the next-cursor request. The link is keyboard-accessible (`<a href>` not `<div role="link">`).
 - The footer line has `aria-live="polite"` so it announces on initial render.
+
+Security-class denials called out in the catalog — `denied/path-not-contained`, `denied/cross-workspace`, and `denied/payload-content-not-permitted` — never auto-dismiss, whether they occur during preview or commit. They require explicit operator dismissal so the security signal is not lost.
 
 The footer line styling reuses `.footer` chrome (`globals.css:643`); no new chrome is introduced.
 
