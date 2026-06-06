@@ -867,6 +867,108 @@ describe("desktop chat routes", () => {
     expect(seenRequests).toHaveLength(1);
   });
 
+  // Issue #623 — POST /api/desktop/chat returned 500 when projectPath failed path validation.
+  // The validateProjectPath throw was uncaught; now it is caught and mapped to the typed 400 envelope.
+  it("returns 400 with a typed error code (not 500) when projectPath is a traversal path", async () => {
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: "any-chat-id",
+        projectPath: "/valid/../traversal",
+        modelId: CHAT_MODEL,
+        content: "hello",
+      }),
+    });
+    expect(sendRes.status).toBe(400);
+    const body = (await sendRes.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe("invalid_path");
+    expect(seenRequests).toHaveLength(0);
+  });
+
+  it("returns 400 with a typed error code (not 500) when projectPath is a relative path", async () => {
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: "any-chat-id",
+        projectPath: "relative/path",
+        modelId: CHAT_MODEL,
+        content: "hello",
+      }),
+    });
+    expect(sendRes.status).toBe(400);
+    const body = (await sendRes.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe("invalid_path");
+    expect(seenRequests).toHaveLength(0);
+  });
+
+  it("returns 400 with a typed error code (not 500) when projectPath is a file:// URL", async () => {
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: "any-chat-id",
+        projectPath: "file:///etc/passwd",
+        modelId: CHAT_MODEL,
+        content: "hello",
+      }),
+    });
+    expect(sendRes.status).toBe(400);
+    const body = (await sendRes.json()) as { error?: { code?: string } };
+    expect(body.error?.code).toBe("invalid_path");
+    expect(seenRequests).toHaveLength(0);
+  });
+
+  // Issue #631 (CWE-200/209) — model output must be redacted before it is persisted and before
+  // it reaches the browser. A model that echoes a secret (e.g. an API key injected via system
+  // prompt) MUST NOT appear un-redacted in the persisted assistant message or the response body.
+  it("redacts secret-shaped content in the model response before persisting and before returning it", async () => {
+    const secretValue = "test-config-secret-value-1234567890";
+    await restartWithDeps(
+      deps(fakeModel(`Here is your key: ${secretValue} — enjoy!`), {
+        // Wire a redactor that replaces the known secret with a placeholder, mirroring
+        // buildRedactor behaviour when an apiKey is present in the gateway config.
+        redactor: (value: unknown) =>
+          typeof value === "string" ? value.replaceAll(secretValue, "[REDACTED]") : value,
+      }),
+    );
+
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "What is my API key?",
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const body = (await sendRes.json()) as {
+      messages: { role: string; content: string }[];
+    };
+
+    // Success response body must not expose the secret.
+    const assistantBody = body.messages.find((m) => m.role === "assistant");
+    expect(assistantBody?.content).not.toContain(secretValue);
+    expect(assistantBody?.content).toContain("[REDACTED]");
+
+    // Persisted assistant message must also be redacted.
+    const persisted = store.listMessages(created.chat.id);
+    const persistedAssistant = persisted.find((m) => m.role === "assistant");
+    expect(persistedAssistant?.content).not.toContain(secretValue);
+    expect(persistedAssistant?.content).toContain("[REDACTED]");
+  });
+
   it("ignores malformed documentContext entries instead of rejecting the send", async () => {
     const createRes = await fetch(`${base()}/api/desktop/chats`, {
       method: "POST",

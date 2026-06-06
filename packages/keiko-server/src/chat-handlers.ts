@@ -766,7 +766,12 @@ async function persistModelChatTurn(
       },
       new AbortController().signal,
     );
-    const assistantMessage = createAssistantMessage(deps, request, response.content);
+    // Issue #631 — redact the model's raw content before persisting and before returning it to
+    // the browser. A model that echoes a secret from its context (e.g. an apiKey injected via
+    // system prompt) would otherwise surface it un-redacted on the success path, mirroring the
+    // grounded-QA path (grounded-qa.ts line 549) which already applies deps.redactor here.
+    const redactedContent = deps.redactor(response.content) as string;
+    const assistantMessage = createAssistantMessage(deps, request, redactedContent);
     const memoryActions =
       memoryContext === undefined ? [] : captureMemoryActions(request, deps, memoryContext);
     const chatPatch =
@@ -817,6 +822,31 @@ export async function handleCreateDesktopChat(
   }
 }
 
+// Issue #623 — validate the project path, returning a typed 400 RouteResult on failure instead of
+// letting validateProjectPath throw into the generic 500 handler. Kept as a helper so the send
+// handler stays within the complexity budget.
+function normalizeDesktopProjectPath(
+  projectPath: string,
+  deps: UiHandlerDeps,
+): string | RouteResult {
+  try {
+    return validateProjectPath(projectPath, { mustExist: false });
+  } catch (error) {
+    return desktopChatErrorResult(error, deps);
+  }
+}
+
+// Resolves the optional conversation memory context, surfacing a typed RouteResult on lookup
+// failure. Extracted so handleSendDesktopChat stays within the complexity budget.
+function resolveDesktopMemoryContext(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  normalizedProjectPath: string,
+): ConversationMemoryRuntimeContext | RouteResult | undefined {
+  if (request.memory === undefined) return undefined;
+  return resolveConversationMemoryContext(deps, normalizedProjectPath, request.chatId);
+}
+
 export async function handleSendDesktopChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -825,7 +855,8 @@ export async function handleSendDesktopChat(
   if (isRouteResult(body)) return body;
   const request = sendRequestFromBody(body);
   if (isRouteResult(request)) return request;
-  const normalizedProjectPath = validateProjectPath(request.projectPath, { mustExist: false });
+  const normalizedProjectPath = normalizeDesktopProjectPath(request.projectPath, deps);
+  if (isRouteResult(normalizedProjectPath)) return normalizedProjectPath;
   const chat = findChat(deps, normalizedProjectPath, request.chatId);
   if (chat === undefined) {
     return { status: 404, body: errorBody("NOT_FOUND", "Chat not found.") };
@@ -846,12 +877,7 @@ export async function handleSendDesktopChat(
   if (!validation.ok) {
     return { status: 400, body: errorBody(validation.code, validation.message) };
   }
-  const memoryContext =
-    request.memory === undefined
-      ? undefined
-      : resolveConversationMemoryContext(deps, normalizedProjectPath, request.chatId);
-  if (memoryContext !== undefined && "status" in memoryContext) {
-    return memoryContext;
-  }
+  const memoryContext = resolveDesktopMemoryContext(deps, request, normalizedProjectPath);
+  if (isRouteResult(memoryContext)) return memoryContext;
   return persistModelChatTurn(deps, request, chat, modelId, memoryContext);
 }
