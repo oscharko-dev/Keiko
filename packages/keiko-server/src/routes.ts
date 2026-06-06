@@ -98,6 +98,8 @@ import {
   handleQiDryRunFigma,
   handleQiDryRunJira,
   handleQiSourceSelect,
+  handleListQiRuns,
+  handleGetQiRun,
   QI_HANDOFF_ROUTE_GROUP,
 } from "./qualityIntelligence/index.js";
 
@@ -344,6 +346,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/quality-intelligence/sources/capabilities",
     handler: handleQiCapabilities,
   },
+  // Issue #280 (Epic #270) — Quality Intelligence UI read routes (additive). Composed from
+  // keiko-evidence UNCHANGED (ADR-0023 D8).
+  { method: "GET", pattern: "/api/quality-intelligence/runs", handler: handleListQiRuns },
+  { method: "GET", pattern: "/api/quality-intelligence/runs/:id", handler: handleGetQiRun },
   // Issue #281 (Epic #270) — Conversation Center → QI workflow handoff route group.
   // Single POST seam; the body is a typed `QualityIntelligenceConversationCenterHandoff`
   // envelope (refs only, no chat content). Registered as a sibling group so concurrent

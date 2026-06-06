@@ -224,15 +224,16 @@ the caller (`keiko-workflows` QI workflows) wires the gateway. Evidence persiste
 `keiko-evidence`; the caller wires the store. This pattern mirrors the established port-injection
 precedent from ADR-0005 and rules 3a–3j.
 
-Existing allow-lists in rules 4a (harness), 5a (workflows), 6a (server), and 7a (cli) are
+Existing allow-lists in rules 5a (workflows), 6a (server), and 7a (cli) are
 extended to include `keiko-quality-intelligence` as a permitted import target in those packages'
-production source.
+production source. Rule 4a (harness) is intentionally not extended — `keiko-harness` does not
+depend on `keiko-quality-intelligence` per D6.
 
 The `adr-0019-trust-6-evidence-allowed-callers` rule is updated to include
 `packages/keiko-quality-intelligence/src/` as a permitted evidence caller path for domain types
 that reference evidence manifest shape (type-only imports).
 
-Issue #287 updates `EXPECTED_RULES` from 31 to a minimum of 32 once rule `direction-10a` lands.
+Issue #287 updates `EXPECTED_RULES` from 18 to 19 (negative-fixture rules); total dep-cruiser rule count reaches 32.
 
 ## Anti-Duplication Table
 

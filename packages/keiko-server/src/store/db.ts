@@ -35,6 +35,7 @@ import {
   updateChat as sqlUpdateChat,
 } from "./chats.js";
 import {
+  findMessageById as sqlFindMessageById,
   insertMessage as sqlInsertMessage,
   listMessages as sqlListMessages,
   updateMessage as sqlUpdateMessage,
@@ -177,6 +178,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
       sqlDeleteChat(db, id);
     },
     listMessages: (chatId: string): readonly ChatMessage[] => sqlListMessages(db, chatId),
+    findMessageById: (id: string): ChatMessage | undefined => sqlFindMessageById(db, id),
     createMessage: (msg: NewChatMessage): ChatMessage => {
       const message = createMessageRecord(db, options, msg);
       sqlTouchChat(db, msg.chatId, options.now());

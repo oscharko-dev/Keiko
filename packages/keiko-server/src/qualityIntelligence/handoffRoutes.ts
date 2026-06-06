@@ -219,15 +219,11 @@ interface ResolvedMessage {
   readonly message: ChatMessage;
 }
 
+// Single indexed lookup — replaces O(P×C×M) triple scan on every handoff POST.
 const findChatMessage = (deps: UiHandlerDeps, messageId: string): ResolvedMessage | undefined => {
-  for (const project of deps.store.listProjects()) {
-    for (const chat of deps.store.listChats(project.path)) {
-      for (const message of deps.store.listMessages(chat.id)) {
-        if (message.id === messageId) return { chatId: chat.id, message };
-      }
-    }
-  }
-  return undefined;
+  const message = deps.store.findMessageById(messageId);
+  if (message === undefined) return undefined;
+  return { chatId: message.chatId, message };
 };
 
 // ─── Persisted handoff record ──────────────────────────────────────────────────

@@ -124,14 +124,16 @@ export function handleListQiRuns(ctx: RouteContext, deps: UiHandlerDeps): RouteR
       }
     }
     return { status: 200, body: { runs } };
-  } catch (err) {
-    // List failure is non-fatal to the UI — return an empty list with a status hint.
-    const message = err instanceof Error ? err.message : "Failed to list Quality Intelligence runs";
+    // Static codes only — never echo OS fs error text (CWE-209).
+  } catch {
     return {
       status: 200,
       body: {
         runs: [],
-        _listError: { code: "LIST_FAILED", message },
+        _listError: {
+          code: "LIST_FAILED",
+          message: "Failed to list Quality Intelligence runs",
+        },
       },
     };
   }
@@ -163,11 +165,13 @@ export function handleGetQiRun(ctx: RouteContext, deps: UiHandlerDeps): RouteRes
       };
     }
     return { status: 200, body: detail };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to load Quality Intelligence run";
+    // Static codes only — never echo OS fs error text (CWE-209).
+  } catch {
     return {
       status: 500,
-      body: { error: { code: "INTERNAL", message } },
+      body: {
+        error: { code: "INTERNAL", message: "Failed to load Quality Intelligence run" },
+      },
     };
   }
 }

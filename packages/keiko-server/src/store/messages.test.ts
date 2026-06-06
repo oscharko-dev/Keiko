@@ -501,6 +501,78 @@ describe("updateMessage (issue #66)", () => {
   });
 });
 
+describe("findMessageById", () => {
+  it("returns the row when id matches", () => {
+    const created = store.createMessage({
+      chatId,
+      role: "user",
+      content: "lookup me",
+      timestamp: 30,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const found = store.findMessageById(created.id);
+    expect(found).toBeDefined();
+    expect(found?.id).toBe(created.id);
+    expect(found?.content).toBe("lookup me");
+  });
+
+  it("returns undefined when id is absent", () => {
+    expect(store.findMessageById("no-such-message")).toBeUndefined();
+  });
+
+  it("populates chatId on the returned row", () => {
+    const created = store.createMessage({
+      chatId,
+      role: "assistant",
+      content: "x",
+      timestamp: 31,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const found = store.findMessageById(created.id);
+    expect(found?.chatId).toBe(chatId);
+  });
+
+  it("does not return a row from a different chat", () => {
+    const otherChatId = store.createChat(proj, "other", "example-chat-model").id;
+    const inOther = store.createMessage({
+      chatId: otherChatId,
+      role: "user",
+      content: "in other chat",
+      timestamp: 40,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const inThis = store.createMessage({
+      chatId,
+      role: "user",
+      content: "in this chat",
+      timestamp: 41,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const foundOther = store.findMessageById(inOther.id);
+    expect(foundOther?.chatId).toBe(otherChatId);
+    expect(foundOther?.content).toBe("in other chat");
+    const foundThis = store.findMessageById(inThis.id);
+    expect(foundThis?.chatId).toBe(chatId);
+    expect(foundThis?.content).toBe("in this chat");
+  });
+});
+
 describe("listMessages", () => {
   it("returns messages ordered by timestamp ASC", () => {
     store.createMessage({

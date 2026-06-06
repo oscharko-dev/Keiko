@@ -200,6 +200,12 @@ button {
 [data-theme="light"] .cmp-send[data-on="true"] {
   color: #06281b;
 }
+/* Accent/info/muted token text on near-white badge backgrounds fails 4.5:1 — use ink-inverse for AA. */
+[data-theme="light"] .qi-badge-succeeded,
+[data-theme="light"] .qi-badge-running,
+[data-theme="light"] .qi-badge-cancelled {
+  color: var(--ink-inverse);
+}
 
 /* ============================================================
    KEIKO DESKTOP — component styles
@@ -7232,10 +7238,10 @@ select.dlg-input {
   color: var(--info);
 }
 
-/* failed: danger */
+/* failed: danger — var(--fg) near-white on 18% danger/--card surface ≈ 7.5:1 (WCAG 1.4.3 AA). */
 .qi-badge-failed {
   background: color-mix(in oklch, var(--danger) 18%, transparent);
-  color: var(--danger);
+  color: var(--fg);
 }
 
 /* cancelled: muted */
@@ -7261,9 +7267,10 @@ select.dlg-input {
   letter-spacing: 0.04em;
 }
 
+/* danger text on 25% danger/--card surface — var(--fg) near-white ≈ 7.5:1 (WCAG 1.4.3 AA). */
 .qi-sev-critical {
   background: color-mix(in oklch, var(--danger) 25%, transparent);
-  color: var(--danger);
+  color: var(--fg);
 }
 
 .qi-sev-high {

@@ -56,6 +56,7 @@ export interface UiStore {
   readonly deleteChat: (id: string) => void;
 
   readonly listMessages: (chatId: string) => readonly ChatMessage[];
+  readonly findMessageById: (id: string) => ChatMessage | undefined;
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;
   readonly createMessages: (messages: readonly NewChatMessage[]) => readonly ChatMessage[];
   readonly updateMessage: (id: string, patch: UpdateChatMessagePatch) => ChatMessage;

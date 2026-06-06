@@ -61,6 +61,7 @@ const COLUMNS =
   "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type";
 
 const SQL_LIST = `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER BY timestamp ASC, id ASC`;
+const SQL_FIND_BY_ID = `SELECT ${COLUMNS} FROM chat_messages WHERE id = ? LIMIT 1`;
 const SQL_CHAT_EXISTS = "SELECT 1 FROM chats WHERE id = ?";
 const SQL_INSERT = `
 INSERT INTO chat_messages
@@ -122,6 +123,11 @@ function processShortResult(
 
 export function listMessages(db: DatabaseSync, chatId: string): readonly ChatMessage[] {
   return (db.prepare(SQL_LIST).all(chatId) as unknown as MessageRow[]).map(rowToMessage);
+}
+
+export function findMessageById(db: DatabaseSync, id: string): ChatMessage | undefined {
+  const row = db.prepare(SQL_FIND_BY_ID).get(id) as unknown as MessageRow | undefined;
+  return row === undefined ? undefined : rowToMessage(row);
 }
 
 export function insertMessage(

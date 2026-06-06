@@ -23,6 +23,9 @@ const FORBIDDEN_IMPORT_PATTERNS: readonly RegExp[] = [
   /\brequire\(\s*["']@oscharko-dev\/ti-/u,
   /\bimport\(\s*["']@oscharko-dev\/test-intelligence(?:[/"'])/u,
   /\bimport\(\s*["']@oscharko-dev\/ti-/u,
+  // Bare side-effect imports: `import "@oscharko-dev/ti-foo";` — no `from`, no parens.
+  /^\s*import\s+["']@oscharko-dev\/test-intelligence(?:[/"'])/mu,
+  /^\s*import\s+["']@oscharko-dev\/ti-/mu,
 ];
 
 const collectSourceFiles = (directory: string): readonly string[] => {
@@ -43,6 +46,23 @@ const collectSourceFiles = (directory: string): readonly string[] => {
   }
   return out;
 };
+
+describe("independence guard — patterns catch every import form", () => {
+  const forbiddenSamples: readonly string[] = [
+    'import { x } from "@oscharko-dev/test-intelligence";',
+    'import { x } from "@oscharko-dev/ti-core";',
+    'const x = require("@oscharko-dev/test-intelligence");',
+    'const x = require("@oscharko-dev/ti-core");',
+    'const x = await import("@oscharko-dev/test-intelligence");',
+    'const x = await import("@oscharko-dev/ti-core");',
+    'import "@oscharko-dev/test-intelligence";',
+    'import "@oscharko-dev/ti-core";',
+  ];
+  it.each(forbiddenSamples)("flags %s", (sample) => {
+    const matched = FORBIDDEN_IMPORT_PATTERNS.some((pattern) => pattern.test(sample));
+    expect(matched).toBe(true);
+  });
+});
 
 describe("independence guard", () => {
   it("contains no @oscharko-dev/test-intelligence or @oscharko-dev/ti-* IMPORT anywhere under src/", () => {
