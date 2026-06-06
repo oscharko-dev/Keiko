@@ -296,6 +296,28 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
     expect((res.body as { error: { code: string } }).error.code).toBe("relationship/bad-request");
   });
 
+  it("rejects unknown top-level envelope fields", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const req = makeReq({
+      method: "POST",
+      url: "/api/relationships/validate",
+      body: JSON.stringify({
+        schemaVersion: "1",
+        proposal: {
+          type: "depends-on",
+          source: { kind: "capsule", id: "cap-1" },
+          target: { kind: "capsule", id: "cap-2" },
+        },
+        extra: true,
+      }),
+    });
+    const res = await handleRelationshipValidate(makeCtx(req), deps);
+    expect(res.status).toBe(400);
+    expect((res.body as { error: { code: string } }).error.code).toBe("relationship/bad-request");
+  });
+
   it("replays an identical body via cached idempotency record", async () => {
     const store = freshStore();
     const { redactor } = trackingRedactor();
@@ -647,6 +669,38 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     expect(res.status).toBe(422);
     const reasons = (res.body as { reasons: { code: string }[] }).reasons;
     expect(reasons.map((r) => r.code)).toContain("denied/cycle-forbidden");
+  });
+
+  it("rechecks starts-workflow target cardinality on transition back to active", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const liveReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "starts-live-1" },
+      body: startsWorkflowBody("chat-live", "run-shared"),
+    });
+    expect((await handleRelationshipCreate(makeCtx(liveReq), deps)).status).toBe(201);
+
+    const seeded = store.createRelationship({
+      workspaceId: "ws-a",
+      scope: { kind: "workspace", workspaceId: "ws-a" },
+      type: "starts-workflow",
+      source: { kind: "chat", id: "chat-blocked" },
+      target: { kind: "workflow-run", id: "run-shared" },
+      lifecycleState: "blocked",
+    });
+    const patch = makeReq({
+      method: "PATCH",
+      url: `/api/relationships/${seeded.relationship.id}`,
+      headers: { "idempotency-key": "starts-reactivate-1", "if-match": seeded.etag },
+      body: JSON.stringify({ schemaVersion: "1", transition: { to: "active" } }),
+    });
+    const res = await handleRelationshipPatch(makeCtx(patch, { id: seeded.relationship.id }), deps);
+    expect(res.status).toBe(422);
+    const reasons = (res.body as { reasons: { code: string }[] }).reasons;
+    expect(reasons.map((r) => r.code)).toContain("denied/cardinality-exceeded");
   });
 });
 
