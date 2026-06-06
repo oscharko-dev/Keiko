@@ -4,6 +4,7 @@ import { useContext } from "react";
 import type { ReactNode } from "react";
 import { WsContext } from "../../context/WsContext";
 import { WIN_TYPES } from "../../windows/WindowsRegistry";
+import { WIN_META } from "../../windows/descriptor-meta";
 import { Icons } from "../../Icons";
 import type { IconName } from "../../Icons";
 
@@ -64,6 +65,27 @@ export function InspectorPanel(): ReactNode {
               </div>
             </>
           )}
+          <div className="rb-section-label">Governance</div>
+          <div className="rb-rows" data-testid="insp-governance">
+            <div className="rb-row">
+              <span className="rb-row-k">Authority</span>
+              <span className="rb-row-v mono">{WIN_META[active.type].authority}</span>
+            </div>
+            <div className="rb-row">
+              <span className="rb-row-k">Persistence</span>
+              <span className="rb-row-v mono">{WIN_META[active.type].persistence}</span>
+            </div>
+            <div className="rb-row">
+              <span className="rb-row-k">Trust</span>
+              <span className="rb-row-v mono">
+                {WIN_META[active.type].trustBoundary.join(", ")}
+              </span>
+            </div>
+            <div className="rb-row">
+              <span className="rb-row-k">Lifecycle</span>
+              <span className="rb-row-v mono">{WIN_META[active.type].lifecycle.join(" → ")}</span>
+            </div>
+          </div>
         </>
       ) : (
         <div className="insp-empty">No window focused</div>

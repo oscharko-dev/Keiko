@@ -19,6 +19,10 @@ import { useChatSession } from "./hooks/useChatSession";
 import { useTheme } from "./hooks/useTheme";
 import { useWorkspace } from "./hooks/useWorkspace";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
+import { useUndoStack } from "./hooks/useUndoStack";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
+import { applyShellUndoAction, SHELL_SHORTCUT_BINDINGS } from "./shell-undo-bindings";
 import "./widgets";
 import { WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow } from "./windows/types";
@@ -66,11 +70,12 @@ const TOOL_TYPES: readonly WindowType[] = [
   "resources",
 ];
 
-function buildCommands(
+export function buildAppShellCommands(
   api: WorkspaceApi,
   openPalettePick: (type: WindowType) => void,
   theme: "light" | "dark",
   toggleTheme: () => void,
+  undoStack: WorkspaceUndoStackApi,
 ): readonly Command[] {
   const out: Command[] = [];
   for (const tp of CARD_TYPES) {
@@ -120,6 +125,26 @@ function buildCommands(
     group: "View",
     icon: theme === "light" ? "moon" : "sun",
     run: toggleTheme,
+  });
+  out.push({
+    id: "undo",
+    label:
+      undoStack.undoLabel !== null
+        ? `Undo: ${undoStack.undoLabel}`
+        : "Undo (window and panel changes only)",
+    group: "Edit",
+    icon: "back",
+    run: undoStack.undo,
+  });
+  out.push({
+    id: "redo",
+    label:
+      undoStack.redoLabel !== null
+        ? `Redo: ${undoStack.redoLabel}`
+        : "Redo (window and panel changes only)",
+    group: "Edit",
+    icon: "fwd",
+    run: undoStack.redo,
   });
   return out;
 }
@@ -172,14 +197,44 @@ function AppShellInner(): ReactNode {
   const closeDialog = useCallback((): void => setPending(null), []);
   const closeCmdk = useCallback((): void => setCmdkOpen(false), []);
 
+  // Epic #518 / ADR-0028 — undo stack wired at the shell. The apply
+  // dispatcher lives in shell-undo-bindings.ts so the integration is
+  // unit-testable without mounting the whole AppShell tree.
+  const applyUndoAction = useCallback(
+    (action: WorkspaceUiAction): void => applyShellUndoAction(ws.api, action),
+    [ws.api],
+  );
+  const undoStack = useUndoStack({ apply: applyUndoAction });
+
   const onTool = useCallback(
     (id: string): void => {
-      if (id in WIN_TYPES) ws.api.toggleTool(id as WindowType);
+      if (!(id in WIN_TYPES)) return;
+      const panel = id as WindowType;
+      const before = openTools.has(panel);
+      ws.api.toggleTool(panel);
+      undoStack.push({
+        kind: "ui.panel.toggle",
+        panel,
+        before,
+        after: !before,
+      });
     },
-    [ws.api],
+    [ws.api, openTools, undoStack],
   );
 
   const onNewChat = useCallback((): void => pick("chat"), [pick]);
+
+  // Epic #518 / ADR-0028 — undo (Cmd/Ctrl+Z) and redo (Cmd/Ctrl+Shift+Z)
+  // routed through useKeyboardShortcuts. The existing Cmd+K palette
+  // handler stays inline below to preserve regression-free behaviour.
+  const dispatchShortcut = useCallback(
+    (commandId: string): void => {
+      if (commandId === "undo") undoStack.undo();
+      else if (commandId === "redo") undoStack.redo();
+    },
+    [undoStack],
+  );
+  useKeyboardShortcuts({ bindings: SHELL_SHORTCUT_BINDINGS, dispatch: dispatchShortcut });
 
   useEffect(() => {
     const h = (e: KeyboardEvent): void => {
@@ -193,8 +248,8 @@ function AppShellInner(): ReactNode {
   }, []);
 
   const commands = useMemo(
-    () => buildCommands(ws.api, pick, theme, toggleTheme),
-    [ws.api, pick, theme, toggleTheme],
+    () => buildAppShellCommands(ws.api, pick, theme, toggleTheme, undoStack),
+    [ws.api, pick, theme, toggleTheme, undoStack],
   );
   const needsGatewaySetup = !session.loading && session.models.length === 0;
 
