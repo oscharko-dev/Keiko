@@ -33,6 +33,7 @@ const EXPECTED_RULES = [
   "adr-0019-direction-3d-evidence-only-contracts-security-workspace",
   "adr-0019-direction-3e-local-knowledge-only-contracts",
   "adr-0019-direction-3k-verification-only-contracts-security-workspace-tools",
+  "adr-0019-direction-3l-evaluations-only-contracts-security-model-gateway-workspace-tools-harness-workflows-verification-evidence",
   "adr-0019-direction-3f-memory-vault-only-contracts-security",
   "adr-0019-direction-3g-memory-capture-only-contracts-security",
   "adr-0019-direction-3h-memory-consolidation-only-contracts-security",
@@ -42,7 +43,7 @@ const EXPECTED_RULES = [
   "adr-0019-direction-4a-harness-only-contracts-security-model-gateway-workspace-tools-evidence",
   "adr-0019-direction-5a-workflows-only-contracts-security-model-gateway-workspace-tools-harness-evidence",
   "adr-0019-direction-6a-server-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence",
-  "adr-0019-direction-7a-cli-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence-server",
+  "adr-0019-direction-7a-cli-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evaluations-evidence-server-verification",
   "adr-0019-direction-8-ui-not-node-domain-values",
   "adr-0019-direction-9-root-product-composition-only",
 ];
