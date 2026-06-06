@@ -32,7 +32,7 @@
   "scripts": {
     "build:packages": "tsc -b tsconfig.packages.json",
     "build": "npm run build:packages && tsc -p tsconfig.build.json",
-    "typecheck": "tsc -b tsconfig.packages.json --noEmit && npm run check:package-graph && tsc -p tsconfig.json --noEmit",
+    "typecheck": "npm run build:packages && npm run check:package-graph && tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

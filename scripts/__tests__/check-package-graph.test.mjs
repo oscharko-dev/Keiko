@@ -42,13 +42,12 @@ function writeCleanRoot(root) {
   writeJson(root, "package.json", {
     name: "synthetic-root",
     private: true,
-    workspaces: ["packages/*"],
-    scripts: {
-      "build:packages": "tsc -b tsconfig.packages.json",
-      typecheck:
-        "tsc -b tsconfig.packages.json --noEmit && npm run check:package-graph && tsc -p tsconfig.json --noEmit",
-    },
-  });
+      workspaces: ["packages/*"],
+      scripts: {
+        "build:packages": "tsc -b tsconfig.packages.json",
+        typecheck: "npm run build:packages && npm run check:package-graph && tsc -p tsconfig.json --noEmit",
+      },
+    });
   writeJson(root, "tsconfig.packages.json", {
     files: [],
     references: [{ path: "./packages/keiko-a" }, { path: "./packages/keiko-b" }],

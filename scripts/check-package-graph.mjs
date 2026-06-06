@@ -5,8 +5,7 @@ import { collectWorkspacePackages } from "./workspace-graph.mjs";
 
 const UI_PACKAGE = "@oscharko-dev/keiko-ui";
 const BUILD_PACKAGES_SCRIPT = "tsc -b tsconfig.packages.json";
-const TYPECHECK_SCRIPT =
-  "tsc -b tsconfig.packages.json --noEmit && npm run check:package-graph && tsc -p tsconfig.json --noEmit";
+const TYPECHECK_SCRIPT = "npm run build:packages && npm run check:package-graph && tsc -p tsconfig.json --noEmit";
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
