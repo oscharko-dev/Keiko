@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { join } from "node:path";
-import { classifyScripts, detectScripts } from "../../src/verification/detect.js";
+import { classifyScripts, detectScripts } from "./detect.js";
 import { makeWorkspace, memoryFs } from "./_support.js";
 
 describe("classifyScripts — name heuristics (no regex, no ReDoS)", () => {

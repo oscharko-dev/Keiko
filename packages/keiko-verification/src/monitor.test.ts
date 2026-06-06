@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { nodeResourceMonitor } from "../../src/verification/monitor.js";
+import { nodeResourceMonitor } from "./monitor.js";
 
 describe("nodeResourceMonitor — documented no-op paths", () => {
   it("returns a no-op unwatch when no memory ceiling is requested", () => {
