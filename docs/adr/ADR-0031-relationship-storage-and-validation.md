@@ -22,15 +22,13 @@ These decisions cannot be safely inferred from the existing code or ADRs. ADR-00
 
 The relationship validator is a pure deterministic function exported by `@oscharko-dev/keiko-contracts`. It runs **only on the server**, **inside the request handler**, and **inside the same SQL transaction** as the write. The UI may produce advisory hints (via `POST /api/relationships/validate`) but those hints are never trusted by the mutating routes.
 
-Validator signature (binding for issue #538):
+Validator signature (binding as shipped on `dev`):
 
-```
-function validateRelationshipProposal(input: {
-  readonly proposal: RelationshipProposal;
-  readonly current: RelationshipStoreSnapshot;
-  readonly resolver: RelationshipEndpointResolver;
-  readonly clock: { readonly now: () => number };
-}): Promise<RelationshipPolicyDecision>;
+```ts
+function validateRelationship(
+  input: unknown,
+  ctx?: RelationshipValidationContext,
+): ValidationOk<Relationship> | ValidationFail;
 ```
 
 The validator:
@@ -109,7 +107,7 @@ The non-authority invariant is enforced by composition: each boundary owns its g
 
 ### 7. Idempotency, optimistic concurrency, schema versioning
 
-- **Idempotency**: mutating routes require an `Idempotency-Key` header. The BFF maintains a process-local LRU `{key → result}` with TTL 15 minutes and capacity 4096. A divergent body on replay returns HTTP 409 with `relationship/idempotency-replay-mismatch`.
+- **Idempotency**: mutating routes require an `Idempotency-Key` header. The current implementation applies replay caching to `POST /api/relationships` with a process-local cache whose TTL is 10 minutes and capacity is 1024. A divergent body on replay returns HTTP 409 with `relationship/idempotency-replay-mismatch`.
 - **Optimistic concurrency**: PATCH and DELETE require `If-Match: "<etag>"`. The etag is monotonic per row, formatted as `printf('%016x', updated_at) || '-' || lower(hex(randomblob(3)))`. Mismatch returns HTTP 412 with `relationship/optimistic-concurrency-conflict` and the current etag in the body.
 - **Schema versioning**: every envelope carries `schemaVersion: "1"`. Additive changes (new relationship type, object kind, lifecycle state, denial code) extend the closed sets without bumping. Breaking changes (rename, narrowing, removal) require a new literal `"2"` plus an ADR amending or superseding ADR-0031.
 - **Bounded queries**: max `limit: 256`, max `maxDepth: 3`, max `maxNodes: 1024`, max `maxRelationships: 2048`, max body size 16 KiB. Exceed → HTTP 400 with `relationship/bounded-query-exceeded`.
@@ -190,8 +188,8 @@ Future schema evolution:
 - [ADR-0027](ADR-0027-workspace-state-ownership.md) — workspace state ownership (`evidence-reference` persistence pattern).
 - [ADR-0029](ADR-0029-workspace-object-registry.md) — object registry validator (descriptor closed enums).
 - [ADR-0030](ADR-0030-workspace-security-evidence.md) — five inviolable workspace rules (the trust boundaries this ADR composes with).
-- ADR-0032 (issue [#536](https://github.com/oscharko-dev/Keiko/issues/536), pending) — relationship audit and activity model.
-- ADR-0033 (issue [#537](https://github.com/oscharko-dev/Keiko/issues/537), pending) — relationship UI containment.
+- [ADR-0032](ADR-0032-relationship-audit-and-activity-model.md) — relationship audit and activity model.
+- [ADR-0033](ADR-0033-relationship-ui-containment.md) — relationship UI containment.
 
 ## Source material
 

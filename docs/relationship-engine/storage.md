@@ -185,8 +185,8 @@ A mutation path **never** writes `stale` directly; the validator may surface an 
 
 The audit row's home is the optional `relationships?` section of `EvidenceManifest` (per [gap-analysis.md Gap 7](gap-analysis.md)) **plus**, for cross-domain mutations not tied to a run, an additive audit row in this database. The decision between the two surfaces is owned by ADR-0032 (issue #536). For the purposes of this contract:
 
-- Run-scoped relationship mutations (`uses-tool`, `produces-evidence`, `proposes-patch` whose source is a `workflow-run`) attach their audit entry to the run's `EvidenceManifest`.
-- Non-run-scoped mutations (`references-document` from a `chat`, `depends-on` between two capsules) require a sibling audit table in this database, named tentatively `relationship_audit_entries`. The shape and the persist-side redactor wiring are locked in ADR-0032; this contract simply notes the gap so #536 has a concrete site.
+- The current implementation routes both run-scoped and non-run-scoped relationship mutations to the sibling audit table in this database, `relationship_audit_entries`.
+- Future `EvidenceManifest.relationships?` embedding remains deferred follow-up work. The shape and any placement split are locked in ADR-0032 / later hardening work; this document keeps the current-state storage decision explicit.
 
 ### 4.4 Atomic-write conventions for the SQLite database
 
