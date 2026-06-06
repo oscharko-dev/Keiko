@@ -14,9 +14,10 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "build:deps": "npm --workspace @oscharko-dev/keiko-contracts run build && npm --workspace @oscharko-dev/keiko-security run build && npm --workspace @oscharko-dev/keiko-workspace run build && npm --workspace @oscharko-dev/keiko-tools run build",
+    "build": "npm run build:deps && tsc -p tsconfig.json",
+    "typecheck": "npm run build:deps && tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && vitest run"
   },
   "files": [
     "dist"
