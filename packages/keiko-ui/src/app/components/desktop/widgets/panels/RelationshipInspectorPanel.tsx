@@ -25,11 +25,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type {
   RelationshipActivityState,
   RelationshipLifecycleState,
   RelationshipType,
+  RelationshipValidationError,
 } from "@oscharko-dev/keiko-contracts";
 import { RELATIONSHIP_TYPE_DEFINITIONS } from "@oscharko-dev/keiko-contracts";
 import {
@@ -109,6 +110,20 @@ function SkeletonBlock({ lines = 3 }: { lines?: number }): ReactNode {
   );
 }
 
+function SectionLabel({
+  children,
+  style,
+}: {
+  children: ReactNode;
+  style?: CSSProperties;
+}): ReactNode {
+  return (
+    <div className="rb-section-label" role="heading" aria-level={3} style={style}>
+      {children}
+    </div>
+  );
+}
+
 // ─── Section 1: Type + display name ───────────────────────────────────────────
 
 function TypeSection({ rel }: { rel: ApiRelationship }): ReactNode {
@@ -153,7 +168,7 @@ function EndpointSection({
 }): ReactNode {
   return (
     <>
-      <div className="rb-section-label">{label} endpoint</div>
+      <SectionLabel>{label} endpoint</SectionLabel>
       <div className="rb-rows">
         <div className="rb-row">
           <span className="rb-row-k">Kind</span>
@@ -178,7 +193,7 @@ function LifecycleSection({ lifecycle }: { lifecycle: RelationshipLifecycleState
   const style = LIFECYCLE_CHIP_STYLES[lifecycle];
   return (
     <>
-      <div className="rb-section-label">Lifecycle status</div>
+      <SectionLabel>Lifecycle status</SectionLabel>
       <div className="rb-rows">
         <div className="rb-row">
           <span className="rb-row-k">State</span>
@@ -212,10 +227,12 @@ interface TransitionRow {
 }
 
 function ActivitySection({
+  type,
   lifecycle,
   transitions,
   densityMode,
 }: {
+  type: RelationshipType;
   lifecycle: RelationshipLifecycleState;
   transitions: readonly TransitionRow[];
   densityMode: DensityMode;
@@ -238,14 +255,14 @@ function ActivitySection({
 
   return (
     <>
-      <div className="rb-section-label">Activity</div>
+      <SectionLabel>Activity</SectionLabel>
       <div className="rb-rows">
         <div className="rb-row">
           <span className="rb-row-k">Current state</span>
           <span className="rb-row-v">
             {/* role="status" aria-live="polite" per activity-visualization.md §"Per-state ARIA wiring" */}
             <RelationshipEdgeBadge
-              type="reads-context" // placeholder type; badge shows activity state only
+              type={type}
               lifecycle={lifecycle}
               activity={activityState}
             />
@@ -287,7 +304,7 @@ function ActivitySection({
 function AuthoritySection(): ReactNode {
   return (
     <>
-      <div className="rb-section-label">Authority status</div>
+      <SectionLabel>Authority status</SectionLabel>
       <div className="rb-rows">
         <div className="rb-row" data-testid="authority-disclaimer">
           {/* Verbatim string per inspector-spec.md §6 */}
@@ -325,7 +342,7 @@ function AuditSection({
 }): ReactNode {
   return (
     <>
-      <div className="rb-section-label">Audit history</div>
+      <SectionLabel>Audit history</SectionLabel>
       {loading && <SkeletonBlock lines={3} />}
       {error !== null && (
         <div className="lk-alert" role="alert" aria-live="assertive">
@@ -399,7 +416,7 @@ function EvidenceSection({ relationshipId }: { relationshipId: string }): ReactN
   // Stub: #541/#542 wire the actual evidence reference list via the evidence viewer.
   return (
     <>
-      <div className="rb-section-label">Evidence references</div>
+      <SectionLabel>Evidence references</SectionLabel>
       <div className="rb-rows">
         <div className="rb-row">
           <a
@@ -431,7 +448,7 @@ function ImpactSection({
 }): ReactNode {
   return (
     <>
-      <div className="rb-section-label">Impact summary</div>
+      <SectionLabel>Impact summary</SectionLabel>
       <div className="rb-rows">
         <div className="rb-row">
           <span className="rb-row-k">Forward dependencies</span>
@@ -477,7 +494,7 @@ function DenialSection({
   // role="status" aria-live="polite" per inspector-spec.md §10 (steady-state denial)
   return (
     <>
-      <div className="rb-section-label">Denial reason</div>
+      <SectionLabel>Denial reason</SectionLabel>
       <div className="lk-alert" role="status" aria-live="polite" data-testid="denial-section">
         {codes.map((code, i) => (
           <div key={code} style={{ marginBottom: i < codes.length - 1 ? 8 : 0 }}>
@@ -503,6 +520,24 @@ function DenialSection({
       </div>
     </>
   );
+}
+
+interface DenialDetails {
+  readonly codes: readonly string[];
+  readonly messages: readonly string[];
+}
+
+function toDenialDetails(
+  reasons: readonly RelationshipValidationError[] | null | undefined,
+): DenialDetails | null {
+  if (reasons === undefined || reasons === null || reasons.length === 0) {
+    return null;
+  }
+  return {
+    codes: reasons.map((reason) => reason.code),
+    // Preserve the server-provided denial string verbatim.
+    messages: reasons.map((reason) => reason.message),
+  };
 }
 
 // ─── Density mode ─────────────────────────────────────────────────────────────
@@ -623,6 +658,7 @@ export function RelationshipInspectorPanel({
   const [error, setError] = useState<string | null>(null);
   const [mutating, setMutating] = useState(false);
   const [mutationError, setMutationError] = useState<string | null>(null);
+  const [mutationDenial, setMutationDenial] = useState<DenialDetails | null>(null);
 
   // Impact counts (forward = outgoing dependencies, reverse = incoming)
   const [forwardCount, setForwardCount] = useState<number | null>(null);
@@ -631,14 +667,25 @@ export function RelationshipInspectorPanel({
   // Skeleton debounce: only show skeleton after 500 ms (inspector-spec.md §"Loading state")
   const [showSkeleton, setShowSkeleton] = useState(false);
   const skeletonTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fetchGeneration = useRef(0);
 
   const fetchRel = useCallback(async (id: string) => {
+    const generation = ++fetchGeneration.current;
     setError(null);
     setLoading(true);
+    setMutationDenial(null);
     // 500 ms skeleton threshold
-    skeletonTimer.current = setTimeout(() => setShowSkeleton(true), 500);
+    const timer = setTimeout(() => {
+      if (fetchGeneration.current === generation) {
+        setShowSkeleton(true);
+      }
+    }, 500);
+    skeletonTimer.current = timer;
     try {
       const [fetchedRel, fetchedExplain] = await Promise.all([getRelationship(id), getExplain(id)]);
+      if (fetchGeneration.current !== generation) {
+        return;
+      }
       setRel(fetchedRel);
       setExplain(fetchedExplain);
 
@@ -648,36 +695,58 @@ export function RelationshipInspectorPanel({
           getDependencies(id, { direction: "outgoing", maxRelationships: 512 }),
           getDependencies(id, { direction: "incoming", maxRelationships: 512 }),
         ]);
+        if (fetchGeneration.current !== generation) {
+          return;
+        }
         setForwardCount(fwd.relationships.length);
         setReverseCount(rev.relationships.length);
       } catch {
         // Impact counts are advisory; do not fail the inspector
       }
     } catch (err) {
+      if (fetchGeneration.current !== generation) {
+        return;
+      }
       const msg =
         err instanceof RelationshipApiError
           ? err.message
           : "Unable to reach the local backend. Check that `keiko serve` is running.";
       setError(msg);
     } finally {
-      if (skeletonTimer.current !== null) {
-        clearTimeout(skeletonTimer.current);
+      if (skeletonTimer.current === timer) {
+        clearTimeout(timer);
+        skeletonTimer.current = null;
+      } else {
+        clearTimeout(timer);
       }
-      setLoading(false);
-      setShowSkeleton(false);
+      if (fetchGeneration.current === generation) {
+        setLoading(false);
+        setShowSkeleton(false);
+      }
     }
   }, []);
 
   useEffect(() => {
     if (relationshipId === null) {
+      fetchGeneration.current += 1;
+      if (skeletonTimer.current !== null) {
+        clearTimeout(skeletonTimer.current);
+        skeletonTimer.current = null;
+      }
       setRel(null);
       setExplain(null);
       setError(null);
+      setMutationDenial(null);
+      setShowSkeleton(false);
+      setLoading(false);
       return;
     }
     void fetchRel(relationshipId);
     return () => {
-      if (skeletonTimer.current !== null) clearTimeout(skeletonTimer.current);
+      if (skeletonTimer.current !== null) {
+        clearTimeout(skeletonTimer.current);
+        skeletonTimer.current = null;
+      }
     };
   }, [relationshipId, fetchRel]);
 
@@ -688,6 +757,7 @@ export function RelationshipInspectorPanel({
       if (rel === null) return;
       setMutating(true);
       setMutationError(null);
+      setMutationDenial(null);
       try {
         const key = crypto.randomUUID();
         const { relationship: updated } = await patchRelationship(
@@ -703,6 +773,7 @@ export function RelationshipInspectorPanel({
         const msg =
           err instanceof RelationshipApiError ? err.message : "Mutation failed. Please retry.";
         setMutationError(msg);
+        setMutationDenial(err instanceof RelationshipApiError ? toDenialDetails(err.reasons) : null);
       } finally {
         setMutating(false);
       }
@@ -719,6 +790,7 @@ export function RelationshipInspectorPanel({
     if (!window.confirm(`Revoke relationship "${rel.type}"? This cannot be undone.`)) return;
     setMutating(true);
     setMutationError(null);
+    setMutationDenial(null);
     try {
       const key = crypto.randomUUID();
       const updated = await deleteRelationship(rel.id, String(rel.etag), key);
@@ -727,6 +799,7 @@ export function RelationshipInspectorPanel({
       const msg =
         err instanceof RelationshipApiError ? err.message : "Revoke failed. Please retry.";
       setMutationError(msg);
+      setMutationDenial(err instanceof RelationshipApiError ? toDenialDetails(err.reasons) : null);
     } finally {
       setMutating(false);
     }
@@ -752,6 +825,12 @@ export function RelationshipInspectorPanel({
   if (relationshipId === null) {
     return null; // Host InspectorPanel renders its default content
   }
+
+  const explainDenial = toDenialDetails(explain?.decision.reasons);
+  const visibleDenial = explainDenial ?? mutationDenial;
+  const showDenialSection =
+    visibleDenial !== null &&
+    (rel?.lifecycle === "blocked" || rel?.lifecycle === "revoked" || mutationDenial !== null);
 
   // ─── Aria-busy container while loading ────────────────────────────────────
 
@@ -783,9 +862,7 @@ export function RelationshipInspectorPanel({
       {/* Loading skeleton (500 ms threshold) */}
       {loading && showSkeleton && (
         <>
-          <div className="rb-section-label" style={{ marginTop: 0 }}>
-            Relationship
-          </div>
+          <SectionLabel style={{ marginTop: 0 }}>Relationship</SectionLabel>
           <SkeletonBlock lines={4} />
           <SkeletonBlock lines={3} />
         </>
@@ -794,9 +871,7 @@ export function RelationshipInspectorPanel({
       {/* Not-found / deleted empty state */}
       {!loading && error === null && rel === null && (
         <>
-          <div className="rb-section-label" style={{ marginTop: 0 }}>
-            Relationship
-          </div>
+          <SectionLabel style={{ marginTop: 0 }}>Relationship</SectionLabel>
           <div className="insp-empty" data-testid="inspector-not-found">
             This relationship is no longer available.
           </div>
@@ -820,9 +895,7 @@ export function RelationshipInspectorPanel({
       {!loading && rel !== null && (
         <>
           {/* Section 1: Type and display name */}
-          <div className="rb-section-label" style={{ marginTop: 0 }}>
-            Relationship
-          </div>
+          <SectionLabel style={{ marginTop: 0 }}>Relationship</SectionLabel>
           <TypeSection rel={rel} />
 
           {/* Section 2: Source endpoint */}
@@ -836,6 +909,7 @@ export function RelationshipInspectorPanel({
 
           {/* Section 5: Activity */}
           <ActivitySection
+            type={rel.type}
             lifecycle={rel.lifecycle}
             transitions={explain?.lifecycle ?? []}
             densityMode={densityMode}
@@ -868,11 +942,10 @@ export function RelationshipInspectorPanel({
           />
 
           {/* Section 10: Denial reason (conditional) */}
-          {(rel.lifecycle === "blocked" || rel.lifecycle === "revoked") && (
+          {showDenialSection && visibleDenial !== null && (
             <DenialSection
-              codes={[]}
-              messages={[]}
-              /* codes/messages populated by #541 SSE activity stream */
+              codes={visibleDenial.codes}
+              messages={visibleDenial.messages}
             />
           )}
 

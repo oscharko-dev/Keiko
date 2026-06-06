@@ -71,6 +71,11 @@ function writeDensityToStorage(mode: DensityMode): void {
   }
 }
 
+function hasModalDialogOpen(): boolean {
+  if (typeof document === "undefined") return false;
+  return document.querySelector('[role="dialog"][aria-modal="true"]') !== null;
+}
+
 // ─── Filter state (from URL params, caller-supplied) ──────────────────────────
 
 export interface RelationshipFilters {
@@ -199,6 +204,19 @@ export function RelationshipListPanel({
     [filters.relDensity],
   );
 
+  useEffect(() => {
+    const urlOverride = filters.relDensity;
+    if (urlOverride === "minimal" || urlOverride === "standard" || urlOverride === "dense") {
+      setDensity(urlOverride);
+      return;
+    }
+    setDensity(readDensityFromStorage());
+  }, [filters.relDensity]);
+
+  useEffect(() => {
+    setTypeFilter(filters.relType ?? "");
+  }, [filters.relType]);
+
   // ─── Fetch relationships ─────────────────────────────────────────────────
 
   const fetchItems = useCallback(async () => {
@@ -246,6 +264,7 @@ export function RelationshipListPanel({
   // — the list panel is the owner of focus mode state.
   useEffect(() => {
     function onKey(e: globalThis.KeyboardEvent): void {
+      if (hasModalDialogOpen()) return;
       // Only handle when no input is focused
       const active = document.activeElement;
       const isInput =
@@ -268,6 +287,7 @@ export function RelationshipListPanel({
   // Filter input focused with `/` (ui-blueprint.md §"Filtering")
   useEffect(() => {
     function onKey(e: globalThis.KeyboardEvent): void {
+      if (hasModalDialogOpen()) return;
       const active = document.activeElement;
       const isInput =
         active instanceof HTMLInputElement ||

@@ -284,6 +284,44 @@ describe("RelationshipListPanel", () => {
         );
       });
     });
+
+    it("resyncs density and type filter when URL-backed props change", async () => {
+      mockListRelationships.mockResolvedValue({
+        entries: [],
+        truncated: false,
+        nextCursor: null,
+      });
+      const onFilterChange = vi.fn();
+      const view = render(
+        <RelationshipListPanel
+          filters={{ relDensity: "minimal", relType: "reads-context" }}
+          onFilterChange={onFilterChange}
+          onSelect={vi.fn()}
+        />,
+      );
+      await waitFor(() => expect(mockListRelationships).toHaveBeenCalled());
+      expect(screen.getByRole("button", { name: /minimal/i }).getAttribute("aria-pressed")).toBe(
+        "true",
+      );
+      expect(screen.getByRole("textbox")).toHaveValue("reads-context");
+
+      view.rerender(
+        <RelationshipListPanel
+          filters={{ relDensity: "dense", relType: "produces-evidence" }}
+          onFilterChange={onFilterChange}
+          onSelect={vi.fn()}
+        />,
+      );
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /dense/i }).getAttribute("aria-pressed")).toBe(
+          "true",
+        );
+      });
+      expect(screen.getByRole("textbox")).toHaveValue("produces-evidence");
+      const lastCall = mockListRelationships.mock.calls.at(-1);
+      expect(lastCall?.[0]?.limit).toBe(512);
+    });
   });
 
   describe("truncation footer", () => {
@@ -316,6 +354,32 @@ describe("RelationshipListPanel", () => {
         const live = container.querySelector("[aria-live='polite']");
         expect(live).not.toBeNull();
       });
+    });
+  });
+
+  describe("modal keyboard containment", () => {
+    it("does not let the slash shortcut focus the list filter while an aria-modal dialog is open", async () => {
+      mockListRelationships.mockResolvedValue({
+        entries: [],
+        truncated: false,
+        nextCursor: null,
+      });
+      renderPanel();
+      await waitFor(() => {
+        expect(screen.getByRole("textbox")).toBeDefined();
+      });
+
+      const modal = document.createElement("div");
+      modal.setAttribute("role", "dialog");
+      modal.setAttribute("aria-modal", "true");
+      document.body.appendChild(modal);
+
+      try {
+        fireEvent.keyDown(window, { key: "/" });
+        expect(document.activeElement).not.toBe(screen.getByRole("textbox"));
+      } finally {
+        modal.remove();
+      }
     });
   });
 
