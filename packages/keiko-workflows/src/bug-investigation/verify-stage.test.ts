@@ -10,7 +10,7 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import type { PatchFileChange, SpawnFn } from "@oscharko-dev/keiko-tools";
 import type { BugInvestigationInput } from "./types.js";
-import { recordingSpawn, scriptChildClose } from "../../../../tests/verification/_support.js";
+import { recordingSpawn, scriptChildClose } from "./_support.js";
 
 const ROOT = "/repo";
 

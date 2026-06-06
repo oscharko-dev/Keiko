@@ -4,10 +4,9 @@
 // only status/exit/duration/appliedLimits/counts; renderMarkdownSummary is a PR/issue table. Every
 // composed string is run through redact() so nothing a summary emits can leak a secret. Pure — no IO.
 
-// Re-export shim: the pure summary type interfaces live in @oscharko-dev/keiko-contracts (issue #158).
-// All import sites (`from "../verification/summary.js"`) continue to resolve unchanged.
-// import+export split so this file can reference VerificationSummary/VerificationAuditSummary in
-// its own function return types.
+// The pure summary type interfaces live in @oscharko-dev/keiko-contracts (issue #158). The
+// import+export split lets this file reference VerificationSummary/VerificationAuditSummary in
+// its own function return types while still re-exporting the types from the package barrel.
 import type {
   VerificationResultSummary,
   VerificationSummary,
@@ -21,7 +20,7 @@ export type {
   VerificationAuditSummary,
 };
 
-import { redact } from "../gateway/redaction.js";
+import { redact } from "@oscharko-dev/keiko-security";
 import type { VerificationReport, VerificationResult, VerificationStatus } from "./types.js";
 
 export function buildVerificationSummary(report: VerificationReport): VerificationSummary {

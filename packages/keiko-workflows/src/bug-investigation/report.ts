@@ -9,7 +9,7 @@
 
 import { redact } from "@oscharko-dev/keiko-security";
 import type { PatchFileChange } from "@oscharko-dev/keiko-tools";
-import type { VerificationAuditSummary } from "../../../../src/verification/index.js";
+import type { VerificationAuditSummary } from "@oscharko-dev/keiko-verification";
 import { isElevatedReviewPath } from "./guard.js";
 import type {
   BugInvestigationReport,

@@ -5,8 +5,8 @@
 // All name matching is done with plain substring/equality checks (no regex), so there is no
 // ReDoS surface at all (CodeQL js/polynomial-redos). Script NAMES are matched, never values.
 
-import { readWorkspaceFile } from "../workspace/index.js";
-import type { WorkspaceFs, WorkspaceInfo } from "../workspace/index.js";
+import { readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { ScriptCatalog, ScriptMapping } from "./types.js";
 
 // package.json is small; this cap is generous and prevents reading a pathological file.

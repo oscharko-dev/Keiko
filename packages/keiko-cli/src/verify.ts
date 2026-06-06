@@ -15,7 +15,7 @@ import {
   VerificationError,
   type VerificationKind,
   type VerificationReport,
-} from "../../../src/verification/index.js";
+} from "@oscharko-dev/keiko-verification";
 import type { CliIo } from "./runner.js";
 
 const VALID_KINDS: ReadonlySet<string> = new Set<VerificationKind>([

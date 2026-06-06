@@ -21,7 +21,7 @@ import {
   detectScripts,
   runVerification,
   type VerificationReport,
-} from "../../../src/verification/index.js";
+} from "@oscharko-dev/keiko-verification";
 import { detectWorkspace, readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
 import type { UnitTestWorkflowInput, UnitTestWorkflowReport } from "@oscharko-dev/keiko-workflows";
 import type { BugInvestigationInput, BugInvestigationReport } from "@oscharko-dev/keiko-workflows";

@@ -8,7 +8,7 @@ import type { MemoryWorkflowPort } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import type { TestFramework, WorkspaceFs } from "@oscharko-dev/keiko-workspace";
-import type { VerificationAuditSummary } from "../../../../src/verification/index.js";
+import type { VerificationAuditSummary } from "@oscharko-dev/keiko-verification";
 import type { WorkflowEventSink } from "./events.js";
 
 // ─── Status & target selection ───────────────────────────────────────────────────

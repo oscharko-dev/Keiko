@@ -237,6 +237,41 @@ module.exports = {
       },
     },
     {
+      name: "adr-0019-direction-3k-verification-only-contracts-security-workspace-tools",
+      comment:
+        "ADR-0019 direction rule 3 (verification strict variant): keiko-verification and the " +
+        "src/verification/ shim may depend on keiko-contracts, keiko-security, keiko-workspace, " +
+        "and keiko-tools only. Workspace is an allowed dependency because the verification " +
+        "orchestrator composes the boundary-checked WorkspaceFs port (path containment + " +
+        "symlink realpath gate) to read package.json scripts and stream verification output. " +
+        "Tools is an allowed dependency because verification reuses the #6 runCommand command " +
+        "boundary (no-shell spawn + terminal allowlist + cancellation + redaction) for every " +
+        "step it executes — the orchestrator does NOT introduce a parallel child_process path. " +
+        "Added at error severity by issue #424 because the verification package physically " +
+        "exists. Also fires on the negative-test fixture under " +
+        "tests/architecture/fixtures/verification/ so the gate can be proven live by " +
+        "scripts/arch-check-negative.mjs. The to.path forbids both non-allow-listed packages " +
+        "AND every sibling `src/` shim domain (gateway|workspace|tools|harness|workflows|" +
+        "audit|ui|evaluations|cli) so a future deep-import is caught (boundary-weakening gap " +
+        "pattern from issues #160 and #165). pathNot only filters self-references; it must " +
+        "NOT silently exclude sibling-but-still-in-src/ domains.",
+      severity: "error",
+      from: {
+        path:
+          "^(packages/keiko-verification/src/|" +
+          "src/verification/|" +
+          "tests/architecture/fixtures/verification/)",
+      },
+      to: {
+        path:
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|workspace|tools|verification)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|workspace|tools|verification)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|workspace|tools|verification)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|evaluations|cli))",
+        pathNot: "^src/verification/",
+      },
+    },
+    {
       name: "adr-0019-direction-3f-memory-vault-only-contracts-security",
       comment:
         "ADR-0019 direction rule 3 (memory-vault strict variant): keiko-memory-vault may " +
@@ -532,10 +567,10 @@ module.exports = {
         "so the gate can be proven live by scripts/arch-check-negative.mjs. pathNot only " +
         "filters self-references via the src/workflows/ shim path; it must NOT silently " +
         "exclude sibling-but-still-in-src/ domains (same #160/#162 memory lesson). " +
-        "src/verification/ is intentionally NOT in the forbidden list: workflows depends " +
-        "on the verification orchestrator (apply-mode verification per ADR-0008 D5) and " +
-        "verification is not yet a physical package — the boundary will be re-evaluated " +
-        "when verification is extracted in a future issue.",
+        "After issue #424 workflows depends on the verification orchestrator through the " +
+        "public package surface (`@oscharko-dev/keiko-verification`); src/verification/ is " +
+        "the legacy re-export shim and is therefore listed in the forbidden src/ domains " +
+        "so workflows cannot deep-import the shim.",
       severity: "error",
       from: {
         path:
@@ -545,10 +580,10 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|quality-intelligence)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|quality-intelligence)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|quality-intelligence)|" +
-          "src/(cli|ui|evaluations|gateway|workspace|tools|harness|audit))",
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|quality-intelligence)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|quality-intelligence)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|quality-intelligence)|" +
+          "src/(cli|ui|evaluations|gateway|workspace|tools|harness|audit|verification))",
         pathNot: "^src/workflows/",
       },
     },
@@ -571,11 +606,11 @@ module.exports = {
         "negative-test fixture under tests/architecture/fixtures/server/ so the gate can " +
         "be proven live by scripts/arch-check-negative.mjs. pathNot only filters self-" +
         "references via the src/ui/ shim path; it must NOT silently exclude sibling-but-" +
-        "still-in-src/ domains (same #160/#162 memory lesson). src/verification/ is " +
-        "intentionally NOT in the forbidden list: the server depends on the verification " +
-        "orchestrator (run-engine.ts via the apply-mode verification gate) and " +
-        "verification is not yet a physical package — the boundary will be re-evaluated " +
-        "when verification is extracted in a future issue. memory-vault, memory-governance, " +
+        "still-in-src/ domains (same #160/#162 memory lesson). After issue #424 the server " +
+        "depends on the verification orchestrator through the public package surface " +
+        "(`@oscharko-dev/keiko-verification`); src/verification/ is the legacy re-export " +
+        "shim and is therefore listed in the forbidden src/ domains so the server cannot " +
+        "deep-import the shim. memory-vault, memory-governance, " +
         "and memory-retrieval added by issue #211 (Memory Center UI BFF routes). " +
         "memory-capture added by issue #212 (Conversation Center in-chat capture BFF route). " +
         "memory-consolidation added by issue #208 (Memory consolidation jobs); the server " +
@@ -588,10 +623,10 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
-          "src/(cli|evaluations|gateway|workspace|tools|harness|workflows|audit))",
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "src/(cli|evaluations|gateway|workspace|tools|harness|workflows|audit|verification))",
         pathNot: "^src/ui/",
       },
     },
@@ -604,7 +639,7 @@ module.exports = {
       severity: "warn",
       from: {
         path:
-          "^(packages/keiko-(contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|quality-intelligence)/src/|" +
+          "^(packages/keiko-(contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|quality-intelligence)/src/|" +
           "src/(gateway|workspace|tools|audit|harness|workflows|verification|evaluations)/)",
       },
       to: {
@@ -623,7 +658,7 @@ module.exports = {
       severity: "warn",
       from: {
         path:
-          "^(packages/keiko-(contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|quality-intelligence)/src/|" +
+          "^(packages/keiko-(contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|quality-intelligence)/src/|" +
           "src/(gateway|workspace|tools|audit|harness|workflows|verification|evaluations)/)",
       },
       to: {
@@ -652,18 +687,21 @@ module.exports = {
         "intentionally NOT in the forbidden list: the CLI's `verify` command consumes the " +
         "verification orchestrator (per ADR-0007) and the `evaluate` command consumes the " +
         "evaluation harness (per ADR-0012). Neither layer is a physical package yet — both " +
-        "boundaries will be re-evaluated when verification and evaluations are extracted in " +
-        "future issues.",
+        "boundary for evaluations will be re-evaluated when it is extracted in issue #425. " +
+        "After issue #424 cli depends on the verification orchestrator through the public " +
+        "package surface (`@oscharko-dev/keiko-verification`); src/verification/ is the " +
+        "legacy re-export shim and is listed in the forbidden src/ domains so cli cannot " +
+        "deep-import the shim.",
       severity: "error",
       from: {
         path: "^(packages/keiko-cli/src/|src/cli/|tests/architecture/fixtures/cli/)",
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server|cli|quality-intelligence)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server|cli|quality-intelligence)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|evidence|server|cli|quality-intelligence)|" +
-          "src/(gateway|workspace|tools|harness|workflows|audit|ui))",
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|server|cli|quality-intelligence)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|server|cli|quality-intelligence)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|server|cli|quality-intelligence)|" +
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification))",
         pathNot: "^src/cli/",
       },
     },

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { runVerification, type VerificationDeps } from "../../src/verification/orchestrator.js";
-import type { VerificationPlan, VerificationStep } from "../../src/verification/types.js";
-import { DEFAULT_VERIFICATION_LIMITS } from "../../src/verification/types.js";
+import { runVerification, type VerificationDeps } from "./orchestrator.js";
+import type { VerificationPlan, VerificationStep } from "./types.js";
+import { DEFAULT_VERIFICATION_LIMITS } from "./types.js";
 import {
   fakeMonitor,
   makeFakeChild,

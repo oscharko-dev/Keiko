@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildAppliedLimits } from "../../src/verification/limits.js";
-import { DEFAULT_VERIFICATION_LIMITS } from "../../src/verification/types.js";
+import { buildAppliedLimits } from "./limits.js";
+import { DEFAULT_VERIFICATION_LIMITS } from "./types.js";
 
 describe("buildAppliedLimits — honest enforced flags (ADR-0007 D2)", () => {
   it("always records all four dimensions in a stable order", () => {

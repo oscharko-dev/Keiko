@@ -4,8 +4,12 @@
 // once per step. The precedence is fixed and the first match wins; each branch is independently
 // unit-tested so a single-line mutation is caught.
 
-import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "../tools/index.js";
-import type { CommandResult } from "../tools/index.js";
+import {
+  CommandCancelledError,
+  CommandDeniedError,
+  CommandTimeoutError,
+} from "@oscharko-dev/keiko-tools";
+import type { CommandResult } from "@oscharko-dev/keiko-tools";
 import type { VerificationStatus } from "./types.js";
 
 // Why distinguish abortReason from the error type: an abort fires BOTH the abort source and (a

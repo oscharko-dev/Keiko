@@ -7,9 +7,9 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ChildProcess } from "node:child_process";
-import type { SpawnFn, SpawnOptions } from "../../src/tools/index.js";
-import type { WorkspaceFs, WorkspaceInfo, WorkspaceStat } from "../../src/workspace/index.js";
-import type { ResourceMonitor } from "../../src/verification/monitor.js";
+import type { SpawnFn, SpawnOptions } from "@oscharko-dev/keiko-tools";
+import type { WorkspaceFs, WorkspaceInfo, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import type { ResourceMonitor } from "./monitor.js";
 
 export interface FakeChild extends EventEmitter {
   stdout: EventEmitter;

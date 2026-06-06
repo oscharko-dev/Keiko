@@ -1,16 +1,8 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildVerificationSummary,
-  renderMarkdownSummary,
-  summarizeForAudit,
-} from "../../src/verification/summary.js";
-import { buildAppliedLimits } from "../../src/verification/limits.js";
-import { DEFAULT_VERIFICATION_LIMITS } from "../../src/verification/types.js";
-import type {
-  VerificationReport,
-  VerificationResult,
-  VerificationStatus,
-} from "../../src/verification/types.js";
+import { buildVerificationSummary, renderMarkdownSummary, summarizeForAudit } from "./summary.js";
+import { buildAppliedLimits } from "./limits.js";
+import { DEFAULT_VERIFICATION_LIMITS } from "./types.js";
+import type { VerificationReport, VerificationResult, VerificationStatus } from "./types.js";
 
 const SECRET = "ghp_" + "0123456789abcdefABCDEFghijklmnopqrst";
 

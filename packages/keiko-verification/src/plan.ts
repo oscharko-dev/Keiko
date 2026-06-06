@@ -8,8 +8,8 @@ import {
   resolveWithinWorkspace,
   type WorkspaceFs,
   type WorkspaceInfo,
-} from "../workspace/index.js";
-import { nodeWorkspaceFs } from "../workspace/fs.js";
+} from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   DEFAULT_VERIFICATION_LIMITS,
   type ScriptCatalog,

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isCommandAllowed } from "../../src/tools/index.js";
-import { VERIFICATION_COMMAND_RULES } from "../../src/verification/orchestrator.js";
-import { buildVerificationPlan, resolveTargetedTests } from "../../src/verification/plan.js";
-import type { ScriptCatalog } from "../../src/verification/types.js";
+import { isCommandAllowed } from "@oscharko-dev/keiko-tools";
+import { VERIFICATION_COMMAND_RULES } from "./orchestrator.js";
+import { buildVerificationPlan, resolveTargetedTests } from "./plan.js";
+import type { ScriptCatalog } from "./types.js";
 import { makeWorkspace } from "./_support.js";
 
 function catalogOf(mapping: Partial<ScriptCatalog["mapping"]>): ScriptCatalog {

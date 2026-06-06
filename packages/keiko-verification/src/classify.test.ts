@@ -3,9 +3,9 @@ import {
   CommandCancelledError,
   CommandDeniedError,
   CommandTimeoutError,
-} from "../../src/tools/index.js";
-import type { CommandResult } from "../../src/tools/index.js";
-import { classifyOutcome } from "../../src/verification/classify.js";
+} from "@oscharko-dev/keiko-tools";
+import type { CommandResult } from "@oscharko-dev/keiko-tools";
+import { classifyOutcome } from "./classify.js";
 
 function result(overrides: Partial<CommandResult>): CommandResult {
   return {
