@@ -21,6 +21,15 @@ The contract binds issues [#538](https://github.com/oscharko-dev/Keiko/issues/53
 
 No new database, no new package, no new third-party dependency.
 
+## 1.1 Current implementation note
+
+On current `dev`, the durable audit contract is only partially implemented:
+
+- `relationship_audit_entries` is the shipped persistence surface.
+- `EvidenceManifest` does not yet expose a `relationships` section.
+- `resolveAuditPlacement()` currently returns `"sibling-table"` for every row, including workflow-run-scoped mutations ([`../../packages/keiko-server/src/store/relationship-audit.ts`](../../packages/keiko-server/src/store/relationship-audit.ts)).
+- The optional `evidenceRef` shape below is a design target, not a field the current server emits.
+
 ## 2. Relationship to the existing audit vocabulary
 
 The closed enum below is **the audit-layer projection of the relationship lifecycle** in the same way `MemoryAuditEvent` ([`packages/keiko-contracts/src/memory-audit-events.ts:41`](../../packages/keiko-contracts/src/memory-audit-events.ts)) is the audit-layer projection of the memory-vault state machine. The naming convention, schema-version pinning, and envelope fields mirror the memory audit contract:
@@ -97,7 +106,7 @@ type RelationshipCreatedAudit = RelationshipAuditEnvelope & {
   readonly targetId: string; // opaque; per-workspace
   readonly lifecycle: "draft" | "active"; // initial state per lifecycle.md §3
   readonly etag: string; // optimistic-concurrency token
-  readonly evidenceRef?: RelationshipEvidenceRef; // see evidence-references.md
+  readonly evidenceRef?: RelationshipEvidenceRef; // follow-up seam; not emitted on current dev
 };
 ```
 
@@ -229,7 +238,7 @@ The relationship engine writes audit rows to two persistence surfaces, never bot
 
 ### 5.1 The two surfaces
 
-1. **Evidence-manifest `relationships?` section.** Added to `EvidenceManifest` ([`packages/keiko-contracts/src/evidence.ts:276`](../../packages/keiko-contracts/src/evidence.ts)) per the gap-analysis follow-up in [gap-analysis.md Gap 7]. The section is built by the existing redacted-by-construction builder ([`packages/keiko-evidence/src/build.ts`](../../packages/keiko-evidence/src/build.ts)) and persisted by [`packages/keiko-evidence/src/persist.ts:39`](../../packages/keiko-evidence/src/persist.ts). Inherits the evidence retention envelope ([`packages/keiko-contracts/src/evidence.ts:315`](../../packages/keiko-contracts/src/evidence.ts) `DEFAULT_RETENTION: { maxRuns: 50 }`).
+1. **Future seam: evidence-manifest `relationships?` section.** Not yet present in the shipped `EvidenceManifest` contract. If implemented, it should be added additively and persisted by the existing evidence pipeline.
 
 2. **Sibling `relationship_audit_entries` table.** Added as part of the V5 migration in the UI-persistence SQLite database alongside the `relationships` table (per [storage.md §3.1](storage.md)). Co-located so the audit row write and the relationship row write share a single `BEGIN`/`COMMIT` (per [storage.md §4](storage.md)). Owned by `@oscharko-dev/keiko-server` migration runner ([`packages/keiko-server/src/store/schema.ts`](../../packages/keiko-server/src/store/schema.ts)).
 
@@ -237,9 +246,9 @@ The relationship engine writes audit rows to two persistence surfaces, never bot
 
 | Audit kind                             | Run-scoped? | Placement                                                                                                                                                                     |
 | -------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `relationship.created`                 | Sometimes   | `EvidenceManifest.relationships` when source is a `workflow-run`; sibling table otherwise. **Dual write is FORBIDDEN.** The placement is selected once per row by §5.3.       |
-| `relationship.updated`                 | Sometimes   | Same rule as `created`.                                                                                                                                                       |
-| `relationship.deleted`                 | Sometimes   | Same rule as `created`.                                                                                                                                                       |
+| `relationship.created`                 | Sometimes   | Design target: `EvidenceManifest.relationships` when source is a `workflow-run`; sibling table otherwise. Current `dev`: sibling table only.                                  |
+| `relationship.updated`                 | Sometimes   | Same design target as `created`. Current `dev`: sibling table only.                                                                                                           |
+| `relationship.deleted`                 | Sometimes   | Same design target as `created`. Current `dev`: sibling table only.                                                                                                           |
 | `relationship.reconnected`             | No          | Sibling table only (health-check pass has no run context).                                                                                                                    |
 | `relationship.validation-denied`       | No          | Sibling table only (no relationship row exists; cannot tie to a run).                                                                                                         |
 | `relationship.policy-denied`           | No          | Sibling table only (same reason).                                                                                                                                             |
@@ -249,12 +258,12 @@ The relationship engine writes audit rows to two persistence surfaces, never bot
 
 ### 5.3 The selection rule
 
-For the three mutation kinds (`created`, `updated`, `deleted`), the placement is selected by the **source endpoint kind**:
+For the three mutation kinds (`created`, `updated`, `deleted`), the intended placement is selected by the **source endpoint kind**:
 
 - If `sourceKind === "workflow-run"` AND the request handler holds an `evidenceRunId` for the in-flight run, the audit row is written into `EvidenceManifest.relationships` for that run. The row is part of the run's evidence.
 - Otherwise, the audit row is written to the sibling `relationship_audit_entries` table. The row stands alone with full envelope fields.
 
-This rule is deterministic, single-call-site, and matches the [storage.md §4.3](storage.md) decision sketch (run-scoped mutations attach to the run; non-run-scoped mutations land in the sibling table). The dual-write prohibition closes the consistency gap: a reader sees the row in exactly one place.
+This remains the design rule. Current `dev` stops short of the workflow-run manifest branch and keeps the single-call-site invariant by writing every row to the sibling table.
 
 ### 5.4 Justification
 
@@ -358,7 +367,7 @@ For all kinds: `relationshipAuditSchemaVersion`, `eventId`, `sequence`, `workspa
 
 Per kind (additive over the envelope):
 
-- `created`/`updated`/`deleted`: `relationshipId`, `relationshipType`, `sourceKind`, `targetKind`, opaque `sourceId`/`targetId`, `lifecycle`, `etag`/`previousEtag`/`newEtag`, `changedFields`, optional `evidenceRef`, `tombstoned`, `reasonCode`.
+- `created`/`updated`/`deleted`: `relationshipId`, `relationshipType`, `sourceKind`, `targetKind`, opaque `sourceId`/`targetId`, `lifecycle`, `etag`/`previousEtag`/`newEtag`, `changedFields`, optional `evidenceRef` (follow-up seam), `tombstoned`, `reasonCode`.
 - `reconnected`: `relationshipId`, `fromLifecycle`, `toLifecycle`, `endpointSide`.
 - `validation-denied`/`policy-denied`: `proposedType`, `proposedSourceKind`, `proposedTargetKind`, `reasons[].code`, `reasons[].endpoint`, `reasons[].summary` (≤240 chars, redacted).
 - `activity-transitioned`: `relationshipId`, `from`, `to`, `liveActivityKind`.

@@ -17,6 +17,15 @@ What was still open after ADR-0031:
 
 These decisions cannot be safely inferred from the existing code or ADRs. ADR-0032 records the bindings.
 
+### Current implementation note
+
+On current `dev`, the shipped audit implementation is narrower than the full design target described below:
+
+- `relationship_audit_entries` is implemented and used as the durable audit surface ([`packages/keiko-server/src/store/schema.ts`](../../packages/keiko-server/src/store/schema.ts), [`packages/keiko-server/src/store/relationship-audit.ts`](../../packages/keiko-server/src/store/relationship-audit.ts)).
+- `EvidenceManifest` does not yet define a `relationships` section ([`packages/keiko-contracts/src/evidence.ts`](../../packages/keiko-contracts/src/evidence.ts)).
+- `resolveAuditPlacement()` currently routes every row to the sibling table and leaves manifest embedding as a TODO seam ([`relationship-audit.ts:74`](../../packages/keiko-server/src/store/relationship-audit.ts)).
+- Relationship-level evidence refs are a design target; the current `GET /api/relationships/:id/explain` surface does not return them ([`packages/keiko-ui/src/app/relationships/api.ts:61`](../../packages/keiko-ui/src/app/relationships/api.ts)).
+
 ## Decision
 
 ### 1. Durable audit events: append-only, redacted-on-write, workspace-scoped
@@ -35,19 +44,19 @@ The relationship engine emits a **closed set** of nine audit-event kinds (per [`
 
 Each event carries a versioned envelope (`relationshipAuditSchemaVersion: "1"`, `eventId`, monotone `sequence` per workspace, `workspaceId`, `occurredAt`, redacted `actor`, `redactionState`, bounded `summary`) plus kind-specific fields (per [`audit-events.md §4`](../relationship-engine/audit-events.md)). The vocabulary mirrors the existing memory audit pattern at [`packages/keiko-contracts/src/memory-audit-events.ts:41`](../../packages/keiko-contracts/src/memory-audit-events.ts).
 
-### 2. Two persistence surfaces, one per row-class, never both
+### 2. Persistence surfaces: design target vs current implementation
 
-Audit rows land on exactly one of:
+The intended end state is two mutually exclusive persistence surfaces:
 
-- **`EvidenceManifest.relationships?` section** — added additively to the existing `EvidenceManifest` ([`packages/keiko-contracts/src/evidence.ts:276`](../../packages/keiko-contracts/src/evidence.ts)) for run-scoped mutations. Persisted via the existing `persistEvidence` pipeline ([`packages/keiko-evidence/src/persist.ts:39`](../../packages/keiko-evidence/src/persist.ts)); inherits `DEFAULT_RETENTION: { maxRuns: 50 }` ([`evidence.ts:315`](../../packages/keiko-contracts/src/evidence.ts)).
-- **`relationship_audit_entries` sibling table** — added in the same V5 SQLite migration as `relationships` in the existing UI-persistence database ([`packages/keiko-server/src/store/schema.ts`](../../packages/keiko-server/src/store/schema.ts)). Co-located so the audit insert shares the relationship row's `BEGIN`/`COMMIT`.
+- **Future seam: `EvidenceManifest.relationships?` section** for run-scoped mutations, added additively to the existing manifest shape and persisted through the existing evidence pipeline.
+- **Current implementation: `relationship_audit_entries` sibling table** in the existing UI-persistence database ([`packages/keiko-server/src/store/schema.ts`](../../packages/keiko-server/src/store/schema.ts)).
 
-The placement rule (per [`audit-events.md §5.3`](../relationship-engine/audit-events.md)) is **deterministic per row**:
+The design placement rule (per [`audit-events.md §5.3`](../relationship-engine/audit-events.md)) remains **deterministic per row**:
 
 - `sourceKind === "workflow-run"` with an in-flight `evidenceRunId` ⇒ manifest section.
 - Otherwise ⇒ sibling table.
 
-Dual writes are forbidden; every audit event lives in exactly one place. The DDL of the sibling table is in [`audit-events.md §5.5`](../relationship-engine/audit-events.md).
+Dual writes are forbidden. On current `dev`, that invariant is satisfied by routing every relationship audit row to the sibling table until manifest embedding is implemented.
 
 ### 3. Redaction-on-write via the existing redactor
 
@@ -72,7 +81,7 @@ Each activity state carries four descriptors: stable text label, semantic ARIA d
 
 ### 6. Evidence references are pointers, not embeddings
 
-`RelationshipEvidenceRef` (per [`docs/relationship-engine/evidence-references.md §2`](../relationship-engine/evidence-references.md)) is a four-field opaque pointer (`evidenceRunId`, `manifestPath`, `manifestSchemaVersion`, `kind`). It never inlines evidence content. The read API at `GET /api/relationships/:id/explain` returns refs but never proxies evidence bytes; the UI navigates to the existing evidence viewer.
+`RelationshipEvidenceRef` (per [`docs/relationship-engine/evidence-references.md §2`](../relationship-engine/evidence-references.md)) remains the intended pointer shape for a follow-up implementation seam. It never inlines evidence content. Current `dev` does not yet ship that type on relationship rows or in `GET /api/relationships/:id/explain`; when added, the API should return refs rather than proxying evidence bytes.
 
 Deleting a relationship that has active evidence refs creates a tombstone (the row transitions to `lifecycle = "revoked"`; the row is retained until the last referencing manifest ages out under `DEFAULT_RETENTION: { maxRuns: 50 }`). This mirrors the memory-vault tombstone pattern at [`packages/keiko-memory-vault/src/tombstones.ts`](../../packages/keiko-memory-vault/src/tombstones.ts) but applied at the index layer: the relationship row IS the tombstone.
 
@@ -132,7 +141,7 @@ Allowing later policy decisions to back-mutate an earlier audit row's payload. R
 - The redaction story is single-call-site: one redactor, one persist boundary, idempotent re-redact.
 - The privacy boundary is structural at the type level (no FORBIDDEN field exists in the audit shapes) AND at the persistence level (no code path writes activity state).
 - Existing patterns are reused without modification: redactor, evidence persist, memory audit envelope, tombstone discipline.
-- The SQLite migration is additive (V5 ships both `relationships` and `relationship_audit_entries`).
+- The SQLite migration is additive (`relationships` and `relationship_audit_entries` ship together in V5); manifest embedding remains a separate additive follow-up.
 - Activity is cheap: O(active-workflows) per derivation tick, capped at 25 animated badges in the UI.
 
 ### Negative

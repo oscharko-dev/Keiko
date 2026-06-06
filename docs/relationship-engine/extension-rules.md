@@ -128,5 +128,5 @@ A new relationship type or kind that touches an existing Keiko subsystem (memory
 ## 11. References
 
 - [taxonomy.md](taxonomy.md), [compatibility-matrix.md](compatibility-matrix.md), [denial-reasons.md](denial-reasons.md), [lifecycle.md](lifecycle.md), [activity-state.md](activity-state.md), [audit-events.md](audit-events.md), [architecture.md](architecture.md)
-- [ADR-0031](../adr/ADR-0031-relationship-storage-and-validation.md), [ADR-0032](../adr/ADR-0032-relationship-audit-and-activity.md)
+- [ADR-0031](../adr/ADR-0031-relationship-storage-and-validation.md), [ADR-0032](../adr/ADR-0032-relationship-audit-and-activity-model.md)
 - Issue: [#538](https://github.com/oscharko-dev/Keiko/issues/538).
