@@ -4,6 +4,8 @@
 
 Accepted (Epic #423, 2026-06-06). Builds on ADR-0019, ADR-0020, and ADR-0021.
 
+Date: 2026-06-06
+
 ## Context
 
 Keiko now operates on a single `0.2.0` modular package baseline. The repository needs one short,

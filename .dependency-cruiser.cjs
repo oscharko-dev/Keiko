@@ -85,9 +85,7 @@ module.exports = {
         "so the current package surface remains the only production entry.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-evidence/src/|" +
-          "tests/architecture/fixtures/evidence/)",
+        path: "^(packages/keiko-evidence/src/|" + "tests/architecture/fixtures/evidence/)",
         pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
@@ -108,9 +106,7 @@ module.exports = {
         "root `src/workspace/` shim so all production callers stay on the package surface.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-workspace/src/|" +
-          "tests/architecture/fixtures/workspace/)",
+        path: "^(packages/keiko-workspace/src/|" + "tests/architecture/fixtures/workspace/)",
         pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
@@ -157,8 +153,7 @@ module.exports = {
       severity: "error",
       from: {
         path:
-          "^(packages/keiko-model-gateway/src/|" +
-          "tests/architecture/fixtures/model-gateway/)",
+          "^(packages/keiko-model-gateway/src/|" + "tests/architecture/fixtures/model-gateway/)",
         pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
@@ -234,9 +229,7 @@ module.exports = {
         "`src/evaluations/` shim so production callers stay on the package surface.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-evaluations/src/|" +
-          "tests/architecture/fixtures/evaluations/)",
+        path: "^(packages/keiko-evaluations/src/|" + "tests/architecture/fixtures/evaluations/)",
         pathNot: "\\.test\\.ts$",
       },
       to: {
@@ -274,9 +267,7 @@ module.exports = {
         "production callers stay on the package surface.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-verification/src/|" +
-          "tests/architecture/fixtures/verification/)",
+        path: "^(packages/keiko-verification/src/|" + "tests/architecture/fixtures/verification/)",
         pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
@@ -509,9 +500,7 @@ module.exports = {
         "`src/harness/` shim so production callers stay on the package surface.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-harness/src/|" +
-          "tests/architecture/fixtures/harness/)",
+        path: "^(packages/keiko-harness/src/|" + "tests/architecture/fixtures/harness/)",
         pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
@@ -544,9 +533,7 @@ module.exports = {
         "code cannot bypass the package surface.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-workflows/src/|" +
-          "tests/architecture/fixtures/workflows/)",
+        path: "^(packages/keiko-workflows/src/|" + "tests/architecture/fixtures/workflows/)",
         pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
@@ -575,7 +562,8 @@ module.exports = {
         "ADR-0019 direction rule 6 (server boundary): keiko-server may depend on " +
         "keiko-contracts, keiko-security, keiko-model-gateway, " +
         "keiko-workspace, keiko-tools, keiko-harness, keiko-workflows, keiko-evidence, " +
-        "keiko-sdk, keiko-memory-vault, keiko-memory-governance, and keiko-memory-retrieval " +
+        "keiko-sdk, keiko-local-knowledge, keiko-memory-vault, keiko-memory-governance, " +
+        "and keiko-memory-retrieval " +
         "only, and must reach those allowed dependencies through their public package " +
         "surfaces (`@oscharko-dev/keiko-<name>`). The to.path therefore forbids both the " +
         "non-allow-listed siblings (`cli|evaluations`) AND retired root `src/*` shims, " +
@@ -587,16 +575,19 @@ module.exports = {
         "memory-consolidation added by issue #208 (Memory consolidation jobs); the server " +
         "wires consolidation lifecycle handlers through packages/keiko-server/src/memory-" +
         "consolidation-handlers.ts so the package must appear in the allow-list to keep " +
-        "the rule truthful with the source.",
+        "the rule truthful with the source. local-knowledge added by Epic #423 audit: the " +
+        "server hosts local-knowledge BFF routes " +
+        "(packages/keiko-server/src/local-knowledge-handlers.ts) and declares the " +
+        "dependency in its package.json.",
       severity: "error",
       from: {
         path: "^(packages/keiko-server/src/|tests/architecture/fixtures/server/)",
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
           "src/(ui|cli|evaluations|gateway|workspace|tools|harness|workflows|audit|verification))",
       },
     },
@@ -802,8 +793,7 @@ module.exports = {
         "subpaths remain allowed; non-exported `packages/*/src/**` deep imports do not.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-(cli|server)/src/|src/cli/|tests/architecture/fixtures/port-bypass/)",
+        path: "^(packages/keiko-(cli|server)/src/|src/cli/|tests/architecture/fixtures/port-bypass/)",
       },
       to: {
         // Direct paths into another workspace's source files bypass the package `exports`.

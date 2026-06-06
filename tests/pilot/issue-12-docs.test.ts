@@ -32,14 +32,17 @@ function readCiJobBlock(): string {
 // Issue #287 extended the chain with `check:qi-supply-chain` (ADR-0023 D5/D11/D12); issue
 // #433 (Epic #423) added `check:version-consistency` so the packed artifact cannot ship with
 // a manifest/version mismatch; Epic #423 also restores `arch:check` to the real publish path
-// so architecture violations cannot bypass the release hook. The pin stays "exact" against the
-// live `package.json`; it does not lock the chain to a particular historical length.
+// so architecture violations cannot bypass the release hook; Epic #423 post-closure audit
+// added `arch:check:negative` immediately after `arch:check` so rule deletions are caught in
+// the publish path, not only in CI. The pin stays "exact" against the live `package.json`;
+// it does not lock the chain to a particular historical length.
 const PACKAGE_SURFACE_CHAIN = [
   "npm run clean",
   "npm run build",
   "npm run prepare:bin",
   "npm run build:ui",
   "npm run arch:check",
+  "npm run arch:check:negative",
   "npm run check:package-surface",
   "npm run check:version-consistency",
   "npm run check:qi-supply-chain",
@@ -70,7 +73,9 @@ describe("Issue #12 docs drift", () => {
       /^export\s+const\s+SDK_VERSION(?:\s*:\s*string)?\s*=\s*KEIKO_PRODUCT_VERSION;$/m,
     );
     expect(versionGate).toContain("SDK_VERSION does not directly re-export");
-    expect(versionGate).toContain('const APPROVED_ROOT_SRC_FILES = ["src/cli/index.ts", "src/index.ts"];');
+    expect(versionGate).toContain(
+      'const APPROVED_ROOT_SRC_FILES = ["src/cli/index.ts", "src/index.ts"];',
+    );
     expect(versionGate).toContain("root src/ must stay minimal");
     expect(versionGate).toContain("root facade drifted beyond the approved minimal facade");
   });
