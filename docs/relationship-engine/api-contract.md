@@ -87,13 +87,13 @@ The `code` is the deterministic identifier listed in §10. The `message` is a sh
 
 ### 3.5 Headers
 
-| Header            | Direction | Routes                                 | Purpose                                                                                      |
-| ----------------- | --------- | -------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `Idempotency-Key` | Request   | POST, PATCH, DELETE                    | Replay protection (per §5). Bounded `[A-Za-z0-9._-]{8,64}`.                                  |
-| `If-Match`        | Request   | PATCH, DELETE                          | Optimistic concurrency precondition (per §6). Value is the current row's etag.               |
-| `ETag`            | Response  | GET single, POST, PATCH                | Current row etag. Echoed back by clients via `If-Match`.                                     |
-| `X-Truncated`     | Response  | GET list, GET dependencies, GET impact | `true` / `false`. Indicates server applied a bounded-query cap. Also surfaced in the body.   |
-| `Cache-Control`   | Response  | All                                    | `no-store` for mutating routes and any route that returns user-scoped data; the BFF default. |
+| Header            | Direction | Routes              | Purpose                                                                                                |
+| ----------------- | --------- | ------------------- | ------------------------------------------------------------------------------------------------------ |
+| `Idempotency-Key` | Request   | POST, PATCH, DELETE | Replay protection (per §5). Bounded `[A-Za-z0-9._-]{8,64}`.                                            |
+| `If-Match`        | Request   | PATCH, DELETE       | Optimistic concurrency precondition (per §6). Value is the current row's etag.                         |
+| `ETag`            | Response  | -                   | Current implementation returns the opaque row etag in the JSON body (`body.etag`), not an HTTP header. |
+| `X-Truncated`     | Response  | -                   | Current implementation reports truncation in the JSON body only.                                       |
+| `Cache-Control`   | Response  | All                 | `no-store` for mutating routes and any route that returns user-scoped data; the BFF default.           |
 
 The BFF's existing CSP and security headers ([`packages/keiko-server/src/csp.ts`](../../packages/keiko-server/src/csp.ts), [`headers.ts`](../../packages/keiko-server/src/headers.ts)) apply unchanged.
 
@@ -140,13 +140,13 @@ Content-Type: application/json
 }
 ```
 
-When `allowed` is `false`, `reasons` is non-empty; each reason has the shape from [gap-analysis.md Gap 3](gap-analysis.md):
+When `allowed` is `false`, `reasons` is non-empty; each reason follows the shipped `RelationshipValidationError` shape:
 
 ```
 {
-  "endpoint": "source" | "target" | "kind" | "scope",
+  "field": "source.kind" | "target.kind" | "type" | "scope.kind",
   "code": "<denied/*>",
-  "summary": "..."
+  "message": "..."
 }
 ```
 
@@ -183,8 +183,6 @@ Idempotency-Key: <opaque 8..64 chars>
 **Response (201)**
 
 ```
-ETag: "<etag>"
-
 {
   "schemaVersion": "1",
   "relationship": {
@@ -195,18 +193,19 @@ ETag: "<etag>"
     "target": { ... },
     "scope": { ... },
     "lifecycle": "active",
-    "createdAt": 1731000000000,
-    "updatedAt": 1731000000000,
-    "etag": "<etag>",
+    "createdAt": "2026-06-06T12:00:00.000Z",
+    "updatedAt": "2026-06-06T12:00:00.000Z",
+    "etag": 0,
     "confidence": 0.83,
     "summary": "..."
-  }
+  },
+  "etag": "<etag>"
 }
 ```
 
 **Replay**: an identical `Idempotency-Key` with an identical body returns the original 201 with the original `id` and `etag`. An identical key with a divergent body returns `relationship/idempotency-replay-mismatch` (HTTP 409). See §5.
 
-**Audit obligation**: emit one `relationship:proposed` event followed by one `relationship:accepted` event (or `relationship:rejected` if the validator denies). Emission is body-free per [taxonomy.md §12](taxonomy.md). The exact ledger shape is owned by issue #536.
+**Audit obligation**: persist one durable audit row (`relationship.created`) on success or `relationship.validation-denied` on denial. The live SSE activity stream remains a stub in the current implementation.
 
 **Error codes (this route)**
 
@@ -235,9 +234,8 @@ Bounded list query.
 | `scopeKind`  | `MemoryScope.kind`         | absent  | filtered to caller's scope set |
 | `scopeId`    | string                     | absent  | filtered to caller's scope set |
 | `limit`      | integer                    | 64      | max 256                        |
-| `cursor`     | opaque base64url           | absent  | server-issued                  |
 
-At least one of `sourceKind+sourceId`, `targetKind+targetId`, `type`, or `lifecycle` MUST be present. A bare `GET /api/relationships` returns `relationship/bad-request` (HTTP 400) with `unsupported-bare-list`. This prevents accidental unbounded scans.
+At least one of `sourceKind+sourceId`, `targetKind+targetId`, `type`, or `lifecycle` MUST be present. A bare `GET /api/relationships` returns `relationship/bounded-query-required` (HTTP 400). This prevents accidental unbounded scans.
 
 **Response (200)**
 
@@ -271,11 +269,10 @@ Single relationship read.
 **Response (200)**
 
 ```
-ETag: "<etag>"
-
 {
   "schemaVersion": "1",
-  "relationship": { <Relationship> }
+  "relationship": { <Relationship> },
+  "etag": "<etag>"
 }
 ```
 
@@ -322,15 +319,14 @@ Exactly one of `transition` or `reconnect` MUST be present. Both present → `re
 **Response (200)**
 
 ```
-ETag: "<new-etag>"
-
 {
   "schemaVersion": "1",
-  "relationship": { <Relationship with updated lifecycle / endpoint> }
+  "relationship": { <Relationship with updated lifecycle / endpoint> },
+  "etag": "<new-etag>"
 }
 ```
 
-**Audit obligation**: emit one `relationship:archived` / `relationship:rejected` / `relationship:retracted` / `relationship:superseded` event per the transition, body-free.
+**Audit obligation**: persist one durable audit row (`relationship.updated`) on success. The current implementation does not emit a live `relationship:*` SSE mutation event here.
 
 **Error codes (this route)**
 
@@ -358,15 +354,14 @@ Idempotency-Key: <opaque>
 **Response (200)**
 
 ```
-ETag: "<new-etag>"
-
 {
   "schemaVersion": "1",
-  "relationship": { <Relationship with lifecycle: "revoked"> }
+  "relationship": { <Relationship with lifecycle: "revoked"> },
+  "etag": "<new-etag>"
 }
 ```
 
-**Audit obligation**: emit one `relationship:retracted` event, body-free.
+**Audit obligation**: persist one durable audit row (`relationship.deleted`). The current implementation does not emit a live `relationship:retracted` SSE event here.
 
 **Error codes (this route)**: same set as PATCH.
 
@@ -470,14 +465,7 @@ Lifecycle history is bounded to the last 32 transitions (per [storage.md §4](st
 
 ### 4.10 `GET /api/relationships/health`
 
-Graph health summary: counts, stale count, orphan count, last-validated-at.
-
-**Query parameters**
-
-| Name     | Type    | Default | Cap     |
-| -------- | ------- | ------- | ------- |
-| `limit`  | integer | 64      | max 256 |
-| `cursor` | opaque  | absent  | -       |
+Graph health summary: counts plus categorized findings already present in the relationship store. The current implementation does not paginate this route.
 
 **Response (200)**
 
@@ -488,68 +476,58 @@ Graph health summary: counts, stale count, orphan count, last-validated-at.
   "totals": {
     "active": 1234,
     "stale": 17,
-    "orphan": 0,
     "blocked": 2,
     "revoked": 89
   },
-  "entries": [
-    {
-      "relationshipId": "rel_...",
-      "sourceLiveness": { "status": "tombstoned", "tombstonedAt": 1730900000000 },
-      "targetLiveness": { "status": "live" }
-    }
-  ],
+  "findings": { "...": "categorized health findings" },
+  "entries": [],
   "truncated": false,
   "nextCursor": null
 }
 ```
 
-Health is the cross-domain availability surface from [gap-analysis.md Gap 9](gap-analysis.md). The endpoint walks the relationship table and consults each `RelationshipEndpointResolver`. The walk is bounded by `limit`; no health call is unbounded.
+Health is the current store-backed graph summary surface from [gap-analysis.md Gap 9](gap-analysis.md). The shipped implementation reads the existing relationship rows and returns a categorized summary; resolver-driven liveness mutation remains follow-up work.
 
 **Audit obligation**: None. Health is read-only.
 
 **Error codes (this route)**
 
-- `relationship/bounded-query-exceeded` (HTTP 400).
 - `relationship/scope-not-permitted` (HTTP 403).
 
 ### 4.11 `GET /api/relationships/events`
 
-Server-Sent Events stream of `relationship:*` activity events scoped to the caller. Issue #541 wires per-kind subscriptions.
+Server-Sent Events stub scoped to the caller. The current implementation opens the stream, emits a bootstrap `relationship:hello` event, and sends keepalive pings; per-kind `relationship:*` delivery remains follow-up work.
 
 **Response (200, text/event-stream)**
 
 Each event:
 
 ```
-event: relationship:proposed
-data: {"schemaVersion":"1","kind":"relationship:proposed","relationshipId":"rel_...","occurredAt":1731000000000,"scope":{...},"summary":"..."}
-
-event: relationship:accepted
-data: {"schemaVersion":"1","kind":"relationship:accepted","relationshipId":"rel_...","occurredAt":1731000000000,"scope":{...}}
+event: relationship:hello
+data: {"schemaVersion":"1","kind":"relationship:hello"}
 
 ```
 
-The client subscribes per-kind via `addEventListener("relationship:proposed", ...)` etc. — the standard discipline from Epic #13 memory entry. An unknown kind is never delivered to an old subscriber.
+The bootstrap event is sufficient for stream-health checks. Per-kind subscriptions are reserved for the later activity-delivery work.
 
 **Audit obligation**: None at the route boundary; the events themselves are emitted as a consequence of mutations elsewhere.
 
 **Error codes (this route)**
 
-- `relationship/sse-not-permitted` (HTTP 403): scope mismatch.
+- `relationship/scope-not-permitted` (HTTP 403): scope mismatch.
 
 ## 5. Idempotency
 
 The replay-protection model. Restated from [architecture.md §6.1](architecture.md).
 
 - Mutating routes (POST, PATCH, DELETE) MUST carry `Idempotency-Key: <opaque 8..64 chars>`. Absent → `relationship/idempotency-key-required` (HTTP 400).
-- The BFF maintains a process-local LRU cache `{key → {relationshipId, status, etag, bodyHash}}` with TTL 15 minutes and capacity 4096. Implementation lives next to the existing handler-deps wiring at [`packages/keiko-server/src/deps.ts`](../../packages/keiko-server/src/deps.ts).
+- The current implementation applies replay caching only to `POST /api/relationships`. It maintains a process-local `Map` with TTL 10 minutes and capacity 1024.
 - On replay (identical key):
   - Identical body hash → return the cached result with HTTP 200/201 as appropriate (the original status).
   - Divergent body hash → `relationship/idempotency-replay-mismatch` (HTTP 409).
 - On cache miss (no record) → execute the mutation, cache the result, return.
 
-**Body hash** is `SHA-256` over the canonicalized JSON request body (sorted keys, no whitespace). The canonicalization rule is consistent with the existing `runid.ts` hashing seam at [`packages/keiko-security/src/runid.ts`](../../packages/keiko-security/src/runid.ts).
+**Body hash** in the current implementation is a deterministic djb2-style hash over the raw JSON request body.
 
 The cache is **not** durable: a server restart invalidates the cache. This is acceptable because the deployed BFF is a single process. A cross-process cache is explicitly out of scope (per [architecture.md §6.1](architecture.md)).
 
@@ -559,15 +537,14 @@ The stale-write protection model. Restated from [architecture.md §6.2](architec
 
 - Every relationship row carries an `etag` column populated by the server on every write. The etag is a monotonic-per-row token (`printf('%016x', updated_at) || '-' || random_suffix`, where `updated_at` is in epoch ms and the suffix is a 6-char random alphabetic tiebreaker for sub-millisecond collisions). The complete algorithm is in [storage.md §4](storage.md).
 - PATCH and DELETE MUST carry `If-Match: "<etag>"`. Absent → `relationship/optimistic-concurrency-required` (HTTP 428).
-- The server compares the supplied etag against the current row's etag in the same SQL transaction as the write. Mismatch → `relationship/optimistic-concurrency-conflict` (HTTP 412). Body:
+- The server compares the supplied etag against the current row's etag before the store mutation. Mismatch → `relationship/optimistic-concurrency-conflict` (HTTP 412). Body:
 
   ```
   {
     "error": {
       "code": "relationship/optimistic-concurrency-conflict",
       "message": "The relationship was modified by another writer."
-    },
-    "currentEtag": "<current-etag>"
+    }
   }
   ```
 
@@ -584,11 +561,10 @@ The unbounded-walk-protection model. Restated from [architecture.md §6.5](archi
 | `maxNodes`            | 256     | 1024     | `relationship/bounded-query-exceeded` |
 | `maxRelationships`    | 512     | 2048     | `relationship/bounded-query-exceeded` |
 | Request body size     | -       | 16 KiB   | `relationship/payload-too-large`      |
-| Cursor age            | -       | 1 hour   | `relationship/cursor-expired`         |
-| Idempotency-Key TTL   | -       | 15 min   | (replay returns the cached miss path) |
+| Idempotency-Key TTL   | -       | 10 min   | (POST replay cache only)              |
 | ETag tiebreaker chars | 6       | 6        | server-controlled                     |
 
-The truncation contract: a server-applied cap (e.g., `maxNodes` reached before `maxDepth`) populates `truncated: true` and `truncationReason: "max-nodes"` in the body and `X-Truncated: true` in the header. The walk never throws; it returns a partial report and the client decides whether to follow up.
+The truncation contract: a server-applied cap (e.g., `maxNodes` reached before `maxDepth`) populates `truncated: true` and `truncationReason: "max-nodes"` in the body. The walk never throws; it returns a partial report and the client decides whether to follow up.
 
 ## 8. Response redaction
 
@@ -606,14 +582,14 @@ A test in [`packages/keiko-server/src/`](../../packages/keiko-server/src/) (issu
 
 ## 9. Audit obligations
 
-Every mutation emits one or more `relationship:*` activity events plus a durable audit entry. The exact ledger shape — including the `EvidenceManifest` embedding — is owned by ADR-0032 (issue #536). This contract makes the obligation explicit:
+Every mutation persists a durable audit entry. The exact ledger shape — including future `EvidenceManifest` embedding — is owned by ADR-0032 (issue #536). Live `relationship:*` SSE activity remains stubbed in the current implementation.
 
-| Route                           | Activity events                                                       | Audit entry kind       |
-| ------------------------------- | --------------------------------------------------------------------- | ---------------------- |
-| POST `/api/relationships`       | `relationship:proposed` then `relationship:accepted` (or `:rejected`) | `relationship:created` |
-| PATCH `/api/relationships/:id`  | one of `:archived`, `:retracted`, `:superseded`                       | `relationship:updated` |
-| DELETE `/api/relationships/:id` | `relationship:retracted`                                              | `relationship:revoked` |
-| Any denied mutation             | `relationship:rejected` (with reason summary)                         | `relationship:denied`  |
+| Route                           | Durable audit entry kind                                   |
+| ------------------------------- | ---------------------------------------------------------- |
+| POST `/api/relationships`       | `relationship.created` or `relationship.validation-denied` |
+| PATCH `/api/relationships/:id`  | `relationship.updated`                                     |
+| DELETE `/api/relationships/:id` | `relationship.deleted`                                     |
+| Truncated impact analysis       | `relationship.impact-analysis-bounded`                     |
 
 Every emitted summary is body-free per [taxonomy.md §12](taxonomy.md) and bounded to 240 chars per `MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS` at [`packages/keiko-contracts/src/memory-audit-events.ts:35`](../../packages/keiko-contracts/src/memory-audit-events.ts).
 

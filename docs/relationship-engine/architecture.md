@@ -31,7 +31,7 @@ The relationship engine is a thin cross-domain layer over existing Keiko subsyst
 | 3   | Policy composer | `@oscharko-dev/keiko-contracts` (pure module)                                                                                                         | Composes per-endpoint liveness reports from the resolver port with the validator decision; never bypasses an owning boundary.                                                                                                                                                                                             | `RelationshipEndpointResolver` instances supplied by `keiko-memory-vault`, `keiko-local-knowledge`, `keiko-workflows`, `keiko-evidence`, `keiko-workspace`, and the chat surface in `keiko-server`.                                                                                                                                                                               |
 | 4   | Store           | `@oscharko-dev/keiko-server` (extended in-place; see [storage.md](storage.md) and [ADR-0031](../adr/ADR-0031-relationship-storage-and-validation.md)) | A new `relationships` table inside the existing UI-persistence SQLite database ([`packages/keiko-server/src/store/db.ts`](../../packages/keiko-server/src/store/db.ts), [`schema.ts`](../../packages/keiko-server/src/store/schema.ts)), migrated via the established `PRAGMA user_version` runner.                       | `runMigrations` ([`schema.ts:94`](../../packages/keiko-server/src/store/schema.ts)), `node:sqlite` with the `--experimental-sqlite` strategy already in production for issue #62, and the `O_EXCL` realpath-contained convention from [`packages/keiko-evidence/src/store.ts`](../../packages/keiko-evidence/src/store.ts) for the corrupt-DB quarantine path (`.corrupt.<iso>`). |
 | 5   | API (BFF)       | `@oscharko-dev/keiko-server` (additive routes registered in [`routes.ts`](../../packages/keiko-server/src/routes.ts))                                 | HTTP routes specified in [api-contract.md](api-contract.md). Each route is registered as an `API_ROUTES` entry; the route dispatcher remains unchanged.                                                                                                                                                                   | The existing `RouteDefinition` / `RouteHandler` machinery in [`routes.ts:133`](../../packages/keiko-server/src/routes.ts); the `UiHandlerDeps` deps injection at [`deps.ts`](../../packages/keiko-server/src/deps.ts); the redacted error envelope `{ error: { code, message } }` already documented in [`routes.ts:6`](../../packages/keiko-server/src/routes.ts).               |
-| 6   | UI hint         | `@oscharko-dev/keiko-ui`                                                                                                                              | Read-only inspector and controlled graph view per [adr-candidates.md ADR-0034](adr-candidates.md). UI may produce a hint about validity for fast feedback but the hint is advisory.                                                                                                                                       | The existing `WindowsRegistry.ts` extension contract ([`WindowsRegistry.ts:5`](../../packages/keiko-ui/src/app/components/desktop/windows/WindowsRegistry.ts)), the descriptor validator from [ADR-0029](../adr/ADR-0029-workspace-object-registry.md), and the SSE `addEventListener(kind, ...)` discipline from Epic #13.                                                       |
+| 6   | UI hint         | `@oscharko-dev/keiko-ui`                                                                                                                              | Read-only inspector and controlled graph view per [ADR-0033](../adr/ADR-0033-relationship-ui-containment.md). UI may produce a hint about validity for fast feedback but the hint is advisory.                                                                                                                            | The existing `WindowsRegistry.ts` extension contract ([`WindowsRegistry.ts:5`](../../packages/keiko-ui/src/app/components/desktop/windows/WindowsRegistry.ts)), the descriptor validator from [ADR-0029](../adr/ADR-0029-workspace-object-registry.md), and the SSE `addEventListener(kind, ...)` discipline from Epic #13.                                                       |
 
 ### 2.1 Diagram-as-table — write path
 
@@ -89,18 +89,16 @@ The activity envelope mirrors the `BaseWorkflowEvent` shape from [`packages/keik
 The validator is a pure deterministic function exposed by `@oscharko-dev/keiko-contracts`. It runs **only on the server**, inside the request handler, inside the same database transaction as the write. The UI MUST NOT short-circuit a mutation because its local hint says the proposal is valid. The UI hint is advisory:
 
 - Optimistic acceptance is allowed (the UI may show "proposing" state) but the relationship is not persisted until the server commits the transaction.
-- A `POST /api/relationships/validate` route exists for preview-only feedback (see [api-contract.md §3.1](api-contract.md)). It returns `{valid, deniedReasons[], hints[]}` without persisting; the UI consumes it for inline validation.
+- A `POST /api/relationships/validate` route exists for preview-only feedback (see [api-contract.md §4.1](api-contract.md)). It returns `{ decision: { allowed, reasons }, hints: [] }` without persisting; the UI consumes it for inline validation.
 - The mutating routes (`POST`, `PATCH`, `DELETE`) re-run the validator unconditionally; preview state from the validate route is not trusted.
 
 ### 3.2 Function signature (binding for #538)
 
-```
-function validateRelationshipProposal(input: {
-  readonly proposal: RelationshipProposal;
-  readonly current: RelationshipStoreSnapshot;   // bounded query result
-  readonly resolver: RelationshipEndpointResolver;
-  readonly clock: { readonly now: () => number };
-}): Promise<RelationshipPolicyDecision>;
+```ts
+function validateRelationship(
+  input: unknown,
+  ctx?: RelationshipValidationContext,
+): ValidationOk<Relationship> | ValidationFail;
 ```
 
 The function:
@@ -201,15 +199,15 @@ This section specifies the cross-cutting correctness guarantees the API contract
 ### 6.1 Idempotency
 
 - Mutating routes (`POST`, `PATCH`, `DELETE`) require an `Idempotency-Key` header. The key is an opaque client-generated string (UUID v4 recommended), bounded to 64 chars.
-- The server records the key → `{ relationshipId, status, etag }` in an in-memory bounded LRU cache scoped to a single server process. The cache TTL is 15 minutes; the maximum size is 4096 entries. (Restated from [api-contract.md §5](api-contract.md).)
+- The current implementation applies replay caching only to `POST /api/relationships`. It records the key → `{ status, response, bodyHash }` in an in-memory bounded LRU cache scoped to a single server process. The cache TTL is 10 minutes; the maximum size is 1024 entries. (Restated from [api-contract.md §5](api-contract.md).)
 - A replay (identical key, identical body) returns the original result. A replay with a divergent body returns `relationship/idempotency-replay-mismatch` (HTTP 409).
 - The cache is process-local. In a single-process BFF (the deployed shape per [ADR-0011 D5](../adr/ADR-0025-forward-only-0-2-0-modular-baseline.md) lineage), this is sufficient. A cross-process cache is a future-work item and is **not** required by this epic.
 
 ### 6.2 Optimistic concurrency
 
 - Every relationship row carries an `etag` column (TEXT, monotonic per row, populated via a server-side counter expressed as `printf('%016x', updated_at)` plus a tiebreaker). The full algorithm is specified in [storage.md §4](storage.md).
-- `PATCH` and `DELETE` require an `If-Match: <etag>` header. The header is matched against the current row's etag in the same SQL transaction as the mutation.
-- A mismatch raises `relationship/optimistic-concurrency-conflict` (HTTP 412). The response body includes the current etag so the client can re-fetch and retry.
+- `PATCH` and `DELETE` require an `If-Match: <etag>` header. The current implementation pre-checks the supplied etag against the current row before the store mutation and rejects mismatches with HTTP 412.
+- A mismatch raises `relationship/optimistic-concurrency-conflict` (HTTP 412). The current response body carries the standard `{ error }` envelope only; callers re-fetch to learn the latest opaque etag.
 - The server never accepts a write without an `If-Match` header on mutating routes. Restated from [api-contract.md §6](api-contract.md).
 
 ### 6.3 Schema versioning
@@ -220,12 +218,12 @@ This section specifies the cross-cutting correctness guarantees the API contract
 
 ### 6.4 Stale writes
 
-- A write whose row is later observed to be stale (the validator's snapshot was taken before another writer committed) is detected by the `If-Match` precondition. The conflicting write returns HTTP 412 with the current etag.
+- A write whose row is later observed to be stale (the validator's snapshot was taken before another writer committed) is detected by the `If-Match` precondition. The conflicting write returns HTTP 412 and the caller must re-fetch to obtain the latest opaque etag.
 - The store layer is the source of truth for staleness. The validator is pure; it cannot itself detect concurrent commits.
 
 ### 6.5 Bounded-query contract
 
-- Read routes accept a `limit` query parameter (default 64, max 256) plus an opaque cursor.
+- The list route accepts a `limit` query parameter (default 64, max 256). The current implementation does not consume a cursor parameter.
 - Dependency-walk and impact routes accept `maxDepth` (default 1, max 3) and `maxNodes` (default 256, max 1024). These caps mirror the `ImpactBudget` defaults from [gap-analysis.md Gap 8](gap-analysis.md).
 - Exceeding a cap raises `relationship/bounded-query-exceeded` with the truncation metadata (`{ truncated: true, truncationReason: "max-depth" | "max-nodes" | "max-relationships" }`). The server never serves an unbounded walk.
 
@@ -249,10 +247,9 @@ A new `keiko-relationships` package was **rejected** because:
 
 ```
   keiko-contracts (LEAF, pure)
-    ├── Relationship, RelationshipEndpoint, RelationshipPolicyDecision
-    ├── validateRelationshipProposal(...)          (PURE)
-    ├── composeRelationshipPolicy(...)             (PURE)
-    └── RelationshipEndpointResolver (PORT)
+    ├── Relationship, RelationshipEndpoint, RelationshipValidationError
+    ├── validateRelationship(...)                  (PURE)
+    └── RelationshipValidationContext (PORT SHAPE)
 
   keiko-memory-vault, keiko-local-knowledge, keiko-workflows, keiko-evidence,
   keiko-workspace, keiko-server (chat surface)
@@ -274,8 +271,8 @@ A new `keiko-relationships` package was **rejected** because:
 
   keiko-ui
     └── windows/
-        ├── relationship-inspector.tsx     (NEW; ADR-0034 / issue #540)
-        └── relationship-graph.tsx        (NEW; ADR-0034 / issue #540)
+        ├── relationship-inspector.tsx     (NEW; ADR-0033 / issue #540)
+        └── relationship-graph.tsx         (NEW; ADR-0033 / issue #540)
 ```
 
 Each new file is named for clarity; final filenames are at the implementing issue's discretion. The point is the seam ownership.
@@ -285,7 +282,7 @@ Each new file is named for clarity; final filenames are at the implementing issu
 These are flagged so future-me / future reviewers do not mistake an absence for a silent decision:
 
 - **Activity envelope and audit-event embedding** are owned by ADR-0032 (issue #536). This blueprint specifies that activity events exist (per §2.3) but does not lock the audit-section embedding shape.
-- **UI substrate and window-type descriptors** are owned by ADR-0034 (issue #537). This blueprint specifies that the UI is read-only and advisory (per §2 row 6) but does not lock the descriptor fields.
+- **UI substrate and window-type descriptors** are owned by ADR-0033 (issue #537). This blueprint specifies that the UI is read-only and advisory (per §2 row 6) but does not lock the descriptor fields.
 - **Inspector deep-link route convention** (static-export query-param routes per Epic #62 memory entry) is restated as a constraint but its concrete URL shape is owned by issue #540.
 - **Cross-process idempotency cache** is explicitly out of scope (per §6.1). A future ADR may introduce it if the BFF deployment shape changes.
 
