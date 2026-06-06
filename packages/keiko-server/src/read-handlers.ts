@@ -18,6 +18,7 @@ import {
   assertValidRunId,
   EvidenceReadError,
   EvidenceSchemaError,
+  InvalidRunIdError,
   type EvidenceListEntry,
 } from "@oscharko-dev/keiko-evidence";
 import {
@@ -318,6 +319,11 @@ export function handleEvidenceDetail(ctx: RouteContext, deps: UiHandlerDeps): Ro
     }
     return { status: 200, body: { manifest } };
   } catch (error) {
+    // Issue #622 — an over-long runId is rejected by the store with a static, path-free
+    // InvalidRunIdError before any fs read; surface it as a 400 (not a generic 500).
+    if (error instanceof InvalidRunIdError) {
+      return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
+    }
     if (error instanceof EvidenceSchemaError) {
       return { status: 422, body: errorBody("EVIDENCE_SCHEMA", error.message) };
     }

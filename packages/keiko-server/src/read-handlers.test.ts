@@ -18,6 +18,7 @@ import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import {
   EvidenceReadError,
   EvidenceSchemaError,
+  InvalidRunIdError,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 
@@ -552,6 +553,25 @@ describe("GET /api/evidence/:runId", () => {
     );
     expect(result.status).toBe(422);
     expect(result.body).toMatchObject({ error: { code: "EVIDENCE_READ" } });
+  });
+
+  it("maps an over-long runId to 400 with no filesystem path leaked (#622)", () => {
+    const store: EvidenceStore = {
+      put: () => "",
+      list: () => [],
+      get: () => {
+        throw new InvalidRunIdError("runId produces a filename that exceeds the filesystem limit");
+      },
+      delete: () => undefined,
+    };
+    const result = handleEvidenceDetail(
+      ctx("/api/evidence/run-x", { runId: "run-x" }),
+      depsWith({ evidenceStore: store }),
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+    const message = (result.body as { error: { message: string } }).error.message;
+    expect(message).not.toMatch(/[/\\]/);
   });
 
   it("serves a present manifest as-is", () => {
