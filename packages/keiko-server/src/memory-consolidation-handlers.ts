@@ -167,14 +167,10 @@ function parseScope(raw: unknown): MemoryScope | null {
       projectId: projectId as ProjectId,
     }));
   }
-  return parseScopeWithId(
-    raw,
-    "workflowDefinitionId",
-    (workflowDefinitionId) => ({
-      kind: "workflow",
-      workflowDefinitionId: workflowDefinitionId as WorkflowDefinitionId,
-    }),
-  );
+  return parseScopeWithId(raw, "workflowDefinitionId", (workflowDefinitionId) => ({
+    kind: "workflow",
+    workflowDefinitionId: workflowDefinitionId as WorkflowDefinitionId,
+  }));
 }
 
 function parseScopes(raw: unknown): readonly MemoryScope[] | null {
@@ -225,42 +221,60 @@ function parseSettingsRecord(raw: unknown): Record<string, unknown> | null {
   return isRecord(raw) ? raw : null;
 }
 
+interface SettingBounds {
+  readonly lo: number;
+  readonly hi: number;
+  readonly integerOnly?: boolean;
+}
+
+const SETTING_BOUNDS: Record<keyof ConsolidationJobSettings, SettingBounds> = {
+  jaccardThreshold: { lo: 0, hi: 1 },
+  staleConfidenceThreshold: { lo: 0, hi: 1 },
+  maxAgeMs: { lo: 0, hi: Number.MAX_SAFE_INTEGER },
+  maxClustersPerRun: { lo: 0, hi: Number.MAX_SAFE_INTEGER, integerOnly: true },
+};
+
 function resolveSetting(
   raw: Record<string, unknown>,
   key: keyof ConsolidationJobSettings,
   fallback: number,
 ): number | null {
   const value = parseOptionalNumber(raw[key]);
-  return value === null ? null : (value ?? fallback);
+  if (value === null) return null;
+  const n = value ?? fallback;
+  const bounds = SETTING_BOUNDS[key];
+  if (n < bounds.lo || n > bounds.hi) return null;
+  if (bounds.integerOnly === true && !Number.isInteger(n)) return null;
+  return n;
 }
 
-function parseSettings(raw: unknown): ConsolidationJobSettings | null {
+function parseSettings(raw: unknown): ConsolidationJobSettings | RouteResult {
   const record = parseSettingsRecord(raw);
-  if (record === null) return null;
-  const jaccardThreshold = resolveSetting(
-    record,
-    "jaccardThreshold",
-    DEFAULT_JACCARD_THRESHOLD,
-  );
-  const staleConfidenceThreshold = resolveSetting(
-    record,
-    "staleConfidenceThreshold",
-    DEFAULT_STALE_CONFIDENCE_THRESHOLD,
-  );
-  const maxAgeMs = resolveSetting(record, "maxAgeMs", DEFAULT_MAX_AGE_MS);
-  const maxClustersPerRun = resolveSetting(
-    record,
-    "maxClustersPerRun",
-    DEFAULT_MAX_CLUSTERS_PER_RUN,
-  );
-  if (jaccardThreshold === null || staleConfidenceThreshold === null) return null;
-  if (maxAgeMs === null || maxClustersPerRun === null) return null;
-  return {
-    jaccardThreshold,
-    staleConfidenceThreshold,
-    maxAgeMs,
-    maxClustersPerRun,
+  if (record === null) {
+    return badRequest(
+      "settings must be an object containing optional numeric consolidation settings.",
+    );
+  }
+  const keys = Object.keys(SETTING_BOUNDS) as (keyof ConsolidationJobSettings)[];
+  const defaults: ConsolidationJobSettings = {
+    jaccardThreshold: DEFAULT_JACCARD_THRESHOLD,
+    staleConfidenceThreshold: DEFAULT_STALE_CONFIDENCE_THRESHOLD,
+    maxAgeMs: DEFAULT_MAX_AGE_MS,
+    maxClustersPerRun: DEFAULT_MAX_CLUSTERS_PER_RUN,
   };
+  const result: Record<string, number> = {};
+  for (const key of keys) {
+    const value = resolveSetting(record, key, defaults[key]);
+    if (value === null) {
+      const bounds = SETTING_BOUNDS[key];
+      const extra = bounds.integerOnly === true ? ", integer" : "";
+      return badRequest(
+        `settings.${key} must be a finite number in [${String(bounds.lo)}, ${String(bounds.hi)}]${extra}.`,
+      );
+    }
+    result[key] = value;
+  }
+  return result as unknown as ConsolidationJobSettings;
 }
 
 interface CreateJobInput {
@@ -300,11 +314,7 @@ function parseCreateInput(raw: Record<string, unknown>): CreateJobInput | RouteR
   const selection = parseSelection(raw);
   if (isRouteResult(selection)) return selection;
   const settings = parseSettings(raw.settings);
-  if (settings === null) {
-    return badRequest(
-      "settings must be an object containing optional numeric consolidation settings.",
-    );
-  }
+  if (isRouteResult(settings)) return settings;
   return { selection, settings };
 }
 
@@ -408,8 +418,7 @@ function failScheduledJob(
   error: unknown,
 ): void {
   const completedAt = Date.now();
-  const message =
-    error instanceof Error ? error.message : "Consolidation run failed unexpectedly.";
+  const message = error instanceof Error ? error.message : "Consolidation run failed unexpectedly.";
   registry.fail(
     jobId,
     transitionJob(running, "failed", { completedAt, error: message }),
@@ -543,10 +552,7 @@ export async function handleCreateConsolidationJob(
   return createJobResponse(deps, record);
 }
 
-export function handleGetConsolidationJob(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): RouteResult {
+export function handleGetConsolidationJob(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const registry = resolveJobRegistry(deps);
   if (isRouteResult(registry)) return registry;
   const jobId = ctx.params.jobId;
@@ -563,10 +569,7 @@ export function handleGetConsolidationJob(
   return { status: 200, body: { job: redactJob(deps, record) } };
 }
 
-export function handleCancelConsolidationJob(
-  ctx: RouteContext,
-  deps: UiHandlerDeps,
-): RouteResult {
+export function handleCancelConsolidationJob(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const registry = resolveJobRegistry(deps);
   if (isRouteResult(registry)) return registry;
   const jobId = ctx.params.jobId;

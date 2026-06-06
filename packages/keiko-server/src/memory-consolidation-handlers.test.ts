@@ -22,7 +22,11 @@ function makeReq(payload: unknown): IncomingMessage {
   return Readable.from([Buffer.from(json)]) as unknown as IncomingMessage;
 }
 
-function makeCtx(path: string, payload: unknown, params: Record<string, string> = {}): RouteContext {
+function makeCtx(
+  path: string,
+  payload: unknown,
+  params: Record<string, string> = {},
+): RouteContext {
   const socket = new Socket();
   return {
     req: makeReq(payload),
@@ -86,7 +90,7 @@ function brandedMemoryUserId(value: string): MemoryUserId {
 
 function insertAcceptedMemory(
   vault: MemoryVaultStore,
-  options: { id: string; body: string; userId?: string; confidence?: number } ,
+  options: { id: string; body: string; userId?: string; confidence?: number },
 ): MemoryRecord {
   const now = Date.now();
   const record: MemoryRecord = {
@@ -166,11 +170,7 @@ describe("memory consolidation job handlers", () => {
     const createdJob = asJson(createResult).job as { id: string };
     await flushImmediate();
     const getResult = handleGetConsolidationJob(
-      makeCtx(
-        `/api/memory/consolidation/jobs/${createdJob.id}`,
-        {},
-        { jobId: createdJob.id },
-      ),
+      makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
       deps,
     );
     expect(getResult.status).toBe(200);
@@ -182,7 +182,7 @@ describe("memory consolidation job handlers", () => {
     expect(fetched.state).toBe("completed");
     expect(fetched.memoryCount).toBe(2);
     expect(fetched.result?.edgesProposed).toHaveLength(1);
-    expect((fetched.result?.elapsedMs ?? -1)).toBeGreaterThanOrEqual(0);
+    expect(fetched.result?.elapsedMs ?? -1).toBeGreaterThanOrEqual(0);
   });
 
   it("cancels a queued job before execution starts", async () => {
@@ -214,11 +214,7 @@ describe("memory consolidation job handlers", () => {
     expect(canceled.state).toBe("canceled");
     await flushImmediate();
     const fetched = handleGetConsolidationJob(
-      makeCtx(
-        `/api/memory/consolidation/jobs/${createdJob.id}`,
-        {},
-        { jobId: createdJob.id },
-      ),
+      makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
       deps,
     );
     expect((asJson(fetched).job as { state: string }).state).toBe("canceled");
@@ -235,5 +231,92 @@ describe("memory consolidation job handlers", () => {
       deps,
     );
     expect(result.status).toBe(400);
+  });
+
+  describe("settings range validation", () => {
+    async function postSettings(
+      vault: MemoryVaultStore,
+      settings: Record<string, unknown>,
+    ): Promise<RouteResult> {
+      return handleCreateConsolidationJob(
+        makeCtx("/api/memory/consolidation/jobs", {
+          scopes: [{ kind: "global" }],
+          settings,
+        }),
+        makeDeps({ memoryVault: vault }),
+      );
+    }
+
+    it("rejects jaccardThreshold above 1 with 400 naming the field", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { jaccardThreshold: 1.1 });
+      expect(result.status).toBe(400);
+      const body = asJson(result);
+      expect((body.error as { message: string }).message).toContain("jaccardThreshold");
+    });
+
+    it("rejects jaccardThreshold below 0 with 400 naming the field", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { jaccardThreshold: -0.1 });
+      expect(result.status).toBe(400);
+      const body = asJson(result);
+      expect((body.error as { message: string }).message).toContain("jaccardThreshold");
+    });
+
+    it("rejects staleConfidenceThreshold above 1 with 400 naming the field", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { staleConfidenceThreshold: 2 });
+      expect(result.status).toBe(400);
+      const body = asJson(result);
+      expect((body.error as { message: string }).message).toContain("staleConfidenceThreshold");
+    });
+
+    it("rejects negative maxAgeMs with 400 naming the field", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { maxAgeMs: -1 });
+      expect(result.status).toBe(400);
+      const body = asJson(result);
+      expect((body.error as { message: string }).message).toContain("maxAgeMs");
+    });
+
+    it("rejects negative maxClustersPerRun with 400 naming the field", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { maxClustersPerRun: -5 });
+      expect(result.status).toBe(400);
+      const body = asJson(result);
+      expect((body.error as { message: string }).message).toContain("maxClustersPerRun");
+    });
+
+    it("rejects non-integer maxClustersPerRun with 400 naming the field", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { maxClustersPerRun: 1.5 });
+      expect(result.status).toBe(400);
+      const body = asJson(result);
+      expect((body.error as { message: string }).message).toContain("maxClustersPerRun");
+    });
+
+    it("accepts boundary value jaccardThreshold=0", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { jaccardThreshold: 0 });
+      expect(result.status).toBe(202);
+    });
+
+    it("accepts boundary value jaccardThreshold=1", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { jaccardThreshold: 1 });
+      expect(result.status).toBe(202);
+    });
+
+    it("accepts boundary value maxAgeMs=0", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { maxAgeMs: 0 });
+      expect(result.status).toBe(202);
+    });
+
+    it("accepts boundary value maxClustersPerRun=0 (skipped job)", async () => {
+      const vault = makeVault();
+      const result = await postSettings(vault, { maxClustersPerRun: 0 });
+      expect(result.status).toBe(202);
+    });
   });
 });
