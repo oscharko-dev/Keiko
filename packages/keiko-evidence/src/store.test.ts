@@ -18,6 +18,11 @@ import {
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { EvidenceReadError, EvidenceWriteError, InvalidRunIdError } from "./errors.js";
 
+// A runId whose filename (<runId>.json) would exceed the 255-byte POSIX limit.
+// 251 chars + ".json" (5) = 256 > 255. The runId itself passes the assertValidRunId charset check
+// (all "a"s, length 251 <= 256) but the resulting filename is too long for the filesystem.
+const OVER_LONG_RUN_ID = "a".repeat(251);
+
 describe("resolveEvidenceDir — precedence (C4)", () => {
   it("prefers the explicit value over env and default", () => {
     expect(resolveEvidenceDir("/explicit", { KEIKO_EVIDENCE_DIR: "/env" })).toBe("/explicit");
@@ -107,6 +112,23 @@ describe("createNodeEvidenceStore", () => {
     const store = createNodeEvidenceStore(freshDir());
     expect(store.get("absent")).toBeUndefined();
     expect(() => store.get("../escape")).toThrow(InvalidRunIdError);
+  });
+
+  it("rejects a runId whose filename would exceed the POSIX 255-byte limit (CWE-209 regression)", () => {
+    // OVER_LONG_RUN_ID (251 chars) passes assertValidRunId charset/length checks but
+    // <runId>.json (256 bytes) exceeds the fs limit → must throw InvalidRunIdError
+    // with NO absolute path in the message, before any filesystem call occurs.
+    const store = createNodeEvidenceStore(freshDir());
+    let thrown: unknown;
+    try {
+      store.get(OVER_LONG_RUN_ID);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(InvalidRunIdError);
+    const message = (thrown as InvalidRunIdError).message;
+    // The message must not contain any path separator — a leaked absolute path would contain "/" or "\"
+    expect(message).not.toMatch(/[/\\]/);
   });
 
   it("throws EvidenceWriteError when the base dir cannot be created under a file", () => {
