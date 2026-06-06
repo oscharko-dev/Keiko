@@ -1,4 +1,4 @@
-# Keiko
+# Keiko — Ex experientia disco
 
 Keiko is a governed agentic workspace for knowledge work that learns from experience.
 
