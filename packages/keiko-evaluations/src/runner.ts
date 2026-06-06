@@ -312,7 +312,7 @@ export async function runEvaluationSuite(
     dimensions,
     surfaceParity,
     fixtureResults,
-    summary: summarizeScorecard(fixtureResults, dimensions, surfaceParity),
+    summary: summarizeScorecard(fixtureResults, dimensions, surfaceParity, options.mode),
   };
 }
 
