@@ -1,16 +1,18 @@
-// UI packaging step (ADR-0011 D6). Runs after `npm run build` (tsc) so `dist/ui/index.js` exists.
-// It invokes the workspace build of @oscharko-dev/keiko-ui (issue #167 — single root lockfile, npm
-// hoist), produces the static export, copies it into `dist/ui/static/`, and writes
-// `dist/ui/csp-hashes.json` — the inline-script SHA-256 hashes the BFF folds into `script-src`.
-// `extractInlineScriptHashes` is re-exported from the keiko-server package barrel via the legacy
-// `src/ui/index.ts` shim, so this script reaches it through the compiled shim at
-// `dist/ui/index.js` rather than the now-extracted package internals (issue #166). Pure Node ESM.
+// UI packaging step (ADR-0011 D6, ADR-0021 bundled-product contract). Invokes the workspace build
+// of @oscharko-dev/keiko-ui, produces the static export, copies it into `dist/ui/static/`, and
+// writes `dist/ui/csp-hashes.json` — the inline-script SHA-256 hashes the BFF folds into
+// `script-src`. The static-export tree IS the bundled UI runtime artifact carried by the packed
+// root product; the keiko-ui workspace package itself is intentionally NOT listed in
+// bundleDependencies because consumers never resolve `@oscharko-dev/keiko-ui` at runtime.
+//
+// `extractInlineScriptHashes` is imported through the @oscharko-dev/keiko-server package barrel
+// (the BFF that the static export composes with at runtime). Pure Node ESM.
 
 import { spawnSync } from "node:child_process";
 import { cp, mkdir, readdir, readFile, writeFile, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractInlineScriptHashes } from "../dist/ui/index.js";
+import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const uiDir = join(repoRoot, "packages", "keiko-ui");
