@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted
+Superseded (2026-06-06). Retained as the historical Epic #270 migration record.
+Use ADR-0025, `docs/PUBLIC_API_SURFACE.md`, `docs/security-and-audit-boundaries.md`,
+and current package manifests for active repository guidance.
 
 ## Date
 
@@ -132,7 +134,7 @@ or event bus may be introduced.
 
 Quality Intelligence runtime state (run ID, progress, resource counters, cancellation, dry-run
 gates) is managed by the Keiko local runtime state contract established in issue #175
-(`docs/migration/quality-intelligence-keiko-baseline.md` §5). New QI state categories must be
+(`docs/historical/quality-intelligence-keiko-baseline.md` §5). New QI state categories must be
 registered in the same contract. State MUST NOT live in a separate `.test-intelligence/`
 directory or a new standalone SQLite database outside the approved stores.
 
@@ -607,6 +609,6 @@ for this documentation PR.
 - ADR-0022: Connected Context Privacy Contract (privacy pattern QI evidence must follow)
 - Issue #270: Epic — Integrate Test Intelligence as native Keiko Quality Intelligence
 - Issue #271: Define Keiko-native Quality Intelligence migration architecture (this issue)
-- Issue #362 / `docs/migration/quality-intelligence-keiko-baseline.md`: Keiko reuse baseline
-- Issue #363 / `docs/migration/quality-intelligence-test-intelligence-inventory.md`: TI behavior inventory
+- Issue #362 / `docs/historical/quality-intelligence-keiko-baseline.md`: Keiko reuse baseline
+- Issue #363 / `docs/historical/quality-intelligence-test-intelligence-inventory.md`: TI behavior inventory
 - `.dependency-cruiser.cjs`: architecture gate encoding ADR-0019 rules and the new `direction-10a` rule (owned by #287)

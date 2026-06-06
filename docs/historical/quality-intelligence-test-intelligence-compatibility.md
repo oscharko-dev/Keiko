@@ -153,8 +153,8 @@ The following are explicitly **NOT** committed to in this issue or the Quality I
 - **Issue #285**: Parity matrix and verification. Implements the parity fixtures and comparison gates.
 - **Issue #287**: Package surface and supply-chain integrity gate. Enforces rule `direction-10a` to prevent TI package imports.
 - **Issue #286** (this issue): Standalone compatibility decision. Defers explicit retirement decision to a later product governance issue.
-- **Document**: `docs/migration/quality-intelligence-test-intelligence-inventory.md`. Catalogs TI capabilities, defects, and reuse targets.
-- **Document**: `docs/migration/quality-intelligence-keiko-baseline.md`. Records the 17 Keiko packages available for Quality Intelligence reuse.
+- **Document**: `docs/historical/quality-intelligence-test-intelligence-inventory.md`. Catalogs TI capabilities, defects, and reuse targets.
+- **Document**: `docs/historical/quality-intelligence-keiko-baseline.md`. Records the 17 Keiko packages available for Quality Intelligence reuse.
 
 ---
 
@@ -190,7 +190,7 @@ npm run lint
 npm run typecheck
 
 # Verify format (docs file only)
-npx prettier --check docs/migration/quality-intelligence-test-intelligence-compatibility.md
+npx prettier --check docs/historical/quality-intelligence-test-intelligence-compatibility.md
 ```
 
 ---
