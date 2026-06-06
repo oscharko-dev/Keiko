@@ -1,13 +1,16 @@
 // Surface-parity tests (ADR-0012 D7, AC#3). Verifies that the four surfaces for each workflow —
 // descriptor, CLI flags, SDK exports, and the UI RunRequest shape — present consistent contracts.
 // allPassed must be true on the real codebase (structural regression guard). No network or model.
+//
+// Dynamic imports against the legacy src/sdk and src/ui paths avoid pulling those trees into the
+// keiko-evaluations TypeScript program (the same load-time-cycle break the production code uses).
 
 import { describe, expect, it } from "vitest";
-import { checkSurfaceParity } from "../../src/evaluations/surface-parity.js";
+import { checkSurfaceParity } from "./surface-parity.js";
 import {
   UNIT_TEST_WORKFLOW_DESCRIPTOR,
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
-} from "../../src/workflows/index.js";
+} from "@oscharko-dev/keiko-workflows";
 import { runGenTestsCli, runInvestigateCli, type CliIo } from "@oscharko-dev/keiko-cli";
 
 // ─── Full checkSurfaceParity result on the real codebase ──────────────────────
@@ -143,23 +146,23 @@ describe("investigate CLI --help", () => {
 
 describe("SDK exports", () => {
   it("exports generateUnitTests as a function", async () => {
-    const sdk = (await import("../../src/sdk/index.js")) as Record<string, unknown>;
+    const sdk = (await import("../../../src/sdk/index.js")) as Record<string, unknown>;
     expect(typeof sdk.generateUnitTests).toBe("function");
   });
 
   it("exports investigateBug as a function", async () => {
-    const sdk = (await import("../../src/sdk/index.js")) as Record<string, unknown>;
+    const sdk = (await import("../../../src/sdk/index.js")) as Record<string, unknown>;
     expect(typeof sdk.investigateBug).toBe("function");
   });
 
   it("exports UNIT_TEST_WORKFLOW_DESCRIPTOR as an object", async () => {
-    const sdk = (await import("../../src/sdk/index.js")) as Record<string, unknown>;
+    const sdk = (await import("../../../src/sdk/index.js")) as Record<string, unknown>;
     expect(typeof sdk.UNIT_TEST_WORKFLOW_DESCRIPTOR).toBe("object");
     expect(sdk.UNIT_TEST_WORKFLOW_DESCRIPTOR).not.toBeNull();
   });
 
   it("exports BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR as an object", async () => {
-    const sdk = (await import("../../src/sdk/index.js")) as Record<string, unknown>;
+    const sdk = (await import("../../../src/sdk/index.js")) as Record<string, unknown>;
     expect(typeof sdk.BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR).toBe("object");
     expect(sdk.BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR).not.toBeNull();
   });
@@ -169,7 +172,7 @@ describe("SDK exports", () => {
 
 describe("RunRequest shape (UI BFF contract)", () => {
   it("parseRunRequest accepts a valid unit-tests request and returns the required fields", async () => {
-    const { parseRunRequest } = await import("../../src/ui/index.js");
+    const { parseRunRequest } = await import("../../../src/ui/index.js");
     const result = parseRunRequest(
       JSON.stringify({
         workflowId: "unit-test-generation",
@@ -190,7 +193,7 @@ describe("RunRequest shape (UI BFF contract)", () => {
   });
 
   it("parseRunRequest accepts a valid bug-investigation request", async () => {
-    const { parseRunRequest } = await import("../../src/ui/index.js");
+    const { parseRunRequest } = await import("../../../src/ui/index.js");
     const result = parseRunRequest(
       JSON.stringify({
         workflowId: "bug-investigation",
@@ -206,7 +209,7 @@ describe("RunRequest shape (UI BFF contract)", () => {
   });
 
   it("parseRunRequest carries limits for both workflow request shapes", async () => {
-    const { parseRunRequest } = await import("../../src/ui/index.js");
+    const { parseRunRequest } = await import("../../../src/ui/index.js");
     for (const body of [
       {
         workflowId: "unit-test-generation",

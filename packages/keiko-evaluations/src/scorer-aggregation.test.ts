@@ -3,13 +3,13 @@
 // pilotReadyIndicator thresholds. Pure unit tests — no IO.
 
 import { describe, expect, it } from "vitest";
-import { aggregateScorecard, summarizeScorecard } from "../../src/evaluations/scorer.js";
+import { aggregateScorecard, summarizeScorecard } from "./scorer.js";
 import type {
   FixtureRunResult,
   SurfaceParityResult,
   EvaluationDimension,
   DimensionResult,
-} from "../../src/evaluations/index.js";
+} from "./index.js";
 import { must } from "./_support.js";
 
 // ─── Test helpers ───────────────────────────────────────────────────────────────

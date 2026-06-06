@@ -150,6 +150,16 @@ packages/keiko-ui/next-env.d.ts
 # `tsc --build` runs in any workspace package; never commit it.
 *.tsbuildinfo
 
+# Emitted JS/d.ts/d.ts.map under root src/ and packages/*/src/ — these directories hold
+# TypeScript sources only; build outputs go to dist/. Cross-package tsc compositions can
+# accidentally emit per-file declaration outputs next to the .ts source; never commit them.
+src/**/*.js
+src/**/*.d.ts
+src/**/*.d.ts.map
+packages/*/src/**/*.js
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.d.ts.map
+
 # Customer/internal material. Contains photos, extracted model inventories, API endpoints,
 # local customer credentials, and derived notes. Never commit this folder.
 /only-for-internal-use/

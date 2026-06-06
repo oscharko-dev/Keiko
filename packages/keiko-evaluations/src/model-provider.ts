@@ -5,12 +5,12 @@
 // active. Live-mode config resolution is fail-closed: an invalid/missing config throws ConfigInvalidError
 // (a GatewayError subclass) which the CLI surfaces as exit 1 — it never silently falls back to offline.
 
-import { Gateway } from "../gateway/gateway.js";
-import { loadConfigFromFile, type EnvSource } from "../gateway/config.js";
-import { ConfigInvalidError } from "../gateway/errors.js";
-import { GatewayModelPort } from "../harness/adapters.js";
-import type { ModelPort } from "../harness/ports.js";
-import type { NormalizedResponse } from "../gateway/types.js";
+import { Gateway } from "@oscharko-dev/keiko-model-gateway";
+import { loadConfigFromFile, type EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { ConfigInvalidError } from "@oscharko-dev/keiko-model-gateway";
+import { GatewayModelPort } from "@oscharko-dev/keiko-harness";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import { createScriptedModelPort } from "./scripted-model.js";
 import type { EvaluationMode } from "./types.js";
 

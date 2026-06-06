@@ -4,16 +4,16 @@
 // apply-mode → test-pass-rate + verification-completeness scored, temp-dir cleanup, scorecard shape.
 
 import { describe, expect, it } from "vitest";
-import { runEvaluationSuite } from "../../src/evaluations/runner.js";
+import { runEvaluationSuite } from "./runner.js";
 import {
   ALL_FIXTURES,
   createScriptedModelPort,
   fixtureByName,
   fixturesForSuite,
   EVAL_SCORECARD_SCHEMA_VERSION,
-} from "../../src/evaluations/index.js";
-import { createInMemoryEvidenceStore } from "../../src/audit/index.js";
-import type { EvalRunOptions, EvalRunnerDeps } from "../../src/evaluations/runner.js";
+} from "./index.js";
+import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type { EvalRunOptions, EvalRunnerDeps } from "./runner.js";
 import { must } from "./_support.js";
 
 // Fixed clock and id source so test output is deterministic

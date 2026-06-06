@@ -11,9 +11,9 @@ import {
   fixturesForSuite,
   isSuiteName,
   EVALUATION_DIMENSIONS,
-} from "../../src/evaluations/index.js";
-import { materializeFixture, recordingWriter } from "../../src/evaluations/runner-support.js";
-import type { EvaluationFixture } from "../../src/evaluations/types.js";
+} from "./index.js";
+import { materializeFixture, recordingWriter } from "./runner-support.js";
+import type { EvaluationFixture } from "./types.js";
 import { must } from "./_support.js";
 
 // ─── Shape invariants for every declared fixture ────────────────────────────────

@@ -4,7 +4,7 @@
 // pure value modules that compile and ship (C1) without touching tsc on the intentionally buggy code
 // embedded as STRINGS in workspaceFiles.
 
-import type { NormalizedResponse } from "../../gateway/types.js";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 // A NormalizedResponse carrying the given content. Token/latency/cost values are fixed so the folded
 // usage totals (and thus the evidence manifest) are deterministic across runs.

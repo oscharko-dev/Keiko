@@ -3,7 +3,7 @@
 // section present. This re-reads the persisted JSON (the store's serialized, redacted form) and
 // asserts the structural invariants without trusting the in-memory builder. Pure string/JSON parsing.
 
-import { EVIDENCE_SCHEMA_VERSION } from "../audit/index.js";
+import { EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-evidence";
 
 const REQUIRED_TOP_LEVEL: readonly string[] = [
   "evidenceSchemaVersion",

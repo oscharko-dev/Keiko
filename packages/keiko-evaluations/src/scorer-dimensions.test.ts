@@ -4,14 +4,14 @@
 // and scoreFixture result shape. No IO — scoreFixture is a pure function.
 
 import { describe, expect, it } from "vitest";
-import { scoreFixture } from "../../src/evaluations/scorer.js";
+import { scoreFixture } from "./scorer.js";
 import type {
   EvaluationFixture,
   EvaluationDimension,
   DimensionOutcome,
   ScoringInput,
-} from "../../src/evaluations/index.js";
-import type { NormalizedResponse } from "../../src/gateway/types.js";
+} from "./index.js";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 // ─── Test helpers ───────────────────────────────────────────────────────────────
 

@@ -3,17 +3,17 @@
 // No IO — renderEvalSummary is a pure function.
 
 import { describe, expect, it } from "vitest";
-import { renderEvalSummary } from "../../src/evaluations/render.js";
+import { renderEvalSummary } from "./render.js";
 import {
   EVALUATION_DIMENSIONS,
   EVAL_SCORECARD_SCHEMA_VERSION,
-} from "../../src/evaluations/index.js";
+} from "./index.js";
 import type {
   DimensionResult,
   EvalScorecard,
   FixtureRunResult,
   ScorecardEntry,
-} from "../../src/evaluations/types.js";
+} from "./types.js";
 
 // ─── Scorecard builders ────────────────────────────────────────────────────────
 

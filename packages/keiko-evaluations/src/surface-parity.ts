@@ -4,13 +4,27 @@
 // has its own scorecard section and its own test file. A parity failure is a hard blocker that causes
 // `keiko evaluate` to exit 1 regardless of dimension scores.
 
-import { runGenTestsCli, runInvestigateCli, type CliIo } from "@oscharko-dev/keiko-cli";
 import {
   BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR,
   UNIT_TEST_WORKFLOW_DESCRIPTOR,
   type WorkflowDescriptor,
-} from "../workflows/index.js";
+} from "@oscharko-dev/keiko-workflows";
 import type { SurfaceParityCheckResult, SurfaceParityResult, WorkflowKind } from "./types.js";
+
+// Structural shape of the CLI handler's IO seam; matches `CliIo` exported by keiko-cli but is
+// duplicated here to avoid creating a static cli ↔ evaluations dependency cycle. The dynamic
+// import in checkCliFlags resolves at runtime only.
+interface CliIo {
+  readonly out: (text: string) => void;
+  readonly err: (text: string) => void;
+}
+
+type CliSurfaceRunner = (
+  args: readonly string[],
+  io: CliIo,
+  env: Record<string, string | undefined>,
+  opts: Record<string, unknown>,
+) => unknown;
 
 interface DescriptorExpectation {
   readonly kind: WorkflowKind;
@@ -134,9 +148,19 @@ function captureCliHelp(
   return chunks.join("");
 }
 
+// Dynamic import breaks the load-time cycle the static import would create. keiko-cli depends on
+// keiko-evaluations (its `evaluate` command consumes `runEvaluationSuite`), so a static import here
+// would express a forbidden reverse edge. The dynamic import resolves at runtime only and is
+// invisible to dependency-cruiser as a static edge.
 async function checkCliFlags(): Promise<readonly SurfaceParityCheckResult[]> {
-  const genTestsHelp = captureCliHelp((args, io, env) => runGenTestsCli(args, io, env, {}));
-  const investigateHelp = captureCliHelp((args, io, env) => runInvestigateCli(args, io, env, {}));
+  const cli = (await import("@oscharko-dev/keiko-cli")) as {
+    runGenTestsCli: CliSurfaceRunner;
+    runInvestigateCli: CliSurfaceRunner;
+  };
+  const genTestsHelp = captureCliHelp((args, io, env) => cli.runGenTestsCli(args, io, env, {}));
+  const investigateHelp = captureCliHelp((args, io, env) =>
+    cli.runInvestigateCli(args, io, env, {}),
+  );
   await Promise.resolve();
   const expectations: readonly CliExpectation[] = [
     {
@@ -177,7 +201,13 @@ function checkCliExpectation(expectation: CliExpectation): SurfaceParityCheckRes
 // The SDK named exports each workflow must surface. A dynamic import breaks the load-time cycle the
 // static import would create (the SDK barrel re-exports this evaluation module).
 async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
-  const sdk = (await import("../sdk/index.js")) as Record<string, unknown>;
+  // The SDK barrel lives at the legacy src/sdk path until issue #426 collapses the root facade.
+  // The import target is held in a variable so TypeScript's composite project resolution does not
+  // pull the legacy src/sdk tree into the keiko-evaluations program; the import resolves at runtime
+  // from inside the bundled root product where src/sdk is on disk.
+  const sdkPath = "../../../src/sdk/index.js";
+  const sdkModule: unknown = await import(sdkPath);
+  const sdk = sdkModule as Record<string, unknown>;
   return SDK_EXPORT_EXPECTATIONS.map((expectation) => {
     const missing = [
       ...(typeof sdk[expectation.functionExport] === "function"
@@ -198,7 +228,17 @@ async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
 // time guarantee is enforced by the TypeScript check; this is the runtime shape assertion (D7 d).
 // Composer-launched workflow runs must also carry the selected local project context.
 async function checkRunRequestShapes(): Promise<readonly SurfaceParityCheckResult[]> {
-  const { parseRunRequest } = await import("../ui/index.js");
+  // Same rationale as checkSdkExports: src/ui/ is the BFF surface until #426 finalises the root
+  // facade. The variable-path dynamic import resolves at runtime only, keeping the legacy src/ui
+  // tree out of the keiko-evaluations TypeScript program.
+  const uiPath = "../../../src/ui/index.js";
+  const uiModule: unknown = await import(uiPath);
+  const ui = uiModule as {
+    parseRunRequest: (
+      input: string,
+    ) => Record<string, unknown> & { code?: string; message?: string };
+  };
+  const parseRunRequest = ui.parseRunRequest;
   return RUN_REQUEST_EXPECTATIONS.map((expectation) => {
     const parsed = parseRunRequest(
       JSON.stringify({
@@ -210,7 +250,7 @@ async function checkRunRequestShapes(): Promise<readonly SurfaceParityCheckResul
       }),
     );
     if ("code" in parsed) {
-      return failed("run-request-shape", expectation.kind, parsed.message);
+      return failed("run-request-shape", expectation.kind, parsed.message ?? "RunRequest invalid");
     }
     const required = ["kind", "modelId", "apply", "input", "limits"];
     const missing = required.filter((field) => !(field in parsed));

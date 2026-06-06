@@ -3,8 +3,8 @@
 // and signal param accepted. All pure unit tests — no IO, no network.
 
 import { describe, expect, it } from "vitest";
-import { createScriptedModelPort } from "../../src/evaluations/scripted-model.js";
-import type { NormalizedResponse } from "../../src/gateway/types.js";
+import { createScriptedModelPort } from "./scripted-model.js";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 function makeResponse(content: string, modelId = "m"): NormalizedResponse {
   return {

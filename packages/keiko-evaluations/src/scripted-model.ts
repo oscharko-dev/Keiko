@@ -5,8 +5,8 @@
 // code is touched. The port replays `script` in order; once calls exceed the script length the last
 // entry repeats; an Error entry rejects with that error; an empty script rejects descriptively.
 
-import type { ModelPort } from "../harness/ports.js";
-import type { NormalizedResponse } from "../gateway/types.js";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
 export interface ScriptedModelPort extends ModelPort {
   // Number of calls made so far.
