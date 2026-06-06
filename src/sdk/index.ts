@@ -12,7 +12,7 @@ export {
   type RunResult,
   type TaskInput,
   type TaskType,
-} from "../harness/index.js";
+} from "@oscharko-dev/keiko-harness";
 
 export { runAgent, type SdkAgentConfig, type SdkEvidenceOptions } from "./run-agent.js";
 
@@ -28,7 +28,7 @@ export {
   type ContextPackSummary,
   type WorkspaceInfo,
   type WorkspaceSummary,
-} from "../workspace/index.js";
+} from "@oscharko-dev/keiko-workspace";
 
 // Verification orchestrator surface (ADR-0007). Verification reuses the #6 command boundary
 // unchanged; these are the plan/run/summary entry points and their JSON-serializable shapes
@@ -81,7 +81,7 @@ export {
   type WorkflowInputSpec,
   type WorkflowLimits,
   type WorkflowStatus,
-} from "../workflows/index.js";
+} from "@oscharko-dev/keiko-workflows";
 
 // Bug-investigation workflow (ADR-0009). The second programmatic workflow surface: investigateBug
 // is the single entry, BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR lets a UI (#13) render it without the
@@ -109,7 +109,7 @@ export {
   type FailureFrame,
   type Hypothesis,
   type VerifiedFindings,
-} from "../workflows/index.js";
+} from "@oscharko-dev/keiko-workflows";
 
 // Audit ledger / evidence manifests (ADR-0010). The first persistent-artifact surface: persistEvidence
 // builds → redacts-by-construction → writes a redacted, versioned EvidenceManifest, and listEvidence /
@@ -148,12 +148,12 @@ export {
   type EvidenceUsageTotals,
   type EvidenceVerificationResult,
   type RetentionPolicy,
-} from "../audit/index.js";
+} from "@oscharko-dev/keiko-evidence";
 
 // Cost-class resolver (relocated to the model gateway in issue #163 so the evidence package stays
 // leaf-clean against ADR-0019 rule 3d). Re-exported on the SDK surface here to preserve the
 // pre-#163 public API for downstream callers that imported `resolveCostClass` from "keiko".
-export { resolveCostClass } from "../gateway/index.js";
+export { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 
 // Wave 1 evaluation harness (ADR-0012 D11). The deterministic offline runner, the product-code
 // scripted-model replay port, and the versioned scorecard schema, exported via an explicit named

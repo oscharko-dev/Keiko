@@ -7,17 +7,17 @@ export {
   type SdkAgentConfig,
   type SdkEvidenceOptions,
 } from "./sdk/index.js";
-export * from "./harness/index.js";
-export * from "./gateway/index.js";
-export * from "./workspace/index.js";
-export * from "./verification/index.js";
+export * from "@oscharko-dev/keiko-harness";
+export * from "@oscharko-dev/keiko-model-gateway";
+export * from "@oscharko-dev/keiko-workspace";
+export * from "@oscharko-dev/keiko-verification";
 // Both the workspace and verification barrels expose a `summarizeForAudit`. An explicit re-export
 // takes precedence over the two star exports and resolves the ambiguity at the package root: the
 // canonical root `summarizeForAudit` is the workspace one (established by ADR-0005), and the
 // verification audit projection is additionally surfaced under an unambiguous alias. Inside
 // ./verification/index.js the function keeps its layer-local name `summarizeForAudit` (ADR-0007).
-export { summarizeForAudit } from "./workspace/index.js";
-export { summarizeForAudit as summarizeVerificationForAudit } from "./verification/index.js";
+export { summarizeForAudit } from "@oscharko-dev/keiko-workspace";
+export { summarizeForAudit as summarizeVerificationForAudit } from "@oscharko-dev/keiko-verification";
 
 // Reviewable developer-assist workflows (ADR-0008). Exported explicitly rather than via `export *`
 // because the workflow event family reuses the harness event-type NAMES (ModelCallStartedEvent,
@@ -44,7 +44,7 @@ export {
   type WorkflowInputSpec,
   type WorkflowLimits,
   type WorkflowStatus,
-} from "./workflows/index.js";
+} from "@oscharko-dev/keiko-workflows";
 
 // Bug-investigation workflow (ADR-0009). Exported explicitly (not via `export *`) for the same
 // reason as the unit-test workflow: the event family reuses harness event-type NAMES by structural
@@ -72,7 +72,7 @@ export {
   type FailureFrame,
   type Hypothesis,
   type VerifiedFindings,
-} from "./workflows/index.js";
+} from "@oscharko-dev/keiko-workflows";
 
 // Audit ledger / evidence manifests (ADR-0010). Exported explicitly (not via `export *`) to keep the
 // public surface auditable, matching the workflow precedent above. None of these names collides with
@@ -110,15 +110,15 @@ export {
   type EvidenceUsageTotals,
   type EvidenceVerificationResult,
   type RetentionPolicy,
-} from "./audit/index.js";
+} from "@oscharko-dev/keiko-evidence";
 
 // Cost-class resolver (relocated to the model gateway in issue #163 so the evidence package stays
 // leaf-clean against ADR-0019 rule 3d). Re-exported on the root surface here to preserve the
 // pre-#163 public API for downstream callers that imported `resolveCostClass` from "keiko".
-// The `export * from "./gateway/index.js"` at the top of this file already re-exports it via the
+// The `export * from "@oscharko-dev/keiko-model-gateway"` at the top of this file already re-exports it via the
 // gateway shim; the explicit line below makes the surface guarantee auditable and survives a
 // future barrel refactor.
-export { resolveCostClass } from "./gateway/index.js";
+export { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 
 // Wave 1 evaluation harness (ADR-0012 D11). Exported explicitly (not via `export *`) to keep the
 // public surface auditable, matching the workflow/audit precedent above. None of these names
@@ -140,4 +140,4 @@ export {
   type FixtureRunResult,
   type FixtureOracle,
   type WorkflowKind,
-} from "./evaluations/index.js";
+} from "@oscharko-dev/keiko-evaluations";

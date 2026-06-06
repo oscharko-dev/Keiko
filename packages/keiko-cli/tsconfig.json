@@ -11,16 +11,6 @@
       "@oscharko-dev/keiko-cli": ["./src/index.ts"]
     }
   },
-  "include": [
-    "src",
-    "../../src/workspace/**/*.ts",
-    "../../src/gateway/**/*.ts",
-    "../../src/tools/**/*.ts",
-    "../../src/harness/**/*.ts",
-    "../../src/workflows/**/*.ts",
-    "../../src/audit/**/*.ts",
-    "../../src/sdk/**/*.ts",
-    "../../src/ui/**/*.ts"
-  ],
+  "include": ["src", "../../src/sdk/**/*.ts"],
   "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_support.ts"]
 }

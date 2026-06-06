@@ -8,13 +8,6 @@
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "include": [
-    "src",
-    "../../src/workspace/**/*.ts",
-    "../../src/gateway/**/*.ts",
-    "../../src/tools/**/*.ts",
-    "../../src/harness/**/*.ts",
-    "../../src/audit/**/*.ts"
-  ],
+  "include": ["src"],
   "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_support.ts"]
 }

@@ -1,15 +1,15 @@
 // SDK-level runAgent wrapper. The harness createSession remains the deterministic core; this wrapper
 // adds the #10 SDK contract that completed SDK runs persist a redacted EvidenceManifest by default.
 
-import { persistEvidence } from "../audit/persist.js";
+import { persistEvidence } from "@oscharko-dev/keiko-evidence";
 import type {
   AuditRedactionConfig,
   BuildOptions,
   EvidenceBuildInput,
   EvidenceDeps,
   RetentionPolicy,
-} from "../audit/types.js";
-import type { EvidenceStore } from "../audit/store.js";
+} from "@oscharko-dev/keiko-evidence";
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   createSession,
   DEFAULT_LIMITS,
@@ -21,8 +21,8 @@ import {
   type RunManifest,
   type RunResult,
   type TaskInput,
-} from "../harness/index.js";
-import { resolveCostClass, type EnvSource } from "../gateway/index.js";
+} from "@oscharko-dev/keiko-harness";
+import { resolveCostClass, type EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 export interface SdkEvidenceOptions {
   // Defaults true. Set false for callers that need the legacy no-artifact session behavior.

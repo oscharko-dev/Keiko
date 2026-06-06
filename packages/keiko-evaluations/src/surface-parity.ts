@@ -205,7 +205,7 @@ async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
   // The import target is held in a variable so TypeScript's composite project resolution does not
   // pull the legacy src/sdk tree into the keiko-evaluations program; the import resolves at runtime
   // from inside the bundled root product where src/sdk is on disk.
-  const sdkPath = "../../../src/sdk/index.js";
+  const sdkPath = "../../../src/index.js";
   const sdkModule: unknown = await import(sdkPath);
   const sdk = sdkModule as Record<string, unknown>;
   return SDK_EXPORT_EXPECTATIONS.map((expectation) => {
@@ -231,7 +231,7 @@ async function checkRunRequestShapes(): Promise<readonly SurfaceParityCheckResul
   // Same rationale as checkSdkExports: src/ui/ is the BFF surface until #426 finalises the root
   // facade. The variable-path dynamic import resolves at runtime only, keeping the legacy src/ui
   // tree out of the keiko-evaluations TypeScript program.
-  const uiPath = "../../../src/ui/index.js";
+  const uiPath = "@oscharko-dev/keiko-server";
   const uiModule: unknown = await import(uiPath);
   const ui = uiModule as {
     parseRunRequest: (
