@@ -4,12 +4,9 @@
     "composite": true,
     "declaration": true,
     "declarationMap": true,
-    "rootDir": "../..",
+    "rootDir": "src",
     "outDir": "dist",
-    "tsBuildInfoFile": "dist/.tsbuildinfo",
-    "paths": {
-      "@oscharko-dev/keiko-cli": ["./src/index.ts"]
-    }
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src"],
   "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_support.ts"]

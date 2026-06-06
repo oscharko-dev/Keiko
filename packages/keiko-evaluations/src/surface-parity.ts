@@ -11,20 +11,35 @@ import {
 } from "@oscharko-dev/keiko-workflows";
 import type { SurfaceParityCheckResult, SurfaceParityResult, WorkflowKind } from "./types.js";
 
-// Structural shape of the CLI handler's IO seam; matches `CliIo` exported by keiko-cli but is
-// duplicated here to avoid creating a static cli ↔ evaluations dependency cycle. The dynamic
-// import in checkCliFlags resolves at runtime only.
-interface CliIo {
+// Structural shape of the CLI handler's IO seam; duplicated locally so the evaluations package can
+// validate higher-layer surfaces via injected adapters instead of depending on keiko-cli directly.
+export interface SurfaceParityCliIo {
   readonly out: (text: string) => void;
   readonly err: (text: string) => void;
 }
 
-type CliSurfaceRunner = (
+export type SurfaceParityCliRunner = (
   args: readonly string[],
-  io: CliIo,
+  io: SurfaceParityCliIo,
   env: Record<string, string | undefined>,
   opts: Record<string, unknown>,
 ) => unknown;
+
+interface SurfaceParityParsedRunRequest {
+  readonly kind?: unknown;
+  readonly modelId?: unknown;
+  readonly apply?: unknown;
+  readonly input?: unknown;
+  readonly limits?: unknown;
+  readonly code?: unknown;
+  readonly message?: unknown;
+}
+
+export interface SurfaceParityDeps {
+  readonly runGenTestsCli: SurfaceParityCliRunner;
+  readonly runInvestigateCli: SurfaceParityCliRunner;
+  readonly parseRunRequest: (input: string) => SurfaceParityParsedRunRequest;
+}
 
 interface DescriptorExpectation {
   readonly kind: WorkflowKind;
@@ -135,10 +150,14 @@ function checkDescriptor(expectation: DescriptorExpectation): SurfaceParityCheck
 }
 
 function captureCliHelp(
-  run: (args: readonly string[], io: CliIo, env: Record<string, string | undefined>) => unknown,
+  run: (
+    args: readonly string[],
+    io: SurfaceParityCliIo,
+    env: Record<string, string | undefined>,
+  ) => unknown,
 ): string {
   const chunks: string[] = [];
-  const io: CliIo = {
+  const io: SurfaceParityCliIo = {
     out: (text: string): void => void chunks.push(text),
     err: (text: string): void => void chunks.push(text),
   };
@@ -148,24 +167,10 @@ function captureCliHelp(
   return chunks.join("");
 }
 
-// Dynamic import breaks the load-time cycle the static import would create. keiko-cli depends on
-// keiko-evaluations (its `evaluate` command consumes `runEvaluationSuite`), so a static import here
-// would express a forbidden reverse edge. The dynamic import resolves at runtime only and is
-// invisible to dependency-cruiser as a static edge.
-async function checkCliFlags(): Promise<readonly SurfaceParityCheckResult[]> {
-  // Variable-string target so TypeScript's composite project resolution does not pull the
-  // keiko-cli package into the keiko-evaluations program. On a clean CI build the workspace
-  // chain builds evaluations BEFORE cli, so a literal-string dynamic import would fail
-  // resolution at eval's tsc step even though the runtime symlink is in place.
-  const cliPath = "@oscharko-dev/keiko-cli";
-  const cliModule: unknown = await import(cliPath);
-  const cli = cliModule as {
-    runGenTestsCli: CliSurfaceRunner;
-    runInvestigateCli: CliSurfaceRunner;
-  };
-  const genTestsHelp = captureCliHelp((args, io, env) => cli.runGenTestsCli(args, io, env, {}));
+async function checkCliFlags(deps: SurfaceParityDeps): Promise<readonly SurfaceParityCheckResult[]> {
+  const genTestsHelp = captureCliHelp((args, io, env) => deps.runGenTestsCli(args, io, env, {}));
   const investigateHelp = captureCliHelp((args, io, env) =>
-    cli.runInvestigateCli(args, io, env, {}),
+    deps.runInvestigateCli(args, io, env, {}),
   );
   await Promise.resolve();
   const expectations: readonly CliExpectation[] = [
@@ -204,16 +209,11 @@ function checkCliExpectation(expectation: CliExpectation): SurfaceParityCheckRes
   return passed("cli-flags", expectation.kind);
 }
 
-// The SDK named exports each workflow must surface. Both expected exports live in
-// @oscharko-dev/keiko-workflows (the SDK barrel re-exports them), so we query the workflows
-// package directly. Using the workflows package as the SDK proxy avoids two real layout problems:
-// (a) the root @oscharko-dev/keiko package is not a workspace member, so a dynamic import of the
-// root package name fails in dev, and (b) the dev-time relative path ../../../src/index.js maps
-// to a .ts file that has no compiled .js sibling under src/, so it fails in installable smoke too.
-// The contract still holds: if keiko-workflows is missing the symbol, the root SDK barrel is
-// missing the symbol — they go together by ADR-0019.
+// The SDK named exports each workflow must surface. Issue #426 moved the SDK into its own
+// workspace package, so parity can import that public surface directly instead of probing a
+// surviving root src/ path.
 async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
-  const sdkPath = "@oscharko-dev/keiko-workflows";
+  const sdkPath = "@oscharko-dev/keiko-sdk";
   const sdkModule: unknown = await import(sdkPath);
   const sdk = sdkModule as Record<string, unknown>;
   return SDK_EXPORT_EXPECTATIONS.map((expectation) => {
@@ -235,20 +235,9 @@ async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
 // The UI RunRequest carries the minimum fields the BFF needs to invoke either workflow. The compile-
 // time guarantee is enforced by the TypeScript check; this is the runtime shape assertion (D7 d).
 // Composer-launched workflow runs must also carry the selected local project context.
-async function checkRunRequestShapes(): Promise<readonly SurfaceParityCheckResult[]> {
-  // Same rationale as checkSdkExports: src/ui/ is the BFF surface until #426 finalises the root
-  // facade. The variable-path dynamic import resolves at runtime only, keeping the legacy src/ui
-  // tree out of the keiko-evaluations TypeScript program.
-  const uiPath = "@oscharko-dev/keiko-server";
-  const uiModule: unknown = await import(uiPath);
-  const ui = uiModule as {
-    parseRunRequest: (
-      input: string,
-    ) => Record<string, unknown> & { code?: string; message?: string };
-  };
-  const parseRunRequest = ui.parseRunRequest;
+function checkRunRequestShapes(deps: SurfaceParityDeps): readonly SurfaceParityCheckResult[] {
   return RUN_REQUEST_EXPECTATIONS.map((expectation) => {
-    const parsed = parseRunRequest(
+    const parsed = deps.parseRunRequest(
       JSON.stringify({
         workflowId: expectation.workflowId,
         modelId: "m",
@@ -258,7 +247,11 @@ async function checkRunRequestShapes(): Promise<readonly SurfaceParityCheckResul
       }),
     );
     if ("code" in parsed) {
-      return failed("run-request-shape", expectation.kind, parsed.message ?? "RunRequest invalid");
+      return failed(
+        "run-request-shape",
+        expectation.kind,
+        typeof parsed.message === "string" ? parsed.message : "RunRequest invalid",
+      );
     }
     const required = ["kind", "modelId", "apply", "input", "limits"];
     const missing = required.filter((field) => !(field in parsed));
@@ -290,12 +283,12 @@ function failed(check: string, kind: WorkflowKind, reason: string): SurfaceParit
   return { check, workflowKind: kind, passed: false, reason };
 }
 
-export async function checkSurfaceParity(): Promise<SurfaceParityResult> {
+export async function checkSurfaceParity(deps: SurfaceParityDeps): Promise<SurfaceParityResult> {
   const checks: SurfaceParityCheckResult[] = [
     ...DESCRIPTOR_EXPECTATIONS.map(checkDescriptor),
-    ...(await checkCliFlags()),
+    ...(await checkCliFlags(deps)),
     ...(await checkSdkExports()),
-    ...(await checkRunRequestShapes()),
+    ...checkRunRequestShapes(deps),
   ];
   return { allPassed: checks.every((check) => check.passed), checks };
 }

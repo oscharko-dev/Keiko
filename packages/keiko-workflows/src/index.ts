@@ -6,8 +6,8 @@
 // them (its #8 surface), so a plain `export *` on it would otherwise surface the names a second
 // time; the bug-investigation sub-barrel deliberately does NOT re-export them. An explicit
 // re-export here takes precedence over `export *` and resolves the ambiguity so the
-// `WorkflowDescriptor` import in src/index.ts and src/sdk/index.ts keeps resolving (same pattern
-// the package root uses for the two `summarizeForAudit`s).
+// `WorkflowDescriptor` import in src/index.ts and packages/keiko-sdk/src/index.ts keeps resolving
+// (same pattern the package root uses for the two `summarizeForAudit`s).
 export type { WorkflowDescriptor, WorkflowInputSpec } from "./descriptor.js";
 
 export * from "./unit-tests/index.js";

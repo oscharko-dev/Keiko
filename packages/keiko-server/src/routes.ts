@@ -6,7 +6,7 @@
 // (the SSE events route). Non-2xx bodies use the redacted error envelope `{ error: { code, message } }`.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { SDK_VERSION } from "./_sdk-version.js";
+import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import type { UiHandlerDeps } from "./deps.js";
 import {
   handleConfig,

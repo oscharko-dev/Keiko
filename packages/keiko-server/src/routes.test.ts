@@ -2,10 +2,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { API_ROUTES, isApiPath, matchRoute, STREAMING, type RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import { SDK_VERSION } from "./_sdk-version.js";
 
 const emptyCtx: RouteContext = {
   req: {} as RouteContext["req"],
@@ -291,13 +291,10 @@ describe("isApiPath", () => {
   });
 });
 
-// Drift guard: the SDK_VERSION literal copied into this package's
-// `_sdk-version.ts` (avoids a transitive-import cascade through the root SDK
-// surface; see file header) must stay in sync with the root product's
-// `package.json` "version" field. The root SDK module enforces the same
-// invariant in tests/cli/runner.test.ts:73 — keeping the assertion mirror'd
-// catches drift on either side at test time, well before a release.
-describe("_sdk-version local literal", () => {
+// Drift guard: the BFF health route surfaces the canonical SDK package version, which must stay in
+// sync with the root product's `package.json` "version" field. The CLI mirrors the same invariant
+// in packages/keiko-cli/src/runner.test.ts.
+describe("SDK package version", () => {
   it("matches the root package.json version", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const rootPackageJsonPath = join(here, "..", "..", "..", "package.json");

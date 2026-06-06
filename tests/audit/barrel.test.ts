@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
+import * as sdk from "@oscharko-dev/keiko-sdk";
 import * as root from "../../src/index.js";
-import * as sdk from "../../src/sdk/index.js";
 
 // The D9 public export list (functions/values; types are erased at runtime so they cannot be
 // asserted here, but the named-export blocks in the barrels keep them in lockstep).

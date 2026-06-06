@@ -5,13 +5,14 @@
 //      root package.json's "version" field (the 0.2.0 baseline finalised in #427).
 //   2. The KEIKO_PRODUCT_VERSION constant in @oscharko-dev/keiko-contracts/src/index.ts
 //      matches that same root version.
-//   3. No drifted hardcoded version literal appears in src/sdk/index.ts or the two
+//   3. Issue #426's removed shim/duplicate paths stay removed: src/sdk/** and the local
 //      _sdk-version.ts mirrors under packages/keiko-cli/src and packages/keiko-server/src.
+//   4. No drifted hardcoded version literal appears in packages/keiko-sdk/src/index.ts.
 //
 // Runs in the prepack chain after the build steps so the packed artifact cannot ship with
 // a manifest/version mismatch. Pure Node 22+, no new runtime dependency.
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -60,28 +61,28 @@ if (constMatch === null) {
   fail(`keiko-contracts KEIKO_PRODUCT_VERSION ${constMatch[1]} does not match root ${expected}`);
 }
 
-const FORBIDDEN_LITERAL_PATTERNS = [
-  { path: "src/sdk/index.ts", marker: /SDK_VERSION\s*=\s*"[0-9.]+"/, name: "src/sdk/index.ts" },
-  {
-    path: "packages/keiko-cli/src/_sdk-version.ts",
-    marker: /SDK_VERSION\s*=\s*"[0-9.]+"/,
-    name: "packages/keiko-cli/src/_sdk-version.ts",
-  },
-  {
-    path: "packages/keiko-server/src/_sdk-version.ts",
-    marker: /SDK_VERSION\s*=\s*"[0-9.]+"/,
-    name: "packages/keiko-server/src/_sdk-version.ts",
-  },
+const REMOVED_PATHS = [
+  "src/sdk",
+  "packages/keiko-cli/src/_sdk-version.ts",
+  "packages/keiko-server/src/_sdk-version.ts",
 ];
 
-for (const target of FORBIDDEN_LITERAL_PATTERNS) {
-  const content = readFileSync(join(repoRoot, target.path), "utf8");
-  if (target.marker.test(content)) {
-    fail(
-      `${target.name}: hardcoded SDK_VERSION literal detected. ` +
-        "The single authoritative source is KEIKO_PRODUCT_VERSION in @oscharko-dev/keiko-contracts.",
-    );
+for (const target of REMOVED_PATHS) {
+  if (existsSync(join(repoRoot, target))) {
+    fail(`${target}: legacy Issue #426 path still exists.`);
   }
+}
+
+const sdkIndexPath = join(repoRoot, "packages", "keiko-sdk", "src", "index.ts");
+const sdkIndex = readFileSync(sdkIndexPath, "utf8");
+if (/SDK_VERSION\s*=\s*"[0-9.]+"/.test(sdkIndex)) {
+  fail(
+    "packages/keiko-sdk/src/index.ts: hardcoded SDK_VERSION literal detected. " +
+      "The single authoritative source is KEIKO_PRODUCT_VERSION in @oscharko-dev/keiko-contracts.",
+  );
+}
+if (!sdkIndex.includes("KEIKO_PRODUCT_VERSION")) {
+  fail("packages/keiko-sdk/src/index.ts: SDK_VERSION is not sourced from KEIKO_PRODUCT_VERSION.");
 }
 
 if (failures.length > 0) {

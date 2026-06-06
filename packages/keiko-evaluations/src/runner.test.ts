@@ -13,7 +13,10 @@ import {
   EVAL_SCORECARD_SCHEMA_VERSION,
 } from "./index.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import { runGenTestsCli, runInvestigateCli } from "@oscharko-dev/keiko-cli";
+import { parseRunRequest } from "@oscharko-dev/keiko-server";
 import type { EvalRunOptions, EvalRunnerDeps } from "./runner.js";
+import type { SurfaceParityDeps } from "./surface-parity.js";
 import { must } from "./_support.js";
 
 // Fixed clock and id source so test output is deterministic
@@ -21,11 +24,18 @@ const FIXED_NOW = 1_700_000_000_000;
 const fixedNow = (): number => FIXED_NOW;
 const fixedId = (name: string) => (): string => `eval-test-${name}`;
 
+const SURFACE_PARITY_DEPS: SurfaceParityDeps = {
+  runGenTestsCli,
+  runInvestigateCli,
+  parseRunRequest,
+};
+
 function makeDeps(fixtureName = "test"): EvalRunnerDeps {
   return {
     store: createInMemoryEvidenceStore(),
     now: fixedNow,
     idSource: fixedId(fixtureName),
+    surfaceParity: SURFACE_PARITY_DEPS,
   };
 }
 
@@ -143,6 +153,7 @@ describe("live-mode evidence semantics", () => {
         idSource: sequenceIds(["current-run", "workflow-run", "workflow-event"]),
         modelProviderFactory: (candidate): ReturnType<typeof createScriptedModelPort> =>
           createScriptedModelPort(candidate.mockTranscript),
+        surfaceParity: SURFACE_PARITY_DEPS,
       },
     );
 

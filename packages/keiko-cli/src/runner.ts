@@ -11,7 +11,7 @@ import { runLifecycleCli } from "./lifecycle.js";
 import { runUiCli } from "./ui.js";
 import { runLauncherCli } from "./launcher.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { SDK_VERSION } from "./_sdk-version.js";
+import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 
 // Pure CLI core: returns an exit code and writes through the injected IO so it is
 // testable without touching process.* (the thin process shim lives in index.ts).
