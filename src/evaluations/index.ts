@@ -1,18 +1,22 @@
-// Public barrel for the Wave 1 evaluation harness (ADR-0012 D11). Explicit named re-exports — no
-// `export *` — so the SDK surface stays auditable. This replaces the prior placeholder barrel. The
-// evaluation layer is the highest-level policy consumer: it composes the workflow/audit/verification
-// layers UNCHANGED and nothing below it imports from here.
+// Re-export shim: the evaluation harness lives in @oscharko-dev/keiko-evaluations
+// (issue #425, ADR-0019). All existing import sites (`from "../evaluations/index.js"`) keep
+// resolving unchanged via this barrel. Mirrors the tools/workspace/verification shim conventions:
+// explicit named re-exports, `type` keyword for type-only, double quotes, `.js` suffix.
 
-export { runEvaluationSuite } from "./runner.js";
-export type { EvalRunnerDeps, EvalRunOptions } from "./runner.js";
-export { createScriptedModelPort } from "./scripted-model.js";
-export type { ScriptedModelPort } from "./scripted-model.js";
-export { createEvaluationModelProvider } from "./model-provider.js";
-export type { EvaluationModelProviderDeps } from "./model-provider.js";
-export { scoreFixture, aggregateScorecard, summarizeScorecard } from "./scorer.js";
-export type { ScoringInput } from "./scorer.js";
-export { checkSurfaceParity } from "./surface-parity.js";
-export { renderEvalSummary } from "./render.js";
+export { runEvaluationSuite } from "@oscharko-dev/keiko-evaluations";
+export type { EvalRunnerDeps, EvalRunOptions } from "@oscharko-dev/keiko-evaluations";
+export { createScriptedModelPort } from "@oscharko-dev/keiko-evaluations";
+export type { ScriptedModelPort } from "@oscharko-dev/keiko-evaluations";
+export { createEvaluationModelProvider } from "@oscharko-dev/keiko-evaluations";
+export type { EvaluationModelProviderDeps } from "@oscharko-dev/keiko-evaluations";
+export {
+  scoreFixture,
+  aggregateScorecard,
+  summarizeScorecard,
+} from "@oscharko-dev/keiko-evaluations";
+export type { ScoringInput } from "@oscharko-dev/keiko-evaluations";
+export { checkSurfaceParity } from "@oscharko-dev/keiko-evaluations";
+export { renderEvalSummary } from "@oscharko-dev/keiko-evaluations";
 export {
   ALL_FIXTURES,
   SUITE_NAMES,
@@ -20,7 +24,7 @@ export {
   fixtureByName,
   isSuiteName,
   type SuiteName,
-} from "./fixtures/index.js";
+} from "@oscharko-dev/keiko-evaluations";
 export {
   EVAL_SCORECARD_SCHEMA_VERSION,
   EVALUATION_DIMENSIONS,
@@ -38,4 +42,4 @@ export {
   type SurfaceParityCheckResult,
   type SurfaceParityResult,
   type WorkflowKind,
-} from "./types.js";
+} from "@oscharko-dev/keiko-evaluations";

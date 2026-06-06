@@ -1,0 +1,9 @@
+// Re-export shim: the gateway barrel now lives in @oscharko-dev/keiko-model-gateway (issue #160,
+// ADR-0019). All existing import sites (`from "../gateway/index.js"`) keep resolving unchanged via
+// this barrel. The full public surface of the original src/gateway/index.ts is preserved.
+export { CAPABILITY_REGISTRY, createDefaultChatCapability, findCapability, listCapabilities, resolveCostClass, selectCheapest, } from "@oscharko-dev/keiko-model-gateway";
+export { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME, loadConfigFromFile, normalizeApiKeyHeaderName, parseGatewayConfig, toSafeObject, validateBaseUrl, } from "@oscharko-dev/keiko-model-gateway";
+export { Gateway } from "@oscharko-dev/keiko-model-gateway";
+export { assertConfiguredModel, findConfiguredCapability, listConfiguredCapabilities, selectConfiguredModel, } from "@oscharko-dev/keiko-model-gateway";
+export { redact } from "@oscharko-dev/keiko-model-gateway";
+export { AuthenticationError, CancelledError, CircuitOpenError, ConfigInvalidError, ContextOverflowError, ERROR_CODES, GatewayError, MalformedToolCallError, ModelRefusalError, ProviderError, RateLimitError, TimeoutError, TransportError, UnknownModelError, } from "@oscharko-dev/keiko-model-gateway";

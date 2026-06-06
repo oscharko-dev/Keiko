@@ -1,0 +1,3 @@
+export { ERROR_CODES, GatewayError, AuthenticationError, TransportError, ModelRefusalError, MalformedToolCallError, ContextOverflowError, RateLimitError, TimeoutError, CancelledError, CircuitOpenError, ProviderError, ConfigInvalidError, UnknownModelError, } from "@oscharko-dev/keiko-security/errors/gateway";
+export type { ErrorCode } from "@oscharko-dev/keiko-security/errors/gateway";
+//# sourceMappingURL=errors.d.ts.map
