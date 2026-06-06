@@ -46,7 +46,6 @@ export type RelationshipAuditPlacement = "sibling-table" | "evidence-manifest";
 export interface RelationshipAuditEntryInput {
   readonly eventId: string;
   readonly workspaceId: string;
-  readonly sequence: number;
   readonly occurredAt: number;
   readonly kind: RelationshipAuditKind;
   readonly relationshipId?: string | undefined;
@@ -86,13 +85,20 @@ export function resolveAuditPlacement(input: {
   return "sibling-table";
 }
 
+// Sequence is allocated atomically inside the INSERT via a subquery — no separate
+// SELECT MAX then JS-side increment. SQLite serialises writers so COALESCE(MAX(sequence),-1)+1
+// is the next monotonic value with no TOCTOU gap. The WHERE clause keeps the subquery
+// workspace-scoped (audit-events.md §10). When no prior rows exist COALESCE returns -1
+// giving sequence 0 as the first value.
 const SQL_INSERT_AUDIT = `
 INSERT INTO relationship_audit_entries(
   event_id, relationship_audit_schema_ver, workspace_id, sequence, occurred_at,
   kind, relationship_id, actor_surface, redacted_actor_id, redaction_state, summary,
   payload_json
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+SELECT ?, ?, ?, COALESCE(MAX(sequence), -1) + 1, ?, ?, ?, ?, ?, ?, ?, ?
+FROM relationship_audit_entries
+WHERE workspace_id = ?
 `;
 
 const SQL_LIST_AUDIT = `
@@ -156,11 +162,13 @@ export function insertRelationshipAuditEntry(
     Record<string, unknown>
   >;
   const payloadJson = JSON.stringify(redactedPayload);
+  // The subquery's WHERE clause receives workspaceId as the last bind parameter so that
+  // COALESCE(MAX(sequence),-1)+1 is scoped to the workspace. SQLite serialises writers so
+  // this read-modify-write happens atomically with no TOCTOU gap.
   db.prepare(SQL_INSERT_AUDIT).run(
     entry.eventId,
     RELATIONSHIP_AUDIT_SCHEMA_VERSION,
     entry.workspaceId,
-    entry.sequence,
     entry.occurredAt,
     entry.kind,
     entry.relationshipId ?? null,
@@ -169,11 +177,16 @@ export function insertRelationshipAuditEntry(
     "redacted-on-write",
     redactedSummary,
     payloadJson,
+    entry.workspaceId,
   );
+  const assigned = db
+    .prepare("SELECT sequence FROM relationship_audit_entries WHERE event_id = ?")
+    .get(entry.eventId) as { sequence: number } | undefined;
+  if (assigned === undefined) throw new Error("Audit INSERT returned no row.");
   const row: RelationshipAuditEntryRow = {
     eventId: entry.eventId,
     workspaceId: entry.workspaceId,
-    sequence: entry.sequence,
+    sequence: assigned.sequence,
     occurredAt: entry.occurredAt,
     kind: entry.kind,
     relationshipId: entry.relationshipId,

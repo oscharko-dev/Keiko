@@ -32,7 +32,6 @@ describe("insertRelationshipAuditEntry", () => {
       {
         eventId: "evt-1",
         workspaceId: "ws-a",
-        sequence: 1,
         occurredAt: 100,
         kind: "relationship.created",
         relationshipId: "rel-1",
@@ -58,7 +57,6 @@ describe("insertRelationshipAuditEntry", () => {
       {
         eventId: "evt-1",
         workspaceId: "ws-a",
-        sequence: 1,
         occurredAt: 100,
         kind: "relationship.created",
         relationshipId: "rel-1",
@@ -81,7 +79,6 @@ describe("insertRelationshipAuditEntry", () => {
         {
           eventId: "evt-1",
           workspaceId: "ws-a",
-          sequence: 1,
           occurredAt: 100,
           kind: "relationship.created",
           actor: { surface: "system", redactedActorId: "actor-1" },
@@ -100,7 +97,6 @@ describe("insertRelationshipAuditEntry", () => {
         {
           eventId: "evt-1",
           workspaceId: "ws-a",
-          sequence: 1,
           occurredAt: 100,
           kind: "relationship.created",
           actor: { surface: "system", redactedActorId: "actor-1" },
@@ -112,13 +108,12 @@ describe("insertRelationshipAuditEntry", () => {
     ).toThrow();
   });
 
-  it("enforces append-only via (workspace_id, sequence) unique index", () => {
+  it("enforces append-only: same event_id cannot be inserted twice", () => {
     insertRelationshipAuditEntry(
       db,
       {
         eventId: "evt-1",
         workspaceId: "ws-a",
-        sequence: 1,
         occurredAt: 100,
         kind: "relationship.created",
         actor: { surface: "system", redactedActorId: "actor-1" },
@@ -131,9 +126,8 @@ describe("insertRelationshipAuditEntry", () => {
       insertRelationshipAuditEntry(
         db,
         {
-          eventId: "evt-2",
+          eventId: "evt-1",
           workspaceId: "ws-a",
-          sequence: 1,
           occurredAt: 200,
           kind: "relationship.updated",
           actor: { surface: "system", redactedActorId: "actor-1" },
@@ -143,6 +137,38 @@ describe("insertRelationshipAuditEntry", () => {
         identity,
       ),
     ).toThrow();
+  });
+
+  // Regression test for TOCTOU race (issue #628): two consecutive writes for the same
+  // workspace must receive distinct, monotonically-increasing sequence numbers. The old
+  // implementation read MAX(sequence) in JS then inserted — two concurrent callers could
+  // read the same max and produce a duplicate. The atomic INSERT…SELECT subquery eliminates
+  // that gap. This test would fail against the old read-then-write path if both calls ran
+  // before either committed (i.e. if the SELECT was outside the INSERT).
+  it("allocates unique, monotonic sequences for concurrent writes to the same workspace", () => {
+    const n = 20;
+    const sequences: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const row = insertRelationshipAuditEntry(
+        db,
+        {
+          eventId: `evt-${String(i)}`,
+          workspaceId: "ws-race",
+          occurredAt: 1000 + i,
+          kind: "relationship.created",
+          actor: { surface: "system", redactedActorId: "a" },
+          summary: "s",
+          payload: {},
+        },
+        identity,
+      );
+      sequences.push(row.sequence);
+    }
+    // All sequences must be distinct (no duplicates).
+    expect(new Set(sequences).size).toBe(n);
+    // Sequences must be monotonically increasing (0, 1, 2, …).
+    const sorted = [...sequences].sort((a, b) => a - b);
+    expect(sorted).toEqual(Array.from({ length: n }, (_, i) => i));
   });
 });
 
@@ -154,7 +180,6 @@ describe("listRelationshipAuditEntriesForRelationship", () => {
       {
         eventId: "evt-1",
         workspaceId: "ws-a",
-        sequence: 1,
         occurredAt: 100,
         kind: "relationship.created",
         relationshipId: "rel-1",
@@ -169,7 +194,6 @@ describe("listRelationshipAuditEntriesForRelationship", () => {
       {
         eventId: "evt-2",
         workspaceId: "ws-a",
-        sequence: 2,
         occurredAt: 200,
         kind: "relationship.created",
         relationshipId: "rel-2",
