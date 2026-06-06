@@ -101,6 +101,7 @@ There is **no** Action variant for:
 - Evidence creation, redaction, archival.
 - Applied patches (the patch itself).
 - Verification run start / completion / cancellation.
+- **Review-session state** (review annotations, review-window progress, accept/reject decisions on agent-proposed patches via `ReviewWidget` / `AgentGateCard`). Review-session state is treated equivalently to verification records and applied patches: it is an irreversible authority moment that produces evidence, not a UI layout change. Issue #525 AC6 names this boundary explicitly.
 - Model call execution.
 - Tool execution.
 - Memory writes.
@@ -124,9 +125,9 @@ interface UndoStackApi {
 }
 ```
 
-The `Cmd/Ctrl+Z` and `Cmd/Ctrl+Shift+Z` commands map directly to `undo()` / `redo()`. The command tooltip reads "Undoes window and panel changes only. Evidence and patches cannot be undone."
+The `Cmd/Ctrl+Z` and `Cmd/Ctrl+Shift+Z` commands map directly to `undo()` / `redo()`. The command tooltip reads "Undoes window and panel changes only. Evidence, review decisions, verification records, and applied patches cannot be undone."
 
-When an authority moment that is *not* reversible completes (a patch is applied, a verification record is written), a transient toast in `NotificationsPanel` reads "Recorded as evidence; cannot be undone." This is informational only; it does not push an Action.
+When an authority moment that is _not_ reversible completes (a patch is applied, a verification record is written), a transient toast in `NotificationsPanel` reads "Recorded as evidence; cannot be undone." This is informational only; it does not push an Action.
 
 ### 6. Wiring
 
@@ -156,3 +157,7 @@ When an authority moment that is *not* reversible completes (a patch is applied,
 - ADR-0030 — Workspace security, evidence, and trust boundaries.
 - [518-ux-blueprint.md](../workspace/518-ux-blueprint.md) — Command model, minimum shortcut set, undo boundary.
 - Issue #527 — Interaction substrate implementation.
+
+## Date
+
+2026-06-06
