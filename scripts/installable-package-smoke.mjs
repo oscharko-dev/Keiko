@@ -64,12 +64,8 @@ function diffExpectedExports(actual, expected) {
   };
 }
 
-function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
-  const probeFile = join(fromDirectory, "__keiko-public-api-probe__.ts");
-  const probeText =
-    `export * from ${JSON.stringify(specifier)};\n` +
-    `export type __Probe = typeof import(${JSON.stringify(specifier)});\n`;
-  const compilerOptions = {
+function externalConsumerCompilerOptions() {
+  return {
     baseUrl: repoRoot,
     ignoreDeprecations: "6.0",
     moduleResolution: ts.ModuleResolutionKind.NodeNext,
@@ -84,6 +80,9 @@ function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
     typeRoots: [join(repoRoot, "node_modules", "@types")],
     types: ["node", "ws"],
   };
+}
+
+function probeHost(compilerOptions, probeFile, probeText) {
   const host = ts.createCompilerHost(compilerOptions, true);
   host.readFile = (fileName) => {
     if (fileName === probeFile) {
@@ -92,6 +91,16 @@ function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
     return ts.sys.readFile(fileName);
   };
   host.fileExists = (fileName) => fileName === probeFile || ts.sys.fileExists(fileName);
+  return host;
+}
+
+function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
+  const probeFile = join(fromDirectory, "__keiko-public-api-probe__.ts");
+  const probeText =
+    `export * from ${JSON.stringify(specifier)};\n` +
+    `export type __Probe = typeof import(${JSON.stringify(specifier)});\n`;
+  const compilerOptions = externalConsumerCompilerOptions();
+  const host = probeHost(compilerOptions, probeFile, probeText);
   const program = ts.createProgram([probeFile], compilerOptions, host);
   const diagnostics = ts.getPreEmitDiagnostics(program);
   if (diagnostics.length > 0) {
