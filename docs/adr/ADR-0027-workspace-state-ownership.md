@@ -8,7 +8,7 @@ Accepted (Epic #518, 2026-06-06). Operationalizes the state ownership decision r
 
 The governed workspace foundation must separate browser UI state, server runtime state, durable workspace layout, evidence references, workspace FS state, memory state, and durable local config. Each class has a different owner, a different storage backend, a different lifetime, and a different trust boundary.
 
-Wave 4 implementation must not introduce a new persistence store. The existing UI persistence layer (Node 22 `node:sqlite` per [ADR-0013 issue #62 memory entry](../workspace/518-capability-audit.md)), the evidence store (`keiko-evidence`), the workspace FS (`keiko-workspace`), the memory vault (`keiko-memory-vault`), and the config store (`keiko-server`) each already cover their lifecycle.
+Wave 4 implementation must not introduce a new persistence store. The current workspace shell persists layout through `useWorkspace` to browser `localStorage`; the evidence store (`keiko-evidence`), the workspace FS (`keiko-workspace`), the memory vault (`keiko-memory-vault`), and the config store (`keiko-server`) each already cover their lifecycle.
 
 ## Decision
 
@@ -17,7 +17,7 @@ Workspace state is partitioned into the classes below. Each class has exactly on
 | State class | Owner package | Backend | Lifetime |
 |---|---|---|---|
 | Browser UI transient state (window position, focus, selection, palette open, hover, in-flight stream, modal stack) | `keiko-ui` hooks | React in-memory | Tab session |
-| UI durable layout (per-project window arrangement, last focused panel) | `keiko-server` UI persistence | `node:sqlite` (`--experimental-sqlite`) | Per project; restored on next session |
+| UI durable layout (per-project window arrangement, last focused panel, current wins/conns/view snapshot) | `keiko-ui` `useWorkspace` hook | browser `localStorage` | Browser-local; restored on next session in the same browser profile |
 | Server runtime state (BFF cache, in-flight run state, WebSocket session) | `keiko-server` | In-memory | Process lifetime |
 | Workspace FS state (project files) | `keiko-workspace` + OS | OS file system | OS-managed |
 | Durable local config (model gateway config, paired devices, user preferences) | `keiko-server` config seam | JSON config file | User-managed |
@@ -32,7 +32,7 @@ Every entry in the windows registry declares its `persistence` expectation from 
 ```
 type PersistenceExpectation =
   | "transient"            // session-only
-  | "durable.ui"           // node:sqlite UI persistence
+  | "durable.ui"           // browser-local durable UI persistence in the current shell
   | "durable.config"       // keiko-server config store
   | "evidence-reference"   // metadata pointing to keiko-evidence
   | "fs-reference"         // metadata pointing to keiko-workspace path
@@ -54,7 +54,7 @@ Workspace objects often reference state owned by another class (e.g., a `review`
 - No new persistence store is added by Epic #518.
 - The descriptor `persistence` field documents how a future object type (agent, MCP tool, connector, document, knowledge object) is stored. Future objects extend through the registry without changing this ADR.
 - The undo stack's compile-time refusal is the load-bearing guarantee that UI-side undo never rewrites evidence/patches/verification/model-call records.
-- The BFF UI persistence layer re-applies the redactor at write time as a second barrier; the descriptor validator is the first barrier.
+- The current workspace shell does not yet enforce descriptor-aware persistence at write time; `WIN_META` remains the governance classification while `useWorkspace` continues to own the actual browser-local layout snapshot.
 
 ## Alternatives considered
 
@@ -68,5 +68,5 @@ Workspace objects often reference state owned by another class (e.g., a `review`
 - ADR-0028 — Workspace commands, events, selection, undo/redo.
 - ADR-0029 — Workspace object registry and extension contract.
 - ADR-0030 — Workspace security, evidence, and trust boundaries.
-- Issue #62 / ADR-0013 — `node:sqlite` UI persistence (existing seam).
+- Issue #62 / ADR-0013 — possible future server-owned UI persistence seam; not the current workspace-shell implementation on `dev`.
 - Issue #525 — Architecture blueprint.

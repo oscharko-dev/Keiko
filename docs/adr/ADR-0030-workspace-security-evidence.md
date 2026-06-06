@@ -38,9 +38,9 @@ The workspace foundation must satisfy all five rules. Each rule is enforced by a
    - The undo command's tooltip and palette entry note the boundary.
 
 5. **No raw secrets, customer data, private logs, or token-bearing artifacts in UI durable state.**
-   - The registration-time validator scans descriptor metadata against `keiko-security` secret patterns and refuses any descriptor with `persistence: "durable.ui"` whose default config values match.
-   - The BFF UI persistence layer (#62) re-applies the `keiko-security` redactor at write time as a second barrier.
-   - Evidence content is never persisted to UI durable state; only `evidence-reference` metadata (a manifest id) is allowed.
+   - The descriptor validator enforces only metadata consistency (`authority`, `trustBoundary`, `persistence`); it does not inspect config defaults or renderer output.
+   - The current workspace shell persists layout through browser `localStorage` in `useWorkspace`; Epic #518 did not introduce a new persistence backend or a BFF redaction seam for workspace layout.
+   - Evidence content is still represented through `evidence-reference` metadata in the object-governance table, but durable-state hardening beyond that metadata classification remains a separate concern.
 
 ### Credential handling
 

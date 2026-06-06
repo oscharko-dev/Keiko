@@ -16,6 +16,23 @@
 //   - The fixtures under `tests/architecture/fixtures/<name>/` are targeted by the negative test
 //     (`scripts/arch-check-negative.mjs`). They are excluded from root tsconfig/build and ESLint.
 
+/**
+ * @param {readonly string[]} packageNames
+ * @returns {string}
+ */
+// eslint-disable-next-line @typescript-eslint/explicit-function-return-type
+function siblingPackageSourcePattern(packageNames) {
+  const patterns = [];
+  for (const packageName of packageNames) {
+    patterns.push(
+      `((\\.\\./)*packages/keiko-${packageName}/src/|packages/keiko-${packageName}/src/)`,
+    );
+  }
+  return patterns.join("|");
+}
+
+const PRODUCTION_SOURCE_PATH_NOT = "\\.(test|spec)\\.[cm]?[jt]sx?$";
+
 /** @type {import("dependency-cruiser").IConfiguration} */
 module.exports = {
   forbidden: [
@@ -68,16 +85,17 @@ module.exports = {
         "so the current package surface remains the only production entry.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-evidence/src/|" +
-          "tests/architecture/fixtures/evidence/)",
+        path: "^(packages/keiko-evidence/src/|" + "tests/architecture/fixtures/evidence/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|workspace|evidence)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|workspace|evidence)|" +
           "@oscharko-dev/keiko-(?!contracts|security|workspace|evidence)|" +
-          "src/(audit|workspace|harness|workflows|cli|ui|verification|evaluations|gateway|tools))",
+          "src/(audit|workspace|harness|workflows|cli|ui|verification|evaluations|gateway|tools)|" +
+          siblingPackageSourcePattern(["contracts", "security", "workspace"]) +
+          ")",
       },
     },
     {
@@ -88,16 +106,17 @@ module.exports = {
         "root `src/workspace/` shim so all production callers stay on the package surface.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-workspace/src/|" +
-          "tests/architecture/fixtures/workspace/)",
+        path: "^(packages/keiko-workspace/src/|" + "tests/architecture/fixtures/workspace/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|workspace)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|workspace)|" +
           "@oscharko-dev/keiko-(?!contracts|security|workspace)|" +
-          "src/(workspace|harness|workflows|cli|ui|verification|evaluations|gateway|tools|audit))",
+          "src/(workspace|harness|workflows|cli|ui|verification|evaluations|gateway|tools|audit)|" +
+          siblingPackageSourcePattern(["contracts", "security"]) +
+          ")",
       },
     },
     {
@@ -113,13 +132,16 @@ module.exports = {
       from: {
         path:
           "^(packages/keiko-tools/src/|" + "src/tools/|" + "tests/architecture/fixtures/tools/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|workspace|tools)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|workspace|tools)|" +
           "@oscharko-dev/keiko-(?!contracts|security|workspace|tools)|" +
-          "src/(tools|harness|workflows|cli|ui|verification|evaluations|gateway|audit))",
+          "src/(tools|harness|workflows|cli|ui|verification|evaluations|gateway|audit)|" +
+          siblingPackageSourcePattern(["contracts", "security", "workspace"]) +
+          ")",
       },
     },
     {
@@ -131,8 +153,8 @@ module.exports = {
       severity: "error",
       from: {
         path:
-          "^(packages/keiko-model-gateway/src/|" +
-          "tests/architecture/fixtures/model-gateway/)",
+          "^(packages/keiko-model-gateway/src/|" + "tests/architecture/fixtures/model-gateway/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         // Forbidden destinations include every retired root src shim so a future
@@ -141,7 +163,9 @@ module.exports = {
           "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway)|" +
           "@oscharko-dev/keiko-(?!contracts|security|model-gateway)|" +
-          "src/(gateway|harness|workflows|cli|ui|verification|evaluations|workspace|tools|audit))",
+          "src/(gateway|harness|workflows|cli|ui|verification|evaluations|workspace|tools|audit)|" +
+          siblingPackageSourcePattern(["contracts", "security"]) +
+          ")",
       },
     },
     {
@@ -176,13 +200,16 @@ module.exports = {
         path:
           "^(packages/keiko-local-knowledge/src/|" +
           "tests/architecture/fixtures/local-knowledge/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|local-knowledge|workspace|model-gateway)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|local-knowledge|workspace|model-gateway)|" +
           "@oscharko-dev/keiko-(?!contracts|local-knowledge|workspace|model-gateway)|" +
-          "src/(gateway|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+          "src/(gateway|tools|harness|workflows|audit|ui|verification|evaluations|cli)|" +
+          siblingPackageSourcePattern(["contracts", "workspace", "model-gateway"]) +
+          ")",
         pathNot: "^packages/keiko-local-knowledge/src/",
       },
     },
@@ -202,9 +229,7 @@ module.exports = {
         "`src/evaluations/` shim so production callers stay on the package surface.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-evaluations/src/|" +
-          "tests/architecture/fixtures/evaluations/)",
+        path: "^(packages/keiko-evaluations/src/|" + "tests/architecture/fixtures/evaluations/)",
         pathNot: "\\.test\\.ts$",
       },
       to: {
@@ -212,7 +237,19 @@ module.exports = {
           "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|evaluations)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|evaluations)|" +
           "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|evaluations)|" +
-          "src/(evaluations|gateway|workspace|tools|harness|workflows|audit|ui|verification|cli))",
+          "src/(evaluations|gateway|workspace|tools|harness|workflows|audit|ui|verification|cli)|" +
+          siblingPackageSourcePattern([
+            "contracts",
+            "security",
+            "model-gateway",
+            "workspace",
+            "tools",
+            "harness",
+            "workflows",
+            "verification",
+            "evidence",
+          ]) +
+          ")",
       },
     },
     {
@@ -230,16 +267,17 @@ module.exports = {
         "production callers stay on the package surface.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-verification/src/|" +
-          "tests/architecture/fixtures/verification/)",
+        path: "^(packages/keiko-verification/src/|" + "tests/architecture/fixtures/verification/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|workspace|tools|verification)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|workspace|tools|verification)|" +
           "@oscharko-dev/keiko-(?!contracts|security|workspace|tools|verification)|" +
-          "src/(verification|gateway|workspace|tools|harness|workflows|audit|ui|evaluations|cli))",
+          "src/(verification|gateway|workspace|tools|harness|workflows|audit|ui|evaluations|cli)|" +
+          siblingPackageSourcePattern(["contracts", "security", "workspace", "tools"]) +
+          ")",
       },
     },
     {
@@ -261,13 +299,16 @@ module.exports = {
       severity: "error",
       from: {
         path: "^(packages/keiko-memory-vault/src/|" + "tests/architecture/fixtures/memory-vault/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-vault)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-vault)|" +
           "@oscharko-dev/keiko-(?!contracts|security|memory-vault)|" +
-          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli)|" +
+          siblingPackageSourcePattern(["contracts", "security"]) +
+          ")",
         pathNot: "^packages/keiko-memory-vault/src/",
       },
     },
@@ -291,13 +332,16 @@ module.exports = {
       from: {
         path:
           "^(packages/keiko-memory-capture/src/|" + "tests/architecture/fixtures/memory-capture/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-capture)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-capture)|" +
           "@oscharko-dev/keiko-(?!contracts|security|memory-capture)|" +
-          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli)|" +
+          siblingPackageSourcePattern(["contracts", "security"]) +
+          ")",
         pathNot: "^packages/keiko-memory-capture/src/",
       },
     },
@@ -325,13 +369,16 @@ module.exports = {
         path:
           "^(packages/keiko-memory-consolidation/src/|" +
           "tests/architecture/fixtures/memory-consolidation/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-consolidation)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-consolidation)|" +
           "@oscharko-dev/keiko-(?!contracts|security|memory-consolidation)|" +
-          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli)|" +
+          siblingPackageSourcePattern(["contracts", "security"]) +
+          ")",
         pathNot: "^packages/keiko-memory-consolidation/src/",
       },
     },
@@ -360,13 +407,16 @@ module.exports = {
         path:
           "^(packages/keiko-memory-governance/src/|" +
           "tests/architecture/fixtures/memory-governance/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-governance)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-governance)|" +
           "@oscharko-dev/keiko-(?!contracts|security|memory-governance)|" +
-          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli)|" +
+          siblingPackageSourcePattern(["contracts", "security"]) +
+          ")",
         pathNot: "^packages/keiko-memory-governance/src/",
       },
     },
@@ -395,13 +445,16 @@ module.exports = {
         path:
           "^(packages/keiko-memory-retrieval/src/|" +
           "tests/architecture/fixtures/memory-retrieval/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|memory-retrieval)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|memory-retrieval)|" +
           "@oscharko-dev/keiko-(?!contracts|security|memory-retrieval)|" +
-          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli)|" +
+          siblingPackageSourcePattern(["contracts", "security"]) +
+          ")",
         pathNot: "^packages/keiko-memory-retrieval/src/",
       },
     },
@@ -425,13 +478,16 @@ module.exports = {
         path:
           "^(packages/keiko-quality-intelligence/src/|" +
           "tests/architecture/fixtures/quality-intelligence/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|quality-intelligence)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|quality-intelligence)|" +
           "@oscharko-dev/keiko-(?!contracts|security|quality-intelligence)|" +
-          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli))",
+          "src/(gateway|workspace|tools|harness|workflows|audit|ui|verification|evaluations|cli)|" +
+          siblingPackageSourcePattern(["contracts", "security"]) +
+          ")",
         pathNot: "^packages/keiko-quality-intelligence/src/",
       },
     },
@@ -444,16 +500,24 @@ module.exports = {
         "`src/harness/` shim so production callers stay on the package surface.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-harness/src/|" +
-          "tests/architecture/fixtures/harness/)",
+        path: "^(packages/keiko-harness/src/|" + "tests/architecture/fixtures/harness/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|evidence)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|evidence)|" +
           "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|evidence)|" +
-          "src/(harness|workflows|cli|ui|verification|evaluations))",
+          "src/(harness|workflows|cli|ui|verification|evaluations)|" +
+          siblingPackageSourcePattern([
+            "contracts",
+            "security",
+            "model-gateway",
+            "workspace",
+            "tools",
+            "evidence",
+          ]) +
+          ")",
       },
     },
     {
@@ -469,16 +533,27 @@ module.exports = {
         "code cannot bypass the package surface.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-workflows/src/|" +
-          "tests/architecture/fixtures/workflows/)",
+        path: "^(packages/keiko-workflows/src/|" + "tests/architecture/fixtures/workflows/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
         path:
           "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|quality-intelligence)|" +
           "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|quality-intelligence)|" +
           "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|quality-intelligence)|" +
-          "src/(workflows|cli|ui|evaluations|gateway|workspace|tools|harness|audit|verification))",
+          "src/(workflows|cli|ui|evaluations|gateway|workspace|tools|harness|audit|verification)|" +
+          siblingPackageSourcePattern([
+            "contracts",
+            "security",
+            "model-gateway",
+            "workspace",
+            "tools",
+            "harness",
+            "verification",
+            "evidence",
+            "quality-intelligence",
+          ]) +
+          ")",
       },
     },
     {
@@ -487,7 +562,8 @@ module.exports = {
         "ADR-0019 direction rule 6 (server boundary): keiko-server may depend on " +
         "keiko-contracts, keiko-security, keiko-model-gateway, " +
         "keiko-workspace, keiko-tools, keiko-harness, keiko-workflows, keiko-evidence, " +
-        "keiko-sdk, keiko-memory-vault, keiko-memory-governance, and keiko-memory-retrieval " +
+        "keiko-sdk, keiko-local-knowledge, keiko-memory-vault, keiko-memory-governance, " +
+        "and keiko-memory-retrieval " +
         "only, and must reach those allowed dependencies through their public package " +
         "surfaces (`@oscharko-dev/keiko-<name>`). The to.path therefore forbids both the " +
         "non-allow-listed siblings (`cli|evaluations`) AND retired root `src/*` shims, " +
@@ -499,16 +575,19 @@ module.exports = {
         "memory-consolidation added by issue #208 (Memory consolidation jobs); the server " +
         "wires consolidation lifecycle handlers through packages/keiko-server/src/memory-" +
         "consolidation-handlers.ts so the package must appear in the allow-list to keep " +
-        "the rule truthful with the source.",
+        "the rule truthful with the source. local-knowledge added by Epic #423 audit: the " +
+        "server hosts local-knowledge BFF routes " +
+        "(packages/keiko-server/src/local-knowledge-handlers.ts) and declares the " +
+        "dependency in its package.json.",
       severity: "error",
       from: {
         path: "^(packages/keiko-server/src/|tests/architecture/fixtures/server/)",
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
-          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
-          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "^((\\.\\./)*packages/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "node_modules/@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
+          "@oscharko-dev/keiko-(?!contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server)|" +
           "src/(ui|cli|evaluations|gateway|workspace|tools|harness|workflows|audit|verification))",
       },
     },
@@ -709,19 +788,18 @@ module.exports = {
     {
       name: "adr-0019-trust-7-cli-server-no-port-bypass",
       comment:
-        "ADR-0019 trust rule 7: cli and server may wire dependencies but must not bypass package " +
-        "ports by reaching into another package's source files. Documented export-map adapter " +
+        "ADR-0019 trust rule 7: cli and server may wire dependencies but must not bypass " +
+        "package ports by reaching into another package's source files. Documented export-map adapter " +
         "subpaths remain allowed; non-exported `packages/*/src/**` deep imports do not.",
       severity: "error",
       from: {
-        path:
-          "^(packages/keiko-(cli|server)/src/|src/cli/|tests/architecture/fixtures/port-bypass/)",
+        path: "^(packages/keiko-(cli|server)/src/|src/cli/|tests/architecture/fixtures/port-bypass/)",
       },
       to: {
         // Direct paths into another workspace's source files bypass the package `exports`.
         // Exported adapter seams such as `@oscharko-dev/keiko-workspace/internal/fs` remain
         // allowed because they are declared public subpaths in the package export maps.
-        path: "^packages/keiko-(?!cli|server)[^/]+/src/(?!index\\.ts$)",
+        path: "^packages/keiko-(?!cli|server)[^/]+/src/",
       },
     },
     {

@@ -6,13 +6,13 @@ Accepted (Epic #518, 2026-06-06). Operationalizes the object registry contract r
 
 ## Context
 
-The existing `WindowsRegistry.ts` already lists 19 typed window types and exposes `registerWindowRender(type, render)` as the extension contract bound in `widgets/index.tsx`. The [product boundary issue](../workspace/518-product-boundaries.md) defined per-object lifecycle, trust boundary, authority requirement, and persistence expectation. This ADR formalizes those fields on the descriptor and adds a registration-time validator.
+The existing `WindowsRegistry.ts` already lists 19 typed window types and exposes `registerWindowRender(type, render)` as the extension contract bound in `widgets/index.tsx`. The [product boundary issue](../workspace/518-product-boundaries.md) defined per-object lifecycle, trust boundary, authority requirement, and persistence expectation. This ADR formalizes those fields as a sidecar metadata table (`WIN_META`) and adds a metadata validator.
 
 ## Decision
 
-### 1. Extended `WindowTypeDef`
+### 1. Sidecar descriptor metadata
 
-The descriptor shape in `packages/keiko-ui/src/app/components/desktop/windows/WindowsRegistry.ts` gains four optional fields. Existing fields are unchanged. Existing descriptors are unaffected; the new fields are populated incrementally as #528 implementation lands.
+The object taxonomy remains `WindowTypeDef` in `WindowsRegistry.ts`. Governance metadata lands in a parallel sidecar table typed by `WorkspaceDescriptorMeta`. Existing `WindowTypeDef` fields are unchanged.
 
 ```
 type LifecycleState =
@@ -51,26 +51,27 @@ type PersistenceExpectation =
   | "fs-reference"
   | "memory-reference";
 
-interface WindowTypeDef {
-  // ... existing fields ...
-  readonly lifecycle?: ReadonlyArray<LifecycleState>;
-  readonly trustBoundary?: ReadonlyArray<TrustBoundary>;
-  readonly authority?: AuthorityRequirement;
-  readonly persistence?: PersistenceExpectation;
+interface WorkspaceDescriptorMeta {
+  readonly lifecycle: ReadonlyArray<LifecycleState>;
+  readonly trustBoundary: ReadonlyArray<TrustBoundary>;
+  readonly authority: AuthorityRequirement;
+  readonly persistence: PersistenceExpectation;
 }
+
+const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>>;
 ```
 
 The four enums live in `keiko-contracts` so other packages can reference the same closed sets.
 
-### 2. Registration-time validator
+### 2. Metadata validator
 
-A pure function `validateWindowTypeDef(def: WindowTypeDef): ValidationError[]` runs at module evaluation in dev/test and is asserted by unit tests in production builds. It refuses:
+A pure function `validateWorkspaceDescriptorMeta(objectType, meta): ValidationError[]` runs at module evaluation in dev/test and is asserted by unit tests in production builds. It refuses:
 
-1. **Persistence inconsistency.** A descriptor with `persistence: "evidence-reference"` whose config schema declares a key matching the evidence-content shape (rather than a reference).
+1. **Unknown enum.** Any value outside the closed sets above.
 2. **Authority inconsistency.** A descriptor with `authority: "ui-only"` whose `trustBoundary` set includes anything other than `["ui"]`.
-3. **Trust escalation.** A descriptor that declares `trustBoundary: ["fs"]` but renders a child that the substrate detects can originate model calls or tool calls (detected by lint rule referencing the BFF wire types).
-4. **Secret-shaped persistence.** A descriptor with `persistence: "durable.ui"` whose default config values match `keiko-security` secret patterns.
-5. **Unknown enum.** Any value outside the closed sets above.
+3. **Evidence persistence inconsistency.** A descriptor with `persistence: "evidence-reference"` whose `trustBoundary` omits `"evidence"`.
+4. **FS persistence inconsistency.** A descriptor with `persistence: "fs-reference"` whose `trustBoundary` omits `"fs"`.
+5. **Memory persistence inconsistency.** A descriptor with `persistence: "memory-reference"` whose `trustBoundary` omits `"memory"`.
 
 The validator is fail-closed in dev/test: a violation throws at module evaluation. In production builds it is a unit test assertion that fails CI before the build is published.
 
@@ -79,12 +80,13 @@ The validator is fail-closed in dev/test: a violation throws at module evaluatio
 A future agent / MCP tool / connector / data source / document / knowledge object / skill / graph node / graph edge is added by:
 
 1. Adding a new entry to the `WindowType` enum in `WindowsRegistry.ts`.
-2. Adding a typed `WindowTypeDef` value (`WIN_TYPES[<newType>] = { title, icon, desc, w, h, lifecycle, trustBoundary, authority, persistence, render: () => null }` — the renderer is bound separately).
-3. Adding a `registerWindowRender(<newType>, <Renderer/>)` line in `widgets/index.tsx`.
-4. Adding a renderer file under `widgets/cards/` or `widgets/panels/` per the panel/card classification in the [UI blueprint](../workspace/518-ui-blueprint.md).
-5. The validator runs against the new descriptor; the unit test for `validateWindowTypeDef` fails until the new descriptor is consistent.
+2. Adding the corresponding `WIN_TYPES[<newType>]` entry.
+3. Adding a `WIN_META[<newType>]` entry with lifecycle, trust boundary, authority, and persistence.
+4. Adding a `registerWindowRender(<newType>, <Renderer/>)` line in `widgets/index.tsx`.
+5. Adding a renderer file under `widgets/cards/` or `widgets/panels/` per the panel/card classification in the [UI blueprint](../workspace/518-ui-blueprint.md).
+6. The validator runs against the new metadata row; the unit test fails until the descriptor is consistent.
 
-No change to `WindowsRegistry.ts` other than the entry and its descriptor is required. The shell, the command palette, the inspector, the connections layer, and the persistence layer all consume the registry through its existing API.
+No change to `WindowsRegistry.ts` other than the new window-type entry is required. The shell, the command palette, the inspector, the connections layer, and the governance metadata surfaces consume the registry and sidecar table through their existing APIs.
 
 ### 4. No runtime plugin host
 
@@ -93,7 +95,7 @@ No change to `WindowsRegistry.ts` other than the entry and its descriptor is req
 ## Consequences
 
 - The registry expresses the workspace's product taxonomy in a typed, validated, reviewable form.
-- Wave 4 issue #528 implements the type extension and the validator. Existing descriptors gain the new fields as the issue lands; defaults are conservative (`authority: "ui-only"`, `persistence: "transient"`).
+- Wave 4 issue #528 implements the sidecar metadata table and the validator. Existing descriptors remain in `WindowsRegistry.ts`; governance metadata lives beside them in `WIN_META`.
 - Future object types compose through the existing extension contract; no shell change is required to land a new type.
 - The runtime plugin host is explicitly out of scope for #518 and any future epic must amend this ADR before proposing it.
 

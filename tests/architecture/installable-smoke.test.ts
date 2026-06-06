@@ -30,11 +30,13 @@ describe("installable-package-smoke script", () => {
     expect(source).not.toMatch(/^export\s+default\b/m);
   });
 
-  it("declares the bundled-payload assertion, the CLI bin assertion, the SDK probe, and the UI probe", () => {
+  it("declares the bundled-payload assertion, the root runtime/type contract checks, and the UI probe", () => {
     const source = readFileSync(scriptPath, "utf8");
     expect(source).toContain("bundleDependencies");
     expect(source).toMatch(/"dist"\s*,\s*"cli"\s*,\s*"index\.js"/);
-    expect(source).toContain("@oscharko-dev/keiko");
+    expect(source).toContain("root-package-surface.contract.json");
+    expect(source).toContain("collectConsumerVisibleTypeExports");
+    expect(source).toContain("getExportsOfModule");
     expect(source).toContain('dist", "ui", "static"');
     expect(source).toContain("/api/health");
   });

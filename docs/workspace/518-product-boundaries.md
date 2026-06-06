@@ -110,7 +110,7 @@ Every workspace action belongs to exactly one authority class. The class determi
 | Authority class             | Originator                         | Executor                                            | Evidence captured?                                                            |
 | --------------------------- | ---------------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------- |
 | **User action (UI-only)**   | User                               | Browser                                             | No (UI state)                                                                 |
-| **User action (persisted)** | User                               | UI hooks → BFF → `node:sqlite`                      | No new evidence; the persisted state is the evidence at the persistence layer |
+| **User action (persisted)** | User                               | `useWorkspace` → browser `localStorage` (current shell layout seam) | No new evidence; persisted layout remains browser-local in the current implementation |
 | **Agent proposal**          | Agent (via model output)           | UI surfaces the proposal                            | Yes — model call recorded in run ledger                                       |
 | **Tool execution**          | User confirms; tool runs           | `keiko-tools` terminal policy → OS                  | Yes — tool input/output redacted into evidence                                |
 | **Model call**              | Either user or workflow            | `keiko-model-gateway` adapter                       | Yes — gateway records redacted exchange                                       |
@@ -187,7 +187,7 @@ Each journey is a sequence of user actions across workspace surfaces. The journe
 
 ### Journey 7 — Return to prior work
 
-1. User closes the browser tab; UI durable state persists to `node:sqlite`.
+1. User closes the browser tab; the current workspace layout persists through `useWorkspace` to browser `localStorage`.
 2. User returns; the workspace shell restores the last layout, the active project, the open windows, and the inspector focus.
 3. Transient UI state (in-flight streaming, ephemeral notifications) does not restore; durable state does.
 

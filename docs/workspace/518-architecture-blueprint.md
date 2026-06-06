@@ -100,14 +100,14 @@ Each persistence surface stays in its existing owner; the registry descriptor na
 ```
 type PersistenceExpectation =
   | "transient"                  // session-only
-  | "durable.ui"                 // node:sqlite UI persistence
+  | "durable.ui"                 // browser-local durable UI persistence in the current shell
   | "durable.config"             // keiko-server config store
   | "evidence-reference"         // metadata pointing to keiko-evidence
   | "fs-reference"               // metadata pointing to keiko-workspace path
   | "memory-reference";          // metadata pointing to keiko-memory-vault
 ```
 
-The registration-time validator (ADR-0029) refuses to register a descriptor that names a persistence value not in this set and refuses any descriptor whose render output could persist raw evidence content, secrets, or token-bearing strings to UI durable state (the static-analysis rule reuses `keiko-security` patterns).
+The descriptor validator from ADR-0029 refuses metadata that names a persistence value outside this closed set and enforces consistency between `authority`, `trustBoundary`, and `persistence`. It does not inspect renderer output or config defaults; those remain separate review concerns in the current implementation.
 
 ## Security, evidence, and trust-boundary handling
 
@@ -117,7 +117,7 @@ Operationalized by ADR-0030. Five rules:
 2. **No escape of workspace path containment.** Any UI surface that names a file path passes the path through `keiko-workspace` validation. The validator's `realpath`-containment seam is the same one that gates server-side reads/writes.
 3. **No arbitrary shell commands.** Any UI surface that submits a command executes via `keiko-tools` terminal-policy allow-list. UI must not synthesize an `exec` call directly.
 4. **No undo rewrite of evidence/patches/verification/model-calls.** Enforced by Action types having no constructor for those classes.
-5. **No raw secrets in UI durable state.** The registration-time validator scans descriptor metadata against `keiko-security` secret patterns; the BFF persistence layer (#62) re-applies the redactor at write time as a second barrier.
+5. **No raw secrets in UI durable state.** The current implementation still uses browser-local layout persistence in `useWorkspace`; Epic #518 did not add a new persistence backend. The descriptor validator narrows declared boundaries, but secret-bearing durable-state hardening remains a separate concern from the metadata validator itself.
 
 ## Workspace substrate decision (ADR-0026)
 
@@ -136,39 +136,21 @@ Consequence for #529: closed with documented deferral evidence pointing to the e
 
 ## Object registry contract (ADR-0029)
 
-The existing `WindowTypeDef` interface in `WindowsRegistry.ts` is extended (additive only — existing fields unchanged):
+The existing `WindowTypeDef` interface in `WindowsRegistry.ts` remains the object taxonomy seam, while the governance metadata lands in a parallel sidecar table typed by `WorkspaceDescriptorMeta`:
 
 ```
-interface WindowTypeDef {
-  // existing fields:
-  readonly title: string;
-  readonly icon: IconName;
-  readonly accent?: boolean;
-  readonly desc: string;
-  readonly w: number;
-  readonly h: number;
-  readonly min: WindowSize;
-  readonly tiny: WindowSize;
-  readonly tool?: boolean;
-  readonly singleton?: boolean;
-  readonly config?: readonly ConfigField[];
-  readonly cta?: string;
-  readonly render: (cfg: Record<string, unknown>, ctx: WindowRenderContext) => ReactNode;
+type WindowGovernanceMeta = WorkspaceDescriptorMeta;
 
-  // NEW (additive):
-  readonly lifecycle?: readonly LifecycleState[];
-  readonly trustBoundary?: readonly TrustBoundary[];
-  readonly authority?: AuthorityRequirement;
-  readonly persistence?: PersistenceExpectation;
-}
+const WIN_META: Readonly<Record<WindowType, WindowGovernanceMeta>>;
 ```
 
-A registration-time validator (`validateWindowTypeDef`) refuses entries that:
+A metadata validator (`validateWorkspaceDescriptorMeta`) refuses entries that:
 
-- Declare `persistence: "durable.ui"` but expose evidence/secret/token-shaped values in their config schema.
-- Declare object behaviors that cross a `trustBoundary` not also declared in the descriptor.
+- Use values outside the closed sets for lifecycle, trust boundary, authority, or persistence.
+- Declare `authority: "ui-only"` with any trust boundary other than `["ui"]`.
+- Declare `evidence-reference`, `fs-reference`, or `memory-reference` persistence without the matching trust boundary.
 
-Validation runs at module-evaluation time in dev/test; production builds rely on type checking + tests.
+Validation runs at module-evaluation time in dev/test through `descriptor-meta.ts`; production builds rely on the targeted contract and table tests.
 
 ## Command/event/selection/undo contract (ADR-0028)
 
@@ -227,8 +209,7 @@ This blueprint locks the implementation shape so #526–#531 are tightly scoped:
 
 ### #528 — Object registry + persistence (delta)
 
-- Extend `WindowTypeDef` with `lifecycle`, `trustBoundary`, `authority`, `persistence` (types in `keiko-contracts`; existing windows update in `widgets/index.tsx`).
-- Add `validateWindowTypeDef` registration-time validator.
+- Add the `WorkspaceDescriptorMeta` contract plus the `WIN_META` sidecar table and `validateWorkspaceDescriptorMeta` validator.
 - Tests: validator rejects bad descriptors; persistence boundary is honoured; evidence-reference descriptors do not persist raw evidence.
 
 ### #529 — Canvas / graph (deferral)

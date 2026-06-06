@@ -11,13 +11,17 @@ import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } 
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import ts from "typescript";
 
 const NPM_INSTALL_TIMEOUT_MS = 90_000;
 const UI_HEALTH_TIMEOUT_MS = 30_000;
 const UI_HEALTH_POLL_INTERVAL_MS = 250;
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+const rootPackageSurfaceContract = JSON.parse(
+  readFileSync(join(repoRoot, "scripts", "root-package-surface.contract.json"), "utf8"),
+);
 const rootVersion = rootPackageJson.version;
 const bundled = rootPackageJson.bundleDependencies ?? [];
 
@@ -36,6 +40,89 @@ function run(cmd, args, options) {
 
 function sleep(ms) {
   return new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, ms));
+}
+
+function formatTsDiagnostics(diagnostics) {
+  return diagnostics
+    .map((diagnostic) => {
+      const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n");
+      if (diagnostic.file === undefined || diagnostic.start === undefined) {
+        return message;
+      }
+      const { line, character } = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+      return `${diagnostic.file.fileName}:${String(line + 1)}:${String(character + 1)} ${message}`;
+    })
+    .join("\n");
+}
+
+function diffExpectedExports(actual, expected) {
+  const actualSet = new Set(actual);
+  const expectedSet = new Set(expected);
+  return {
+    missing: expected.filter((item) => !actualSet.has(item)),
+    unexpected: actual.filter((item) => !expectedSet.has(item)),
+  };
+}
+
+function externalConsumerCompilerOptions() {
+  return {
+    baseUrl: repoRoot,
+    ignoreDeprecations: "6.0",
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    module: ts.ModuleKind.NodeNext,
+    target: ts.ScriptTarget.ES2022,
+    noEmit: true,
+    skipLibCheck: false,
+    paths: {
+      ws: ["node_modules/@types/ws/index.d.ts"],
+    },
+    strict: true,
+    typeRoots: [join(repoRoot, "node_modules", "@types")],
+    types: ["node", "ws"],
+  };
+}
+
+function probeHost(compilerOptions, probeFile, probeText) {
+  const host = ts.createCompilerHost(compilerOptions, true);
+  host.readFile = (fileName) => {
+    if (fileName === probeFile) {
+      return probeText;
+    }
+    return ts.sys.readFile(fileName);
+  };
+  host.fileExists = (fileName) => fileName === probeFile || ts.sys.fileExists(fileName);
+  return host;
+}
+
+function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
+  const probeFile = join(fromDirectory, "__keiko-public-api-probe__.ts");
+  const probeText =
+    `export * from ${JSON.stringify(specifier)};\n` +
+    `export type __Probe = typeof import(${JSON.stringify(specifier)});\n`;
+  const compilerOptions = externalConsumerCompilerOptions();
+  const host = probeHost(compilerOptions, probeFile, probeText);
+  const program = ts.createProgram([probeFile], compilerOptions, host);
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+  if (diagnostics.length > 0) {
+    fail(
+      "installed declarations do not typecheck for an external consumer:\n" +
+        formatTsDiagnostics(diagnostics),
+    );
+  }
+  const sourceFile = program.getSourceFile(probeFile);
+  if (sourceFile === undefined) {
+    fail(`TypeScript source file not found: ${probeFile}`);
+  }
+  const checker = program.getTypeChecker();
+  const symbol = checker.getSymbolAtLocation(sourceFile);
+  if (symbol === undefined) {
+    fail(`TypeScript module symbol not found for: ${probeFile}`);
+  }
+  return checker
+    .getExportsOfModule(symbol)
+    .map((item) => item.getName())
+    .filter((item) => item !== "__Probe")
+    .sort();
 }
 
 function packRoot() {
@@ -115,23 +202,33 @@ function assertCliVersionAndHelp(tmp) {
   }
 }
 
-// `runVerification` is the SDK sentinel mirrored from `scripts/check-package-surface.mjs`:
-// the static surface check asserts the same symbol resolves as a function, so the runtime
-// smoke would otherwise be weaker than the static gate (issue #169 verifier finding gap 1).
-const SDK_SENTINEL_TOKEN = "runVerification";
+async function assertInstalledRootRuntimeSurface(tmp) {
+  try {
+    const moduleUrl = pathToFileURL(
+      join(tmp, "node_modules", "@oscharko-dev", "keiko", "dist", "index.js"),
+    ).href;
+    const mod = await import(moduleUrl);
+    const runtimeExports = Object.keys(mod).sort();
+    const diff = diffExpectedExports(runtimeExports, rootPackageSurfaceContract.runtimeExports);
+    if (diff.missing.length > 0 || diff.unexpected.length > 0) {
+      fail(
+        "installed root runtime contract drifted " +
+          `(missing ${String(diff.missing.length)}, unexpected ${String(diff.unexpected.length)}).`,
+      );
+    }
+  } catch (error) {
+    fail(`installed root import failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 
-function assertSdkRootImport(tmp) {
-  const sdkProbe =
-    "import('@oscharko-dev/keiko').then(m => { " +
-    "if (typeof m !== 'object' || m === null) process.exit(2); " +
-    "const keys = Object.keys(m); " +
-    "if (keys.length === 0) process.exit(3); " +
-    `if (typeof m["${SDK_SENTINEL_TOKEN}"] !== 'function') process.exit(4); ` +
-    "console.log(String(keys.length)); " +
-    "});";
-  const result = run("node", ["-e", sdkProbe], { cwd: tmp });
-  if (result.status !== 0) {
-    fail(`SDK root import exited ${String(result.status)}: ${result.stderr}`);
+function assertInstalledRootTypeSurface(tmp) {
+  const typeExports = collectConsumerVisibleTypeExports("@oscharko-dev/keiko", tmp);
+  const diff = diffExpectedExports(typeExports, rootPackageSurfaceContract.declarationExports);
+  if (diff.missing.length > 0 || diff.unexpected.length > 0) {
+    fail(
+      "installed root declaration contract drifted " +
+        `(missing ${String(diff.missing.length)}, unexpected ${String(diff.unexpected.length)}).`,
+    );
   }
 }
 
@@ -243,10 +340,11 @@ async function main() {
     assertCliExecutable(tmp);
     assertBundledPayload(tmp);
     assertCliVersionAndHelp(tmp);
-    assertSdkRootImport(tmp);
+    await assertInstalledRootRuntimeSurface(tmp);
+    assertInstalledRootTypeSurface(tmp);
     await assertPackagedUi(tmp);
     console.log(
-      `installable-smoke ok: tarball installed, ${String(bundled.length)} bundled packages present, CLI + SDK + UI reachable.`,
+      `installable-smoke ok: tarball installed, ${String(bundled.length)} bundled packages present, root runtime/types + CLI + UI reachable.`,
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });

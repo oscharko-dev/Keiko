@@ -29,7 +29,7 @@ The [reference analysis](../workspace/518-reference-analysis.md) confirmed that 
 
 ## Consequences
 
-- The bulk of Epic #518's implementation work is documentation, contracts, and bounded extensions to existing files. The [capability audit Gap Matrix](../workspace/518-capability-audit.md#gap-matrix-true-new-work) bounds new TypeScript implementation to a descriptor type extension, a registration-time validator, an undo-stack hook, a keyboard-shortcut hook, and the tests for each.
+- The bulk of Epic #518's implementation work is documentation, contracts, and bounded extensions to existing files. The [capability audit Gap Matrix](../workspace/518-capability-audit.md#gap-matrix-true-new-work) bounds new TypeScript implementation to shared contracts, a descriptor-meta sidecar table and validator, two UI hooks, small shell integrations in existing files, and the tests for each.
 - Issue #529 (independent canvas / graph substrate) closes with documented deferral evidence. The deferral evidence points to `Workspace.tsx`, `useWorkspace.ts`, `windows/ConnectionsLayer.tsx`, and `local-knowledge/connector-graph.tsx` as the existing substrate.
 - No new package is created by this epic. No new runtime dependency is introduced.
 - A future ADR can adopt a canvas renderer, a virtualization layer, a graph layout engine, or a state-management library when a measured product need demonstrates that the existing substrate is insufficient. The bar for that ADR is concrete user-visible failures of the existing substrate, not aesthetic preference.

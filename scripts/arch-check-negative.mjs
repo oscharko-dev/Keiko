@@ -21,33 +21,38 @@ const RULES_FILE = ".dependency-cruiser.cjs";
 const FIXTURE_PATH = "tests/architecture/fixtures";
 const INCLUDE_ONLY_OVERRIDE = "^(tests/architecture/fixtures|\\.\\./|src|packages/[^/]+/src)";
 
-// One expected rule per physically-extracted package boundary. Each rule should fire EXACTLY ONCE
-// against its dedicated fixture subdir, so the assertion is "name appears, exit non-zero". Add a
-// new entry whenever a new boundary lands a fixture under tests/architecture/fixtures/<name>/.
-const EXPECTED_RULES = [
-  "adr-0019-direction-1-contracts-leaf",
-  "adr-0019-direction-2-security-only-contracts",
-  "adr-0019-direction-3a-model-gateway-only-contracts-security",
-  "adr-0019-direction-3b-workspace-only-contracts-security",
-  "adr-0019-direction-3c-tools-only-contracts-security-workspace",
-  "adr-0019-direction-3d-evidence-only-contracts-security-workspace",
-  "adr-0019-direction-3e-local-knowledge-only-contracts",
-  "adr-0019-direction-3k-verification-only-contracts-security-workspace-tools",
-  "adr-0019-direction-3l-evaluations-only-contracts-security-model-gateway-workspace-tools-harness-workflows-verification-evidence",
-  "adr-0019-direction-3f-memory-vault-only-contracts-security",
-  "adr-0019-direction-3g-memory-capture-only-contracts-security",
-  "adr-0019-direction-3h-memory-consolidation-only-contracts-security",
-  "adr-0019-direction-3i-memory-governance-only-contracts-security",
-  "adr-0019-direction-3j-memory-retrieval-only-contracts-security",
-  "adr-0019-direction-10a-quality-intelligence-only-contracts-security",
-  "adr-0019-direction-4a-harness-only-contracts-security-model-gateway-workspace-tools-evidence",
-  "adr-0019-direction-5a-workflows-only-contracts-security-model-gateway-workspace-tools-harness-evidence",
-  "adr-0019-direction-6a-server-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence",
-  "adr-0019-direction-7a-cli-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evaluations-evidence-server-verification",
-  "adr-0019-direction-8-ui-not-node-domain-values",
-  "adr-0019-direction-9-root-product-composition-only",
-  "adr-0019-trust-7-cli-server-no-port-bypass",
-];
+// One expected rule per physically-extracted package boundary. Most rules should fire exactly once
+// against their dedicated fixture subdir; workflows intentionally fires twice because it pins both
+// the non-allow-listed sibling violation and the allow-listed sibling package-source bypass. Add or
+// adjust entries whenever a boundary gains another dedicated fixture.
+const EXPECTED_RULE_COUNTS = {
+  "adr-0019-direction-1-contracts-leaf": 1,
+  "adr-0019-direction-2-security-only-contracts": 1,
+  "adr-0019-direction-3a-model-gateway-only-contracts-security": 1,
+  "adr-0019-direction-3b-workspace-only-contracts-security": 1,
+  "adr-0019-direction-3c-tools-only-contracts-security-workspace": 1,
+  "adr-0019-direction-3d-evidence-only-contracts-security-workspace": 1,
+  "adr-0019-direction-3e-local-knowledge-only-contracts": 1,
+  "adr-0019-direction-3k-verification-only-contracts-security-workspace-tools": 1,
+  "adr-0019-direction-3l-evaluations-only-contracts-security-model-gateway-workspace-tools-harness-workflows-verification-evidence":
+    1,
+  "adr-0019-direction-3f-memory-vault-only-contracts-security": 1,
+  "adr-0019-direction-3g-memory-capture-only-contracts-security": 1,
+  "adr-0019-direction-3h-memory-consolidation-only-contracts-security": 1,
+  "adr-0019-direction-3i-memory-governance-only-contracts-security": 1,
+  "adr-0019-direction-3j-memory-retrieval-only-contracts-security": 1,
+  "adr-0019-direction-10a-quality-intelligence-only-contracts-security": 1,
+  "adr-0019-direction-4a-harness-only-contracts-security-model-gateway-workspace-tools-evidence": 1,
+  "adr-0019-direction-5a-workflows-only-contracts-security-model-gateway-workspace-tools-harness-evidence":
+    2,
+  "adr-0019-direction-6a-server-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence":
+    1,
+  "adr-0019-direction-7a-cli-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evaluations-evidence-server-verification":
+    1,
+  "adr-0019-direction-8-ui-not-node-domain-values": 1,
+  "adr-0019-direction-9-root-product-composition-only": 1,
+  "adr-0019-trust-7-cli-server-no-port-bypass": 1,
+};
 
 // `npx --no-install` keeps CI hermetic by refusing to fetch from the registry when the
 // local devDependency is missing. dependency-cruiser is a root devDependency, so npm
@@ -100,14 +105,15 @@ function countOccurrences(haystack, needle) {
   }
 }
 
-const wrong = EXPECTED_RULES.map((rule) => ({
+const wrong = Object.entries(EXPECTED_RULE_COUNTS).map(([rule, expected]) => ({
   rule,
+  expected,
   count: countOccurrences(stdout, rule),
-})).filter((entry) => entry.count !== 1);
+})).filter((entry) => entry.count !== entry.expected);
 if (wrong.length > 0) {
-  for (const { rule, count } of wrong) {
+  for (const { rule, count, expected } of wrong) {
     console.error(
-      `arch-check-negative: FAIL — rule \`${rule}\` fired ${String(count)} times (expected 1).`,
+      `arch-check-negative: FAIL — rule \`${rule}\` fired ${String(count)} times (expected ${String(expected)}).`,
     );
   }
   console.error("  Stdout:");
@@ -118,7 +124,7 @@ if (wrong.length > 0) {
 }
 
 console.log(
-  `arch-check-negative: PASS — gate fired on ${String(EXPECTED_RULES.length)} fixture(s) as expected.`,
+  `arch-check-negative: PASS — gate fired on ${String(Object.values(EXPECTED_RULE_COUNTS).reduce((sum, count) => sum + count, 0))} fixture(s) as expected.`,
 );
 console.log(stdout.trim());
 process.exit(0);
