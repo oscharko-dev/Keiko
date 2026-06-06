@@ -41,6 +41,7 @@ import type {
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
+import type { RelationshipHandlerDeps } from "./relationship-handlers.js";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -109,6 +110,10 @@ export interface UiHandlerDeps {
   readonly localKnowledgeEmbeddingRequest?:
     | ((request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>)
     | undefined;
+  // Issue #539 (Epic #532) — relationship engine handler deps. Optional so legacy tests
+  // that do not exercise /api/relationships/* keep their fixtures unchanged. Production
+  // wiring composes a sqlite-backed RelationshipStore inside buildUiHandlerDeps.
+  readonly relationship?: RelationshipHandlerDeps | undefined;
 }
 
 export interface BuildHandlerDepsOptions {

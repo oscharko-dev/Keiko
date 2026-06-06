@@ -121,9 +121,9 @@ export const DEFAULT_AUDIT_LIST_LIMIT = 64;
 // Rejects any payload object whose key (or a nested key) contains a forbidden substring per
 // audit-events.md §8.3. Same normalisation as the validator's forbidden-key gate in
 // `@oscharko-dev/keiko-contracts/relationships-validation` so the API and audit edges agree.
-function assertNoForbiddenKeys(payload: unknown, path: string = ""): void {
+function assertNoForbiddenKeys(payload: unknown, path = ""): void {
   if (payload === null || typeof payload !== "object" || Array.isArray(payload)) return;
-  for (const key of Object.keys(payload as Record<string, unknown>)) {
+  for (const key of Object.keys(payload)) {
     const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "");
     for (const banned of RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS) {
       if (normalized.includes(banned)) {

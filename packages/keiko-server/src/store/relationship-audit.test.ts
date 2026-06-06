@@ -45,7 +45,7 @@ describe("insertRelationshipAuditEntry", () => {
     const rows = listRelationshipAuditEntries(db, "ws-a", 64);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.kind).toBe("relationship.created");
-    expect(rows[0]?.payload["relationshipType"]).toBe("depends-on");
+    expect(rows[0]?.payload.relationshipType).toBe("depends-on");
     // Cross-workspace read returns nothing.
     expect(listRelationshipAuditEntries(db, "ws-b", 64)).toHaveLength(0);
   });
@@ -71,7 +71,7 @@ describe("insertRelationshipAuditEntry", () => {
     const rows = listRelationshipAuditEntries(db, "ws-a", 64);
     expect(rows[0]?.summary.includes("sk-")).toBe(false);
     expect(rows[0]?.summary).toContain("[REDACTED]");
-    expect(rows[0]?.payload["hint"]).not.toContain("sk-");
+    expect(rows[0]?.payload.hint).not.toContain("sk-");
   });
 
   it("rejects forbidden payload keys (audit-events.md §8.3)", () => {
