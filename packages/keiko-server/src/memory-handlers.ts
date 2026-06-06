@@ -43,7 +43,7 @@ import {
   type MemoryType,
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
-import type { RouteContext, RouteResult } from "./routes.js";
+import type { ApiError, RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -59,7 +59,7 @@ const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted"
 // Sanitise GovernanceError into a code-keyed safe response body. GovernanceError.message
 // is composed as `GovernanceError(${code}): ${detail}` and can embed memory UUIDs from
 // the inner detail string; the public surface should only expose the stable enum `code`.
-function governanceErrorBody(err: GovernanceError) {
+function governanceErrorBody(err: GovernanceError): ApiError {
   return errorBody("GOVERNANCE_ERROR", `Governance constraint violated (${err.code}).`);
 }
 
