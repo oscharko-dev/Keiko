@@ -5,7 +5,8 @@
   "type": "module",
   "license": "Apache-2.0",
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "npm": ">=10.9.0"
   },
   "packageManager": "npm@10.9.8",
   "workspaces": [
@@ -49,7 +50,7 @@
     "conversation:release-check": "npm run typecheck && npm run lint && npm run arch:check && npm run arch:check:negative && npm test && tsc -p tsconfig.build.json && node dist/cli/index.js --version",
     "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:package-surface && npm run check:qi-supply-chain",
     "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:package-surface && npm run check:qi-supply-chain",
-    "clean": "rm -rf dist coverage packages/keiko-contracts/dist packages/keiko-security/dist packages/keiko-quality-intelligence/dist packages/keiko-model-gateway/dist packages/keiko-workspace/dist packages/keiko-tools/dist packages/keiko-verification/dist packages/keiko-evidence/dist packages/keiko-local-knowledge/dist packages/keiko-harness/dist packages/keiko-workflows/dist packages/keiko-evaluations/dist packages/keiko-server/dist packages/keiko-cli/dist packages/keiko-memory-vault/dist packages/keiko-memory-capture/dist packages/keiko-memory-consolidation/dist packages/keiko-memory-governance/dist packages/keiko-memory-retrieval/dist packages/keiko-ui/.next packages/keiko-ui/out"
+    "clean": "node scripts/clean.mjs"
   },
   "overrides": {
     "postcss": "8.5.15",
