@@ -174,6 +174,22 @@ function producesEvidenceBody(sourceId: string, targetId: string): string {
   });
 }
 
+function dependsOnBody(
+  sourceKind: "capsule" | "capsule-set" | "workflow-run" | "memory",
+  sourceId: string,
+  targetKind: "capsule" | "capsule-set" | "workflow-run" | "memory" | "evidence-run" | "workspace-path",
+  targetId: string,
+): string {
+  return JSON.stringify({
+    schemaVersion: "1",
+    proposal: {
+      type: "depends-on",
+      source: { kind: sourceKind, id: sourceId },
+      target: { kind: targetKind, id: targetId },
+    },
+  });
+}
+
 beforeEach(() => {
   _resetIdempotencyStoreForTests();
 });
@@ -255,6 +271,29 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
     const listReq = makeReq({ method: "GET", url: "/api/relationships?type=depends-on" });
     const listRes = await handleRelationshipList(makeCtx(listReq), deps);
     expect((listRes.body as { entries: unknown[] }).entries).toHaveLength(0);
+  });
+
+  it("rejects unknown proposal fields instead of silently ignoring them", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const req = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "unknown-field-1" },
+      body: JSON.stringify({
+        schemaVersion: "1",
+        proposal: {
+          type: "depends-on",
+          source: { kind: "capsule", id: "cap-1" },
+          target: { kind: "capsule", id: "cap-2" },
+          metadata: { prompt: "should-not-be-ignored" },
+        },
+      }),
+    });
+    const res = await handleRelationshipCreate(makeCtx(req), deps);
+    expect(res.status).toBe(400);
+    expect((res.body as { error: { code: string } }).error.code).toBe("relationship/bad-request");
   });
 
   it("replays an identical body via cached idempotency record", async () => {
@@ -385,6 +424,35 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
       limit: 10,
     });
     expect(stored.entries).toHaveLength(1);
+  });
+
+  it("validate denies a direct reverse depends-on edge before persistence", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const seedReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "dep-seed-1" },
+      body: dependsOnBody("capsule", "cap-b", "capsule", "cap-a"),
+    });
+    const seedRes = await handleRelationshipCreate(makeCtx(seedReq), deps);
+    expect(seedRes.status).toBe(201);
+
+    const validateReq = makeReq({
+      method: "POST",
+      url: "/api/relationships/validate",
+      body: dependsOnBody("capsule", "cap-a", "capsule", "cap-b"),
+    });
+    const validateRes = await handleRelationshipValidate(makeCtx(validateReq), deps);
+    expect(validateRes.status).toBe(200);
+    const decision = (
+      validateRes.body as {
+        decision: { allowed: boolean; reasons: { code: string }[] };
+      }
+    ).decision;
+    expect(decision.allowed).toBe(false);
+    expect(decision.reasons.map((r) => r.code)).toContain("denied/cycle-forbidden");
   });
 
   it("sanitizes the create summary before persistence using deps.redactor", async () => {
@@ -548,6 +616,38 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     expect(res.status).toBe(200);
     expect(store.getRelationship("ws-a", id)?.summary).toBe("moved [REDACTED] into archive");
   });
+
+  it("rechecks reverse-edge cycles on transition back to active", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const reverseReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "dep-reverse-1" },
+      body: dependsOnBody("capsule", "cap-b", "capsule", "cap-a"),
+    });
+    expect((await handleRelationshipCreate(makeCtx(reverseReq), deps)).status).toBe(201);
+
+    const seeded = store.createRelationship({
+      workspaceId: "ws-a",
+      scope: { kind: "workspace", workspaceId: "ws-a" },
+      type: "depends-on",
+      source: { kind: "capsule", id: "cap-a" },
+      target: { kind: "capsule", id: "cap-b" },
+      lifecycleState: "blocked",
+    });
+    const patch = makeReq({
+      method: "PATCH",
+      url: `/api/relationships/${seeded.relationship.id}`,
+      headers: { "idempotency-key": "dep-reactivate-1", "if-match": seeded.etag },
+      body: JSON.stringify({ schemaVersion: "1", transition: { to: "active" } }),
+    });
+    const res = await handleRelationshipPatch(makeCtx(patch, { id: seeded.relationship.id }), deps);
+    expect(res.status).toBe(422);
+    const reasons = (res.body as { reasons: { code: string }[] }).reasons;
+    expect(reasons.map((r) => r.code)).toContain("denied/cycle-forbidden");
+  });
 });
 
 describe("PATCH /api/relationships/:id reconnect contract", () => {
@@ -617,6 +717,44 @@ describe("PATCH /api/relationships/:id reconnect contract", () => {
     const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
     expect(res.status).toBe(200);
     expect(store.getRelationship("ws-a", id)?.summary).toBe("relinked [REDACTED] target");
+  });
+
+  it("rejects reconnect when it would introduce a direct reverse depends-on edge", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const reverseReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "reconnect-cycle-1" },
+      body: dependsOnBody("capsule", "cap-b", "capsule", "cap-a"),
+    });
+    expect((await handleRelationshipCreate(makeCtx(reverseReq), deps)).status).toBe(201);
+
+    const createReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "reconnect-cycle-2" },
+      body: dependsOnBody("capsule", "cap-a", "capsule", "cap-c"),
+    });
+    const createRes = await handleRelationshipCreate(makeCtx(createReq), deps);
+    expect(createRes.status).toBe(201);
+    const id = (createRes.body as { relationship: { id: string } }).relationship.id;
+    const etag = (createRes.body as { etag: string }).etag;
+
+    const patch = makeReq({
+      method: "PATCH",
+      url: `/api/relationships/${id}`,
+      headers: { "idempotency-key": "reconnect-cycle-3", "if-match": etag },
+      body: JSON.stringify({
+        schemaVersion: "1",
+        reconnect: { target: { kind: "capsule", id: "cap-b" } },
+      }),
+    });
+    const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
+    expect(res.status).toBe(422);
+    const reasons = (res.body as { reasons: { code: string }[] }).reasons;
+    expect(reasons.map((r) => r.code)).toContain("denied/cycle-forbidden");
   });
 });
 

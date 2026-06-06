@@ -104,9 +104,9 @@ function validateRelationship(
 The function:
 
 - Is **pure** with respect to the input snapshot and the resolver: it does not write, mutate, or originate model/tool/network calls.
-- Composes decisions in the order specified by [denial-reasons.md §"Resolution order"](denial-reasons.md): identity checks first, then kind compatibility, then cardinality, then cycle detection, then scope, then path containment, then deny-list, then lifecycle, then endpoint liveness, then payload-content, then authority, then schema-version.
+- Rejects malformed or unsupported envelopes first (`schemaVersion`, unknown type/kind/lifecycle, missing required fields), then composes policy denials in the order specified by [denial-reasons.md §"Resolution order"](denial-reasons.md): endpoint identity first, then kind compatibility, then cardinality, then cycle detection, then scope, then path containment, then deny-list, then lifecycle, then deferred endpoint liveness, then payload-content, then authority.
 - Returns `{ allowed: false, reasons: [...] }` whenever any single check fails; the decision is deterministic and stable across repeat invocations on identical inputs.
-- Never short-circuits on an upstream identity check **for reporting**: reasons accumulate so the UI inspector renders one panel per failure. The exception is the structural identity prelude (non-existent endpoint or unknown forward-looking kind), which short-circuits because further evaluation is meaningless.
+- Never short-circuits on policy denials **for reporting**: reasons accumulate so the UI inspector renders one panel per failure. The exceptions are the structural envelope prelude and missing-endpoint identity failures, which short-circuit because further evaluation is meaningless.
 
 The validator is exhaustively tested in #538; reuse-first means the test harness shape comes from `boundary.test.ts` ([`packages/keiko-contracts/src/boundary.test.ts`](../../packages/keiko-contracts/src/boundary.test.ts)).
 

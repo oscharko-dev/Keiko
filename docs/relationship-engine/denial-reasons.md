@@ -12,7 +12,7 @@ The catalog is normative for issues [#535](https://github.com/oscharko-dev/Keiko
 
 ## Resolution order
 
-When more than one denial code applies to the same proposal, the validator returns reasons in the following order so the operator sees the most-structural failure first:
+When more than one denial code applies to the same structurally valid proposal, the validator returns reasons in the following order so the operator sees the most-structural failure first:
 
 1. `denied/non-existent-source`
 2. `denied/non-existent-target`
@@ -33,7 +33,7 @@ When more than one denial code applies to the same proposal, the validator retur
 17. `denied/authority-insufficient`
 18. `denied/schema-version-unsupported`
 
-A single `RelationshipPolicyDecision` MAY include more than one reason; the validator does not short-circuit unless an upstream identity check (codes 1, 2, or 3) fails.
+A single `RelationshipPolicyDecision` MAY include more than one reason. The validator first rejects malformed or unsupported envelopes (`schemaVersion`, unknown type/kind/lifecycle, missing required fields). For structurally valid proposals, it short-circuits only when endpoint identity fails (`denied/non-existent-source` / `denied/non-existent-target`); other resolver liveness codes remain in the ordered accumulation list above.
 
 ## Catalog
 

@@ -369,6 +369,14 @@ describe("validateRelationship — self-edge", () => {
     );
     expect(codesFrom(r)).not.toContain("denied/cycle-forbidden");
   });
+
+  it("rejects a direct reverse depends-on edge when ctx reports it already exists", () => {
+    const r = validateRelationship(
+      happy("depends-on", endpoint("capsule", "cap-a"), endpoint("capsule", "cap-b")),
+      { dependsOnReverseEdgeExists: true },
+    );
+    expect(codesFrom(r)).toContain("denied/cycle-forbidden");
+  });
 });
 
 // ─── Forbidden metadata ───────────────────────────────────────────────────────
@@ -619,6 +627,21 @@ describe("validateRelationship — endpoint resolver (ctx-gated)", () => {
       { endpointResolver: { source: "unavailable", target: "live" } },
     );
     expect(codesFrom(r)).toContain("denied/endpoint-unavailable");
+  });
+
+  it("defers tombstoned until after earlier denial classes in the documented order", () => {
+    const r = validateRelationship(
+      happy("reads-context", endpoint("chat", "c1"), endpoint("chat", "c2", "workspace-b")),
+      { endpointResolver: { source: "live", target: "tombstoned" } },
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    const codes = r.errors.map((e) => e.code);
+    expect(codes.indexOf("denied/target-kind-not-allowed")).toBeGreaterThanOrEqual(0);
+    expect(codes.indexOf("denied/cross-workspace")).toBeGreaterThanOrEqual(0);
+    expect(codes.indexOf("denied/endpoint-tombstoned")).toBeGreaterThan(
+      codes.indexOf("denied/cross-workspace"),
+    );
   });
 
   it("accepts when both endpoints are live", () => {

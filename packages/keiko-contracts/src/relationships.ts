@@ -419,6 +419,11 @@ export interface RelationshipValidationContext {
   // queries the relationship store for these counts BEFORE invoking the validator.
   readonly cardinalityCounts?: RelationshipCardinalityCounts;
 
+  // Optional O(1) reverse-edge snapshot for direct depends-on cycle rejection. The API
+  // layer supplies this when it can answer "does target -> source already exist?" without
+  // turning the pure validator into a graph walker.
+  readonly dependsOnReverseEdgeExists?: boolean;
+
   // Optional endpoint-liveness snapshot from the resolver port. Same pre-call pattern as
   // cardinalityCounts: the API layer composes the resolver, the validator stays pure.
   readonly endpointResolver?: RelationshipEndpointResolverResult;

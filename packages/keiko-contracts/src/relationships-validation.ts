@@ -402,6 +402,19 @@ function checkSelfEdge(
   return null;
 }
 
+function checkDirectDependsOnReverseEdge(
+  type: RelationshipType,
+  ctx: RelationshipValidationContext | undefined,
+): RelationshipValidationError | null {
+  if (type === "depends-on" && ctx?.dependsOnReverseEdgeExists === true) {
+    return makeError(
+      "denied/cycle-forbidden",
+      "depends-on reverse edge already exists for this endpoint pair",
+    );
+  }
+  return null;
+}
+
 // ─── Cross-workspace ──────────────────────────────────────────────────────────
 // The error message NEVER echoes the foreign workspace id: audit-events.md §8.3 lists
 // `proposedSourceId` / `proposedTargetId` / cross-workspace identifiers as FORBIDDEN.
@@ -545,6 +558,19 @@ function appendKindCompatibilityErrors(
   }
 }
 
+function appendCycleErrors(
+  type: RelationshipType,
+  sourceRef: ObjectReference,
+  targetRef: ObjectReference,
+  ctx: RelationshipValidationContext | undefined,
+  errors: RelationshipValidationError[],
+): void {
+  const selfEdge = checkSelfEdge(sourceRef, targetRef);
+  if (selfEdge) errors.push(selfEdge);
+  const reverseEdge = checkDirectDependsOnReverseEdge(type, ctx);
+  if (reverseEdge) errors.push(reverseEdge);
+}
+
 // Runs every accumulating check in the resolution-order documented by
 // denial-reasons.md. The helper is the seam between the short-circuit phase (above) and
 // the per-step pure helpers (cardinality / cycle / cross-workspace / lifecycle /
@@ -578,8 +604,7 @@ function runAccumulatingChecks(
   if (cardinality) errors.push(cardinality);
 
   // Resolution-order 8 — O(1) self-loop.
-  const selfEdge = checkSelfEdge(sourceRef, targetRef);
-  if (selfEdge) errors.push(selfEdge);
+  appendCycleErrors(type, sourceRef, targetRef, ctx, errors);
 
   // Resolution-order 9 — body-free cross-workspace.
   const cross = checkCrossWorkspace(record.workspaceId as string, sourceRef, targetRef);
@@ -589,6 +614,10 @@ function runAccumulatingChecks(
   const transition = checkLifecycleTransition(lifecycleState, ctx);
   if (transition) errors.push(transition);
 
+  // Resolution-order 13-15 — deferred endpoint liveness from the resolver port. Missing
+  // endpoints short-circuit earlier in `runResolverMissingCheck`.
+  appendDeferredResolverErrors(ctx, errors);
+
   // Resolution-order 16 — forbidden metadata keys.
   for (const error of checkForbiddenMetadata(record)) {
     errors.push(error);
@@ -597,17 +626,34 @@ function runAccumulatingChecks(
 }
 
 // Resolver-supplied identity codes (resolution-order 1 + 2). Returns the errors when
-// the resolver reports any failure (caller short-circuits); empty array when every
-// endpoint is live and ctx supplied an endpointResolver; null when ctx omitted it
-// entirely (so the caller knows to skip the gate).
-function runResolverCheck(
+// the resolver reports any missing endpoint (caller short-circuits); empty array when
+// ctx supplied an endpointResolver but both endpoints still exist; null when ctx omitted
+// endpoint resolution entirely.
+function runResolverMissingCheck(
   ctx: RelationshipValidationContext | undefined,
 ): readonly RelationshipValidationError[] | null {
   if (!ctx?.endpointResolver) return null;
   const errors: RelationshipValidationError[] = [];
-  appendResolverError("source", ctx.endpointResolver.source, errors);
-  appendResolverError("target", ctx.endpointResolver.target, errors);
+  if (ctx.endpointResolver.source === "missing") {
+    appendResolverError("source", ctx.endpointResolver.source, errors);
+  }
+  if (ctx.endpointResolver.target === "missing") {
+    appendResolverError("target", ctx.endpointResolver.target, errors);
+  }
   return errors;
+}
+
+function appendDeferredResolverErrors(
+  ctx: RelationshipValidationContext | undefined,
+  errors: RelationshipValidationError[],
+): void {
+  if (!ctx?.endpointResolver) return;
+  if (ctx.endpointResolver.source !== "missing") {
+    appendResolverError("source", ctx.endpointResolver.source, errors);
+  }
+  if (ctx.endpointResolver.target !== "missing") {
+    appendResolverError("target", ctx.endpointResolver.target, errors);
+  }
 }
 
 export function validateRelationship(
@@ -627,7 +673,7 @@ export function validateRelationship(
 
   // Resolver identity is the most-structural failure (denial-reasons.md "Resolution
   // order" 1 + 2). When the resolver reports any failure, short-circuit.
-  const resolverErrors = runResolverCheck(ctx);
+  const resolverErrors = runResolverMissingCheck(ctx);
   if (resolverErrors !== null && resolverErrors.length > 0) {
     return { ok: false, errors: resolverErrors };
   }
