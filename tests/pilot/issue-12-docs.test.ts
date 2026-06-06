@@ -23,7 +23,7 @@ function readCiJobBlock(): string {
   const block = [];
   for (let index = start; index < lines.length; index += 1) {
     const line = lines[index] ?? "";
-    if (index > start && /^  [^ ]/u.test(line)) break;
+    if (index > start && /^ {2}[^ ]/u.test(line)) break;
     block.push(line);
   }
   return block.join("\n");
