@@ -1,10 +1,6 @@
-// Local copy of the root product SDK_VERSION constant. The CLI surfaces this via
-// `keiko --version`. Kept as a literal (not a deep `../../../src/sdk/index.js`
-// re-export) for the same reason as keiko-server's _sdk-version.ts: under
-// composite: true + rootDir: "../..", the root SDK module transitively pulls in
-// src/evaluations and src/cli, which would force a circular include into this
-// package and trigger TS6307. The spec discourages inventing a port for a single
-// string constant; a single-line literal kept in sync with the root
-// src/sdk/index.ts SDK_VERSION (and the root package.json "version" field) is
-// the minimal-surface alternative.
-export const SDK_VERSION = "0.1.7";
+// Re-exported product version. The authoritative source is KEIKO_PRODUCT_VERSION in
+// @oscharko-dev/keiko-contracts. SDK_VERSION is the CLI-facing alias surfaced by
+// `keiko --version`. After issue #426 the legacy src shims were deleted, so the deep
+// re-export risk that originally motivated a duplicate literal no longer applies.
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";
+export const SDK_VERSION: string = KEIKO_PRODUCT_VERSION;
