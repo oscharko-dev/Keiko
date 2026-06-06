@@ -1,3 +1,7 @@
+// Memory-specific packaged-install smoke. Retained separately from installable-package-smoke
+// because this flow proves the shipped UI/BFF memory runtime with a fake model provider, while the
+// generic install smoke stays fast and focused on the root artifact contract.
+
 import { Buffer } from "node:buffer";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
