@@ -262,6 +262,7 @@ module.exports = {
           "^(packages/keiko-evaluations/src/|" +
           "src/evaluations/|" +
           "tests/architecture/fixtures/evaluations/)",
+        pathNot: "\\.test\\.ts$",
       },
       to: {
         path:

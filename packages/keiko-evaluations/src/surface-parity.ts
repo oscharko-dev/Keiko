@@ -206,7 +206,8 @@ async function checkSdkExports(): Promise<readonly SurfaceParityCheckResult[]> {
   // pull the legacy src/sdk tree into the keiko-evaluations program; the import resolves at runtime
   // from inside the bundled root product where src/sdk is on disk.
   const sdkPath = "../../../src/sdk/index.js";
-  const sdk = (await import(sdkPath)) as Record<string, unknown>;
+  const sdkModule: unknown = await import(sdkPath);
+  const sdk = sdkModule as Record<string, unknown>;
   return SDK_EXPORT_EXPECTATIONS.map((expectation) => {
     const missing = [
       ...(typeof sdk[expectation.functionExport] === "function"
@@ -231,7 +232,8 @@ async function checkRunRequestShapes(): Promise<readonly SurfaceParityCheckResul
   // facade. The variable-path dynamic import resolves at runtime only, keeping the legacy src/ui
   // tree out of the keiko-evaluations TypeScript program.
   const uiPath = "../../../src/ui/index.js";
-  const ui = (await import(uiPath)) as {
+  const uiModule: unknown = await import(uiPath);
+  const ui = uiModule as {
     parseRunRequest: (
       input: string,
     ) => Record<string, unknown> & { code?: string; message?: string };

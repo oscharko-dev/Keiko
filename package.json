@@ -29,7 +29,7 @@
   ],
   "sideEffects": false,
   "scripts": {
-    "build:packages": "npm --workspace @oscharko-dev/keiko-contracts run build && npm --workspace @oscharko-dev/keiko-security run build && npm --workspace @oscharko-dev/keiko-quality-intelligence run build && npm --workspace @oscharko-dev/keiko-model-gateway run build && npm --workspace @oscharko-dev/keiko-workspace run build && npm --workspace @oscharko-dev/keiko-tools run build && npm --workspace @oscharko-dev/keiko-verification run build && npm --workspace @oscharko-dev/keiko-evidence run build && npm --workspace @oscharko-dev/keiko-local-knowledge run build && npm --workspace @oscharko-dev/keiko-memory-vault run build && npm --workspace @oscharko-dev/keiko-memory-capture run build && npm --workspace @oscharko-dev/keiko-memory-consolidation run build && npm --workspace @oscharko-dev/keiko-memory-governance run build && npm --workspace @oscharko-dev/keiko-memory-retrieval run build && npm --workspace @oscharko-dev/keiko-harness run build && npm --workspace @oscharko-dev/keiko-workflows run build && npm --workspace @oscharko-dev/keiko-server run build && npm --workspace @oscharko-dev/keiko-cli run build",
+    "build:packages": "npm --workspace @oscharko-dev/keiko-contracts run build && npm --workspace @oscharko-dev/keiko-security run build && npm --workspace @oscharko-dev/keiko-quality-intelligence run build && npm --workspace @oscharko-dev/keiko-model-gateway run build && npm --workspace @oscharko-dev/keiko-workspace run build && npm --workspace @oscharko-dev/keiko-tools run build && npm --workspace @oscharko-dev/keiko-verification run build && npm --workspace @oscharko-dev/keiko-evidence run build && npm --workspace @oscharko-dev/keiko-local-knowledge run build && npm --workspace @oscharko-dev/keiko-memory-vault run build && npm --workspace @oscharko-dev/keiko-memory-capture run build && npm --workspace @oscharko-dev/keiko-memory-consolidation run build && npm --workspace @oscharko-dev/keiko-memory-governance run build && npm --workspace @oscharko-dev/keiko-memory-retrieval run build && npm --workspace @oscharko-dev/keiko-harness run build && npm --workspace @oscharko-dev/keiko-workflows run build && npm --workspace @oscharko-dev/keiko-evaluations run build && npm --workspace @oscharko-dev/keiko-server run build && npm --workspace @oscharko-dev/keiko-cli run build",
     "build": "npm run build:packages && tsc -p tsconfig.build.json",
     "typecheck": "npm run build:packages && tsc -p tsconfig.json --noEmit",
     "lint": "eslint . --max-warnings=0",
@@ -49,7 +49,7 @@
     "conversation:release-check": "npm run typecheck && npm run lint && npm run arch:check && npm run arch:check:negative && npm test && tsc -p tsconfig.build.json && node dist/cli/index.js --version",
     "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:package-surface && npm run check:qi-supply-chain",
     "prepublishOnly": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run check:package-surface && npm run check:qi-supply-chain",
-    "clean": "rm -rf dist coverage packages/keiko-contracts/dist packages/keiko-security/dist packages/keiko-quality-intelligence/dist packages/keiko-model-gateway/dist packages/keiko-workspace/dist packages/keiko-tools/dist packages/keiko-verification/dist packages/keiko-evidence/dist packages/keiko-local-knowledge/dist packages/keiko-harness/dist packages/keiko-workflows/dist packages/keiko-server/dist packages/keiko-cli/dist packages/keiko-memory-vault/dist packages/keiko-memory-capture/dist packages/keiko-memory-consolidation/dist packages/keiko-memory-governance/dist packages/keiko-memory-retrieval/dist packages/keiko-ui/.next packages/keiko-ui/out"
+    "clean": "rm -rf dist coverage packages/keiko-contracts/dist packages/keiko-security/dist packages/keiko-quality-intelligence/dist packages/keiko-model-gateway/dist packages/keiko-workspace/dist packages/keiko-tools/dist packages/keiko-verification/dist packages/keiko-evidence/dist packages/keiko-local-knowledge/dist packages/keiko-harness/dist packages/keiko-workflows/dist packages/keiko-evaluations/dist packages/keiko-server/dist packages/keiko-cli/dist packages/keiko-memory-vault/dist packages/keiko-memory-capture/dist packages/keiko-memory-consolidation/dist packages/keiko-memory-governance/dist packages/keiko-memory-retrieval/dist packages/keiko-ui/.next packages/keiko-ui/out"
   },
   "overrides": {
     "postcss": "8.5.15",
@@ -81,6 +81,7 @@
     "@oscharko-dev/keiko-memory-vault": "*",
     "@oscharko-dev/keiko-model-gateway": "*",
     "@oscharko-dev/keiko-security": "*",
+    "@oscharko-dev/keiko-evaluations": "*",
     "@oscharko-dev/keiko-server": "*",
     "@oscharko-dev/keiko-tools": "*",
     "@oscharko-dev/keiko-verification": "*",
@@ -105,6 +106,7 @@
     "@oscharko-dev/keiko-memory-retrieval",
     "@oscharko-dev/keiko-harness",
     "@oscharko-dev/keiko-workflows",
+    "@oscharko-dev/keiko-evaluations",
     "@oscharko-dev/keiko-server",
     "@oscharko-dev/keiko-cli"
   ]
