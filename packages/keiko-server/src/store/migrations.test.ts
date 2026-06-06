@@ -148,6 +148,108 @@ describe("runMigrations", () => {
     expect(row.connected_scope_at).toBeNull();
   });
 
+  it("v5 creates relationship tables with the documented columns and indexes (issue #539)", () => {
+    const db = openMem();
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(5);
+    const names = tableNames(db);
+    expect(names).toContain("relationships");
+    expect(names).toContain("relationship_lifecycle_history");
+    expect(names).toContain("relationship_audit_entries");
+    const relCols = (
+      db.prepare("PRAGMA table_info(relationships)").all() as { name: string }[]
+    ).map((c) => c.name);
+    for (const expected of [
+      "id",
+      "schema_version",
+      "workspace_scope_id",
+      "scope_kind",
+      "scope_coordinate",
+      "type",
+      "source_kind",
+      "source_id",
+      "target_kind",
+      "target_id",
+      "lifecycle",
+      "created_at",
+      "updated_at",
+      "etag",
+      "confidence",
+      "summary",
+    ]) {
+      expect(relCols).toContain(expected);
+    }
+    const auditCols = (
+      db.prepare("PRAGMA table_info(relationship_audit_entries)").all() as { name: string }[]
+    ).map((c) => c.name);
+    for (const expected of [
+      "event_id",
+      "relationship_audit_schema_ver",
+      "workspace_id",
+      "sequence",
+      "occurred_at",
+      "kind",
+      "relationship_id",
+      "actor_surface",
+      "redacted_actor_id",
+      "redaction_state",
+      "summary",
+      "payload_json",
+    ]) {
+      expect(auditCols).toContain(expected);
+    }
+    const indexes = (
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'" +
+            " ORDER BY name",
+        )
+        .all() as { name: string }[]
+    ).map((r) => r.name);
+    expect(indexes).toContain("idx_relationships_source");
+    expect(indexes).toContain("idx_relationships_target");
+    expect(indexes).toContain("idx_relationships_type");
+    expect(indexes).toContain("idx_relationships_lifecycle");
+    expect(indexes).toContain("uniq_relationships_produces_evidence_source");
+    expect(indexes).toContain("uniq_relationships_starts_workflow_target");
+    expect(indexes).toContain("uniq_relationship_audit_workspace_sequence");
+  });
+
+  it("v5 partial unique index enforces produces-evidence 1:1 on source (#539)", () => {
+    const db = openMem();
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    // Insert a first produces-evidence relationship.
+    const insert = (id: string): void => {
+      db.exec(
+        `INSERT INTO relationships(id, schema_version, workspace_scope_id, scope_kind,
+          scope_coordinate, type, source_kind, source_id, target_kind, target_id, lifecycle,
+          created_at, updated_at, etag)
+         VALUES ('${id}','1','ws-1','workspace','ws-1','produces-evidence','workflow-run',
+          'run-1','evidence-run','ev-${id}','active',1,1,'etag-${id}')`,
+      );
+    };
+    insert("rel-1");
+    expect(() => {
+      insert("rel-2");
+    }).toThrow();
+    // The barrier only applies while lifecycle is in the active set; a revoked row co-exists.
+    db.exec(`UPDATE relationships SET lifecycle='revoked' WHERE id='rel-1'`);
+    expect(() => {
+      insert("rel-3");
+    }).not.toThrow();
+  });
+
+  it("v5 migration is idempotent (issue #539)", () => {
+    const db = openMem();
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    const before = userVersion(db);
+    runMigrations(db);
+    expect(userVersion(db)).toBe(before);
+  });
+
   it("v2 migration is forward-compatible from v1 state", () => {
     // Build a DB that explicitly sits at user_version = 1 with the v1 chat_messages shape (no
     // task_type column). Run migrations; v2 ALTER must add task_type without dropping existing

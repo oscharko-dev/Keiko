@@ -94,6 +94,19 @@ import {
   handleStartLocalKnowledgeCapsuleIndexing,
 } from "./local-knowledge-handlers.js";
 import {
+  handleRelationshipCreate,
+  handleRelationshipDelete,
+  handleRelationshipDependencies,
+  handleRelationshipEvents,
+  handleRelationshipExplain,
+  handleRelationshipGet,
+  handleRelationshipHealth,
+  handleRelationshipImpact,
+  handleRelationshipList,
+  handleRelationshipPatch,
+  handleRelationshipValidate,
+} from "./relationship-handlers.js";
+import {
   handleQiCapabilities,
   handleQiDryRunFigma,
   handleQiDryRunJira,
@@ -350,6 +363,26 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // keiko-evidence UNCHANGED (ADR-0023 D8).
   { method: "GET", pattern: "/api/quality-intelligence/runs", handler: handleListQiRuns },
   { method: "GET", pattern: "/api/quality-intelligence/runs/:id", handler: handleGetQiRun },
+  // Issue #539 (Epic #532) — relationship engine routes. The api-contract.md §2 ordering
+  // is preserved; literal-suffix paths (validate, impact, health, events) come BEFORE the
+  // `:id`-templated routes so matchRoute returns the literal handler instead of binding
+  // "validate" / "impact" / "health" / "events" to the `:id` param. Internal route #11
+  // (events) returns the STREAMING sentinel from `handleRelationshipEvents`.
+  { method: "POST", pattern: "/api/relationships/validate", handler: handleRelationshipValidate },
+  { method: "GET", pattern: "/api/relationships/impact", handler: handleRelationshipImpact },
+  { method: "GET", pattern: "/api/relationships/health", handler: handleRelationshipHealth },
+  { method: "GET", pattern: "/api/relationships/events", handler: handleRelationshipEvents },
+  { method: "POST", pattern: "/api/relationships", handler: handleRelationshipCreate },
+  { method: "GET", pattern: "/api/relationships", handler: handleRelationshipList },
+  { method: "GET", pattern: "/api/relationships/:id", handler: handleRelationshipGet },
+  { method: "PATCH", pattern: "/api/relationships/:id", handler: handleRelationshipPatch },
+  { method: "DELETE", pattern: "/api/relationships/:id", handler: handleRelationshipDelete },
+  {
+    method: "GET",
+    pattern: "/api/relationships/:id/dependencies",
+    handler: handleRelationshipDependencies,
+  },
+  { method: "GET", pattern: "/api/relationships/:id/explain", handler: handleRelationshipExplain },
   // Issue #281 (Epic #270) — Conversation Center → QI workflow handoff route group.
   // Single POST seam; the body is a typed `QualityIntelligenceConversationCenterHandoff`
   // envelope (refs only, no chat content). Registered as a sibling group so concurrent
