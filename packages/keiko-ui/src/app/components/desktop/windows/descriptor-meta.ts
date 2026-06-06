@@ -1,0 +1,166 @@
+// Epic #518 / Issue #528 — Workspace object descriptor metadata table.
+//
+// ADR-0029 extends the existing WindowsRegistry.ts with four declarative
+// metadata fields per object type: lifecycle, trustBoundary, authority,
+// persistence. To keep the existing 377-line registry file unchanged, the
+// extension lives in this sidecar table.
+//
+// The closed-set enums are owned by @oscharko-dev/keiko-contracts; the
+// validator runs at module evaluation in dev/test and throws on any
+// inconsistency. The unit test in descriptor-meta.test.ts is the
+// production assertion that the table is consistent.
+
+import {
+  type WorkspaceDescriptorMeta,
+  validateWorkspaceDescriptorMeta,
+} from "@oscharko-dev/keiko-contracts";
+import type { WindowType } from "./WindowsRegistry";
+
+// ─── Meta table: one entry per WindowType ─────────────────────────────────
+
+export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
+  chat: {
+    lifecycle: ["draft", "streaming", "final", "archived"],
+    trustBoundary: ["ui", "model", "evidence"],
+    authority: "user-confirm",
+    persistence: "durable.ui",
+  },
+  files: {
+    lifecycle: ["connecting", "connected", "degraded", "disconnected", "error"],
+    trustBoundary: ["ui", "fs"],
+    authority: "user",
+    persistence: "fs-reference",
+  },
+  editor: {
+    lifecycle: ["viewing", "editing", "unsaved", "saved", "error"],
+    trustBoundary: ["ui", "fs"],
+    authority: "user",
+    persistence: "fs-reference",
+  },
+  browser: {
+    lifecycle: ["idle", "live", "error"],
+    trustBoundary: ["ui", "network"],
+    authority: "user-confirm",
+    persistence: "transient",
+  },
+  terminal: {
+    lifecycle: ["idle", "running", "blocked", "cancelled", "error"],
+    trustBoundary: ["ui", "tool"],
+    authority: "user-confirm",
+    persistence: "transient",
+  },
+  review: {
+    lifecycle: ["proposed", "needs-review", "applied", "reverted", "archived"],
+    trustBoundary: ["ui", "evidence"],
+    authority: "user-confirm",
+    persistence: "evidence-reference",
+  },
+  agents: {
+    lifecycle: ["proposed", "running", "blocked", "needs-review", "verified", "cancelled"],
+    trustBoundary: ["ui", "model", "tool", "evidence"],
+    authority: "user-confirm",
+    persistence: "durable.ui",
+  },
+  integ: {
+    lifecycle: ["idle", "connecting", "connected", "degraded", "disconnected", "error"],
+    trustBoundary: ["ui", "network"],
+    authority: "user-confirm",
+    persistence: "durable.config",
+  },
+  keiko: {
+    lifecycle: ["live"],
+    trustBoundary: ["ui", "memory"],
+    authority: "user",
+    persistence: "memory-reference",
+  },
+  settings: {
+    lifecycle: ["viewing", "editing", "saved"],
+    trustBoundary: ["ui"],
+    authority: "user",
+    persistence: "durable.config",
+  },
+  project: {
+    lifecycle: ["none", "connecting", "connected", "disconnected"],
+    trustBoundary: ["ui", "fs"],
+    authority: "user",
+    persistence: "durable.config",
+  },
+  search: {
+    lifecycle: ["idle", "searching", "results", "error"],
+    trustBoundary: ["ui", "fs"],
+    authority: "read-only",
+    persistence: "transient",
+  },
+  plugins: {
+    lifecycle: ["idle", "installed", "disabled", "enabled"],
+    trustBoundary: ["ui"],
+    authority: "user",
+    persistence: "durable.config",
+  },
+  automations: {
+    lifecycle: ["idle", "enabled", "disabled"],
+    trustBoundary: ["ui"],
+    authority: "user",
+    persistence: "durable.config",
+  },
+  mobile: {
+    lifecycle: ["paired", "unpaired", "error"],
+    trustBoundary: ["ui", "network"],
+    authority: "user-confirm",
+    persistence: "durable.config",
+  },
+  inspector: {
+    lifecycle: ["empty", "focused"],
+    trustBoundary: ["ui"],
+    authority: "ui-only",
+    persistence: "transient",
+  },
+  activity: {
+    lifecycle: ["live", "archived"],
+    trustBoundary: ["ui"],
+    authority: "read-only",
+    persistence: "transient",
+  },
+  notifications: {
+    lifecycle: ["unread", "read", "dismissed"],
+    trustBoundary: ["ui"],
+    authority: "ui-only",
+    persistence: "transient",
+  },
+  resources: {
+    lifecycle: ["live"],
+    trustBoundary: ["ui"],
+    authority: "read-only",
+    persistence: "transient",
+  },
+};
+
+// ─── Module-evaluation validation ─────────────────────────────────────────
+//
+// In dev / test (Vitest / Next.js dev server), the entire table is
+// validated when this module loads. A misconfigured descriptor throws
+// before any user action. Production builds rely on the descriptor-meta
+// test (in tests above and in CI) — the same validator running per row.
+
+export function validateAllDescriptorMeta(): readonly string[] {
+  const errors: string[] = [];
+  for (const type of Object.keys(WIN_META) as WindowType[]) {
+    const meta = WIN_META[type];
+    const found = validateWorkspaceDescriptorMeta(type, meta);
+    for (const e of found) {
+      errors.push(`[${e.objectType}].${e.field}: ${e.message}`);
+    }
+  }
+  return errors;
+}
+
+// `process.env.NODE_ENV` is exposed by Next.js. In production builds the
+// guard skips the throw so a hot path is never blocked by descriptor
+// validation; the unit test in descriptor-meta.test.ts is the production
+// assertion.
+if (typeof process !== "undefined" && process.env["NODE_ENV"] !== "production") {
+  const errors = validateAllDescriptorMeta();
+  if (errors.length > 0) {
+    throw new Error(`Workspace descriptor meta table failed validation:\n  ${errors.join("\n  ")}`);
+  }
+}
