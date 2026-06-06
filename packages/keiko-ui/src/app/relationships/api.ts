@@ -31,8 +31,8 @@ export interface ApiRelationship {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly etag: number;
-  readonly confidence?: number;
-  readonly summary?: string;
+  readonly confidence?: number | undefined;
+  readonly summary?: string | undefined;
 }
 
 export interface ApiError {
@@ -79,7 +79,7 @@ export interface DependencyReport {
   readonly rootRelationshipId: string;
   readonly depthReached: number;
   readonly truncated: boolean;
-  readonly truncationReason?: string;
+  readonly truncationReason?: string | undefined;
   readonly relationships: readonly ApiRelationship[];
   readonly endpoints: readonly DependencyNode[];
 }
@@ -95,18 +95,18 @@ export interface CreateRelationshipProposal {
   readonly type: RelationshipType;
   readonly source: { readonly kind: RelationshipObjectKind; readonly id: string };
   readonly target: { readonly kind: RelationshipObjectKind; readonly id: string };
-  readonly summary?: string;
+  readonly summary?: string | undefined;
 }
 
 export interface ListRelationshipsQuery {
-  readonly lifecycle?: RelationshipLifecycleState;
-  readonly type?: RelationshipType;
-  readonly sourceKind?: RelationshipObjectKind;
-  readonly targetKind?: RelationshipObjectKind;
-  readonly sourceId?: string;
-  readonly targetId?: string;
-  readonly limit?: number;
-  readonly cursor?: string;
+  readonly lifecycle?: RelationshipLifecycleState | undefined;
+  readonly type?: RelationshipType | undefined;
+  readonly sourceKind?: RelationshipObjectKind | undefined;
+  readonly targetKind?: RelationshipObjectKind | undefined;
+  readonly sourceId?: string | undefined;
+  readonly targetId?: string | undefined;
+  readonly limit?: number | undefined;
+  readonly cursor?: string | undefined;
 }
 
 // ─── Error class ──────────────────────────────────────────────────────────────

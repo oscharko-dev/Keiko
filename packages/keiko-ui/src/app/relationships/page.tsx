@@ -19,7 +19,7 @@
 
 import type { ReactNode } from "react";
 import { Suspense } from "react";
-import { RelationshipsView } from "./RelationshipsView.js";
+import { RelationshipsView } from "./RelationshipsView";
 
 // ─── Loading skeleton ──────────────────────────────────────────────────────────
 // Shown while the Client Component shell hydrates. Reuses existing CSS variables only.

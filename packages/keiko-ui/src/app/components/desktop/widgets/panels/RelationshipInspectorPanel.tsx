@@ -39,9 +39,9 @@ import {
   patchRelationship,
   deleteRelationship,
   RelationshipApiError,
-} from "../../../../relationships/api.js";
-import type { ApiRelationship, ExplainResult } from "../../../../relationships/api.js";
-import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge.js";
+} from "../../../../relationships/api";
+import type { ApiRelationship, ExplainResult } from "../../../../relationships/api";
+import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge";
 
 // ─── Authority disclaimer constant (inspector-spec.md §6) ─────────────────────
 // Verbatim string — never interpolated, never translated (Wave 3 non-goal).

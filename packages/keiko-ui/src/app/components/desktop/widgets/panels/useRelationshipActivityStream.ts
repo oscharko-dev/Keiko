@@ -81,7 +81,7 @@ interface ActivityEvent {
   readonly id: string;
   readonly state: RelationshipActivityState;
   readonly timestamp: number;
-  readonly count?: number;
+  readonly count?: number | undefined;
 }
 
 function isValidActivityState(v: unknown): v is RelationshipActivityState {

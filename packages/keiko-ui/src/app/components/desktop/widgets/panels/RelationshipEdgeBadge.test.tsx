@@ -12,7 +12,7 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import { axe, toHaveNoViolations } from "jest-axe";
-import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge.js";
+import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge";
 import type { RelationshipActivityState } from "@oscharko-dev/keiko-contracts";
 
 expect.extend(toHaveNoViolations);
@@ -178,7 +178,7 @@ describe("RelationshipEdgeBadge", () => {
 
     it("passes axe on failed state without onClick", async () => {
       const { container } = render(
-        <RelationshipEdgeBadge type="reads-context" lifecycle="failed" activity="failed" />,
+        <RelationshipEdgeBadge type="reads-context" lifecycle="revoked" activity="failed" />,
       );
       const results = await axe(container);
       expect(results).toHaveNoViolations();

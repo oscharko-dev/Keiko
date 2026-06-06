@@ -18,8 +18,8 @@ import { renderHook } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { axe, toHaveNoViolations } from "jest-axe";
 import type { ReactNode } from "react";
-import { useRelationshipActivityStream, N_VISIBLE } from "./useRelationshipActivityStream.js";
-import { RelationshipEdgeBadge, ACTIVITY_VISUALS } from "./RelationshipEdgeBadge.js";
+import { useRelationshipActivityStream, N_VISIBLE } from "./useRelationshipActivityStream";
+import { RelationshipEdgeBadge, ACTIVITY_VISUALS } from "./RelationshipEdgeBadge";
 import type { RelationshipActivityState } from "@oscharko-dev/keiko-contracts";
 import { RELATIONSHIP_ACTIVITY_STATES } from "@oscharko-dev/keiko-contracts";
 
@@ -160,7 +160,7 @@ describe("useRelationshipActivityStream", () => {
         });
 
         await waitFor(() => {
-          expect(captured?.activityMap.get("rel-1")).toBe(state);
+          expect(captured!.activityMap.get("rel-1")).toBe(state);
         });
       },
     );
@@ -181,7 +181,7 @@ describe("useRelationshipActivityStream", () => {
       );
 
       await waitFor(() => expect(captured).not.toBeNull());
-      expect(captured?.animate).toBe(false);
+      expect(captured!.animate).toBe(false);
     });
 
     it("animate is true when prefers-reduced-motion is not set", async () => {
@@ -198,7 +198,7 @@ describe("useRelationshipActivityStream", () => {
       );
 
       await waitFor(() => expect(captured).not.toBeNull());
-      expect(captured?.animate).toBe(true);
+      expect(captured!.animate).toBe(true);
     });
   });
 
@@ -215,14 +215,14 @@ describe("useRelationshipActivityStream", () => {
       );
 
       await waitFor(() => expect(captured).not.toBeNull());
-      expect(captured?.animate).toBe(true);
+      expect(captured!.animate).toBe(true);
 
       act(() => {
-        captured?.disable();
+        captured!.disable();
       });
 
       await waitFor(() => {
-        expect(captured?.animate).toBe(false);
+        expect(captured!.animate).toBe(false);
       });
     });
   });
@@ -254,7 +254,7 @@ describe("useRelationshipActivityStream", () => {
       });
 
       await waitFor(() => {
-        expect(captured?.activityMap.size ?? 0).toBe(50);
+        expect(captured!.activityMap.size ?? 0).toBe(50);
       });
 
       // Verify badge rendering honors N_VISIBLE: only first 25 should be animated.
@@ -303,7 +303,7 @@ describe("useRelationshipActivityStream", () => {
       });
 
       await waitFor(() => {
-        expect(captured?.throughputMap.get("rel-ht")).toBe(73);
+        expect(captured!.throughputMap.get("rel-ht")).toBe(73);
       });
 
       // Render the badge and confirm the count appears in the label.
@@ -398,7 +398,7 @@ describe("useRelationshipActivityStream", () => {
 
       // Wait a tick; the map should NOT contain rel-bad.
       await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(captured?.activityMap.has("rel-bad")).toBe(false);
+      expect(captured!.activityMap.has("rel-bad")).toBe(false);
     });
 
     it("drops a message with an 'apikey' key nested in the payload", async () => {
@@ -425,7 +425,7 @@ describe("useRelationshipActivityStream", () => {
       });
 
       await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(captured?.activityMap.has("rel-apikey")).toBe(false);
+      expect(captured!.activityMap.has("rel-apikey")).toBe(false);
     });
 
     it("accepts a clean event with no forbidden keys", async () => {
@@ -449,7 +449,7 @@ describe("useRelationshipActivityStream", () => {
       });
 
       await waitFor(() => {
-        expect(captured?.activityMap.get("rel-clean")).toBe("completed");
+        expect(captured!.activityMap.get("rel-clean")).toBe("completed");
       });
     });
   });

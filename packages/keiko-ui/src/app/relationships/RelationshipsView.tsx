@@ -22,12 +22,12 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { RelationshipFilters } from "../components/desktop/widgets/panels/RelationshipListPanel.js";
-import { RelationshipListPanel } from "../components/desktop/widgets/panels/RelationshipListPanel.js";
-import { RelationshipInspectorPanel } from "../components/desktop/widgets/panels/RelationshipInspectorPanel.js";
-import type { DensityMode } from "../components/desktop/widgets/panels/RelationshipListPanel.js";
-import { RelationshipCreateDialog } from "../components/desktop/modals/RelationshipCreateDialog.js";
-import type { ApiRelationship } from "./api.js";
+import type { RelationshipFilters } from "../components/desktop/widgets/panels/RelationshipListPanel";
+import { RelationshipListPanel } from "../components/desktop/widgets/panels/RelationshipListPanel";
+import { RelationshipInspectorPanel } from "../components/desktop/widgets/panels/RelationshipInspectorPanel";
+import type { DensityMode } from "../components/desktop/widgets/panels/RelationshipListPanel";
+import { RelationshipCreateDialog } from "../components/desktop/modals/RelationshipCreateDialog";
+import type { ApiRelationship } from "./api";
 
 // ─── Component ─────────────────────────────────────────────────────────────────
 

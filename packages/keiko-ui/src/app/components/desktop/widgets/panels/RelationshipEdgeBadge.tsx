@@ -350,22 +350,22 @@ export interface RelationshipEdgeBadgeProps {
   /** Transient derived activity state (not persisted). */
   readonly activity: RelationshipActivityState;
   /** Optional count for high-throughput aggregate display. */
-  readonly throughputCount?: number;
+  readonly throughputCount?: number | undefined;
   /**
    * Override from useRelationshipActivityStream.animate.
    * When false, the processing spinning-circle is rendered statically
    * (prefers-reduced-motion or user disabled animations).
    * Defaults to true (animate if the state supports it).
    */
-  readonly animateOverride?: boolean;
+  readonly animateOverride?: boolean | undefined;
   /**
    * When true, renders high-contrast variant: drops color-mix backgrounds,
    * uses full-opacity state color + border. For prefers-contrast: more.
    * Defaults to false.
    */
-  readonly highContrast?: boolean;
+  readonly highContrast?: boolean | undefined;
   /** Called when the badge is clicked (e.g. to focus the inspector). */
-  readonly onClick?: () => void;
+  readonly onClick?: (() => void) | undefined;
   /** Additional CSS class names. */
   readonly className?: string;
 }

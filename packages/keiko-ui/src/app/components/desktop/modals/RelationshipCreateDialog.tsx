@@ -28,8 +28,8 @@ import {
   createRelationship,
   validateRelationshipProposal,
   RelationshipApiError,
-} from "../../../relationships/api.js";
-import type { ApiRelationship } from "../../../relationships/api.js";
+} from "../../../relationships/api";
+import type { ApiRelationship } from "../../../relationships/api";
 
 // ─── Per-denial-code UI messages (verbatim from denial-reasons.md) ─────────────
 // These are displayed only when the server returns a denial — never invented by the UI.

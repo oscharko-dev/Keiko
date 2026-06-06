@@ -18,8 +18,8 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { axe, toHaveNoViolations } from "jest-axe";
-import { RelationshipListPanel } from "./RelationshipListPanel.js";
-import type { RelationshipFilters } from "./RelationshipListPanel.js";
+import { RelationshipListPanel } from "./RelationshipListPanel";
+import type { RelationshipFilters } from "./RelationshipListPanel";
 
 expect.extend(toHaveNoViolations);
 
@@ -40,7 +40,7 @@ vi.mock("../../../../relationships/api.js", () => ({
   },
 }));
 
-import { listRelationships } from "../../../../relationships/api.js";
+import { listRelationships } from "../../../../relationships/api";
 
 const mockListRelationships = vi.mocked(listRelationships);
 

@@ -18,7 +18,7 @@ import { axe, toHaveNoViolations } from "jest-axe";
 import {
   RelationshipInspectorPanel,
   RELATIONSHIP_AUTHORITY_DISCLAIMER,
-} from "./RelationshipInspectorPanel.js";
+} from "./RelationshipInspectorPanel";
 
 expect.extend(toHaveNoViolations);
 
@@ -43,7 +43,7 @@ vi.mock("../../../../relationships/api.js", () => ({
   },
 }));
 
-import { getRelationship, getExplain, patchRelationship } from "../../../../relationships/api.js";
+import { getRelationship, getExplain, patchRelationship } from "../../../../relationships/api";
 
 const mockGetRelationship = vi.mocked(getRelationship);
 const mockGetExplain = vi.mocked(getExplain);
@@ -68,7 +68,7 @@ const BASE_EXPLAIN = {
   decision: { allowed: true, reasons: [] },
   lifecycle: [
     {
-      from: "pending" as const,
+      from: "draft" as const,
       to: "active" as const,
       occurredAt: new Date("2026-01-01").getTime(),
     },

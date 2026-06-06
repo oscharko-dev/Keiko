@@ -31,9 +31,9 @@ import {
   RELATIONSHIP_TYPES,
   RELATIONSHIP_OBJECT_KINDS,
 } from "@oscharko-dev/keiko-contracts";
-import { listRelationships, RelationshipApiError } from "../../../../relationships/api.js";
-import type { ApiRelationship } from "../../../../relationships/api.js";
-import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge.js";
+import { listRelationships, RelationshipApiError } from "../../../../relationships/api";
+import type { ApiRelationship } from "../../../../relationships/api";
+import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge";
 
 // ─── Density mode helpers ──────────────────────────────────────────────────────
 
@@ -74,13 +74,13 @@ function writeDensityToStorage(mode: DensityMode): void {
 // ─── Filter state (from URL params, caller-supplied) ──────────────────────────
 
 export interface RelationshipFilters {
-  readonly relType?: string;
-  readonly relLifecycle?: string;
-  readonly relActivity?: string;
-  readonly relSrcKind?: string;
-  readonly relTgtKind?: string;
-  readonly relDensity?: string;
-  readonly relFocus?: string;
+  readonly relType?: string | undefined;
+  readonly relLifecycle?: string | undefined;
+  readonly relActivity?: string | undefined;
+  readonly relSrcKind?: string | undefined;
+  readonly relTgtKind?: string | undefined;
+  readonly relDensity?: string | undefined;
+  readonly relFocus?: string | undefined;
 }
 
 // Parse comma-separated multi-value filter param (visual-density-rules.md §"URL serialization")
@@ -143,13 +143,13 @@ export interface RelationshipListPanelProps {
   /** Filter params from URL (from parent reading useSearchParams under Suspense). */
   readonly filters: RelationshipFilters;
   /** Currently selected relationship id. */
-  readonly selectedId?: string;
+  readonly selectedId?: string | undefined;
   /** Called when a relationship row is selected. */
   readonly onSelect: (id: string) => void;
   /** Called when filter params change — parent updates URL. */
   readonly onFilterChange: (newParams: Partial<RelationshipFilters>) => void;
   /** Working directory / workspace scope for bounded queries. */
-  readonly workspaceId?: string;
+  readonly workspaceId?: string | undefined;
 }
 
 // ─── Component ─────────────────────────────────────────────────────────────────
