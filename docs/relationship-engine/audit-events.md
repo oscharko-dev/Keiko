@@ -209,12 +209,17 @@ Emitted when `GET /api/relationships/impact` returns `truncated: true` (per [api
 ```ts
 type RelationshipImpactAnalysisBoundedAudit = RelationshipAuditEnvelope & {
   readonly kind: "relationship.impact-analysis-bounded";
+  // `<endpointKind>:<endpointId>` echo of the focal endpoint the operator supplied
+  // (impact starts from an endpoint, not a relationship row).
   readonly originRelationshipId: string;
   readonly requestedMaxDepth: number;
   readonly requestedMaxNodes: number;
   readonly observedDepth: number;
   readonly observedNodes: number; // bounded by maxNodes
-  readonly truncatedAt: "depth" | "nodes";
+  // Matches the store's `DependencyWalkResult.truncationReason` discriminator so
+  // operators can distinguish a depth-bounded run from a node-cap or
+  // relationship-cap stop without re-reading the request body.
+  readonly truncatedAt: "max-depth" | "max-nodes" | "max-relationships";
 };
 ```
 

@@ -479,12 +479,33 @@ Graph health summary: counts plus categorized findings already present in the re
     "blocked": 2,
     "revoked": 89
   },
-  "findings": { "...": "categorized health findings" },
+  "findings": {
+    "orphanedEndpoints":          [{ "kind": "<RelationshipObjectKind>", "id": "<endpoint-id>" }],
+    "orphanedEndpointsTruncated": false,
+    "staleRelationships":         [{ "id": "rel-...", "type": "depends-on", "source": { ... }, "target": { ... }, "lifecycle": "stale" }],
+    "staleRelationshipsTruncated": false,
+    "blockedRelationships":        [{ "id": "rel-...", "lifecycle": "blocked", "...": "..." }],
+    "blockedRelationshipsTruncated": false,
+    "failedRelationships":         [{ "id": "rel-...", "lifecycle": "revoked", "...": "..." }],
+    "failedRelationshipsTruncated": false,
+    "invalidReferences":           [{ "id": "rel-...", "...": "..." }],
+    "invalidReferencesTruncated":  false,
+    "cycleParticipants":           [{ "id": "rel-...", "...": "..." }],
+    "cycleScanTruncated":          false
+  },
   "entries": [],
   "truncated": false,
   "nextCursor": null
 }
 ```
+
+The six finding categories are bounded per-category at `MAX_RELATIONSHIPS_PER_QUERY = 2048`. Each per-category `*Truncated` flag (and `cycleScanTruncated` for the cycle scan input) is set to `true` when the underlying scan would have returned more rows than the cap; partial results are still surfaced so the operator sees the most-relevant subset.
+
+`failedRelationships` aliases the lifecycle terminal state `revoked` (the post-deletion/soft-revoke state per [lifecycle.md](lifecycle.md)). The wire-level field uses the operator-facing word "failed" while the store column stays `lifecycle = 'revoked'`; clients should treat `failedRelationships[*].lifecycle === "revoked"` as the canonical shape and not infer a separate lifecycle state.
+
+`cycleParticipants` replaces the original "unused" category from issue [#542](https://github.com/oscharko-dev/Keiko/issues/542) acceptance criterion AC4. "Unused" would have required a workspace-object inventory port that the relationship store does not own; cycle detection covers the operationally critical health defect (relationship graphs that pin themselves into permanent re-evaluation loops) with the same bounded-scan budget. The substitution is recorded in [closure-evidence.md](closure-evidence.md).
+
+The top-level `truncated` field is the back-compat signal for pre-#542 clients of routes 7/8 ([gap-analysis.md Gap 9](gap-analysis.md)). It is `true` when any per-category truncation flag inside `findings` is `true`, so a back-compat client that polls only the top-level signal still observes that the data is incomplete. The new categorized surface remains the recommended consumption path; the top-level `entries`/`nextCursor` are kept null for shape compatibility only.
 
 Health is the current store-backed graph summary surface from [gap-analysis.md Gap 9](gap-analysis.md). The shipped implementation reads the existing relationship rows and returns a categorized summary; resolver-driven liveness mutation remains follow-up work.
 
