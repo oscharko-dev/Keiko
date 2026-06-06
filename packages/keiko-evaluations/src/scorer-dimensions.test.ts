@@ -58,6 +58,7 @@ function makeInput(overrides: Partial<ScoringInput> = {}): ScoringInput {
     verificationPresent: true,
     manifestValid: true,
     recordedWriteCount: 0,
+    mode: "offline",
     ...overrides,
   };
 }

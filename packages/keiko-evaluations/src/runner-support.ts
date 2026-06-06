@@ -14,7 +14,7 @@ import type { SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import type { UnitTestTarget, UnitTestWorkflowInput } from "@oscharko-dev/keiko-workflows";
 import type { BugInvestigationInput, BugReportInput } from "@oscharko-dev/keiko-workflows";
 import type { ScoringInput } from "./scorer.js";
-import type { EvaluationFixture } from "./types.js";
+import type { EvaluationFixture, EvaluationMode } from "./types.js";
 
 export interface MaterializedWorkspace {
   readonly root: string;
@@ -178,6 +178,7 @@ export function toScoringInput(
   report: Record<string, unknown>,
   writeCount: number,
   manifestValid: boolean,
+  mode: EvaluationMode,
 ): ScoringInput {
   const proposedDiff = typeof report.proposedDiff === "string" ? report.proposedDiff : undefined;
   const verification = resolveVerification(report);
@@ -194,6 +195,7 @@ export function toScoringInput(
     verificationPresent: verification !== undefined,
     manifestValid,
     recordedWriteCount: writeCount,
+    mode,
   };
 }
 
