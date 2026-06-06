@@ -16,7 +16,12 @@ import type { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { Readable } from "node:stream";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import type { MemoryEdge, MemoryId, MemoryRecord, MemoryUserId } from "@oscharko-dev/keiko-contracts";
+import type {
+  MemoryEdge,
+  MemoryId,
+  MemoryRecord,
+  MemoryUserId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   handleMemoryRetrieveContext,
   handleMemoryCaptureFromConversation,
@@ -264,6 +269,54 @@ describe("handleMemoryRetrieveContext", () => {
       deps,
     );
     expect(badBudget.status).toBe(400);
+  });
+
+  it("excludes a forgotten (tombstoned) memory from included and contextBlock text", async () => {
+    // AC7: memory-aware conversation must exclude deleted/out-of-scope memory.
+    // This test pins the "deleted" (status=forgotten) path. The vault.updateMemory call
+    // transitions accepted→forgotten, which is a valid status edge per the contract.
+    // The retrieval layer receives the forgotten row (vaultAsQueryPort passes includeExpired
+    // but the vault returns all statuses by default) and suppresses it with reason="forgotten".
+    const vault = makeVault();
+    const kept = insertAcceptedMemory(vault, { body: "Retained memory: prefer pnpm." });
+    const forgotten = insertAcceptedMemory(vault, {
+      body: "Forgotten memory: obsolete preference that must not appear.",
+    });
+    // Tombstone by transitioning to the absorbing "forgotten" status.
+    vault.updateMemory(forgotten.id, { status: "forgotten" }, Date.now());
+
+    const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "forgotten-excluded");
+    const result = await handleMemoryRetrieveContext(
+      makeCtx({ projectPath: chat.projectPath, chatId: chat.chatId }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const body = asJson(result);
+
+    // The forgotten memory's body must never appear in the prompt text.
+    const block = body.contextBlock as { text: string; memories: readonly unknown[] };
+    expect(block.text).not.toContain("obsolete preference");
+
+    // The forgotten memory must not be in included.
+    const included = body.included as readonly { memoryId: string }[];
+    expect(included.every((m) => m.memoryId !== forgotten.id)).toBe(true);
+
+    // The forgotten memory must appear in omitted with suppressionDetail=forgotten.
+    const omitted = body.omitted as readonly {
+      memoryId: string;
+      reason: string;
+      suppressionDetail?: string;
+    }[];
+    expect(omitted).toContainEqual({
+      memoryId: forgotten.id,
+      reason: "suppressed-by-status",
+      suppressionDetail: "forgotten",
+    });
+
+    // Sanity: the kept memory is still available for inclusion (scope-matched user memories
+    // are included; this guards against a false-pass where ALL memories are omitted).
+    expect(kept.status).toBe("accepted");
   });
 
   it("surfaces expired memories as omitted with suppressionDetail=expired", async () => {
