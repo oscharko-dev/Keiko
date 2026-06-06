@@ -4509,6 +4509,16 @@ select.dlg-input {
 .rb-row-v {
   color: var(--fg-faint);
 }
+/* Issue #527 — WCAG 2.2 AA contrast fix (scoped to governance surface only).
+   --fg-faint yields 2.52:1 dark / 2.91:1 light, both below the 4.5:1 minimum.
+   --fg-muted yields 7.77:1 dark / 7.90:1 light (normal) and 7.23:1 / 8.41:1
+   (hover on --card), all passing. The .insp-governance class is placed only on
+   the "Governance" .rb-section-label and its sibling .rb-rows container in
+   InspectorPanel — no other panel or row is affected. */
+.insp-governance.rb-section-label,
+.insp-governance .rb-row-v {
+  color: var(--fg-muted);
+}
 .rb-foot {
   font-size: 11px;
   color: var(--fg-faint);
