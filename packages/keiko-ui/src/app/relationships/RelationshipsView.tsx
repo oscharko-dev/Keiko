@@ -26,6 +26,7 @@ import type { RelationshipFilters } from "../components/desktop/widgets/panels/R
 import { RelationshipListPanel } from "../components/desktop/widgets/panels/RelationshipListPanel";
 import { RelationshipInspectorPanel } from "../components/desktop/widgets/panels/RelationshipInspectorPanel";
 import type { DensityMode } from "../components/desktop/widgets/panels/RelationshipListPanel";
+import { useRelationshipActivityStream } from "../components/desktop/widgets/panels/useRelationshipActivityStream";
 import { RelationshipCreateDialog } from "../components/desktop/modals/RelationshipCreateDialog";
 import type { ApiRelationship } from "./api";
 
@@ -34,6 +35,8 @@ import type { ApiRelationship } from "./api";
 export function RelationshipsView(): ReactNode {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const { activityMap, throughputMap, animate } = useRelationshipActivityStream();
+  const [highContrast, setHighContrast] = useState(false);
 
   // ─── Derive filters from URL ─────────────────────────────────────────────
   const filters: RelationshipFilters = {
@@ -120,6 +123,20 @@ export function RelationshipsView(): ReactNode {
     restoreCreateButtonFocusRef.current = false;
     createButtonRef.current?.focus();
   }, [createDialogOpen]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mediaQuery = window.matchMedia("(prefers-contrast: more)");
+    const syncHighContrast = (matches: boolean) => {
+      setHighContrast(matches);
+    };
+    syncHighContrast(mediaQuery.matches);
+    const handleChange = (event: MediaQueryListEvent) => {
+      syncHighContrast(event.matches);
+    };
+    mediaQuery.addEventListener("change", handleChange);
+    return () => mediaQuery.removeEventListener("change", handleChange);
+  }, []);
 
   // ─── Global keyboard shortcuts ────────────────────────────────────────────
   // inspector-spec.md keyboard map: F=FocusMode, Escape=ClearFocus
@@ -214,6 +231,10 @@ export function RelationshipsView(): ReactNode {
               selectedId={selectedId}
               onSelect={handleSelect}
               onFilterChange={applyFilters}
+              activityMap={activityMap}
+              throughputMap={throughputMap}
+              animateBadges={animate}
+              highContrast={highContrast}
             />
           </div>
 
@@ -229,6 +250,10 @@ export function RelationshipsView(): ReactNode {
               densityMode={densityMode}
               onClearFocus={handleClearFocus}
               onViewImpact={handleViewImpact}
+              activityMap={activityMap}
+              throughputMap={throughputMap}
+              animateBadges={animate}
+              highContrast={highContrast}
             />
           </div>
         </div>

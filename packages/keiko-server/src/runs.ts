@@ -71,6 +71,8 @@ const DEFAULT_TERMINATED_TTL_MS = 600_000;
 export interface RunRegistry {
   register: (input: RegisterRunInput) => RunRecord;
   get: (runId: string) => RunRecord | undefined;
+  // Bounded inspection snapshot for read-only projections such as local activity streams.
+  snapshot?: (limit?: number) => readonly RunRecord[];
   // Marks a run terminal, captures its final report + appliable snapshot, and starts the TTL clock.
   complete: (
     runId: string,
@@ -168,6 +170,14 @@ export function createRunRegistry(options: RunRegistryOptions = {}): RunRegistry
     },
     complete: (runId, status, report, appliable): void => {
       completeRun(state, runId, status, report, appliable);
+    },
+    snapshot: (limit): readonly RunRecord[] => {
+      evictExpired(state);
+      const records = Array.from(state.records.values());
+      if (limit === undefined || limit >= records.length) {
+        return records;
+      }
+      return records.slice(Math.max(0, records.length - limit));
     },
     activeCount: (): number => {
       evictExpired(state);

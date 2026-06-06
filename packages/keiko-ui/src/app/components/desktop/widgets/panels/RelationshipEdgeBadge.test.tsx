@@ -2,7 +2,7 @@
 //
 // Covers:
 //   • All 9 activity states render correct label + aria description (non-color-only)
-//   • Animated states get motion-safe: class; no animation when prefers-reduced-motion mock
+//   • Animated states use app CSS classes; no animation when animateOverride is disabled
 //   • onClick renders a <button>; no onClick renders a <span>
 //   • High-throughput state shows throughputCount
 //   • a11y: role="status" aria-live="polite" aria-atomic="true" present
@@ -10,12 +10,40 @@
 //   • Keyboard: button variant is focusable and fires onClick on Enter/Space
 
 import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { axe, toHaveNoViolations } from "jest-axe";
 import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge";
 import type { RelationshipActivityState } from "@oscharko-dev/keiko-contracts";
 
 expect.extend(toHaveNoViolations);
+
+function mockMatchMedia({
+  reducedMotion = false,
+  prefersContrastMore = false,
+}: {
+  reducedMotion?: boolean;
+  prefersContrastMore?: boolean;
+} = {}): void {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    configurable: true,
+    value: (query: string): MediaQueryList =>
+      ({
+        matches: query.includes("prefers-reduced-motion")
+          ? reducedMotion
+          : query.includes("prefers-contrast")
+            ? prefersContrastMore
+            : false,
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }) as MediaQueryList,
+  });
+}
 
 const ALL_ACTIVITY_STATES: RelationshipActivityState[] = [
   "inactive",
@@ -28,6 +56,14 @@ const ALL_ACTIVITY_STATES: RelationshipActivityState[] = [
   "degraded",
   "high-throughput",
 ];
+
+beforeEach(() => {
+  mockMatchMedia();
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("RelationshipEdgeBadge", () => {
   describe("non-color-only state representation", () => {
@@ -142,13 +178,26 @@ describe("RelationshipEdgeBadge", () => {
   });
 
   describe("animation constraints", () => {
-    it("processing state includes motion-safe: animation class", () => {
+    it("processing state uses the app CSS processing class instead of a Tailwind-only class", () => {
       const { container } = render(
         <RelationshipEdgeBadge type="reads-context" lifecycle="active" activity="processing" />,
       );
-      // processing is the animated state — icon must carry a motion-safe: prefixed class
+      // processing is the animated state — icon must carry the concrete app CSS class
       const html = container.innerHTML;
-      expect(html).toContain("motion-safe:");
+      expect(html).toContain("rb-edge-badge-icon--processing");
+      expect(html).not.toContain("motion-safe:");
+    });
+
+    it("processing state can be rendered statically via animateOverride=false", () => {
+      const { container } = render(
+        <RelationshipEdgeBadge
+          type="reads-context"
+          lifecycle="active"
+          activity="processing"
+          animateOverride={false}
+        />,
+      );
+      expect(container.innerHTML).not.toContain("rb-edge-badge-icon--processing");
     });
 
     it("inactive state does NOT have animation classes", () => {
@@ -159,6 +208,23 @@ describe("RelationshipEdgeBadge", () => {
       // No animation on static states
       expect(html).not.toContain("animate-spin");
       expect(html).not.toContain("animate-pulse");
+    });
+  });
+
+  describe("high contrast", () => {
+    it("auto-detects prefers-contrast: more when no prop override is provided", () => {
+      mockMatchMedia({ prefersContrastMore: true });
+
+      const { container } = render(
+        <RelationshipEdgeBadge type="reads-context" lifecycle="active" activity="failed" />,
+      );
+
+      const wrapper = container.firstElementChild as HTMLElement | null;
+      expect(wrapper?.getAttribute("data-high-contrast")).toBe("true");
+      const badge = container.querySelector(".rb-edge-badge-static") as HTMLElement | null;
+      expect(badge?.style.background).toBe("var(--card)");
+      expect(badge?.style.border).toContain("var(--danger)");
+      expect(container.innerHTML).toContain("rb-edge-badge-icon--high-contrast");
     });
   });
 

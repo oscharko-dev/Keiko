@@ -5,7 +5,7 @@
 //   text label + ARIA aria-label + icon (activity-visualization.md per-state table).
 //
 // CSS variables come exclusively from globals.css tokens — no new tokens introduced.
-// Motion only via `motion-safe` Tailwind prefix (activity-visualization.md §"Motion rules").
+// Motion only via app CSS classes in globals.css (activity-visualization.md §"Motion rules").
 // prefers-reduced-motion: static segmented circle replaces rotation (§"Reduced-motion").
 // prefers-contrast: more → high-contrast override per activity-visualization.md §"Contrast".
 //
@@ -20,7 +20,7 @@
 
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import type {
   RelationshipActivityState,
   RelationshipLifecycleState,
@@ -83,7 +83,7 @@ const ACTIVITY_VISUALS: Readonly<Record<RelationshipActivityState, ActivityVisua
     textColor: "var(--accent)",
     bgColor: "var(--accent-dim)",
     borderColor: "var(--accent-line)",
-    animated: true, // @keyframes spin; gated motion-safe
+    animated: true, // @keyframes spin; gated by globals.css reduced-motion media query
   },
   completed: {
     label: "Completed",
@@ -139,20 +139,28 @@ function ActivityIcon({
   shape,
   color,
   animated,
+  highContrast,
 }: {
   shape: ActivityVisual["iconShape"];
   color: string;
   animated: boolean;
+  highContrast: boolean;
 }): ReactNode {
-  // animated prop maps to CSS animation class; motion-safe:animate-spin applies
-  // @keyframes spin from globals.css:146 only when prefers-reduced-motion: no-preference.
-  const spinClass = animated ? "motion-safe:animate-spin" : "";
+  const iconClassName = [
+    "rb-edge-badge-icon",
+    animated ? "rb-edge-badge-icon--processing" : "",
+    highContrast ? "rb-edge-badge-icon--high-contrast" : "",
+  ]
+    .filter((value) => value.length > 0)
+    .join(" ");
+  const strokeWidth = highContrast ? 2 : 1.5;
   const svgProps = {
     width: 12,
     height: 12,
     viewBox: "0 0 12 12",
     "aria-hidden": true as const,
     fill: "currentColor",
+    className: iconClassName,
     style: { color },
   };
 
@@ -160,17 +168,17 @@ function ActivityIcon({
     case "hollow-circle":
       return (
         <svg {...svgProps}>
-          <circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+          <circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" strokeWidth={strokeWidth} />
         </svg>
       );
     case "clock":
       return (
         <svg {...svgProps}>
-          <circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" strokeWidth="1.5" />
+          <circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" strokeWidth={strokeWidth} />
           <path
             d="M6 3v3l2 1"
             stroke="currentColor"
-            strokeWidth="1.5"
+            strokeWidth={strokeWidth}
             strokeLinecap="round"
             fill="none"
           />
@@ -185,14 +193,14 @@ function ActivityIcon({
     case "spinning-circle":
       // Segmented circle: static when reduced-motion, animated when allowed
       return (
-        <svg {...svgProps} className={spinClass}>
+        <svg {...svgProps}>
           <circle
             cx="6"
             cy="6"
             r="4.5"
             fill="none"
             stroke="currentColor"
-            strokeWidth="1.5"
+            strokeWidth={strokeWidth}
             strokeDasharray="8 4"
           />
         </svg>
@@ -203,7 +211,7 @@ function ActivityIcon({
           <path
             d="M2 6l3 3 5-5"
             stroke="currentColor"
-            strokeWidth="1.8"
+            strokeWidth={highContrast ? 2.2 : 1.8}
             strokeLinecap="round"
             strokeLinejoin="round"
             fill="none"
@@ -217,7 +225,7 @@ function ActivityIcon({
           <path
             d="M6 5v2.5"
             stroke="var(--card)"
-            strokeWidth="1.5"
+            strokeWidth={strokeWidth}
             strokeLinecap="round"
             fill="none"
           />
@@ -236,7 +244,7 @@ function ActivityIcon({
           <path
             d="M1 6h2.5l1.5-2 2 4 1.5-2H11"
             stroke="currentColor"
-            strokeWidth="1.5"
+            strokeWidth={strokeWidth}
             strokeLinecap="round"
             strokeLinejoin="round"
             fill="none"
@@ -378,12 +386,32 @@ export function RelationshipEdgeBadge({
   activity,
   throughputCount,
   animateOverride = true,
-  highContrast = false,
+  highContrast,
   onClick,
   className = "",
 }: RelationshipEdgeBadgeProps): ReactNode {
-  const visual = ACTIVITY_VISUALS[activity];
+  const [prefersMoreContrast, setPrefersMoreContrast] = useState(false);
+
+  useEffect(() => {
+    if (highContrast !== undefined || typeof window === "undefined") return;
+    const mediaQuery = window.matchMedia("(prefers-contrast: more)");
+    const update = (matches: boolean): void => {
+      setPrefersMoreContrast(matches);
+    };
+
+    update(mediaQuery.matches);
+    const handleChange = (event: MediaQueryListEvent): void => {
+      update(event.matches);
+    };
+    mediaQuery.addEventListener("change", handleChange);
+    return (): void => {
+      mediaQuery.removeEventListener("change", handleChange);
+    };
+  }, [highContrast]);
+
+  const visual = ACTIVITY_VISUALS[activity] ?? ACTIVITY_VISUALS.inactive;
   const def = RELATIONSHIP_TYPE_DEFINITIONS[type];
+  const effectiveHighContrast = highContrast ?? prefersMoreContrast;
 
   // High-throughput label includes the numeric count (activity-state.md §5.4).
   const displayLabel =
@@ -400,7 +428,7 @@ export function RelationshipEdgeBadge({
   // High-contrast override (activity-visualization.md §"prefers-contrast: more"):
   //   • Drop color-mix background → use var(--card) + full-opacity border in the state color.
   //   • Keep text in the state's color token.
-  const badgeStyle: React.CSSProperties = highContrast
+  const badgeStyle: CSSProperties = effectiveHighContrast
     ? {
         color: visual.textColor,
         background: "var(--card)",
@@ -420,6 +448,7 @@ export function RelationshipEdgeBadge({
       aria-atomic="true"
       className={`rb-edge-badge ${className}`.trim()}
       data-activity-state={activity}
+      data-high-contrast={effectiveHighContrast ? "true" : undefined}
     >
       {onClick !== undefined ? (
         <button
@@ -434,6 +463,7 @@ export function RelationshipEdgeBadge({
               shape={visual.iconShape}
               color={visual.textColor}
               animated={shouldAnimate}
+              highContrast={effectiveHighContrast}
             />
           </span>
           {/* visually-hidden aria description per activity-visualization.md §"Per-state ARIA wiring" */}
@@ -451,6 +481,7 @@ export function RelationshipEdgeBadge({
               shape={visual.iconShape}
               color={visual.textColor}
               animated={shouldAnimate}
+              highContrast={effectiveHighContrast}
             />
           </span>
           <span className="visually-hidden">{visual.ariaDescription}</span>

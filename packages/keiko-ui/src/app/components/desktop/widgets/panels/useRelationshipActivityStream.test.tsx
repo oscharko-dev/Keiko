@@ -14,7 +14,6 @@
 // pattern in this repo (TerminalWidget.test.tsx:56).
 
 import { render, act, screen, waitFor } from "@testing-library/react";
-import { renderHook } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { axe, toHaveNoViolations } from "jest-axe";
 import type { ReactNode } from "react";
@@ -32,6 +31,7 @@ type MessageHandler = (ev: MessageEvent<string>) => void;
 
 class FakeEventSource {
   public static last: FakeEventSource | null = null;
+  public static instances: FakeEventSource[] = [];
   public closed = false;
   private readonly listeners: Map<string, MessageHandler[]> = new Map();
   public onmessage: MessageHandler | null = null;
@@ -39,6 +39,7 @@ class FakeEventSource {
 
   constructor(_url: string) {
     FakeEventSource.last = this;
+    FakeEventSource.instances.push(this);
   }
 
   addEventListener(type: string, handler: MessageHandler): void {
@@ -76,13 +77,23 @@ class FakeEventSource {
 
 // ─── matchMedia mock helper ────────────────────────────────────────────────────
 
-function mockMatchMedia(reducedMotion: boolean): void {
+function mockMatchMedia({
+  reducedMotion,
+  prefersContrastMore = false,
+}: {
+  reducedMotion: boolean;
+  prefersContrastMore?: boolean;
+}): void {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
     configurable: true,
     value: (query: string): MediaQueryList =>
       ({
-        matches: query.includes("prefers-reduced-motion") ? reducedMotion : false,
+        matches: query.includes("prefers-reduced-motion")
+          ? reducedMotion
+          : query.includes("prefers-contrast")
+            ? prefersContrastMore
+            : false,
         media: query,
         onchange: null,
         addListener: () => {},
@@ -118,13 +129,32 @@ function makeActivityEvent(id: string, state: RelationshipActivityState, count?:
   };
 }
 
+function setVisibilityState(state: DocumentVisibilityState): void {
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: state,
+  });
+}
+
+function requireCapturedState(
+  state: ReturnType<typeof useRelationshipActivityStream> | null,
+): ReturnType<typeof useRelationshipActivityStream> {
+  expect(state).not.toBeNull();
+  if (state === null) {
+    throw new Error("expected hook state to be captured");
+  }
+  return state;
+}
+
 // ─── Suite setup ──────────────────────────────────────────────────────────────
 
 beforeEach(() => {
   FakeEventSource.last = null;
+  FakeEventSource.instances = [];
   vi.stubGlobal("EventSource", FakeEventSource);
   // Default: motion allowed
-  mockMatchMedia(false);
+  mockMatchMedia({ reducedMotion: false });
+  setVisibilityState("visible");
 });
 
 afterEach(() => {
@@ -139,7 +169,7 @@ describe("useRelationshipActivityStream", () => {
   describe("state mapping — all 9 states", () => {
     it.each(RELATIONSHIP_ACTIVITY_STATES)(
       "state '%s' is stored after a matching SSE event",
-      async (state) => {
+      async (state: (typeof RELATIONSHIP_ACTIVITY_STATES)[number]) => {
         let captured: ReturnType<typeof useRelationshipActivityStream> | null = null;
 
         render(
@@ -168,7 +198,7 @@ describe("useRelationshipActivityStream", () => {
 
   describe("reduced-motion", () => {
     it("animate is false when prefers-reduced-motion: reduce is set", async () => {
-      mockMatchMedia(true); // reduced motion = ON
+      mockMatchMedia({ reducedMotion: true }); // reduced motion = ON
 
       let captured: ReturnType<typeof useRelationshipActivityStream> | null = null;
 
@@ -185,7 +215,7 @@ describe("useRelationshipActivityStream", () => {
     });
 
     it("animate is true when prefers-reduced-motion is not set", async () => {
-      mockMatchMedia(false);
+      mockMatchMedia({ reducedMotion: false });
 
       let captured: ReturnType<typeof useRelationshipActivityStream> | null = null;
 
@@ -275,7 +305,7 @@ describe("useRelationshipActivityStream", () => {
         </div>,
       );
 
-      const animated = container.querySelectorAll(".motion-safe\\:animate-spin");
+      const animated = container.querySelectorAll(".rb-edge-badge-icon--processing");
       // Only badges with animateOverride=true (first 25) should have the spin class.
       expect(animated.length).toBeLessThanOrEqual(N_VISIBLE);
     });
@@ -329,7 +359,7 @@ describe("useRelationshipActivityStream", () => {
         />,
       );
       // high-throughput has animated:false so no spin class even with animateOverride=true.
-      expect(container.innerHTML).not.toContain("animate-spin");
+      expect(container.innerHTML).not.toContain("rb-edge-badge-icon--processing");
     });
   });
 
@@ -465,6 +495,118 @@ describe("useRelationshipActivityStream", () => {
       unmount();
 
       expect(es?.closed).toBe(true);
+    });
+  });
+
+  describe("fallback contract and visibility pause", () => {
+    it("retries the SSE endpoint instead of calling an unsupported polling fetch shape", async () => {
+      vi.useFakeTimers();
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+
+      render(<HookHarness onState={() => undefined} />);
+
+      expect(FakeEventSource.last).not.toBeNull();
+      expect(FakeEventSource.instances).toHaveLength(1);
+
+      act(() => {
+        FakeEventSource.last?.onerror?.();
+      });
+
+      expect(FakeEventSource.instances[0]?.closed).toBe(true);
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      act(() => {
+        vi.advanceTimersByTime(5_000);
+      });
+
+      expect(FakeEventSource.instances).toHaveLength(2);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it("pauses expiry and reconnect while the page is hidden, then resumes on visibility", async () => {
+      vi.useFakeTimers();
+      let captured: ReturnType<typeof useRelationshipActivityStream> | null = null;
+
+      render(
+        <HookHarness
+          onState={(state) => {
+            captured = state;
+          }}
+        />,
+      );
+
+      expect(FakeEventSource.last).not.toBeNull();
+
+      act(() => {
+        FakeEventSource.last?.dispatch(
+          "relationship:activity",
+          makeActivityEvent("rel-vis", "active"),
+        );
+      });
+
+      expect(requireCapturedState(captured).activityMap.get("rel-vis")).toBe("active");
+
+      const firstSource = FakeEventSource.last;
+
+      act(() => {
+        setVisibilityState("hidden");
+        document.dispatchEvent(new Event("visibilitychange"));
+        vi.advanceTimersByTime(125_000);
+      });
+
+      expect(firstSource?.closed).toBe(true);
+      expect(FakeEventSource.instances).toHaveLength(1);
+      expect(requireCapturedState(captured).activityMap.get("rel-vis")).toBe("active");
+
+      act(() => {
+        setVisibilityState("visible");
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+
+      expect(FakeEventSource.instances).toHaveLength(2);
+      expect(requireCapturedState(captured).activityMap.get("rel-vis")).toBe("inactive");
+    });
+  });
+
+  describe("bounded state retention", () => {
+    it("drops long-idle inactive entries so the in-memory map cannot grow forever", async () => {
+      vi.useFakeTimers();
+      let captured: ReturnType<typeof useRelationshipActivityStream> | null = null;
+
+      render(
+        <HookHarness
+          onState={(state) => {
+            captured = state;
+          }}
+        />,
+      );
+
+      expect(FakeEventSource.last).not.toBeNull();
+
+      act(() => {
+        FakeEventSource.last?.dispatch(
+          "relationship:activity",
+          makeActivityEvent("rel-prune", "high-throughput", 73),
+        );
+      });
+
+      expect(requireCapturedState(captured).activityMap.get("rel-prune")).toBe("high-throughput");
+      expect(requireCapturedState(captured).throughputMap.get("rel-prune")).toBe(73);
+
+      act(() => {
+        vi.advanceTimersByTime(61_000);
+      });
+
+      expect(requireCapturedState(captured).activityMap.get("rel-prune")).toBe("inactive");
+      expect(requireCapturedState(captured).throughputMap.has("rel-prune")).toBe(false);
+
+      act(() => {
+        vi.advanceTimersByTime(61_000);
+      });
+
+      expect(requireCapturedState(captured).activityMap.has("rel-prune")).toBe(false);
+      expect(requireCapturedState(captured).throughputMap.has("rel-prune")).toBe(false);
     });
   });
 });
