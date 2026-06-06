@@ -9,5 +9,6 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src"],
-  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_memfs.ts"]
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_memfs.ts"],
+  "references": [{ "path": "../keiko-contracts" }, { "path": "../keiko-security" }]
 }
