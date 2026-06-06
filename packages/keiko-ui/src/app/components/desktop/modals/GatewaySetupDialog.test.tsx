@@ -92,6 +92,21 @@ describe("GatewaySetupDialog", () => {
     }
   });
 
+  it("restores focus to the triggering element when the dialog closes", () => {
+    const trigger = document.createElement("button");
+    trigger.textContent = "Open gateway setup";
+    document.body.appendChild(trigger);
+    trigger.focus();
+
+    try {
+      const { unmount } = render(<GatewaySetupDialog />);
+      unmount();
+      expect(trigger).toHaveFocus();
+    } finally {
+      trigger.remove();
+    }
+  });
+
   it("submits an optional custom API key header for proxy gateways", async () => {
     vi.mocked(setupGateway).mockResolvedValueOnce({
       ok: true,
