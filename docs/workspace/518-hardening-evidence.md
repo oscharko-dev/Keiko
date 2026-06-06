@@ -13,12 +13,11 @@ This document records the accessibility, performance, security, evidence, supply
 | Area             | Delta                                                                                                                                              | Files                                                                                                                                            |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Documentation    | 6 blueprints + 5 ADRs + this hardening doc + closure                                                                                               | `docs/workspace/518-*.md` + `docs/adr/ADR-0026..0030-*.md`                                                                                       |
-| Contracts        | `WorkspaceCommand`, `WorkspaceUiAction`, `WorkspaceKeyChord`, `WorkspaceDescriptorMeta` types + closed-set enums + pure validator                  | `packages/keiko-contracts/src/workspace-ui.ts`, `packages/keiko-contracts/src/workspace-descriptors.ts`, `packages/keiko-contracts/src/index.ts` |
+| Contracts        | `WorkspaceCommand`, `WorkspaceUiAction`, `WorkspaceKeyChord`, `WorkspaceDescriptorMeta` types + closed-set enums + pure validators                 | `packages/keiko-contracts/src/workspace-ui.ts`, `packages/keiko-contracts/src/workspace-descriptors.ts`, `packages/keiko-contracts/src/index.ts` |
 | UI hooks         | `useUndoStack`, `useKeyboardShortcuts`                                                                                                             | `packages/keiko-ui/src/app/components/desktop/hooks/useUndoStack.ts`, `useKeyboardShortcuts.ts`                                                  |
 | UI registry meta | `WIN_META` sidecar table + module-evaluation validator                                                                                             | `packages/keiko-ui/src/app/components/desktop/windows/descriptor-meta.ts`                                                                        |
-| Tests            | 41 new tests (Footer × 9, useUndoStack × 7, useKeyboardShortcuts × 11, workspace-descriptors × 16, descriptor-meta × 7, minus overlap = 41 unique) | `*.test.tsx` and `*.test.ts` siblings of the files above                                                                                         |
-
-No new source file under `packages/keiko-*/src/` other than the ones above. No edit to any existing source file other than `packages/keiko-contracts/src/index.ts` (additive re-exports only).
+| Shell integration | Undo/redo binding layer + live shell/inspector wiring                                                                                             | `packages/keiko-ui/src/app/components/desktop/shell-undo-bindings.ts`, `AppShell.tsx`, `widgets/panels/InspectorPanel.tsx`                      |
+| Tests            | Targeted contract, hook, shell-command, shell-binding, inspector, and descriptor-meta tests                                                        | `*.test.tsx` and `*.test.ts` siblings of the files above                                                                                         |
 
 ## Accessibility evidence
 
@@ -78,7 +77,7 @@ Per [ADR-0030](../adr/ADR-0030-workspace-security-evidence.md), the workspace fo
 | 2 (Workspace containment) | New code names no file path; `WorkspaceDescriptorMeta.persistence: "fs-reference"` validator (R4) requires the `fs` trust boundary                                                                                                                         | PASS   |
 | 3 (No shell commands)     | New code spawns no process; `WorkspaceCommand.authority: "tool"` would delegate to keiko-tools                                                                                                                                                             | PASS   |
 | 4 (Undo refusal)          | `WorkspaceUiAction` discriminated union has constructors only for `ui.*` kinds; runtime witness test asserts every kind starts with `ui.` and no forbidden prefix exists; compile-time refusal                                                             | PASS   |
-| 5 (No raw secrets)        | New code persists nothing; `validateWorkspaceDescriptorMeta` rule R6 + module-evaluation throw enforce that durable.ui descriptors include the ui trust boundary and (by R3 / R5) cannot collapse into evidence / memory references without their boundary | PASS   |
+| 5 (No raw secrets)        | Epic #518 added no new persistence backend; the existing shell still persists wins / conns / view through `useWorkspace` browser `localStorage` writes. `validateWorkspaceDescriptorMeta` constrains declared metadata boundaries only; it does not inspect config defaults or renderer output. | PASS for the Epic #518 delta; existing browser-local layout persistence remains a separate hardening concern |
 
 ### Static-analysis sweep
 
@@ -109,7 +108,7 @@ Evidence-bearing object types declare `persistence: "evidence-reference"` and `t
 
 ### Outcome
 
-PASS. Evidence semantics preserved. No raw evidence content is persisted in UI durable state; only references.
+PASS for the Epic #518 delta. The new governance metadata keeps evidence-bearing objects classified as `evidence-reference`; the current browser-local workspace snapshot remains unchanged by this epic and should not be mistaken for a descriptor-aware persistence layer.
 
 ## Supply-chain evidence
 
@@ -158,7 +157,7 @@ The keiko-ui hooks subdir is covered by a separate lint pattern (the per-package
 
 ## Required CI gates
 
-The final epic PR will trigger the eight required `dev` checks:
+The final epic PR to `dev` was [#563](https://github.com/oscharko-dev/Keiko/pull/563). That merge ran the repository's required `dev` checks:
 
 | Required check                      | Notes                                                  |
 | ----------------------------------- | ------------------------------------------------------ |

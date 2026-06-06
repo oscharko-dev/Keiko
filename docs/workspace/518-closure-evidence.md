@@ -6,7 +6,7 @@ Date: 2026-06-06.
 
 ## Outcome
 
-The governed Keiko workspace foundation is closure-ready. Every child issue under Epic #518 has shipped: each landed as its own pull request merged into the long-lived epic branch `claude/epic-518-governed-workspace-foundation`, which is the source branch for the final epic PR awaiting human + Codex maintainer merge into `dev`.
+The governed Keiko workspace foundation has landed on `dev`. The child issues under Epic #518 first landed on the long-lived epic branch `claude/epic-518-governed-workspace-foundation`, and that branch was then merged into `dev` through [#563](https://github.com/oscharko-dev/Keiko/pull/563) (merge commit `f23b3e66`).
 
 This delivery follows the epic's required implementation order:
 
@@ -23,26 +23,26 @@ The implementation deltas Wave 4 added are bounded to typed contracts, two UI ho
 
 | Issue  | Title                                            | PR                                                     | Branch                                    | Status                                                                         | Verification                         |
 | ------ | ------------------------------------------------ | ------------------------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------ | ------------------------------------ |
-| `#545` | Existing Keiko capability audit                  | [#550](https://github.com/oscharko-dev/Keiko/pull/550) | `claude/issue-545-capability-audit`       | Closes with final epic PR                                                      | Markdown only                        |
-| `#520` | OSS reference architecture analysis              | [#551](https://github.com/oscharko-dev/Keiko/pull/551) | `claude/issue-520-reference-analysis`     | Closes with final epic PR                                                      | Markdown only                        |
-| `#522` | Product boundaries, taxonomy, journeys           | [#552](https://github.com/oscharko-dev/Keiko/pull/552) | `claude/issue-522-product-boundaries`     | Closes with final epic PR                                                      | Markdown only                        |
-| `#523` | UX blueprint and interaction contract            | [#553](https://github.com/oscharko-dev/Keiko/pull/553) | `claude/issue-523-ux-blueprint`           | Closes with final epic PR                                                      | Markdown only                        |
-| `#524` | UI blueprint and visual composition              | [#554](https://github.com/oscharko-dev/Keiko/pull/554) | `claude/issue-524-ui-blueprint`           | Closes with final epic PR                                                      | Markdown only                        |
-| `#525` | Architecture blueprint + ADRs 0026–0030          | [#555](https://github.com/oscharko-dev/Keiko/pull/555) | `claude/issue-525-architecture-blueprint` | Closes with final epic PR                                                      | Markdown only                        |
-| `#526` | Workspace shell contract test + runbook          | [#556](https://github.com/oscharko-dev/Keiko/pull/556) | `claude/issue-526-workspace-shell`        | Closes with final epic PR                                                      | 9 Footer tests pass                  |
-| `#527` | Interaction substrate (commands, undo, keyboard) | [#557](https://github.com/oscharko-dev/Keiko/pull/557) | `claude/issue-527-interaction-substrate`  | Closes with final epic PR                                                      | 18 hook tests pass; arch:check green |
-| `#528` | Object registry meta + validator                 | [#559](https://github.com/oscharko-dev/Keiko/pull/559) | `claude/issue-528-object-registry`        | Closes with final epic PR                                                      | 23 validator + table tests pass      |
-| `#529` | Canvas / graph substrate (deferred)              | [#560](https://github.com/oscharko-dev/Keiko/pull/560) | `claude/issue-529-canvas-deferral`        | Closes with final epic PR; deferral evidence in `518-canvas-graph-deferral.md` | No code change                       |
-| `#530` | Hardening evidence                               | [#561](https://github.com/oscharko-dev/Keiko/pull/561) | `claude/issue-530-hardening`              | Closes with final epic PR                                                      | Verification suite recorded          |
-| `#531` | Closure evidence + final epic PR                 | This PR (the final epic PR)                            | `claude/issue-531-closure`                | Closes with final epic PR                                                      | This document                        |
+| `#545` | Existing Keiko capability audit                  | [#550](https://github.com/oscharko-dev/Keiko/pull/550) | `claude/issue-545-capability-audit`       | Merged to `dev` through epic PR [#563](https://github.com/oscharko-dev/Keiko/pull/563) | Markdown only                        |
+| `#520` | OSS reference architecture analysis              | [#551](https://github.com/oscharko-dev/Keiko/pull/551) | `claude/issue-520-reference-analysis`     | Merged to `dev` through epic PR [#563](https://github.com/oscharko-dev/Keiko/pull/563) | Markdown only                        |
+| `#522` | Product boundaries, taxonomy, journeys           | [#552](https://github.com/oscharko-dev/Keiko/pull/552) | `claude/issue-522-product-boundaries`     | Merged to `dev` through epic PR [#563](https://github.com/oscharko-dev/Keiko/pull/563) | Markdown only                        |
+| `#523` | UX blueprint and interaction contract            | [#553](https://github.com/oscharko-dev/Keiko/pull/553) | `claude/issue-523-ux-blueprint`           | Merged to `dev` through epic PR [#563](https://github.com/oscharko-dev/Keiko/pull/563) | Markdown only                        |
+| `#524` | UI blueprint and visual composition              | [#554](https://github.com/oscharko-dev/Keiko/pull/554) | `claude/issue-524-ui-blueprint`           | Merged to `dev` through epic PR [#563](https://github.com/oscharko-dev/Keiko/pull/563) | Markdown only                        |
+| `#525` | Architecture blueprint + ADRs 0026–0030          | [#555](https://github.com/oscharko-dev/Keiko/pull/555) | `claude/issue-525-architecture-blueprint` | Merged to `dev` through epic PR [#563](https://github.com/oscharko-dev/Keiko/pull/563) | Markdown only                        |
+| `#526` | Workspace shell contract test + runbook          | [#556](https://github.com/oscharko-dev/Keiko/pull/556) | `claude/issue-526-workspace-shell`        | Merged to `dev` through epic PR [#563](https://github.com/oscharko-dev/Keiko/pull/563) | 9 Footer tests pass                  |
+| `#527` | Interaction substrate (commands, undo, keyboard) | [#557](https://github.com/oscharko-dev/Keiko/pull/557) | `claude/issue-527-interaction-substrate`  | Merged to `dev` through epic PR [#563](https://github.com/oscharko-dev/Keiko/pull/563); later integrated by [#565](https://github.com/oscharko-dev/Keiko/pull/565) | 18 hook tests pass; arch:check green |
+| `#528` | Object registry meta + validator                 | [#559](https://github.com/oscharko-dev/Keiko/pull/559) | `claude/issue-528-object-registry`        | Merged to `dev` through epic PR [#563](https://github.com/oscharko-dev/Keiko/pull/563); later integrated by [#565](https://github.com/oscharko-dev/Keiko/pull/565) | 23 validator + table tests pass      |
+| `#529` | Canvas / graph substrate (deferred)              | [#560](https://github.com/oscharko-dev/Keiko/pull/560) | `claude/issue-529-canvas-deferral`        | Merged to `dev` through epic PR [#563](https://github.com/oscharko-dev/Keiko/pull/563); deferral evidence in `518-canvas-graph-deferral.md` | No code change                       |
+| `#530` | Hardening evidence                               | [#561](https://github.com/oscharko-dev/Keiko/pull/561) | `claude/issue-530-hardening`              | Merged to `dev` through epic PR [#563](https://github.com/oscharko-dev/Keiko/pull/563) | Verification suite recorded          |
+| `#531` | Closure evidence + final epic PR                 | [#563](https://github.com/oscharko-dev/Keiko/pull/563) | `claude/issue-531-closure`                | Merged to `dev`                                                               | This document                        |
 
-All 12 child issues are in `Ready for Human Review` state on the `Keiko Product Delivery` board. They close when the final epic PR merges into `dev`.
+The epic has already merged into `dev`. Any still-open child issue or delivery-board card is now a governance follow-up, not an implementation blocker.
 
 ## Implementation summary
 
 ### Documentation (Waves 1–3, plus #530 + #531)
 
-Eight new workspace documents under `docs/workspace/`:
+Nine workspace documents under `docs/workspace/`:
 
 - [518-capability-audit.md](518-capability-audit.md) — Reuse Matrix + Gap Matrix; bounded Wave 4 implementation scope.
 - [518-reference-analysis.md](518-reference-analysis.md) — tldraw / AFFiNE / Excalidraw / React Flow dispositions; no-new-dep compliance note; glossary.
@@ -59,7 +59,7 @@ Five new ADRs under `docs/adr/`:
 - [ADR-0026](../adr/ADR-0026-workspace-substrate.md) — workspace substrate (existing surfaces locked as substrate; canvas/graph independent build rejected).
 - [ADR-0027](../adr/ADR-0027-workspace-state-ownership.md) — state ownership and persistence (8 state classes; closed `PersistenceExpectation` set).
 - [ADR-0028](../adr/ADR-0028-workspace-commands-undo.md) — commands / events / selection / undo (typed `Command` records; conflict-at-startup keyboard substrate; typed `Action` union with no constructor for evidence/patch/verification/model-call/tool/memory/fs/durable-config kinds — compile-time refusal).
-- [ADR-0029](../adr/ADR-0029-workspace-object-registry.md) — object registry and extension contract (extended `WindowTypeDef` metadata + registration-time validator).
+- [ADR-0029](../adr/ADR-0029-workspace-object-registry.md) — object registry and extension contract (`WIN_META` sidecar metadata + metadata validator).
 - [ADR-0030](../adr/ADR-0030-workspace-security-evidence.md) — security, evidence, trust (five inviolable workspace rules; gates that enforce them).
 
 The decision summary in `docs/adr/README.md` was updated for ADRs 0025–0030.
@@ -80,8 +80,9 @@ The decision summary in `docs/adr/README.md` was updated for ADRs 0025–0030.
 - `src/app/components/desktop/hooks/useKeyboardShortcuts.test.tsx` (new) — 11 tests including conflict detection, reserved-chord refusal, exact modifier matching.
 - `src/app/components/desktop/windows/descriptor-meta.ts` (new) — `WIN_META` sidecar table mapping every `WindowType` to declared meta (19 entries); module-evaluation validation guard.
 - `src/app/components/desktop/windows/descriptor-meta.test.ts` (new) — 7 assertions pinning the table.
-
-No edit to any pre-existing UI source file.
+- `src/app/components/desktop/shell-undo-bindings.ts` (new) — shell-level undo apply dispatcher + shortcut binding table used by the production shell integration.
+- `src/app/components/desktop/AppShell.tsx` (modified) — wires undo/redo and keyboard shortcuts into the live shell.
+- `src/app/components/desktop/widgets/panels/InspectorPanel.tsx` (modified) — surfaces governance metadata from `WIN_META`.
 
 ## Files changed by area
 
@@ -91,10 +92,10 @@ No edit to any pre-existing UI source file.
 | ADRs (`docs/adr/`)                | 5 new files; 1 modified (`README.md` decision summary) |
 | Contracts source                  | 2 new files; 1 modified (`src/index.ts`)               |
 | Contracts tests                   | 1 new file                                             |
-| UI source                         | 3 new files                                            |
-| UI tests                          | 4 new files                                            |
+| UI source                         | 4 new files; 2 modified existing files                 |
+| UI tests                          | 6 new files                                            |
 
-Zero edits to existing source under `packages/keiko-*/src/`. Zero changes to `package.json`, `package-lock.json`, or `bundleDependencies`.
+Zero changes to `package.json`, `package-lock.json`, or `bundleDependencies`.
 
 ## Verification performed
 
@@ -112,13 +113,11 @@ Recorded in detail by [#530 hardening evidence](518-hardening-evidence.md). Summ
 | `npx eslint <files added by this epic>`              | 0 errors                                                                       |
 | `npm run lint`                                       | Pre-existing 149 errors on dev HEAD `d834195d` (identical count); out of scope |
 
-The final epic PR will trigger all eight required `dev` checks: `ci`, `actionlint`, `Verify pinned action SHAs`, `Analyze (actions)`, `Analyze (javascript-typescript)`, `Build, scan, SBOM, smoke`, `Review dependency diff (dev/main)`, `ui`.
+The final epic PR to `dev` was [#563](https://github.com/oscharko-dev/Keiko/pull/563). This document now serves as post-merge closure evidence rather than a pre-merge handoff.
 
 ## Delivery board state
 
-- Epic `#518` — `Workflow State: Ready for Human Review`; `Owner / Agent: coordinator`; `Branch: claude/epic-518-governed-workspace-foundation`; `Human Review Required: Yes`. Status remains `Open Epics` until the final epic PR lands.
-- Each child issue `#545` / `#520` / `#522` / `#523` / `#524` / `#525` / `#526` / `#527` / `#528` / `#529` / `#530` — `Workflow State: Ready for Human Review`; child PR linked; child issue label `status: ready for human review`.
-- `#531` — set to `Ready for Human Review` when this PR is opened.
+- Epic `#518` and its child issues should now be treated as post-merge governance items: any remaining `Ready for Human Review` or open-state board entries need manual project-state cleanup rather than more implementation work.
 
 ## Review settlement
 
