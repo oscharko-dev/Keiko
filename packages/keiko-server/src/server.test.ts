@@ -103,6 +103,9 @@ describe("security headers", () => {
     expect(res.headers.get("referrer-policy")).toBe("no-referrer");
     expect(res.headers.get("cross-origin-opener-policy")).toBe("same-origin");
     expect(res.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+    expect(res.headers.get("permissions-policy")).toBe(
+      "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
+    );
   });
 });
 

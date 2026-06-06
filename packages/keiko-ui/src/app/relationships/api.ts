@@ -161,7 +161,10 @@ function buildHeaders(opts: {
   readonly idempotencyKey?: string;
   readonly ifMatch?: string;
 }): Record<string, string> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    "X-Keiko-CSRF": "1",
+  };
   if (opts.idempotencyKey !== undefined) headers["Idempotency-Key"] = opts.idempotencyKey;
   if (opts.ifMatch !== undefined) headers["If-Match"] = opts.ifMatch;
   return headers;
@@ -182,7 +185,7 @@ export async function validateRelationshipProposal(
   };
   const res = await fetch("/api/relationships/validate", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: buildHeaders({}),
     body: JSON.stringify(body),
   });
   const data = await parseApiResponse<{ decision: ValidateResult["decision"] }>(res);
