@@ -231,10 +231,14 @@ describe("runMigrations", () => {
       );
     };
     insert("rel-1");
-    expect(() => insert("rel-2")).toThrow();
+    expect(() => {
+      insert("rel-2");
+    }).toThrow();
     // The barrier only applies while lifecycle is in the active set; a revoked row co-exists.
     db.exec(`UPDATE relationships SET lifecycle='revoked' WHERE id='rel-1'`);
-    expect(() => insert("rel-3")).not.toThrow();
+    expect(() => {
+      insert("rel-3");
+    }).not.toThrow();
   });
 
   it("v5 migration is idempotent (issue #539)", () => {

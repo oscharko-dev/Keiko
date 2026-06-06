@@ -418,6 +418,34 @@ export function relationshipCardinalitySnapshot(
   };
 }
 
+// Closed-set predicate fragments. Each fragment is a STATIC `column = ?` string;
+// only the parameter values are bound at execution time. No user input enters SQL text.
+const LIST_FILTER_FRAGMENTS = [
+  { key: "sourceKind", clause: "source_kind = ?" },
+  { key: "sourceId", clause: "source_id = ?" },
+  { key: "targetKind", clause: "target_kind = ?" },
+  { key: "targetId", clause: "target_id = ?" },
+  { key: "type", clause: "type = ?" },
+  { key: "lifecycle", clause: "lifecycle = ?" },
+  { key: "afterEtag", clause: "etag < ?" },
+] as const;
+
+function buildListClauses(q: RelationshipListQuery): {
+  readonly clauses: readonly string[];
+  readonly params: readonly (string | number)[];
+} {
+  const clauses: string[] = ["workspace_scope_id = ?"];
+  const params: (string | number)[] = [q.workspaceId];
+  for (const fragment of LIST_FILTER_FRAGMENTS) {
+    const value = q[fragment.key];
+    if (value !== undefined) {
+      clauses.push(fragment.clause);
+      params.push(value);
+    }
+  }
+  return { clauses, params };
+}
+
 export function listRelationships(
   db: DatabaseSync,
   q: RelationshipListQuery,
@@ -425,59 +453,25 @@ export function listRelationships(
   if (q.limit <= 0 || q.limit > MAX_LIST_LIMIT) {
     throw invalidRequest("Limit out of bounds.");
   }
-  // Build a parameterised WHERE list dynamically by appending closed-set predicates. Each
-  // predicate is a STATIC fragment; the dynamic part is only the count and the bound values.
-  // No string interpolation of user-supplied content into SQL.
-  const clauses: string[] = ["workspace_scope_id = ?"];
-  const params: Array<string | number> = [q.workspaceId];
-  if (q.sourceKind !== undefined) {
-    clauses.push("source_kind = ?");
-    params.push(q.sourceKind);
-  }
-  if (q.sourceId !== undefined) {
-    clauses.push("source_id = ?");
-    params.push(q.sourceId);
-  }
-  if (q.targetKind !== undefined) {
-    clauses.push("target_kind = ?");
-    params.push(q.targetKind);
-  }
-  if (q.targetId !== undefined) {
-    clauses.push("target_id = ?");
-    params.push(q.targetId);
-  }
-  if (q.type !== undefined) {
-    clauses.push("type = ?");
-    params.push(q.type);
-  }
-  if (q.lifecycle !== undefined) {
-    clauses.push("lifecycle = ?");
-    params.push(q.lifecycle);
-  }
-  if (q.afterEtag !== undefined) {
-    clauses.push("etag < ?");
-    params.push(q.afterEtag);
-  }
+  const { clauses, params: filterParams } = buildListClauses(q);
+  const params: (string | number)[] = [...filterParams, q.limit + 1];
   const sql =
     "SELECT id, schema_version, workspace_scope_id, scope_kind, scope_coordinate, type," +
     " source_kind, source_id, target_kind, target_id, lifecycle, created_at, updated_at," +
     " etag, confidence, summary FROM relationships WHERE " +
     clauses.join(" AND ") +
     " ORDER BY etag DESC, id ASC LIMIT ?";
-  params.push(q.limit + 1);
   const rows = db.prepare(sql).all(...params) as unknown as RelationshipRow[];
   const truncated = rows.length > q.limit;
   const slice = truncated ? rows.slice(0, q.limit) : rows;
   const entries = slice.map(rowToRelationship);
   const last = slice[slice.length - 1];
-  const nextCursor = truncated && last !== undefined ? last.etag.toString() : undefined;
+  const nextCursor = truncated && last !== undefined ? last.etag : undefined;
   // Always return undefined when not truncated; `nextCursor` is `string | undefined` so
   // exactOptionalPropertyTypes-safe.
-  const result: RelationshipListResult =
-    nextCursor === undefined
-      ? { entries, truncated, nextCursor: undefined }
-      : { entries, truncated, nextCursor };
-  return result;
+  return nextCursor === undefined
+    ? { entries, truncated, nextCursor: undefined }
+    : { entries, truncated, nextCursor };
 }
 
 export function findRelationshipsBySource(
@@ -514,13 +508,13 @@ export function listRelationshipLifecycleHistory(
   if (limit <= 0 || limit > LIFECYCLE_HISTORY_RETAIN) {
     throw invalidRequest("History limit out of bounds.");
   }
-  const rows = db.prepare(SQL_LIST_HISTORY).all(relationshipId, limit) as Array<{
+  const rows = db.prepare(SQL_LIST_HISTORY).all(relationshipId, limit) as {
     relationship_id: string;
     from_state: string;
     to_state: string;
     occurred_at: number;
     summary: string | null;
-  }>;
+  }[];
   return rows.map((r) => {
     const base: RelationshipLifecycleHistoryRow = {
       relationshipId: r.relationship_id,
@@ -544,10 +538,10 @@ export interface DependencyWalkOptions {
 
 export interface DependencyWalkResult {
   readonly relationships: readonly StoredRelationship[];
-  readonly nodes: ReadonlyArray<{
+  readonly nodes: readonly {
     readonly kind: RelationshipObjectKind;
     readonly id: string;
-  }>;
+  }[];
   readonly truncated: boolean;
   readonly truncationReason: "max-depth" | "max-nodes" | "max-relationships" | null;
   readonly depthReached: number;
@@ -578,10 +572,10 @@ export function computeImpact(db: DatabaseSync, options: ImpactWalkOptions): Dep
 }
 
 export function graphHealth(db: DatabaseSync, workspaceId: string): RelationshipHealthSummary {
-  const rows = db.prepare(SQL_HEALTH_COUNTS).all(workspaceId) as Array<{
+  const rows = db.prepare(SQL_HEALTH_COUNTS).all(workspaceId) as {
     lifecycle: string;
     n: number;
-  }>;
+  }[];
   const totals: Record<RelationshipLifecycleState, number> = {
     draft: 0,
     active: 0,
@@ -659,10 +653,10 @@ function runWalkFromOrigin(
 ): DependencyWalkResult {
   // Seed from the relationship's endpoints — the walk includes the origin row itself plus
   // its neighbours, expanding by `direction` per hop.
-  const seedEndpoints: Array<{
+  const seedEndpoints: {
     readonly kind: RelationshipObjectKind;
     readonly id: string;
-  }> = [];
+  }[] = [];
   if (options.direction !== "incoming") {
     seedEndpoints.push({ kind: origin.target.kind, id: origin.target.id });
   }
@@ -676,13 +670,12 @@ function runWalkFromOrigin(
     maxRelationships: options.maxRelationships,
   });
   // Always include the origin relationship + endpoints.
-  const nodeKey = (n: { kind: string; id: string }): string => `${n.kind}/${n.id}`;
   const seenRels = new Set(walkResult.relationships.map((r) => r.id));
   const relationships: StoredRelationship[] = seenRels.has(origin.id)
     ? [...walkResult.relationships]
     : [origin, ...walkResult.relationships];
   const seenNodes = new Set(walkResult.nodes.map(nodeKey));
-  const nodes: Array<{ kind: RelationshipObjectKind; id: string }> = [...walkResult.nodes];
+  const nodes: { kind: RelationshipObjectKind; id: string }[] = [...walkResult.nodes];
   for (const n of [origin.source, origin.target]) {
     if (!seenNodes.has(nodeKey(n))) {
       seenNodes.add(nodeKey(n));
@@ -698,89 +691,129 @@ function runWalkFromOrigin(
   };
 }
 
+interface WalkNode {
+  readonly kind: RelationshipObjectKind;
+  readonly id: string;
+}
+type WalkTruncation = "max-depth" | "max-nodes" | "max-relationships";
+
+interface WalkState {
+  readonly visitedNodes: Set<string>;
+  readonly collectedNodes: WalkNode[];
+  readonly seenRelationships: Map<string, StoredRelationship>;
+  readonly maxNodes: number;
+  readonly maxRelationships: number;
+  truncationReason: WalkTruncation | null;
+}
+
+function nodeKey(n: { readonly kind: string; readonly id: string }): string {
+  return `${n.kind}/${n.id}`;
+}
+
+function admitEndpoint(state: WalkState, endpoint: WalkNode, nextFrontier: WalkNode[]): boolean {
+  const key = nodeKey(endpoint);
+  if (state.visitedNodes.has(key)) return true;
+  if (state.collectedNodes.length >= state.maxNodes) {
+    state.truncationReason = "max-nodes";
+    return false;
+  }
+  state.visitedNodes.add(key);
+  const admitted: WalkNode = { kind: endpoint.kind, id: endpoint.id };
+  state.collectedNodes.push(admitted);
+  nextFrontier.push(admitted);
+  return true;
+}
+
+function admitRelationship(state: WalkState, rel: StoredRelationship): boolean {
+  if (state.seenRelationships.has(rel.id)) return true;
+  if (state.seenRelationships.size >= state.maxRelationships) {
+    state.truncationReason = "max-relationships";
+    return false;
+  }
+  state.seenRelationships.set(rel.id, rel);
+  return true;
+}
+
+function expandFrontier(
+  db: DatabaseSync,
+  workspaceId: string,
+  frontier: readonly WalkNode[],
+  direction: "outgoing" | "incoming" | "both",
+  state: WalkState,
+): WalkNode[] {
+  const nextFrontier: WalkNode[] = [];
+  for (const node of frontier) {
+    const neighbours = expandNeighbours(db, workspaceId, node, direction);
+    for (const rel of neighbours) {
+      if (!admitRelationship(state, rel)) return nextFrontier;
+      if (!admitEndpoint(state, rel.source, nextFrontier)) return nextFrontier;
+      if (!admitEndpoint(state, rel.target, nextFrontier)) return nextFrontier;
+    }
+  }
+  return nextFrontier;
+}
+
+interface WalkOptions {
+  readonly direction: "outgoing" | "incoming" | "both";
+  readonly maxDepth: number;
+  readonly maxNodes: number;
+  readonly maxRelationships: number;
+}
+
+function seedWalkState(seed: readonly WalkNode[], options: WalkOptions): WalkState {
+  const state: WalkState = {
+    visitedNodes: new Set<string>(),
+    collectedNodes: [],
+    seenRelationships: new Map<string, StoredRelationship>(),
+    maxNodes: options.maxNodes,
+    maxRelationships: options.maxRelationships,
+    truncationReason: null,
+  };
+  for (const s of seed) {
+    if (!state.visitedNodes.has(nodeKey(s))) {
+      state.visitedNodes.add(nodeKey(s));
+      state.collectedNodes.push({ kind: s.kind, id: s.id });
+    }
+  }
+  return state;
+}
+
+function walkResult(
+  state: WalkState,
+  depthReached: number,
+  truncationReason: WalkTruncation | null,
+): DependencyWalkResult {
+  return {
+    relationships: [...state.seenRelationships.values()],
+    nodes: state.collectedNodes,
+    truncated: truncationReason !== null,
+    truncationReason,
+    depthReached,
+  };
+}
+
 function runWalk(
   db: DatabaseSync,
   workspaceId: string,
-  seed: ReadonlyArray<{ readonly kind: RelationshipObjectKind; readonly id: string }>,
-  options: {
-    readonly direction: "outgoing" | "incoming" | "both";
-    readonly maxDepth: number;
-    readonly maxNodes: number;
-    readonly maxRelationships: number;
-  },
+  seed: readonly WalkNode[],
+  options: WalkOptions,
 ): DependencyWalkResult {
-  const nodeKey = (n: { kind: string; id: string }): string => `${n.kind}/${n.id}`;
-  const visitedNodes = new Set<string>();
-  const collectedNodes: Array<{ kind: RelationshipObjectKind; id: string }> = [];
-  for (const s of seed) {
-    if (!visitedNodes.has(nodeKey(s))) {
-      visitedNodes.add(nodeKey(s));
-      collectedNodes.push({ kind: s.kind, id: s.id });
-    }
-  }
-  const seenRelationships = new Map<string, StoredRelationship>();
-  let truncated = false;
-  let truncationReason: "max-depth" | "max-nodes" | "max-relationships" | null = null;
+  const state = seedWalkState(seed, options);
   let depthReached = 0;
-  let frontier: Array<{ kind: RelationshipObjectKind; id: string }> = [...collectedNodes];
-
+  let frontier: readonly WalkNode[] = [...state.collectedNodes];
   for (let depth = 0; depth < options.maxDepth; depth++) {
-    const nextFrontier: Array<{ kind: RelationshipObjectKind; id: string }> = [];
     depthReached = depth + 1;
-    for (const node of frontier) {
-      const neighbours = expandNeighbours(db, workspaceId, node, options.direction);
-      for (const rel of neighbours) {
-        if (!seenRelationships.has(rel.id)) {
-          if (seenRelationships.size >= options.maxRelationships) {
-            truncated = true;
-            truncationReason = "max-relationships";
-            return {
-              relationships: [...seenRelationships.values()],
-              nodes: collectedNodes,
-              truncated,
-              truncationReason,
-              depthReached,
-            };
-          }
-          seenRelationships.set(rel.id, rel);
-        }
-        for (const endpoint of [rel.source, rel.target]) {
-          const key = nodeKey(endpoint);
-          if (!visitedNodes.has(key)) {
-            if (collectedNodes.length >= options.maxNodes) {
-              truncated = true;
-              truncationReason = "max-nodes";
-              return {
-                relationships: [...seenRelationships.values()],
-                nodes: collectedNodes,
-                truncated,
-                truncationReason,
-                depthReached,
-              };
-            }
-            visitedNodes.add(key);
-            collectedNodes.push({ kind: endpoint.kind, id: endpoint.id });
-            nextFrontier.push({ kind: endpoint.kind, id: endpoint.id });
-          }
-        }
-      }
+    const nextFrontier = expandFrontier(db, workspaceId, frontier, options.direction, state);
+    if (state.truncationReason !== null) {
+      return walkResult(state, depthReached, state.truncationReason);
     }
     if (nextFrontier.length === 0) break;
     frontier = nextFrontier;
   }
   // depth-bounded normal completion is not a truncation per se; we only mark `max-depth`
   // when the frontier was non-empty after the last hop (more work to do).
-  if (frontier.length > 0 && truncationReason === null && depthReached === options.maxDepth) {
-    truncated = true;
-    truncationReason = "max-depth";
-  }
-  return {
-    relationships: [...seenRelationships.values()],
-    nodes: collectedNodes,
-    truncated,
-    truncationReason,
-    depthReached,
-  };
+  const exhaustedDepth = frontier.length > 0 && depthReached === options.maxDepth;
+  return walkResult(state, depthReached, exhaustedDepth ? "max-depth" : null);
 }
 
 function expandNeighbours(
