@@ -7,10 +7,11 @@
 //      matches that same root version.
 //   3. Issue #426's removed shim/duplicate paths stay removed: src/sdk/** and the local
 //      _sdk-version.ts mirrors under packages/keiko-cli/src and packages/keiko-server/src.
-//   4. No drifted hardcoded version literal appears in packages/keiko-sdk/src/index.ts.
+//   4. packages/keiko-sdk/src/index.ts directly re-exports KEIKO_PRODUCT_VERSION as SDK_VERSION.
 //
-// Runs in the prepack chain after the build steps so the packed artifact cannot ship with
-// a manifest/version mismatch. Pure Node 22+, no new runtime dependency.
+// Runs in the prepack chain after the build steps. This validates the source/build inputs the
+// publish path depends on; tarball contents are separately enforced by check:package-surface and
+// the install/runtime smoke gates.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -75,14 +76,21 @@ for (const target of REMOVED_PATHS) {
 
 const sdkIndexPath = join(repoRoot, "packages", "keiko-sdk", "src", "index.ts");
 const sdkIndex = readFileSync(sdkIndexPath, "utf8");
-if (/SDK_VERSION\s*=\s*"[0-9.]+"/.test(sdkIndex)) {
+if (
+  !/^import\s+\{\s*KEIKO_PRODUCT_VERSION\s*\}\s+from\s+"@oscharko-dev\/keiko-contracts";$/m.test(
+    sdkIndex,
+  )
+) {
   fail(
-    "packages/keiko-sdk/src/index.ts: hardcoded SDK_VERSION literal detected. " +
-      "The single authoritative source is KEIKO_PRODUCT_VERSION in @oscharko-dev/keiko-contracts.",
+    "packages/keiko-sdk/src/index.ts: missing KEIKO_PRODUCT_VERSION import from " +
+      "@oscharko-dev/keiko-contracts.",
   );
 }
-if (!sdkIndex.includes("KEIKO_PRODUCT_VERSION")) {
-  fail("packages/keiko-sdk/src/index.ts: SDK_VERSION is not sourced from KEIKO_PRODUCT_VERSION.");
+if (!/^export\s+const\s+SDK_VERSION(?:\s*:\s*string)?\s*=\s*KEIKO_PRODUCT_VERSION;$/m.test(sdkIndex)) {
+  fail(
+    "packages/keiko-sdk/src/index.ts: SDK_VERSION does not directly re-export " +
+      "KEIKO_PRODUCT_VERSION.",
+  );
 }
 
 if (failures.length > 0) {
