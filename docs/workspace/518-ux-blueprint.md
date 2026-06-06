@@ -60,14 +60,14 @@ The UX blueprint owns the interaction flow for each primary journey defined in [
 
 ## Navigation model
 
-| Region                                                           | Owner             | Keyboard reach                          | Behavior                                                                                                       |
-| ---------------------------------------------------------------- | ----------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **LeftRail**                                                     | `AppShell`        | `Alt+1..7` by visible rail order        | Tabs to global tools (Project, Search, Plugins, Automations, Keiko mobile) and to the Keiko Twin (top of rail) |
-| **Header tabs**                                                  | `Header`          | `Ctrl+1..9` cycles tabs                 | Switches workspace tabs (multi-workspace, per memory #64)                                                      |
-| **Workspace**                                                    | `Workspace`       | `Tab` enters windows; `Shift+Tab` exits | Pan/zoom via keyboard (`Arrow` + `+/-`); fit-to-view via `f`                                                   |
-| **RightRail**                                                    | `RightRail`       | `Alt+i` toggles inspector visibility    | Inspector and supplemental panels                                                                              |
-| **Footer**                                                       | `Footer`          | `Alt+s` focuses status surface          | Indicators for connected project, model availability, workflow readiness, evidence access                      |
-| **Modals (palette / new window / gateway setup / perm control)** | `AppShell.modals` | `Esc` closes; focus trap inside         | Standard modal patterns                                                                                        |
+| Region                                                           | Owner             | Keyboard reach                          | Behavior                                                                                                                                        |
+| ---------------------------------------------------------------- | ----------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| **LeftRail**                                                     | `AppShell`        | `Alt+1..7` by visible rail order        | Tabs to global tools (Project, Search, Plugins, Automations, Keiko mobile) and to the Keiko Twin (top of rail)                                  |
+| **Header tabs**                                                  | `Header`          | `Ctrl+1..9` cycles tabs                 | Switches workspace tabs (multi-workspace, per memory #64)                                                                                       |
+| **Workspace**                                                    | `Workspace`       | `Tab` enters windows; `Shift+Tab` exits | Pan/zoom and window manipulation use the shipped workspace controls and keyboard shortcuts; no dedicated fit-to-view shortcut is wired on `dev` |
+| **RightRail**                                                    | `RightRail`       | `Alt+i` toggles inspector visibility    | Inspector and supplemental panels                                                                                                               |
+| **Footer**                                                       | `Footer`          | `Alt+s` focuses status surface          | Indicators for connected project, model availability, workflow readiness, evidence access                                                       |
+| **Modals (palette / new window / gateway setup / perm control)** | `AppShell.modals` | `Esc` closes; focus trap inside         | Standard modal patterns                                                                                                                         |
 
 ### Command palette
 

@@ -57,9 +57,9 @@ BFF events (SSE chat-message-arrived, WebSocket run-progress) flow through hooks
 
 ### 3. Selection model
 
-`useWorkspace` owns selection state. Selection is single-window by default. Multi-selection is the bounded extension landed in #527 if and only if the UX blueprint requires it for an in-scope behavior; otherwise multi-selection is deferred.
+`useWorkspace` currently owns single-window focus and z-ordering. The typed `SelectionState` contract exists in `keiko-contracts`, but `WorkspaceApi` on `dev` does not yet expose that state as a first-class runtime selection API. Multi-selection remains deferred unless a downstream issue proves it is needed.
 
-The substrate's typed `SelectionState` is exposed by `WorkspaceApi`:
+The substrate's typed `SelectionState` is the contract shape reserved for future selection wiring:
 
 ```
 interface SelectionState {
