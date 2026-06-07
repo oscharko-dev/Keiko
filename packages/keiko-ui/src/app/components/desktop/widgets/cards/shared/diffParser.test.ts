@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_DIFF_BYTES, parseUnifiedDiff } from "./diffParser";
+import { MAX_DIFF_BYTES, MAX_DIFF_FILES, parseUnifiedDiff } from "./diffParser";
 
 // noUncheckedIndexedAccess: use non-null assertions only in tests where we've
 // already asserted the array length, making the element access safe.
@@ -233,6 +233,53 @@ describe("parseUnifiedDiff", () => {
     expect(result.totalBytes).toBeGreaterThan(MAX_DIFF_BYTES);
     // The prefix must have parsed cleanly — no exception and files array is populated
     expect(result.files.length).toBeGreaterThan(0);
+  });
+
+  // Issue #645 — large diffs must cap the rendered file list and flag truncation so the Review
+  // widget never iterates an unbounded files array for generated patches / large repository diffs.
+  describe("file-count cap (issue #645)", () => {
+    function fileEntry(idx: number): string {
+      return [
+        `diff --git a/f${String(idx)}.ts b/f${String(idx)}.ts`,
+        `--- a/f${String(idx)}.ts`,
+        `+++ b/f${String(idx)}.ts`,
+        "@@ -1,1 +1,1 @@",
+        "-old",
+        "+new",
+      ].join("\n");
+    }
+
+    function buildDiff(fileCount: number): string {
+      const parts: string[] = [];
+      for (let i = 0; i < fileCount; i += 1) parts.push(fileEntry(i));
+      parts.push("");
+      return parts.join("\n");
+    }
+
+    it("exports MAX_DIFF_FILES as a positive integer", () => {
+      expect(typeof MAX_DIFF_FILES).toBe("number");
+      expect(MAX_DIFF_FILES).toBeGreaterThan(0);
+      expect(Number.isInteger(MAX_DIFF_FILES)).toBe(true);
+    });
+
+    it("does NOT mark truncated when the file count is exactly at the cap", () => {
+      const result = parseUnifiedDiff(buildDiff(MAX_DIFF_FILES));
+      expect(result.files.length).toBe(MAX_DIFF_FILES);
+      expect(result.truncated).toBe(false);
+    });
+
+    it("caps file list at MAX_DIFF_FILES and marks truncated:true when more files are present", () => {
+      const overshoot = MAX_DIFF_FILES + 50;
+      const result = parseUnifiedDiff(buildDiff(overshoot));
+      expect(result.files.length).toBe(MAX_DIFF_FILES);
+      expect(result.truncated).toBe(true);
+    });
+
+    it("preserves the first N file headers in input order", () => {
+      const result = parseUnifiedDiff(buildDiff(MAX_DIFF_FILES + 3));
+      expect(result.files[0]?.path).toBe("f0.ts");
+      expect(result.files[MAX_DIFF_FILES - 1]?.path).toBe(`f${String(MAX_DIFF_FILES - 1)}.ts`);
+    });
   });
 
   it("mutation guard: 2 added + 1 removed reports addedLines:2 removedLines:1", () => {
