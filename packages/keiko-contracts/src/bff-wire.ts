@@ -52,6 +52,12 @@ export interface ChatConnectedScope {
   readonly root?: string;
 }
 
+// Epic #532 — a sane cap on the number of folders/files one chat may connect at once. The BFF
+// rejects PATCHes whose connectedScopes list exceeds this; the store enforces the same as a
+// defense-in-depth subset. Bounds retrieval fan-out cost (each source runs an independent,
+// budget-split retrieval pass), so total work stays bounded regardless of N.
+export const MAX_CONNECTED_SOURCES = 16;
+
 export type ChatLocalKnowledgeScope =
   | {
       readonly kind: "capsule";
@@ -71,6 +77,13 @@ export interface Chat {
   readonly selectedModel: string;
   readonly branchLabel: string | undefined;
   readonly status: "open" | "closed" | undefined;
+  // Epic #532 — `connectedScopes` is the canonical list of connected sources (a chat may ground
+  // against multiple folders/files at once). `connectedScope` is retained for backward-compat
+  // (legacy single-source readers and rows). `connectedScopes` SUPERSEDES `connectedScope`:
+  // readers should derive the effective list as
+  //   `chat.connectedScopes ?? (chat.connectedScope ? [chat.connectedScope] : [])`.
+  // When both are present, `connectedScope` equals `connectedScopes[0]`.
+  readonly connectedScopes?: readonly ChatConnectedScope[];
   readonly connectedScope: ChatConnectedScope | undefined;
   readonly localKnowledgeScope: ChatLocalKnowledgeScope | undefined;
   readonly createdAt: number;
@@ -110,6 +123,11 @@ export interface UpdateChatPatch {
   readonly selectedModel?: string;
   readonly branchLabel?: string;
   readonly status?: "open" | "closed";
+  // Epic #532 — set `connectedScopes` to bind a list of sources (null clears ALL). Back-compat:
+  // `connectedScope` is still accepted and is treated as a 1-element list. When a caller supplies
+  // both, `connectedScopes` wins. As with the single field, `undefined` (absent) leaves the
+  // binding untouched while `null` explicitly clears it.
+  readonly connectedScopes?: readonly ChatConnectedScope[] | null;
   readonly connectedScope?: ChatConnectedScope | null;
   readonly localKnowledgeScope?: ChatLocalKnowledgeScope | null;
 }
@@ -428,6 +446,10 @@ export interface GroundedEvidenceCitation {
   readonly lineRange: { readonly startLine: number; readonly endLine: number } | undefined;
   readonly score: number;
   readonly stableId: string;
+  // Epic #532 — a short, human-readable label of the connected source this citation came from
+  // (the connected root's basename; disambiguated with a short hash when two sources share a
+  // basename). Absent for legacy single-source answers, which carry no per-source attribution.
+  readonly source?: string;
 }
 
 export interface GroundedUncertainty {
