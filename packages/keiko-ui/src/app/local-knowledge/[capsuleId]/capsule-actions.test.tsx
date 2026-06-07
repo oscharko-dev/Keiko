@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CapsuleActions } from "./capsule-actions";
 import type { CapsuleActionsProps } from "./capsule-actions";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
-import type { CapsuleActionResponse } from "@/lib/local-knowledge-api";
+import type { CapsuleActionResponse, CapsuleDetailResponse } from "@/lib/local-knowledge-api";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -30,10 +30,14 @@ function defaultProps(overrides: Partial<CapsuleActionsProps> = {}): CapsuleActi
   return {
     capsuleId: DEFAULT_ID,
     capsuleDisplayName: DEFAULT_NAME,
+    sourceCount: 1,
+    lifecycleState: "ready",
     onActionComplete: vi.fn(),
+    connectCapsuleSourceImpl: vi.fn().mockResolvedValue({} as CapsuleDetailResponse),
     deleteCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     refreshCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     repairCapsuleImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
+    startIndexingImpl: vi.fn().mockImplementation(() => okAction(DEFAULT_ID)),
     ...overrides,
   };
 }

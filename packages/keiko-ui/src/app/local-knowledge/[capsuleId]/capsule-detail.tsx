@@ -139,10 +139,7 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
           value={`${embId.provider} / ${embId.modelId} (${embId.vectorDimensions.toString()}d, ${embId.vectorMetric})`}
         />
         <OverviewRow label="Storage size" value={formatBytes(health.storageSizeBytes)} />
-        <OverviewRow
-          label="Unsupported documents"
-          value={health.unsupportedDocuments.toString()}
-        />
+        <OverviewRow label="Unsupported documents" value={health.unsupportedDocuments.toString()} />
         {health.lastIndexedAt !== undefined ? (
           <OverviewRow label="Last indexed" value={formatTs(health.lastIndexedAt)} />
         ) : null}
@@ -232,8 +229,7 @@ function PrivacySection(): ReactNode {
       <ul className="lkd-list" aria-label="Privacy and deletion details">
         <li className="lkd-source-row">
           Indexed text, vectors, diagnostics, and job history stay in Keiko&apos;s local runtime
-          state
-          on this machine.
+          state on this machine.
         </li>
         <li className="lkd-source-row">
           Selected chunks may be sent through the configured Model Gateway for embeddings during
@@ -434,6 +430,8 @@ export function CapsuleDetail({ fetchDetailImpl }: CapsuleDetailProps = {}): Rea
         <CapsuleActions
           capsuleId={capsuleId}
           capsuleDisplayName={data.capsule.displayName}
+          sourceCount={data.sources.length}
+          lifecycleState={data.capsule.lifecycleState}
           onActionComplete={reload}
         />
       </header>

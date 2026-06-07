@@ -1,8 +1,9 @@
 "use client";
 
 // Issue #198 — Destructive-action buttons for the capsule detail page.
-// Three actions: Delete, Refresh changed files, Repair failed files.
-// Each is gated behind a confirmation modal (aria-modal="true", focus-trapped).
+// Issue #189 — SOURCE-CONNECT: Connect a folder + Index now actions.
+// Three modal actions: Delete, Refresh changed files, Repair failed files.
+// Two inline actions: Connect a folder (text input), Index now (button).
 // Delete requires typing the capsule display name before confirming (Foundry IQ pattern).
 // Refresh and Repair use a single "Are you sure?" step.
 //
@@ -10,11 +11,13 @@
 // WCAG: min 30×30 button targets, focus-visible ring, colour tokens for danger text.
 
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
-import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
 import {
+  connectCapsuleSource,
   deleteCapsule,
   refreshCapsuleChangedFiles,
   repairCapsuleFailedFiles,
+  startIndexing,
 } from "@/lib/local-knowledge-api";
 import type { CapsuleActionResponse } from "@/lib/local-knowledge-api";
 import { ApiError } from "@/lib/api";
@@ -61,6 +64,80 @@ function confirmButtonLabel(kind: ActionKind, busy: boolean): string {
   if (kind === "delete") return "Delete";
   if (kind === "refresh") return "Refresh";
   return "Repair";
+}
+
+// ---------------------------------------------------------------------------
+// ConnectFolderForm — Issue #189 SOURCE-CONNECT inline affordance
+// ---------------------------------------------------------------------------
+
+interface ConnectFolderFormProps {
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly onConnected: () => void;
+  readonly connectImpl?: typeof connectCapsuleSource;
+}
+
+function ConnectFolderForm({
+  capsuleId,
+  onConnected,
+  connectImpl = connectCapsuleSource,
+}: ConnectFolderFormProps): ReactNode {
+  const [rootPath, setRootPath] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+
+  async function handleConnect(): Promise<void> {
+    const trimmed = rootPath.trim();
+    if (trimmed === "" || busy) return;
+    setBusy(true);
+    setConnectError(null);
+    try {
+      await connectImpl(capsuleId, { kind: "folder", rootPath: trimmed, recursive: true });
+      setRootPath("");
+      onConnected();
+    } catch (error) {
+      setConnectError(formatError(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="lkd-connect-form" aria-label="Connect a folder">
+      <label htmlFor="lkd-connect-path-input" className="lkd-connect-label">
+        Connect a folder
+      </label>
+      <div className="lkd-connect-row">
+        <input
+          id="lkd-connect-path-input"
+          type="text"
+          className="dlg-input lkd-connect-input"
+          value={rootPath}
+          disabled={busy}
+          placeholder="/absolute/path/to/folder"
+          aria-label="Absolute folder path to connect"
+          autoComplete="off"
+          onChange={(e: ChangeEvent<HTMLInputElement>) => setRootPath(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void handleConnect();
+          }}
+        />
+        <button
+          type="button"
+          className="lk-btn lk-btn-ghost"
+          disabled={busy || rootPath.trim() === ""}
+          aria-busy={busy}
+          onClick={() => void handleConnect()}
+        >
+          {busy ? "Connecting…" : "Connect"}
+        </button>
+      </div>
+      {connectError !== null ? (
+        <div role="alert" aria-live="assertive" className="lk-alert" style={{ marginTop: 4 }}>
+          {connectError}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -252,24 +329,48 @@ function ConfirmModal({
 export interface CapsuleActionsProps {
   readonly capsuleId: KnowledgeCapsuleId;
   readonly capsuleDisplayName: string;
+  readonly sourceCount: number;
+  readonly lifecycleState: CapsuleLifecycleState;
   readonly onActionComplete: () => void;
   // Injectable seams for tests
+  readonly connectCapsuleSourceImpl?: typeof connectCapsuleSource;
   readonly deleteCapsuleImpl?: typeof deleteCapsule;
   readonly refreshCapsuleImpl?: typeof refreshCapsuleChangedFiles;
   readonly repairCapsuleImpl?: typeof repairCapsuleFailedFiles;
+  readonly startIndexingImpl?: typeof startIndexing;
 }
 
 export function CapsuleActions({
   capsuleId,
   capsuleDisplayName,
+  sourceCount,
+  lifecycleState,
   onActionComplete,
+  connectCapsuleSourceImpl = connectCapsuleSource,
   deleteCapsuleImpl = deleteCapsule,
   refreshCapsuleImpl = refreshCapsuleChangedFiles,
   repairCapsuleImpl = repairCapsuleFailedFiles,
+  startIndexingImpl = startIndexing,
 }: CapsuleActionsProps): ReactNode {
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [indexBusy, setIndexBusy] = useState(false);
+  const [indexError, setIndexError] = useState<string | null>(null);
+
+  async function handleIndex(): Promise<void> {
+    if (indexBusy) return;
+    setIndexBusy(true);
+    setIndexError(null);
+    try {
+      await startIndexingImpl(capsuleId);
+      onActionComplete();
+    } catch (error) {
+      setIndexError(formatError(error));
+    } finally {
+      setIndexBusy(false);
+    }
+  }
 
   function openModal(kind: ActionKind): void {
     setActionError(null);
@@ -312,8 +413,36 @@ export function CapsuleActions({
     }
   }
 
+  const showIndexButton = sourceCount > 0 && lifecycleState !== "ready";
+
   return (
     <>
+      <ConnectFolderForm
+        capsuleId={capsuleId}
+        onConnected={onActionComplete}
+        connectImpl={connectCapsuleSourceImpl}
+      />
+
+      {showIndexButton ? (
+        <div className="lkd-index-row">
+          <button
+            type="button"
+            className="lk-btn lk-btn-ghost"
+            aria-label="Index this capsule now"
+            aria-busy={indexBusy}
+            disabled={indexBusy}
+            onClick={() => void handleIndex()}
+          >
+            {indexBusy ? "Indexing…" : "Index now"}
+          </button>
+          {indexError !== null ? (
+            <div role="alert" aria-live="assertive" className="lk-alert" style={{ marginTop: 4 }}>
+              {indexError}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <div
         role="group"
         aria-label={`Actions for capsule ${capsuleDisplayName}`}
