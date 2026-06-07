@@ -10,20 +10,25 @@ interface ModeSwitchProps {
 
 export function ModeSwitch({ mode, onChange }: ModeSwitchProps): ReactNode {
   return (
-    <div className="modesw" data-mode={mode}>
+    <div className="modesw" data-mode={mode} role="group" aria-label="Agent mode">
       <button
         type="button"
         className="modesw-opt"
         data-on={mode === "manual"}
+        aria-pressed={mode === "manual"}
         onClick={() => onChange("manual")}
         title="You approve every privileged action"
       >
-        <span className="modesw-av">M</span> You
+        <span className="modesw-av" aria-hidden="true">
+          M
+        </span>{" "}
+        You
       </button>
       <button
         type="button"
         className="modesw-opt"
         data-on={mode === "autonomous"}
+        aria-pressed={mode === "autonomous"}
         onClick={() => onChange("autonomous")}
         title="Keiko governs agents per your policy"
       >

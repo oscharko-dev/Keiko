@@ -16,7 +16,7 @@
 //   - var(--accent) for selected/active state.
 //   - var(--line) for borders.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   QualityIntelligenceUiRunSummary,
@@ -489,18 +489,31 @@ export function QualityIntelligencePanel({
     }
   }, [fetchRunsImpl]);
 
+  // Issue #643 — guard against stale QI detail responses overwriting active UI state.
+  // Each detail fetch claims a monotonically increasing sequence number; results / errors that
+  // arrive after a newer selection are dropped. This is the QI counterpart to the Desktop Chat
+  // active-id guard and applies to rapid run-switching (user clicks run A, then B before A
+  // resolves) and to the request-of-record race when the same id is re-fetched.
+  const detailRequestSeqRef = useRef(0);
+
   const loadDetail = useCallback(
     async (id: string): Promise<void> => {
+      const requestSeq = detailRequestSeqRef.current + 1;
+      detailRequestSeqRef.current = requestSeq;
       setDetailLoading(true);
       setDetailError(null);
       setDetail(null);
       try {
         const res = await fetchRunDetailImpl(id);
+        if (detailRequestSeqRef.current !== requestSeq) return;
         setDetail(res);
       } catch (err) {
+        if (detailRequestSeqRef.current !== requestSeq) return;
         setDetailError(formatError(err));
       } finally {
-        setDetailLoading(false);
+        if (detailRequestSeqRef.current === requestSeq) {
+          setDetailLoading(false);
+        }
       }
     },
     [fetchRunDetailImpl],

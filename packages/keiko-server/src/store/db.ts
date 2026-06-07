@@ -208,9 +208,17 @@ function quarantineCorruptDb(target: string): void {
   }
 }
 
+// Issue #639 — bound the SQLITE_BUSY window so concurrent UI/BFF writers (chat writes,
+// relationship writes, evidence-adjacent updates) wait for the writer lock for a short, bounded
+// interval instead of failing immediately. 5_000ms matches the conservative default we want for
+// the local single-writer desktop pattern; exported so the regression test can assert the value
+// without re-deriving it.
+export const UI_DB_BUSY_TIMEOUT_MS = 5_000;
+
 function preparedDatabase(target: string): DatabaseSync {
   const db = new DatabaseSync(target);
   db.exec("PRAGMA foreign_keys = ON");
+  db.exec(`PRAGMA busy_timeout = ${String(UI_DB_BUSY_TIMEOUT_MS)}`);
   return db;
 }
 

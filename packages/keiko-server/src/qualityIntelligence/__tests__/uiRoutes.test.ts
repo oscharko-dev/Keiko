@@ -24,7 +24,8 @@ vi.mock("@oscharko-dev/keiko-evidence", async () => {
   };
 });
 
-const { handleListQiRuns, handleGetQiRun } = await import("../uiRoutes.js");
+const { handleListQiRuns, handleGetQiRun, QI_RUN_LIST_DEFAULT_LIMIT, QI_RUN_LIST_MAX_LIMIT } =
+  await import("../uiRoutes.js");
 
 // ---------------------------------------------------------------------------
 // Fixture helpers — minimal RouteContext + UiHandlerDeps so we exercise only
@@ -121,8 +122,113 @@ describe("handleListQiRuns", () => {
 
     const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), deps()));
     expect(result.status).toBe(200);
-    expect(result.body).toEqual({ runs: [] });
+    expect(result.body).toEqual({
+      runs: [],
+      limit: QI_RUN_LIST_DEFAULT_LIMIT,
+      totalRunIds: 0,
+      truncated: false,
+    });
     expect(loadMock).not.toHaveBeenCalled();
+  });
+
+  // Issue #646 — bound manifest loading so very large evidence stores do not block the BFF.
+  describe("bounded list (issue #646)", () => {
+    function ids(n: number): readonly string[] {
+      return Array.from({ length: n }, (_, i) => `run-${String(i).padStart(4, "0")}`);
+    }
+
+    it("applies the default limit of 100 when no limit query parameter is provided", () => {
+      listMock.mockReturnValue(ids(QI_RUN_LIST_DEFAULT_LIMIT + 25));
+      loadMock.mockImplementation((id: string) => manifest(id));
+
+      const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), deps()));
+      expect(result.status).toBe(200);
+      const body = result.body as {
+        runs: readonly { id: string }[];
+        limit: number;
+        totalRunIds: number;
+        truncated: boolean;
+      };
+      expect(body.limit).toBe(QI_RUN_LIST_DEFAULT_LIMIT);
+      expect(body.runs.length).toBe(QI_RUN_LIST_DEFAULT_LIMIT);
+      expect(body.totalRunIds).toBe(QI_RUN_LIST_DEFAULT_LIMIT + 25);
+      expect(body.truncated).toBe(true);
+      // The route must NOT call load for ids past the limit.
+      expect(loadMock).toHaveBeenCalledTimes(QI_RUN_LIST_DEFAULT_LIMIT);
+    });
+
+    it("accepts an explicit smaller limit and reports it in the response envelope", () => {
+      listMock.mockReturnValue(ids(10));
+      loadMock.mockImplementation((id: string) => manifest(id));
+
+      const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs?limit=3"), deps()));
+      expect(result.status).toBe(200);
+      const body = result.body as {
+        runs: readonly { id: string }[];
+        limit: number;
+        totalRunIds: number;
+        truncated: boolean;
+      };
+      expect(body.limit).toBe(3);
+      expect(body.runs.map((r) => r.id)).toEqual(["run-0000", "run-0001", "run-0002"]);
+      expect(body.totalRunIds).toBe(10);
+      expect(body.truncated).toBe(true);
+      expect(loadMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("caps an explicit limit at QI_RUN_LIST_MAX_LIMIT", () => {
+      listMock.mockReturnValue(ids(50));
+      loadMock.mockImplementation((id: string) => manifest(id));
+
+      const result = asResult(
+        handleListQiRuns(
+          ctx(`/api/quality-intelligence/runs?limit=${String(QI_RUN_LIST_MAX_LIMIT + 200)}`),
+          deps(),
+        ),
+      );
+      expect(result.status).toBe(200);
+      const body = result.body as { limit: number; truncated: boolean; totalRunIds: number };
+      expect(body.limit).toBe(QI_RUN_LIST_MAX_LIMIT);
+      // 50 runs available, capped limit 500 → not truncated.
+      expect(body.truncated).toBe(false);
+      expect(body.totalRunIds).toBe(50);
+    });
+
+    it("sets truncated = false when totalRunIds is at or below the limit", () => {
+      listMock.mockReturnValue(ids(QI_RUN_LIST_DEFAULT_LIMIT));
+      loadMock.mockImplementation((id: string) => manifest(id));
+
+      const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), deps()));
+      expect(result.status).toBe(200);
+      const body = result.body as { truncated: boolean; totalRunIds: number };
+      expect(body.truncated).toBe(false);
+      expect(body.totalRunIds).toBe(QI_RUN_LIST_DEFAULT_LIMIT);
+    });
+
+    it.each([
+      ["0", "non-positive"],
+      ["-1", "negative"],
+      ["abc", "non-numeric"],
+      ["1.5", "fractional"],
+      ["1e2", "scientific notation"],
+      [" 5", "whitespace"],
+      ["", "empty"],
+    ])("returns 400 BAD_REQUEST for malformed limit %s (%s)", (raw, _label) => {
+      listMock.mockReturnValue(ids(5));
+      const result = asResult(
+        handleListQiRuns(
+          ctx(`/api/quality-intelligence/runs?limit=${encodeURIComponent(raw)}`),
+          deps(),
+        ),
+      );
+      expect(result.status).toBe(400);
+      expect(result.body).toEqual({
+        error: { code: "BAD_REQUEST", message: "limit must be a positive integer" },
+      });
+      // listQualityIntelligenceRuns must never be called for a malformed limit.
+      expect(listMock).not.toHaveBeenCalled();
+      expect(loadMock).not.toHaveBeenCalled();
+    });
   });
 
   it("returns a standard LIST_FAILED error envelope and never echoes the error message on list failure", () => {
@@ -256,8 +362,10 @@ describe("evidenceDir wiring (issue #620)", () => {
     const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), depsWithDir));
 
     expect(result.status).toBe(200);
-    const body = result.body as { runs: unknown[] };
+    const body = result.body as { runs: unknown[]; truncated: boolean; totalRunIds: number };
     expect(body.runs).toEqual([]);
+    expect(body.truncated).toBe(false);
+    expect(body.totalRunIds).toBe(0);
   });
 
   it("handleGetQiRun returns 404 NOT_FOUND (not 500 INTERNAL) for an unknown id when evidenceDir is wired", () => {

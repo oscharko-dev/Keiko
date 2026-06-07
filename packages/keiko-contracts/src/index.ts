@@ -621,6 +621,7 @@ export type {
   QualityIntelligenceUiEvidenceRef,
   QualityIntelligenceUiFindingSummary,
   QualityIntelligenceUiRunDetail,
+  QualityIntelligenceUiRunListResponse,
   QualityIntelligenceUiRunSummary,
   QualityIntelligenceUiRunTotals,
 } from "./qualityIntelligence/bffWire.js";
