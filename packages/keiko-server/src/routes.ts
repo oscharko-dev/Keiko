@@ -429,18 +429,33 @@ export function matchRoute(
   method: string,
   pathname: string,
 ): RouteMatch | "method-not-allowed" | undefined {
-  let pathMatchedOtherMethod = false;
+  let bestMethodMatch: RouteMatch | undefined;
+  let bestMethodSpecificity = -1;
+  let bestOtherMethodSpecificity = -1;
   for (const definition of API_ROUTES) {
     const params = matchPattern(definition.pattern, pathname);
     if (params === undefined) {
       continue;
     }
+    const specificity = definition.pattern.split("/").filter((part) => !part.startsWith(":")).length;
     if (definition.method === method) {
-      return { definition, params };
+      if (specificity > bestMethodSpecificity) {
+        bestMethodSpecificity = specificity;
+        bestMethodMatch = { definition, params };
+      }
+      continue;
     }
-    pathMatchedOtherMethod = true;
+    if (specificity > bestOtherMethodSpecificity) {
+      bestOtherMethodSpecificity = specificity;
+    }
   }
-  return pathMatchedOtherMethod ? "method-not-allowed" : undefined;
+  if (
+    bestMethodMatch !== undefined &&
+    bestMethodSpecificity >= bestOtherMethodSpecificity
+  ) {
+    return bestMethodMatch;
+  }
+  return bestOtherMethodSpecificity >= 0 ? "method-not-allowed" : undefined;
 }
 
 export function isApiPath(pathname: string): boolean {

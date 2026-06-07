@@ -101,6 +101,22 @@ describe("ConnectorGraph — empty state", () => {
     expect(labels[2]).toContain("Capsules");
     expect(labels[3]).toContain("Conversation Center");
   });
+
+  it("opens an in-app create dialog instead of using window.prompt", async () => {
+    const user = userEvent.setup();
+    const promptSpy = vi.spyOn(window, "prompt");
+    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /create your first knowledge capsule/i }));
+
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: /create capsule/i })).toBeInTheDocument();
+    promptSpy.mockRestore();
+  });
 });
 
 describe("ConnectorGraph — with capsules", () => {
@@ -146,6 +162,31 @@ describe("ConnectorGraph — with capsules", () => {
 });
 
 describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
+  it("submits a trimmed display name from the create dialog", async () => {
+    const createCapsuleImpl = vi
+      .fn()
+      .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
+    const user = userEvent.setup();
+
+    render(
+      <ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /create a new knowledge capsule/i }),
+      ).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /create a new knowledge capsule/i }));
+    await user.type(screen.getByLabelText(/capsule display name/i), "  Treasury Docs  ");
+    await user.click(screen.getByRole("button", { name: /^create capsule$/i }));
+
+    await waitFor(() => {
+      expect(createCapsuleImpl).toHaveBeenCalledWith({ displayName: "Treasury Docs" });
+    });
+  });
+
   it("calls startIndexing with the right capsule ID when Index is clicked", async () => {
     const id = makeCapsuleId("42");
     const capsule = makeCapsule({ id, displayName: "Index Me", lifecycleState: "draft" });

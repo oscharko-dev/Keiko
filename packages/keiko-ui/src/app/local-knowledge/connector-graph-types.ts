@@ -37,7 +37,7 @@ export interface ConnectorGraphState {
   readonly handleCancelIndexing: (id: KnowledgeCapsuleId) => void;
   readonly handleDisconnect: (id: KnowledgeCapsuleId) => void;
   readonly handleOpenHealth: (id: KnowledgeCapsuleId) => void;
-  readonly handleCreateCapsule: () => void;
+  readonly handleCreateCapsule: (name: string) => Promise<void>;
 }
 
 export const STATUS_LABELS: Record<CapsuleLifecycleState, string> = {

@@ -7,7 +7,8 @@
 // var(--danger) on near-black backgrounds. Focus rings are in globals.css via
 // .lk-btn:focus-visible. Min 30×30 target size exceeds WCAG 2.5.8 (24×24).
 
-import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/keiko-contracts";
 import type { CapsuleListEntry, ConnectorGraphProps } from "./connector-graph-types";
 import { STATUS_LABELS } from "./connector-graph-types";
@@ -32,6 +33,128 @@ function AlertBanner({ message, onRetry }: { message: string; onRetry?: () => vo
         </button>
       ) : null}
     </div>
+  );
+}
+
+function focusablesIn(root: HTMLElement): readonly HTMLElement[] {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(
+      "button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex='-1'])",
+    ),
+  );
+}
+
+function CreateCapsuleDialog({
+  busy,
+  error,
+  onCancel,
+  onSubmit,
+}: {
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly onCancel: () => void;
+  readonly onSubmit: (name: string) => Promise<void>;
+}): ReactNode {
+  const titleId = useId();
+  const descriptionId = useId();
+  const inputId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const [name, setName] = useState("");
+  const [validationError, setValidationError] = useState<string | null>(null);
+
+  useEffect(() => {
+    triggerRef.current = document.activeElement as HTMLElement | null;
+    inputRef.current?.focus();
+    return () => {
+      triggerRef.current?.focus?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return undefined;
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape" && !busy) {
+        event.preventDefault();
+        onCancel();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const focusables = focusablesIn(dialog);
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+    dialog.addEventListener("keydown", handleKeyDown);
+    return () => dialog.removeEventListener("keydown", handleKeyDown);
+  }, [busy, onCancel]);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault();
+    const trimmed = name.trim();
+    if (trimmed.length === 0) {
+      setValidationError("Capsule display name is required.");
+      return;
+    }
+    setValidationError(null);
+    await onSubmit(trimmed);
+  }
+
+  const dialogError = validationError ?? error;
+  return createPortal(
+    <div className="mc-dialog-backdrop" role="presentation">
+      <div
+        ref={dialogRef}
+        className="mc-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+      >
+        <h2 id={titleId} className="mc-dialog-title">
+          Create capsule
+        </h2>
+        <p id={descriptionId} className="mc-dialog-body">
+          Name the knowledge capsule before Keiko creates and indexes it.
+        </p>
+        <form onSubmit={(event) => void handleSubmit(event)}>
+          <label className="mc-dialog-field" htmlFor={inputId}>
+            <span className="mc-dialog-label">Capsule display name</span>
+            <input
+              id={inputId}
+              ref={inputRef}
+              className="mc-dialog-input"
+              value={name}
+              disabled={busy}
+              autoComplete="off"
+              onChange={(event) => {
+                setName(event.target.value);
+                if (validationError !== null) setValidationError(null);
+              }}
+            />
+          </label>
+          {dialogError !== null ? <div className="mc-dialog-error">{dialogError}</div> : null}
+          <div className="mc-dialog-actions">
+            <button type="button" className="lk-btn lk-btn-ghost" disabled={busy} onClick={onCancel}>
+              Cancel
+            </button>
+            <button type="submit" className="lk-btn lk-btn-primary" disabled={busy}>
+              {busy ? "Creating…" : "Create capsule"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -406,6 +529,7 @@ function CapsuleSection({
 
 interface GraphPageHeaderProps {
   readonly creating: boolean;
+  readonly createDialogOpen: boolean;
   readonly loadStatus: string;
   readonly loadError: string | null;
   readonly actionError: string | null;
@@ -416,6 +540,7 @@ interface GraphPageHeaderProps {
 
 function GraphPageHeader({
   creating,
+  createDialogOpen,
   loadStatus,
   loadError,
   actionError,
@@ -431,6 +556,8 @@ function GraphPageHeader({
           type="button"
           disabled={creating}
           aria-label="Create a new knowledge capsule"
+          aria-haspopup="dialog"
+          aria-expanded={createDialogOpen}
           onClick={onCreateCapsule}
           className="lk-btn lk-btn-primary lk-btn-lg"
         >
@@ -467,17 +594,28 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
     handleCreateCapsule,
   } = useConnectorGraph(props);
   const isLoading = loadStatus === "loading";
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+
+  async function submitCreateCapsule(name: string): Promise<void> {
+    try {
+      await handleCreateCapsule(name);
+      setCreateDialogOpen(false);
+    } catch {
+      // The state hook surfaces the error message; keep the dialog open for correction/retry.
+    }
+  }
 
   return (
     <div className="lk-page">
       <GraphPageHeader
         creating={creating}
+        createDialogOpen={createDialogOpen}
         loadStatus={loadStatus}
         loadError={loadError}
         actionError={actionError}
         createError={createError}
         reload={reload}
-        onCreateCapsule={handleCreateCapsule}
+        onCreateCapsule={() => setCreateDialogOpen(true)}
       />
       <PipelineDiagram capsules={capsules} isLoading={isLoading} />
       <section
@@ -492,13 +630,21 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
           isLoading={isLoading}
           creating={creating}
           actionBusy={actionBusy}
-          onCreateCapsule={handleCreateCapsule}
+          onCreateCapsule={() => setCreateDialogOpen(true)}
           onStartIndexing={handleStartIndexing}
           onCancelIndexing={handleCancelIndexing}
           onDisconnect={handleDisconnect}
           onOpenHealth={handleOpenHealth}
         />
       </section>
+      {createDialogOpen ? (
+        <CreateCapsuleDialog
+          busy={creating}
+          error={createError}
+          onCancel={() => setCreateDialogOpen(false)}
+          onSubmit={submitCreateCapsule}
+        />
+      ) : null}
     </div>
   );
 }

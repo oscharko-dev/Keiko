@@ -125,7 +125,7 @@ function useCapsuleCreate(
 ): {
   creating: boolean;
   createError: string | null;
-  handleCreateCapsule: () => void;
+  handleCreateCapsule: (name: string) => Promise<void>;
 } {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -143,13 +143,7 @@ function useCapsuleCreate(
     }
   }
 
-  function handleCreateCapsule(): void {
-    const name = window.prompt("Capsule display name:");
-    if (name === null || name.trim().length === 0) return;
-    void doCreate(name.trim());
-  }
-
-  return { creating, createError, handleCreateCapsule };
+  return { creating, createError, handleCreateCapsule: doCreate };
 }
 
 export function useConnectorGraph(props: ConnectorGraphProps): ConnectorGraphState {

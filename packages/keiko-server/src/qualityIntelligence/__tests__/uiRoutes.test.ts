@@ -125,16 +125,15 @@ describe("handleListQiRuns", () => {
     expect(loadMock).not.toHaveBeenCalled();
   });
 
-  it("returns a static LIST_FAILED hint and never echoes the error message on list failure", () => {
+  it("returns a standard LIST_FAILED error envelope and never echoes the error message on list failure", () => {
     listMock.mockImplementation(() => {
       throw new Error(`ENOENT: no such file or directory, open '${SECRET_FS_PATH}'`);
     });
 
     const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), deps()));
-    expect(result.status).toBe(200);
+    expect(result.status).toBe(500);
     expect(result.body).toEqual({
-      runs: [],
-      _listError: {
+      error: {
         code: "LIST_FAILED",
         message: "Failed to list Quality Intelligence runs",
       },
@@ -216,7 +215,7 @@ describe("handleGetQiRun", () => {
 // listQualityIntelligenceRuns / loadQualityIntelligenceRun.  Before the fix,
 // resolveEvidenceDir(deps) returned undefined unconditionally, which caused
 // resolveLoadStore to throw EvidenceReadError on every call:
-//   LIST  → 200 _listError:LIST_FAILED   (instead of 200 runs:[])
+//   LIST  → 500 LIST_FAILED              (instead of 200 runs:[])
 //   GET   → 500 INTERNAL                  (instead of 404 NOT_FOUND)
 // ---------------------------------------------------------------------------
 
@@ -257,10 +256,8 @@ describe("evidenceDir wiring (issue #620)", () => {
     const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs"), depsWithDir));
 
     expect(result.status).toBe(200);
-    const body = result.body as { runs: unknown[]; _listError?: unknown };
+    const body = result.body as { runs: unknown[] };
     expect(body.runs).toEqual([]);
-    // Regression: before the fix this key would be present with code "LIST_FAILED"
-    expect(body._listError).toBeUndefined();
   });
 
   it("handleGetQiRun returns 404 NOT_FOUND (not 500 INTERNAL) for an unknown id when evidenceDir is wired", () => {

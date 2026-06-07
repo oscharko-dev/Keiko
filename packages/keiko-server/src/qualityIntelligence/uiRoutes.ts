@@ -122,10 +122,9 @@ export function handleListQiRuns(ctx: RouteContext, deps: UiHandlerDeps): RouteR
     // Static codes only — never echo OS fs error text (CWE-209).
   } catch {
     return {
-      status: 200,
+      status: 500,
       body: {
-        runs: [],
-        _listError: {
+        error: {
           code: "LIST_FAILED",
           message: "Failed to list Quality Intelligence runs",
         },

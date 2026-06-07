@@ -248,6 +248,10 @@ describe("matchRoute", () => {
     expect(matchRoute("DELETE", "/api/health")).toBe("method-not-allowed");
   });
 
+  it("treats DELETE /api/relationships/health as method-not-allowed instead of binding health to :id", () => {
+    expect(matchRoute("DELETE", "/api/relationships/health")).toBe("method-not-allowed");
+  });
+
   it("returns undefined for an unknown path", () => {
     expect(matchRoute("GET", "/api/nope")).toBeUndefined();
   });
