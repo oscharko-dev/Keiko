@@ -21,6 +21,7 @@ import type {
 import { assertCompatibleEmbeddingIdentity } from "@oscharko-dev/keiko-model-gateway";
 import type {
   OpenAIEmbeddingAdapter,
+  OpenAIEmbeddingErrorKind,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingSuccess,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -84,6 +85,88 @@ async function embedSingleChunkWithModel(
     input: chunk.text,
     ...(signal !== undefined ? { signal } : {}),
   });
+}
+
+// ─── Transient-failure retry ─────────────────────────────────────────────────
+// Only network-flavoured failures are worth retrying. Auth (`wrong-header`),
+// `unsupported-model`, and `invalid-response` are deterministic — retrying them burns
+// the budget without any chance of recovery. `cancelled` is the caller's own abort.
+const TRANSIENT_EMBED_KINDS: ReadonlySet<OpenAIEmbeddingErrorKind> =
+  new Set<OpenAIEmbeddingErrorKind>(["rate-limited", "timeout", "transport"]);
+
+const DEFAULT_EMBED_MAX_RETRIES = 2;
+const DEFAULT_EMBED_BASE_DELAY_MS = 200;
+const MAX_EMBED_BACKOFF_MS = 5_000;
+
+function isTransientOutcome(outcome: OpenAIEmbeddingOutcome): boolean {
+  return !outcome.ok && TRANSIENT_EMBED_KINDS.has(outcome.kind);
+}
+
+function backoffMs(attempt: number, base: number): number {
+  return Math.min(base * 2 ** (attempt - 1), MAX_EMBED_BACKOFF_MS);
+}
+
+// Cancellable default sleep. Rejects on abort so the retry loop can bail out of its backoff
+// the moment the caller cancels rather than waiting out the full delay.
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted === true) {
+    return Promise.reject(new DOMException("aborted", "AbortError"));
+  }
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort(): void {
+      clearTimeout(timer);
+      reject(new DOMException("aborted", "AbortError"));
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+interface ResolvedRetry {
+  readonly maxRetries: number;
+  readonly baseDelayMs: number;
+  readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
+function resolveRetry(retry: EmbedBatchOptions["retry"]): ResolvedRetry {
+  return {
+    maxRetries: retry?.maxRetries ?? DEFAULT_EMBED_MAX_RETRIES,
+    baseDelayMs: retry?.baseDelayMs ?? DEFAULT_EMBED_BASE_DELAY_MS,
+    sleep: retry?.sleep ?? defaultSleep,
+  };
+}
+
+async function embedChunkWithRetry(
+  options: EmbedBatchOptions,
+  chunk: ChunkToEmbed,
+): Promise<OpenAIEmbeddingOutcome> {
+  const retry = resolveRetry(options.retry);
+  let outcome = await embedSingleChunkWithModel(
+    options.adapter,
+    chunk,
+    options.pinnedIdentity,
+    options.signal,
+  );
+  for (let attempt = 1; attempt <= retry.maxRetries; attempt += 1) {
+    if (!isTransientOutcome(outcome) || options.signal?.aborted === true) {
+      return outcome;
+    }
+    try {
+      await retry.sleep(backoffMs(attempt, retry.baseDelayMs), options.signal);
+    } catch {
+      return outcome; // aborted mid-backoff; the abort gate converts this to CANCELLED
+    }
+    outcome = await embedSingleChunkWithModel(
+      options.adapter,
+      chunk,
+      options.pinnedIdentity,
+      options.signal,
+    );
+  }
+  return outcome;
 }
 
 // ─── Identity verification ───────────────────────────────────────────────────
@@ -154,12 +237,7 @@ async function buildChunkOutcomes(
     if (abortError !== undefined) {
       return { ok: false, chunk, error: abortError } satisfies ChunkOutcome;
     }
-    const outcome = await embedSingleChunkWithModel(
-      options.adapter,
-      chunk,
-      options.pinnedIdentity,
-      options.signal,
-    );
+    const outcome = await embedChunkWithRetry(options, chunk);
     if (!outcome.ok) {
       return { ok: false, chunk, error: errorFromOutcome(outcome) } satisfies ChunkOutcome;
     }

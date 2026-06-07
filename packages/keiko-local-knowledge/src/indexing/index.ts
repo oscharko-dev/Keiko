@@ -16,6 +16,7 @@ export {
   type ChunkToEmbed,
   type EmbedBatchOptions,
   type EmbedBatchResult,
+  type EmbedRetryOptions,
   type IndexingDocumentChunkedEvent,
   type IndexingDocumentDiscoveredEvent,
   type IndexingDocumentEmbeddedEvent,

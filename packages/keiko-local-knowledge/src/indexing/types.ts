@@ -211,6 +211,18 @@ export interface ChunkToEmbed {
   readonly text: string;
 }
 
+// Bounded retry over TRANSIENT embedding failures (rate-limit, timeout, transport). A
+// single flaky response should not fail an entire document on a large index; permanent
+// failures (auth, unsupported-model, malformed body) and caller cancellation are never
+// retried. The `sleep` seam keeps backoff deterministic and instant in tests.
+export interface EmbedRetryOptions {
+  // Additional attempts AFTER the first try. 0 disables retry.
+  readonly maxRetries: number;
+  // First backoff in ms; doubled each subsequent attempt (capped by the batcher).
+  readonly baseDelayMs: number;
+  readonly sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+}
+
 export interface EmbedBatchOptions {
   readonly adapter: OpenAIEmbeddingAdapter;
   readonly store: KnowledgeStore;
@@ -219,6 +231,8 @@ export interface EmbedBatchOptions {
   readonly signal?: AbortSignal;
   readonly now: () => number;
   readonly idSource: () => string;
+  // Optional; defaults to 2 retries with a 200 ms exponential backoff.
+  readonly retry?: EmbedRetryOptions;
 }
 
 export interface EmbedBatchResult {

@@ -218,6 +218,9 @@ describe("embedChunkBatch — adapter failure", () => {
       concurrency: 2,
       now: fixedClock(),
       idSource: fixedIds("storage"),
+      // Transport is transient → it would retry with real backoff; inject an instant
+      // sleep so the perpetually-failing chunk exhausts its retries without waiting.
+      retry: { maxRetries: 2, baseDelayMs: 0, sleep: () => Promise.resolve() },
     });
 
     expect(result.errors.some((e) => e.code === "EMBEDDING_ADAPTER_FAILED")).toBe(true);
@@ -326,5 +329,141 @@ describe("embedChunkBatch — abort", () => {
     expect(result.vectors).toEqual([]);
     expect(result.errors.some((e) => e.code === "CANCELLED")).toBe(true);
     expect(countVectorsForCapsule(fixture.store._internal.db, fixture.seeded.capsuleId)).toBe(0);
+  });
+});
+
+describe("embedChunkBatch — transient-failure retry", () => {
+  let fixture: Fixture;
+
+  beforeEach(() => {
+    fixture = buildFixture();
+  });
+
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  // Instant, deterministic backoff so the retry loop never touches the wall clock.
+  const instantRetry = { maxRetries: 2, baseDelayMs: 0, sleep: () => Promise.resolve() } as const;
+
+  function firstChunk(): ChunkToEmbed {
+    const chunk = fixture.chunks[0];
+    if (chunk === undefined) throw new Error("fixture produced no chunks");
+    return chunk;
+  }
+
+  it("retries a transient failure and succeeds on the next attempt", async () => {
+    const attempts = new Map<string, number>();
+    const adapter = scriptedAdapter({
+      responder: (req) => {
+        const n = (attempts.get(req.input) ?? 0) + 1;
+        attempts.set(req.input, n);
+        if (n === 1) return { ok: false, kind: "timeout" };
+        return {
+          ok: true,
+          value: {
+            vector: deterministicVector(req.input, DEFAULT_EMBEDDING.vectorDimensions),
+            modelId: DEFAULT_EMBEDDING.modelId,
+          },
+        };
+      },
+    });
+
+    const result = await embedChunkBatch(fixture.chunks, {
+      adapter,
+      store: fixture.store,
+      pinnedIdentity: DEFAULT_EMBEDDING,
+      concurrency: 2,
+      now: fixedClock(),
+      idSource: fixedIds("storage"),
+      retry: instantRetry,
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.vectors.length).toBe(fixture.chunks.length);
+    for (const chunk of fixture.chunks) {
+      expect(attempts.get(chunk.text)).toBe(2);
+    }
+  });
+
+  it("does not retry a permanent failure", async () => {
+    let calls = 0;
+    const adapter = scriptedAdapter({
+      responder: () => {
+        calls += 1;
+        return { ok: false, kind: "wrong-header" };
+      },
+    });
+
+    const result = await embedChunkBatch(fixture.chunks, {
+      adapter,
+      store: fixture.store,
+      pinnedIdentity: DEFAULT_EMBEDDING,
+      concurrency: 2,
+      now: fixedClock(),
+      idSource: fixedIds("storage"),
+      retry: { maxRetries: 3, baseDelayMs: 0, sleep: () => Promise.resolve() },
+    });
+
+    expect(result.vectors).toEqual([]);
+    // One call per chunk — an auth failure must not burn the retry budget.
+    expect(calls).toBe(fixture.chunks.length);
+  });
+
+  it("gives up after exactly maxRetries on a perpetual transient failure", async () => {
+    let calls = 0;
+    const adapter = scriptedAdapter({
+      responder: () => {
+        calls += 1;
+        return { ok: false, kind: "rate-limited" };
+      },
+    });
+
+    const result = await embedChunkBatch([firstChunk()], {
+      adapter,
+      store: fixture.store,
+      pinnedIdentity: DEFAULT_EMBEDDING,
+      concurrency: 1,
+      now: fixedClock(),
+      idSource: fixedIds("storage"),
+      retry: instantRetry,
+    });
+
+    expect(result.errors.some((e) => e.code === "EMBEDDING_ADAPTER_FAILED")).toBe(true);
+    // first attempt + 2 retries.
+    expect(calls).toBe(3);
+  });
+
+  it("stops retrying once the signal aborts during backoff", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const adapter = scriptedAdapter({
+      responder: () => {
+        calls += 1;
+        return { ok: false, kind: "transport" };
+      },
+    });
+
+    const result = await embedChunkBatch([firstChunk()], {
+      adapter,
+      store: fixture.store,
+      pinnedIdentity: DEFAULT_EMBEDDING,
+      concurrency: 1,
+      signal: controller.signal,
+      now: fixedClock(),
+      idSource: fixedIds("storage"),
+      retry: {
+        maxRetries: 5,
+        baseDelayMs: 0,
+        sleep: () => {
+          controller.abort();
+          return Promise.reject(new DOMException("aborted", "AbortError"));
+        },
+      },
+    });
+
+    // First attempt fails transient → enters backoff → sleep aborts → loop bails.
+    expect(calls).toBe(1);
+    expect(result.vectors).toEqual([]);
   });
 });
