@@ -41,6 +41,9 @@ function ProjectRow({
         className="proj-head"
         type="button"
         data-active={isActiveProject ? "true" : "false"}
+        aria-expanded={expanded}
+        aria-current={isActiveProject ? "true" : undefined}
+        aria-label={`${project.name} (${availabilityLabel})`}
         onClick={() => {
           setExpanded((current) => !current);
           onProject(project);
@@ -65,6 +68,7 @@ function ProjectRow({
                   type="button"
                   className="chat-row"
                   data-active={activeChatId === chat.id}
+                  aria-pressed={activeChatId === chat.id}
                   onClick={() => {
                     void onChat(chat);
                   }}

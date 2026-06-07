@@ -100,4 +100,18 @@ describe("ProjectPanel", () => {
     expect(screen.getByText("Investigate shell audit")).toBeInTheDocument();
     expect(screen.queryByText("example-workspace")).toBeNull();
   });
+
+  // Issue #644 — assistive technology must see the project/chat selection state, not just CSS.
+  it("exposes aria-expanded, aria-current, and chat aria-pressed for the active project (issue #644)", () => {
+    render(
+      <ChatSessionProvider value={session()}>
+        <ProjectPanel />
+      </ChatSessionProvider>,
+    );
+    const projectButton = screen.getByRole("button", { name: /Keiko/ });
+    expect(projectButton).toHaveAttribute("aria-expanded", "true");
+    expect(projectButton).toHaveAttribute("aria-current", "true");
+    const chatButton = screen.getByRole("button", { name: /Investigate shell audit/ });
+    expect(chatButton).toHaveAttribute("aria-pressed", "true");
+  });
 });

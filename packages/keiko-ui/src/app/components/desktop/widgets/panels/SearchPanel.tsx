@@ -13,9 +13,15 @@ export function SearchPanel(): ReactNode {
   return (
     <div className="srch">
       <div className="srch-box">
-        <Icons.search size={15} />
-        <input placeholder="Search files & symbols…" />
-        <span className="kbd">⇧⇧</span>
+        <Icons.search size={15} aria-hidden="true" />
+        <input
+          type="search"
+          aria-label="Search files and symbols"
+          placeholder="Search files & symbols…"
+        />
+        <span className="kbd" aria-hidden="true">
+          ⇧⇧
+        </span>
       </div>
       <div className="tw-label srch-label">
         {projectName} <span className="srch-meta mono">workspace search</span>
