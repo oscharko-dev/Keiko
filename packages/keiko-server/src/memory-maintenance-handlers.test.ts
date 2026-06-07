@@ -207,6 +207,36 @@ describe("handleRunMaintenance", () => {
     expect(vault.getMemory(mid("new"))?.status).toBe("accepted");
   });
 
+  it("promotes proposed conflicts AND supersedes the older one in a single pass", () => {
+    // Regression guard for the promote-before-consolidate ordering. Consolidation only inspects
+    // `accepted` records, so freshly-captured `proposed` conflicts must be promoted FIRST within the
+    // same pass — otherwise a single "Run maintenance" promotes but supersedes nothing until a
+    // second run.
+    const vault = makeVault();
+    const now = Date.now();
+    insert(vault, {
+      id: "old",
+      status: "proposed",
+      sensitivity: "public",
+      confidence: 0.6,
+      body: "our primary production database is postgresql for all storage",
+      createdAt: now - 2 * DAY,
+    });
+    insert(vault, {
+      id: "new",
+      status: "proposed",
+      sensitivity: "public",
+      confidence: 0.6,
+      body: "our primary production database is not postgresql for all storage",
+      createdAt: now - DAY,
+    });
+    const result = handleRunMaintenance(makeCtx(), makeDeps({ memoryVault: vault }));
+    expect(counts(result).promoted).toBe(2);
+    expect(counts(result).superseded).toBe(1);
+    expect(vault.getMemory(mid("old"))?.status).toBe("superseded");
+    expect(vault.getMemory(mid("new"))?.status).toBe("accepted");
+  });
+
   it("never touches a pinned memory", () => {
     const vault = makeVault();
     insert(vault, {

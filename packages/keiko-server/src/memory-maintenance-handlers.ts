@@ -193,14 +193,16 @@ function runConsolidationPass(
 }
 
 // ─── Plan application ──────────────────────────────────────────────────────────
-function applyPlan(
+// Applies the reinforce / decay / archive / forget effects on the post-consolidation snapshot.
+// Promotions are applied SEPARATELY and BEFORE consolidation (see runMemoryMaintenance) so that
+// freshly-accepted memories are visible to conflict detection within the same maintenance pass.
+function applyDecayEffects(
   vault: MemoryVaultStore,
   evidenceStore: EvidenceStore | undefined,
   plan: MemoryMaintenancePlan,
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceCounts,
 ): void {
-  applyPromotions(vault, evidenceStore, plan.promote, byId, counts);
   applyConfidencePatches(vault, plan.reinforce, byId, (n) => (counts.reinforced += n));
   applyConfidencePatches(vault, plan.decay, byId, (n) => (counts.decayed += n));
   applyArchives(vault, evidenceStore, plan.archive, byId, counts);
@@ -301,17 +303,26 @@ export function runMemoryMaintenance(
   evidenceStore?: EvidenceStore,
 ): MaintenanceCounts {
   const counts = emptyCounts();
+  // Phase 1 — promote strong `proposed` memories FIRST. Consolidation and conflict detection only
+  // inspect `accepted` records, so without this a vault full of freshly-captured `proposed`
+  // memories would need a SECOND maintenance run before any near-duplicate or polarity conflict is
+  // resolved. Promoting up front makes a single "Run maintenance" fully effective.
+  const beforePromote = vault.listMemories({ includeExpired: true });
+  const promoteStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
+  const promotePlan = planMemoryMaintenance(beforePromote, promoteStats, { nowMs: Date.now() });
+  applyPromotions(vault, evidenceStore, promotePlan.promote, recordsById(beforePromote), counts);
+  // Phase 2 — consolidate the now-accepted set: link near-duplicates and auto-supersede pairwise
+  // correction conflicts (the older conflicting fact -> `superseded`).
   const accepted = vault
     .listMemories({ includeExpired: true })
     .filter((record) => record.status === "accepted");
   runConsolidationPass(vault, evidenceStore, accepted, counts);
-  // Reload ONCE after supersession/edge writes so the plan and its application share a single
-  // post-consolidation snapshot (the plan references ids; applyPlan resolves them in the same map).
-  // The access stats feed the strength model.
+  // Phase 3 — reinforce / decay / archive / forget on the post-consolidation snapshot. The access
+  // stats feed the strength model.
   const all = vault.listMemories({ includeExpired: true });
   const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
   const plan = planMemoryMaintenance(all, accessStats, { nowMs: Date.now() });
-  applyPlan(vault, evidenceStore, plan, recordsById(all), counts);
+  applyDecayEffects(vault, evidenceStore, plan, recordsById(all), counts);
   return counts;
 }
 
