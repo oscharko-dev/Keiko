@@ -727,7 +727,13 @@ async function dispatchMultiSourceAsk(
   seamOverride: MultiSourceSeam | undefined,
 ): Promise<RouteResult> {
   const { chat, input, signal } = args;
-  const modelId = resolveGroundedModelId(deps, chat, input.modelId);
+  // An injected seam (tests) bypasses model-capability resolution exactly as the single-source path
+  // does for an injected runner: there is no real model port to validate against. Production (no
+  // override) resolves the chat-model guardrails once, shared with the single path.
+  const modelId =
+    seamOverride !== undefined
+      ? (input.modelId ?? chat.selectedModel)
+      : resolveGroundedModelId(deps, chat, input.modelId);
   if (typeof modelId !== "string") return modelId;
   const seam = resolveMultiSourceSeam(deps, modelId, signal, seamOverride);
   if ("status" in seam) return seam;
