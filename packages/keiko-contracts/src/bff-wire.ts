@@ -58,6 +58,12 @@ export interface ChatConnectedScope {
 // budget-split retrieval pass), so total work stays bounded regardless of N.
 export const MAX_CONNECTED_SOURCES = 16;
 
+// Epic #189 — sibling of MAX_CONNECTED_SOURCES for the local-knowledge (connector) source list. A
+// chat may bind multiple capsules/capsule-sets at once; the BFF rejects PATCHes whose
+// localKnowledgeScopes list exceeds this, and the store enforces the same as a defense-in-depth
+// subset. Bounds the connector fan-out cost in the hybrid grounded path (Slice 2).
+export const MAX_LOCAL_KNOWLEDGE_SOURCES = 16;
+
 export type ChatLocalKnowledgeScope =
   | {
       readonly kind: "capsule";
@@ -85,6 +91,13 @@ export interface Chat {
   // When both are present, `connectedScope` equals `connectedScopes[0]`.
   readonly connectedScopes?: readonly ChatConnectedScope[];
   readonly connectedScope: ChatConnectedScope | undefined;
+  // Epic #189 — `localKnowledgeScopes` is the canonical list of connector sources (a chat may
+  // ground against multiple capsules/capsule-sets at once). `localKnowledgeScope` is retained for
+  // backward-compat (legacy single-source readers and rows). `localKnowledgeScopes` SUPERSEDES
+  // `localKnowledgeScope`: readers should derive the effective list as
+  //   `chat.localKnowledgeScopes ?? (chat.localKnowledgeScope ? [chat.localKnowledgeScope] : [])`.
+  // When both are present, `localKnowledgeScope` equals `localKnowledgeScopes[0]`.
+  readonly localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[];
   readonly localKnowledgeScope: ChatLocalKnowledgeScope | undefined;
   readonly createdAt: number;
   readonly updatedAt: number;
@@ -129,6 +142,11 @@ export interface UpdateChatPatch {
   // binding untouched while `null` explicitly clears it.
   readonly connectedScopes?: readonly ChatConnectedScope[] | null;
   readonly connectedScope?: ChatConnectedScope | null;
+  // Epic #189 — set `localKnowledgeScopes` to bind a list of connector sources (null clears ALL).
+  // Back-compat: `localKnowledgeScope` is still accepted and is treated as a 1-element list. When a
+  // caller supplies both, `localKnowledgeScopes` wins. As with the single field, `undefined`
+  // (absent) leaves the binding untouched while `null` explicitly clears it.
+  readonly localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[] | null;
   readonly localKnowledgeScope?: ChatLocalKnowledgeScope | null;
 }
 
@@ -560,6 +578,10 @@ export interface LocalKnowledgeEvidenceCitation {
   readonly marker: string;
   readonly label: string;
   readonly score: number;
+  // Epic #189 — a short, human-readable label of the connector source this citation came from
+  // (the capsule/capsule-set displayName). Absent for legacy single-connector answers, which carry
+  // no per-source attribution (mirrors GroundedEvidenceCitation.source for folder evidence).
+  readonly source?: string;
 }
 
 export interface LocalKnowledgeGroundedAnswer {
@@ -577,7 +599,37 @@ export interface LocalKnowledgeGroundedAnswer {
   readonly contextPack: LocalKnowledgeGroundedAnswerContextSummary;
 }
 
-export type GroundedAnswer = ConnectedContextGroundedAnswer | LocalKnowledgeGroundedAnswer;
+// Epic #189 — the hybrid grounded answer merges folder evidence (#177/#532 lexical) and connector
+// evidence (#189 vector) from one chat into a single model call. Defined here in Slice 1 so the
+// wire shape and store/BFF layers type-check; Slice 2 populates it, Slice 3 renders it.
+export interface HybridGroundedAnswerContextSummary {
+  readonly kind: "hybrid";
+  readonly folderSourceCount: number;
+  readonly connectorSourceCount: number;
+  readonly folder: GroundedAnswerContextPackSummary;
+  readonly knowledge: LocalKnowledgeGroundedAnswerContextSummary;
+}
+
+export interface HybridGroundedAnswer {
+  readonly groundingKind: "hybrid";
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
+  readonly evidenceRunId?: string | undefined;
+  readonly content: string;
+  // folder evidence (source-tagged, like the multi-source connected answer)
+  readonly citations: readonly GroundedEvidenceCitation[];
+  // connector evidence (source-tagged)
+  readonly knowledgeCitations: readonly LocalKnowledgeEvidenceCitation[];
+  readonly uncertainty: readonly GroundedUncertainty[];
+  readonly omittedCount: number;
+  readonly elapsedMs: number;
+  readonly contextPack: HybridGroundedAnswerContextSummary;
+}
+
+export type GroundedAnswer =
+  | ConnectedContextGroundedAnswer
+  | LocalKnowledgeGroundedAnswer
+  | HybridGroundedAnswer;
 
 // ─── BFF error envelope ───────────────────────────────────────────────────────────
 

@@ -6,7 +6,13 @@
 import { describe, expect, it } from "vitest";
 import {
   buildGroundedAnswerContextPackSummary,
+  MAX_CONNECTED_SOURCES,
+  MAX_LOCAL_KNOWLEDGE_SOURCES,
+  type Chat,
+  type GroundedAnswer,
   type GroundedAnswerContextPackSummary,
+  type HybridGroundedAnswer,
+  type LocalKnowledgeEvidenceCitation,
 } from "./bff-wire.js";
 import {
   CANDIDATE_OMISSION_REASONS,
@@ -198,5 +204,83 @@ describe("buildGroundedAnswerContextPackSummary", () => {
   it("structural test: summary JSON is bounded (well below the 1KB review target)", () => {
     const summary = buildGroundedAnswerContextPackSummary(pack(), 4, 1_812);
     expect(JSON.stringify(summary).length).toBeLessThan(1_000);
+  });
+});
+
+// Epic #189 — the plural local-knowledge source list mirrors the #532 connected-source list.
+describe("local-knowledge multi-source contract (#189)", () => {
+  it("bounds the connector source list at the same cap as the connected source list", () => {
+    expect(MAX_LOCAL_KNOWLEDGE_SOURCES).toBe(16);
+    expect(MAX_LOCAL_KNOWLEDGE_SOURCES).toBe(MAX_CONNECTED_SOURCES);
+  });
+
+  it("derives the effective connector list via the documented reader rule (plural supersedes)", () => {
+    const readerRule = (chat: Chat): readonly Chat["localKnowledgeScope"][] =>
+      chat.localKnowledgeScopes ?? (chat.localKnowledgeScope ? [chat.localKnowledgeScope] : []);
+    const base = {
+      id: "c1",
+      projectPath: "/p",
+      title: "t",
+      selectedModel: "m",
+      branchLabel: undefined,
+      status: undefined,
+      connectedScope: undefined,
+      createdAt: 1,
+      updatedAt: 1,
+    } as const;
+    const single = { kind: "capsule", capsuleId: "cap-a", connectedAtMs: 1 } as const;
+    const list = [
+      single,
+      { kind: "capsule-set", capsuleSetId: "set-b", connectedAtMs: 2 } as const,
+    ];
+    // Plural present → it wins.
+    expect(
+      readerRule({ ...base, localKnowledgeScopes: list, localKnowledgeScope: single }),
+    ).toEqual(list);
+    // Plural absent, singular present → 1-element list.
+    expect(readerRule({ ...base, localKnowledgeScope: single })).toEqual([single]);
+    // Neither → empty list.
+    expect(readerRule({ ...base, localKnowledgeScope: undefined })).toEqual([]);
+  });
+
+  it("admits a source-tagged connector citation and the hybrid grounded answer member", () => {
+    const citation: LocalKnowledgeEvidenceCitation = {
+      stableId: "s1",
+      marker: "[1]",
+      label: "doc.md",
+      score: 0.9,
+      source: "Capsule A",
+    };
+    const hybrid: HybridGroundedAnswer = {
+      groundingKind: "hybrid",
+      userMessageId: "u1",
+      assistantMessageId: "a1",
+      content: "answer",
+      citations: [],
+      knowledgeCitations: [citation],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 5,
+      contextPack: {
+        kind: "hybrid",
+        folderSourceCount: 1,
+        connectorSourceCount: 2,
+        folder: buildGroundedAnswerContextPackSummary(pack(), 0, 0),
+        knowledge: {
+          kind: "local-knowledge",
+          scopeKind: "capsule-set",
+          scopeId: "scope-1",
+          scopeLabel: "Set B",
+          capsuleCount: 2,
+          sourceCount: 2,
+          citationCount: 1,
+          referenceBudget: 8,
+          referencesUsed: 1,
+        },
+      },
+    };
+    const answer: GroundedAnswer = hybrid;
+    expect(answer.groundingKind).toBe("hybrid");
+    expect(citation.source).toBe("Capsule A");
   });
 });
