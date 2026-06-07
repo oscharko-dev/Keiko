@@ -499,28 +499,43 @@ function localKnowledgeQuery(chat: Chat, input: AskInput): Parameters<typeof run
   };
 }
 
-function enforcedNoEvidenceReason(
+export function enforcedNoEvidenceReason(
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
 ): string | undefined {
   if (result.noEvidence) return result.reason ?? "no-evidence";
   if (result.answer.trim().length === 0) return "empty-answer";
-  if (result.references.length > 0 && result.citations.length === 0) {
-    return "answer-without-citations";
-  }
+  // #189: an answer with retrieved references but no model-emitted [n] markers is still grounded
+  // (the references were in the model's context) — it is NOT "no evidence". buildLocalKnowledgeCitations
+  // rescues the references as citations rather than discarding a correct, evidence-backed answer.
   return undefined;
 }
 
-function buildLocalKnowledgeCitations(
+export function buildLocalKnowledgeCitations(
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
   noEvidenceReason: string | undefined,
 ): readonly LocalKnowledgeEvidenceCitation[] {
   if (noEvidenceReason !== undefined) return [];
-  return result.citations.map((entry) => ({
-    stableId: citationStableId(entry.reference, entry.marker),
-    marker: entry.marker,
-    label: renderCitationLabel(entry.citation),
-    score: entry.reference.score,
-  }));
+  // When the model emitted [n] markers, honour exactly what it cited.
+  if (result.citations.length > 0) {
+    return result.citations.map((entry) => ({
+      stableId: citationStableId(entry.reference, entry.marker),
+      marker: entry.marker,
+      label: renderCitationLabel(entry.citation),
+      score: entry.reference.score,
+    }));
+  }
+  // Rescue (#189): the answer is grounded in the retrieved references but the model emitted no
+  // [n] markers (some models don't). Surface the references it was given — numbered in retrieval
+  // order — instead of discarding a correct, evidence-backed answer.
+  return result.references.slice(0, MAX_PROMPT_REFERENCES).map((reference, index) => {
+    const marker = `[${String(index + 1)}]`;
+    return {
+      stableId: citationStableId(reference, marker),
+      marker,
+      label: renderCitationLabel(reference.citation),
+      score: reference.score,
+    };
+  });
 }
 
 function buildLocalKnowledgeAnswer(
