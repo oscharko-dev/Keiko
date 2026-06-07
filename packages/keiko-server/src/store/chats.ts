@@ -7,7 +7,10 @@ import {
   isValidScopePath,
   type SelectedScopeKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { MAX_CONNECTED_SOURCES } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  MAX_CONNECTED_SOURCES,
+  MAX_LOCAL_KNOWLEDGE_SOURCES,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   Chat,
   ChatConnectedScope,
@@ -193,7 +196,22 @@ function decodeConnectedScopes(
   }));
 }
 
-function decodeLocalKnowledgeScope(raw: string | null): ChatLocalKnowledgeScope | undefined {
+function decodeLocalKnowledgeScopeObject(raw: unknown): ChatLocalKnowledgeScope | undefined {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const scope = raw as Record<string, unknown>;
+  const connectedAtMs = decodeNonNegativeInteger(scope.connectedAtMs);
+  if (connectedAtMs === undefined) return undefined;
+  return decodeLocalKnowledgeScopePayload(scope, connectedAtMs);
+}
+
+// Epic #189 — the local_knowledge_scope_json column now holds EITHER a single scope object (legacy)
+// OR a JSON array of scope objects (multi-source). Mirrors decodeConnectedScopes: a single object
+// yields a 1-element list; an array yields one entry per element. A tampered row can never widen
+// the result — any malformed entry collapses the whole decode to undefined. Returns undefined when
+// nothing valid was found (column null, parse error, or any invalid entry).
+function decodeLocalKnowledgeScopes(
+  raw: string | null,
+): readonly ChatLocalKnowledgeScope[] | undefined {
   if (raw === null) return undefined;
   let parsed: unknown;
   try {
@@ -201,13 +219,22 @@ function decodeLocalKnowledgeScope(raw: string | null): ChatLocalKnowledgeScope 
   } catch {
     return undefined;
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    return undefined;
+  if (Array.isArray(parsed)) return decodeLocalKnowledgeScopeArray(parsed);
+  const single = decodeLocalKnowledgeScopeObject(parsed);
+  return single === undefined ? undefined : [single];
+}
+
+function decodeLocalKnowledgeScopeArray(
+  entries: readonly unknown[],
+): readonly ChatLocalKnowledgeScope[] | undefined {
+  if (entries.length === 0 || entries.length > MAX_LOCAL_KNOWLEDGE_SOURCES) return undefined;
+  const scopes: ChatLocalKnowledgeScope[] = [];
+  for (const entry of entries) {
+    const decoded = decodeLocalKnowledgeScopeObject(entry);
+    if (decoded === undefined) return undefined;
+    scopes.push(decoded);
   }
-  const scope = parsed as Record<string, unknown>;
-  const connectedAtMs = decodeNonNegativeInteger(scope.connectedAtMs);
-  if (connectedAtMs === undefined) return undefined;
-  return decodeLocalKnowledgeScopePayload(scope, connectedAtMs);
+  return scopes;
 }
 
 function decodeNonNegativeInteger(value: unknown): number | undefined {
@@ -244,6 +271,7 @@ function decodeLocalKnowledgeScopePayload(
 function rowToChat(row: ChatRow): Chat {
   const status = row.status === null ? undefined : (row.status as "open" | "closed");
   const connectedScopes = decodeConnectedScopes(row.connected_scope_paths, row.connected_scope_at);
+  const localKnowledgeScopes = decodeLocalKnowledgeScopes(row.local_knowledge_scope_json);
   return {
     id: row.id,
     projectPath: row.project_path,
@@ -256,7 +284,11 @@ function rowToChat(row: ChatRow): Chat {
     ...(connectedScopes !== undefined && connectedScopes.length > 0
       ? { connectedScopes, connectedScope: connectedScopes[0] }
       : { connectedScope: undefined }),
-    localKnowledgeScope: decodeLocalKnowledgeScope(row.local_knowledge_scope_json),
+    // Epic #189 — populate BOTH the canonical connector list and the back-compat single field
+    // (= list[0]). Absent binding → both undefined.
+    ...(localKnowledgeScopes !== undefined && localKnowledgeScopes.length > 0
+      ? { localKnowledgeScopes, localKnowledgeScope: localKnowledgeScopes[0] }
+      : { localKnowledgeScope: undefined }),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -462,6 +494,27 @@ function validatePatchLocalKnowledgeScope(scope: unknown): void {
   validateLocalKnowledgeScopeShape(scope as ChatLocalKnowledgeScope);
 }
 
+// Epic #189 — validate the multi-source connector list. Each entry runs the same defense-in-depth
+// shape check as the single field; the list is bounded by MAX_LOCAL_KNOWLEDGE_SOURCES (a strict
+// subset of the BFF gate). undefined/null are pass-through (leave-unchanged / clear-all).
+function validatePatchLocalKnowledgeScopes(scopes: unknown): void {
+  if (scopes === undefined || scopes === null) return;
+  if (!Array.isArray(scopes)) {
+    throw invalidRequest("localKnowledgeScopes must be an array or null.");
+  }
+  if (scopes.length > MAX_LOCAL_KNOWLEDGE_SOURCES) {
+    throw invalidRequest(
+      `localKnowledgeScopes must contain at most ${String(MAX_LOCAL_KNOWLEDGE_SOURCES)} sources.`,
+    );
+  }
+  for (const scope of scopes) {
+    if (typeof scope !== "object" || scope === null || Array.isArray(scope)) {
+      throw invalidRequest("localKnowledgeScopes entries must be objects.");
+    }
+    validateLocalKnowledgeScopeShape(scope as ChatLocalKnowledgeScope);
+  }
+}
+
 function validateChatPatch(patch: UpdateChatPatch): void {
   // Runtime defense: handlers may pass widened (unknown) input cast to UpdateChatPatch.
   const raw: unknown = patch.status;
@@ -471,6 +524,7 @@ function validateChatPatch(patch: UpdateChatPatch): void {
   validatePatchScope(patch.connectedScope);
   validatePatchScopes(patch.connectedScopes);
   validatePatchLocalKnowledgeScope(patch.localKnowledgeScope);
+  validatePatchLocalKnowledgeScopes(patch.localKnowledgeScopes);
 }
 
 // Epic #532 — resolve the effective scope-patch intent. `connectedScopes` SUPERSEDES the legacy
@@ -539,29 +593,42 @@ interface LocalKnowledgeScopeUpdateParams {
   readonly json: string | null;
 }
 
-function localKnowledgeScopeUpdateParams(
-  value: ChatLocalKnowledgeScope | null | undefined,
+function encodeLocalKnowledgeScopeObject(value: ChatLocalKnowledgeScope): Record<string, unknown> {
+  return value.kind === "capsule"
+    ? { kind: "capsule", capsuleId: value.capsuleId, connectedAtMs: value.connectedAtMs }
+    : { kind: "capsule-set", capsuleSetId: value.capsuleSetId, connectedAtMs: value.connectedAtMs };
+}
+
+// Epic #189 — resolve the effective connector-patch intent. `localKnowledgeScopes` (plural)
+// SUPERSEDES the legacy single `localKnowledgeScope`: when the list field is present (including
+// null), it wins. A single object normalizes to a 1-element list. Returns undefined (leave
+// unchanged), null (clear), or the ordered list to persist. Mirrors resolveScopePatch (#532).
+function resolveLocalKnowledgeScopePatch(
+  patch: UpdateChatPatch,
+): readonly ChatLocalKnowledgeScope[] | null | undefined {
+  if (patch.localKnowledgeScopes !== undefined) {
+    if (patch.localKnowledgeScopes === null || patch.localKnowledgeScopes.length === 0) return null;
+    return patch.localKnowledgeScopes;
+  }
+  if (patch.localKnowledgeScope === undefined) return undefined;
+  if (patch.localKnowledgeScope === null) return null;
+  return [patch.localKnowledgeScope];
+}
+
+// Epic #189 — encode the resolved connector-patch intent into the single local_knowledge_scope_json
+// column. A single source encodes as the legacy single object (byte-identical to the pre-#189 form,
+// so back-compat decode is unchanged); a multi-source list encodes as a JSON array. Mirrors
+// scopeUpdateParams (#532); per-scope connectedAtMs lives inside each object.
+function localKnowledgeScopesUpdateParams(
+  value: readonly ChatLocalKnowledgeScope[] | null | undefined,
 ): LocalKnowledgeScopeUpdateParams {
   if (value === undefined) return { apply: 0, json: null };
-  if (value === null) return { apply: 1, json: null };
-  if (value.kind === "capsule") {
-    return {
-      apply: 1,
-      json: JSON.stringify({
-        kind: "capsule",
-        capsuleId: value.capsuleId,
-        connectedAtMs: value.connectedAtMs,
-      }),
-    };
+  if (value === null || value.length === 0) return { apply: 1, json: null };
+  const first = value[0];
+  if (value.length === 1 && first !== undefined) {
+    return { apply: 1, json: JSON.stringify(encodeLocalKnowledgeScopeObject(first)) };
   }
-  return {
-    apply: 1,
-    json: JSON.stringify({
-      kind: "capsule-set",
-      capsuleSetId: value.capsuleSetId,
-      connectedAtMs: value.connectedAtMs,
-    }),
-  };
+  return { apply: 1, json: JSON.stringify(value.map(encodeLocalKnowledgeScopeObject)) };
 }
 
 export function updateChat(
@@ -577,7 +644,7 @@ export function updateChat(
   const branchParam = patch.branchLabel ?? null;
   const statusParam = patch.status ?? null;
   const scope = scopeUpdateParams(resolveScopePatch(patch));
-  const localScope = localKnowledgeScopeUpdateParams(patch.localKnowledgeScope);
+  const localScope = localKnowledgeScopesUpdateParams(resolveLocalKnowledgeScopePatch(patch));
   const row = db
     .prepare(SQL_UPDATE)
     .get(

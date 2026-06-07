@@ -410,6 +410,108 @@ describe("updateChat — connectedScopes list round-trip (#532)", () => {
   });
 });
 
+// Epic #189 — multi-source localKnowledgeScopes list round-trip through SQLite. A chat may bind N
+// connector sources (capsules/capsule-sets); the list is encoded as a JSON ARRAY in the existing
+// local_knowledge_scope_json column (single object kept for the legacy 1-element form).
+describe("updateChat — localKnowledgeScopes list round-trip (#189)", () => {
+  it("sets two connector sources and round-trips both (list + back-compat single)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const scopes = [
+      { kind: "capsule" as const, capsuleId: "cap-a", connectedAtMs: 10 },
+      { kind: "capsule-set" as const, capsuleSetId: "set-b", connectedAtMs: 11 },
+    ];
+    const updated = store.updateChat(c.id, { localKnowledgeScopes: scopes });
+    expect(updated.localKnowledgeScopes).toEqual(scopes);
+    expect(updated.localKnowledgeScope).toEqual(scopes[0]);
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.localKnowledgeScopes).toEqual(scopes);
+    expect(fetched?.localKnowledgeScope).toEqual(scopes[0]);
+  });
+
+  it("decodes a legacy single-object row as a 1-element localKnowledgeScopes list", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: "cap-x", connectedAtMs: 5 },
+    });
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.localKnowledgeScopes).toEqual([
+      { kind: "capsule", capsuleId: "cap-x", connectedAtMs: 5 },
+    ]);
+    expect(fetched?.localKnowledgeScope).toEqual({
+      kind: "capsule",
+      capsuleId: "cap-x",
+      connectedAtMs: 5,
+    });
+  });
+
+  it("clears the list when patched with localKnowledgeScopes: null", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      localKnowledgeScopes: [{ kind: "capsule", capsuleId: "cap-a", connectedAtMs: 1 }],
+    });
+    const cleared = store.updateChat(c.id, { localKnowledgeScopes: null });
+    expect(cleared.localKnowledgeScopes ?? []).toHaveLength(0);
+    expect(cleared.localKnowledgeScope).toBeUndefined();
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.localKnowledgeScopes ?? []).toHaveLength(0);
+    expect(fetched?.localKnowledgeScope).toBeUndefined();
+  });
+
+  it("treats a single-element localKnowledgeScopes list identically to the legacy single field", () => {
+    const c = store.createChat(proj, "t", "m");
+    const one = { kind: "capsule-set" as const, capsuleSetId: "set-x", connectedAtMs: 3 };
+    const viaList = store.updateChat(c.id, { localKnowledgeScopes: [one] });
+    expect(viaList.localKnowledgeScope).toEqual(one);
+    expect(viaList.localKnowledgeScopes).toEqual([one]);
+  });
+
+  it("rejects a list exceeding MAX_LOCAL_KNOWLEDGE_SOURCES (17 entries)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const tooMany = Array.from({ length: 17 }, (_unused, i) => ({
+      kind: "capsule" as const,
+      capsuleId: `cap-${String(i)}`,
+      connectedAtMs: 1,
+    }));
+    expect(() => store.updateChat(c.id, { localKnowledgeScopes: tooMany })).toThrow(UiStoreError);
+  });
+
+  it("accepts the maximum allowed list size (16 entries)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const max = Array.from({ length: 16 }, (_unused, i) => ({
+      kind: "capsule" as const,
+      capsuleId: `cap-${String(i)}`,
+      connectedAtMs: 1,
+    }));
+    const updated = store.updateChat(c.id, { localKnowledgeScopes: max });
+    expect(updated.localKnowledgeScopes).toHaveLength(16);
+  });
+
+  it("rejects a list entry with an empty capsule id", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, {
+        localKnowledgeScopes: [{ kind: "capsule", capsuleId: "", connectedAtMs: 1 }],
+      }),
+    ).toThrow(UiStoreError);
+  });
+
+  it("prefers localKnowledgeScopes over localKnowledgeScope when both are present in a patch", () => {
+    const c = store.createChat(proj, "t", "m");
+    const updated = store.updateChat(c.id, {
+      localKnowledgeScope: { kind: "capsule", capsuleId: "cap-single", connectedAtMs: 1 },
+      localKnowledgeScopes: [{ kind: "capsule", capsuleId: "cap-list", connectedAtMs: 2 }],
+    });
+    expect(updated.localKnowledgeScopes).toEqual([
+      { kind: "capsule", capsuleId: "cap-list", connectedAtMs: 2 },
+    ]);
+    expect(updated.localKnowledgeScope).toEqual({
+      kind: "capsule",
+      capsuleId: "cap-list",
+      connectedAtMs: 2,
+    });
+  });
+});
+
 describe("deleteChat", () => {
   it("deletes the chat and cascades to messages", () => {
     const c = store.createChat(proj, "t", "m");
