@@ -18,6 +18,8 @@ import { type Cfg } from "./modals/PermControl";
 import { useChatSession } from "./hooks/useChatSession";
 import { useTheme } from "./hooks/useTheme";
 import { useWorkspace } from "./hooks/useWorkspace";
+import { appendScope, effectiveScopes, removeScope } from "./hooks/workspaceActions";
+import { updateChatConnectedScopes } from "@/lib/api";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
@@ -187,7 +189,40 @@ function AppShellInner(): ReactNode {
   const twin = useTwin();
   const session = useChatSession();
   const wsRef = useRef<HTMLDivElement>(null);
-  const ws = useWorkspace(wsRef);
+  // Epic #532 — a Files↔Chat relationship edge binds/unbinds the folder on the active chat's
+  // connectedScopes (1+N), so the gesture actually grounds the chat against the connected folder(s).
+  const handleScopeBind = useCallback(
+    (filesRoot: string): void => {
+      const chat = session.activeChat;
+      if (chat === undefined) return;
+      const current = effectiveScopes(chat);
+      const next = appendScope(current, filesRoot, Date.now());
+      if (next === null || next === current) return;
+      void updateChatConnectedScopes(chat.id, next)
+        .then((res) => {
+          session.replaceChat(res.chat);
+        })
+        .catch(() => undefined);
+    },
+    [session],
+  );
+  const handleScopeUnbind = useCallback(
+    (filesRoot: string): void => {
+      const chat = session.activeChat;
+      if (chat === undefined) return;
+      const next = removeScope(effectiveScopes(chat), filesRoot);
+      void updateChatConnectedScopes(chat.id, next.length > 0 ? next : null)
+        .then((res) => {
+          session.replaceChat(res.chat);
+        })
+        .catch(() => undefined);
+    },
+    [session],
+  );
+  const ws = useWorkspace(wsRef, {
+    onScopeBind: handleScopeBind,
+    onScopeUnbind: handleScopeUnbind,
+  });
 
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);

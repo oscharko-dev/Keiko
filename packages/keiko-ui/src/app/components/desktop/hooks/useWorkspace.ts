@@ -368,7 +368,17 @@ function useConnectionPrune(
   }, [wins, setConns]);
 }
 
-export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspaceResult {
+// Epic #532 — optional Files↔Chat scope-binding callbacks. The composition root (AppShell) wires
+// these to the active chat's connectedScopes so a relationship edge grounds the chat against a folder.
+export interface UseWorkspaceOptions {
+  readonly onScopeBind?: ((filesRoot: string) => void) | undefined;
+  readonly onScopeUnbind?: ((filesRoot: string) => void) | undefined;
+}
+
+export function useWorkspace(
+  wsRef: RefObject<HTMLElement | null>,
+  opts: UseWorkspaceOptions = {},
+): UseWorkspaceResult {
   const [wins, setWins] = useState<AppWindow[] | null>(null);
   const [snapPrev, setSnapPrev] = useState<SnapPrev | null>(null);
   const [palOpen, setPalOpen] = useState(false);
@@ -435,6 +445,8 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
     focus,
     setConns,
     setConnecting,
+    onScopeBind: opts.onScopeBind,
+    onScopeUnbind: opts.onScopeUnbind,
   });
   cancelConnectRef.current = cancelConnect;
 
