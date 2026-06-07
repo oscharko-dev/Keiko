@@ -129,6 +129,9 @@ export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): vo
   const pendingDdl = MIGRATIONS.filter((m) => m.version > start);
   const needsEncryption = start < ENCRYPTION_VERSION;
   if (pendingDdl.length === 0 && !needsEncryption) return;
+  // An EXISTING (already-created) DB crossing into the encryption version had plaintext on disk;
+  // its superseded pages must be purged from the WAL so the plaintext does not linger after upgrade.
+  const upgradedExistingDb = start > 0 && needsEncryption;
   db.exec("BEGIN");
   try {
     for (const m of pendingDdl) {
@@ -144,5 +147,10 @@ export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): vo
   } catch (error) {
     db.exec("ROLLBACK");
     throw error;
+  }
+  if (upgradedExistingDb) {
+    // Outside the transaction (checkpoint cannot run inside one): truncate the WAL so pages that
+    // held the now-re-encrypted plaintext are reclaimed immediately, not at the next close.
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
   }
 }
