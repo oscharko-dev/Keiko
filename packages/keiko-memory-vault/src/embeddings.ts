@@ -108,13 +108,11 @@ function narrowMetric(raw: string): MemoryEmbeddingMetric {
 }
 
 function openVectorBytes(stored: Uint8Array, cipher: MemoryContentCipher): Buffer {
-  // The BLOB is a sealed binary envelope (0x01||nonce||ct||tag). A legacy pre-encryption row that
-  // the migration has not yet swept is plain LE bytes with no version prefix; we fall back to using
-  // them verbatim so a half-migrated DB still reads. openBytes throws on a real auth failure.
-  if (stored.length > 0 && stored[0] === 0x01) {
-    return cipher.openBytes(Buffer.from(stored));
-  }
-  return Buffer.from(stored);
+  // The BLOB is ALWAYS a sealed binary envelope here: the v1->v2 migration (run before any read in
+  // openMemoryDatabase) seals every embedding row, and there is no unambiguous plaintext-vs-sealed
+  // marker for raw Float32 bytes, so we never guess. openBytes throws loudly on a wrong key or a
+  // tampered/corrupt envelope rather than silently returning plaintext.
+  return cipher.openBytes(Buffer.from(stored));
 }
 
 export function getEmbeddingRow(

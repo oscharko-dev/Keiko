@@ -46,14 +46,18 @@ function sweepStringColumn(
   }
 }
 
+// Unlike the string columns, the embedding BLOB has NO unambiguous "already sealed" marker: a
+// legacy plaintext Float32-LE vector can legitimately start with byte 0x01, so a magic-byte sniff
+// would wrongly skip it and leave plaintext that then fails to decrypt. Correctness instead rests on
+// the user_version gate in runMigrations: this sweep runs exactly once, in the same transaction that
+// sets user_version = 2, at which point EVERY embedding row is still v1 plaintext. So we seal all of
+// them unconditionally. An interrupted run rolls back (user_version stays < 2) and re-seals cleanly.
 function sweepEmbeddingVectors(db: DatabaseSync, cipher: MemoryContentCipher): void {
   const rows = db
     .prepare("SELECT memory_id, vector FROM memory_embeddings")
     .all() as unknown as readonly EmbeddingBlobRow[];
   const update = db.prepare("UPDATE memory_embeddings SET vector = ? WHERE memory_id = ?");
   for (const row of rows) {
-    const alreadySealed = row.vector.length > 0 && row.vector[0] === 0x01;
-    if (alreadySealed) continue;
     update.run(cipher.sealBytes(Buffer.from(row.vector)), row.memory_id);
   }
 }
