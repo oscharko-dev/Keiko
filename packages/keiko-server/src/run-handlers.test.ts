@@ -720,3 +720,89 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
     expect(json).toMatchObject({ error: { code: "WORKSPACE_NOT_REGISTERED" } });
   });
 });
+
+// Issue #638 — the apply handler must atomically claim the pending snapshot before awaiting
+// applyRun so two overlapping POST /api/runs/:runId/apply requests cannot both consume the
+// same patch. The race is reproduced by holding the model port's promise: the second request
+// has to enter the handler while the first is suspended in applyRun → workflow → model.call().
+describe("issue #638 — overlapping apply requests cannot reuse the same snapshot", () => {
+  it("returns 409 to the second request while the first is still awaiting the model", async () => {
+    // start() is called so the file-level afterEach has a real HTTP server to close (the
+    // handler-only test below does not depend on the HTTP path itself).
+    await start(fakeModel("noop"));
+
+    const localRegistry = createRunRegistry();
+    localRegistry.register({
+      runId: "race-run",
+      fingerprint: "fp-race",
+      modelId: "example-chat-model",
+      sink: new QueueEventSink(),
+      cancel: (): void => undefined,
+    });
+    localRegistry.complete(
+      "race-run",
+      "completed",
+      { status: "dry-run" },
+      {
+        kind: "unit-tests",
+        payload: { workspaceRoot: ".", target: { kind: "file", filePath: "x.ts" } },
+        limits: undefined,
+      },
+    );
+
+    let releaseModel: (response: NormalizedResponse) => void = () => undefined;
+    const modelHold = new Promise<NormalizedResponse>((resolve) => {
+      releaseModel = resolve;
+    });
+    const hangingModel: ModelPort = {
+      call: (): Promise<NormalizedResponse> => modelHold,
+    };
+
+    const deps: UiHandlerDeps = {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: createInMemoryEvidenceStore(),
+      env: {},
+      redactor: buildRedactor({}),
+      registry: localRegistry,
+      store: createInMemoryUiStore(),
+      modelPortFactory: (): ModelPort => hangingModel,
+    };
+    const ctx = {
+      req: {} as never,
+      res: {} as never,
+      params: { runId: "race-run" },
+      url: new URL("http://127.0.0.1/api/runs/race-run/apply"),
+    };
+
+    const first = handleApplyRun(ctx, deps);
+    // Yield so the first request progresses through its synchronous prologue (claiming the
+    // snapshot) and suspends at `await applyRun(...)` → workflow → model.call().
+    for (let i = 0; i < 5; i += 1) await Promise.resolve();
+
+    // The snapshot must have been claimed atomically before the await: a second concurrent
+    // request observes `record.appliable === undefined` and is rejected with 409.
+    expect(localRegistry.get("race-run")?.appliable).toBeUndefined();
+    const second = await handleApplyRun(ctx, deps);
+    expect(second.status).toBe(409);
+
+    // Release the model so the first request finishes and the registry settles.
+    releaseModel({
+      modelId: "m",
+      content: "",
+      finishReason: "stop",
+      toolCalls: [],
+      structuredOutput: null,
+      usage: {
+        requestId: "r",
+        promptTokens: 0,
+        completionTokens: 0,
+        latencyMs: 0,
+        costClass: "low",
+      },
+    });
+    const firstResult = await first;
+    expect(firstResult.status).toBe(200);
+    expect(localRegistry.get("race-run")?.applyReport).toBeDefined();
+  });
+});
