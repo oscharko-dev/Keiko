@@ -94,6 +94,40 @@ function toEmbeddingInput(
   };
 }
 
+// A bound embedder: embeds an arbitrary string against a fixed model/provider, returning a
+// vault-ready input or null on any failure. Never throws.
+export type MemoryEmbedder = (text: string) => Promise<MemoryEmbeddingInput | null>;
+
+// Builds an embedder from a gateway config, or returns null when no embedding-capable model is
+// configured (or its provider is absent). The CLI backfill and the conversation paths both compose
+// through this single factory so model selection + the /embed/ re-check live in one place.
+export function createMemoryEmbedder(
+  config: GatewayConfig | undefined,
+  requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
+): MemoryEmbedder | null {
+  const modelId = selectMemoryEmbeddingModelId(config);
+  if (modelId === undefined) return null;
+  const provider = providerForModel(config, modelId);
+  if (provider === undefined) return null;
+  const adapter = buildAdapter(provider, requestImpl);
+  return async (text: string): Promise<MemoryEmbeddingInput | null> => {
+    if (text.length === 0) return null;
+    try {
+      const outcome = await adapter.request({
+        endpoint: provider.baseUrl,
+        apiKey: provider.apiKey,
+        modelId,
+        input: text,
+      });
+      if (!outcome.ok) return null;
+      return toEmbeddingInput("openai", outcome);
+    } catch {
+      // Model/transport boundary: a thrown adapter must degrade to "no embedding", never crash.
+      return null;
+    }
+  };
+}
+
 // Embeds `text` against the configured embedding model. Returns null when no embedding-capable
 // model is configured, when the matching provider is absent, or on any request failure. The whole
 // IO body is guarded so this NEVER throws into the capture/retrieval path.
@@ -101,26 +135,9 @@ export async function embedMemoryText(
   deps: UiHandlerDeps,
   text: string,
 ): Promise<MemoryEmbeddingInput | null> {
-  if (text.length === 0) return null;
-  const config = currentGatewayConfig(deps);
-  const modelId = selectMemoryEmbeddingModelId(config);
-  if (modelId === undefined) return null;
-  const provider = providerForModel(config, modelId);
-  if (provider === undefined) return null;
-  try {
-    const adapter = buildAdapter(provider, requestEmbeddingImpl(deps));
-    const outcome = await adapter.request({
-      endpoint: provider.baseUrl,
-      apiKey: provider.apiKey,
-      modelId,
-      input: text,
-    });
-    if (!outcome.ok) return null;
-    return toEmbeddingInput("openai", outcome);
-  } catch {
-    // Model/transport boundary: a thrown adapter must degrade to "no embedding", never crash.
-    return null;
-  }
+  const embedder = createMemoryEmbedder(currentGatewayConfig(deps), requestEmbeddingImpl(deps));
+  if (embedder === null) return null;
+  return embedder(text);
 }
 
 // Best-effort embed-on-capture. Embeds the memory body and upserts the vector. A null embedding

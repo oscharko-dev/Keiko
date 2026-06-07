@@ -142,6 +142,107 @@ describe("runMemoryCli maintain", () => {
   });
 });
 
+describe("runMemoryCli reembed", () => {
+  function fakeEmbedder(dimensions = 8): (text: string) => Promise<{
+    provider: string;
+    modelId: string;
+    metric: "cosine";
+    vector: Float32Array;
+  } | null> {
+    return (text: string) =>
+      Promise.resolve(
+        text.length === 0
+          ? null
+          : {
+              provider: "openai",
+              modelId: "text-embedding-3-large",
+              metric: "cosine" as const,
+              vector: Float32Array.from({ length: dimensions }, (_, i) => (i + 1) / dimensions),
+            },
+      );
+  }
+
+  it("embeds accepted memories that lack an embedding", async () => {
+    const vault = makeVault();
+    insert(vault, { id: "a", status: "accepted" });
+    insert(vault, { id: "b", status: "accepted" });
+    const cap = capture();
+    const code = await runMemoryCli(["reembed"], cap.io, {}, { vault, embedText: fakeEmbedder() });
+    expect(code).toBe(0);
+    expect(cap.out()).toContain("embedded: 2");
+    expect(cap.out()).toContain("skipped:  0");
+    expect(vault.getEmbedding(mid("a"))).toBeDefined();
+    expect(vault.getEmbedding(mid("b"))).toBeDefined();
+  });
+
+  it("skips memories that already have an embedding", async () => {
+    const vault = makeVault();
+    insert(vault, { id: "a", status: "accepted" });
+    insert(vault, { id: "b", status: "accepted" });
+    vault.upsertEmbedding(mid("a"), {
+      provider: "openai",
+      modelId: "text-embedding-3-large",
+      metric: "cosine",
+      vector: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]),
+    });
+    const cap = capture();
+    const code = await runMemoryCli(["reembed"], cap.io, {}, { vault, embedText: fakeEmbedder() });
+    expect(code).toBe(0);
+    expect(cap.out()).toContain("embedded: 1");
+    expect(cap.out()).toContain("skipped:  1");
+  });
+
+  it("does not embed non-accepted memories", async () => {
+    const vault = makeVault();
+    insert(vault, { id: "p", status: "proposed" });
+    insert(vault, { id: "a", status: "accepted" });
+    const cap = capture();
+    const code = await runMemoryCli(["reembed"], cap.io, {}, { vault, embedText: fakeEmbedder() });
+    expect(code).toBe(0);
+    expect(cap.out()).toContain("embedded: 1");
+    expect(vault.getEmbedding(mid("p"))).toBeUndefined();
+    expect(vault.getEmbedding(mid("a"))).toBeDefined();
+  });
+
+  it("respects --limit", async () => {
+    const vault = makeVault();
+    insert(vault, { id: "a", status: "accepted" });
+    insert(vault, { id: "b", status: "accepted" });
+    insert(vault, { id: "c", status: "accepted" });
+    const cap = capture();
+    const code = await runMemoryCli(
+      ["reembed", "--limit", "1"],
+      cap.io,
+      {},
+      { vault, embedText: fakeEmbedder() },
+    );
+    expect(code).toBe(0);
+    expect(cap.out()).toContain("embedded: 1");
+  });
+
+  it("reports and exits 0 when no embedding model is configured", async () => {
+    const vault = makeVault();
+    insert(vault, { id: "a", status: "accepted" });
+    const cap = capture();
+    // embedText: null models "no embedding model available".
+    const code = await runMemoryCli(["reembed"], cap.io, {}, { vault, embedText: null });
+    expect(code).toBe(0);
+    expect(cap.out()).toContain("No embedding model is configured");
+    expect(vault.getEmbedding(mid("a"))).toBeUndefined();
+  });
+
+  it("counts an embed failure (null result) without throwing", async () => {
+    const vault = makeVault();
+    insert(vault, { id: "a", status: "accepted" });
+    const cap = capture();
+    const failingEmbedder = (): Promise<null> => Promise.resolve(null);
+    const code = await runMemoryCli(["reembed"], cap.io, {}, { vault, embedText: failingEmbedder });
+    expect(code).toBe(0);
+    expect(cap.out()).toContain("failed:   1");
+    expect(vault.getEmbedding(mid("a"))).toBeUndefined();
+  });
+});
+
 describe("runMemoryCli error handling", () => {
   it("exits 1 and prints the message when the vault factory throws", () => {
     const cap = capture();

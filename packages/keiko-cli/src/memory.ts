@@ -11,26 +11,45 @@
 // subcommand).
 
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
-import { runMemoryMaintenance } from "@oscharko-dev/keiko-server";
-import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import {
+  createMemoryEmbedder,
+  runMemoryMaintenance,
+  type MemoryEmbedder,
+} from "@oscharko-dev/keiko-server";
+import {
+  loadConfigFromFile,
+  requestOpenAIEmbedding,
+  GatewayError,
+  type EnvSource,
+} from "@oscharko-dev/keiko-model-gateway";
 import type { MemoryRecord, MemoryScope } from "@oscharko-dev/keiko-contracts";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:
   keiko memory maintain [--memory-dir PATH]   Run a bounded consolidate + decay + forget pass.
   keiko memory stats [--memory-dir PATH]      Print memory counts by status and scope.
+  keiko memory reembed [--memory-dir PATH] [--limit N] [--config PATH]
+                                              Backfill embeddings for accepted memories lacking one.
 
 Opens the local memory vault (default $KEIKO_MEMORY_DIR or the platform state dir; override with
 --memory-dir). \`maintain\` strengthens recalled memories, decays stale ones, archives faded ones,
-forgets expired/very-faint ones, and auto-supersedes pairwise correction conflicts.
+forgets expired/very-faint ones, and auto-supersedes pairwise correction conflicts. \`reembed\`
+computes the embedding for each accepted memory that has none (bounded by --limit, default 200), so
+pre-existing memories become semantically retrievable; it is gated on an embedding model being
+configured (via --config / $KEIKO_CONFIG_FILE) and is best-effort.
 `;
 
+const DEFAULT_REEMBED_LIMIT = 200;
+
 // Test seam: inject a vault + a factory so unit tests never touch the filesystem or keychain.
+// `embedText` overrides the production embedder (built from the gateway config) so reembed tests
+// never touch the network; `null` models the "no embedding model configured" case.
 export interface MemoryCliDeps {
   readonly vault?: MemoryVaultStore | undefined;
   readonly openVault?:
     | ((memoryDir: string | undefined, env: EnvSource) => MemoryVaultStore)
     | undefined;
+  readonly embedText?: MemoryEmbedder | null | undefined;
 }
 
 function flagValue(args: readonly string[], name: string): string | undefined {
@@ -129,16 +148,127 @@ function runMaintain(
   }
 }
 
+// Resolves the production embedder from the gateway config (--config / $KEIKO_CONFIG_FILE), or
+// null when no config source is available, the config cannot be loaded, or no embedding-capable
+// model is configured. The test seam (deps.embedText) short-circuits this entirely. A GatewayError
+// is treated as "no model" (best-effort backfill never hard-fails on a config problem).
+function resolveEmbedder(
+  args: readonly string[],
+  env: EnvSource,
+  deps: MemoryCliDeps,
+): MemoryEmbedder | null {
+  if (deps.embedText !== undefined) return deps.embedText;
+  const configPath = flagValue(args, "--config") ?? env.KEIKO_CONFIG_FILE;
+  if (configPath === undefined) return null;
+  try {
+    return createMemoryEmbedder(loadConfigFromFile(configPath, env), requestOpenAIEmbedding);
+  } catch (error) {
+    if (error instanceof GatewayError) return null;
+    throw error;
+  }
+}
+
+function parseLimit(args: readonly string[]): number {
+  const raw = flagValue(args, "--limit");
+  if (raw === undefined) return DEFAULT_REEMBED_LIMIT;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_REEMBED_LIMIT;
+}
+
+interface ReembedCounts {
+  embedded: number;
+  skipped: number;
+  failed: number;
+}
+
+async function backfillEmbeddings(
+  vault: MemoryVaultStore,
+  embed: MemoryEmbedder,
+  limit: number,
+): Promise<ReembedCounts> {
+  const accepted = vault.listMemories({ status: ["accepted"], includeExpired: true, limit });
+  const counts: ReembedCounts = { embedded: 0, skipped: 0, failed: 0 };
+  for (const record of accepted) {
+    if (vault.getEmbedding(record.id) !== undefined) {
+      counts.skipped += 1;
+      continue;
+    }
+    const input = await embed(record.body);
+    if (input === null) {
+      counts.failed += 1;
+      continue;
+    }
+    try {
+      vault.upsertEmbedding(record.id, input);
+      counts.embedded += 1;
+    } catch {
+      counts.failed += 1;
+    }
+  }
+  return counts;
+}
+
+function renderReembedReport(counts: ReembedCounts): string {
+  return [
+    "Memory re-embedding complete.",
+    `  embedded: ${String(counts.embedded)}`,
+    `  skipped:  ${String(counts.skipped)}`,
+    `  failed:   ${String(counts.failed)}`,
+    "",
+  ].join("\n");
+}
+
+async function reembed(
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+  deps: MemoryCliDeps,
+): Promise<number> {
+  const embed = resolveEmbedder(args, env, deps);
+  if (embed === null) {
+    io.out(
+      "No embedding model is configured — skipping re-embedding. " +
+        "Provide a gateway config with --config PATH or $KEIKO_CONFIG_FILE.\n",
+    );
+    return 0;
+  }
+  const vault = resolveVault(args, env, deps);
+  try {
+    const counts = await backfillEmbeddings(vault, embed, parseLimit(args));
+    io.out(renderReembedReport(counts));
+    return 0;
+  } finally {
+    if (deps.vault === undefined) vault.close();
+  }
+}
+
+// async wrapper so a sync-or-async failure surfaces as exit 1 (the sync subcommands rely on
+// dispatchSubcommand's try/catch, which cannot catch a rejected Promise).
+async function runReembed(
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+  deps: MemoryCliDeps,
+): Promise<number> {
+  try {
+    return await reembed(args, io, env, deps);
+  } catch (error) {
+    io.err(`keiko memory: ${error instanceof Error ? error.message : String(error)}\n`);
+    return 1;
+  }
+}
+
 function dispatchSubcommand(
   sub: string,
   args: readonly string[],
   io: CliIo,
   env: EnvSource,
   deps: MemoryCliDeps,
-): number {
+): number | Promise<number> {
   try {
     if (sub === "maintain") return runMaintain(args, io, env, deps);
     if (sub === "stats") return runStats(args, io, env, deps);
+    if (sub === "reembed") return runReembed(args, io, env, deps);
   } catch (error) {
     io.err(`keiko memory: ${error instanceof Error ? error.message : String(error)}\n`);
     return 1;
@@ -153,7 +283,7 @@ export function runMemoryCli(
   io: CliIo,
   env: EnvSource = {},
   deps: MemoryCliDeps = {},
-): number {
+): number | Promise<number> {
   const sub = rest[0];
   if (sub === undefined || sub === "--help" || sub === "-h") {
     io.out(USAGE);

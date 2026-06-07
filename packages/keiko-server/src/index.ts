@@ -114,6 +114,11 @@ export {
 export { TerminalToolError, type TerminalErrorCode } from "./terminal-errors.js";
 export { runMemoryMaintenance, type MaintenanceCounts } from "./memory-maintenance-handlers.js";
 export {
+  createMemoryEmbedder,
+  selectMemoryEmbeddingModelId,
+  type MemoryEmbedder,
+} from "./memory-embedding.js";
+export {
   buildTerminalEvidenceEntry,
   appendTerminalEvidence,
   type TerminalEvidenceEntry,
