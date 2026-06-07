@@ -164,6 +164,28 @@ describe("encodeVectorLE deterministic encoding (regression)", () => {
     const plain = TEST_CIPHER.openBytes(Buffer.from(row.vector));
     expect(Array.from(plain)).toEqual([0x00, 0x00, 0x80, 0x3f, 0x00, 0x00, 0x00, 0x40]);
   });
+
+  it("round-trips a vector whose plaintext LE encoding starts with 0x01 (no magic-byte ambiguity)", () => {
+    // Construct a Float32 whose little-endian byte 0 is 0x01 — the exact value that a magic-byte
+    // sniff would mistake for a sealed envelope. It must still seal, store, and decode losslessly.
+    const probe = new Float32Array(new Uint8Array([0x01, 0x02, 0x03, 0x04]).buffer);
+    expect(new Uint8Array(probe.buffer)[0]).toBe(0x01);
+
+    const db = openTestDb();
+    insertMemoryRow(db, makeMemory("m1"), TEST_CIPHER);
+    upsertEmbeddingRow(
+      db,
+      "m1" as MemoryId,
+      { provider: "p", modelId: "m", metric: "cosine", vector: probe },
+      1,
+      TEST_CIPHER,
+    );
+    const back = getEmbeddingRow(db, "m1" as MemoryId, TEST_CIPHER);
+    expect(back?.dimensions).toBe(1);
+    expect(Buffer.from(back?.vector.buffer ?? new ArrayBuffer(0))).toEqual(
+      Buffer.from(probe.buffer),
+    );
+  });
 });
 
 describe("gateEmbeddingInput (DoS + cast soundness)", () => {
