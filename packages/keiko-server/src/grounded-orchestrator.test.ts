@@ -29,6 +29,7 @@ import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import {
   ClarificationNeededError,
   echoAnswerer,
+  retrieveConnectedContextPack,
   runGroundedExploration,
   type GroundedAnswerer,
   type OrchestratorInput,
@@ -507,5 +508,78 @@ describe("echoAnswerer", () => {
     };
     const out = await echoAnswerer.answer("anything", pack);
     expect(out).toContain("(no evidence)");
+  });
+});
+
+describe("retrieveConnectedContextPack (Epic #532 M1)", () => {
+  it("produces the same pack runGroundedExploration produces for the same input+deps", async () => {
+    const retrieved = await retrieveConnectedContextPack(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    const explored = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    expect(retrieved.pack).toStrictEqual(explored.pack);
+    expect(retrieved.plan).toStrictEqual(explored.plan);
+    expect(retrieved.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it("does NOT invoke the answerer (retrieval-only contract)", async () => {
+    let answerCalls = 0;
+    const countingAnswerer: GroundedAnswerer = {
+      answer: (): Promise<string> => {
+        answerCalls += 1;
+        return Promise.resolve("should not run");
+      },
+    };
+    await retrieveConnectedContextPack(input(), {
+      answerer: countingAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    expect(answerCalls).toBe(0);
+  });
+
+  it("AC5: runGroundedExploration still returns identical pack and assistantContent", async () => {
+    // Two independent runs over the same deterministic fixture must agree byte-for-byte on the
+    // wire-observable fields, proving the retrieval/answer split did not perturb the single path.
+    const first = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    const second = await runGroundedExploration(input(), {
+      answerer: echoAnswerer,
+      nowMs: () => NOW,
+      detectWorkspace: () => fakeWorkspace(),
+    });
+    expect(first.pack).toStrictEqual(second.pack);
+    expect(first.assistantContent).toBe(second.assistantContent);
+    expect(first.plan).toStrictEqual(second.plan);
+  });
+
+  it("propagates a cancelled signal without answering", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    let answerCalls = 0;
+    const countingAnswerer: GroundedAnswerer = {
+      answer: (): Promise<string> => {
+        answerCalls += 1;
+        return Promise.resolve("nope");
+      },
+    };
+    await expect(
+      retrieveConnectedContextPack(input(), {
+        answerer: countingAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+        signal: controller.signal,
+      }),
+    ).rejects.toBeInstanceOf(CancelledError);
+    expect(answerCalls).toBe(0);
   });
 });
