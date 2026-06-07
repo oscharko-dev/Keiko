@@ -144,3 +144,105 @@ describe("recordQualityIntelligenceRun + load + list", () => {
     expect(() => recordQualityIntelligenceRun(input, { evidenceDir })).toThrow();
   });
 });
+
+// Issue #637 — manifest load must enforce per-group SHA-256 integrity hashes AND totals against
+// the live collections so a tampered persisted manifest is rejected before any UI/BFF consumer
+// sees corrupted data.
+describe("load-time integrity verification (issue #637)", () => {
+  async function readManifest(runId: string): Promise<Record<string, unknown>> {
+    const path = join(evidenceDir, QI_SUBDIR, `${runId}.qi.json`);
+    return JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+  }
+
+  async function writeManifest(runId: string, manifest: unknown): Promise<void> {
+    const path = join(evidenceDir, QI_SUBDIR, `${runId}.qi.json`);
+    await writeFile(path, JSON.stringify(manifest), "utf8");
+  }
+
+  function inputWithFinding(runId: string): QualityIntelligenceRecordInput {
+    return {
+      ...baseInput(runId),
+      totals: { candidates: 1, findings: 1, exports: 0 },
+      findings: [
+        {
+          id: "f-1",
+          kind: "logic-defect",
+          severity: "medium",
+          summaryRedacted: "summary-1",
+        },
+      ],
+    };
+  }
+
+  it("rejects a load when a finding payload is mutated without recomputing the integrity hash", async () => {
+    recordQualityIntelligenceRun(inputWithFinding("run-tamper-findings"), { evidenceDir });
+    const original = await readManifest("run-tamper-findings");
+    const findings = original.findings as readonly Record<string, unknown>[];
+    const tampered = {
+      ...original,
+      findings: findings.map((f, i) =>
+        i === 0 ? { ...f, summaryRedacted: "mutated-summary" } : f,
+      ),
+    };
+    await writeManifest("run-tamper-findings", tampered);
+    expect(() => loadQualityIntelligenceRun("run-tamper-findings", { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
+  it("rejects a load when totals.findings drift from findings.length", async () => {
+    recordQualityIntelligenceRun(inputWithFinding("run-tamper-totals"), { evidenceDir });
+    const original = await readManifest("run-tamper-totals");
+    const totals = original.totals as Record<string, number>;
+    const tampered = { ...original, totals: { ...totals, findings: 99 } };
+    await writeManifest("run-tamper-totals", tampered);
+    expect(() => loadQualityIntelligenceRun("run-tamper-totals", { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
+  it("rejects a load when an evidenceRefs entry is added without recomputing the integrity hash", async () => {
+    recordQualityIntelligenceRun(baseInput("run-tamper-evidence"), { evidenceDir });
+    const original = await readManifest("run-tamper-evidence");
+    const tampered = {
+      ...original,
+      evidenceRefs: [
+        { envelopeId: "env-injected", atomId: "atom-injected", lifecycleStatus: "active" },
+      ],
+    };
+    await writeManifest("run-tamper-evidence", tampered);
+    expect(() => loadQualityIntelligenceRun("run-tamper-evidence", { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
+  it("skips a tampered manifest in list when load is the iteration mechanism (BFF parity)", async () => {
+    recordQualityIntelligenceRun(inputWithFinding("run-tamper-list-bad"), { evidenceDir });
+    recordQualityIntelligenceRun(baseInput("run-tamper-list-good"), { evidenceDir });
+    const original = await readManifest("run-tamper-list-bad");
+    const findings = original.findings as readonly Record<string, unknown>[];
+    await writeManifest("run-tamper-list-bad", {
+      ...original,
+      findings: findings.map((f) => ({ ...f, summaryRedacted: "mutated" })),
+    });
+    expect(listQualityIntelligenceRuns({ evidenceDir })).toEqual(
+      expect.arrayContaining(["run-tamper-list-bad", "run-tamper-list-good"]),
+    );
+    // The store's list returns runIds (filesystem-only). BFF iteration handles per-load failures
+    // and skips them — this test asserts the contract by calling load on the tampered id and
+    // verifying it throws.
+    expect(() => loadQualityIntelligenceRun("run-tamper-list-bad", { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+    expect(loadQualityIntelligenceRun("run-tamper-list-good", { evidenceDir })?.runId).toBe(
+      "run-tamper-list-good",
+    );
+  });
+
+  it("untampered manifests still load cleanly after the integrity check (happy path)", () => {
+    recordQualityIntelligenceRun(inputWithFinding("run-integrity-happy"), { evidenceDir });
+    const loaded = loadQualityIntelligenceRun("run-integrity-happy", { evidenceDir });
+    expect(loaded?.runId).toBe("run-integrity-happy");
+    expect(loaded?.findings.length).toBe(1);
+  });
+});
