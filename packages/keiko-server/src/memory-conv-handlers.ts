@@ -11,10 +11,11 @@
 //
 //   POST /api/memory/capture-from-conversation
 //     Body: { text, context: { projectPath, chatId } }
-//     Returns { outcomes: CaptureOutcome[] }. Pure call to keiko-memory-capture's
-//     `extractCandidatesFromUserText`. Persistence of accepted candidates stays on the
-//     existing /api/memory/proposals/:id/accept route from #211 (see follow-up note in the
-//     #212 PR for the candidate-persistence wiring).
+//     Returns { outcomes: CaptureOutcome[] }. Calls keiko-memory-capture's
+//     `extractCandidatesFromUserText` and persists each `candidate` outcome as a `proposed`
+//     memory record via the shared `buildMemoryRecordFromProposal` builder so the existing
+//     /api/memory/proposals/:id/accept route from #211 can transition the proposal to accepted
+//     (issue #642).
 //
 // CSRF: enforced for POST methods by the server dispatch layer in server.ts. Handlers do
 // NOT re-check.
@@ -53,6 +54,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -391,6 +393,24 @@ export async function handleMemoryCaptureFromConversation(
     captureContext,
     { resolver: createMemoryTargetResolver(vault) },
   );
+  // Issue #642: persist every candidate outcome as a `proposed` memory record so the
+  // /api/memory/proposals/:id/accept route can find it by the returned proposalId. Uses the
+  // shared `buildMemoryRecordFromProposal` builder for parity with chat-handlers.ts.
+  persistCandidateOutcomes(vault, outcomes);
   // Redact every outcome (proposal bodies may carry user text that needs scrubbing).
   return { status: 200, body: deps.redactor({ outcomes }) };
+}
+
+function persistCandidateOutcomes(
+  vault: MemoryVaultStore,
+  outcomes: readonly CaptureOutcome[],
+): void {
+  for (const outcome of outcomes) {
+    if (outcome.kind !== "candidate") continue;
+    const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
+    const record = buildMemoryRecordFromProposal(proposalId, outcome);
+    if (record !== null) {
+      vault.insertMemory(record);
+    }
+  }
 }
