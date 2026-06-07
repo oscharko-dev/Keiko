@@ -6,6 +6,7 @@ import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import type { FilesWindowContext, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
+import type { ChatConnectedScope } from "@/lib/types";
 
 function addPosition(
   vp: ViewportWorld,
@@ -451,3 +452,71 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
 
 // Re-exports for callers that need the lower-level type
 export type { WindowType };
+
+// ─── M3 (#532) pure scope-list helpers (exported for tests) ─────────────────
+
+export const MAX_SCOPES = 16;
+
+/** True when `root` is a non-empty absolute POSIX or Windows path. */
+function isAbsoluteRoot(root: string): boolean {
+  return root.length > 0 && (root.startsWith("/") || /^[A-Za-z]:[/\\]/u.test(root));
+}
+
+/**
+ * Resolves the real absolute root of a Files window.
+ * Returns null when only the "src" sentinel fallback would apply — the spec
+ * says we must NOT bind that fallback as a connectedScope.
+ */
+export function resolvedFilesRoot(w: AppWindow): string | null {
+  if (w.type !== "files") return null;
+  const resolvedRoot = w.cfg["resolvedRoot"];
+  const configuredRoot = w.cfg["root"];
+  const root =
+    typeof resolvedRoot === "string" && resolvedRoot.length > 0
+      ? resolvedRoot
+      : typeof configuredRoot === "string" && configuredRoot.length > 0
+        ? configuredRoot
+        : null;
+  return root !== null && isAbsoluteRoot(root) ? root : null;
+}
+
+/**
+ * Appends a new source to the current scopes list (de-duped by root, capped at
+ * MAX_SCOPES). Returns null when the root is empty/not absolute (caller should
+ * surface "browse/choose a folder first").
+ */
+export function appendScope(
+  current: readonly ChatConnectedScope[],
+  root: string,
+  now: number,
+): readonly ChatConnectedScope[] | null {
+  if (!isAbsoluteRoot(root)) return null;
+  if (current.some((s) => s.root === root)) return current;
+  const next: ChatConnectedScope = {
+    kind: "workspace-root",
+    relativePaths: [],
+    root,
+    connectedAtMs: now,
+  };
+  const combined = [...current, next];
+  return combined.length > MAX_SCOPES ? combined.slice(-MAX_SCOPES) : combined;
+}
+
+/**
+ * Removes the source with the given root from the scopes list. Returns an
+ * empty array (not null) when the list becomes empty so callers can PATCH null.
+ */
+export function removeScope(
+  current: readonly ChatConnectedScope[],
+  root: string,
+): readonly ChatConnectedScope[] {
+  return current.filter((s) => s.root !== root);
+}
+
+/** Canonical reader: derive effective scopes from Chat fields. */
+export function effectiveScopes(chat: {
+  connectedScopes?: readonly ChatConnectedScope[];
+  connectedScope?: ChatConnectedScope;
+}): readonly ChatConnectedScope[] {
+  return chat.connectedScopes ?? (chat.connectedScope !== undefined ? [chat.connectedScope] : []);
+}

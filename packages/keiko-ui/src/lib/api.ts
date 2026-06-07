@@ -389,6 +389,20 @@ export async function updateChatConnectedScope(
   });
 }
 
+// Epic #532 — M3: bind a list of sources (1+N) to a chat. `null` clears ALL
+// connected scopes. Kept separate from the single-source helper so callers
+// that still use singular binding are not affected. Always patches the plural
+// `connectedScopes` field so the BFF stores and returns the canonical list.
+export async function updateChatConnectedScopes(
+  chatId: string,
+  scopes: readonly ChatConnectedScope[] | null,
+): Promise<ChatResponse> {
+  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ connectedScopes: scopes }),
+  });
+}
+
 export async function updateChatLocalKnowledgeScope(
   chatId: string,
   scope: ChatLocalKnowledgeScope | null,
