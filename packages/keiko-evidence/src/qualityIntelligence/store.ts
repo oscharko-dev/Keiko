@@ -219,12 +219,42 @@ function parseAndValidateManifest(json: string): QualityIntelligenceEvidenceMani
   if (!validation.ok) {
     throw new EvidenceReadError(`QI manifest schema invalid: ${validation.reason ?? "unknown"}`);
   }
-  // After the schema gate, the runtime value satisfies the manifest contract by construction —
-  // the gate validates the schema-version literal, the closed top-level key set, and the status
-  // enum, which is what `QualityIntelligenceEvidenceManifest` constrains beyond the structural
-  // arrays. Downstream callers consume the readonly arrays at their own risk for cross-row
-  // integrity (which is what `integrityHashes` exists for).
-  return parsed as QualityIntelligenceEvidenceManifest;
+  const manifest = parsed as QualityIntelligenceEvidenceManifest;
+  // Issue #637 — verify recorded SHA-256 integrity hashes AND totals against the live
+  // collections on read. The strict-schema gate above only validates the schema-version literal,
+  // the closed top-level key set, and the status enum; it does NOT detect a tampered finding /
+  // export / evidenceRef payload or a totals/collections drift. Failing closed here keeps the
+  // BFF list endpoint from surfacing corrupted runs and forces the detail endpoint into its
+  // controlled error path.
+  assertManifestIntegrity(manifest);
+  return manifest;
+}
+
+function assertManifestIntegrity(manifest: QualityIntelligenceEvidenceManifest): void {
+  if (manifest.totals.findings !== manifest.findings.length) {
+    throw new EvidenceReadError(
+      `QI manifest totals.findings (${String(manifest.totals.findings)}) does not match findings.length (${String(manifest.findings.length)})`,
+    );
+  }
+  if (manifest.totals.exports !== manifest.exports.length) {
+    throw new EvidenceReadError(
+      `QI manifest totals.exports (${String(manifest.totals.exports)}) does not match exports.length (${String(manifest.exports.length)})`,
+    );
+  }
+  const expected = buildIntegrityHashes(
+    manifest.findings,
+    manifest.exports,
+    manifest.evidenceRefs,
+  );
+  if (expected.findings !== manifest.integrityHashes.findings) {
+    throw new EvidenceReadError("QI manifest findings integrity hash mismatch");
+  }
+  if (expected.exports !== manifest.integrityHashes.exports) {
+    throw new EvidenceReadError("QI manifest exports integrity hash mismatch");
+  }
+  if (expected.evidenceRefs !== manifest.integrityHashes.evidenceRefs) {
+    throw new EvidenceReadError("QI manifest evidenceRefs integrity hash mismatch");
+  }
 }
 
 function loadQiManifest(
