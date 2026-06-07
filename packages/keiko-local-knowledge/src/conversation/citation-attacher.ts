@@ -12,8 +12,12 @@
 //     "unique footnotes" view.
 //   * Markers with leading zeros (`[01]`) are accepted to match what some models emit;
 //     the parsed integer is what's matched against the reference list.
-//   * No regex backtracking traps — the pattern is `\[(\d+)\]`, linear in the answer
-//     length, bounded by digit count.
+//   * Bracket glyphs beyond ASCII `[ ]` are accepted: CJK lenticular `【n】` and fullwidth
+//     `［n］`. Some models (e.g. gpt-oss) emit these instead of ASCII brackets; without
+//     this tolerance their citations would be lost and the caller would fall back to
+//     attaching every reference. The original glyph is preserved in `marker`.
+//   * No regex backtracking traps — the pattern is `[bracket](\d+)[bracket]`, linear in the
+//     answer length, bounded by digit count (each class matches exactly one character).
 
 import type { CitationReference, RetrievalReference } from "@oscharko-dev/keiko-contracts";
 
@@ -29,7 +33,10 @@ export interface AttachCitationsResult {
 // portable implementation; we cannot share a single static instance across calls because
 // `lastIndex` is mutated during iteration (a single shared instance would corrupt under
 // concurrent generator runs).
-const MARKER_PATTERN = /\[(\d+)\]/g;
+// Open ∈ { [ , 【 (U+3010), ［ (U+FF3B) }; close ∈ { ] , 】 (U+3011), ］ (U+FF3D) }. Each
+// class matches exactly one character so the linear-scan / no-backtracking property holds.
+// Mismatched pairs (`[1】`) are accepted intentionally — markers are untrusted LLM output.
+const MARKER_PATTERN = /[[【［](\d+)[\]】］]/g;
 
 export function attachCitationsToAnswer(
   answer: string,

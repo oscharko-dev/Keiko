@@ -85,4 +85,31 @@ describe("attachCitationsToAnswer", () => {
     expect(result.citations).toHaveLength(1);
     expect(result.citations[0]?.marker).toBe("[1]");
   });
+
+  it("maps CJK lenticular markers 【1】【2】 (gpt-oss emits these)", () => {
+    const refs = [reference("ch-a"), reference("ch-b")];
+    const result = attachCitationsToAnswer("alpha 【1】 beta 【2】 gamma", refs);
+    expect(result.text).toBe("alpha 【1】 beta 【2】 gamma");
+    expect(result.citations).toHaveLength(2);
+    expect(result.citations[0]?.marker).toBe("【1】");
+    expect(result.citations[0]?.index).toBe(1);
+    expect(result.citations[0]?.reference.chunkId).toBe("ch-a");
+    expect(result.citations[1]?.marker).toBe("【2】");
+    expect(result.citations[1]?.reference.chunkId).toBe("ch-b");
+  });
+
+  it("maps fullwidth square-bracket markers ［1］", () => {
+    const refs = [reference("ch-a")];
+    const result = attachCitationsToAnswer("see ［1］ here", refs);
+    expect(result.citations).toHaveLength(1);
+    expect(result.citations[0]?.marker).toBe("［1］");
+    expect(result.citations[0]?.index).toBe(1);
+  });
+
+  it("drops out-of-bounds lenticular markers (numeric phrases like 【2024】)", () => {
+    const refs = [reference("ch-a"), reference("ch-b")];
+    const result = attachCitationsToAnswer("the year 【2024】 and source 【1】", refs);
+    expect(result.citations).toHaveLength(1);
+    expect(result.citations[0]?.index).toBe(1);
+  });
 });
