@@ -82,7 +82,23 @@ const RING_WEIGHTS: Readonly<Record<RetrievalRingKind, number>> = {
   "git-history": 0.15,
 };
 
-const MIN_EXCERPT_BYTES_PER_FILE = 8192;
+// Lexical/structural scanning is transient — each candidate file is read to match lines, then
+// discarded — so its breadth is bounded by elapsedMsMax, NOT by the excerpt-byte budget the model
+// context is built from. Deriving maxFilesScanned from the excerpt slice capped the scan at ~4
+// files and starved multi-file connected scopes (Epic #177 retrieval defect): the search could
+// never reach the file a question was actually about. These ceilings let a ring examine the
+// connected scope broadly while the excerpt READ phase keeps enforcing filesReadMax/excerptBytesMax.
+const SCAN_FILE_CEILING = 2048;
+// Evidence atoms returned for ranking. With the search facade's per-file match cap this represents
+// many candidate files (well beyond filesReadMax) so the ranker has real choice before the excerpt
+// phase reads the top files.
+const MATCH_RETURN_CEILING = 256;
+// Per-file scan read cap (2 MiB). A connected file up to this size is fully read and matched so it
+// is never skipped as size-exceeded regardless of format; only files larger than this are omitted.
+// This bounds the transient per-file read during line matching, NOT the excerpt content that enters
+// the pack (Epic #177 retrieval fix — the prior excerpt-byte-derived cap of ~18 KiB silently dropped
+// larger files from the search entirely).
+const SCAN_BYTES_PER_FILE = 2_097_152;
 
 const RING_LABELS: Readonly<Record<RetrievalRingKind, string>> = {
   lexical: "Lexical scan across the selected scope",
@@ -125,24 +141,16 @@ function atLeastOne(value: number): number {
 }
 
 function sliceLimits(budget: ExplorationBudget, weight: number): SearchLimits {
-  const perRingExcerptBytes = budget.excerptBytesMax * weight;
-  // Per-file is a quarter of the per-ring excerpt allotment, bounded below by 8 KiB so a
-  // small ring still has enough headroom to read one usable hunk.
-  const maxBytesPerFileScanned = Math.max(
-    MIN_EXCERPT_BYTES_PER_FILE,
-    Math.floor(perRingExcerptBytes / 4),
-  );
-  // Matches budget allotted at 50% per ring (the planner doesn't know match density yet).
-  const matchesBudget = budget.searchCallsMax * weight * 0.5;
-  // maxBytesPerFileScanned has an 8 KiB floor that can push the ring's worst-case excerpt
-  // budget (files * bytes-per-file) past its weighted share of excerptBytesMax. Cap
-  // maxFilesScanned so the worst case stays within the slice while preserving the floor.
-  const filesByBudget = budget.filesReadMax * weight;
-  const filesByExcerpt = perRingExcerptBytes / maxBytesPerFileScanned;
+  // Scanning is transient — each file is read to match lines, then discarded — and is bounded by
+  // elapsedMsMax, NOT by the excerpt-byte budget the model context is built from. Both the per-file
+  // read cap and the scan breadth are therefore decoupled from excerptBytesMax (Epic #177 retrieval
+  // fix); deriving them from the excerpt slice capped scanning at ~4 files of ~18 KiB and silently
+  // skipped any larger or later-sorted file. The excerpt READ phase still enforces filesReadMax /
+  // excerptBytesMax when it incorporates file content into the pack.
   return {
-    maxFilesScanned: atLeastOne(Math.min(filesByBudget, filesByExcerpt)),
-    maxMatchesReturned: atLeastOne(matchesBudget),
-    maxBytesPerFileScanned,
+    maxFilesScanned: atLeastOne(SCAN_FILE_CEILING * weight),
+    maxMatchesReturned: atLeastOne(MATCH_RETURN_CEILING * weight),
+    maxBytesPerFileScanned: SCAN_BYTES_PER_FILE,
     elapsedMsMax: atLeastOne(budget.elapsedMsMax * weight),
   };
 }

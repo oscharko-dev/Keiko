@@ -35,10 +35,20 @@ describe("isDenied (always-on security)", () => {
     ".turbo/cache",
     ".git",
     ".git/config",
-    "app.log",
-    "logs/error.log",
     ".DS_Store",
     "sub/.DS_Store",
+    // Epic #532 — credential locations must stay denied when any folder is connectable.
+    ".ssh",
+    ".ssh/config",
+    "home/user/.ssh/known_hosts",
+    ".aws",
+    ".aws/credentials",
+    ".gnupg/secring.gpg",
+    ".kube/config",
+    ".docker/config.json",
+    ".netrc",
+    ".git-credentials",
+    "Library/Keychains/login.keychain-db",
   ]) {
     it(`denies ${denied}`, () => {
       expect(isDenied(denied)).toBe(true);
@@ -53,6 +63,9 @@ describe("isDenied (always-on security)", () => {
     "src/env.ts",
     "documentation.md",
     "envoy.config.ts",
+    // Log files are intentionally searchable (connected-context format coverage); not denied.
+    "app.log",
+    "logs/error.log",
   ]) {
     it(`does not deny ${allowed}`, () => {
       expect(isDenied(allowed)).toBe(false);

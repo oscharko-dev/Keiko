@@ -38,8 +38,9 @@ import {
 } from "@oscharko-dev/keiko-workflows";
 import {
   DEFAULT_SEARCH_LIMITS,
+  FileTooLargeError,
   RepoSearchUnsupportedFileError,
-  detectWorkspace,
+  detectWorkspaceAt,
   gitHistoryAdapter,
   importGraphAdapter,
   readExcerpt,
@@ -224,10 +225,16 @@ async function runRing(ring: RetrievalRing, inputs: SearchInputs): Promise<RingR
       fs: inputs.fs,
       nowMs: inputs.nowMs,
     });
+    // Lexical scanning is transient: each candidate file is read to match lines, then discarded.
+    // It does NOT consume the excerpt budget. Charging result.filesScanned against filesReadMax
+    // (Epic #177 retrieval defect) let a wide scan exhaust the budget the excerpt READ phase needs
+    // and starved multi-file scopes — the scan could only ever examine ~4 files. The reserved
+    // search call (one per ring) plus elapsedMs already bound the scan; the files whose content
+    // actually enters the pack are charged when their excerpts are read in the assembler.
     return {
       atoms: result.atoms,
       omitted: omittedFromSearchCandidates(result.candidates, inputs.nowMs()),
-      usage: usageDelta({ filesRead: result.filesScanned, elapsedMs: result.elapsedMs }),
+      usage: usageDelta({ elapsedMs: result.elapsedMs }),
     };
   }
   // Keep the planner's ring split authoritative: the structural ring should only run the
@@ -457,7 +464,10 @@ async function readKeptExcerpts(
         remainingBytes -= result.bytesConsumed;
       }
     } catch (error) {
-      if (error instanceof RepoSearchUnsupportedFileError) {
+      // A single unreadable file (unsupported/binary, or larger than the excerpt read cap) must
+      // degrade to a skipped excerpt, never crash the whole grounded answer. Other kept files and
+      // the rest of the pipeline continue; the file simply contributes no excerpt content.
+      if (error instanceof RepoSearchUnsupportedFileError || error instanceof FileTooLargeError) {
         continue;
       }
       throw error;
@@ -562,7 +572,7 @@ export async function runGroundedExploration(
   deps: OrchestratorDeps,
 ): Promise<OrchestratorOutput> {
   const fs = deps.fs ?? nodeWorkspaceFs;
-  const detect = deps.detectWorkspace ?? detectWorkspace;
+  const detect = deps.detectWorkspace ?? detectWorkspaceAt;
   const nowMs = deps.nowMs ?? Date.now;
   const start = nowMs();
   throwIfCancelled(deps.signal);

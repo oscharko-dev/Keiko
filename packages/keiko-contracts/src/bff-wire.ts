@@ -44,6 +44,12 @@ export interface ChatConnectedScope {
   readonly kind: SelectedScopeKind;
   readonly relativePaths: readonly string[];
   readonly connectedAtMs: number;
+  // Epic #177/#532 — absolute root of the connected folder. Keiko is a workspace for everyone, not
+  // only developers: a user keeps a single Keiko project but connects folders from ANYWHERE on the
+  // machine (outside that project root) to the chat. When present, the grounded path resolves
+  // `relativePaths` against THIS root instead of the chat's projectPath. Absent (legacy chats) →
+  // the chat's projectPath is used. Always an already-validated, deny-list-cleared absolute path.
+  readonly root?: string;
 }
 
 export type ChatLocalKnowledgeScope =

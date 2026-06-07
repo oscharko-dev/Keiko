@@ -149,30 +149,33 @@ describe("createExplorationPlan", () => {
     }
   });
 
-  it("ring's worst-case excerpt size stays within its weighted budget slice", () => {
-    // Copilot review on PR #250: maxBytesPerFileScanned has an 8 KiB floor; maxFilesScanned
-    // must be capped so files * bytes-per-file <= weighted slice of excerptBytesMax. This
-    // keeps the budget governor's per-dimension semantics deterministic across small rings.
+  it("decouples lexical scan breadth from the excerpt-byte budget so multi-file scopes are reachable", () => {
+    // Epic #177 retrieval fix. Lexical/structural scanning is transient — each candidate file is
+    // read to match lines, then discarded — and is bounded by elapsedMsMax, NOT by the excerpt-byte
+    // budget the model context is built from. The previous coupling
+    // (maxFilesScanned * maxBytesPerFileScanned <= excerptBytesMax * weight) capped the lexical
+    // ring at ~4 files, so the search never reached a file ranked later than the alphabetically
+    // first few. The excerpt READ phase still enforces excerptBytesMax / filesReadMax when it
+    // incorporates content into the pack.
     const p = plan({
       scope: happyScope({ kind: "workspace-root", relativePaths: [] }),
       query: happyQuery({ text: "look at src/a/b.ts and `Foo` and src/c/d.ts" }),
     });
     expect(p.state).toBe("ready");
-    const weights: Record<string, number> = {
-      lexical: 0.55,
-      structural: 0.3,
-      "git-history": 0.15,
-    };
+    const lexical = p.rings.find((r) => r.kind === "lexical");
+    expect(lexical).toBeDefined();
+    const lexicalLimits = lexical?.searchLimits;
+    // The number of files an excerpt-byte-derived cap would have allowed (the old, buggy bound).
+    const excerptDerivedFiles = Math.floor(
+      (p.budget.excerptBytesMax * 0.55) / (lexicalLimits?.maxBytesPerFileScanned ?? 1),
+    );
+    // Scan breadth must now exceed both that excerpt-derived cap and filesReadMax, so an
+    // alphabetically-late but relevant file is still examined.
+    expect(lexicalLimits?.maxFilesScanned ?? 0).toBeGreaterThan(excerptDerivedFiles);
+    expect(lexicalLimits?.maxFilesScanned ?? 0).toBeGreaterThan(p.budget.filesReadMax);
+    // The per-file scan read cap keeps its 8 KiB floor across every ring.
     for (const ring of p.rings) {
-      const weight = weights[ring.kind] ?? 0;
-      const slice = p.budget.excerptBytesMax * weight;
-      const worstCase =
-        ring.searchLimits.maxFilesScanned * ring.searchLimits.maxBytesPerFileScanned;
-      // Worst case is allowed up to the floor adjustment (maxFilesScanned floor of 1) +
-      // maxBytesPerFileScanned. Both honoured per dimension; product is bounded.
-      expect(worstCase).toBeLessThanOrEqual(
-        Math.max(slice, ring.searchLimits.maxBytesPerFileScanned),
-      );
+      expect(ring.searchLimits.maxBytesPerFileScanned).toBeGreaterThanOrEqual(8192);
     }
   });
 

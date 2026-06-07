@@ -164,6 +164,56 @@ describe("searchText (memFs)", () => {
     expect(r.atoms).toHaveLength(0);
   });
 
+  // Epic #177 retrieval correctness — stop-word filtering, per-file diversity, and scan breadth.
+  it("ignores stop words so a stop-word-only line does not match a content query", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "the and to of in on are was\n" });
+    // Every query word except the two content tokens is a stop word; the file contains neither
+    // content token, so a correct matcher returns nothing. A matcher that scored raw whitespace
+    // tokens would match on "the"/"are"/"on" and emit a spurious atom.
+    const r = await searchText(
+      scope,
+      nlq("what are the widgetRegistry on the disk"),
+      DEFAULT_SEARCH_LIMITS,
+      { fs, nowMs: FIXED_NOW },
+    );
+    expect(r.atoms).toHaveLength(0);
+  });
+
+  it("caps emitted matches per file so one file cannot dominate the budget", async () => {
+    const { scope, fs } = memScope({ "src/a.ts": "needle\n".repeat(20) });
+    const r = await searchText(scope, nlq("needle"), DEFAULT_SEARCH_LIMITS, {
+      fs,
+      nowMs: FIXED_NOW,
+    });
+    const fromA = r.atoms.filter((a) => a.scopePath === "src/a.ts");
+    expect(fromA.length).toBeGreaterThan(0);
+    expect(fromA.length).toBeLessThanOrEqual(3);
+  });
+
+  it("examines a later-sorted file instead of saturating on the first one", async () => {
+    const { scope, fs } = memScope({
+      "src/a_early.ts": "shared\nshared\nshared\nshared\nshared\nshared\n",
+      "src/z_late.ts": "shared target\n",
+    });
+    // Without the per-file cap the six 'shared' lines in the alphabetically-first file would
+    // consume the whole match budget and z_late.ts would never be scanned.
+    const limits: SearchLimits = { ...DEFAULT_SEARCH_LIMITS, maxMatchesReturned: 4 };
+    const r = await searchText(scope, nlq("shared target"), limits, { fs, nowMs: FIXED_NOW });
+    const files = new Set(r.atoms.map((a) => a.scopePath));
+    expect(files.has("src/z_late.ts")).toBe(true);
+  });
+
+  it("reads an excerpt window from a file larger than the request byte budget", async () => {
+    const big = `${"x\n".repeat(8000)}TARGET\n`;
+    const { scope, fs } = memScope({ "src/big.ts": big });
+    const r = await readExcerpt(
+      scope,
+      { scopePath: "src/big.ts", startLine: 8001, endLine: 8001, maxBytes: 8192 },
+      { fs },
+    );
+    expect(r.content).toContain("TARGET");
+  });
+
   it("rejects an exact-symbol query containing whitespace", async () => {
     const { scope, fs } = memScope({ "src/a.ts": "foo bar\n" });
     await expect(

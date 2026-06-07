@@ -59,7 +59,7 @@ export {
   type IgnoreMatcher,
 } from "./ignore.js";
 
-export { detectWorkspace } from "./detect.js";
+export { detectWorkspace, detectWorkspaceAt } from "./detect.js";
 
 export {
   discoverFiles,

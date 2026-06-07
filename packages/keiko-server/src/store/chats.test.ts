@@ -175,6 +175,32 @@ describe("updateChat — connectedScope round-trip (#184)", () => {
     });
   });
 
+  it("round-trips an external scope root through SELECT (#532)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const externalRoot = "/Users/someone/Documents/quarterly-reports";
+    const updated = store.updateChat(c.id, {
+      connectedScope: {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: 99,
+        root: externalRoot,
+      },
+    });
+    expect(updated.connectedScope?.root).toBe(externalRoot);
+    const fetched = store.listChats(proj).find((x) => x.id === c.id);
+    // The root must survive the JSON column encode/decode — a connected folder outside the chat's
+    // project is otherwise silently lost and the grounded path falls back to the wrong root.
+    expect(fetched?.connectedScope?.root).toBe(externalRoot);
+  });
+
+  it("leaves connectedScope.root undefined when not provided (#532)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const updated = store.updateChat(c.id, {
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 },
+    });
+    expect(updated.connectedScope?.root).toBeUndefined();
+  });
+
   it("clears connectedScope when patched with null", () => {
     const c = store.createChat(proj, "t", "m");
     store.updateChat(c.id, {
