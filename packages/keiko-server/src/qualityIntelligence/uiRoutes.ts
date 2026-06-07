@@ -18,12 +18,19 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import type {
   QualityIntelligenceUiRunSummary,
+  QualityIntelligenceUiRunListResponse,
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceUiFindingSummary,
   QualityIntelligenceUiEvidenceRef,
 } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+
+// Issue #646 — bound manifest loading on the run-list path. Default 100 keeps the local BFF
+// responsive on large evidence stores; the max cap of 500 mirrors the QI run-detail budget so
+// the UI cannot ask for an unbounded scan even with an explicit query parameter.
+export const QI_RUN_LIST_DEFAULT_LIMIT = 100;
+export const QI_RUN_LIST_MAX_LIMIT = 500;
 
 // ---------------------------------------------------------------------------
 // Evidence-dir resolution — mirrors the pattern from read-handlers.ts (no new logic)
@@ -102,13 +109,54 @@ function projectRunDetail(
 // GET /api/quality-intelligence/runs
 // ---------------------------------------------------------------------------
 
+type LimitOutcome =
+  | { readonly ok: true; readonly limit: number }
+  | { readonly ok: false; readonly response: RouteResult };
+
+function parseLimitParam(ctx: RouteContext): LimitOutcome {
+  const raw = ctx.url.searchParams.get("limit");
+  if (raw === null) {
+    return { ok: true, limit: QI_RUN_LIST_DEFAULT_LIMIT };
+  }
+  // Strict integer parse: reject empty, leading zeros, signs, decimals, scientific notation,
+  // whitespace, NaN/Infinity. Anything that isn't a bare decimal positive integer 400s.
+  if (!/^[1-9]\d*$/.test(raw)) {
+    return {
+      ok: false,
+      response: {
+        status: 400,
+        body: { error: { code: "BAD_REQUEST", message: "limit must be a positive integer" } },
+      },
+    };
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) {
+    return {
+      ok: false,
+      response: {
+        status: 400,
+        body: { error: { code: "BAD_REQUEST", message: "limit must be a positive integer" } },
+      },
+    };
+  }
+  return { ok: true, limit: Math.min(value, QI_RUN_LIST_MAX_LIMIT) };
+}
+
 export function handleListQiRuns(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  void ctx;
+  const limitOutcome = parseLimitParam(ctx);
+  if (!limitOutcome.ok) return limitOutcome.response;
+  const limit = limitOutcome.limit;
   const evidenceDir = resolveEvidenceDir(deps);
   try {
     const runIds = listQualityIntelligenceRuns({ evidenceDir });
+    const totalRunIds = runIds.length;
+    const truncated = totalRunIds > limit;
     const runs: QualityIntelligenceUiRunSummary[] = [];
+    // Issue #646: stop iterating as soon as the bounded slice is full so we never load more
+    // manifests than the route promised. A single corrupt manifest still skips its slot, but
+    // we do NOT advance past `limit` to refill it — the goal is bounded work per request.
     for (const id of runIds) {
+      if (runs.length >= limit) break;
       try {
         const manifest = loadQualityIntelligenceRun(id, { evidenceDir });
         const summary = projectRunSummary(manifest);
@@ -118,7 +166,8 @@ export function handleListQiRuns(ctx: RouteContext, deps: UiHandlerDeps): RouteR
         // Skip and continue — the store's quarantine mechanism handles it.
       }
     }
-    return { status: 200, body: { runs } };
+    const body: QualityIntelligenceUiRunListResponse = { runs, limit, totalRunIds, truncated };
+    return { status: 200, body };
     // Static codes only — never echo OS fs error text (CWE-209).
   } catch {
     return {
