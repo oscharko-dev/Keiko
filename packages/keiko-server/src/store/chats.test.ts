@@ -260,6 +260,121 @@ describe("updateChat — connectedScope round-trip (#184)", () => {
   });
 });
 
+// Epic #532 — multi-source connectedScopes list round-trip through SQLite. A chat may bind N
+// connected folders/files at once; the list is encoded as a JSON ARRAY in connected_scope_paths.
+describe("updateChat — connectedScopes list round-trip (#532)", () => {
+  it("sets two sources with distinct roots and round-trips both (list + back-compat single)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const scopes = [
+      {
+        kind: "directory" as const,
+        relativePaths: ["docs"],
+        connectedAtMs: 10,
+        root: "/srv/alpha",
+      },
+      {
+        kind: "files" as const,
+        relativePaths: ["a.md", "b.md"],
+        connectedAtMs: 11,
+        root: "/srv/beta",
+      },
+    ];
+    const updated = store.updateChat(c.id, { connectedScopes: scopes });
+    expect(updated.connectedScopes).toEqual(scopes);
+    // Back-compat readers see the first source on the single field.
+    expect(updated.connectedScope).toEqual(scopes[0]);
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.connectedScopes).toEqual(scopes);
+    expect(fetched?.connectedScopes?.[0]?.root).toBe("/srv/alpha");
+    expect(fetched?.connectedScopes?.[1]?.root).toBe("/srv/beta");
+    expect(fetched?.connectedScope).toEqual(scopes[0]);
+  });
+
+  it("decodes a legacy single-object row as a 1-element connectedScopes list", () => {
+    const c = store.createChat(proj, "t", "m");
+    // Write via the single-field path (legacy encoding = one object, not an array).
+    store.updateChat(c.id, {
+      connectedScope: { kind: "files", relativePaths: ["src/a"], connectedAtMs: 5 },
+    });
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.connectedScopes).toEqual([
+      { kind: "files", relativePaths: ["src/a"], connectedAtMs: 5 },
+    ]);
+    expect(fetched?.connectedScope).toEqual({
+      kind: "files",
+      relativePaths: ["src/a"],
+      connectedAtMs: 5,
+    });
+  });
+
+  it("clears the list when patched with connectedScopes: null", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      connectedScopes: [{ kind: "files", relativePaths: ["src/a"], connectedAtMs: 1 }],
+    });
+    const cleared = store.updateChat(c.id, { connectedScopes: null });
+    expect(cleared.connectedScopes ?? []).toHaveLength(0);
+    expect(cleared.connectedScope).toBeUndefined();
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.connectedScopes ?? []).toHaveLength(0);
+    expect(fetched?.connectedScope).toBeUndefined();
+  });
+
+  it("treats a single-element connectedScopes list identically to the legacy single field", () => {
+    const c = store.createChat(proj, "t", "m");
+    const one = { kind: "files" as const, relativePaths: ["src/x"], connectedAtMs: 3 };
+    const viaList = store.updateChat(c.id, { connectedScopes: [one] });
+    expect(viaList.connectedScope).toEqual(one);
+    expect(viaList.connectedScopes).toEqual([one]);
+  });
+
+  it("rejects a list exceeding MAX_CONNECTED_SOURCES (17 entries)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const tooMany = Array.from({ length: 17 }, (_unused, i) => ({
+      kind: "files" as const,
+      relativePaths: [`src/f${String(i)}`],
+      connectedAtMs: 1,
+    }));
+    expect(() => store.updateChat(c.id, { connectedScopes: tooMany })).toThrow(UiStoreError);
+  });
+
+  it("rejects a list whose entry has an invalid (absolute) relative path", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, {
+        connectedScopes: [{ kind: "files", relativePaths: ["/etc/passwd"], connectedAtMs: 1 }],
+      }),
+    ).toThrow(UiStoreError);
+  });
+
+  it("accepts the maximum allowed list size (16 entries)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const max = Array.from({ length: 16 }, (_unused, i) => ({
+      kind: "files" as const,
+      relativePaths: [`src/f${String(i)}`],
+      connectedAtMs: 1,
+    }));
+    const updated = store.updateChat(c.id, { connectedScopes: max });
+    expect(updated.connectedScopes).toHaveLength(16);
+  });
+
+  it("prefers connectedScopes over connectedScope when both are present in a patch", () => {
+    const c = store.createChat(proj, "t", "m");
+    const updated = store.updateChat(c.id, {
+      connectedScope: { kind: "files", relativePaths: ["src/single"], connectedAtMs: 1 },
+      connectedScopes: [{ kind: "files", relativePaths: ["src/list"], connectedAtMs: 2 }],
+    });
+    expect(updated.connectedScopes).toEqual([
+      { kind: "files", relativePaths: ["src/list"], connectedAtMs: 2 },
+    ]);
+    expect(updated.connectedScope).toEqual({
+      kind: "files",
+      relativePaths: ["src/list"],
+      connectedAtMs: 2,
+    });
+  });
+});
+
 describe("deleteChat", () => {
   it("deletes the chat and cascades to messages", () => {
     const c = store.createChat(proj, "t", "m");
