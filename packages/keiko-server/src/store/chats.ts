@@ -190,6 +190,7 @@ const SELECT_COLUMNS =
   "connected_scope_paths, connected_scope_at, local_knowledge_scope_json, created_at, updated_at";
 
 const SQL_LIST = `SELECT ${SELECT_COLUMNS} FROM chats WHERE project_path = ? ORDER BY created_at ASC`;
+const SQL_LIST_LIMITED = `${SQL_LIST} LIMIT ?`;
 // Epic #177 audit: grounded-ask and chat PATCH paths used a project-scan + chat-scan helper that
 // fired O(projects × chats) row fetches per request. The chat id is unique across projects (the
 // schema enforces it via the chats.id primary key), so a single-row lookup is correct and bounded.
@@ -243,6 +244,19 @@ function validateSelectedModel(value: string): void {
 
 export function listChats(db: DatabaseSync, projectPath: string): readonly Chat[] {
   return (db.prepare(SQL_LIST).all(projectPath) as unknown as ChatRow[]).map(rowToChat);
+}
+
+export function listChatsLimited(
+  db: DatabaseSync,
+  projectPath: string,
+  limit: number,
+): readonly Chat[] {
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw invalidRequest("limit must be a positive integer.");
+  }
+  return (db.prepare(SQL_LIST_LIMITED).all(projectPath, limit) as unknown as ChatRow[]).map(
+    rowToChat,
+  );
 }
 
 export function findChatById(db: DatabaseSync, id: string): Chat | undefined {

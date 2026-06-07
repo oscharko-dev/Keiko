@@ -42,6 +42,10 @@ import {
 
 const MAX_STORE_BODY_BYTES = 256_000;
 const SELECTED_SCOPE_KIND_SET: ReadonlySet<SelectedScopeKind> = new Set(SELECTED_SCOPE_KINDS);
+const DEFAULT_CHAT_LIST_LIMIT = 100;
+const MAX_CHAT_LIST_LIMIT = 200;
+const DEFAULT_MESSAGE_LIST_LIMIT = 200;
+const MAX_MESSAGE_LIST_LIMIT = 500;
 
 class BodyTooLargeError extends Error {
   public constructor() {
@@ -263,6 +267,24 @@ function requireQuery(ctx: RouteContext, name: string): string {
   return v;
 }
 
+function optionalBoundedQueryInteger(
+  ctx: RouteContext,
+  name: string,
+  fallback: number,
+  max: number,
+): number {
+  const raw = ctx.url.searchParams.get(name);
+  if (raw === null || raw.length === 0) return fallback;
+  if (!/^\d+$/.test(raw)) {
+    throw new InvalidRequest(`Query "${name}" must be a positive integer.`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0 || value > max) {
+    throw new InvalidRequest(`Query "${name}" must be between 1 and ${String(max)}.`);
+  }
+  return value;
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Response projections
 // ──────────────────────────────────────────────────────────────────────────
@@ -281,7 +303,7 @@ function projectWithAvailability(p: Project): ProjectWithAvailability {
 }
 
 function chatBelongsToProject(deps: UiHandlerDeps, projectPath: string, chatId: string): boolean {
-  return deps.store.listChats(projectPath).some((chat) => chat.id === chatId);
+  return deps.store.findChatById(chatId)?.projectPath === projectPath;
 }
 
 // Epic #177 audit: the chat PATCH path scanned every project's chat list per request
@@ -292,7 +314,7 @@ function findChatById(deps: UiHandlerDeps, chatId: string): Chat | undefined {
 }
 
 function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: string): boolean {
-  return deps.store.listMessages(chatId).some((message) => message.id === messageId);
+  return deps.store.findMessageById(messageId)?.chatId === chatId;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -380,7 +402,13 @@ function runHandlerSync(worker: () => RouteResult): RouteResult {
 export function handleListChats(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   return runHandlerSync(() => {
     const projectPath = requireQuery(ctx, "projectPath");
-    const chats = deps.store.listChats(projectPath);
+    const limit = optionalBoundedQueryInteger(
+      ctx,
+      "limit",
+      DEFAULT_CHAT_LIST_LIMIT,
+      MAX_CHAT_LIST_LIMIT,
+    );
+    const chats = deps.store.listChats(projectPath, limit);
     return { status: 200, body: { chats } };
   });
 }
@@ -699,10 +727,16 @@ export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): Rout
   return runHandlerSync(() => {
     const chatId = requireQuery(ctx, "chatId");
     const projectPath = requireQuery(ctx, "projectPath");
+    const limit = optionalBoundedQueryInteger(
+      ctx,
+      "limit",
+      DEFAULT_MESSAGE_LIST_LIMIT,
+      MAX_MESSAGE_LIST_LIMIT,
+    );
     if (!chatBelongsToProject(deps, projectPath, chatId)) {
       return notFoundResult("Chat not found.");
     }
-    const messages = deps.store.listMessages(chatId);
+    const messages = deps.store.listMessages(chatId, limit);
     return { status: 200, body: { messages } };
   });
 }

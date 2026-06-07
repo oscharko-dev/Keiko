@@ -31,6 +31,7 @@ import {
   findChatById as sqlFindChatById,
   insertChat as sqlInsertChat,
   listChats as sqlListChats,
+  listChatsLimited as sqlListChatsLimited,
   touchChat as sqlTouchChat,
   updateChat as sqlUpdateChat,
 } from "./chats.js";
@@ -38,6 +39,7 @@ import {
   findMessageById as sqlFindMessageById,
   insertMessage as sqlInsertMessage,
   listMessages as sqlListMessages,
+  listMessagesLimited as sqlListMessagesLimited,
   updateMessage as sqlUpdateMessage,
 } from "./messages.js";
 import { validateProjectPath } from "./validation.js";
@@ -164,7 +166,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     deleteProject: (path: string): void => {
       deleteProjectRecord(db, path);
     },
-    listChats: (projectPath: string) => sqlListChats(db, projectPath),
+    listChats: (projectPath: string, limit?: number) =>
+      limit === undefined ? sqlListChats(db, projectPath) : sqlListChatsLimited(db, projectPath, limit),
     findChatById: (id: string): Chat | undefined => sqlFindChatById(db, id),
     createChat: (
       projectPath: string,
@@ -177,7 +180,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     deleteChat: (id: string): void => {
       sqlDeleteChat(db, id);
     },
-    listMessages: (chatId: string): readonly ChatMessage[] => sqlListMessages(db, chatId),
+    listMessages: (chatId: string, limit?: number): readonly ChatMessage[] =>
+      limit === undefined ? sqlListMessages(db, chatId) : sqlListMessagesLimited(db, chatId, limit),
     findMessageById: (id: string): ChatMessage | undefined => sqlFindMessageById(db, id),
     createMessage: (msg: NewChatMessage): ChatMessage => {
       const message = createMessageRecord(db, options, msg);

@@ -404,6 +404,29 @@ describe("GET /api/chats", () => {
     expect(body.chats.map((c) => c.title).sort()).toEqual(["Chat A", "Chat B"]);
   });
 
+  it("applies the limit query", async () => {
+    store.createProject(projDir);
+    for (let i = 0; i < 3; i++) {
+      store.createChat(projDir, `Chat ${String(i)}`, "m1");
+    }
+    const res = await fetch(url(`/api/chats?projectPath=${encodeURIComponent(projDir)}&limit=2`));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { chats: { title: string }[] };
+    expect(body.chats).toHaveLength(2);
+    expect(body.chats.map((chat) => chat.title)).toEqual(["Chat 0", "Chat 1"]);
+  });
+
+  it("returns 400 for an out-of-bounds limit", async () => {
+    store.createProject(projDir);
+    const res = await fetch(
+      url(`/api/chats?projectPath=${encodeURIComponent(projDir)}&limit=999`),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.message).toMatch(/limit/i);
+  });
+
   it("returns 400 when projectPath is missing", async () => {
     const res = await fetch(url("/api/chats"));
     expect(res.status).toBe(400);
@@ -936,6 +959,47 @@ describe("GET /api/chats/messages", () => {
     const body = (await res.json()) as { messages: { content: string }[] };
     expect(body.messages).toHaveLength(1);
     expect(body.messages[0]?.content).toBe("hello");
+  });
+
+  it("applies the limit query", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    for (let i = 0; i < 3; i++) {
+      store.createMessage({
+        chatId: c.id,
+        role: "user",
+        content: `message-${String(i)}`,
+        timestamp: i + 1,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+    }
+    const res = await fetch(
+      url(
+        `/api/chats/messages?chatId=${encodeURIComponent(c.id)}&projectPath=${encodeURIComponent(projDir)}&limit=2`,
+      ),
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { messages: { content: string }[] };
+    expect(body.messages).toHaveLength(2);
+    expect(body.messages.map((message) => message.content)).toEqual(["message-0", "message-1"]);
+  });
+
+  it("returns 400 for an invalid message limit", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(
+      url(
+        `/api/chats/messages?chatId=${encodeURIComponent(c.id)}&projectPath=${encodeURIComponent(projDir)}&limit=0`,
+      ),
+    );
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("invalid_request");
+    expect(body.error.message).toMatch(/limit/i);
   });
 
   it("returns 404 instead of leaking messages when chat belongs to another project", async () => {

@@ -13,7 +13,7 @@
 // Bounded-query caps mirror api-contract.md §7. Hard caps are exported as `const` so the
 // handlers cite the same numbers.
 
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import type {
   Relationship,
@@ -1045,7 +1045,8 @@ function admitRelationship(state: WalkState, rel: StoredRelationship): boolean {
 }
 
 function expandFrontier(
-  db: DatabaseSync,
+  outgoingStatement: StatementSync | undefined,
+  incomingStatement: StatementSync | undefined,
   workspaceId: string,
   frontier: readonly WalkNode[],
   direction: "outgoing" | "incoming" | "both",
@@ -1053,7 +1054,13 @@ function expandFrontier(
 ): WalkNode[] {
   const nextFrontier: WalkNode[] = [];
   for (const node of frontier) {
-    const neighbours = expandNeighbours(db, workspaceId, node, direction);
+    const neighbours = expandNeighbours(
+      outgoingStatement,
+      incomingStatement,
+      workspaceId,
+      node,
+      direction,
+    );
     for (const rel of neighbours) {
       if (!admitRelationship(state, rel)) return nextFrontier;
       if (!admitEndpoint(state, rel.source, nextFrontier)) return nextFrontier;
@@ -1109,11 +1116,22 @@ function runWalk(
   options: WalkOptions,
 ): DependencyWalkResult {
   const state = seedWalkState(seed, options);
+  const outgoingStatement =
+    options.direction === "incoming" ? undefined : db.prepare(SQL_FIND_BY_SOURCE);
+  const incomingStatement =
+    options.direction === "outgoing" ? undefined : db.prepare(SQL_FIND_BY_TARGET);
   let depthReached = 0;
   let frontier: readonly WalkNode[] = [...state.collectedNodes];
   for (let depth = 0; depth < options.maxDepth; depth++) {
     depthReached = depth + 1;
-    const nextFrontier = expandFrontier(db, workspaceId, frontier, options.direction, state);
+    const nextFrontier = expandFrontier(
+      outgoingStatement,
+      incomingStatement,
+      workspaceId,
+      frontier,
+      options.direction,
+      state,
+    );
     if (state.truncationReason !== null) {
       return walkResult(state, depthReached, state.truncationReason);
     }
@@ -1127,21 +1145,30 @@ function runWalk(
 }
 
 function expandNeighbours(
-  db: DatabaseSync,
+  outgoingStatement: StatementSync | undefined,
+  incomingStatement: StatementSync | undefined,
   workspaceId: string,
   node: { readonly kind: RelationshipObjectKind; readonly id: string },
   direction: "outgoing" | "incoming" | "both",
 ): readonly StoredRelationship[] {
   const out: StoredRelationship[] = [];
   if (direction !== "incoming") {
-    for (const r of findRelationshipsBySource(db, workspaceId, node, MAX_LIST_LIMIT)) {
-      out.push(r);
-    }
+    const rows = outgoingStatement?.all(
+      workspaceId,
+      node.kind,
+      node.id,
+      MAX_LIST_LIMIT,
+    ) as RelationshipRow[] | undefined;
+    for (const row of rows ?? []) out.push(rowToRelationship(row));
   }
   if (direction !== "outgoing") {
-    for (const r of findRelationshipsByTarget(db, workspaceId, node, MAX_LIST_LIMIT)) {
-      out.push(r);
-    }
+    const rows = incomingStatement?.all(
+      workspaceId,
+      node.kind,
+      node.id,
+      MAX_LIST_LIMIT,
+    ) as RelationshipRow[] | undefined;
+    for (const row of rows ?? []) out.push(rowToRelationship(row));
   }
   return out;
 }

@@ -61,6 +61,7 @@ const COLUMNS =
   "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type";
 
 const SQL_LIST = `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER BY timestamp ASC, id ASC`;
+const SQL_LIST_LIMITED = `${SQL_LIST} LIMIT ?`;
 const SQL_FIND_BY_ID = `SELECT ${COLUMNS} FROM chat_messages WHERE id = ? LIMIT 1`;
 const SQL_CHAT_EXISTS = "SELECT 1 FROM chats WHERE id = ?";
 const SQL_INSERT = `
@@ -123,6 +124,19 @@ function processShortResult(
 
 export function listMessages(db: DatabaseSync, chatId: string): readonly ChatMessage[] {
   return (db.prepare(SQL_LIST).all(chatId) as unknown as MessageRow[]).map(rowToMessage);
+}
+
+export function listMessagesLimited(
+  db: DatabaseSync,
+  chatId: string,
+  limit: number,
+): readonly ChatMessage[] {
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw invalidRequest("limit must be a positive integer.");
+  }
+  return (db.prepare(SQL_LIST_LIMITED).all(chatId, limit) as unknown as MessageRow[]).map(
+    rowToMessage,
+  );
 }
 
 export function findMessageById(db: DatabaseSync, id: string): ChatMessage | undefined {
