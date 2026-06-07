@@ -20,6 +20,7 @@ import type {
 } from "@/lib/local-knowledge-api";
 import { useCapsuleDetail } from "./capsule-detail-state";
 import { CapsuleActions } from "./capsule-actions";
+import { CapsuleRename } from "./capsule-rename";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -427,6 +428,14 @@ export function CapsuleDetail({ fetchDetailImpl }: CapsuleDetailProps = {}): Rea
     <div className="lkd-content">
       <header className="lk-header">
         <h1 className="lk-title">{data.capsule.displayName}</h1>
+        <CapsuleRename
+          capsuleId={capsuleId}
+          displayName={data.capsule.displayName}
+          {...(data.capsule.description !== undefined
+            ? { description: data.capsule.description }
+            : {})}
+          onRenamed={reload}
+        />
         <CapsuleActions
           capsuleId={capsuleId}
           capsuleDisplayName={data.capsule.displayName}

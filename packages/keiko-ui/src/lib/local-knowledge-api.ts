@@ -125,6 +125,61 @@ export async function createCapsule(input: CreateCapsuleInput): Promise<CapsuleD
 }
 
 // ---------------------------------------------------------------------------
+// POST /api/local-knowledge/capsule-sets — Issue #189 Slice 4 "zusammenlegen".
+// Non-destructive logical composition: groups 1..16 existing capsules into a named
+// set by reference (no documents are moved or copied). Returns 201 with the new set.
+// Errors 400 (INVALID_REQUEST) for an empty/oversized member list, unknown capsule
+// ids, or incompatible embedding identities across members.
+// ---------------------------------------------------------------------------
+
+export interface CreateCapsuleSetInput {
+  readonly displayName: string;
+  readonly description?: string;
+  readonly capsuleIds: readonly KnowledgeCapsuleId[];
+}
+
+export interface CapsuleSetDetail {
+  readonly id: CapsuleSetId;
+  readonly displayName: string;
+  readonly description?: string;
+  readonly capsuleIds: readonly KnowledgeCapsuleId[];
+  readonly capsuleCount: number;
+  readonly composedAt: number;
+}
+
+export async function createCapsuleSet(
+  input: CreateCapsuleSetInput,
+): Promise<{ readonly capsuleSet: CapsuleSetDetail }> {
+  return fetchJson<{ readonly capsuleSet: CapsuleSetDetail }>("/api/local-knowledge/capsule-sets", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// PATCH /api/local-knowledge/capsules/:id — Issue #189 Slice 4 "beschriften".
+// Rename a capsule's display name and/or edit its description. At least one field
+// must be present (the BFF rejects an empty patch with 400). Metadata updates are
+// not yet supported and are rejected with a clear 400. Returns the full capsule
+// detail so the caller can refresh in place.
+// ---------------------------------------------------------------------------
+
+export interface RenameCapsulePatch {
+  readonly displayName?: string;
+  readonly description?: string;
+}
+
+export async function renameCapsule(
+  capsuleId: KnowledgeCapsuleId,
+  patch: RenameCapsulePatch,
+): Promise<CapsuleDetail> {
+  return fetchJson<CapsuleDetail>(
+    `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}`,
+    { method: "PATCH", body: JSON.stringify(patch) },
+  );
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/local-knowledge/capsules/:id/index
 // ---------------------------------------------------------------------------
 
