@@ -22,7 +22,10 @@ import { encryptExistingContent } from "./migrate-encrypt.js";
 
 // v2 = encryption-at-rest (ADR-0035). v1 stored content columns in plaintext; v2 seals them via an
 // eager code sweep (no column changes). The bump is one-way: a v2 DB is unreadable by v1 code.
-export const MEMORY_VAULT_SCHEMA_VERSION = 2;
+// v3 = access tracking (#204). Adds the `memory_access` counter table that feeds the decay /
+// reinforcement maintenance cycle. The table holds ONLY counters + timestamps (no memory
+// content), so it stays CLEARTEXT — the cipher is never applied to it.
+export const MEMORY_VAULT_SCHEMA_VERSION = 3;
 
 const ENCRYPTION_VERSION = 2;
 
@@ -111,7 +114,24 @@ CREATE INDEX idx_tombstones_scope ON memory_tombstones(scope_kind, scope_coordin
 CREATE INDEX idx_tombstones_memory_id ON memory_tombstones(memory_id);
 `;
 
-const MIGRATIONS: readonly Migration[] = [{ version: 1, sql: V1_SQL }];
+// v3 access-tracking table. STRICT pins the column types; ON DELETE CASCADE removes the access
+// row when its memory is hard-deleted (FK enforcement is enabled via PRAGMA foreign_keys = ON in
+// db.ts). No content column => no cipher. The index on last_accessed_at supports a future
+// "least-recently-touched" sweep without scanning the whole table.
+const V3_SQL = `
+CREATE TABLE memory_access (
+  memory_id TEXT NOT NULL PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+  last_accessed_at INTEGER NOT NULL,
+  access_count INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
+CREATE INDEX idx_memory_access_last ON memory_access(last_accessed_at);
+`;
+
+const MIGRATIONS: readonly Migration[] = [
+  { version: 1, sql: V1_SQL },
+  { version: 3, sql: V3_SQL },
+];
 
 function currentUserVersion(db: DatabaseSync): number {
   const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
@@ -140,9 +160,15 @@ export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): vo
     }
     if (needsEncryption) {
       // Idempotent: skips values already sealed, so a fresh DB (no rows) and a re-run are no-ops.
+      // The encryption sweep is keyed to ENCRYPTION_VERSION (2) but is NOT a user_version write:
+      // post-v2 migrations (v3+) own the version. Setting the version is deferred to the line below
+      // so encryption never regresses a DB that already applied a later DDL migration.
       encryptExistingContent(db, cipher);
-      setUserVersion(db, ENCRYPTION_VERSION);
     }
+    // Pin the final version to the current schema head once every pending DDL and the encryption
+    // sweep have run. A fresh DB applies v1 + v3 DDL and the encryption sweep, then lands on 3; a
+    // v2 DB applies only the v3 DDL and lands on 3; a v1 DB is encrypted then lands on 3.
+    setUserVersion(db, MEMORY_VAULT_SCHEMA_VERSION);
     db.exec("COMMIT");
   } catch (error) {
     db.exec("ROLLBACK");

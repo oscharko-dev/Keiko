@@ -22,6 +22,7 @@ export { MEMORY_VAULT_SCHEMA_VERSION } from "./schema.js";
 export type {
   DeleteMemoryOptions,
   ListMemoriesOptions,
+  MemoryAccessStat,
   MemoryEmbeddingInput,
   MemoryEmbeddingMetric,
   MemoryEmbeddingRow,

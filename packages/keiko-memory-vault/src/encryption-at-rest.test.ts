@@ -10,7 +10,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MemoryId, MemoryRecord, UserId } from "@oscharko-dev/keiko-contracts/memory";
-import { createMemoryVault } from "./index.js";
+import { createMemoryVault, MEMORY_VAULT_SCHEMA_VERSION } from "./index.js";
 import type { MemoryVaultStore } from "./types.js";
 
 const KEY_A = Buffer.alloc(32, 7);
@@ -143,6 +143,9 @@ function downgradeToLegacyPlaintext(dir: string): void {
     RATIONALE_MARKER,
     "m1",
   );
+  // A genuine v1 (pre-encryption) DB predates the v3 access table; drop it so the reopen applies
+  // the v3 DDL cleanly instead of colliding with an already-present table.
+  db.exec("DROP TABLE IF EXISTS memory_access");
   db.exec("PRAGMA user_version = 1");
   db.close();
 }
@@ -165,8 +168,10 @@ describe("legacy plaintext migration", () => {
     expect(back?.body).toBe(BODY_MARKER);
     expect(back?.tags).toEqual([TAG_MARKER]);
     expect(back?.provenance.captureRationale).toBe(RATIONALE_MARKER);
+    // The eager encryption sweep runs as part of the v1 -> head migration; the DB lands on the
+    // current schema head (access table added), not on the encryption version in isolation.
     const version = readUserVersion(dir);
-    expect(version).toBe(2);
+    expect(version).toBe(MEMORY_VAULT_SCHEMA_VERSION);
     migrated.close();
   });
 

@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chmodIfPresent, openMemoryDatabase, quarantineCorruptDb } from "./db.js";
+import { MEMORY_VAULT_SCHEMA_VERSION } from "./schema.js";
 import { TEST_CIPHER } from "./_support.js";
 
 const cleanups: string[] = [];
@@ -21,7 +22,7 @@ function freshDir(): string {
 }
 
 describe("openMemoryDatabase", () => {
-  it("brings a fresh DB up with WAL mode + FK on + migrated to v2", () => {
+  it("brings a fresh DB up with WAL mode + FK on + migrated to the schema head", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
     const db = openMemoryDatabase(dbPath, TEST_CIPHER);
@@ -30,7 +31,7 @@ describe("openMemoryDatabase", () => {
     const fk = db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number };
     expect(fk.foreign_keys).toBe(1);
     const v = db.prepare("PRAGMA user_version").get() as { user_version: number };
-    expect(v.user_version).toBe(2);
+    expect(v.user_version).toBe(MEMORY_VAULT_SCHEMA_VERSION);
     db.close();
   });
 
@@ -87,9 +88,9 @@ describe("openMemoryDatabase corruption path", () => {
     const dbPath = join(dir, "keiko-memory.db");
     writeFileSync(dbPath, "garbage that is not a sqlite header");
     const db = openMemoryDatabase(dbPath, TEST_CIPHER);
-    // Vault is up: schema applied to v2 + new file exists with the correct user_version.
+    // Vault is up: schema applied to the head + new file exists with the correct user_version.
     const v = db.prepare("PRAGMA user_version").get() as { user_version: number };
-    expect(v.user_version).toBe(2);
+    expect(v.user_version).toBe(MEMORY_VAULT_SCHEMA_VERSION);
     db.close();
     expect(readdirSync(dir).some((e) => e.startsWith("keiko-memory.db.corrupt."))).toBe(true);
   });

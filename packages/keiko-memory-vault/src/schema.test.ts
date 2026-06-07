@@ -38,7 +38,33 @@ describe("runMigrations", () => {
     db.close();
   });
 
-  it("creates all four tables", () => {
+  it("lands a fresh DB on the current schema head even though encryption keys to v2", () => {
+    // Regression guard: the encryption sweep is keyed to ENCRYPTION_VERSION (2) but must NOT pin
+    // user_version to 2 — the v3 DDL migration owns the head. A fresh DB must end at 3, not 2.
+    const db = openMemDb();
+    runMigrations(db, TEST_CIPHER);
+    expect(userVersion(db)).toBe(3);
+    db.close();
+  });
+
+  it("upgrades a v2 DB forward to v3 by applying only the v3 DDL", () => {
+    const db = openMemDb();
+    runMigrations(db, TEST_CIPHER);
+    // Simulate a genuine pre-v3 (encryption-era) database: the access table did not exist and the
+    // version sat at the encryption head. Dropping the table + regressing the version reproduces
+    // the on-disk shape a v2 DB actually has before this migration runs.
+    db.exec("DROP TABLE memory_access");
+    db.exec("PRAGMA user_version = 2");
+    runMigrations(db, TEST_CIPHER);
+    expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
+    const hasAccess = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'memory_access'")
+      .get() as { name?: string } | undefined;
+    expect(hasAccess?.name).toBe("memory_access");
+    db.close();
+  });
+
+  it("creates all five tables", () => {
     const db = openMemDb();
     runMigrations(db, TEST_CIPHER);
     const tables = db
@@ -46,6 +72,7 @@ describe("runMigrations", () => {
       .all() as unknown as readonly { name: string }[];
     expect(tables.map((t) => t.name)).toEqual([
       "memories",
+      "memory_access",
       "memory_edges",
       "memory_embeddings",
       "memory_tombstones",
@@ -70,6 +97,7 @@ describe("runMigrations", () => {
       "idx_memories_scope_type",
       "idx_memories_updated_at",
       "idx_memories_valid_until",
+      "idx_memory_access_last",
       "idx_tombstones_memory_id",
       "idx_tombstones_scope",
     ]);

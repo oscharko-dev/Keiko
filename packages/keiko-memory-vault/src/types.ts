@@ -13,6 +13,9 @@ import type {
   MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryContentCipher } from "./cipher.js";
+import type { MemoryAccessStat } from "./access.js";
+
+export type { MemoryAccessStat } from "./access.js";
 
 export type MemoryEmbeddingMetric = "cosine" | "euclidean" | "dot";
 
@@ -109,6 +112,11 @@ export interface MemoryVaultStore {
   readonly upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput) => void;
   readonly getEmbedding: (memoryId: MemoryId) => MemoryEmbeddingRow | undefined;
   readonly listTombstonesByScope: (scope: MemoryScope) => readonly MemoryTombstone[];
+  // Access tracking (#204). `recordAccess` upserts an insert-or-increment counter for each id
+  // (a recall reflex from the retrieval surface); `getAccessStats` reads the counters back for the
+  // maintenance planner. Both operate on the cleartext `memory_access` table — no content.
+  readonly recordAccess: (ids: readonly MemoryId[], nowMs: number) => void;
+  readonly getAccessStats: (ids?: readonly MemoryId[]) => ReadonlyMap<MemoryId, MemoryAccessStat>;
   readonly close: () => void;
 }
 
