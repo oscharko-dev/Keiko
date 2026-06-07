@@ -30,7 +30,7 @@ import type {
 
 import { assembleContextBlock } from "./context.js";
 import { RetrievalError } from "./errors.js";
-import { rankMemories } from "./ranking.js";
+import { rankMemories, type RankMemoriesQuery } from "./ranking.js";
 import { isMemorySuppressed } from "./suppression.js";
 import {
   DEFAULT_BUDGET_TOKENS,
@@ -52,10 +52,7 @@ interface ResolvedRequest {
   readonly staleConfidenceThreshold: number;
 }
 
-function emptyResult(
-  request: MemoryRetrievalRequest,
-  budgetTokens: number,
-): MemoryRetrievalResult {
+function emptyResult(request: MemoryRetrievalRequest, budgetTokens: number): MemoryRetrievalResult {
   return {
     contextBlock: {
       text: "",
@@ -79,6 +76,7 @@ function resolveWeights(request: MemoryRetrievalRequest): RankingWeights {
     pinned: request.pinnedBoost ?? DEFAULT_RANKING_WEIGHTS.pinned,
     correction: request.correctionBoost ?? DEFAULT_RANKING_WEIGHTS.correction,
     graph: request.graphProximityBoost ?? DEFAULT_RANKING_WEIGHTS.graph,
+    semantic: request.semanticWeight ?? DEFAULT_RANKING_WEIGHTS.semantic,
   };
 }
 
@@ -109,7 +107,11 @@ function assertNonNegativeBudget(budgetTokens: number, maxIncluded: number): voi
 }
 
 function assertValidThreshold(staleConfidenceThreshold: number): void {
-  if (Number.isFinite(staleConfidenceThreshold) && staleConfidenceThreshold >= 0 && staleConfidenceThreshold <= 1) {
+  if (
+    Number.isFinite(staleConfidenceThreshold) &&
+    staleConfidenceThreshold >= 0 &&
+    staleConfidenceThreshold <= 1
+  ) {
     return;
   }
   throw new RetrievalError(
@@ -237,10 +239,12 @@ export function retrieveMemoryContext(
   const deduped = dedupeById(fetched);
   const filtered = applyFilters(deduped, request, resolved);
   const edgesByMemory = buildEdgesIndex(port, filtered.candidates);
-  const rankQuery =
-    request.queryText === undefined
-      ? { nowMs: request.nowMs, weights: resolved.weights }
-      : { queryText: request.queryText, nowMs: request.nowMs, weights: resolved.weights };
+  const rankQuery: RankMemoriesQuery = {
+    nowMs: request.nowMs,
+    weights: resolved.weights,
+    ...(request.queryText === undefined ? {} : { queryText: request.queryText }),
+    ...(request.semanticById === undefined ? {} : { semanticById: request.semanticById }),
+  };
   const ranked = rankMemories(
     filtered.candidates,
     rankQuery,
