@@ -987,6 +987,85 @@ describe("PATCH /api/chats", () => {
     expect(fetched?.connectedScope).toBeUndefined();
   });
 
+  // Epic #189 — multi-source localKnowledgeScopes (connectors). Shape-only validation at the BFF
+  // (capsule existence is checked in the grounded path); no filesystem roots involved.
+  it("sets a valid 2-connector localKnowledgeScopes list (list + back-compat single)", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        localKnowledgeScopes: [
+          { kind: "capsule", capsuleId: "cap-alpha", connectedAtMs: 10 },
+          { kind: "capsule-set", capsuleSetId: "set-beta", connectedAtMs: 11 },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chat: {
+        localKnowledgeScopes: { kind: string }[];
+        localKnowledgeScope: { kind: string } | undefined;
+      };
+    };
+    expect(body.chat.localKnowledgeScopes).toHaveLength(2);
+    expect(body.chat.localKnowledgeScopes[0]?.kind).toBe("capsule");
+    expect(body.chat.localKnowledgeScopes[1]?.kind).toBe("capsule-set");
+    expect(body.chat.localKnowledgeScope?.kind).toBe("capsule");
+  });
+
+  it("rejects a localKnowledgeScopes list exceeding MAX_LOCAL_KNOWLEDGE_SOURCES (17)", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const tooMany = Array.from({ length: 17 }, (_unused, i) => ({
+      kind: "capsule" as const,
+      capsuleId: `cap-${String(i)}`,
+      connectedAtMs: 1,
+    }));
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ localKnowledgeScopes: tooMany }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a localKnowledgeScopes entry with an empty capsule id", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        localKnowledgeScopes: [{ kind: "capsule", capsuleId: "", connectedAtMs: 1 }],
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(store.findChatById(c.id)?.localKnowledgeScopes ?? []).toHaveLength(0);
+  });
+
+  it("clears all connectors when localKnowledgeScopes is patched with null", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        localKnowledgeScopes: [{ kind: "capsule", capsuleId: "cap-x", connectedAtMs: 1 }],
+      }),
+    });
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ localKnowledgeScopes: null }),
+    });
+    expect(res.status).toBe(200);
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.localKnowledgeScopes ?? []).toHaveLength(0);
+    expect(fetched?.localKnowledgeScope).toBeUndefined();
+  });
+
   it("rejects a connectedScopes list with an empty-string root entry", async () => {
     store.createProject(projDir);
     const c = store.createChat(projDir, "t", "m");

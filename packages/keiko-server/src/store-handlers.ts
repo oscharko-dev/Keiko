@@ -39,7 +39,10 @@ import {
   isValidScopePath,
   type SelectedScopeKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { MAX_CONNECTED_SOURCES } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  MAX_CONNECTED_SOURCES,
+  MAX_LOCAL_KNOWLEDGE_SOURCES,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 
 const MAX_STORE_BODY_BYTES = 256_000;
 const SELECTED_SCOPE_KIND_SET: ReadonlySet<SelectedScopeKind> = new Set(SELECTED_SCOPE_KINDS);
@@ -660,13 +663,10 @@ function parseCapsuleSetLocalKnowledgeScope(
   };
 }
 
-function optionalLocalKnowledgeScope(
-  body: Record<string, unknown>,
-): ChatLocalKnowledgeScope | null | undefined {
-  if (!("localKnowledgeScope" in body)) return undefined;
-  const raw = body.localKnowledgeScope;
-  if (raw === null) return null;
-  if (typeof raw !== "object" || Array.isArray(raw)) {
+// Shared per-connector shape validator. Used by both the single localKnowledgeScope field and each
+// entry of the Epic #189 localKnowledgeScopes list, so the two surfaces never drift.
+function parseLocalKnowledgeScopeObject(raw: unknown): ChatLocalKnowledgeScope {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new InvalidRequest('Field "localKnowledgeScope" must be an object or null.');
   }
   const scope = raw as Record<string, unknown>;
@@ -678,6 +678,36 @@ function optionalLocalKnowledgeScope(
     return parseCapsuleSetLocalKnowledgeScope(scope, connectedAtMs);
   }
   throw new InvalidRequest('Field "localKnowledgeScope.kind" must be "capsule" or "capsule-set".');
+}
+
+function optionalLocalKnowledgeScope(
+  body: Record<string, unknown>,
+): ChatLocalKnowledgeScope | null | undefined {
+  if (!("localKnowledgeScope" in body)) return undefined;
+  const raw = body.localKnowledgeScope;
+  if (raw === null) return null;
+  return parseLocalKnowledgeScopeObject(raw);
+}
+
+// Epic #189 — parse the multi-source connector list (capsules/capsule-sets). undefined → absent;
+// null → clear all; array → fully validated list bounded by MAX_LOCAL_KNOWLEDGE_SOURCES. Each entry
+// runs the same shape validator as the single field. Capsule existence is checked in the grounded
+// path, not here (shape-only, like optionalConnectedScopes).
+function optionalLocalKnowledgeScopes(
+  body: Record<string, unknown>,
+): readonly ChatLocalKnowledgeScope[] | null | undefined {
+  if (!("localKnowledgeScopes" in body)) return undefined;
+  const raw = body.localKnowledgeScopes;
+  if (raw === null) return null;
+  if (!Array.isArray(raw)) {
+    throw new InvalidRequest('Field "localKnowledgeScopes" must be an array or null.');
+  }
+  if (raw.length > MAX_LOCAL_KNOWLEDGE_SOURCES) {
+    throw new InvalidRequest(
+      `Field "localKnowledgeScopes" must contain at most ${String(MAX_LOCAL_KNOWLEDGE_SOURCES)} sources.`,
+    );
+  }
+  return raw.map((entry) => parseLocalKnowledgeScopeObject(entry));
 }
 
 // Issue #184 — three return states: undefined → field absent (leave unchanged); null →
@@ -727,21 +757,31 @@ function optionalConnectedScopes(
   return raw.map((entry) => parseConnectedScopeObject(entry));
 }
 
+// Epic #189/#532 — the four grounding-source patch fields (connected folders + local-knowledge
+// connectors, each single + plural). Extracted so buildChatPatch stays under the complexity gate.
+function groundingScopePatchFields(body: Record<string, unknown>): Partial<UpdateChatPatch> {
+  const connectedScope = optionalConnectedScope(body);
+  const connectedScopes = optionalConnectedScopes(body);
+  const localKnowledgeScope = optionalLocalKnowledgeScope(body);
+  const localKnowledgeScopes = optionalLocalKnowledgeScopes(body);
+  return {
+    ...(connectedScope !== undefined ? { connectedScope } : {}),
+    ...(connectedScopes !== undefined ? { connectedScopes } : {}),
+    ...(localKnowledgeScope !== undefined ? { localKnowledgeScope } : {}),
+    ...(localKnowledgeScopes !== undefined ? { localKnowledgeScopes } : {}),
+  };
+}
+
 function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): UpdateChatPatch {
   const title = optionalString(body, "title");
   const selectedModel = optionalChatModelId(deps, body, "selectedModel");
   const branchLabel = optionalString(body, "branchLabel");
   const statusRaw = body.status;
-  const connectedScope = optionalConnectedScope(body);
-  const connectedScopes = optionalConnectedScopes(body);
-  const localKnowledgeScope = optionalLocalKnowledgeScope(body);
   const patch: UpdateChatPatch = {
     ...(title !== undefined ? { title } : {}),
     ...(selectedModel !== undefined ? { selectedModel } : {}),
     ...(branchLabel !== undefined ? { branchLabel } : {}),
-    ...(connectedScope !== undefined ? { connectedScope } : {}),
-    ...(connectedScopes !== undefined ? { connectedScopes } : {}),
-    ...(localKnowledgeScope !== undefined ? { localKnowledgeScope } : {}),
+    ...groundingScopePatchFields(body),
   };
   if (statusRaw === undefined) return patch;
   if (statusRaw !== "open" && statusRaw !== "closed") {
@@ -763,8 +803,15 @@ function scopesRequiringAccessValidation(patch: UpdateChatPatch): readonly ChatC
   return [];
 }
 
-function patchTouchesConnectedScope(patch: UpdateChatPatch): boolean {
-  return patch.connectedScopes !== undefined || patch.connectedScope !== undefined;
+// Epic #189 — the grounded index is invalidated when ANY grounding source changes: a connected
+// folder scope (#532) OR a local-knowledge connector scope. The hybrid path reads both.
+function patchTouchesGroundingScope(patch: UpdateChatPatch): boolean {
+  return (
+    patch.connectedScopes !== undefined ||
+    patch.connectedScope !== undefined ||
+    patch.localKnowledgeScopes !== undefined ||
+    patch.localKnowledgeScope !== undefined
+  );
 }
 
 export async function handleUpdateChat(
@@ -784,7 +831,7 @@ export async function handleUpdateChat(
       }
     }
     const chat = deps.store.updateChat(id, patch);
-    if (patchTouchesConnectedScope(patch) || patch.status === "closed") {
+    if (patchTouchesGroundingScope(patch) || patch.status === "closed") {
       clearGroundedContextIndexesForConversation(id);
     }
     return { status: 200, body: { chat } };
