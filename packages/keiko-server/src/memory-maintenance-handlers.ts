@@ -35,12 +35,13 @@ import type {
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
+import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 
-interface MaintenanceCounts {
+export interface MaintenanceCounts {
   promoted: number;
   reinforced: number;
   decayed: number;
@@ -81,12 +82,13 @@ function resolveVault(deps: UiHandlerDeps): MemoryVaultStore | RouteResult {
 }
 
 function emitAudit(
-  deps: UiHandlerDeps,
+  evidenceStore: EvidenceStore | undefined,
   kind: MemoryAuditEvent["kind"],
   surface: MemoryAuditInitiatorSurface,
   summary: string,
   extra: Record<string, unknown>,
 ): void {
+  if (evidenceStore === undefined) return;
   const event = {
     schemaVersion: "1",
     kind,
@@ -96,7 +98,7 @@ function emitAudit(
     summary,
     ...extra,
   } as MemoryAuditEvent;
-  recordMemoryAudit({ evidenceStore: deps.evidenceStore }, event);
+  recordMemoryAudit({ evidenceStore }, event);
 }
 
 // Patch a record's confidence by rebuilding the provenance envelope (confidence lives there).
@@ -134,7 +136,7 @@ function pairwiseSupersede(action: ProposedAction | undefined): SupersedeAction 
 
 function applySupersessions(
   vault: MemoryVaultStore,
-  deps: UiHandlerDeps,
+  evidenceStore: EvidenceStore | undefined,
   reviewItems: readonly ReviewItem[],
   byId: Map<MemoryId, MemoryRecord>,
 ): number {
@@ -146,18 +148,18 @@ function applySupersessions(
     if (loser?.status !== "accepted") continue;
     vault.updateMemory(action.older, { status: "superseded" }, Date.now());
     superseded += 1;
-    emitSupersedeAudit(deps, action, loser.scope);
+    emitSupersedeAudit(evidenceStore, action, loser.scope);
   }
   return superseded;
 }
 
 function emitSupersedeAudit(
-  deps: UiHandlerDeps,
+  evidenceStore: EvidenceStore | undefined,
   action: SupersedeAction,
   scope: MemoryScope,
 ): void {
   emitAudit(
-    deps,
+    evidenceStore,
     "memory:superseded",
     "consolidation",
     "Auto-superseded an older conflicting memory.",
@@ -171,7 +173,7 @@ function emitSupersedeAudit(
 
 function runConsolidationPass(
   vault: MemoryVaultStore,
-  deps: UiHandlerDeps,
+  evidenceStore: EvidenceStore | undefined,
   records: readonly MemoryRecord[],
   counts: MaintenanceCounts,
 ): void {
@@ -182,27 +184,32 @@ function runConsolidationPass(
   });
   counts.edgesCreated += applyEdges(vault, result.edgesProposed);
   counts.clustersInspected += result.clustersInspected;
-  counts.superseded += applySupersessions(vault, deps, result.reviewItems, recordsById(records));
+  counts.superseded += applySupersessions(
+    vault,
+    evidenceStore,
+    result.reviewItems,
+    recordsById(records),
+  );
 }
 
 // ─── Plan application ──────────────────────────────────────────────────────────
 function applyPlan(
   vault: MemoryVaultStore,
-  deps: UiHandlerDeps,
+  evidenceStore: EvidenceStore | undefined,
   plan: MemoryMaintenancePlan,
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceCounts,
 ): void {
-  applyPromotions(vault, deps, plan.promote, byId, counts);
+  applyPromotions(vault, evidenceStore, plan.promote, byId, counts);
   applyConfidencePatches(vault, plan.reinforce, byId, (n) => (counts.reinforced += n));
   applyConfidencePatches(vault, plan.decay, byId, (n) => (counts.decayed += n));
-  applyArchives(vault, deps, plan.archive, byId, counts);
-  applyForgets(vault, deps, plan.forget, byId, counts);
+  applyArchives(vault, evidenceStore, plan.archive, byId, counts);
+  applyForgets(vault, evidenceStore, plan.forget, byId, counts);
 }
 
 function applyPromotions(
   vault: MemoryVaultStore,
-  deps: UiHandlerDeps,
+  evidenceStore: EvidenceStore | undefined,
   ids: readonly MemoryId[],
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceCounts,
@@ -212,10 +219,13 @@ function applyPromotions(
     if (record === undefined) continue;
     vault.updateMemory(id, { status: "accepted" }, Date.now());
     counts.promoted += 1;
-    emitAudit(deps, "memory:accepted", "memory-center", "Promoted a strong proposed memory.", {
-      memoryId: id,
-      scope: record.scope,
-    });
+    emitAudit(
+      evidenceStore,
+      "memory:accepted",
+      "memory-center",
+      "Promoted a strong proposed memory.",
+      { memoryId: id, scope: record.scope },
+    );
   }
 }
 
@@ -235,7 +245,7 @@ function applyConfidencePatches(
 
 function applyArchives(
   vault: MemoryVaultStore,
-  deps: UiHandlerDeps,
+  evidenceStore: EvidenceStore | undefined,
   ids: readonly MemoryId[],
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceCounts,
@@ -245,7 +255,7 @@ function applyArchives(
     if (record === undefined) continue;
     vault.updateMemory(id, { status: "archived" }, Date.now());
     counts.archived += 1;
-    emitAudit(deps, "memory:archived", "retention", "Archived a faded memory.", {
+    emitAudit(evidenceStore, "memory:archived", "retention", "Archived a faded memory.", {
       memoryId: id,
       scope: record.scope,
     });
@@ -254,7 +264,7 @@ function applyArchives(
 
 function applyForgets(
   vault: MemoryVaultStore,
-  deps: UiHandlerDeps,
+  evidenceStore: EvidenceStore | undefined,
   forgets: readonly { id: MemoryId; reason: string }[],
   byId: Map<MemoryId, MemoryRecord>,
   counts: MaintenanceCounts,
@@ -269,11 +279,17 @@ function applyForgets(
       nowMs: Date.now(),
     });
     counts.forgotten += 1;
-    emitAudit(deps, "memory:forgotten", "retention", `Forgot a memory (${forget.reason}).`, {
-      memoryId: forget.id,
-      scope: record.scope,
-      tombstoned: true,
-    });
+    emitAudit(
+      evidenceStore,
+      "memory:forgotten",
+      "retention",
+      `Forgot a memory (${forget.reason}).`,
+      {
+        memoryId: forget.id,
+        scope: record.scope,
+        tombstoned: true,
+      },
+    );
   }
 }
 
@@ -281,18 +297,24 @@ function reloadById(vault: MemoryVaultStore): Map<MemoryId, MemoryRecord> {
   return recordsById(vault.listMemories({ includeExpired: true }));
 }
 
-function runMaintenance(vault: MemoryVaultStore, deps: UiHandlerDeps): MaintenanceCounts {
+// Reusable maintenance core. Drives consolidation + the governance plan against a vault, emitting
+// audit events when an evidence store is supplied. Exported so both the BFF route handler and the
+// `keiko memory maintain` CLI run the SAME pass — no duplicated orchestration.
+export function runMemoryMaintenance(
+  vault: MemoryVaultStore,
+  evidenceStore?: EvidenceStore,
+): MaintenanceCounts {
   const counts = emptyCounts();
   const accepted = vault
     .listMemories({ includeExpired: true })
     .filter((record) => record.status === "accepted");
-  runConsolidationPass(vault, deps, accepted, counts);
+  runConsolidationPass(vault, evidenceStore, accepted, counts);
   // Reload after supersession/edge writes so the plan sees the post-consolidation statuses; the
   // access stats feed the strength model.
   const all = vault.listMemories({ includeExpired: true });
   const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
   const plan = planMemoryMaintenance(all, accessStats, { nowMs: Date.now() });
-  applyPlan(vault, deps, plan, reloadById(vault), counts);
+  applyPlan(vault, evidenceStore, plan, reloadById(vault), counts);
   return counts;
 }
 
@@ -301,7 +323,7 @@ export function handleRunMaintenance(ctx: RouteContext, deps: UiHandlerDeps): Ro
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
   try {
-    const counts = runMaintenance(vault, deps);
+    const counts = runMemoryMaintenance(vault, deps.evidenceStore);
     return { status: 200, body: counts };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Memory maintenance failed.";

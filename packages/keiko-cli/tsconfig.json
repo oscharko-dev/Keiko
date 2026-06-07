@@ -25,6 +25,7 @@
     { "path": "../keiko-harness" },
     { "path": "../keiko-sdk" },
     { "path": "../keiko-workflows" },
-    { "path": "../keiko-server" }
+    { "path": "../keiko-server" },
+    { "path": "../keiko-memory-vault" }
   ]
 }
