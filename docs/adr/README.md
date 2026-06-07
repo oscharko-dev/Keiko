@@ -27,6 +27,7 @@ This page keeps only the product decisions needed by reviewers. It is not an imp
 | Workspace commands, events, selection, undo/redo | [ADR-0028](ADR-0028-workspace-commands-undo.md) defines the typed `Command` record contract, the conflict-at-startup keyboard substrate, and the typed `Action` discriminated union that compile-time refuses undo of evidence / patches / verification / model-call records. |
 | Workspace object registry and extension contract | [ADR-0029](ADR-0029-workspace-object-registry.md) keeps `WindowsRegistry.ts` as the taxonomy seam, adds a `WIN_META` sidecar table typed by `WorkspaceDescriptorMeta`, and adds a metadata validator that rejects inconsistent authority / trust / persistence declarations. |
 | Workspace security, evidence, and trust boundaries | [ADR-0030](ADR-0030-workspace-security-evidence.md) records the current workspace trust-boundary rules and durable-state restrictions. |
+| Memory vault encryption-at-rest | [ADR-0035](ADR-0035-memory-vault-encryption-at-rest.md) seals local memory CONTENT columns with AES-256-GCM (zero new deps), keeps index/scope metadata cleartext, and resolves the key via `KEIKO_MEMORY_KEY` > macOS Keychain > `0600` keyfile. |
 
 ## Historical Records
 
