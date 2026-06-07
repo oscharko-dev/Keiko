@@ -57,6 +57,7 @@ import {
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { captureSalientFromTurn } from "./memory-salience.js";
 
 const DEFAULT_CHAT_MODEL = "example-chat-model";
 const DEFAULT_CHAT_TITLE = "New chat";
@@ -739,6 +740,42 @@ function captureMemoryActions(
   return actions;
 }
 
+// Merges the regex intent capture (synchronous) with model-assisted salience capture (async).
+// Regex runs FIRST so its inserts are part of the vault state the salience extractor reads for
+// dedup. Salience reuses the same `memory.enabled` gate; when memory is off, both paths no-op.
+async function collectMemoryActions(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  memoryContext: ConversationMemoryRuntimeContext | undefined,
+  modelId: string,
+  assistantText: string,
+): Promise<readonly ConversationMemoryActionWire[]> {
+  if (memoryContext === undefined) {
+    return [];
+  }
+  const regexActions = captureMemoryActions(request, deps, memoryContext);
+  const salientActions = await captureSalientFromTurn(
+    deps,
+    request,
+    memoryContext,
+    modelId,
+    assistantText,
+  );
+  return [...regexActions, ...salientActions];
+}
+
+// On the first turn of a freshly-created chat (still bearing the default title), adopt the user's
+// message prefix as the title; otherwise just pin the selected model.
+function buildChatPatch(
+  chat: Chat,
+  request: SendDesktopChatRequest,
+  modelId: string,
+): { selectedModel: string; title?: string } {
+  return chat.title === DEFAULT_CHAT_TITLE
+    ? { selectedModel: modelId, title: request.content.slice(0, 60) }
+    : { selectedModel: modelId };
+}
+
 async function persistModelChatTurn(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -772,12 +809,14 @@ async function persistModelChatTurn(
     // grounded-QA path (grounded-qa.ts line 549) which already applies deps.redactor here.
     const redactedContent = deps.redactor(response.content) as string;
     const assistantMessage = createAssistantMessage(deps, request, redactedContent);
-    const memoryActions =
-      memoryContext === undefined ? [] : captureMemoryActions(request, deps, memoryContext);
-    const chatPatch =
-      chat.title === DEFAULT_CHAT_TITLE
-        ? { selectedModel: modelId, title: request.content.slice(0, 60) }
-        : { selectedModel: modelId };
+    const memoryActions = await collectMemoryActions(
+      deps,
+      request,
+      memoryContext,
+      modelId,
+      redactedContent,
+    );
+    const chatPatch = buildChatPatch(chat, request, modelId);
     return {
       status: 200,
       body: {

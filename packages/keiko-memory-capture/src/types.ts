@@ -105,3 +105,30 @@ export type CaptureOutcome =
     }
   | { readonly kind: "supersession"; readonly operation: MemorySupersession }
   | { readonly kind: "rejected"; readonly reason: RejectionReason };
+
+// ─── Salience capture (model-assisted) ───────────────────────────────────────
+// The scope-kind hints the salience model is allowed to express. A narrower subset of
+// MemoryScopeKind: salience never infers `workflow` or `global` scope from free text — a
+// conversation fact is personal (`user`) or tied to the current project/workspace.
+export type MemoryScopeKindHint = Extract<MemoryScopeKind, "user" | "project" | "workspace">;
+
+// Input for `extractSalientMemories`. `existingBodies` are the bodies already stored for the
+// conversation's scopes (used for dedup); `assistantText` is CONTEXT ONLY — the extractor never
+// stores the assistant's own claims as user facts.
+export interface SalienceInput {
+  readonly userText: string;
+  readonly assistantText?: string;
+  readonly existingBodies: readonly string[];
+  readonly context: CaptureContext;
+  readonly policy?: CapturePolicyOptions;
+}
+
+// Dependencies for `extractSalientMemories`. `callModel(system, user)` is the only IO boundary.
+// The clock/id factories are deps-authoritative: they overlay the caller's CaptureContext so the
+// resulting envelopes are deterministic under test (decision 3).
+export interface SalienceDeps {
+  readonly callModel: (system: string, user: string) => Promise<string>;
+  readonly now: () => number;
+  readonly newMemoryId: () => MemoryId;
+  readonly newProposalId: () => MemoryProposalId;
+}
