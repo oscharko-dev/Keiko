@@ -2,11 +2,13 @@
 
 ## Status
 
-Proposed (Epic #189 ⨯ #532 integration, 2026-06-07). Locks the contract for grounding a single
-Conversation Center chat against a **mix** of connected folders (lexical, Epic #177/#532) and Local
-Knowledge connectors (vector, Epic #189) in one merged answer. [ADR-0022](ADR-0022-connected-context-privacy.md) and the #532 multi-source
-work cover the folder side; Epic #189's ADRs cover the connector/vector side. This ADR adds the
-*unification* layer only — it does not change either retrieval engine.
+Accepted (Epic #189 ⨯ #532 integration, 2026-06-07) — implemented across Slices 1–4 on the
+`feat/189-lk-multisource-integration` branch, pending the integration PR. Locks the contract for
+grounding a single Conversation Center chat against a **mix** of connected folders (lexical, Epic
+#177/#532) and Local Knowledge connectors (vector, Epic #189) in one merged answer.
+[ADR-0022](ADR-0022-connected-context-privacy.md) and the #532 multi-source work cover the folder
+side; Epic #189's ADRs cover the connector/vector side. This ADR adds the *unification* layer only —
+it does not change either retrieval engine.
 
 ## Context
 
@@ -81,6 +83,34 @@ rejected (see Alternatives).
 - Per-source evidence is persisted per root/connector for an honest audit trail.
 - Vector retrieval remains brute-force (O(N·D)); scale to very large manuals is validated empirically
   in the integration's final slice, with an ANN seam added only if measurement requires it.
+
+## Implementation status
+
+Delivered on the integration branch:
+
+- **Slices 1–3** — plural `localKnowledgeScopes`, the `hybrid` answer + dispatcher, the BFF
+  validation, the connector workspace window, relationship-edge binding, and mixed source pills.
+- **Connect-source** — a connector capsule can be fed a machine folder
+  (`POST /capsules/:id/connection`) with the #532 deny-list + realpath containment, then indexed.
+- **Slice 4 (management)** — non-destructive capsule-set composition (`POST /capsule-sets`,
+  *zusammenlegen*) and capsule rename (`PATCH /capsules/:id`, *beschriften*), each with a UI
+  surface (Combine-capsules dialog, inline rename). Capsule `metadata` is contract-defined but its
+  persistence is deferred behind a schema migration; the BFF rejects metadata patches with a clear
+  400 rather than silently dropping them.
+
+Robustness decisions made during implementation (kept here so the ADR stays the source of truth):
+
+- **Transient-embedding retry.** Indexing retries TRANSIENT embedding failures (rate-limit, timeout,
+  transport) with bounded exponential backoff so one flaky response does not fail a whole document;
+  permanent failures (auth, unsupported-model, malformed body) and caller cancellation are not
+  retried. This is the resilience lever; the concurrency cap stays at the #196-documented ≤ 4.
+- **Citation resilience.** A grounded connector answer that used references but emitted no parseable
+  `[n]` markers still attaches its references as citations (rather than reporting "no evidence"), and
+  the marker parser also accepts CJK lenticular `【n】` and fullwidth `［n］` brackets some models emit.
+- **Boot-safe prompt sharing.** The shared `GROUNDED_SYSTEM_PROMPT` lives in a leaf module
+  (`grounded-prompt.ts`) so the hybrid/multi-source modules import it without a circular dependency;
+  the earlier cycle caused a top-level temporal-dead-zone crash that unit tests (vitest) did not
+  reproduce but the real Node ESM server boot did — now guarded by a native-boot smoke test.
 
 ## Alternatives considered
 
