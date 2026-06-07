@@ -117,7 +117,7 @@ Operationalized by ADR-0030. Five rules:
 2. **No escape of workspace path containment.** Any UI surface that names a file path passes the path through `keiko-workspace` validation. The validator's `realpath`-containment seam is the same one that gates server-side reads/writes.
 3. **No arbitrary shell commands.** Any UI surface that submits a command executes via `keiko-tools` terminal-policy allow-list. UI must not synthesize an `exec` call directly.
 4. **No undo rewrite of evidence/patches/verification/model-calls.** Enforced by Action types having no constructor for those classes.
-5. **No raw secrets in UI durable state.** The current implementation still uses browser-local layout persistence in `useWorkspace`; Epic #518 did not add a new persistence backend. The descriptor validator narrows declared boundaries, but secret-bearing durable-state hardening remains a separate concern from the metadata validator itself.
+5. **No raw secrets in UI durable state.** The current implementation still uses browser-local layout persistence in `useWorkspace`; Epic #518 did not add a new persistence backend. The descriptor validator narrows declared boundaries, and the browser-local snapshot sanitizer enforces that transient windows, server-owned `durable.config` payloads, unsafe references, and secret-shaped config strings are not durably persisted through the workspace layout snapshot.
 
 ## Workspace substrate decision (ADR-0026)
 

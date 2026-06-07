@@ -54,7 +54,7 @@ Workspace objects often reference state owned by another class (e.g., a `review`
 - No new persistence store is added by Epic #518.
 - The descriptor `persistence` field documents how a future object type (agent, MCP tool, connector, document, knowledge object) is stored. Future objects extend through the registry without changing this ADR.
 - The undo stack's compile-time refusal is the load-bearing guarantee that UI-side undo never rewrites evidence/patches/verification/model-call records.
-- The current workspace shell does not yet enforce descriptor-aware persistence at write time; `WIN_META` remains the governance classification while `useWorkspace` continues to own the actual browser-local layout snapshot.
+- The current workspace shell enforces descriptor-aware browser-local persistence at write and restore time in `workspace-persistence.ts`: transient windows are omitted, `durable.config` payloads are stripped, reference classes persist declared metadata only, stale connections are pruned, and secret-shaped config strings are redacted or omitted before `useWorkspace` writes the layout snapshot to `localStorage`.
 
 ## Alternatives considered
 
@@ -70,6 +70,7 @@ Workspace objects often reference state owned by another class (e.g., a `review`
 - ADR-0030 — Workspace security, evidence, and trust boundaries.
 - Issue #62 — possible future server-owned UI persistence seam (not the current workspace-shell implementation on `dev`; no dedicated ADR file exists for this seam today).
 - Issue #525 — Architecture blueprint.
+- Issue #600 — Browser-local workspace snapshot secret hardening.
 
 ## Date
 

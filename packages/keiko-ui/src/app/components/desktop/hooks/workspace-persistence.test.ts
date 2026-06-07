@@ -38,7 +38,7 @@ describe("workspace-persistence", () => {
         type: "review",
         cfg: {
           runId: "run-123",
-          rawEvidence: "{\"secret\":\"must-not-persist\"}",
+          rawEvidence: '{"secret":"must-not-persist"}',
         },
       }),
     ]);
@@ -61,6 +61,66 @@ describe("workspace-persistence", () => {
 
     expect(persisted).toHaveLength(1);
     expect(persisted[0]?.cfg).toEqual({});
+  });
+
+  it("preserves allowed non-secret config references in the browser-local snapshot", () => {
+    const persisted = sanitizePersistedWindows([
+      win({ id: "chat-1", type: "chat", cfg: { title: "Sprint triage" } }),
+      win({ id: "files-1", type: "files", cfg: { root: "/Users/alice/work/keiko" } }),
+      win({ id: "editor-1", type: "editor", cfg: { file: "packages/keiko-ui/src/index.ts" } }),
+      win({ id: "editor-2", type: "editor", cfg: { file: "./.env.example" } }),
+      win({ id: "review-1", type: "review", cfg: { runId: "run-2026-06-07-001" } }),
+    ]);
+
+    expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
+      ["chat-1", { title: "Sprint triage" }],
+      ["files-1", { root: "/Users/alice/work/keiko" }],
+      ["editor-1", { file: "packages/keiko-ui/src/index.ts" }],
+      ["editor-2", { file: "./.env.example" }],
+      ["review-1", { runId: "run-2026-06-07-001" }],
+    ]);
+  });
+
+  it("redacts or drops secret-shaped config values before browser-local persistence", () => {
+    const openAiKey = `sk-${"a".repeat(24)}`;
+    const gitHubToken = `ghp_${"A".repeat(36)}`;
+    const slackToken = `xoxb-${"1".repeat(12)}-${"a".repeat(18)}`;
+    const bearerToken = `Bearer ${"z".repeat(16)}`;
+    const persisted = sanitizePersistedWindows([
+      win({ id: "chat-1", type: "chat", cfg: { title: bearerToken } }),
+      win({
+        id: "files-1",
+        type: "files",
+        cfg: { root: "https://user:pass@example.test/repo.git" },
+      }),
+      win({ id: "editor-1", type: "editor", cfg: { file: "./.env" } }),
+      win({ id: "review-1", type: "review", cfg: { runId: gitHubToken } }),
+      win({ id: "review-2", type: "review", cfg: { runId: slackToken, rawEvidence: openAiKey } }),
+    ]);
+
+    expect(persisted.map((entry) => [entry.id, entry.cfg])).toEqual([
+      ["chat-1", { title: "[REDACTED]" }],
+      ["files-1", {}],
+      ["editor-1", {}],
+      ["review-1", {}],
+      ["review-2", {}],
+    ]);
+    expect(JSON.stringify(persisted)).not.toContain(openAiKey);
+    expect(JSON.stringify(persisted)).not.toContain(gitHubToken);
+    expect(JSON.stringify(persisted)).not.toContain(slackToken);
+    expect(JSON.stringify(persisted)).not.toContain(bearerToken);
+  });
+
+  it("scrubs secret-shaped config values during browser-local restore", () => {
+    const raw = JSON.stringify([
+      win({ id: "files-1", type: "files", cfg: { root: `token=${"t".repeat(20)}` } }),
+      win({ id: "review-1", type: "review", cfg: { runId: "run-123" } }),
+    ]);
+
+    expect(parsePersistedWindows(raw)).toEqual([
+      win({ id: "files-1", type: "files", cfg: {} }),
+      win({ id: "review-1", type: "review", cfg: { runId: "run-123" } }),
+    ]);
   });
 
   it("rejects malformed or unsupported persisted window records on restore", () => {
@@ -86,7 +146,9 @@ describe("workspace-persistence", () => {
       { id: "c-2", a: "review-1", b: "review-1" },
     ];
 
-    expect(sanitizePersistedConnections(conns, wins)).toEqual([{ id: "c-2", a: "review-1", b: "review-1" }]);
+    expect(sanitizePersistedConnections(conns, wins)).toEqual([
+      { id: "c-2", a: "review-1", b: "review-1" },
+    ]);
   });
 
   it("restores only connections that still point at supported persisted windows", () => {
@@ -100,6 +162,8 @@ describe("workspace-persistence", () => {
       { id: "c-3", a: "files-1", b: 42 },
     ]);
 
-    expect(parsePersistedConnections(raw, wins)).toEqual([{ id: "c-1", a: "review-1", b: "files-1" }]);
+    expect(parsePersistedConnections(raw, wins)).toEqual([
+      { id: "c-1", a: "review-1", b: "files-1" },
+    ]);
   });
 });

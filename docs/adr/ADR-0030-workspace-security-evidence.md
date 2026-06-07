@@ -41,13 +41,13 @@ The workspace foundation must satisfy all five rules. Each rule is enforced by a
 
    5a. **Enforced — no new credential surface.** Epic #518 introduces no new credential store, no new redaction surface, and no new outbound network surface. API tokens, OAuth secrets, and pairing tokens continue to live only in the OS-protected stores already used by `keiko-server` config and `keiko-memory-vault`. The `keiko-security` redactor continues to scrub incidental matches before persistence.
 
-   5b. **Deferred — durable-state secret hardening is not yet a closed gate.** The descriptor validator enforces only metadata consistency (`authority`, `trustBoundary`, `persistence`); it does not inspect renderer output, config defaults, or what `useWorkspace` writes into browser `localStorage`. The current workspace shell persists layout through browser `localStorage` in `useWorkspace`; Epic #518 did not introduce a new persistence backend or a BFF redaction seam for workspace layout. Evidence content is represented through `evidence-reference` metadata in the object-governance table; durable-state hardening beyond that metadata classification remains a separate concern, tracked as a follow-up.
+   5b. **Enforced — browser-local durable-state secret hardening.** The current workspace shell persists layout through browser `localStorage` in `useWorkspace`, but every window snapshot is normalized by `workspace-persistence.ts` before JSON serialization and again during restore. The sanitizer drops transient windows, strips `durable.config` payloads, limits reference windows to declared scalar config keys, redacts secret-shaped `durable.ui` free text to a fixed sentinel, and omits secret-shaped or credential-class reference values from persisted config. Epic #518 and Issue #600 do not introduce a new persistence backend or BFF redaction seam for workspace layout; the browser-local trust boundary is hardened by making the existing snapshot writer secret-safe by construction.
 
 ### Credential handling
 
 - API tokens, OAuth secrets, and pairing tokens are stored only by the OS-protected stores already used by `keiko-server` config and `keiko-memory-vault`.
 - The workspace foundation introduces no new credential surface.
-- Credentials are never logged, serialized to evidence, or returned to the browser. The `keiko-security` redactor scrubs any incidental match before persistence.
+- Credentials are never logged, serialized to evidence, or returned to the browser. The `keiko-security` redactor scrubs any incidental match before persistence, and the browser-local workspace snapshot redacts or omits secret-shaped config strings before writing to `localStorage`.
 
 ### CSP and headers
 
@@ -69,7 +69,7 @@ The workspace foundation must satisfy all five rules. Each rule is enforced by a
 ### Evidence semantics for workspace objects
 
 - Objects whose state is evidence-bearing declare `persistence: "evidence-reference"`.
-- The reference holds only the manifest id; the content is fetched on demand from `keiko-evidence` and rendered redacted-by-construction.
+- The reference holds only the manifest id; the content is fetched on demand from `keiko-evidence` and rendered redacted-by-construction. Secret-shaped or non-reference-shaped values are omitted from the browser-local workspace snapshot instead of being durably persisted.
 - Export of evidence bundles uses the existing redacted export path.
 
 ### Workspace foundation review targets
@@ -83,6 +83,7 @@ When Wave 4 implementation lands, the following gates run (existing — no new g
 - `npm run arch:check:negative` — ADR-0019 package-direction negative fixtures. (The undo Action-union refusal is pinned by the `useUndoStack.test.tsx` refusal test plus the compile-time `ui.`-prefix assertion, not by an `arch:check:negative` fixture.)
 - `npm run build` — produces the static UI export and the bundled root tarball.
 - `npm pack` smoke — installable artifact still bundles correctly.
+- Issue #600 verification adds targeted `workspace-persistence` regression coverage for allowed non-secret references, redacted or denied secret-shaped config values, and restore-time scrubbing of previously persisted unsafe snapshots.
 
 ## Consequences
 
@@ -107,6 +108,7 @@ When Wave 4 implementation lands, the following gates run (existing — no new g
 - ADR-0029 — Workspace object registry and extension contract.
 - [518-product-boundaries.md](../workspace/518-product-boundaries.md) — Authority model.
 - Issue #530 — Hardening pass.
+- Issue #600 — Browser-local workspace snapshot secret hardening.
 
 ## Date
 
