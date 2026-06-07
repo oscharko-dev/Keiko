@@ -61,8 +61,20 @@ interface DirectoryPickerProps {
   readonly onClose: () => void;
 }
 
-function errorMessage(error: unknown): string {
+// M2 (#532) — exported so tests can assert the mapping independently of the
+// component render cycle. Maps BFF error codes to user-facing copy:
+//   400 BAD_ROOT  → absolute path required
+//   403 DENIED    → path on the filesystem deny-list
+export function directoryPickerError(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.code === "BAD_ROOT") return "Enter an absolute folder path.";
+    if (error.code === "DENIED") return "That location is excluded.";
+  }
   return error instanceof Error ? error.message : "Unable to read directories.";
+}
+
+function errorMessage(error: unknown): string {
+  return directoryPickerError(error);
 }
 
 function DirectoryPicker({
@@ -80,10 +92,12 @@ function DirectoryPicker({
 
   const load = useCallback(
     async (path?: string): Promise<void> => {
+      // M2 (#532): the BFF now accepts any absolute folder. When there is no
+      // requestRoot yet, show a prompt rather than an error so the input feels
+      // intentional (the user hasn't typed anything yet, not an error state).
       if (requestRoot.length === 0) {
         setListing(null);
-        setDraft("");
-        setError("Select a registered project first.");
+        setError("Enter an absolute folder path.");
         return;
       }
       setLoading(true);
