@@ -494,12 +494,18 @@ function reportWithApply(
 
 // Route 9 — POST /api/runs/:runId/apply. The ONLY write path. 404 unknown; 409 when not in an
 // appliable (dry-run-success) state; otherwise re-invokes the gated workflow with apply:true.
+//
+// Issue #638: the pending snapshot is claimed atomically (set to `undefined`) BEFORE we await
+// `applyRun`, so a second overlapping request sees `record.appliable === undefined` and 409s
+// out. Clearing AFTER the await would let two requests both observe the same pending patch and
+// double-apply the workspace mutation, which is the race the regression test reproduces.
 export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const record = deps.registry.get(ctx.params.runId ?? "");
   if (record === undefined) {
     return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
   }
-  if (record.appliable === undefined) {
+  const snapshot = record.appliable;
+  if (snapshot === undefined) {
     return {
       status: 409,
       body: errorBody("NOT_APPLIABLE", "The run is not in an appliable state."),
@@ -509,8 +515,8 @@ export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Pr
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  const report = await applyRun(record.appliable, model, record.modelId, deps.redactor);
   record.appliable = undefined;
+  const report = await applyRun(snapshot, model, record.modelId, deps.redactor);
   record.applyReport = report;
   record.appliedAt = Date.now();
   return {

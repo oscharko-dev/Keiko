@@ -244,3 +244,62 @@ describe("generateUnitTests — apply mode verification", () => {
     expect(report.verificationSkipReason).toBe(SKIP_UNRESOLVED);
   });
 });
+
+describe("generateUnitTests — target workspace containment (issue #641)", () => {
+  it("fails closed on an escaped target file path with modelCallCount=0 and no diff", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input({ target: { kind: "file", filePath: "../package.json" } }),
+      deps(model.port),
+    );
+    expect(report.status).toBe("failed");
+    expect(report.modelCallCount).toBe(0);
+    expect(report.proposedDiff).toBeUndefined();
+    expect(report.addedTestFiles).toHaveLength(0);
+    expect(model.calls()).toBe(0);
+    expect(report.failureReason).toContain("path escapes the workspace boundary");
+  });
+
+  it("fails closed on an escaped target module dir before any model call", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input({ target: { kind: "module", moduleDir: "../escape" } }),
+      deps(model.port),
+    );
+    expect(report.status).toBe("failed");
+    expect(report.modelCallCount).toBe(0);
+    expect(model.calls()).toBe(0);
+  });
+
+  it("fails closed on an escaped changedFiles entry before any model call", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input({
+        target: { kind: "changedFiles", filePaths: ["src/add.ts", "../package.json"] },
+      }),
+      deps(model.port),
+    );
+    expect(report.status).toBe("failed");
+    expect(report.modelCallCount).toBe(0);
+    expect(model.calls()).toBe(0);
+  });
+
+  it("fails closed when the normalized target resolves to a denied path", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input({ target: { kind: "file", filePath: "node_modules/x/index.js" } }),
+      deps(model.port),
+    );
+    expect(report.status).toBe("failed");
+    expect(report.modelCallCount).toBe(0);
+    expect(model.calls()).toBe(0);
+    expect(report.failureReason).toContain("denied");
+  });
+
+  it("accepts a valid in-workspace target path (no regression on the happy path)", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(input(), deps(model.port));
+    expect(report.status).toBe("dry-run");
+    expect(report.modelCallCount).toBe(1);
+  });
+});
