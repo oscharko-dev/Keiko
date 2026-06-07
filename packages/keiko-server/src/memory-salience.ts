@@ -23,6 +23,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import { embedAndStoreMemory } from "./memory-embedding.js";
 
 // Mirror of chat-handlers' private scopeLabel (decision 3 — mirrored rather than exported to keep
 // the modules decoupled). Pure and trivial.
@@ -97,11 +98,14 @@ function buildCallModel(
 }
 
 // Persists one salience candidate and returns its wire action, or null when the outcome is not a
-// candidate or no record could be built.
-function persistCandidate(
+// candidate or no record could be built. Best-effort embed-on-capture (#204): the inserted memory
+// is embedded and the vector stored when an embedding model is configured; failure is swallowed by
+// embedAndStoreMemory so capture is never affected.
+async function persistCandidate(
+  deps: UiHandlerDeps,
   outcome: CaptureOutcome,
   vault: MemoryVaultStore,
-): ConversationMemoryActionWire | null {
+): Promise<ConversationMemoryActionWire | null> {
   if (outcome.kind !== "candidate") {
     return null;
   }
@@ -111,6 +115,7 @@ function persistCandidate(
     return null;
   }
   const inserted = vault.insertMemory(record);
+  await embedAndStoreMemory(deps, vault, inserted.id, inserted.body);
   return {
     kind: "candidate",
     proposalId: String(inserted.id),
@@ -159,7 +164,7 @@ export async function captureSalientFromTurn(
     );
     const actions: ConversationMemoryActionWire[] = [];
     for (const outcome of outcomes) {
-      const action = persistCandidate(outcome, vault);
+      const action = await persistCandidate(deps, outcome, vault);
       if (action !== null) {
         actions.push(action);
       }

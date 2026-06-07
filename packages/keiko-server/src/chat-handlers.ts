@@ -56,6 +56,7 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import { embedAndStoreMemory } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
 import { captureSalientFromTurn } from "./memory-salience.js";
 
@@ -690,22 +691,24 @@ function buildCaptureContext(input: ConversationMemoryRuntimeContext): CaptureCo
   };
 }
 
-function captureActionFromOutcome(
+async function captureActionFromOutcome(
   outcome: CaptureOutcome,
   deps: UiHandlerDeps,
-): ConversationMemoryActionWire | null {
+): Promise<ConversationMemoryActionWire | null> {
   switch (outcome.kind) {
     case "candidate": {
       if (deps.memoryVault === undefined) return null;
       const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
       const record = buildMemoryRecordFromProposal(proposalId, outcome);
       if (record === null) return null;
-      deps.memoryVault.insertMemory(record);
+      const inserted = deps.memoryVault.insertMemory(record);
+      // Best-effort embed-on-capture (#204): swallowed on failure / no model — never breaks capture.
+      await embedAndStoreMemory(deps, deps.memoryVault, inserted.id, inserted.body);
       return {
         kind: "candidate",
-        proposalId: String(record.id),
-        body: record.body,
-        scopeLabel: scopeLabel(record.scope),
+        proposalId: String(inserted.id),
+        body: inserted.body,
+        scopeLabel: scopeLabel(inserted.scope),
         requiresApproval: outcome.requiresApproval,
       };
     }
@@ -728,11 +731,11 @@ function captureActionFromOutcome(
   }
 }
 
-function captureMemoryActions(
+async function captureMemoryActions(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
   context: ConversationMemoryRuntimeContext,
-): readonly ConversationMemoryActionWire[] {
+): Promise<readonly ConversationMemoryActionWire[]> {
   if (request.memory === undefined || !request.memory.enabled || deps.memoryVault === undefined) {
     return [];
   }
@@ -741,7 +744,7 @@ function captureMemoryActions(
   });
   const actions: ConversationMemoryActionWire[] = [];
   for (const outcome of outcomes) {
-    const action = captureActionFromOutcome(outcome, deps);
+    const action = await captureActionFromOutcome(outcome, deps);
     if (action !== null) actions.push(action);
   }
   return actions;
@@ -760,7 +763,7 @@ async function collectMemoryActions(
   if (memoryContext === undefined) {
     return [];
   }
-  const regexActions = captureMemoryActions(request, deps, memoryContext);
+  const regexActions = await captureMemoryActions(request, deps, memoryContext);
   const salientActions = await captureSalientFromTurn(
     deps,
     request,
