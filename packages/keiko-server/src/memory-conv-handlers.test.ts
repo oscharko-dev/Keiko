@@ -27,6 +27,7 @@ import {
   handleMemoryCaptureFromConversation,
   vaultAsQueryPort,
 } from "./memory-conv-handlers.js";
+import { handleAcceptMemoryProposal } from "./memory-handlers.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
@@ -547,5 +548,95 @@ describe("handleMemoryCaptureFromConversation", () => {
     };
     const result = await handleMemoryCaptureFromConversation(makeCtx(oversize), deps);
     expect(result.status).toBe(413);
+  });
+
+  // Issue #642 — candidate outcomes must be persisted as `proposed` memory records so the
+  // shared /api/memory/proposals/:id/accept route can transition them to accepted.
+  describe("issue #642 — candidate persistence enables proposal accept", () => {
+    function acceptCtx(id: string): RouteContext {
+      const socket = new Socket();
+      return {
+        req: makeReq({}),
+        res: { socket } as unknown as RouteContext["res"],
+        params: { id },
+        url: new URL(`http://127.0.0.1/api/memory/proposals/${id}/accept`),
+      };
+    }
+
+    it("persists a candidate outcome as a `proposed` memory record under the returned id", async () => {
+      const vault = makeVault();
+      const deps = makeDeps({ memoryVault: vault });
+      const chat = registerChat(deps, "capture-persist");
+      const result = await handleMemoryCaptureFromConversation(
+        makeCtx({
+          text: "remember that release hardening uses vitest",
+          context: { projectPath: chat.projectPath, chatId: chat.chatId },
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      const body = asJson(result);
+      const outcomes = body.outcomes as readonly {
+        kind: string;
+        proposal?: { proposalId: string };
+      }[];
+      const proposalId = outcomes[0]?.proposal?.proposalId;
+      expect(typeof proposalId).toBe("string");
+      const stored = vault.getMemory(proposalId as unknown as MemoryId);
+      expect(stored).not.toBeUndefined();
+      expect(stored?.status).toBe("proposed");
+    });
+
+    it("allows the accept route to transition the captured proposal to accepted", async () => {
+      const vault = makeVault();
+      const deps = makeDeps({ memoryVault: vault });
+      const chat = registerChat(deps, "capture-then-accept");
+      const captureResult = await handleMemoryCaptureFromConversation(
+        makeCtx({
+          text: "remember that release hardening uses vitest",
+          context: { projectPath: chat.projectPath, chatId: chat.chatId },
+        }),
+        deps,
+      );
+      const outcomes = asJson(captureResult).outcomes as readonly {
+        proposal?: { proposalId: string };
+      }[];
+      const proposalId = outcomes[0]?.proposal?.proposalId;
+      if (proposalId === undefined) {
+        throw new Error("expected capture to emit a candidate proposalId");
+      }
+      const accepted = handleAcceptMemoryProposal(acceptCtx(proposalId), deps);
+      expect(accepted.status).toBe(200);
+      const reloaded = vault.getMemory(proposalId as unknown as MemoryId);
+      expect(reloaded?.status).toBe("accepted");
+    });
+
+    it("does not insert records for non-candidate outcomes", async () => {
+      const vault = makeVault();
+      const deps = makeDeps({ memoryVault: vault });
+      const chat = registerChat(deps, "capture-no-intent");
+      const before = vault.listMemoriesByScope(
+        { kind: "user", userId: "local" as unknown as MemoryUserId },
+        { includeExpired: true },
+      ).length;
+      await handleMemoryCaptureFromConversation(
+        makeCtx({
+          text: "what is the weather like?",
+          context: { projectPath: chat.projectPath, chatId: chat.chatId },
+        }),
+        deps,
+      );
+      const projectMemories = vault.listMemoriesByScope(projectScope(chat.projectPath), {
+        includeExpired: true,
+      });
+      // No project-scoped memories should have been written for a chat with no detected intent.
+      expect(projectMemories.length).toBe(0);
+      // And nothing was added to the user scope either.
+      const after = vault.listMemoriesByScope(
+        { kind: "user", userId: "local" as unknown as MemoryUserId },
+        { includeExpired: true },
+      ).length;
+      expect(after).toBe(before);
+    });
   });
 });
