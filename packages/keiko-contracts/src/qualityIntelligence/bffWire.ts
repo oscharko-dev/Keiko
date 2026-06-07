@@ -42,6 +42,24 @@ export interface QualityIntelligenceUiRunSummary {
 }
 
 /**
+ * Response envelope for `GET /api/quality-intelligence/runs` (issue #646).
+ *
+ * The list route bounds manifest loading by a default limit and reports how many run ids the
+ * underlying store knows about so the UI can render a "more available" indicator without doing
+ * a second pass. Producers MUST cap the `runs` array at `limit` and set `truncated = true` when
+ * `totalRunIds > limit`. Additive on the wire: legacy clients reading `runs` continue to work.
+ */
+export interface QualityIntelligenceUiRunListResponse {
+  readonly runs: readonly QualityIntelligenceUiRunSummary[];
+  /** Effective limit applied for this response (default or explicit, capped at the route max). */
+  readonly limit: number;
+  /** Total run ids the store reported (may exceed runs.length when truncated). */
+  readonly totalRunIds: number;
+  /** True when totalRunIds > limit; the response omits the tail of the run list. */
+  readonly truncated: boolean;
+}
+
+/**
  * Per-finding row for the findings panel.
  * `summaryRedacted` is a non-secret single-sentence description already passed through
  * the QI redaction pipeline. Producers MUST NOT send raw validator output here.
