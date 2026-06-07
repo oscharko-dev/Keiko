@@ -692,13 +692,36 @@ function parseCreateCapsuleInput(body: Record<string, unknown>): {
   return description.length === 0 ? { displayName } : { displayName, description };
 }
 
+// Issue #621: derive native vector dimensions from the embedding model id rather than
+// hardcoding 1536, which is wrong for text-embedding-3-large (native: 3072).
+function derivedVectorDimensions(modelId: string): number {
+  const lower = modelId.toLowerCase();
+  if (lower.includes("text-embedding-3-large")) return 3072;
+  if (lower.includes("text-embedding-3-small")) return 1536;
+  if (lower.includes("text-embedding-ada-002")) return 1536;
+  // Conservative default for unknown embedding models.
+  return 1536;
+}
+
 function defaultEmbeddingIdentity(modelId: string): KnowledgeCapsule["embeddingModelIdentity"] {
   return {
     provider: "openai",
     modelId,
-    vectorDimensions: 1536,
+    vectorDimensions: derivedVectorDimensions(modelId),
     vectorMetric: "cosine",
   };
+}
+
+// Issue #621: heuristic to select the first embedding-capable provider from the gateway
+// config. Falls back to providers[0] when no provider matches the embedding pattern so
+// that configs with a single provider still work without explicit labelling.
+export function selectEmbeddingModelId(
+  config: { readonly providers: readonly { readonly modelId: string }[] } | null | undefined,
+): string | undefined {
+  const providers = config?.providers;
+  if (providers === undefined || providers.length === 0) return undefined;
+  const match = providers.find((p) => /embed/i.test(p.modelId));
+  return match !== undefined ? match.modelId : providers[0]?.modelId;
 }
 
 function createCapsuleStorageReference(capsuleId: string): string {
@@ -925,7 +948,7 @@ export async function handleCreateLocalKnowledgeCapsule(
     const input = parseCreateCapsuleInput(await readJsonObject(ctx.req));
     const env = openStoreForDeps(deps);
     try {
-      const configuredModelId = currentGatewayConfig(deps)?.providers[0]?.modelId;
+      const configuredModelId = selectEmbeddingModelId(currentGatewayConfig(deps));
       if (configuredModelId === undefined) {
         return conflict(
           "No configured embedding model is available for new capsules. Configure the Model Gateway first.",

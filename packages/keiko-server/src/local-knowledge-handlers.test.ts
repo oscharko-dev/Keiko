@@ -27,6 +27,7 @@ import {
   handleListLocalKnowledgeCapsules,
   handleReindexLocalKnowledgeCapsule,
   handleStartLocalKnowledgeCapsuleIndexing,
+  selectEmbeddingModelId,
 } from "./local-knowledge-handlers.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
@@ -600,6 +601,152 @@ describe("local-knowledge handlers", () => {
 
     expect(result.status).toBe(400);
     expect(result.body).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  describe("selectEmbeddingModelId (#621)", () => {
+    it("returns undefined when providers list is empty", () => {
+      expect(selectEmbeddingModelId({ providers: [] })).toBeUndefined();
+    });
+
+    it("returns undefined when config is null", () => {
+      expect(selectEmbeddingModelId(null)).toBeUndefined();
+    });
+
+    it("returns undefined when config is undefined", () => {
+      expect(selectEmbeddingModelId(undefined)).toBeUndefined();
+    });
+
+    it("picks the first embedding provider from a chat-first list", () => {
+      const config = {
+        providers: [
+          { modelId: "gpt-oss-120b" },
+          { modelId: "text-embedding-3-large" },
+          { modelId: "text-embedding-3-small" },
+        ],
+      };
+      expect(selectEmbeddingModelId(config)).toBe("text-embedding-3-large");
+    });
+
+    it("falls back to providers[0] when no provider matches /embed/i", () => {
+      const config = {
+        providers: [{ modelId: "gpt-oss-120b" }, { modelId: "gpt-oss-40b" }],
+      };
+      expect(selectEmbeddingModelId(config)).toBe("gpt-oss-120b");
+    });
+
+    it("matches embed pattern case-insensitively", () => {
+      const config = { providers: [{ modelId: "My-EMBED-Model" }] };
+      expect(selectEmbeddingModelId(config)).toBe("My-EMBED-Model");
+    });
+
+    it("returns the only provider when it is an embedding model", () => {
+      const config = { providers: [{ modelId: "text-embedding-ada-002" }] };
+      expect(selectEmbeddingModelId(config)).toBe("text-embedding-ada-002");
+    });
+  });
+
+  describe("defaultEmbeddingIdentity vectorDimensions derivation (#621)", () => {
+    // Exercise via handleCreateLocalKnowledgeCapsule which calls defaultEmbeddingIdentity.
+    it("records 3072 dimensions for text-embedding-3-large", async () => {
+      const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+      tempDirs.push(tmp);
+
+      const result = await handleCreateLocalKnowledgeCapsule(
+        baseCtx(tmp, "POST", { displayName: "Large Embed" }),
+        depsFor(tmp, "text-embedding-3-large"),
+      );
+
+      expect(result.status).toBe(201);
+      const body = result.body as {
+        readonly capsule: {
+          readonly embeddingModelIdentity: { readonly vectorDimensions: number };
+        };
+      };
+      expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(3072);
+    });
+
+    it("records 1536 dimensions for text-embedding-3-small", async () => {
+      const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+      tempDirs.push(tmp);
+
+      const result = await handleCreateLocalKnowledgeCapsule(
+        baseCtx(tmp, "POST", { displayName: "Small Embed" }),
+        depsFor(tmp, "text-embedding-3-small"),
+      );
+
+      expect(result.status).toBe(201);
+      const body = result.body as {
+        readonly capsule: {
+          readonly embeddingModelIdentity: { readonly vectorDimensions: number };
+        };
+      };
+      expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(1536);
+    });
+
+    it("records 1536 dimensions as conservative fallback for an unknown model", async () => {
+      const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+      tempDirs.push(tmp);
+
+      const result = await handleCreateLocalKnowledgeCapsule(
+        baseCtx(tmp, "POST", { displayName: "Unknown Embed" }),
+        depsFor(tmp, "my-custom-embedding-v1"),
+      );
+
+      expect(result.status).toBe(201);
+      const body = result.body as {
+        readonly capsule: {
+          readonly embeddingModelIdentity: { readonly vectorDimensions: number };
+        };
+      };
+      expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(1536);
+    });
+  });
+
+  it("selects the embedding provider over a chat-first provider when creating a capsule (#621)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+
+    const deps: UiHandlerDeps = {
+      ...depsFor(tmp, "text-embedding-3-small"),
+      config: {
+        providers: [
+          {
+            modelId: "gpt-oss-120b",
+            baseUrl: "https://gateway.example.test/v1",
+            apiKey: "redacted",
+            timeoutMs: 30_000,
+            maxRetries: 1,
+            retryBaseDelayMs: 100,
+          },
+          {
+            modelId: "text-embedding-3-small",
+            baseUrl: "https://gateway.example.test/v1",
+            apiKey: "redacted",
+            timeoutMs: 30_000,
+            maxRetries: 1,
+            retryBaseDelayMs: 100,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+      },
+    };
+
+    const result = await handleCreateLocalKnowledgeCapsule(
+      baseCtx(tmp, "POST", { displayName: "Mixed Config Capsule" }),
+      deps,
+    );
+
+    expect(result.status).toBe(201);
+    const body = result.body as {
+      readonly capsule: {
+        readonly embeddingModelIdentity: {
+          readonly modelId: string;
+          readonly vectorDimensions: number;
+        };
+      };
+    };
+    expect(body.capsule.embeddingModelIdentity.modelId).toBe("text-embedding-3-small");
+    expect(body.capsule.embeddingModelIdentity.vectorDimensions).toBe(1536);
   });
 
   it("surfaces parserDiagnostics and indexingJobs truncation totals on the detail response (#189 F4)", async () => {
