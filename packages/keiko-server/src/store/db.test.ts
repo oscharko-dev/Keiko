@@ -227,7 +227,9 @@ describe("UI DB busy_timeout (issue #639)", () => {
     const dbPath = join(tmpDir, "busy.db");
     const db = openNodeUiDatabase(dbPath);
     try {
-      const rows = db.prepare("PRAGMA busy_timeout").all() as readonly { timeout: number }[];
+      const rows = db.prepare("PRAGMA busy_timeout").all() as unknown as readonly {
+        timeout: number;
+      }[];
       expect(rows[0]?.timeout).toBe(UI_DB_BUSY_TIMEOUT_MS);
     } finally {
       db.close();
@@ -241,7 +243,9 @@ describe("UI DB busy_timeout (issue #639)", () => {
     const probe = new DatabaseSync(":memory:");
     try {
       probe.exec(`PRAGMA busy_timeout = ${String(UI_DB_BUSY_TIMEOUT_MS)}`);
-      const rows = probe.prepare("PRAGMA busy_timeout").all() as readonly { timeout: number }[];
+      const rows = probe.prepare("PRAGMA busy_timeout").all() as unknown as readonly {
+        timeout: number;
+      }[];
       expect(rows[0]?.timeout).toBe(UI_DB_BUSY_TIMEOUT_MS);
     } finally {
       probe.close();
