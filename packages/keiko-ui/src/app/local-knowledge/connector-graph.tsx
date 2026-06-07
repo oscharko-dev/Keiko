@@ -13,6 +13,7 @@ import type { KnowledgeCapsuleId, CapsuleLifecycleState } from "@oscharko-dev/ke
 import type { CapsuleListEntry, ConnectorGraphProps } from "./connector-graph-types";
 import { STATUS_LABELS } from "./connector-graph-types";
 import { useConnectorGraph } from "./connector-graph-state";
+import { CapsuleSetComposeDialog } from "./capsule-set-compose";
 
 // ---------------------------------------------------------------------------
 // AlertBanner
@@ -144,7 +145,12 @@ function CreateCapsuleDialog({
           </label>
           {dialogError !== null ? <div className="mc-dialog-error">{dialogError}</div> : null}
           <div className="mc-dialog-actions">
-            <button type="button" className="lk-btn lk-btn-ghost" disabled={busy} onClick={onCancel}>
+            <button
+              type="button"
+              className="lk-btn lk-btn-ghost"
+              disabled={busy}
+              onClick={onCancel}
+            >
               Cancel
             </button>
             <button type="submit" className="lk-btn lk-btn-primary" disabled={busy}>
@@ -530,39 +536,61 @@ function CapsuleSection({
 interface GraphPageHeaderProps {
   readonly creating: boolean;
   readonly createDialogOpen: boolean;
+  readonly combineDialogOpen: boolean;
+  readonly combineDisabled: boolean;
   readonly loadStatus: string;
   readonly loadError: string | null;
   readonly actionError: string | null;
   readonly createError: string | null;
   readonly reload: () => void;
   readonly onCreateCapsule: () => void;
+  readonly onCombineCapsules: () => void;
 }
 
 function GraphPageHeader({
   creating,
   createDialogOpen,
+  combineDialogOpen,
+  combineDisabled,
   loadStatus,
   loadError,
   actionError,
   createError,
   reload,
   onCreateCapsule,
+  onCombineCapsules,
 }: GraphPageHeaderProps): ReactNode {
   return (
     <>
       <header className="lk-header">
         <h1 className="lk-title">Local Knowledge Connector</h1>
-        <button
-          type="button"
-          disabled={creating}
-          aria-label="Create a new knowledge capsule"
-          aria-haspopup="dialog"
-          aria-expanded={createDialogOpen}
-          onClick={onCreateCapsule}
-          className="lk-btn lk-btn-primary lk-btn-lg"
-        >
-          {creating ? "Creating…" : "Create capsule"}
-        </button>
+        <div className="lk-header-actions">
+          <button
+            type="button"
+            disabled={combineDisabled}
+            aria-label="Combine capsules into a set"
+            aria-haspopup="dialog"
+            aria-expanded={combineDialogOpen}
+            title={
+              combineDisabled ? "Create capsules first, then combine them into a set." : undefined
+            }
+            onClick={onCombineCapsules}
+            className="lk-btn lk-btn-ghost lk-btn-lg"
+          >
+            Combine capsules
+          </button>
+          <button
+            type="button"
+            disabled={creating}
+            aria-label="Create a new knowledge capsule"
+            aria-haspopup="dialog"
+            aria-expanded={createDialogOpen}
+            onClick={onCreateCapsule}
+            className="lk-btn lk-btn-primary lk-btn-lg"
+          >
+            {creating ? "Creating…" : "Create capsule"}
+          </button>
+        </div>
       </header>
       {loadStatus === "error" && loadError !== null ? (
         <AlertBanner message={loadError} onRetry={reload} />
@@ -595,6 +623,7 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
   } = useConnectorGraph(props);
   const isLoading = loadStatus === "loading";
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [combineDialogOpen, setCombineDialogOpen] = useState(false);
 
   async function submitCreateCapsule(name: string): Promise<void> {
     try {
@@ -605,17 +634,25 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
     }
   }
 
+  function onSetCreated(): void {
+    setCombineDialogOpen(false);
+    reload();
+  }
+
   return (
     <div className="lk-page">
       <GraphPageHeader
         creating={creating}
         createDialogOpen={createDialogOpen}
+        combineDialogOpen={combineDialogOpen}
+        combineDisabled={isLoading || capsules.length === 0}
         loadStatus={loadStatus}
         loadError={loadError}
         actionError={actionError}
         createError={createError}
         reload={reload}
         onCreateCapsule={() => setCreateDialogOpen(true)}
+        onCombineCapsules={() => setCombineDialogOpen(true)}
       />
       <PipelineDiagram capsules={capsules} isLoading={isLoading} />
       <section
@@ -643,6 +680,13 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
           error={createError}
           onCancel={() => setCreateDialogOpen(false)}
           onSubmit={submitCreateCapsule}
+        />
+      ) : null}
+      {combineDialogOpen ? (
+        <CapsuleSetComposeDialog
+          capsules={capsules}
+          onCancel={() => setCombineDialogOpen(false)}
+          onCreated={onSetCreated}
         />
       ) : null}
     </div>
