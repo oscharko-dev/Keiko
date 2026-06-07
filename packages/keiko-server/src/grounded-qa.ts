@@ -54,6 +54,13 @@ import {
   type GroundedRetriever,
   type MultiSourceAnswerer,
 } from "./grounded-qa-multi-source.js";
+import {
+  buildLocalKnowledgeScopes,
+  runHybridGroundedAsk,
+  type ConnectorRetrieve,
+  type FolderRetriever,
+  type HybridAnswerer,
+} from "./grounded-qa-hybrid.js";
 
 // ─── Body parsing (mirrors store-handlers' bounded reader) ────────────────────
 
@@ -761,32 +768,20 @@ function singleScopeFromList(
   return buildSelectedScopeFrom(chat, cs, deriveScopeIdFrom(chat, cs, 0));
 }
 
-// ─── Public handler ───────────────────────────────────────────────────────────
-
-export async function handleGroundedAsk(
-  ctx: RouteContext,
+// Epic #532 — the folder-only branch (0 → bad request; 1 → the byte-identical legacy single-source
+// runner; 2+ → the multi-source merge). Extracted so handleGroundedAsk stays the thin count-based
+// dispatcher.
+async function dispatchFolderAsk(
+  prepared: PreparedGroundedAsk,
   deps: UiHandlerDeps,
-  runner?: GroundedRunner,
-  multiSource?: MultiSourceSeam,
+  scopes: ReturnType<typeof buildConnectedScopes>,
+  runner: GroundedRunner | undefined,
+  multiSource: MultiSourceSeam | undefined,
 ): Promise<RouteResult> {
-  const prepared = await prepareGroundedAsk(ctx, deps);
-  if ("status" in prepared) return prepared;
   const { chat, input, signal } = prepared;
-  if (chat.localKnowledgeScope !== undefined) {
-    return handleLocalKnowledgeGroundedAsk(chat, input, deps, signal);
-  }
-  // Epic #532 — branch on the canonical connected-source list. 0 → no scope; exactly 1 → the
-  // EXISTING single-source path, byte-for-byte unchanged (AC5); 2+ → the multi-source merge.
-  const scopes = buildConnectedScopes(chat);
-  if (scopes.length === 0) {
-    return badRequest("Chat has no connected scope.");
-  }
   if (scopes.length >= 2) {
     return dispatchMultiSourceAsk(prepared, deps, scopes, multiSource);
   }
-  // Single source. The legacy `connectedScope` field drives buildSelectedScope (byte-identical
-  // scopeId via deriveScopeId — AC5). A chat that only carries `connectedScopes[0]` (no legacy
-  // field) still grounds: build from that lone scope at index 0.
   const scope = buildSelectedScope(chat) ?? singleScopeFromList(chat, scopes);
   if (scope === undefined) {
     return badRequest("Chat has no connected scope.");
@@ -802,4 +797,80 @@ export async function handleGroundedAsk(
     runner: resolved.runner,
     signal,
   });
+}
+
+// ─── Hybrid seam (test injection) ─────────────────────────────────────────────
+
+// Epic #189 — the hybrid branch's three ports. Tests inject deterministic retrieval/answer (no real
+// workspace or embeddings); production omits this and builds them inside runHybridGroundedAsk.
+export interface HybridSeam {
+  readonly folderRetriever?: FolderRetriever;
+  readonly connectorRetrieve?: ConnectorRetrieve;
+  readonly answer?: HybridAnswerer;
+}
+
+function hybridSeamFields(seam: HybridSeam | undefined): Partial<{
+  folderRetriever: FolderRetriever;
+  connectorRetrieve: ConnectorRetrieve;
+  answer: HybridAnswerer;
+}> {
+  if (seam === undefined) return {};
+  return {
+    ...(seam.folderRetriever !== undefined ? { folderRetriever: seam.folderRetriever } : {}),
+    ...(seam.connectorRetrieve !== undefined ? { connectorRetrieve: seam.connectorRetrieve } : {}),
+    ...(seam.answer !== undefined ? { answer: seam.answer } : {}),
+  };
+}
+
+async function dispatchHybridAsk(
+  prepared: PreparedGroundedAsk,
+  deps: UiHandlerDeps,
+  seam: HybridSeam | undefined,
+): Promise<RouteResult> {
+  const { chat, input, signal } = prepared;
+  // An injected answerer (tests) bypasses model-capability resolution exactly as the multi-source
+  // path does: there is no real model port to validate. Production resolves the guardrails once.
+  const modelId =
+    seam?.answer !== undefined
+      ? (input.modelId ?? chat.selectedModel)
+      : resolveGroundedModelId(deps, chat, input.modelId);
+  if (typeof modelId !== "string") return modelId;
+  return runHybridGroundedAsk({
+    chat,
+    content: input.content,
+    modelId,
+    deps,
+    signal,
+    ...hybridSeamFields(seam),
+  });
+}
+
+// ─── Public handler ───────────────────────────────────────────────────────────
+
+export async function handleGroundedAsk(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runner?: GroundedRunner,
+  multiSource?: MultiSourceSeam,
+  hybrid?: HybridSeam,
+): Promise<RouteResult> {
+  const prepared = await prepareGroundedAsk(ctx, deps);
+  if ("status" in prepared) return prepared;
+  const { chat } = prepared;
+  // Epic #189 — count-based dispatch over BOTH source kinds. 0+0 → no scope. Connector-free chats
+  // keep the EXISTING folder path (#532, byte-identical). A lone connector with no folders keeps the
+  // EXISTING single-connector path (#189, byte-identical). Everything else (folders+connector, or
+  // 2+ connectors) is the hybrid merge.
+  const folderScopes = buildConnectedScopes(chat);
+  const connectorCount = buildLocalKnowledgeScopes(chat).length;
+  if (folderScopes.length === 0 && connectorCount === 0) {
+    return badRequest("Chat has no connected scope.");
+  }
+  if (connectorCount === 0) {
+    return dispatchFolderAsk(prepared, deps, folderScopes, runner, multiSource);
+  }
+  if (folderScopes.length === 0 && connectorCount === 1) {
+    return handleLocalKnowledgeGroundedAsk(chat, prepared.input, deps, prepared.signal);
+  }
+  return dispatchHybridAsk(prepared, deps, hybrid);
 }
