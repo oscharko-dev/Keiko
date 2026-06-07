@@ -5,6 +5,7 @@
 
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryEdge, MemoryEdgeId, MemoryId } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryContentCipher } from "./cipher.js";
 
 interface EdgeRow {
   readonly id: string;
@@ -28,7 +29,8 @@ const LIST_OUT_SQL = "SELECT * FROM memory_edges WHERE from_memory_id = ? ORDER 
 const LIST_IN_SQL = "SELECT * FROM memory_edges WHERE to_memory_id = ? ORDER BY created_at ASC";
 const DELETE_SQL = "DELETE FROM memory_edges WHERE id = ?";
 
-function rowToEdge(row: EdgeRow): MemoryEdge {
+// provenance_summary is the only free-text edge column, so it is the only sealed one (ADR-0035).
+function rowToEdge(row: EdgeRow, cipher: MemoryContentCipher): MemoryEdge {
   const base = {
     id: row.id as MemoryEdgeId,
     schemaVersion: "1" as const,
@@ -40,11 +42,19 @@ function rowToEdge(row: EdgeRow): MemoryEdge {
   return {
     ...base,
     ...(row.confidence !== null ? { confidence: row.confidence } : {}),
-    ...(row.provenance_summary !== null ? { provenanceSummary: row.provenance_summary } : {}),
+    ...(row.provenance_summary !== null
+      ? { provenanceSummary: cipher.openString(row.provenance_summary) }
+      : {}),
   };
 }
 
-export function insertEdgeRow(db: DatabaseSync, edge: MemoryEdge): void {
+export function insertEdgeRow(
+  db: DatabaseSync,
+  edge: MemoryEdge,
+  cipher: MemoryContentCipher,
+): void {
+  const provenanceSummary =
+    edge.provenanceSummary === undefined ? null : cipher.sealString(edge.provenanceSummary);
   db.prepare(INSERT_SQL).run(
     edge.id,
     edge.schemaVersion,
@@ -53,18 +63,26 @@ export function insertEdgeRow(db: DatabaseSync, edge: MemoryEdge): void {
     edge.kind,
     edge.createdAt,
     edge.confidence ?? null,
-    edge.provenanceSummary ?? null,
+    provenanceSummary,
   );
 }
 
-export function listOutgoingEdgeRows(db: DatabaseSync, memoryId: MemoryId): readonly MemoryEdge[] {
+export function listOutgoingEdgeRows(
+  db: DatabaseSync,
+  memoryId: MemoryId,
+  cipher: MemoryContentCipher,
+): readonly MemoryEdge[] {
   const rows = db.prepare(LIST_OUT_SQL).all(memoryId) as unknown as readonly EdgeRow[];
-  return rows.map(rowToEdge);
+  return rows.map((row) => rowToEdge(row, cipher));
 }
 
-export function listIncomingEdgeRows(db: DatabaseSync, memoryId: MemoryId): readonly MemoryEdge[] {
+export function listIncomingEdgeRows(
+  db: DatabaseSync,
+  memoryId: MemoryId,
+  cipher: MemoryContentCipher,
+): readonly MemoryEdge[] {
   const rows = db.prepare(LIST_IN_SQL).all(memoryId) as unknown as readonly EdgeRow[];
-  return rows.map(rowToEdge);
+  return rows.map((row) => rowToEdge(row, cipher));
 }
 
 export function deleteEdgeRow(db: DatabaseSync, edgeId: MemoryEdgeId): boolean {

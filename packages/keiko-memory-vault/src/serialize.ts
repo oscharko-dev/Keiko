@@ -34,6 +34,46 @@ import type {
 } from "@oscharko-dev/keiko-contracts/memory";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import { MemoryStorageError } from "./errors.js";
+import type { MemoryContentCipher } from "./cipher.js";
+
+// Content-vs-metadata split (ADR-0035): only the columns that carry remembered TEXT are sealed —
+// body, payload_json, tags_json, capture_rationale, stale_reason. Every other column (ids, scope,
+// status, sensitivity, pinned, confidence, all timestamps, source_*, model_*, retention_*) stays
+// cleartext so SQL indexes and the UI scope display keep working without a key. Crypto is confined
+// to the two wrapper functions below; the pure row↔record builders never see a key.
+
+function openNullable(cipher: MemoryContentCipher, value: string | null): string | null {
+  return value === null ? null : cipher.openString(value);
+}
+
+// Returns a row whose sealed content columns are decrypted in place, so the pure builders below run
+// on plaintext exactly as they did before encryption landed.
+function decryptContentColumns(row: MemoryRow, cipher: MemoryContentCipher): MemoryRow {
+  return {
+    ...row,
+    body: cipher.openString(row.body),
+    payload_json: openNullable(cipher, row.payload_json),
+    tags_json: cipher.openString(row.tags_json),
+    capture_rationale: openNullable(cipher, row.capture_rationale),
+    stale_reason: openNullable(cipher, row.stale_reason),
+  };
+}
+
+function sealNullable(cipher: MemoryContentCipher, value: string | null): string | null {
+  return value === null ? null : cipher.sealString(value);
+}
+
+// Returns a write-row whose content columns are sealed, leaving every metadata column untouched.
+function encryptContentColumns(row: MemoryRowWrite, cipher: MemoryContentCipher): MemoryRowWrite {
+  return {
+    ...row,
+    body: cipher.sealString(row.body),
+    payload_json: sealNullable(cipher, row.payload_json),
+    tags_json: cipher.sealString(row.tags_json),
+    capture_rationale: sealNullable(cipher, row.capture_rationale),
+    stale_reason: sealNullable(cipher, row.stale_reason),
+  };
+}
 
 export interface MemoryRow {
   readonly id: string;
@@ -80,7 +120,10 @@ function buildScopeFromRow(kind: string, coord: string): MemoryScope {
     case "global":
       return { kind: "global" };
     default:
-      throw new MemoryStorageError("schema-mismatch", "Stored memory scope kind is not recognized.");
+      throw new MemoryStorageError(
+        "schema-mismatch",
+        "Stored memory scope kind is not recognized.",
+      );
   }
 }
 
@@ -160,7 +203,12 @@ function parsePayloadJson(raw: string | null): MemoryStructuredPayload | undefin
   }
 }
 
-export function rowToMemoryRecord(row: MemoryRow): MemoryRecord {
+export function rowToMemoryRecord(row: MemoryRow, cipher: MemoryContentCipher): MemoryRecord {
+  const decrypted = decryptContentColumns(row, cipher);
+  return decryptedRowToMemoryRecord(decrypted);
+}
+
+function decryptedRowToMemoryRecord(row: MemoryRow): MemoryRecord {
   const payload = parsePayloadJson(row.payload_json);
   const retentionHint = buildRetentionHintFromRow(row);
   const base = {
@@ -275,7 +323,14 @@ function retentionFieldsToRow(hint: MemoryRecord["retentionHint"]): RetentionRow
   };
 }
 
-export function memoryRecordToRow(record: MemoryRecord): MemoryRowWrite {
+export function memoryRecordToRow(
+  record: MemoryRecord,
+  cipher: MemoryContentCipher,
+): MemoryRowWrite {
+  return encryptContentColumns(plainRecordToRow(record), cipher);
+}
+
+function plainRecordToRow(record: MemoryRecord): MemoryRowWrite {
   return {
     id: record.id,
     schema_version: record.schemaVersion,

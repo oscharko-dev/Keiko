@@ -13,6 +13,7 @@ import type {
 import { memoryRecordToRow, rowToMemoryRecord, type MemoryRow } from "./serialize.js";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import type { ListMemoriesOptions } from "./types.js";
+import type { MemoryContentCipher } from "./cipher.js";
 import { MemoryStorageError } from "./errors.js";
 
 const INSERT_SQL = `
@@ -61,8 +62,11 @@ UPDATE memories SET
 WHERE id = ?
 `;
 
-function bindValues(record: MemoryRecord): readonly (string | number | null)[] {
-  const r = memoryRecordToRow(record);
+function bindValues(
+  record: MemoryRecord,
+  cipher: MemoryContentCipher,
+): readonly (string | number | null)[] {
+  const r = memoryRecordToRow(record, cipher);
   return [
     r.id,
     r.schema_version,
@@ -96,17 +100,29 @@ function bindValues(record: MemoryRecord): readonly (string | number | null)[] {
   ];
 }
 
-export function insertMemoryRow(db: DatabaseSync, record: MemoryRecord): void {
-  db.prepare(INSERT_SQL).run(...bindValues(record));
+export function insertMemoryRow(
+  db: DatabaseSync,
+  record: MemoryRecord,
+  cipher: MemoryContentCipher,
+): void {
+  db.prepare(INSERT_SQL).run(...bindValues(record, cipher));
 }
 
-export function getMemoryRow(db: DatabaseSync, id: MemoryId): MemoryRecord | undefined {
+export function getMemoryRow(
+  db: DatabaseSync,
+  id: MemoryId,
+  cipher: MemoryContentCipher,
+): MemoryRecord | undefined {
   const row = db.prepare(SELECT_BY_ID_SQL).get(id) as unknown as MemoryRow | undefined;
-  return row === undefined ? undefined : rowToMemoryRecord(row);
+  return row === undefined ? undefined : rowToMemoryRecord(row, cipher);
 }
 
-export function updateMemoryRow(db: DatabaseSync, record: MemoryRecord): void {
-  const r = memoryRecordToRow(record);
+export function updateMemoryRow(
+  db: DatabaseSync,
+  record: MemoryRecord,
+  cipher: MemoryContentCipher,
+): void {
+  const r = memoryRecordToRow(record, cipher);
   const info = db
     .prepare(UPDATE_SQL)
     .run(
@@ -213,6 +229,7 @@ export function listMemoriesRows(
   db: DatabaseSync,
   options: ListMemoriesOptions,
   nowMs: number,
+  cipher: MemoryContentCipher,
 ): readonly MemoryRecord[] {
   const params: (string | number)[] = [];
   const where: string[] = [];
@@ -230,7 +247,7 @@ export function listMemoriesRows(
   const rows = db
     .prepare(buildListSql(where, options))
     .all(...params) as unknown as readonly MemoryRow[];
-  return rows.map(rowToMemoryRecord);
+  return rows.map((row) => rowToMemoryRecord(row, cipher));
 }
 
 export function listMemoriesByScopeRows(
@@ -238,6 +255,7 @@ export function listMemoriesByScopeRows(
   scope: MemoryScope,
   options: ListMemoriesOptions,
   nowMs: number,
+  cipher: MemoryContentCipher,
 ): readonly MemoryRecord[] {
   const kind: MemoryScopeKind = scopeKindOf(scope);
   const coordinate = scopeCoordinateOf(scope);
@@ -257,5 +275,5 @@ export function listMemoriesByScopeRows(
   const rows = db
     .prepare(buildListSql(where, options))
     .all(...params) as unknown as readonly MemoryRow[];
-  return rows.map(rowToMemoryRecord);
+  return rows.map((row) => rowToMemoryRecord(row, cipher));
 }
