@@ -154,6 +154,9 @@ export interface KnowledgeCapsule {
   // Path relative to the runtime-state directory; never absolute and never containing `..`.
   // The validator enforces this so storage references cannot escape the local-state root.
   readonly storageReference: string;
+  // Arbitrary key-value metadata for UI labelling and connector tagging. Bounded at the
+  // BFF layer to protect the store from unbounded growth (see UpdateCapsulePatch).
+  readonly metadata?: Readonly<Record<string, string>>;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -168,6 +171,33 @@ export interface CapsuleSet {
   readonly tags: readonly string[];
   readonly capsuleIds: readonly KnowledgeCapsuleId[];
   readonly composedAt: number;
+}
+
+// ─── Capsule management wire types (Slice 4 / Issue #189) ─────────────────────
+
+// Bounded limits matching the spec (≤16 keys, key ≤128, value ≤1024 chars).
+export const CAPSULE_METADATA_MAX_KEYS = 16 as const;
+export const CAPSULE_METADATA_KEY_MAX_CHARS = 128 as const;
+export const CAPSULE_METADATA_VALUE_MAX_CHARS = 1024 as const;
+// Maximum members in a capsule set (non-destructive composition cap).
+export const CAPSULE_SET_MAX_MEMBERS = 16 as const;
+
+// PATCH /api/local-knowledge/capsules/:id — update display name, description, or metadata.
+// At least one field must be present; the BFF rejects an empty patch with 400.
+export interface UpdateCapsulePatch {
+  readonly displayName?: string;
+  readonly description?: string;
+  // Back-compat optional — absent means "no change". A metadata map replaces the full
+  // metadata on the capsule. Bounded by CAPSULE_METADATA_MAX_KEYS.
+  readonly metadata?: Readonly<Record<string, string>>;
+}
+
+// POST /api/local-knowledge/capsule-sets — create a new non-destructive capsule set.
+// capsuleIds must be 1..CAPSULE_SET_MAX_MEMBERS distinct, existing capsule ids.
+export interface CreateCapsuleSetBody {
+  readonly displayName: string;
+  readonly description?: string;
+  readonly capsuleIds: readonly string[];
 }
 
 // ─── Connector graph ──────────────────────────────────────────────────────────
