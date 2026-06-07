@@ -10,6 +10,7 @@ import type {
   GroundedAnswerContextPackSummary,
   GroundedEvidenceCitation,
   GroundedUncertainty,
+  HybridGroundedAnswerContextSummary,
   LocalKnowledgeEvidenceCitation,
   LocalKnowledgeGroundedAnswerContextSummary,
 } from "@/lib/types";
@@ -293,6 +294,23 @@ function LocalKnowledgeContextPackSummary({
   );
 }
 
+// Epic #189 Slice 3 M5 — hybrid context pack: folder + connector source summaries side-by-side.
+function HybridContextPackSummary({
+  contextPack,
+}: {
+  readonly contextPack: HybridGroundedAnswerContextSummary;
+}): ReactNode {
+  return (
+    <section className="grounded-context-pack" aria-label="Hybrid source summary">
+      <div className="grounded-context-pack-headline">
+        {`Hybrid: ${String(contextPack.folderSourceCount)} folder source${contextPack.folderSourceCount === 1 ? "" : "s"} + ${String(contextPack.connectorSourceCount)} connector source${contextPack.connectorSourceCount === 1 ? "" : "s"}`}
+      </div>
+      <ContextPackSummary contextPack={contextPack.folder} />
+      <LocalKnowledgeContextPackSummary contextPack={contextPack.knowledge} />
+    </section>
+  );
+}
+
 export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode {
   if (answer === undefined) {
     return busy ? (
@@ -306,6 +324,26 @@ export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode
         <LocalKnowledgeCitationList citations={answer.citations} />
         <UncertaintyLine markers={answer.uncertainty} />
         <LocalKnowledgeContextPackSummary contextPack={answer.contextPack} />
+      </div>
+    );
+  }
+  // Epic #189 Slice 3 M5 — hybrid answer: merged content, folder citations, connector citations.
+  if (answer.groundingKind === "hybrid") {
+    return (
+      <div className="grounded-answer">
+        <div className="grounded-answer-body">{answer.content}</div>
+        <CoverageNotice omittedCounts={answer.contextPack.folder.omittedCounts} />
+        {/* Folder evidence (source-tagged) */}
+        <CitationList citations={answer.citations} />
+        {/* Connector evidence (source-tagged) */}
+        <LocalKnowledgeCitationList citations={answer.knowledgeCitations} />
+        <UncertaintyLine markers={answer.uncertainty} />
+        <OmittedLine
+          omittedCount={answer.omittedCount}
+          omittedCounts={answer.contextPack.folder.omittedCounts}
+        />
+        <AuditEvidenceLink runId={answer.evidenceRunId} />
+        <HybridContextPackSummary contextPack={answer.contextPack} />
       </div>
     );
   }

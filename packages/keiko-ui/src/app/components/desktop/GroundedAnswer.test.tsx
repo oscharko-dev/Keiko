@@ -166,6 +166,51 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText("1 / 10 references")).toBeInTheDocument();
   });
 
+  it("renders folder citations, connector citations, and the hybrid source summary for a hybrid answer", () => {
+    const a: GroundedAnswerType = {
+      groundingKind: "hybrid",
+      userMessageId: "hy-u",
+      assistantMessageId: "hy-a",
+      content: "Merged from the marketing folder and the product manual.",
+      citations: [citation()],
+      knowledgeCitations: [
+        {
+          stableId: "hk-1",
+          marker: "[1]",
+          label: "manual.pdf · p.287 · chunk ch-9",
+          score: 0.88,
+          source: "Quasar Manual",
+        },
+      ],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 55,
+      contextPack: {
+        kind: "hybrid",
+        folderSourceCount: 2,
+        connectorSourceCount: 1,
+        folder: contextPack(),
+        knowledge: {
+          kind: "local-knowledge",
+          scopeKind: "capsule",
+          scopeId: "lk-9",
+          scopeLabel: "Quasar Manual",
+          capsuleCount: 1,
+          sourceCount: 1,
+          citationCount: 1,
+          referenceBudget: 10,
+          referencesUsed: 1,
+        },
+      },
+    };
+    render(<GroundedAnswer answer={a} busy={false} />);
+    expect(screen.getByText(/Merged from the marketing folder/)).toBeInTheDocument();
+    expect(screen.getByText(/src\/foo\.ts/)).toBeInTheDocument();
+    expect(screen.getByText(/manual\.pdf/)).toBeInTheDocument();
+    expect(screen.getByText("Hybrid: 2 folder sources + 1 connector source")).toBeInTheDocument();
+    expect(screen.getByText("Knowledge scope: Quasar Manual")).toBeInTheDocument();
+  });
+
   it("renders one static evidence reference per citation with the path:start-end label", () => {
     const a = answer({
       citations: [

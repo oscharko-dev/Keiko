@@ -10,6 +10,7 @@ import {
 } from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
 import { ConnectedScopePill } from "./ConnectedScopePill";
+import { ConnectorScopePill } from "./ConnectorScopePill";
 import { BudgetIndicator, BUDGET_EXCEEDED_ALERT_ID } from "./ContextBudget";
 import { GroundedAnswer } from "./GroundedAnswer";
 import { Icons } from "./Icons";
@@ -869,8 +870,10 @@ function ChatScopeHeader({
       className="chat-scope-header"
       style={{ padding: "6px 12px", display: "flex", gap: 12, flexWrap: "wrap" }}
     >
-      {/* Renders one pill per connected source (1+N, #532); self-guards to null when none. */}
+      {/* Folder pills: one per connected folder/file source (1+N, #532). Self-guards to null. */}
       <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
+      {/* Connector pills: one per Local Knowledge connector source (#189 Slice 3 M4). Mixed N. */}
+      <ConnectorScopePill chat={chat} onDisconnect={onChatChanged} />
       <LocalKnowledgeScopeControl chat={chat} onChatChanged={onChatChanged} />
     </div>
   );
@@ -890,7 +893,15 @@ function GroundedAnswerPanel({
   readonly busy: boolean;
 }): ReactNode {
   if (chat === undefined) return null;
-  if (chat.connectedScope === undefined && chat.localKnowledgeScope === undefined) return null;
+  // Show the grounded panel when the chat has ANY scope binding (folder or connector, singular or
+  // plural). This covers the legacy single-source fields and the #532/#189 plural list fields.
+  const hasFolderScope =
+    chat.connectedScope !== undefined ||
+    (chat.connectedScopes !== undefined && chat.connectedScopes.length > 0);
+  const hasConnectorScope =
+    chat.localKnowledgeScope !== undefined ||
+    (chat.localKnowledgeScopes !== undefined && chat.localKnowledgeScopes.length > 0);
+  if (!hasFolderScope && !hasConnectorScope) return null;
   if (answer === undefined && !busy) return null;
   return (
     <div className="chatw-grounded" aria-live="polite">

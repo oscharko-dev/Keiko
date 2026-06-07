@@ -18,8 +18,17 @@ import { type Cfg } from "./modals/PermControl";
 import { useChatSession } from "./hooks/useChatSession";
 import { useTheme } from "./hooks/useTheme";
 import { useWorkspace } from "./hooks/useWorkspace";
-import { appendScope, effectiveScopes, removeScope } from "./hooks/workspaceActions";
-import { updateChatConnectedScopes } from "@/lib/api";
+import {
+  appendConnectorScope,
+  appendScope,
+  effectiveLocalKnowledgeScopes,
+  effectiveScopes,
+  removeConnectorScope,
+  removeScope,
+  MAX_SCOPES,
+} from "./hooks/workspaceActions";
+import { updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
+import type { ChatLocalKnowledgeScope } from "@/lib/types";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
@@ -84,6 +93,7 @@ function evidenceStatusLabel(wins: readonly AppWindow[] | null): string {
 
 const CARD_TYPES: readonly WindowType[] = [
   "chat",
+  "connector",
   "files",
   "editor",
   "browser",
@@ -219,9 +229,43 @@ function AppShellInner(): ReactNode {
     },
     [session],
   );
+  // Epic #189 Slice 3 M3 — a Connector↔Chat relationship edge binds/unbinds the connector scope
+  // on the active chat's localKnowledgeScopes, so the gesture grounds the chat via vector search.
+  const handleConnectorBind = useCallback(
+    (scope: ChatLocalKnowledgeScope): void => {
+      const chat = session.activeChat;
+      if (chat === undefined) return;
+      const current = effectiveLocalKnowledgeScopes(chat);
+      const next = appendConnectorScope(current, scope, MAX_SCOPES);
+      if (next === current) return;
+      void updateChatLocalKnowledgeScopes(chat.id, next)
+        .then((res) => {
+          session.replaceChat(res.chat);
+        })
+        .catch(() => undefined);
+    },
+    [session],
+  );
+  const handleConnectorUnbind = useCallback(
+    (scope: ChatLocalKnowledgeScope): void => {
+      const chat = session.activeChat;
+      if (chat === undefined) return;
+      const key =
+        scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
+      const next = removeConnectorScope(effectiveLocalKnowledgeScopes(chat), key);
+      void updateChatLocalKnowledgeScopes(chat.id, next.length > 0 ? next : null)
+        .then((res) => {
+          session.replaceChat(res.chat);
+        })
+        .catch(() => undefined);
+    },
+    [session],
+  );
   const ws = useWorkspace(wsRef, {
     onScopeBind: handleScopeBind,
     onScopeUnbind: handleScopeUnbind,
+    onConnectorBind: handleConnectorBind,
+    onConnectorUnbind: handleConnectorUnbind,
   });
 
   const [palOpen, setPalOpen] = useState(false);

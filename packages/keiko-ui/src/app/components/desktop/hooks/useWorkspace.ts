@@ -28,6 +28,7 @@ import {
   makeMutations,
   makeSnapActions,
 } from "./workspaceActions";
+import type { ChatLocalKnowledgeScope } from "@/lib/types";
 
 export type { AppWindow, Connection, ConnectingState, SnapPrev, View };
 export type { SnapZone } from "../windows/connectionUtils";
@@ -370,9 +371,13 @@ function useConnectionPrune(
 
 // Epic #532 — optional Files↔Chat scope-binding callbacks. The composition root (AppShell) wires
 // these to the active chat's connectedScopes so a relationship edge grounds the chat against a folder.
+// Epic #189 Slice 3 M3 — optional Connector↔Chat scope-binding callbacks. The composition root
+// (AppShell) wires these to the active chat's localKnowledgeScopes.
 export interface UseWorkspaceOptions {
   readonly onScopeBind?: ((filesRoot: string) => void) | undefined;
   readonly onScopeUnbind?: ((filesRoot: string) => void) | undefined;
+  readonly onConnectorBind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
+  readonly onConnectorUnbind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
 }
 
 export function useWorkspace(
@@ -447,6 +452,8 @@ export function useWorkspace(
     setConnecting,
     onScopeBind: opts.onScopeBind,
     onScopeUnbind: opts.onScopeUnbind,
+    onConnectorBind: opts.onConnectorBind,
+    onConnectorUnbind: opts.onConnectorUnbind,
   });
   cancelConnectRef.current = cancelConnect;
 

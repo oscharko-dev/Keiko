@@ -6,7 +6,8 @@ import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import type { FilesWindowContext, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
-import type { ChatConnectedScope } from "@/lib/types";
+import type { KnowledgeCapsuleId, CapsuleSetId } from "@oscharko-dev/keiko-contracts";
+import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
 
 function addPosition(
   vp: ViewportWorld,
@@ -290,6 +291,11 @@ interface ConnectArgs {
   // connectedScopes so the relationship gesture actually grounds the chat against the folder.
   readonly onScopeBind?: ((filesRoot: string) => void) | undefined;
   readonly onScopeUnbind?: ((filesRoot: string) => void) | undefined;
+  // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
+  // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
+  // root (AppShell) appends/removes it from the active chat's localKnowledgeScopes.
+  readonly onConnectorBind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
+  readonly onConnectorUnbind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
 }
 
 function isDuplicate(cs: readonly Connection[], a: string, b: string): boolean {
@@ -327,6 +333,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     setConnecting,
     onScopeBind,
     onScopeUnbind,
+    onConnectorBind,
+    onConnectorUnbind,
   } = args;
 
   const cancelConnect: WorkspaceApi["cancelConnect"] = () => {
@@ -357,6 +365,10 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       // relationship gesture grounds the chat. No-op for any other window pairing.
       const boundRoot = filesChatBindRoot(from, to);
       if (boundRoot !== null) onScopeBind?.(boundRoot);
+      // Epic #189 Slice 3 M3 — a Connector↔Chat edge binds the selected connector scope to the
+      // chat's localKnowledgeScopes. No-op for any other window pairing.
+      const connectorScope = connectorChatBind(from, to);
+      if (connectorScope !== null) onConnectorBind?.(connectorScope);
     }
     cancelConnect();
   };
@@ -397,6 +409,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
 
   const removeConn: WorkspaceApi["removeConn"] = (id) => {
     // Epic #532 — if the removed edge was a Files↔Chat binding, unbind that folder from the chat.
+    // Epic #189 Slice 3 M3 — if the removed edge was a Connector↔Chat binding, unbind that scope.
     const conn = connsRef.current.find((c) => c.id === id);
     setConns((cs) => cs.filter((c) => c.id !== id));
     if (conn === undefined) return;
@@ -406,6 +419,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     if (a === undefined || b === undefined) return;
     const boundRoot = filesChatBindRoot(a, b);
     if (boundRoot !== null) onScopeUnbind?.(boundRoot);
+    const connectorScope = connectorChatBind(a, b);
+    if (connectorScope !== null) onConnectorUnbind?.(connectorScope);
   };
 
   const connect: WorkspaceApi["connect"] = (a, b) => {
@@ -551,4 +566,77 @@ export function effectiveScopes(chat: {
   connectedScope?: ChatConnectedScope | undefined;
 }): readonly ChatConnectedScope[] {
   return chat.connectedScopes ?? (chat.connectedScope !== undefined ? [chat.connectedScope] : []);
+}
+
+// ─── M1 (#189 Slice 3) pure connector-scope helpers (exported for tests) ─────
+
+/**
+ * Canonical reader: derive effective local-knowledge scopes from Chat fields.
+ * Prefers the plural `localKnowledgeScopes` list; falls back to a 1-element list
+ * from the legacy singular `localKnowledgeScope` field.
+ */
+export function effectiveLocalKnowledgeScopes(chat: {
+  localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[] | undefined;
+  localKnowledgeScope?: ChatLocalKnowledgeScope | undefined;
+}): readonly ChatLocalKnowledgeScope[] {
+  return (
+    chat.localKnowledgeScopes ??
+    (chat.localKnowledgeScope !== undefined ? [chat.localKnowledgeScope] : [])
+  );
+}
+
+/** Stable de-dupe key for a local-knowledge scope. */
+function lkScopeKey(scope: ChatLocalKnowledgeScope): string {
+  return scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
+}
+
+/**
+ * Appends a connector scope to the list (de-duped by capsuleId / capsuleSetId, capped at
+ * MAX_SCOPES). Returns the same list reference when the scope is already present.
+ */
+export function appendConnectorScope(
+  current: readonly ChatLocalKnowledgeScope[],
+  scope: ChatLocalKnowledgeScope,
+  max: number,
+): readonly ChatLocalKnowledgeScope[] {
+  const key = lkScopeKey(scope);
+  if (current.some((s) => lkScopeKey(s) === key)) return current;
+  const combined = [...current, scope];
+  return combined.length > max ? combined.slice(-max) : combined;
+}
+
+/**
+ * Removes the connector scope identified by `key` (e.g. `"capsule:<id>"` or
+ * `"set:<id>"`) from the list. Returns an empty array when the last scope is removed.
+ */
+export function removeConnectorScope(
+  current: readonly ChatLocalKnowledgeScope[],
+  key: string,
+): readonly ChatLocalKnowledgeScope[] {
+  return current.filter((s) => lkScopeKey(s) !== key);
+}
+
+/**
+ * For a window pair, returns the connector scope extracted from the Connector
+ * window's cfg when exactly one side is a `"connector"` window and the other
+ * is a `"chat"` window; otherwise null.
+ */
+export function connectorChatBind(a: AppWindow, b: AppWindow): ChatLocalKnowledgeScope | null {
+  const connector = a.type === "connector" ? a : b.type === "connector" ? b : null;
+  const chatWin = a.type === "chat" ? a : b.type === "chat" ? b : null;
+  if (connector === null || chatWin === null) return null;
+  const kind = connector.cfg["selectedKind"];
+  const id = connector.cfg["selectedId"];
+  if (typeof kind !== "string" || typeof id !== "string" || id.length === 0) return null;
+  if (kind === "capsule") {
+    return { kind: "capsule", capsuleId: id as KnowledgeCapsuleId, connectedAtMs: Date.now() };
+  }
+  if (kind === "capsule-set") {
+    return {
+      kind: "capsule-set",
+      capsuleSetId: id as CapsuleSetId,
+      connectedAtMs: Date.now(),
+    };
+  }
+  return null;
 }

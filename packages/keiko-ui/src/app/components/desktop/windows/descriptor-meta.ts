@@ -31,6 +31,12 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user",
     persistence: "fs-reference",
   },
+  connector: {
+    lifecycle: ["connecting", "connected", "degraded", "disconnected", "error"],
+    trustBoundary: ["ui", "fs"],
+    authority: "user",
+    persistence: "fs-reference",
+  },
   editor: {
     lifecycle: ["viewing", "editing", "unsaved", "saved", "error"],
     trustBoundary: ["ui", "fs"],

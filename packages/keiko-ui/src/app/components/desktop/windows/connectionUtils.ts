@@ -12,13 +12,16 @@ export interface WinSnapshot {
 
 export const CONNECTABLE: Readonly<Record<string, readonly string[]>> = {
   agents: ["files", "terminal", "plugins", "review", "browser", "agents", "keiko"],
-  chat: ["files", "browser", "plugins", "keiko"],
+  // Epic #189 Slice 3 M3 — a Chat window can bind to a Connector window via a relationship edge.
+  chat: ["files", "browser", "plugins", "keiko", "connector"],
   files: ["agents", "chat"],
   terminal: ["agents"],
   plugins: ["agents", "chat"],
   review: ["agents"],
   browser: ["agents", "chat"],
   keiko: ["agents", "chat"],
+  // A Connector window can bind to a Chat window (triggers localKnowledgeScopes binding).
+  connector: ["chat"],
 };
 
 export function canConnect(a: string | undefined, b: string | undefined): boolean {

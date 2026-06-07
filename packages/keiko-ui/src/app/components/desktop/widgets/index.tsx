@@ -17,6 +17,7 @@ import { AgentRunWidget, type AgentRunCfg } from "./cards/AgentRunWidget";
 import { IntegrationsWidget } from "./cards/IntegrationsWidget";
 import { KeikoTwinPanel } from "./panels/KeikoTwinPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
+import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
 
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const v = cfg[key];
@@ -113,5 +114,20 @@ registerWindowRender("integ", (cfg) => {
     <IntegrationsWidget provider={provider} />
   ) : (
     <IntegrationsWidget />
+  );
+});
+// Epic #189 Slice 3 M2 — connector picker window. updateCfg persists selectedKind/selectedId into
+// the window's cfg so the relationship-edge binding (M3) can read the selection.
+registerWindowRender("connector", (cfg, ctx) => {
+  const selectedKind = str(cfg, "selectedKind");
+  const selectedId = str(cfg, "selectedId");
+  return (
+    <ConnectorPickerWidget
+      selectedKind={selectedKind}
+      selectedId={selectedId}
+      onSelect={(patch) => {
+        ctx.updateCfg(patch);
+      }}
+    />
   );
 });

@@ -413,6 +413,19 @@ export async function updateChatLocalKnowledgeScope(
   });
 }
 
+// Epic #189 — Slice 3 M1: bind a plural list of connector sources to a chat. `null` clears ALL
+// localKnowledgeScopes. Mirrors `updateChatConnectedScopes` for the local-knowledge side.
+// Always patches the plural `localKnowledgeScopes` field so the BFF stores and returns the list.
+export async function updateChatLocalKnowledgeScopes(
+  chatId: string,
+  scopes: readonly ChatLocalKnowledgeScope[] | null,
+): Promise<ChatResponse> {
+  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ localKnowledgeScopes: scopes }),
+  });
+}
+
 export async function deleteChat(id: string): Promise<void> {
   await fetchJson<void>(`/api/chats?id=${encodeURIComponent(id)}`, {
     method: "DELETE",

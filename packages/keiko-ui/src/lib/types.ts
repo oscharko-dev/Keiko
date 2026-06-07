@@ -100,6 +100,7 @@ export type {
   LocalKnowledgeEvidenceCitation,
   GroundedAnswerContextPackSummary,
   LocalKnowledgeGroundedAnswerContextSummary,
+  HybridGroundedAnswerContextSummary,
   ProjectsResponse,
   ProjectResponse,
   ChatsResponse,

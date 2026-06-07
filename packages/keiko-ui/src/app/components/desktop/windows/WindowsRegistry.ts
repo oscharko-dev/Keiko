@@ -20,7 +20,9 @@ export type WindowType =
   | "inspector"
   | "activity"
   | "notifications"
-  | "resources";
+  | "resources"
+  // Epic #189 Slice 3 — Local Knowledge connector picker window.
+  | "connector";
 
 export interface WindowSize {
   readonly w: number;
@@ -298,6 +300,19 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tool: true,
     singleton: true,
   },
+  // Epic #189 Slice 3 — compact connector picker window. The user selects a ready capsule or
+  // capsule-set; the selection is stored in cfg so the relationship-edge binding can read it.
+  connector: {
+    title: "Connector",
+    icon: "plugins",
+    accent: true,
+    desc: "Pick a Local Knowledge connector",
+    w: 320,
+    h: 380,
+    min: { w: 280, h: 300 },
+    config: [],
+    cta: "Select connector",
+  },
 };
 
 const RENDER_REGISTRY = new Map<
@@ -356,6 +371,7 @@ export const WIN_TYPES: Readonly<Record<WindowType, WindowTypeDef>> = buildAll()
 // Wave 5 palette ordering. Cards first, then tools.
 export const TYPE_ORDER: readonly WindowType[] = [
   "chat",
+  "connector",
   "files",
   "editor",
   "browser",
