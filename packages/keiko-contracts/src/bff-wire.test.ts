@@ -9,6 +9,7 @@ import {
   MAX_CONNECTED_SOURCES,
   MAX_LOCAL_KNOWLEDGE_SOURCES,
   type Chat,
+  type ChatLocalKnowledgeScope,
   type GroundedAnswer,
   type GroundedAnswerContextPackSummary,
   type HybridGroundedAnswer,
@@ -228,10 +229,14 @@ describe("local-knowledge multi-source contract (#189)", () => {
       createdAt: 1,
       updatedAt: 1,
     } as const;
-    const single = { kind: "capsule", capsuleId: "cap-a", connectedAtMs: 1 } as const;
-    const list = [
+    const single = {
+      kind: "capsule",
+      capsuleId: "cap-a",
+      connectedAtMs: 1,
+    } as ChatLocalKnowledgeScope;
+    const list: readonly ChatLocalKnowledgeScope[] = [
       single,
-      { kind: "capsule-set", capsuleSetId: "set-b", connectedAtMs: 2 } as const,
+      { kind: "capsule-set", capsuleSetId: "set-b", connectedAtMs: 2 } as ChatLocalKnowledgeScope,
     ];
     // Plural present → it wins.
     expect(

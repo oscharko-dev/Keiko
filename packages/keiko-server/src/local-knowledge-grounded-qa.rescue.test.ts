@@ -66,7 +66,7 @@ describe("local-knowledge citation rescue (#189)", () => {
     const citations = buildLocalKnowledgeCitations(
       result({
         references: [ref(1), ref(2)],
-        citations: [{ reference: ref(1), marker: "[1]", citation: ref(1).citation }],
+        citations: [{ reference: ref(1), marker: "[1]", index: 1, citation: ref(1).citation }],
       }),
       undefined,
     );

@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInMemoryUiStore, UiStoreError, type UiStore } from "./index.js";
+import type { ChatLocalKnowledgeScope } from "./types.js";
 
 let tmp: string;
 let proj: string;
@@ -419,7 +420,7 @@ describe("updateChat — localKnowledgeScopes list round-trip (#189)", () => {
     const scopes = [
       { kind: "capsule" as const, capsuleId: "cap-a", connectedAtMs: 10 },
       { kind: "capsule-set" as const, capsuleSetId: "set-b", connectedAtMs: 11 },
-    ];
+    ] as ChatLocalKnowledgeScope[];
     const updated = store.updateChat(c.id, { localKnowledgeScopes: scopes });
     expect(updated.localKnowledgeScopes).toEqual(scopes);
     expect(updated.localKnowledgeScope).toEqual(scopes[0]);
@@ -431,7 +432,11 @@ describe("updateChat — localKnowledgeScopes list round-trip (#189)", () => {
   it("decodes a legacy single-object row as a 1-element localKnowledgeScopes list", () => {
     const c = store.createChat(proj, "t", "m");
     store.updateChat(c.id, {
-      localKnowledgeScope: { kind: "capsule", capsuleId: "cap-x", connectedAtMs: 5 },
+      localKnowledgeScope: {
+        kind: "capsule",
+        capsuleId: "cap-x",
+        connectedAtMs: 5,
+      } as ChatLocalKnowledgeScope,
     });
     const fetched = store.findChatById(c.id);
     expect(fetched?.localKnowledgeScopes).toEqual([
@@ -447,7 +452,9 @@ describe("updateChat — localKnowledgeScopes list round-trip (#189)", () => {
   it("clears the list when patched with localKnowledgeScopes: null", () => {
     const c = store.createChat(proj, "t", "m");
     store.updateChat(c.id, {
-      localKnowledgeScopes: [{ kind: "capsule", capsuleId: "cap-a", connectedAtMs: 1 }],
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: "cap-a", connectedAtMs: 1 },
+      ] as ChatLocalKnowledgeScope[],
     });
     const cleared = store.updateChat(c.id, { localKnowledgeScopes: null });
     expect(cleared.localKnowledgeScopes ?? []).toHaveLength(0);
@@ -459,7 +466,11 @@ describe("updateChat — localKnowledgeScopes list round-trip (#189)", () => {
 
   it("treats a single-element localKnowledgeScopes list identically to the legacy single field", () => {
     const c = store.createChat(proj, "t", "m");
-    const one = { kind: "capsule-set" as const, capsuleSetId: "set-x", connectedAtMs: 3 };
+    const one = {
+      kind: "capsule-set" as const,
+      capsuleSetId: "set-x",
+      connectedAtMs: 3,
+    } as ChatLocalKnowledgeScope;
     const viaList = store.updateChat(c.id, { localKnowledgeScopes: [one] });
     expect(viaList.localKnowledgeScope).toEqual(one);
     expect(viaList.localKnowledgeScopes).toEqual([one]);
@@ -471,7 +482,7 @@ describe("updateChat — localKnowledgeScopes list round-trip (#189)", () => {
       kind: "capsule" as const,
       capsuleId: `cap-${String(i)}`,
       connectedAtMs: 1,
-    }));
+    })) as ChatLocalKnowledgeScope[];
     expect(() => store.updateChat(c.id, { localKnowledgeScopes: tooMany })).toThrow(UiStoreError);
   });
 
@@ -481,7 +492,7 @@ describe("updateChat — localKnowledgeScopes list round-trip (#189)", () => {
       kind: "capsule" as const,
       capsuleId: `cap-${String(i)}`,
       connectedAtMs: 1,
-    }));
+    })) as ChatLocalKnowledgeScope[];
     const updated = store.updateChat(c.id, { localKnowledgeScopes: max });
     expect(updated.localKnowledgeScopes).toHaveLength(16);
   });
@@ -490,7 +501,9 @@ describe("updateChat — localKnowledgeScopes list round-trip (#189)", () => {
     const c = store.createChat(proj, "t", "m");
     expect(() =>
       store.updateChat(c.id, {
-        localKnowledgeScopes: [{ kind: "capsule", capsuleId: "", connectedAtMs: 1 }],
+        localKnowledgeScopes: [
+          { kind: "capsule", capsuleId: "", connectedAtMs: 1 },
+        ] as ChatLocalKnowledgeScope[],
       }),
     ).toThrow(UiStoreError);
   });
@@ -498,8 +511,14 @@ describe("updateChat — localKnowledgeScopes list round-trip (#189)", () => {
   it("prefers localKnowledgeScopes over localKnowledgeScope when both are present in a patch", () => {
     const c = store.createChat(proj, "t", "m");
     const updated = store.updateChat(c.id, {
-      localKnowledgeScope: { kind: "capsule", capsuleId: "cap-single", connectedAtMs: 1 },
-      localKnowledgeScopes: [{ kind: "capsule", capsuleId: "cap-list", connectedAtMs: 2 }],
+      localKnowledgeScope: {
+        kind: "capsule",
+        capsuleId: "cap-single",
+        connectedAtMs: 1,
+      } as ChatLocalKnowledgeScope,
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: "cap-list", connectedAtMs: 2 },
+      ] as ChatLocalKnowledgeScope[],
     });
     expect(updated.localKnowledgeScopes).toEqual([
       { kind: "capsule", capsuleId: "cap-list", connectedAtMs: 2 },
