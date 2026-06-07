@@ -83,23 +83,50 @@ describe("desktop files browser", () => {
     });
   });
 
-  it("rejects files requests for unregistered roots", async () => {
-    const unregistered = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-unregistered-")));
-    extraRoot = unregistered;
+  it("browses an unregistered arbitrary absolute directory (Epic #532 — any machine folder)", async () => {
+    const arbitrary = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-arbitrary-")));
+    extraRoot = arbitrary;
+    await mkdir(join(arbitrary, "reports"));
+    await writeFile(join(arbitrary, "notes.txt"), "hello world", "utf8");
 
-    await expect(listFilesDirectories(store, unregistered)).rejects.toMatchObject({
-      status: 403,
-      code: "WORKSPACE_NOT_REGISTERED",
+    const listing = await listFilesDirectories(store, arbitrary);
+    expect(listing.path).toBe(arbitrary);
+    expect(listing.entries.map((entry) => entry.name)).toEqual(["reports"]);
+    expect(listing.roots).toEqual([{ label: "Project root", path: arbitrary }]);
+
+    const tree = await readFilesTree(store, arbitrary, "");
+    expect(tree.entries.map((entry) => entry.name)).toContain("notes.txt");
+
+    const preview = await readFilesPreview(store, arbitrary, "notes.txt", buildRedactor({}));
+    expect(preview.kind).toBe("text");
+    if (preview.kind === "text") {
+      expect(preview.content).toContain("hello world");
+    }
+  });
+
+  it("rejects a relative (non-absolute) arbitrary root", async () => {
+    await expect(listFilesDirectories(store, "relative/dir")).rejects.toMatchObject({
+      status: 400,
+      code: "BAD_ROOT",
     });
-    await expect(readFilesTree(store, unregistered, "")).rejects.toMatchObject({
+  });
+
+  it("denies an unregistered root that passes through a credential location", async () => {
+    // The deny list matches on EVERY path segment of the realpath, so a root literally named like a
+    // credential dir — or nested under one — is rejected even though its basename is innocuous. This
+    // keeps full-machine browse from ever exposing ~/.aws, ~/.ssh, and friends (Epic #532 security).
+    const base = await realpath(await mkdtemp(join(tmpdir(), "keiko-files-cred-")));
+    extraRoot = base;
+    await mkdir(join(base, ".aws"));
+    await mkdir(join(base, ".aws", "sub"));
+
+    await expect(listFilesDirectories(store, join(base, ".aws"))).rejects.toMatchObject({
       status: 403,
-      code: "WORKSPACE_NOT_REGISTERED",
+      code: "DENIED",
     });
-    await expect(
-      readFilesPreview(store, unregistered, "x.txt", buildRedactor({})),
-    ).rejects.toMatchObject({
+    await expect(listFilesDirectories(store, join(base, ".aws", "sub"))).rejects.toMatchObject({
       status: 403,
-      code: "WORKSPACE_NOT_REGISTERED",
+      code: "DENIED",
     });
   });
 
