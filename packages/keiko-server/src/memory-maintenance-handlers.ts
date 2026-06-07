@@ -293,10 +293,6 @@ function applyForgets(
   }
 }
 
-function reloadById(vault: MemoryVaultStore): Map<MemoryId, MemoryRecord> {
-  return recordsById(vault.listMemories({ includeExpired: true }));
-}
-
 // Reusable maintenance core. Drives consolidation + the governance plan against a vault, emitting
 // audit events when an evidence store is supplied. Exported so both the BFF route handler and the
 // `keiko memory maintain` CLI run the SAME pass — no duplicated orchestration.
@@ -309,12 +305,13 @@ export function runMemoryMaintenance(
     .listMemories({ includeExpired: true })
     .filter((record) => record.status === "accepted");
   runConsolidationPass(vault, evidenceStore, accepted, counts);
-  // Reload after supersession/edge writes so the plan sees the post-consolidation statuses; the
-  // access stats feed the strength model.
+  // Reload ONCE after supersession/edge writes so the plan and its application share a single
+  // post-consolidation snapshot (the plan references ids; applyPlan resolves them in the same map).
+  // The access stats feed the strength model.
   const all = vault.listMemories({ includeExpired: true });
   const accessStats: ReadonlyMap<MemoryId, MemoryAccessStatLike> = vault.getAccessStats();
   const plan = planMemoryMaintenance(all, accessStats, { nowMs: Date.now() });
-  applyPlan(vault, evidenceStore, plan, reloadById(vault), counts);
+  applyPlan(vault, evidenceStore, plan, recordsById(all), counts);
   return counts;
 }
 
