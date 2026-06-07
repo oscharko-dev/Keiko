@@ -221,7 +221,9 @@ export function createCapsule(
     // Defensive: a successful INSERT must be readable. This branch indicates a serious
     // store-level inconsistency (e.g. concurrent DELETE) and the caller cannot continue
     // safely with a synthesised value.
-    throw new KnowledgeStoreError(`createCapsule: insert succeeded but row not found for ${String(input.id)}`);
+    throw new KnowledgeStoreError(
+      `createCapsule: insert succeeded but row not found for ${String(input.id)}`,
+    );
   }
   auditSink?.emit({ kind: "capsule-created", capsuleId: capsule.id, occurredAt: now });
   return capsule;
@@ -274,6 +276,56 @@ export function updateCapsuleState(
   return capsule;
 }
 
+export interface CapsuleDetailsPatch {
+  readonly displayName?: string;
+  readonly description?: string;
+}
+
+// Slice 4 (#189): update a capsule's display name / description. The SET clause is built only
+// from the columns present in the patch; column fragments are fixed literals (no user input),
+// so values stay fully parameterised. Metadata persistence is a separate schema migration and is
+// intentionally NOT handled here.
+export function updateCapsuleDetails(
+  store: KnowledgeStore,
+  id: KnowledgeCapsuleId,
+  patch: CapsuleDetailsPatch,
+): KnowledgeCapsule {
+  const assignments: string[] = [];
+  const params: Record<string, string | number> = { id, now: store._internal.now() };
+  if (patch.displayName !== undefined) {
+    assignments.push("display_name = :displayName");
+    params.displayName = patch.displayName;
+  }
+  if (patch.description !== undefined) {
+    assignments.push("description = :description");
+    params.description = patch.description;
+  }
+  if (assignments.length === 0) {
+    throw new KnowledgeStoreError("updateCapsuleDetails requires at least one field to change.");
+  }
+  const sql = `UPDATE capsules SET ${assignments.join(", ")}, updated_at = :now WHERE id = :id`;
+  const db = store._internal.db;
+  db.exec("BEGIN");
+  try {
+    const result = db.prepare(sql).run(params);
+    if (Number(result.changes) === 0) {
+      db.exec("ROLLBACK");
+      throw new KnowledgeNotFoundError(`Capsule not found: ${String(id)}`);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    if (!(error instanceof KnowledgeNotFoundError)) {
+      db.exec("ROLLBACK");
+    }
+    throw error;
+  }
+  const capsule = getCapsule(store, id);
+  if (capsule === undefined) {
+    throw new KnowledgeNotFoundError(`Capsule not found after update: ${String(id)}`);
+  }
+  return capsule;
+}
+
 export function deleteCapsule(
   store: KnowledgeStore,
   id: KnowledgeCapsuleId,
@@ -304,7 +356,10 @@ export function deleteCapsule(
   return { capsuleId: id, affectedCapsuleSetIds, cleanupVerified: true };
 }
 
-function verifyDeleteCleanup(db: KnowledgeStore["_internal"]["db"], capsuleId: KnowledgeCapsuleId): void {
+function verifyDeleteCleanup(
+  db: KnowledgeStore["_internal"]["db"],
+  capsuleId: KnowledgeCapsuleId,
+): void {
   for (const table of DELETE_VERIFICATION_TABLES) {
     const row = db
       .prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE capsule_id = :c`)

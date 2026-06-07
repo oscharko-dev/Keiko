@@ -24,6 +24,7 @@ import {
   handleConnectLocalKnowledgeCapsule,
   handleCreateLocalKnowledgeCapsule,
   handleCreateLocalKnowledgeCapsuleSet,
+  handleUpdateLocalKnowledgeCapsule,
   handleDisconnectLocalKnowledgeCapsule,
   handleGetLocalKnowledgeCapsule,
   handleListLocalKnowledgeCapsules,
@@ -299,6 +300,62 @@ describe("local-knowledge handlers", () => {
     seedStore(tmp).store.close();
     const result = await handleCreateLocalKnowledgeCapsuleSet(
       baseCtx(tmp, "POST", { displayName: "Set", capsuleIds: ["cap-does-not-exist"] }),
+      depsFor(tmp),
+    );
+    expect(result.status).toBe(404);
+  });
+
+  it("renames a capsule via PATCH (displayName + description)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const result = await handleUpdateLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "PATCH", { displayName: "Renamed Capsule", description: "Updated desc" }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.body).toMatchObject({
+      capsule: { displayName: "Renamed Capsule", description: "Updated desc" },
+    });
+  });
+
+  it("rejects an empty capsule PATCH (no displayName or description)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const result = await handleUpdateLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "PATCH", {}), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+    expect(result.status).toBe(400);
+  });
+
+  it("rejects a metadata-only capsule PATCH (metadata persistence not yet supported)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const result = await handleUpdateLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "PATCH", { metadata: { team: "platform" } }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+    expect(result.status).toBe(400);
+  });
+
+  it("returns 404 when PATCHing a missing capsule", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const result = await handleUpdateLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "PATCH", { displayName: "X" }),
+        params: { capsuleId: "cap-missing" },
+      },
       depsFor(tmp),
     );
     expect(result.status).toBe(404);

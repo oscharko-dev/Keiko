@@ -94,6 +94,7 @@ import {
   handleListLocalKnowledgeCapsuleSets,
   handleReindexLocalKnowledgeCapsule,
   handleStartLocalKnowledgeCapsuleIndexing,
+  handleUpdateLocalKnowledgeCapsule,
 } from "./local-knowledge-handlers.js";
 import {
   handleRelationshipCreate,
@@ -240,6 +241,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/local-knowledge/capsules/:capsuleId",
     handler: handleGetLocalKnowledgeCapsule,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/local-knowledge/capsules/:capsuleId",
+    handler: handleUpdateLocalKnowledgeCapsule,
   },
   {
     method: "POST",

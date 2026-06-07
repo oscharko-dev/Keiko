@@ -18,7 +18,9 @@ import {
   removeSourceFromCapsule,
   resolveKnowledgeStorePath,
   runIndexingJob,
+  updateCapsuleDetails,
   updateCapsuleState,
+  type CapsuleDetailsPatch,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   CapsuleHealth,
@@ -1024,6 +1026,55 @@ export async function handleCreateLocalKnowledgeCapsuleSet(
         return badRequest("INVALID_REQUEST", error.message);
       }
       throw error;
+    } finally {
+      env.close();
+    }
+  });
+}
+
+// ─── Update a capsule's display name / description (Slice 4 / Issue #189) ───────
+// Metadata persistence requires a schema migration and is intentionally NOT supported here yet;
+// a metadata-bearing patch is rejected with a clear 400 rather than silently dropped.
+
+function parseUpdateCapsuleInput(body: Record<string, unknown>): CapsuleDetailsPatch {
+  if (body.metadata !== undefined) {
+    throw new InvalidRequest(
+      "Capsule metadata updates are not yet supported; update displayName or description.",
+    );
+  }
+  const patch: { displayName?: string; description?: string } = {};
+  if (body.displayName !== undefined) {
+    if (typeof body.displayName !== "string" || body.displayName.trim().length === 0) {
+      throw new InvalidRequest('Field "displayName" must be a non-empty string when provided.');
+    }
+    patch.displayName = body.displayName.trim();
+  }
+  if (body.description !== undefined) {
+    if (typeof body.description !== "string") {
+      throw new InvalidRequest('Field "description" must be a string when provided.');
+    }
+    patch.description = body.description.trim();
+  }
+  if (patch.displayName === undefined && patch.description === undefined) {
+    throw new InvalidRequest("Patch must include displayName or description.");
+  }
+  return patch;
+}
+
+export async function handleUpdateLocalKnowledgeCapsule(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
+    const capsuleId = parseCapsuleId(ctx);
+    const patch = parseUpdateCapsuleInput(await readJsonObject(ctx.req));
+    const env = openStoreForDeps(deps);
+    try {
+      const capsule = updateCapsuleDetails(env.store, capsuleId, patch);
+      return {
+        status: 200,
+        body: buildCapsuleResponseBody(deps, env.store, env.dbPath, capsule),
+      };
     } finally {
       env.close();
     }

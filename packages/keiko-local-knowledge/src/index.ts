@@ -26,6 +26,8 @@ export {
   getCapsule,
   listCapsules,
   updateCapsuleState,
+  updateCapsuleDetails,
+  type CapsuleDetailsPatch,
   type CreateCapsuleInput,
 } from "./capsule-lifecycle.js";
 export {

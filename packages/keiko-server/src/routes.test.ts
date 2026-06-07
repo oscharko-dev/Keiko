@@ -26,8 +26,8 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 91 route contract including local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, the QI Conversation Center handoff route, and the relationship engine routes (Epic #532)", () => {
-    expect(API_ROUTES).toHaveLength(91);
+  it("declares the 92 route contract including local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, the QI Conversation Center handoff route, and the relationship engine routes (Epic #532)", () => {
+    expect(API_ROUTES).toHaveLength(92);
   });
 
   it("includes the Quality Intelligence UI read routes (#280)", () => {
@@ -52,7 +52,7 @@ describe("API route contract", () => {
     const localKnowledgeRoutes = API_ROUTES.filter((r) =>
       r.pattern.startsWith("/api/local-knowledge"),
     );
-    expect(localKnowledgeRoutes).toHaveLength(11);
+    expect(localKnowledgeRoutes).toHaveLength(12);
     expect(
       localKnowledgeRoutes.find(
         (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsules",
@@ -76,6 +76,11 @@ describe("API route contract", () => {
     expect(
       localKnowledgeRoutes.find(
         (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "PATCH" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
       ),
     ).toBeDefined();
     expect(
