@@ -654,6 +654,13 @@ function buildMemoryResult(
     },
     vaultAsQueryPort(deps.memoryVault),
   );
+  // Reinforcement reflex (#204): every recall is an access. Bumping the access counter for the
+  // included memories feeds the decay/reinforcement maintenance cycle so frequently-recalled
+  // memories strengthen over time. Guarded above (memoryVault is defined here).
+  const includedIds = retrieval.contextBlock.memories.map((item) => item.memoryId);
+  if (includedIds.length > 0) {
+    deps.memoryVault.recordAccess(includedIds, Date.now());
+  }
   const result = {
     context: {
       enabled: true,

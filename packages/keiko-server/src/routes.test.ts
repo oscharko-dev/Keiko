@@ -26,8 +26,8 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 92 route contract including local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, the QI Conversation Center handoff route, and the relationship engine routes (Epic #532)", () => {
-    expect(API_ROUTES).toHaveLength(92);
+  it("declares the 93 route contract including local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, the QI Conversation Center handoff route, the relationship engine routes (Epic #532), and the memory maintenance route (#204)", () => {
+    expect(API_ROUTES).toHaveLength(93);
   });
 
   it("includes the Quality Intelligence UI read routes (#280)", () => {
@@ -122,9 +122,12 @@ describe("API route contract", () => {
     ).toBeDefined();
   });
 
-  it("includes the 17 memory routes (12 from #211, 2 from #212, 3 consolidation-job routes from #208)", () => {
+  it("includes the 18 memory routes (12 from #211, 2 from #212, 3 consolidation-job routes from #208, 1 maintenance route from #204)", () => {
     const memoryRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/memory"));
-    expect(memoryRoutes).toHaveLength(17);
+    expect(memoryRoutes).toHaveLength(18);
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/maintenance"),
+    ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/context"),
     ).toBeDefined();

@@ -62,6 +62,7 @@ import {
   handleCreateConsolidationJob,
   handleGetConsolidationJob,
 } from "./memory-consolidation-handlers.js";
+import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import {
@@ -321,6 +322,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/memory/consolidation/jobs/:jobId/cancel",
     handler: handleCancelConsolidationJob,
   },
+  // Issue #204 — bounded, user-triggerable memory maintenance (consolidate + decay + forget).
+  { method: "POST", pattern: "/api/memory/maintenance", handler: handleRunMaintenance },
   // ADR-0017 — browser tool (BYO Chrome over CDP).
   { method: "GET", pattern: "/api/browser/status", handler: handleBrowserStatus },
   { method: "POST", pattern: "/api/browser/sessions", handler: handleCreateBrowserSession },

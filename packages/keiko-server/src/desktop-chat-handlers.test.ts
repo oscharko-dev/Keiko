@@ -287,7 +287,7 @@ describe("desktop chat routes", () => {
     const memoryDir = join(tmp, "memory-vault");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
-    insertAcceptedMemory(memoryVault, "Use pnpm instead of npm for installs.");
+    const recalled = insertAcceptedMemory(memoryVault, "Use pnpm instead of npm for installs.");
     await restartWithDeps(deps(fakeModel("memory response"), { memoryVault }));
 
     const createRes = await fetch(`${base()}/api/desktop/chats`, {
@@ -330,6 +330,8 @@ describe("desktop chat routes", () => {
     if (proposalId !== undefined) {
       expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
     }
+    // Reinforcement reflex (#204): the recalled memory's access counter is bumped on retrieval.
+    expect(memoryVault.getAccessStats([recalled.id]).get(recalled.id)?.accessCount).toBe(1);
     memoryVault.close();
   });
 
