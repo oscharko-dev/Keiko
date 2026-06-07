@@ -2,7 +2,7 @@
 // happy and error paths goes through routeRequest dispatch and the SECURITY_HEADERS surface via the
 // real createUiServer. Every test injects an in-memory UiStore so the FS is never touched.
 
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -418,9 +418,7 @@ describe("GET /api/chats", () => {
 
   it("returns 400 for an out-of-bounds limit", async () => {
     store.createProject(projDir);
-    const res = await fetch(
-      url(`/api/chats?projectPath=${encodeURIComponent(projDir)}&limit=999`),
-    );
+    const res = await fetch(url(`/api/chats?projectPath=${encodeURIComponent(projDir)}&limit=999`));
     expect(res.status).toBe(400);
     const body = (await res.json()) as { error: { code: string; message: string } };
     expect(body.error.code).toBe("invalid_request");
@@ -881,6 +879,122 @@ describe("PATCH /api/chats", () => {
       headers: PATCH_HEADERS,
       body: JSON.stringify({
         connectedScope: { kind: "files", relativePaths: ["src/x"], connectedAtMs: 1.5 },
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  // Epic #532 — multi-source connectedScopes list: each source is validated through the same
+  // realpath + deny-list + redaction access gate as the single field.
+  it("sets a valid 2-source connectedScopes list (each in its own external root)", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const alpha = join(tmp, "alpha");
+    const beta = join(tmp, "beta");
+    mkdirSync(join(alpha, "docs"), { recursive: true });
+    mkdirSync(beta, { recursive: true });
+    writeFileSync(join(beta, "offer.md"), "offer body\n");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScopes: [
+          { kind: "directory", relativePaths: ["docs"], connectedAtMs: 10, root: alpha },
+          { kind: "files", relativePaths: ["offer.md"], connectedAtMs: 11, root: beta },
+        ],
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      chat: {
+        connectedScopes: { kind: string; relativePaths: string[]; root?: string }[];
+        connectedScope: { kind: string } | undefined;
+      };
+    };
+    expect(body.chat.connectedScopes).toHaveLength(2);
+    // The BFF validates access via realpath but persists the caller-supplied root verbatim
+    // (matching the single-source #532 behavior); realpathSync here only proves the dirs exist.
+    expect(realpathSync(alpha)).toContain("alpha");
+    expect(body.chat.connectedScopes[0]?.root).toBe(alpha);
+    expect(body.chat.connectedScopes[1]?.root).toBe(beta);
+    // Back-compat single field reflects the first source.
+    expect(body.chat.connectedScope?.kind).toBe("directory");
+  });
+
+  it("rejects a connectedScopes list whose entry has a deny-listed root (.ssh)", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const ok = join(tmp, "ok-src");
+    const denied = join(tmp, ".ssh");
+    mkdirSync(ok, { recursive: true });
+    mkdirSync(denied, { recursive: true });
+    writeFileSync(join(ok, "a.md"), "a\n");
+    writeFileSync(join(denied, "id_rsa"), "key\n");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScopes: [
+          { kind: "files", relativePaths: ["a.md"], connectedAtMs: 1, root: ok },
+          { kind: "files", relativePaths: ["id_rsa"], connectedAtMs: 2, root: denied },
+        ],
+      }),
+    });
+    expect(res.status).toBe(400);
+    const fetched = store.findChatById(c.id);
+    // The denied source must not have partially persisted.
+    expect(fetched?.connectedScopes ?? []).toHaveLength(0);
+  });
+
+  it("rejects a connectedScopes list exceeding MAX_CONNECTED_SOURCES (17 entries)", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const tooMany = Array.from({ length: 17 }, (_unused, i) => ({
+      kind: "files" as const,
+      relativePaths: [`src/f${String(i)}`],
+      connectedAtMs: 1,
+    }));
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ connectedScopes: tooMany }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("clears all sources when connectedScopes is patched with null", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const alpha = join(tmp, "alpha-clear");
+    mkdirSync(join(alpha, "docs"), { recursive: true });
+    await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScopes: [
+          { kind: "directory", relativePaths: ["docs"], connectedAtMs: 1, root: alpha },
+        ],
+      }),
+    });
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ connectedScopes: null }),
+    });
+    expect(res.status).toBe(200);
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.connectedScopes ?? []).toHaveLength(0);
+    expect(fetched?.connectedScope).toBeUndefined();
+  });
+
+  it("rejects a connectedScopes list with an empty-string root entry", async () => {
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScopes: [{ kind: "files", relativePaths: ["a.md"], connectedAtMs: 1, root: "  " }],
       }),
     });
     expect(res.status).toBe(400);

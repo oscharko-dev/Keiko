@@ -39,6 +39,7 @@ import {
   isValidScopePath,
   type SelectedScopeKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
+import { MAX_CONNECTED_SOURCES } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 const MAX_STORE_BODY_BYTES = 256_000;
 const SELECTED_SCOPE_KIND_SET: ReadonlySet<SelectedScopeKind> = new Set(SELECTED_SCOPE_KINDS);
@@ -682,13 +683,10 @@ function optionalLocalKnowledgeScope(
 // Issue #184 — three return states: undefined → field absent (leave unchanged); null →
 // explicit clear (forward through to the store); ChatConnectedScope → fully validated value.
 // All input has crossed the wire and is `unknown` until proven otherwise.
-function optionalConnectedScope(
-  body: Record<string, unknown>,
-): ChatConnectedScope | null | undefined {
-  if (!("connectedScope" in body)) return undefined;
-  const raw = body.connectedScope;
-  if (raw === null) return null;
-  if (typeof raw !== "object" || Array.isArray(raw)) {
+// Shared per-scope shape validator. Used by both the single connectedScope field and each entry
+// of the Epic #532 connectedScopes list, so the two surfaces never drift.
+function parseConnectedScopeObject(raw: unknown): ChatConnectedScope {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new InvalidRequest('Field "connectedScope" must be an object or null.');
   }
   const scope = raw as Record<string, unknown>;
@@ -699,18 +697,50 @@ function optionalConnectedScope(
   return { kind, relativePaths, connectedAtMs, ...(root !== undefined ? { root } : {}) };
 }
 
+function optionalConnectedScope(
+  body: Record<string, unknown>,
+): ChatConnectedScope | null | undefined {
+  if (!("connectedScope" in body)) return undefined;
+  const raw = body.connectedScope;
+  if (raw === null) return null;
+  return parseConnectedScopeObject(raw);
+}
+
+// Epic #532 — parse the multi-source connectedScopes list. undefined → field absent; null →
+// clear all; array → fully validated list. Each entry runs the same shape validators (incl. the
+// optional root) as the single field; the list is bounded by MAX_CONNECTED_SOURCES. Live-filesystem
+// access (realpath + deny-list + redaction) for each scope runs later in handleUpdateChat.
+function optionalConnectedScopes(
+  body: Record<string, unknown>,
+): readonly ChatConnectedScope[] | null | undefined {
+  if (!("connectedScopes" in body)) return undefined;
+  const raw = body.connectedScopes;
+  if (raw === null) return null;
+  if (!Array.isArray(raw)) {
+    throw new InvalidRequest('Field "connectedScopes" must be an array or null.');
+  }
+  if (raw.length > MAX_CONNECTED_SOURCES) {
+    throw new InvalidRequest(
+      `Field "connectedScopes" must contain at most ${String(MAX_CONNECTED_SOURCES)} sources.`,
+    );
+  }
+  return raw.map((entry) => parseConnectedScopeObject(entry));
+}
+
 function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): UpdateChatPatch {
   const title = optionalString(body, "title");
   const selectedModel = optionalChatModelId(deps, body, "selectedModel");
   const branchLabel = optionalString(body, "branchLabel");
   const statusRaw = body.status;
   const connectedScope = optionalConnectedScope(body);
+  const connectedScopes = optionalConnectedScopes(body);
   const localKnowledgeScope = optionalLocalKnowledgeScope(body);
   const patch: UpdateChatPatch = {
     ...(title !== undefined ? { title } : {}),
     ...(selectedModel !== undefined ? { selectedModel } : {}),
     ...(branchLabel !== undefined ? { branchLabel } : {}),
     ...(connectedScope !== undefined ? { connectedScope } : {}),
+    ...(connectedScopes !== undefined ? { connectedScopes } : {}),
     ...(localKnowledgeScope !== undefined ? { localKnowledgeScope } : {}),
   };
   if (statusRaw === undefined) return patch;
@@ -718,6 +748,23 @@ function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): Upd
     throw new InvalidRequest('Field "status" must be "open" or "closed".');
   }
   return { ...patch, status: statusRaw };
+}
+
+// Epic #532 — the connectedScopes list SUPERSEDES the single connectedScope. The effective set of
+// sources to access-validate is the list when present (non-null), else the single field. Returns
+// an empty list when the patch only clears or omits the binding (no filesystem checks needed).
+function scopesRequiringAccessValidation(patch: UpdateChatPatch): readonly ChatConnectedScope[] {
+  if (patch.connectedScopes !== undefined) {
+    return patch.connectedScopes ?? [];
+  }
+  if (patch.connectedScope !== undefined && patch.connectedScope !== null) {
+    return [patch.connectedScope];
+  }
+  return [];
+}
+
+function patchTouchesConnectedScope(patch: UpdateChatPatch): boolean {
+  return patch.connectedScopes !== undefined || patch.connectedScope !== undefined;
 }
 
 export async function handleUpdateChat(
@@ -728,13 +775,16 @@ export async function handleUpdateChat(
     const id = requireQuery(ctx, "id");
     const body = await readJsonObject(ctx.req);
     const patch = buildChatPatch(deps, body);
-    if (patch.connectedScope !== undefined && patch.connectedScope !== null) {
+    const scopesToCheck = scopesRequiringAccessValidation(patch);
+    if (scopesToCheck.length > 0) {
       const existing = findChatById(deps, id);
       if (existing === undefined) return notFoundResult("Chat not found.");
-      validateConnectedScopeAccess(deps, existing, patch.connectedScope);
+      for (const scope of scopesToCheck) {
+        validateConnectedScopeAccess(deps, existing, scope);
+      }
     }
     const chat = deps.store.updateChat(id, patch);
-    if (patch.connectedScope !== undefined || patch.status === "closed") {
+    if (patchTouchesConnectedScope(patch) || patch.status === "closed") {
       clearGroundedContextIndexesForConversation(id);
     }
     return { status: 200, body: { chat } };
