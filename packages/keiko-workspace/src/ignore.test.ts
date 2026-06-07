@@ -49,6 +49,19 @@ describe("isDenied (always-on security)", () => {
     ".netrc",
     ".git-credentials",
     "Library/Keychains/login.keychain-db",
+    // Epic #532 security audit H1/M1 — additional credential stores.
+    ".config",
+    ".config/gcloud/application_default_credentials.json",
+    "home/alice/.config/gcloud/credentials.db",
+    ".terraform/terraform.tfstate",
+    ".terraform.d/credentials.tfrc.json",
+    ".vault-token",
+    ".cargo/credentials.toml",
+    ".pypirc",
+    ".m2/settings.xml",
+    ".password-store/work/aws.gpg",
+    "id_ecdsa_sk",
+    "id_ed25519_sk",
   ]) {
     it(`denies ${denied}`, () => {
       expect(isDenied(denied)).toBe(true);

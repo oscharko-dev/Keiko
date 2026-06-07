@@ -518,7 +518,10 @@ function persistGroundedAuditEvidence(
     {
       runId,
       modelId: workerCtx.modelId,
-      workspaceRoot: workerCtx.chat.projectPath,
+      // Epic #532 audit (L1): record the root that was ACTUALLY searched. For a connected external
+      // folder scope.workspaceRoot is cs.root, not chat.projectPath — the evidence ledger must name
+      // the real grounding root so the audit trail is honest about which tree produced the answer.
+      workspaceRoot: workerCtx.scope.workspaceRoot,
       chatId: workerCtx.chat.id,
       pack: output.pack,
       citationCount,
