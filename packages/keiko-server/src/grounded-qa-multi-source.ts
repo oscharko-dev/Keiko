@@ -45,8 +45,8 @@ import {
   type RetrievalOnlyOutput,
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
+import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import {
-  GROUNDED_SYSTEM_PROMPT,
   badRequest,
   buildCitations,
   buildQuery,

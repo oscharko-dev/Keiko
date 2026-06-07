@@ -65,8 +65,8 @@ import {
   selectedCapsulesForScope,
   type SelectedLocalKnowledgeScope,
 } from "./local-knowledge-grounded-qa.js";
+import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import {
-  GROUNDED_SYSTEM_PROMPT,
   buildCitations,
   buildQuery,
   buildSelectedScopeFrom,
