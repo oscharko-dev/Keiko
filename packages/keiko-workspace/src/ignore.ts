@@ -36,6 +36,19 @@ export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
   "*.keychain-db",
   "*.keystore",
   "*.jks",
+  // Epic #532 security audit (H1/M1): additional well-known credential stores reachable when a
+  // user connects their home directory. `.config` is the XDG base whose subdirectories (gcloud
+  // ADC, many per-app tokens) consistently hold secrets; the rest are exact credential locations.
+  ".config",
+  ".terraform",
+  ".terraform.d",
+  ".vault-token",
+  ".cargo",
+  ".pypirc",
+  ".m2",
+  ".password-store",
+  "id_ecdsa_sk",
+  "id_ed25519_sk",
   // deps
   "node_modules",
   // build

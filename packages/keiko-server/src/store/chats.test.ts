@@ -373,6 +373,41 @@ describe("updateChat — connectedScopes list round-trip (#532)", () => {
       connectedAtMs: 2,
     });
   });
+
+  it("drops a scope whose persisted root is not absolute (L2 read-side tamper defense, #532)", () => {
+    const c = store.createChat(proj, "t", "m");
+    // The BFF validates root absoluteness on write; the store write layer does not. A directly
+    // tampered DB row (or a caller that bypassed the BFF) could carry a relative root. The
+    // read/decode layer must treat a non-absolute root as tampering and collapse the whole scope to
+    // undefined rather than ground against an attacker-chosen relative location.
+    const written = store.updateChat(c.id, {
+      connectedScope: {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: 9,
+        root: "relative/evil",
+      },
+    });
+    expect(written.connectedScope).toBeUndefined();
+    expect(written.connectedScopes ?? []).toHaveLength(0);
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.connectedScope).toBeUndefined();
+  });
+
+  it("round-trips a scope whose persisted root IS absolute (L2 allows the valid shape, #532)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const written = store.updateChat(c.id, {
+      connectedScope: {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: 9,
+        root: "/srv/data/reports",
+      },
+    });
+    expect(written.connectedScope?.root).toBe("/srv/data/reports");
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.connectedScope?.root).toBe("/srv/data/reports");
+  });
 });
 
 describe("deleteChat", () => {

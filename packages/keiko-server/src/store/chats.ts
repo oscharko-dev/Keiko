@@ -1,6 +1,7 @@
 // ADR-0013 — chats CRUD scoped to a project. Parameterized SQL only.
 
 import type { DatabaseSync } from "node:sqlite";
+import { isAbsolute } from "node:path";
 import {
   SELECTED_SCOPE_KINDS,
   isValidScopePath,
@@ -95,11 +96,25 @@ function validateScopePathsForKind(
 // OR a JSON array of scope objects (multi-source). The Issue #184 legacy form (a bare array of
 // path strings) is still tolerated as a single files scope. Disambiguation: an array whose first
 // element is an object is the new multi-source list; an array of strings is the #184 legacy form.
+// Epic #532 audit (L2) — defense-in-depth on read. The connectedScope root is fully validated at
+// the BFF write path (realpath → deny-list → containment). On read from a possibly-tampered DB row
+// we re-assert the SHAPE the writer guarantees: an absolute path. A `root` key that is present but
+// not a non-empty absolute string is treated as tampering — the whole scope decode collapses to
+// undefined (matching the "a malformed entry can never widen the result" invariant) rather than
+// silently grounding against an attacker-chosen relative location.
+function decodeScopeRoot(raw: unknown): { readonly ok: boolean; readonly root?: string } {
+  if (raw === undefined) return { ok: true };
+  if (typeof raw === "string" && raw.length > 0 && isAbsolute(raw)) return { ok: true, root: raw };
+  return { ok: false };
+}
+
 function decodeSingleScopeObject(raw: Record<string, unknown>): DecodedScopePayload | undefined {
   if (!isSelectedScopeKind(raw.kind) || !Array.isArray(raw.relativePaths)) return undefined;
   const relativePaths = validateScopePathsForKind(raw.kind, raw.relativePaths);
   if (relativePaths === undefined) return undefined;
-  const root = typeof raw.root === "string" && raw.root.length > 0 ? raw.root : undefined;
+  const decodedRoot = decodeScopeRoot(raw.root);
+  if (!decodedRoot.ok) return undefined;
+  const root = decodedRoot.root;
   const connectedAtMs =
     Number.isInteger(raw.connectedAtMs) && (raw.connectedAtMs as number) >= 0
       ? (raw.connectedAtMs as number)
