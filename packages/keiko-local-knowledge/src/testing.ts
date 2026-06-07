@@ -38,6 +38,7 @@ type ParsedUnitWithoutDocId =
 
 export interface SeedVectorsOptions {
   readonly capsuleId?: string;
+  readonly displayName?: string;
   readonly sourceId?: string;
   readonly documentId?: string;
   readonly text?: string;
@@ -85,27 +86,27 @@ export function scriptedAdapter(options: ScriptedAdapterOptions = {}): OpenAIEmb
       value: {
         vector: deterministicVector(request.input, identity.vectorDimensions),
         modelId: identity.modelId,
-        ...(identity.modelRevision !== undefined
-          ? { modelRevision: identity.modelRevision }
-          : {}),
+        ...(identity.modelRevision !== undefined ? { modelRevision: identity.modelRevision } : {}),
       },
     }));
   return {
     endpoint: options.endpoint ?? "https://example.test/v1",
     apiKey: options.apiKey ?? "sk-test",
-    request: async (request): Promise<OpenAIEmbeddingOutcome> => Promise.resolve(responder(request)),
+    request: async (request): Promise<OpenAIEmbeddingOutcome> =>
+      Promise.resolve(responder(request)),
   };
 }
 
 function sampleCapsuleInput(
   overrides: Readonly<{
     id: KnowledgeCapsuleId;
+    displayName?: string;
     embeddingModelIdentity: EmbeddingModelIdentity;
   }>,
 ): CreateCapsuleInput {
   return {
     id: overrides.id,
-    displayName: "Engineering Capsule",
+    displayName: overrides.displayName ?? "Engineering Capsule",
     tags: ["alpha", "beta"],
     retrievalEffort: "default" as const,
     outputMode: "answers" as const,
@@ -131,6 +132,7 @@ function sampleSourceInput(id: KnowledgeSourceId): AddCapsuleSourceInput {
 
 interface ResolvedSeedOptions {
   readonly capsuleId: KnowledgeCapsuleId;
+  readonly displayName: string;
   readonly sourceId: KnowledgeSourceId;
   readonly documentId: DocumentId;
   readonly identity: EmbeddingModelIdentity;
@@ -178,6 +180,7 @@ function resolveSeedOptions(options: SeedVectorsOptions): ResolvedSeedOptions {
   const text = normalizeSeedText(options.unit, options.text);
   return {
     capsuleId,
+    displayName: options.displayName ?? "Engineering Capsule",
     sourceId,
     documentId,
     identity,
@@ -190,7 +193,14 @@ function resolveSeedOptions(options: SeedVectorsOptions): ResolvedSeedOptions {
 }
 
 function insertSeedRows(store: KnowledgeStore, options: ResolvedSeedOptions): void {
-  createCapsule(store, sampleCapsuleInput({ id: options.capsuleId, embeddingModelIdentity: options.identity }));
+  createCapsule(
+    store,
+    sampleCapsuleInput({
+      id: options.capsuleId,
+      displayName: options.displayName,
+      embeddingModelIdentity: options.identity,
+    }),
+  );
   addSourceToCapsule(store, options.capsuleId, sampleSourceInput(options.sourceId));
   insertDocumentRow(store._internal.db, {
     id: options.documentId,
