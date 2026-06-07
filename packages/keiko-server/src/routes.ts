@@ -84,6 +84,7 @@ import {
 } from "./browser.js";
 import {
   handleCancelLocalKnowledgeCapsuleIndexing,
+  handleConnectLocalKnowledgeCapsule,
   handleCreateLocalKnowledgeCapsule,
   handleDeleteLocalKnowledgeCapsule,
   handleDisconnectLocalKnowledgeCapsule,
@@ -243,6 +244,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "DELETE",
     pattern: "/api/local-knowledge/capsules/:capsuleId/index",
     handler: handleCancelLocalKnowledgeCapsuleIndexing,
+  },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/capsules/:capsuleId/connection",
+    handler: handleConnectLocalKnowledgeCapsule,
   },
   {
     method: "DELETE",
@@ -437,7 +443,9 @@ export function matchRoute(
     if (params === undefined) {
       continue;
     }
-    const specificity = definition.pattern.split("/").filter((part) => !part.startsWith(":")).length;
+    const specificity = definition.pattern
+      .split("/")
+      .filter((part) => !part.startsWith(":")).length;
     if (definition.method === method) {
       if (specificity > bestMethodSpecificity) {
         bestMethodSpecificity = specificity;
@@ -449,10 +457,7 @@ export function matchRoute(
       bestOtherMethodSpecificity = specificity;
     }
   }
-  if (
-    bestMethodMatch !== undefined &&
-    bestMethodSpecificity >= bestOtherMethodSpecificity
-  ) {
+  if (bestMethodMatch !== undefined && bestMethodSpecificity >= bestOtherMethodSpecificity) {
     return bestMethodMatch;
   }
   return bestOtherMethodSpecificity >= 0 ? "method-not-allowed" : undefined;

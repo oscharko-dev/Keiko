@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import type { IncomingMessage } from "node:http";
 import {
+  addSourceToCapsule,
   createSqliteAuditSink,
   createDefaultParserRegistry,
   createCapsule,
@@ -40,6 +41,7 @@ import {
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { isDenied } from "@oscharko-dev/keiko-workspace";
 
 const MAX_BODY_BYTES = 32_000;
 // F4 (Epic #189): cap unbounded BFF response collections so a worst-case capsule with
@@ -1067,6 +1069,86 @@ export async function handleCancelLocalKnowledgeCapsuleIndexing(
         );
       }
       return actionResponse(capsule.id);
+    } finally {
+      env.close();
+    }
+  });
+}
+
+// ─── Connect a source folder to a capsule (Epic #189) ─────────────────────────
+// A connector's entry point: attach a host folder (or file set) as a knowledge source
+// so it can be indexed. Connectors deliberately reach OUTSIDE the workspace (the product
+// connects ANY machine folder of manuals), so containment is by realpath + the always-on
+// deny list (never index ~/.ssh, ~/.aws, .git, …) — not a workspace root. Per-file size
+// and format limits are enforced later by the indexing discovery walk.
+
+function connectScopeRootPath(scope: KnowledgeSourceScope): string {
+  return scope.kind === "folder" || scope.kind === "files" ? scope.rootPath : scope.repositoryRoot;
+}
+
+function parseConnectSourceInput(body: Record<string, unknown>): {
+  readonly scope: KnowledgeSourceScope;
+  readonly displayName: string;
+} {
+  const scopeRaw = body.scope;
+  if (typeof scopeRaw !== "object" || scopeRaw === null || Array.isArray(scopeRaw)) {
+    throw new InvalidRequest('Field "scope" must be a knowledge-source scope object.');
+  }
+  const scope = scopeRaw as KnowledgeSourceScope;
+  assertScopeShape(scope);
+  const displayNameRaw = body.displayName;
+  const displayName =
+    typeof displayNameRaw === "string" && displayNameRaw.trim().length > 0
+      ? displayNameRaw.trim()
+      : basename(connectScopeRootPath(scope));
+  return { scope, displayName };
+}
+
+// Canonicalize (realpath) then refuse denied locations and non-directory roots BEFORE
+// touching the store. realpath resolves symlinks so a link into ~/.ssh cannot slip past.
+function guardConnectorSourcePath(scope: KnowledgeSourceScope): KnowledgeSourceScope {
+  const canonical = canonicalizeScopeRoot(scope);
+  const root = connectScopeRootPath(canonical);
+  if (isDenied(root)) {
+    throw new InvalidRequest("Source path is in a denied location and cannot be indexed.");
+  }
+  let stats: ReturnType<typeof statSync>;
+  try {
+    stats = statSync(root);
+  } catch {
+    throw new InvalidRequest("Source path does not exist or is not accessible.");
+  }
+  if (!stats.isDirectory()) {
+    throw new InvalidRequest("Source path must be an existing directory.");
+  }
+  return canonical;
+}
+
+export async function handleConnectLocalKnowledgeCapsule(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
+    const capsuleId = parseCapsuleId(ctx);
+    const { scope, displayName } = parseConnectSourceInput(await readJsonObject(ctx.req));
+    const guarded = guardConnectorSourcePath(scope);
+    const env = openStoreForDeps(deps);
+    try {
+      const capsule = getCapsule(env.store, capsuleId);
+      if (capsule === undefined) {
+        return notFound(`Capsule not found: ${capsuleId}`);
+      }
+      addSourceToCapsule(env.store, capsule.id, {
+        id: randomUUID() as KnowledgeSourceId,
+        displayName,
+        tags: [],
+        scope: guarded,
+      });
+      const updated = getCapsule(env.store, capsule.id) ?? capsule;
+      return {
+        status: 201,
+        body: buildCapsuleResponseBody(deps, env.store, env.dbPath, updated),
+      };
     } finally {
       env.close();
     }

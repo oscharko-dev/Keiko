@@ -21,6 +21,7 @@ import type { RouteContext } from "./routes.js";
 import {
   handleDeleteLocalKnowledgeCapsule,
   handleCancelLocalKnowledgeCapsuleIndexing,
+  handleConnectLocalKnowledgeCapsule,
   handleCreateLocalKnowledgeCapsule,
   handleDisconnectLocalKnowledgeCapsule,
   handleGetLocalKnowledgeCapsule,
@@ -141,6 +142,89 @@ afterEach(() => {
 });
 
 describe("local-knowledge handlers", () => {
+  it("connects a folder source to a capsule so it can be indexed", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const docsRoot = join(tmp, "manuals");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "guide.md"), "# Guide\n", "utf8");
+
+    const result = await handleConnectLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", {
+          scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+          displayName: "Manuals",
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(201);
+    // The freshly attached source is surfaced in the capsule detail body.
+    expect(JSON.stringify(result.body)).toContain("Manuals");
+  });
+
+  it("refuses a source path in a denied location (deny list)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const deniedRoot = join(tmp, ".ssh");
+    mkdirSync(deniedRoot, { recursive: true });
+
+    const result = await handleConnectLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", {
+          scope: { kind: "folder", rootPath: deniedRoot, recursive: true },
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("denied");
+  });
+
+  it("refuses a non-existent source path", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+
+    const result = await handleConnectLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", {
+          scope: { kind: "folder", rootPath: join(tmp, "no-such-dir"), recursive: true },
+        }),
+        params: { capsuleId: "cap-1" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(400);
+  });
+
+  it("returns 404 when connecting a source to a missing capsule", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    seedStore(tmp).store.close();
+    const docsRoot = join(tmp, "manuals");
+    mkdirSync(docsRoot, { recursive: true });
+
+    const result = await handleConnectLocalKnowledgeCapsule(
+      {
+        ...baseCtx(tmp, "POST", {
+          scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+        }),
+        params: { capsuleId: "cap-missing" },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(404);
+  });
+
   it("creates a draft capsule with the default Local Knowledge policy", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
