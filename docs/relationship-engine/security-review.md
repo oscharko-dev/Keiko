@@ -23,7 +23,7 @@ Every store function in [`packages/keiko-server/src/store/relationships.ts`](../
 - `getRelationship(id, workspaceId)` (`sqlGetRelationship`)
 - `listRelationships(query)` (`buildListClauses` always seeds `workspace_scope_id = ?`)
 - `walkDependencies` / `computeImpact` / `graphHealth` (all workspace-scoped)
-- Migration V5 enforces `workspace_scope_id` `NOT NULL` and a foreign key to `projects(path) ON DELETE CASCADE`.
+- Migration V5 enforces `workspace_scope_id` `NOT NULL`. There is deliberately NO foreign key from `relationships` to `projects` (see [`schema.ts:79`](../../packages/keiko-server/src/store/schema.ts) comment); endpoint liveness is resolved at the API edge through the `RelationshipEndpointResolver` port (per [storage.md §2.2](storage.md)).
 
 ### 2. Server-authoritative validation BEFORE persistence
 
@@ -35,7 +35,7 @@ Every mutating route in [`packages/keiko-server/src/relationship-handlers.ts`](.
 
 ### 3. Single redactor call site on every response
 
-`respond()` in `relationship-handlers.ts` is the sole place where response bodies leave the BFF. Every handler returns through `runHandler` → `respond` → live redactor. The redactor itself lives in `packages/keiko-security/src/redaction.ts` and is unchanged by this epic.
+`respond()` in `relationship-handlers.ts` is the sole site for JSON response bodies. Every JSON handler returns through `runHandler` → `respond` → live redactor. The redactor itself lives in `packages/keiko-security/src/redaction.ts` and is unchanged by this epic. The SSE channel (Route 11 `GET /api/relationships/events`) emits only static framing literals (`event: relationship:hello`, keep-alive `: ping`) and carries no user data; the follow-up that wires per-kind activity delivery (closure-evidence.md §"Known limitations") MUST route dispatched event bodies through the redactor before write.
 
 ### 4. Forbidden-key rejector at every payload-accepting boundary
 
@@ -45,7 +45,7 @@ The forbidden-substring list `RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS` is
 - Audit ledger writer: `packages/keiko-server/src/store/relationship-audit.ts` `assertNoForbiddenKeys` (rejects `payload_json` with any forbidden key; recurses into nested records).
 - Activity stream client: `packages/keiko-ui/src/app/components/desktop/widgets/panels/useRelationshipActivityStream.ts` drops SSE messages whose payload contains a forbidden key (test pinned).
 
-No payload that contains `prompt` / `promptText` / `documentContent` / `fileContent` / `toolStdout` / `toolStderr` / `secret` / `credential` / `apiKey` / `password` / `token` (case-insensitive substring) reaches storage or the wire.
+The 10 forbidden substrings are `prompt`, `documentcontent`, `filecontent`, `toolstdout`, `toolstderr`, `secret`, `credential`, `apikey`, `password`, `token`. Casing/punctuation variants (e.g., `promptText`, `API_KEY`, `api-key`) are normalized via the lowercase + non-alphanumeric-strip + substring rule before comparison, so no payload key containing any of these substrings reaches storage or the wire.
 
 ### 5. No relationship-existence-implied authority
 
@@ -57,7 +57,7 @@ The inspector renders the verbatim authority disclaimer `"Relationship: governan
 
 ### 7. Cross-workspace denial does not leak
 
-`validateRelationship` returns `denied/cross-workspace` for any relationship whose source / target workspace identifiers disagree with the relationship's own `workspaceId`. The denial message is workspace-id-free and is asserted by an explicit test in `relationships-validation.test.ts` (`"cross-workspace denial body-free"`).
+`validateRelationship` returns `denied/cross-workspace` for any relationship whose source / target workspace identifiers disagree with the relationship's own `workspaceId`. The denial message is workspace-id-free and is asserted by an explicit test in `relationships-validation.test.ts` (describe `validateRelationship — cross-workspace body-free`).
 
 ## Findings
 

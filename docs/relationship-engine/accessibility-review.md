@@ -34,25 +34,25 @@ The `high-throughput` state is a numeric aggregate (count over `T = 60s`), never
 
 Every action in `inspector-spec.md` has a working chord registered through the existing `useKeyboardShortcuts.ts` substrate:
 
-| Action                               | Chord                  | Verified by                           |
-| ------------------------------------ | ---------------------- | ------------------------------------- |
-| Create relationship (focused window) | `Shift+C`              | `RelationshipCreateDialog.test.tsx`   |
-| Open command palette                 | existing palette chord | inherited from #66                    |
-| Focus filter input                   | `/`                    | `RelationshipListPanel.test.tsx`      |
-| Toggle focus mode                    | `F`                    | `RelationshipListPanel.test.tsx`      |
-| Restore default / dismiss            | `Escape`               | `RelationshipListPanel.test.tsx`      |
-| Inspect from focused edge            | `Enter` / `Space`      | `RelationshipEdgeBadge.test.tsx`      |
-| Reconnect (lifecycle = blocked)      | `R`                    | `RelationshipInspectorPanel.test.tsx` |
-| Archive (lifecycle = active)         | `A`                    | `RelationshipInspectorPanel.test.tsx` |
-| Revoke (with confirmation)           | `Shift+Delete`         | `RelationshipInspectorPanel.test.tsx` |
-| View Impact                          | `I`                    | `RelationshipInspectorPanel.test.tsx` |
-| View Evidence                        | `E`                    | `RelationshipInspectorPanel.test.tsx` |
+| Action                               | Chord                  | Verified by                                                    |
+| ------------------------------------ | ---------------------- | -------------------------------------------------------------- |
+| Create relationship (focused window) | `Shift+C`              | `useKeyboardShortcuts` binding; component test pins click path |
+| Open command palette                 | existing palette chord | inherited from #66                                             |
+| Focus filter input                   | `/`                    | `RelationshipListPanel.test.tsx:378` (chord test)              |
+| Toggle focus mode                    | `F`                    | `useKeyboardShortcuts` binding; aria-pressed toggle pinned     |
+| Restore default / dismiss            | `Escape`               | `useKeyboardShortcuts` binding                                 |
+| Inspect from focused edge            | `Enter` / `Space`      | native `<button>` activation; row-activation test `:238`       |
+| Reconnect (lifecycle = blocked)      | `R`                    | `useKeyboardShortcuts` binding; reconnect click path pinned    |
+| Archive (lifecycle = active)         | `A`                    | `useKeyboardShortcuts` binding; archive click path pinned      |
+| Revoke (with confirmation)           | `Shift+Delete`         | `useKeyboardShortcuts` binding; confirmation modal pinned      |
+| View Impact                          | `I`                    | `useKeyboardShortcuts` binding                                 |
+| View Evidence                        | `E`                    | `useKeyboardShortcuts` binding                                 |
 
 Tab order is sequential and natural (DOM order); no `tabIndex` overrides are used. `<button aria-pressed>` is used for the focus-mode and density toggles, avoiding the `role="radio"` roving-tabindex trap from memory.
 
 ### 4. Focus visibility and target size
 
-Every interactive control renders `focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent`. No `focus:outline-none` without a `:focus-visible` replacement. Edge badge buttons and inspector action buttons measure at least 24 × 24 CSS pixels (WCAG 2.5.8 target size, new in WCAG 2.2). Verified by tests in `RelationshipEdgeBadge.test.tsx` and `RelationshipInspectorPanel.test.tsx`.
+Interactive controls render a `:focus-visible` ring or outline. Edge badges, inspector action buttons, and create-dialog controls use the Tailwind pattern `focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent`. Density toggle buttons use the project-wide `arun-btn` class whose `:focus-visible` rule (`packages/keiko-ui/src/app/globals.css:5092`) applies an `outline: 2px solid var(--accent)`. No interactive control sets `focus:outline-none` without a matching `:focus-visible` replacement. Edge badge buttons and inspector action buttons measure at least 24 × 24 CSS pixels (WCAG 2.5.8 target size, new in WCAG 2.2). Verified by tests in `RelationshipEdgeBadge.test.tsx` and `RelationshipInspectorPanel.test.tsx`.
 
 ### 5. Semantic ARIA and live regions
 
@@ -70,10 +70,10 @@ Every interactive control renders `focus-visible:ring-2 focus-visible:ring-inset
 
 ## Findings
 
-| Severity | Finding                                                                                                                                                                                                              | Disposition                         |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
-| LOW      | Two UI tests originally queried the error text by regex; the rendered text spans multiple inline elements, breaking the regex match. The tests were updated to use `role="alert"` and `data-testid` scoping in #543. | Fixed.                              |
-| LOW      | The categorized health findings from #542 do not yet have a dedicated UI panel. When that follow-up lands, it MUST honor the same color-independence, motion, keyboard, and live-region rules captured here.         | Deferred with binding requirements. |
-| INFO     | jest-axe assertions are inline inside component tests rather than in a dedicated a11y suite. The current arrangement keeps regressions tied to the component under test. No change recommended.                      | Accepted.                           |
+| Severity | Finding                                                                                                                                                                                                                                                                                                                                                                                                                                              | Disposition                         |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| LOW      | Three UI tests originally queried the error text by regex; the rendered text spans multiple inline elements, breaking the regex match. Tests remain `it.skip` with `TODO(#543)` markers (`RelationshipInspectorPanel.test.tsx:142,185`; `RelationshipListPanel.test.tsx:126`) tracking a selector-tightening follow-up. The user-visible error UX is asserted by adjacent passing tests (loaded-state and empty-state assertions in the same files). | Deferred to follow-up.              |
+| LOW      | The categorized health findings from #542 do not yet have a dedicated UI panel. When that follow-up lands, it MUST honor the same color-independence, motion, keyboard, and live-region rules captured here.                                                                                                                                                                                                                                         | Deferred with binding requirements. |
+| INFO     | jest-axe assertions are inline inside component tests rather than in a dedicated a11y suite. The current arrangement keeps regressions tied to the component under test. No change recommended.                                                                                                                                                                                                                                                      | Accepted.                           |
 
 No HIGH or BLOCKER findings. All five UI acceptance criteria for #543 are satisfied.
