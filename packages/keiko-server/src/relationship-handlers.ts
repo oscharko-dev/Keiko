@@ -176,6 +176,7 @@ export interface ImpactArgs {
 export interface GraphHealth {
   readonly checkedAt: number;
   readonly totals: Readonly<Record<RelationshipLifecycleState, number>>;
+  readonly truncated: boolean;
   readonly findings: RelationshipHealthFindings;
 }
 
@@ -1864,9 +1865,20 @@ async function handleHealthImpl(ctx: RouteContext, deps: UiHandlerDeps): Promise
         // We retain them so existing #540/#541 clients keep working until #543 migrates
         // them to the categorized `findings` surface.
         entries: [],
-        truncated: false,
+        truncated: health.truncated || anyHealthFindingTruncated(health.findings),
         nextCursor: null,
       }),
+  );
+}
+
+function anyHealthFindingTruncated(findings: RelationshipHealthFindings): boolean {
+  return (
+    findings.orphanedEndpointsTruncated ||
+    findings.staleRelationshipsTruncated ||
+    findings.blockedRelationshipsTruncated ||
+    findings.failedRelationshipsTruncated ||
+    findings.invalidReferencesTruncated ||
+    findings.cycleScanTruncated
   );
 }
 
@@ -2157,6 +2169,7 @@ export function createRelationshipStorePort(
       return {
         checkedAt: summary.checkedAt,
         totals: summary.totals,
+        truncated: summary.truncated,
         findings: summary.findings,
       };
     },
