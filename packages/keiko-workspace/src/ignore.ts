@@ -19,6 +19,23 @@ export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
   "*.p12",
   "*.pfx",
   ".npmrc",
+  // credential directories & stores — Epic #532 makes any folder on the machine connectable, so
+  // the deny gate must keep well-known secret locations out of every tree listing, excerpt, and
+  // grounded answer even when the user points a Files window at their home directory.
+  ".ssh",
+  ".aws",
+  ".gnupg",
+  ".kube",
+  ".azure",
+  ".docker",
+  ".netrc",
+  ".pgpass",
+  ".git-credentials",
+  "Keychains",
+  "*.keychain",
+  "*.keychain-db",
+  "*.keystore",
+  "*.jks",
   // deps
   "node_modules",
   // build
@@ -32,11 +49,12 @@ export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
   ".turbo",
   // vcs
   ".git",
-  // logs
-  "*.log",
   // os
   ".DS_Store",
 ]);
+// Note: `*.log` is intentionally NOT denied — connected-context search must cover every text
+// format, including log files. Secret-shaped strings inside any matched content are still scrubbed
+// by the redaction layer before they reach an answer or the evidence ledger.
 
 // Iterates from the end rather than using /\/+$/ to avoid quadratic ReDoS on
 // inputs with many consecutive trailing slashes (CodeQL js/polynomial-redos).

@@ -27,6 +27,14 @@ import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
 
 const BINARY_PROBE_BYTES = 512;
 
+// Per-file cap on emitted lexical matches (Epic #177 retrieval fix). A connected-scope question
+// carries several content tokens, so a prose-heavy file can match many low-signal lines. Emitting
+// all of them let one alphabetically-early file exhaust the global match budget before the scan
+// ever reached the file the question was actually about. Keeping only each file's best lines makes
+// the evidence diverse across the scope while still surfacing every file's strongest signal for the
+// downstream ranker.
+const MAX_MATCHES_PER_FILE = 3;
+
 function toRelative(root: string, absolutePath: string): string {
   return relative(root, absolutePath).split("\\").join("/");
 }
@@ -262,23 +270,31 @@ function scanLines(
   atoms: EvidenceAtom[],
 ): void {
   const lines = text.split("\n");
+  // Score every line, then keep only this file's best-scoring lines (ties broken by earliest
+  // line). This bounds each file's contribution to MAX_MATCHES_PER_FILE and surfaces the file's
+  // strongest evidence rather than whichever lines happen to appear first.
+  const scored: { readonly line: number; readonly score: number }[] = [];
   for (let i = 0; i < lines.length; i += 1) {
+    const score = runner.matcher.match(lines[i] ?? "");
+    if (score > 0) {
+      scored.push({ line: i + 1, score });
+    }
+  }
+  scored.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.line - b.line));
+  const best = scored.slice(0, MAX_MATCHES_PER_FILE).sort((a, b) => a.line - b.line);
+  for (const match of best) {
     if (hitLimit(runner, state)) {
       return;
-    }
-    const score = runner.matcher.match(lines[i] ?? "");
-    if (score === 0) {
-      continue;
     }
     atoms.push(
       buildAtom({
         scopeId: runner.scope.scopeId,
         scopePath: relativePath,
-        lineRange: { startLine: i + 1, endLine: i + 1 },
+        lineRange: { startLine: match.line, endLine: match.line },
         provenanceKind: "lexical-search",
         tool: "repo.searchText",
         queryFingerprint: runner.fingerprint,
-        score,
+        score: match.score,
         emittedAtMs: runner.nowMs(),
       }),
     );

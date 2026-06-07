@@ -221,6 +221,45 @@ function OmittedLine({
   );
 }
 
+// Reasons a file in the connected scope could not be searched AT ALL — distinct from relevance
+// filtering (low-relevance / near-duplicate, where the file was read) and from by-design noise
+// exclusions (ignored deps/secrets). Surfacing these makes clear the answer does not cover the
+// whole folder: a file over the 2 MiB cap or a binary/unsupported format is otherwise invisible.
+const COVERAGE_GAP_REASONS: ReadonlyArray<{
+  readonly reason: keyof GroundedAnswerContextPackSummary["omittedCounts"];
+  readonly label: string;
+}> = [
+  { reason: "size-exceeded", label: "larger than 2 MB" },
+  { reason: "binary", label: "binary or an unsupported format" },
+  { reason: "generated", label: "generated artifacts" },
+  { reason: "budget-exhausted", label: "skipped after the exploration budget was reached" },
+  { reason: "tool-unavailable", label: "unreadable" },
+];
+
+function CoverageNotice({
+  omittedCounts,
+}: {
+  readonly omittedCounts: GroundedAnswerContextPackSummary["omittedCounts"];
+}): ReactNode {
+  const gaps = COVERAGE_GAP_REASONS.map(({ reason, label }) => ({
+    label,
+    count: omittedCounts[reason],
+  })).filter((gap) => gap.count > 0);
+  const total = gaps.reduce((sum, gap) => sum + gap.count, 0);
+  if (total <= 0) return null;
+  const detail = gaps.map((gap) => `${String(gap.count)} ${gap.label}`).join(", ");
+  const fileWord = total === 1 ? "file" : "files";
+  const verb = total === 1 ? "was" : "were";
+  return (
+    <div className="grounded-coverage-notice" role="note">
+      <span className="grounded-coverage-notice-title">Partial coverage</span>
+      <span>
+        {`This answer reflects only the searchable files in the connected scope — ${String(total)} ${fileWord} ${verb} not searched (${detail}). It does not cover the entire folder.`}
+      </span>
+    </div>
+  );
+}
+
 function AuditEvidenceLink({ runId }: { readonly runId: string | undefined }): ReactNode {
   if (runId === undefined) return null;
   return (
@@ -273,6 +312,7 @@ export function GroundedAnswer({ answer, busy }: GroundedAnswerProps): ReactNode
   return (
     <div className="grounded-answer">
       <div className="grounded-answer-body">{answer.content}</div>
+      <CoverageNotice omittedCounts={answer.contextPack.omittedCounts} />
       <CitationList citations={answer.citations} />
       <UncertaintyLine markers={answer.uncertainty} />
       <OmittedLine

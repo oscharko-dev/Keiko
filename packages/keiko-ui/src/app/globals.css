@@ -5953,6 +5953,27 @@ select.dlg-input {
   font-family: var(--font-mono);
 }
 
+/* Partial-coverage notice: warns the user that the answer does not cover the whole connected
+   folder because some files were too large (>2 MB) or a binary/unsupported format. Text uses --fg
+   (16.96:1 on --card-2 in dark, high contrast on the near-white --card-2 in light — WCAG 1.4.3);
+   the warning cue is the --warn left border, which is not subject to text-contrast rules. */
+.grounded-coverage-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--card-2);
+  border-left: 3px solid var(--warn);
+  border-radius: 4px;
+}
+.grounded-coverage-notice-title {
+  font-weight: 600;
+  color: var(--fg);
+}
+
 /* Issue #187 — context inspection summary on every grounded answer. Counts/enums only;
    never raw paths, query text, or excerpt content. Both --dt and --dd use --fg: in the dark
    theme --fg-muted on --card is 3.67:1 which fails WCAG 1.4.3 normal-text 4.5:1 — labels

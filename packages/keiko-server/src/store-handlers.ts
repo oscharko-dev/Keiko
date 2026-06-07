@@ -562,21 +562,43 @@ function validateScopePathAccess(
   }
 }
 
+function resolveRealRoot(rootInput: string, notAccessibleMessage: string): string {
+  const root = validateProjectPath(rootInput, { mustExist: true });
+  try {
+    return realpathSync(root);
+  } catch {
+    throw new InvalidRequest(notAccessibleMessage);
+  }
+}
+
+// Epic #532 — a connected scope may carry its OWN absolute root pointing anywhere on the machine
+// (a folder outside the chat's project, so non-developers can connect any folder). Validate it like
+// a project root, then refuse credential/secret locations (deny-list) and credential-shaped path
+// metadata so home-directory browsing can never bind a secret folder as a grounded scope.
+function validateConnectedScopeRoot(deps: UiHandlerDeps, rootInput: string): string {
+  const realRoot = resolveRealRoot(rootInput, "Connected scope root is not accessible.");
+  if (pathIsDenied(realRoot)) {
+    throw new InvalidRequest("Connected scope root is excluded from Keiko's safe read surface.");
+  }
+  const redacted = deps.redactor(realRoot);
+  if (typeof redacted === "string" && redacted !== realRoot) {
+    throw new InvalidRequest("Connected scope root contains credential-shaped metadata.");
+  }
+  return realRoot;
+}
+
 function validateConnectedScopeAccess(
   deps: UiHandlerDeps,
   chat: Chat,
   scope: ChatConnectedScope,
 ): void {
-  const projectRoot = validateProjectPath(chat.projectPath, { mustExist: true });
-  let realProjectRoot: string;
-  try {
-    realProjectRoot = realpathSync(projectRoot);
-  } catch {
-    throw new InvalidRequest("Selected project is not accessible.");
-  }
+  const realRoot =
+    scope.root !== undefined
+      ? validateConnectedScopeRoot(deps, scope.root)
+      : resolveRealRoot(chat.projectPath, "Selected project is not accessible.");
   if (scope.kind === "workspace-root") return;
   for (const entry of scope.relativePaths) {
-    validateScopePathAccess(deps, realProjectRoot, scope.kind, entry);
+    validateScopePathAccess(deps, realRoot, scope.kind, entry);
   }
 }
 
@@ -587,6 +609,18 @@ function validateScopeConnectedAtMs(value: unknown): number {
     );
   }
   return value;
+}
+
+// Epic #532 — shape check for the optional connected-scope root. Deep validation (existence,
+// deny-list, realpath containment) runs in validateConnectedScopeAccess against the live filesystem.
+function validateOptionalScopeRoot(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new InvalidRequest(
+      'Field "connectedScope.root" must be a non-empty string when provided.',
+    );
+  }
+  return value.trim();
 }
 
 function parseCapsuleLocalKnowledgeScope(
@@ -661,7 +695,8 @@ function optionalConnectedScope(
   const kind = validateScopeKind(scope.kind);
   const relativePaths = validateScopeRelativePaths(kind, scope.relativePaths);
   const connectedAtMs = validateScopeConnectedAtMs(scope.connectedAtMs);
-  return { kind, relativePaths, connectedAtMs };
+  const root = validateOptionalScopeRoot(scope.root);
+  return { kind, relativePaths, connectedAtMs, ...(root !== undefined ? { root } : {}) };
 }
 
 function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): UpdateChatPatch {

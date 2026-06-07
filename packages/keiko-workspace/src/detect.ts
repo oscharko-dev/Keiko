@@ -148,20 +148,30 @@ function detectLanguages(root: string, fs: WorkspaceFs): readonly WorkspaceLangu
   return languages;
 }
 
+// Build workspace metadata treating `root` as THE workspace root — no walk-up, never throws
+// WorkspaceNotFoundError. The connected-context feature uses this for a folder the user explicitly
+// connected (Files-window scope): that folder IS the root even when it carries no `.git`/
+// `package.json` marker, so an arbitrary documents folder is searchable just like a repository.
+export function detectWorkspaceAt(root: string, fs: WorkspaceFs = nodeWorkspaceFs): WorkspaceInfo {
+  const resolved = resolve(root);
+  const meta = readPackageMeta(resolved, fs);
+  return {
+    root: resolved,
+    name: meta.name,
+    version: meta.version,
+    testFramework: meta.testFramework,
+    sourceDirs: detectDirs(resolved, fs, ["src"]),
+    testDirs: detectDirs(resolved, fs, ["tests", "test", "__tests__"]),
+    languages: detectLanguages(resolved, fs),
+    ignoreLines: readIgnoreLines(resolved, fs),
+  };
+}
+
+// Walk up from startDir to the nearest `.git`/`package.json` root, then read its metadata. Used
+// for auto-detection (e.g. the CLI) where the caller starts inside a repository subdirectory.
 export function detectWorkspace(
   startDir: string,
   fs: WorkspaceFs = nodeWorkspaceFs,
 ): WorkspaceInfo {
-  const root = findRoot(startDir, fs);
-  const meta = readPackageMeta(root, fs);
-  return {
-    root,
-    name: meta.name,
-    version: meta.version,
-    testFramework: meta.testFramework,
-    sourceDirs: detectDirs(root, fs, ["src"]),
-    testDirs: detectDirs(root, fs, ["tests", "test", "__tests__"]),
-    languages: detectLanguages(root, fs),
-    ignoreLines: readIgnoreLines(root, fs),
-  };
+  return detectWorkspaceAt(findRoot(startDir, fs), fs);
 }

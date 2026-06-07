@@ -50,6 +50,7 @@ interface ChatRow {
 interface DecodedScopePayload {
   readonly kind: SelectedScopeKind;
   readonly relativePaths: readonly string[];
+  readonly root?: string;
 }
 
 function isSelectedScopeKind(value: unknown): value is SelectedScopeKind {
@@ -97,7 +98,9 @@ function decodeConnectedScopePayload(parsed: unknown): DecodedScopePayload | und
   const raw = parsed as Record<string, unknown>;
   if (!isSelectedScopeKind(raw.kind) || !Array.isArray(raw.relativePaths)) return undefined;
   const relativePaths = validateScopePathsForKind(raw.kind, raw.relativePaths);
-  return relativePaths === undefined ? undefined : { kind: raw.kind, relativePaths };
+  if (relativePaths === undefined) return undefined;
+  const root = typeof raw.root === "string" && raw.root.length > 0 ? raw.root : undefined;
+  return { kind: raw.kind, relativePaths, ...(root !== undefined ? { root } : {}) };
 }
 
 function decodeConnectedScope(
@@ -118,7 +121,12 @@ function decodeConnectedScope(
   if (!Number.isInteger(connectedAt) || connectedAt < 0) {
     return undefined;
   }
-  return { kind: payload.kind, relativePaths: payload.relativePaths, connectedAtMs: connectedAt };
+  return {
+    kind: payload.kind,
+    relativePaths: payload.relativePaths,
+    connectedAtMs: connectedAt,
+    ...(payload.root !== undefined ? { root: payload.root } : {}),
+  };
 }
 
 function decodeLocalKnowledgeScope(raw: string | null): ChatLocalKnowledgeScope | undefined {
@@ -387,7 +395,13 @@ function scopeUpdateParams(value: ChatConnectedScope | null | undefined): ScopeU
   if (value === null) return { apply: 1, pathsJson: null, connectedAtMs: null };
   return {
     apply: 1,
-    pathsJson: JSON.stringify({ kind: value.kind, relativePaths: value.relativePaths }),
+    // Epic #532 — persist the optional scope root (a folder outside the chat's project) inside the
+    // existing connected_scope_paths JSON column, so no schema migration is needed.
+    pathsJson: JSON.stringify({
+      kind: value.kind,
+      relativePaths: value.relativePaths,
+      ...(value.root !== undefined ? { root: value.root } : {}),
+    }),
     connectedAtMs: value.connectedAtMs,
   };
 }

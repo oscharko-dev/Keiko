@@ -61,6 +61,15 @@ export const DEFAULT_SEARCH_LIMITS: SearchLimits = {
   elapsedMsMax: 5_000,
 } as const;
 
+// Upper bound (2 MiB) on how many bytes of a file readExcerpt will load to reach a requested line
+// window. The returned excerpt content is still clamped to the caller's request.maxBytes; this cap
+// only governs how deep into a file we can slice. Decoupling it from request.maxBytes lets excerpts
+// be read from files far larger than a single excerpt budget (a 16 KiB doc was previously unreadable
+// and crashed the grounded request — Epic #177). Kept in step with the planner's 2 MiB scan cap so
+// any file the search can match can also be excerpted. Files larger than this raise
+// FileTooLargeError, which callers handle as a graceful omission.
+const MAX_EXCERPT_FILE_BYTES = 2_097_152;
+
 export interface SearchResult {
   readonly atoms: readonly EvidenceAtom[];
   readonly candidates: readonly CandidateFile[];
@@ -330,10 +339,14 @@ export async function readExcerpt(
       "binary",
     );
   }
+  // Read enough of the file to reach the requested line window (bounded by MAX_EXCERPT_FILE_BYTES),
+  // then clamp the returned content to the caller's request.maxBytes budget. The read cap is
+  // intentionally larger than request.maxBytes so a window deep in a multi-kibibyte file is still
+  // reachable instead of the whole file being rejected.
   const content = readWorkspaceFile(
     scope.workspace,
     request.scopePath,
-    { maxBytes: request.maxBytes + 4_096 },
+    { maxBytes: MAX_EXCERPT_FILE_BYTES },
     fs,
   );
   const allLines = content.text.split("\n");

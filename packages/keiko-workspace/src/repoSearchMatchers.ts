@@ -20,9 +20,128 @@ export function fingerprintFor(query: RetrievalQuery): string {
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
 
+// Issue #177 retrieval correctness: a natural-language question carries function words ("the",
+// "to", "are", "based", "on", ...) that appear on nearly every prose line. Scoring the raw
+// whitespace tokens let those stop words match almost everything, so the global
+// `maxMatchesReturned` budget was exhausted on the first alphabetically-scanned files and the
+// rest of a multi-file scope was never read (a `docs/` connect would only ever surface its
+// first file, never the file the question was actually about). We mirror the exploration
+// planner's fixed English stop-word policy (planner/anchors.ts in keiko-workflows — duplicated
+// here rather than imported because the architecture forbids keiko-workspace depending on the
+// higher-level keiko-workflows package): strip surrounding punctuation, drop single-character and
+// stop-word tokens, and keep `adr-0022`/`file.ts`-style hyphenated and dotted identifiers intact.
+const NL_STOP_WORDS: ReadonlySet<string> = new Set([
+  "the",
+  "and",
+  "for",
+  "with",
+  "from",
+  "this",
+  "that",
+  "what",
+  "where",
+  "when",
+  "which",
+  "have",
+  "has",
+  "had",
+  "are",
+  "was",
+  "were",
+  "is",
+  "be",
+  "been",
+  "being",
+  "do",
+  "does",
+  "did",
+  "doing",
+  "of",
+  "in",
+  "on",
+  "at",
+  "to",
+  "an",
+  "as",
+  "or",
+  "but",
+  "not",
+  "no",
+  "yes",
+  "if",
+  "by",
+  "it",
+  "its",
+  "you",
+  "your",
+  "we",
+  "our",
+  "they",
+  "their",
+  "them",
+  "he",
+  "she",
+  "his",
+  "her",
+  "my",
+  "me",
+  "i",
+  "us",
+  "how",
+  "why",
+  "who",
+  "whom",
+  "whose",
+  "than",
+  "then",
+  "there",
+  "can",
+  "could",
+  "would",
+  "should",
+  "may",
+  "might",
+  "must",
+  "will",
+  "so",
+  "such",
+  "any",
+  "all",
+  "some",
+  "every",
+  "each",
+  "about",
+  "into",
+  "only",
+  "based",
+  "answer",
+]);
+
+// Strip leading/trailing non-alphanumeric characters (Unicode-aware) while preserving internal
+// punctuation such as the hyphen in "ADR-0022" or the dot in "file.ts". Anchored, single
+// character-class quantifiers only — linear in input length (ReDoS-safe).
+function normalizeNaturalLanguageToken(raw: string): string {
+  return raw.replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, "");
+}
+
+// Extract the content tokens a relevance score should be computed over. Falls back to the
+// normalized-but-unfiltered tokens when filtering removes everything (a degenerate single-char
+// or stop-word-only query), so the matcher never silently scores nothing.
+function naturalLanguageContentTokens(
+  rawTokens: readonly string[],
+  caseSensitive: boolean,
+): readonly string[] {
+  const normalized = rawTokens
+    .map(normalizeNaturalLanguageToken)
+    .filter((t) => t.length > 0)
+    .map((t) => (caseSensitive ? t : t.toLowerCase()));
+  const content = normalized.filter((t) => t.length >= 2 && !NL_STOP_WORDS.has(t.toLowerCase()));
+  return content.length > 0 ? content : normalized;
+}
+
 function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
   const rawTokens = query.text.split(/\s+/).filter((t) => t.length > 0);
-  const tokens = query.caseSensitive ? rawTokens : rawTokens.map((t) => t.toLowerCase());
+  const tokens = naturalLanguageContentTokens(rawTokens, query.caseSensitive);
   const total = tokens.length;
   return {
     match: (line: string): number => {

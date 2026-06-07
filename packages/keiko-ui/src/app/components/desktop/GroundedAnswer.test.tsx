@@ -105,6 +105,31 @@ describe("GroundedAnswer", () => {
     expect(screen.getByText(/Inspected 1 file/)).toBeInTheDocument();
   });
 
+  it("warns about partial coverage when files were too large or a binary format", () => {
+    const a = answer({
+      contextPack: contextPack({
+        omittedCounts: { ...OMITTED_COUNTS_ZERO, "size-exceeded": 3, binary: 2 },
+      }),
+    });
+    render(<GroundedAnswer answer={a} busy={false} />);
+    const notice = screen.getByText(/Partial coverage/);
+    expect(notice).toBeInTheDocument();
+    // 3 + 2 = 5 files not searched, with each reason quantified.
+    expect(screen.getByText(/5 files were not searched/)).toBeInTheDocument();
+    expect(screen.getByText(/3 larger than 2 MB/)).toBeInTheDocument();
+    expect(screen.getByText(/2 binary or an unsupported format/)).toBeInTheDocument();
+  });
+
+  it("does not warn about coverage when omissions are only relevance or noise filtering", () => {
+    const a = answer({
+      contextPack: contextPack({
+        omittedCounts: { ...OMITTED_COUNTS_ZERO, "low-relevance": 9, ignored: 4 },
+      }),
+    });
+    render(<GroundedAnswer answer={a} busy={false} />);
+    expect(screen.queryByText(/Partial coverage/)).not.toBeInTheDocument();
+  });
+
   it("renders local knowledge citations and summary when the answer is knowledge-grounded", () => {
     const a: GroundedAnswerType = {
       groundingKind: "local-knowledge",

@@ -186,7 +186,9 @@ function deriveScopeId(chat: Chat): string {
     return `chat-${chat.id}`;
   }
   const hash = createHash("sha256")
-    .update(`${chat.id}|${String(chat.connectedScope.connectedAtMs)}`)
+    .update(
+      `${chat.id}|${String(chat.connectedScope.connectedAtMs)}|${chat.connectedScope.root ?? ""}`,
+    )
     .digest("hex");
   return `cs-${hash.slice(0, 16)}`;
 }
@@ -197,7 +199,9 @@ function buildSelectedScope(chat: Chat): SelectedScope | undefined {
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     scopeId: deriveScopeId(chat),
-    workspaceRoot: chat.projectPath,
+    // Epic #532 — a connected folder may live outside the chat's project. When the scope carries
+    // its own validated root, ground against that folder; otherwise fall back to the chat project.
+    workspaceRoot: cs.root ?? chat.projectPath,
     kind: cs.kind,
     relativePaths: cs.relativePaths,
     conversationId: chat.id,
@@ -594,10 +598,13 @@ async function runGroundedRunner(
   workerCtx: AskWorkerCtx,
   query: RetrievalQuery,
 ): Promise<OrchestratorOutput | RouteResult> {
-  const { chat, scope, runner } = workerCtx;
+  const { scope, runner } = workerCtx;
   try {
     ensureNotCancelled(workerCtx.signal);
-    const output = await runner({ scope, query, workspaceRoot: chat.projectPath });
+    // Epic #532 — ground against the scope's own root (a folder that may live outside the chat's
+    // project), not the chat projectPath. buildSelectedScope set scope.workspaceRoot = cs.root ??
+    // chat.projectPath, so a connected external folder resolves correctly.
+    const output = await runner({ scope, query, workspaceRoot: scope.workspaceRoot });
     ensureNotCancelled(workerCtx.signal);
     return output;
   } catch (error) {
