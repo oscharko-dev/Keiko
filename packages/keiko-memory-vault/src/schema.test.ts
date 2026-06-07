@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { MEMORY_VAULT_SCHEMA_VERSION, runMigrations } from "./schema.js";
+import { TEST_CIPHER } from "./_support.js";
 
 function openMemDb(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -14,32 +15,32 @@ function userVersion(db: DatabaseSync): number {
 }
 
 describe("runMigrations", () => {
-  it("brings a fresh DB to schema version 1", () => {
+  it("brings a fresh DB to the current schema version", () => {
     const db = openMemDb();
-    runMigrations(db);
+    runMigrations(db, TEST_CIPHER);
     expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
     db.close();
   });
 
   it("is idempotent on re-run", () => {
     const db = openMemDb();
-    runMigrations(db);
-    runMigrations(db);
+    runMigrations(db, TEST_CIPHER);
+    runMigrations(db, TEST_CIPHER);
     expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
     db.close();
   });
 
-  it("migrates an empty user_version=0 DB forward to V1", () => {
+  it("migrates an empty user_version=0 DB forward to the current version", () => {
     const db = openMemDb();
     expect(userVersion(db)).toBe(0);
-    runMigrations(db);
-    expect(userVersion(db)).toBe(1);
+    runMigrations(db, TEST_CIPHER);
+    expect(userVersion(db)).toBe(MEMORY_VAULT_SCHEMA_VERSION);
     db.close();
   });
 
   it("creates all four tables", () => {
     const db = openMemDb();
-    runMigrations(db);
+    runMigrations(db, TEST_CIPHER);
     const tables = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
       .all() as unknown as readonly { name: string }[];
@@ -54,7 +55,7 @@ describe("runMigrations", () => {
 
   it("creates the expected indexes", () => {
     const db = openMemDb();
-    runMigrations(db);
+    runMigrations(db, TEST_CIPHER);
     const idx = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%' ORDER BY name",
@@ -79,7 +80,7 @@ describe("runMigrations", () => {
 describe("STRICT-table type enforcement", () => {
   it("rejects a wrong-type insert via raw prepare", () => {
     const db = openMemDb();
-    runMigrations(db);
+    runMigrations(db, TEST_CIPHER);
     // confidence is REAL NOT NULL; passing a TEXT-shaped non-numeric value should error under STRICT.
     expect(() =>
       db

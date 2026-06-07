@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { chmodIfPresent, openMemoryDatabase, quarantineCorruptDb } from "./db.js";
+import { TEST_CIPHER } from "./_support.js";
 
 const cleanups: string[] = [];
 
@@ -20,16 +21,16 @@ function freshDir(): string {
 }
 
 describe("openMemoryDatabase", () => {
-  it("brings a fresh DB up with WAL mode + FK on + V1 migrated", () => {
+  it("brings a fresh DB up with WAL mode + FK on + migrated to v2", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
-    const db = openMemoryDatabase(dbPath);
+    const db = openMemoryDatabase(dbPath, TEST_CIPHER);
     const journal = db.prepare("PRAGMA journal_mode").get() as { journal_mode: string };
     expect(journal.journal_mode).toBe("wal");
     const fk = db.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number };
     expect(fk.foreign_keys).toBe(1);
     const v = db.prepare("PRAGMA user_version").get() as { user_version: number };
-    expect(v.user_version).toBe(1);
+    expect(v.user_version).toBe(2);
     db.close();
   });
 
@@ -37,7 +38,7 @@ describe("openMemoryDatabase", () => {
     if (process.platform === "win32") return;
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
-    const db = openMemoryDatabase(dbPath);
+    const db = openMemoryDatabase(dbPath, TEST_CIPHER);
     db.close();
     expect(statSync(dir).mode & 0o777).toBe(0o700);
     expect(statSync(dbPath).mode & 0o777).toBe(0o600);
@@ -46,9 +47,9 @@ describe("openMemoryDatabase", () => {
   it("close() releases the file lock so the next open succeeds", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
-    const first = openMemoryDatabase(dbPath);
+    const first = openMemoryDatabase(dbPath, TEST_CIPHER);
     first.close();
-    const second = openMemoryDatabase(dbPath);
+    const second = openMemoryDatabase(dbPath, TEST_CIPHER);
     expect(() => second.prepare("SELECT 1").get()).not.toThrow();
     second.close();
   });
@@ -85,10 +86,10 @@ describe("openMemoryDatabase corruption path", () => {
     const dir = freshDir();
     const dbPath = join(dir, "keiko-memory.db");
     writeFileSync(dbPath, "garbage that is not a sqlite header");
-    const db = openMemoryDatabase(dbPath);
-    // Vault is up: V1 applied + new file exists with the correct user_version.
+    const db = openMemoryDatabase(dbPath, TEST_CIPHER);
+    // Vault is up: schema applied to v2 + new file exists with the correct user_version.
     const v = db.prepare("PRAGMA user_version").get() as { user_version: number };
-    expect(v.user_version).toBe(1);
+    expect(v.user_version).toBe(2);
     db.close();
     expect(readdirSync(dir).some((e) => e.startsWith("keiko-memory.db.corrupt."))).toBe(true);
   });
