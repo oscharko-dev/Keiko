@@ -63,9 +63,61 @@ function workspace(partial: Partial<UseWorkspaceResult>): UseWorkspaceResult {
   };
 }
 
+describe("M1 — empty startup layout", () => {
+  it("renders the empty-state affordance when wins is an empty array", () => {
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins: [] })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    expect(screen.getByText("Empty workspace")).toBeInTheDocument();
+    // Both the empty-state button and the FAB carry aria-label="New window".
+    // Query the empty-state-specific button via its class to avoid ambiguity.
+    expect(container.querySelector(".ws-empty-btn")).not.toBeNull();
+  });
+
+  it("calls openPalette when the empty-state New window button is clicked", async () => {
+    const openPalette = vi.fn();
+    const user = userEvent.setup();
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins: [] })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={openPalette}
+      />,
+    );
+    const emptyBtn = container.querySelector<HTMLButtonElement>(".ws-empty-btn");
+    expect(emptyBtn).not.toBeNull();
+    await user.click(emptyBtn as HTMLButtonElement);
+    // Both the empty-state button and the FAB call openPalette — at least 1 call is expected.
+    expect(openPalette).toHaveBeenCalled();
+  });
+
+  it("does not render the empty-state when wins has at least one window", () => {
+    // Use "agents" type — it renders without a full chat context in jsdom.
+    const wins = [appWindow({ id: "agents-1", type: "agents" })];
+    render(
+      <Workspace
+        ws={workspace({ wins })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+    expect(screen.queryByText("Empty workspace")).toBeNull();
+  });
+});
+
 describe("Workspace card connections", () => {
   it("renders the workspace surface as a main landmark", () => {
-    render(<Workspace ws={workspace({})} wsRef={createRef<HTMLDivElement>()} openPalette={() => undefined} />);
+    render(
+      <Workspace
+        ws={workspace({})}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
     expect(screen.getByRole("main", { name: "Workspace surface" })).toBeInTheDocument();
   });
 
