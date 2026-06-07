@@ -47,7 +47,7 @@
     "smoke:install:memory": "node scripts/installable-memory-smoke.mjs",
     "check:workspace-supply-chain": "node scripts/check-workspace-supply-chain.mjs",
     "check:qi-supply-chain": "node scripts/check-quality-intelligence-supply-chain.mjs",
-    "arch:check": "depcruise --validate .dependency-cruiser.cjs src packages",
+    "arch:check": "depcruise --validate .dependency-cruiser.cjs src packages && node scripts/check-import-policy.mjs",
     "arch:check:negative": "node scripts/arch-check-negative.mjs",
     "conversation:release-check": "npm run typecheck && npm run lint && npm run arch:check && npm run arch:check:negative && npm test && tsc -p tsconfig.build.json && node dist/cli/index.js --version",
     "prepack": "npm run clean && npm run build && npm run prepare:bin && npm run build:ui && npm run arch:check && npm run arch:check:negative && npm run check:package-surface && npm run check:version-consistency && npm run check:qi-supply-chain",

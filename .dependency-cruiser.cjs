@@ -13,6 +13,11 @@
 //   - The root product retains only `src/index.ts` and `src/cli/index.ts` (the installed `keiko`
 //     bin entrypoint). Every other former root `src/<domain>/` shim is a retired path that must
 //     stay unreachable from production package source.
+//   - `includeOnly` intentionally scans source paths, not `packages/*/dist`. Workspace package-name
+//     imports can resolve through package exports into `dist` and therefore are not the source of
+//     truth for package dependency direction in this gate. `scripts/check-package-graph.mjs` owns
+//     the package-name governance with an explicit ADR-0019 allowlist; this file owns source graph
+//     topology and direct package-source bypasses.
 //   - The fixtures under `tests/architecture/fixtures/<name>/` are targeted by the negative test
 //     (`scripts/arch-check-negative.mjs`). They are excluded from root tsconfig/build and ESLint.
 
@@ -601,6 +606,7 @@ module.exports = {
       from: {
         path:
           "^(packages/keiko-(contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence)/src/|" +
+          "tests/architecture/fixtures/domain-not-server/|" +
           "src/(gateway|workspace|tools|audit|harness|workflows|verification|evaluations)/)",
       },
       to: {
@@ -617,6 +623,7 @@ module.exports = {
       from: {
         path:
           "^(packages/keiko-(contracts|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence)/src/|" +
+          "tests/architecture/fixtures/domain-not-cli/|" +
           "src/(gateway|workspace|tools|audit|harness|workflows|verification|evaluations)/)",
       },
       to: {
@@ -716,7 +723,7 @@ module.exports = {
         "53-warning baseline. The browser-tier scope is preserved by keeping " +
         "^packages/keiko-ui/src/ — that is the Next.js frontend in `ui/`, not the BFF.",
       severity: "error",
-      from: { path: "^packages/keiko-ui/src/" },
+      from: { path: "^(packages/keiko-ui/src/|tests/architecture/fixtures/ui-provider-config/)" },
       to: {
         path:
           "^(packages/keiko-model-gateway/src/.*(config|credentials|provider-config)|" +
@@ -733,7 +740,7 @@ module.exports = {
         "redacts before returning to the browser. Same reasoning as trust-2; keeps the rule " +
         "tight on the actual browser tier (keiko-ui/) without drifting the warning baseline.",
       severity: "error",
-      from: { path: "^packages/keiko-ui/src/" },
+      from: { path: "^(packages/keiko-ui/src/|tests/architecture/fixtures/ui-gateway-internals/)" },
       to: {
         path: "^(packages/keiko-model-gateway/src/|src/gateway/)",
       },
@@ -742,12 +749,13 @@ module.exports = {
       name: "adr-0019-trust-4-no-direct-fs-outside-workspace",
       comment:
         "ADR-0019 trust rule 4: direct node:fs imports are forbidden in keiko-tools, keiko-" +
-        "harness, and keiko-workflows post-extraction. Workspace file access must route through " +
-        "keiko-workspace.",
+        "harness, and keiko-workflows post-extraction except for keiko-tools' controlled " +
+        "effect adapters (writer.ts, exec.ts, and test support). Workspace file access must " +
+        "route through keiko-workspace; patch writes route through keiko-tools' writer port.",
       severity: "error",
       from: {
         path: "^(packages/keiko-(tools|harness|workflows)/src/|src/(tools|harness|workflows)/)",
-        pathNot: "\\.test\\.ts$",
+        pathNot: "^(packages/keiko-tools/src/(_support|exec|writer)\\.ts$)|\\.test\\.ts$",
       },
       to: { path: "^node:fs$|^fs$" },
     },
@@ -779,6 +787,7 @@ module.exports = {
       from: {
         path:
           "^(packages/keiko-(contracts|security|model-gateway|workspace|tools|quality-intelligence)/src/|" +
+          "tests/architecture/fixtures/evidence-allowed-callers/|" +
           "src/(gateway|workspace|tools|verification)/)",
       },
       to: {
@@ -811,7 +820,7 @@ module.exports = {
         "test-only exceptions in production code).",
       severity: "error",
       from: {
-        path: "^(packages/keiko-[^/]+/src/|src/)",
+        path: "^(packages/keiko-[^/]+/src/|tests/architecture/fixtures/no-do-not-follow-in-prod/|src/)",
         pathNot: "\\.test\\.ts$",
       },
       to: { path: "(^|/)(__tests__|__test-support__|test-support)(/|$)" },
@@ -825,6 +834,8 @@ module.exports = {
       exportsFields: ["exports"],
       conditionNames: ["import", "node"],
     },
+    // Source-only by design: package-name dependency direction is enforced by
+    // scripts/check-package-graph.mjs rather than by scanning generated dist output.
     includeOnly: "^(src|packages/[^/]+/src)",
   },
 };

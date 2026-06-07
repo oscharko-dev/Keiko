@@ -29,12 +29,16 @@ function writePackage(root, name, dependencyNames = []) {
         import: "./dist/index.js",
       },
     },
-    dependencies: Object.fromEntries(dependencyNames.map((dependencyName) => [dependencyName, "*"])),
+    dependencies: Object.fromEntries(
+      dependencyNames.map((dependencyName) => [dependencyName, "*"]),
+    ),
   });
   writeJson(root, `packages/${name}/tsconfig.json`, {
     compilerOptions: { rootDir: "src" },
     include: ["src"],
-    references: dependencyNames.map((dependencyName) => ({ path: `../${dependencyName.slice("@oscharko-dev/".length)}` })),
+    references: dependencyNames.map((dependencyName) => ({
+      path: `../${dependencyName.slice("@oscharko-dev/".length)}`,
+    })),
   });
 }
 
@@ -42,41 +46,42 @@ function writeCleanRoot(root) {
   writeJson(root, "package.json", {
     name: "synthetic-root",
     private: true,
-      workspaces: ["packages/*"],
-      scripts: {
-        "build:packages": "tsc -b tsconfig.packages.json",
-        typecheck: "npm run build:packages && npm run check:package-graph && tsc -p tsconfig.json --noEmit",
-      },
-    });
+    workspaces: ["packages/*"],
+    scripts: {
+      "build:packages": "tsc -b tsconfig.packages.json",
+      typecheck:
+        "npm run build:packages && npm run check:package-graph && tsc -p tsconfig.json --noEmit",
+    },
+  });
   writeJson(root, "tsconfig.packages.json", {
     files: [],
-    references: [{ path: "./packages/keiko-a" }, { path: "./packages/keiko-b" }],
+    references: [{ path: "./packages/keiko-contracts" }, { path: "./packages/keiko-security" }],
   });
-  writePackage(root, "keiko-a", ["@oscharko-dev/keiko-b"]);
-  writePackage(root, "keiko-b");
+  writePackage(root, "keiko-contracts");
+  writePackage(root, "keiko-security", ["@oscharko-dev/keiko-contracts"]);
 }
 
 function writeDriftedRoot(root) {
   writeCleanRoot(root);
   writeJson(root, "tsconfig.packages.json", {
     files: [],
-    references: [{ path: "./packages/keiko-a" }],
+    references: [{ path: "./packages/keiko-contracts" }],
   });
-  writeJson(root, "packages/keiko-a/package.json", {
-    name: "@oscharko-dev/keiko-a",
-    main: "./dist/packages/keiko-a/src/index.js",
-    types: "./dist/packages/keiko-a/src/index.d.ts",
+  writeJson(root, "packages/keiko-security/package.json", {
+    name: "@oscharko-dev/keiko-security",
+    main: "./dist/packages/keiko-security/src/index.js",
+    types: "./dist/packages/keiko-security/src/index.d.ts",
     exports: {
       ".": {
-        types: "./dist/packages/keiko-a/src/index.d.ts",
-        import: "./dist/packages/keiko-a/src/index.js",
+        types: "./dist/packages/keiko-security/src/index.d.ts",
+        import: "./dist/packages/keiko-security/src/index.js",
       },
     },
     dependencies: {
-      "@oscharko-dev/keiko-b": "*",
+      "@oscharko-dev/keiko-harness": "*",
     },
   });
-  writeJson(root, "packages/keiko-a/tsconfig.json", {
+  writeJson(root, "packages/keiko-security/tsconfig.json", {
     compilerOptions: { rootDir: "../.." },
     include: ["src", "../../src/sdk/**/*.ts"],
     references: [],
@@ -105,10 +110,19 @@ describe("checkWorkspacePackageGraph", () => {
     expect(failures).toEqual(
       expect.arrayContaining([
         expect.stringContaining("tsconfig.packages.json references"),
-        expect.stringContaining("@oscharko-dev/keiko-a: tsconfig references"),
-        expect.stringContaining('@oscharko-dev/keiko-a: compilerOptions.rootDir must be "src"'),
-        expect.stringContaining("@oscharko-dev/keiko-a: tsconfig include still contains a root-relative path"),
-        expect.stringContaining("@oscharko-dev/keiko-a: manifest still points at dist/packages/... output"),
+        expect.stringContaining("@oscharko-dev/keiko-security: tsconfig references"),
+        expect.stringContaining(
+          "@oscharko-dev/keiko-security: workspace dependencies @oscharko-dev/keiko-harness",
+        ),
+        expect.stringContaining(
+          '@oscharko-dev/keiko-security: compilerOptions.rootDir must be "src"',
+        ),
+        expect.stringContaining(
+          "@oscharko-dev/keiko-security: tsconfig include still contains a root-relative path",
+        ),
+        expect.stringContaining(
+          "@oscharko-dev/keiko-security: manifest still points at dist/packages/... output",
+        ),
       ]),
     );
   });

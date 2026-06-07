@@ -5,7 +5,169 @@ import { collectWorkspacePackages } from "./workspace-graph.mjs";
 
 const UI_PACKAGE = "@oscharko-dev/keiko-ui";
 const BUILD_PACKAGES_SCRIPT = "tsc -b tsconfig.packages.json";
-const TYPECHECK_SCRIPT = "npm run build:packages && npm run check:package-graph && tsc -p tsconfig.json --noEmit";
+const TYPECHECK_SCRIPT =
+  "npm run build:packages && npm run check:package-graph && tsc -p tsconfig.json --noEmit";
+const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
+  [
+    "@oscharko-dev/keiko-cli",
+    [
+      "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-security",
+      "@oscharko-dev/keiko-model-gateway",
+      "@oscharko-dev/keiko-workspace",
+      "@oscharko-dev/keiko-tools",
+      "@oscharko-dev/keiko-harness",
+      "@oscharko-dev/keiko-workflows",
+      "@oscharko-dev/keiko-evaluations",
+      "@oscharko-dev/keiko-evidence",
+      "@oscharko-dev/keiko-sdk",
+      "@oscharko-dev/keiko-server",
+      "@oscharko-dev/keiko-verification",
+    ],
+  ],
+  ["@oscharko-dev/keiko-contracts", []],
+  [
+    "@oscharko-dev/keiko-evaluations",
+    [
+      "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-security",
+      "@oscharko-dev/keiko-model-gateway",
+      "@oscharko-dev/keiko-workspace",
+      "@oscharko-dev/keiko-tools",
+      "@oscharko-dev/keiko-harness",
+      "@oscharko-dev/keiko-workflows",
+      "@oscharko-dev/keiko-verification",
+      "@oscharko-dev/keiko-evidence",
+    ],
+  ],
+  [
+    "@oscharko-dev/keiko-evidence",
+    [
+      "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-security",
+      "@oscharko-dev/keiko-workspace",
+    ],
+  ],
+  [
+    "@oscharko-dev/keiko-harness",
+    [
+      "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-security",
+      "@oscharko-dev/keiko-model-gateway",
+      "@oscharko-dev/keiko-workspace",
+      "@oscharko-dev/keiko-tools",
+      "@oscharko-dev/keiko-evidence",
+    ],
+  ],
+  [
+    "@oscharko-dev/keiko-local-knowledge",
+    [
+      "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-model-gateway",
+      "@oscharko-dev/keiko-workspace",
+    ],
+  ],
+  [
+    "@oscharko-dev/keiko-memory-capture",
+    ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
+  ],
+  [
+    "@oscharko-dev/keiko-memory-consolidation",
+    ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
+  ],
+  [
+    "@oscharko-dev/keiko-memory-governance",
+    ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
+  ],
+  [
+    "@oscharko-dev/keiko-memory-retrieval",
+    ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
+  ],
+  [
+    "@oscharko-dev/keiko-memory-vault",
+    ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
+  ],
+  [
+    "@oscharko-dev/keiko-model-gateway",
+    ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
+  ],
+  [
+    "@oscharko-dev/keiko-quality-intelligence",
+    ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
+  ],
+  [
+    "@oscharko-dev/keiko-sdk",
+    [
+      "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-model-gateway",
+      "@oscharko-dev/keiko-workspace",
+      "@oscharko-dev/keiko-tools",
+      "@oscharko-dev/keiko-harness",
+      "@oscharko-dev/keiko-workflows",
+      "@oscharko-dev/keiko-evaluations",
+      "@oscharko-dev/keiko-verification",
+      "@oscharko-dev/keiko-evidence",
+    ],
+  ],
+  ["@oscharko-dev/keiko-security", ["@oscharko-dev/keiko-contracts"]],
+  [
+    "@oscharko-dev/keiko-server",
+    [
+      "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-security",
+      "@oscharko-dev/keiko-model-gateway",
+      "@oscharko-dev/keiko-workspace",
+      "@oscharko-dev/keiko-tools",
+      "@oscharko-dev/keiko-harness",
+      "@oscharko-dev/keiko-workflows",
+      "@oscharko-dev/keiko-verification",
+      "@oscharko-dev/keiko-evidence",
+      "@oscharko-dev/keiko-sdk",
+      "@oscharko-dev/keiko-local-knowledge",
+      "@oscharko-dev/keiko-memory-vault",
+      "@oscharko-dev/keiko-memory-governance",
+      "@oscharko-dev/keiko-memory-retrieval",
+      "@oscharko-dev/keiko-memory-capture",
+      "@oscharko-dev/keiko-memory-consolidation",
+      "@oscharko-dev/keiko-quality-intelligence",
+    ],
+  ],
+  [
+    "@oscharko-dev/keiko-tools",
+    [
+      "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-security",
+      "@oscharko-dev/keiko-workspace",
+    ],
+  ],
+  [
+    "@oscharko-dev/keiko-verification",
+    [
+      "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-security",
+      "@oscharko-dev/keiko-workspace",
+      "@oscharko-dev/keiko-tools",
+    ],
+  ],
+  [
+    "@oscharko-dev/keiko-workflows",
+    [
+      "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-security",
+      "@oscharko-dev/keiko-model-gateway",
+      "@oscharko-dev/keiko-workspace",
+      "@oscharko-dev/keiko-tools",
+      "@oscharko-dev/keiko-harness",
+      "@oscharko-dev/keiko-verification",
+      "@oscharko-dev/keiko-evidence",
+      "@oscharko-dev/keiko-quality-intelligence",
+    ],
+  ],
+  [
+    "@oscharko-dev/keiko-workspace",
+    ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
+  ],
+]);
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
@@ -18,9 +180,7 @@ function workspaceDeps(manifest) {
 }
 
 function workspaceRefs(tsconfig) {
-  return (tsconfig.references ?? [])
-    .map((entry) => `@oscharko-dev/${basename(entry.path)}`)
-    .sort();
+  return (tsconfig.references ?? []).map((entry) => `@oscharko-dev/${basename(entry.path)}`).sort();
 }
 
 function manifestTargets(manifest) {
@@ -78,9 +238,23 @@ function packageGraphFailures(pkg, tsconfig) {
   const failures = [];
   const deps = workspaceDeps(pkg.manifest);
   const refs = workspaceRefs(tsconfig);
+  const allowedDeps = ALLOWED_WORKSPACE_DEPENDENCIES.get(pkg.name);
 
   if (JSON.stringify(refs) !== JSON.stringify(deps)) {
-    failures.push(`${pkg.name}: tsconfig references ${refs.join(", ")} do not match dependencies ${deps.join(", ")}`);
+    failures.push(
+      `${pkg.name}: tsconfig references ${refs.join(", ")} do not match dependencies ${deps.join(", ")}`,
+    );
+  }
+  if (!allowedDeps) {
+    failures.push(`${pkg.name}: missing ADR-0019 workspace dependency allowlist entry`);
+  } else {
+    const allowed = new Set(allowedDeps);
+    const disallowedDeps = deps.filter((dep) => !allowed.has(dep));
+    if (disallowedDeps.length > 0) {
+      failures.push(
+        `${pkg.name}: workspace dependencies ${disallowedDeps.join(", ")} are not allowed by the ADR-0019 package graph allowlist`,
+      );
+    }
   }
   if (tsconfig.compilerOptions?.rootDir !== "src") {
     failures.push(`${pkg.name}: compilerOptions.rootDir must be "src"`);
@@ -99,7 +273,9 @@ export async function checkWorkspacePackageGraph(root) {
   const rootManifest = await readJson(join(root, "package.json"));
   const packagesSolution = await readJson(join(root, "tsconfig.packages.json"));
   const packages = await collectWorkspacePackages(root);
-  const graphPackages = packages.filter((pkg) => pkg.name !== UI_PACKAGE).sort((a, b) => a.name.localeCompare(b.name));
+  const graphPackages = packages
+    .filter((pkg) => pkg.name !== UI_PACKAGE)
+    .sort((a, b) => a.name.localeCompare(b.name));
 
   failures.push(...rootScriptFailures(rootManifest));
   failures.push(...solutionRefFailures(packagesSolution, graphPackages));
@@ -122,10 +298,13 @@ export async function main(argv = process.argv.slice(2)) {
     }
     process.exit(1);
   }
-  console.log("package-graph: PASS — workspace references, package emits, and root package build graph are aligned.");
+  console.log(
+    "package-graph: PASS — workspace references, package emits, and root package build graph are aligned.",
+  );
 }
 
-const invokedDirectly = process.argv[1] && resolve(process.argv[1]).endsWith("check-package-graph.mjs");
+const invokedDirectly =
+  process.argv[1] && resolve(process.argv[1]).endsWith("check-package-graph.mjs");
 if (invokedDirectly) {
   await main();
 }
