@@ -15,6 +15,7 @@ import { computeFingerprint } from "./emit.js";
 import { runModelLoop } from "./model-loop.js";
 import { cancelledReport, emitCompleted, failedReport, finishPipeline } from "./stages.js";
 import { buildRunState, EMPTY_LOOP, type RunState } from "./internal.js";
+import { assertTargetWithinWorkspace } from "./target-guard.js";
 import type {
   UnitTestWorkflowDeps,
   UnitTestWorkflowInput,
@@ -31,6 +32,9 @@ async function runPipeline(state: RunState): Promise<UnitTestWorkflowReport> {
     applyEnabled: state.input.apply === true,
     limits: state.limits,
   });
+  // Issue #641: enforce workspace containment on the input target before context selection so
+  // escaped, denied, or symlink-escape paths fail closed with modelCallCount=0 and no model call.
+  assertTargetWithinWorkspace(workspace, state.input.target, fs);
   const pack = buildTestGenContext(workspace, state.input, state.limits, { fs });
   const conventions = detectConventions(workspace, pack);
   state.emitter.emit({
