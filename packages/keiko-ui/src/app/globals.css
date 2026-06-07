@@ -5753,6 +5753,14 @@ select.dlg-input {
 /* ============================================================
    Connector UI (Issue #184) — Files window -> chat scope binding
    ============================================================ */
+/* Epic #532 — container for 1+N connected-source pills; wraps to new rows as sources accumulate. */
+.scope-pill-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .scope-pill-wrap {
   display: inline-flex;
   align-items: center;

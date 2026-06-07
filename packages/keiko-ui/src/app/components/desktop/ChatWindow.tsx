@@ -869,9 +869,8 @@ function ChatScopeHeader({
       className="chat-scope-header"
       style={{ padding: "6px 12px", display: "flex", gap: 12, flexWrap: "wrap" }}
     >
-      {chat.connectedScope !== undefined ? (
-        <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
-      ) : null}
+      {/* Renders one pill per connected source (1+N, #532); self-guards to null when none. */}
+      <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
       <LocalKnowledgeScopeControl chat={chat} onChatChanged={onChatChanged} />
     </div>
   );
