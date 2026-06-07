@@ -45,4 +45,5 @@ export {
   createNodeUiStore,
   isProjectAvailable,
   openNodeUiDatabase,
+  UI_DB_BUSY_TIMEOUT_MS,
 } from "./db.js";
