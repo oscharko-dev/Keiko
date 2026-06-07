@@ -91,6 +91,16 @@ export interface OrchestratorOutput {
   readonly plan?: ExplorationPlan;
 }
 
+// Epic #532 — retrieval-only output. The multi-source (1+N) path runs retrieval per connected
+// source, then answers ONCE over the merged packs, so it needs the pack without a per-scope
+// answer. `elapsedMs` here is retrieval-only wall time (no model call), distinct from
+// OrchestratorOutput.elapsedMs which also includes the answer.
+export interface RetrievalOnlyOutput {
+  readonly pack: ConnectedContextPack;
+  readonly elapsedMs: number;
+  readonly plan: ExplorationPlan;
+}
+
 // Raised when the planner asks for clarification (no anchors, too-generic prompt, etc.). The
 // route maps this to a 400 BAD_REQUEST with the planner's clarification reason in the message.
 export class ClarificationNeededError extends Error {
@@ -567,10 +577,14 @@ async function assembleGroundedPack({
 
 // ─── Public entry ─────────────────────────────────────────────────────────────
 
-export async function runGroundedExploration(
+// Epic #532 — retrieval-only pipeline: the ready-governed plan, workspace detection, ring run,
+// and pack assembly (the original steps 1–4) WITHOUT the model answer. `deps.answerer` is part of
+// the shared deps type but is intentionally not invoked here; the multi-source path answers once
+// over the merged packs rather than per source.
+export async function retrieveConnectedContextPack(
   input: OrchestratorInput,
   deps: OrchestratorDeps,
-): Promise<OrchestratorOutput> {
+): Promise<RetrievalOnlyOutput> {
   const fs = deps.fs ?? nodeWorkspaceFs;
   const detect = deps.detectWorkspace ?? detectWorkspaceAt;
   const nowMs = deps.nowMs ?? Date.now;
@@ -591,6 +605,19 @@ export async function runGroundedExploration(
   throwIfCancelled(deps.signal);
   const pack = await assembleGroundedPack({ input, deps, plan, rings, searchScope, fs, nowMs });
   throwIfCancelled(deps.signal);
+  return { pack, elapsedMs: Math.max(0, nowMs() - start), plan };
+}
+
+export async function runGroundedExploration(
+  input: OrchestratorInput,
+  deps: OrchestratorDeps,
+): Promise<OrchestratorOutput> {
+  // AC5 (#532): the single-source path measures its OWN total wall time (retrieval + answer) so the
+  // observable elapsedMs is byte-identical to before this split. The retrieval-only elapsed returned
+  // by retrieveConnectedContextPack is deliberately discarded here.
+  const nowMs = deps.nowMs ?? Date.now;
+  const start = nowMs();
+  const { pack, plan } = await retrieveConnectedContextPack(input, deps);
   const assistantContent = await deps.answerer.answer(input.query.text, pack);
   const elapsedMs = Math.max(0, nowMs() - start);
   return { pack, assistantContent, elapsedMs, plan };
