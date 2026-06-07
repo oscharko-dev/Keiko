@@ -179,6 +179,7 @@ export { QUALITY_INTELLIGENCE_HANDOFF_PROMPTED_ACTIONS } from "./handoffEnvelope
 export type {
   QualityIntelligenceUiRunTotals,
   QualityIntelligenceUiRunSummary,
+  QualityIntelligenceUiRunListResponse,
   QualityIntelligenceUiFindingSummary,
   QualityIntelligenceUiEvidenceRef,
   QualityIntelligenceUiRunDetail,

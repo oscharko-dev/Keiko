@@ -94,6 +94,24 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+describe("runGenTestsCli — --help / -h (issue #640)", () => {
+  it("exits 0 with usage on stdout for --help", async () => {
+    const c = makeIo();
+    const code = await runGenTestsCli(["--help"], c.io, {}, { model: modelReturning(FENCED) });
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Usage:");
+    expect(c.err()).toBe("");
+  });
+
+  it("exits 0 with usage on stdout for -h", async () => {
+    const c = makeIo();
+    const code = await runGenTestsCli(["-h"], c.io, {}, { model: modelReturning(FENCED) });
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Usage:");
+    expect(c.err()).toBe("");
+  });
+});
+
 describe("runGenTestsCli (AC #1)", () => {
   it("exits 2 and prints usage when neither --file nor --dir is given", async () => {
     const c = makeIo();

@@ -1,6 +1,10 @@
 // Pure unified-diff parser. No I/O, no globals.
-// Payload cap: MAX_DIFF_BYTES (512 KB) — large diffs truncate at byte boundary
-// then at the previous newline so the prefix parses cleanly.
+// Payload caps:
+// - MAX_DIFF_BYTES (512 KB) — large diffs truncate at byte boundary then at the previous newline
+//   so the prefix parses cleanly.
+// - MAX_DIFF_FILES (400 entries, issue #645) — diffs with more file headers cap the rendered file
+//   list and set `truncated: true`. Prevents the Review widget from doing unbounded work on the
+//   `files` array for large repository / generated patches.
 
 export type DiffLineKind = "ctx" | "add" | "del" | "meta";
 
@@ -39,6 +43,11 @@ export interface DiffParseResult {
 
 // 512 KB cap keeps the renderer fast; large diffs use the evidence manifest.
 export const MAX_DIFF_BYTES = 512 * 1024;
+
+// Issue #645: hard cap on the number of files surfaced to the Review widget. The remaining file
+// headers in the parsed prefix are dropped and `truncated:true` signals the renderer to render a
+// "truncated" indicator instead of an unbounded list.
+export const MAX_DIFF_FILES = 400;
 
 // --- helpers ----------------------------------------------------------------
 
@@ -109,7 +118,11 @@ export function parseUnifiedDiff(raw: string): DiffParseResult {
   const flushFile = (): void => {
     flushHunk();
     if (current !== null) {
-      files.push(current);
+      if (files.length < MAX_DIFF_FILES) {
+        files.push(current);
+      } else {
+        truncated = true;
+      }
     }
     current = null;
   };
