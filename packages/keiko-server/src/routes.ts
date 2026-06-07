@@ -86,6 +86,7 @@ import {
   handleCancelLocalKnowledgeCapsuleIndexing,
   handleConnectLocalKnowledgeCapsule,
   handleCreateLocalKnowledgeCapsule,
+  handleCreateLocalKnowledgeCapsuleSet,
   handleDeleteLocalKnowledgeCapsule,
   handleDisconnectLocalKnowledgeCapsule,
   handleGetLocalKnowledgeCapsule,
@@ -229,6 +230,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/local-knowledge/capsule-sets",
     handler: handleListLocalKnowledgeCapsuleSets,
+  },
+  {
+    method: "POST",
+    pattern: "/api/local-knowledge/capsule-sets",
+    handler: handleCreateLocalKnowledgeCapsuleSet,
   },
   {
     method: "GET",

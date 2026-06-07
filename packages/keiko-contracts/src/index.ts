@@ -396,8 +396,14 @@ export type {
   ConnectorNodeRef,
   ConnectorEdge,
   ConnectorGraphState,
+  UpdateCapsulePatch,
+  CreateCapsuleSetBody,
 } from "./local-knowledge.js";
 export {
+  CAPSULE_METADATA_MAX_KEYS,
+  CAPSULE_METADATA_KEY_MAX_CHARS,
+  CAPSULE_METADATA_VALUE_MAX_CHARS,
+  CAPSULE_SET_MAX_MEMBERS,
   LOCAL_KNOWLEDGE_SCHEMA_VERSION,
   EMBEDDING_VECTOR_METRICS,
   KNOWLEDGE_SOURCE_SCOPE_KINDS,

@@ -103,6 +103,9 @@ export * from "./conversation/index.js";
 export { readCitationExcerpt } from "./conversation/citation-excerpts.js";
 export { scriptedAdapter, seedCapsuleWithVectors } from "./testing.js";
 export * from "./privacy/index.js";
+// Slice 4 (Issue #189) — non-destructive capsule-set composition exposed to the BFF.
+export { composeCapsules, CompositionError } from "./composition.js";
+export type { ComposeCapsulesOptions } from "./composition.js";
 
 // ─── Quality Intelligence handoff (Issue #278) ─────────────────────────────────
 // Pure adapter that converts a local-knowledge RetrievalReference list into a list of

@@ -4,6 +4,8 @@ import { basename, dirname } from "node:path";
 import type { IncomingMessage } from "node:http";
 import {
   addSourceToCapsule,
+  composeCapsules,
+  CompositionError,
   createSqliteAuditSink,
   createDefaultParserRegistry,
   createCapsule,
@@ -23,13 +25,17 @@ import type {
   DocumentId,
   IndexingJobRecord,
   KnowledgeCapsule,
+  KnowledgeCapsuleId,
   KnowledgeSource,
   KnowledgeSourceId,
   ParserDiagnostic,
   KnowledgeSourceScope,
 } from "@oscharko-dev/keiko-contracts";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "@oscharko-dev/keiko-local-knowledge";
-import { validateKnowledgeSourceScope } from "@oscharko-dev/keiko-contracts";
+import {
+  CAPSULE_SET_MAX_MEMBERS,
+  validateKnowledgeSourceScope,
+} from "@oscharko-dev/keiko-contracts";
 import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
@@ -936,6 +942,88 @@ export async function handleListLocalKnowledgeCapsuleSets(
         composedAt: capsuleSet.composedAt,
       }));
       return { status: 200, body: { capsuleSets } };
+    } finally {
+      env.close();
+    }
+  });
+}
+
+// ─── Create a capsule set (Slice 4 / Issue #189) — non-destructive composition ──
+
+function parseSetCapsuleIds(raw: unknown): readonly KnowledgeCapsuleId[] {
+  if (!Array.isArray(raw) || raw.length === 0) {
+    throw new InvalidRequest('Field "capsuleIds" must be a non-empty array.');
+  }
+  if (raw.length > CAPSULE_SET_MAX_MEMBERS) {
+    throw new InvalidRequest(
+      `A capsule set may reference at most ${String(CAPSULE_SET_MAX_MEMBERS)} capsules.`,
+    );
+  }
+  const seen = new Set<string>();
+  const capsuleIds: KnowledgeCapsuleId[] = [];
+  for (const id of raw) {
+    if (typeof id !== "string" || id.trim().length === 0) {
+      throw new InvalidRequest('Every "capsuleIds" entry must be a non-empty string.');
+    }
+    if (seen.has(id)) {
+      throw new InvalidRequest(`Duplicate capsule id in the set request: ${id}.`);
+    }
+    seen.add(id);
+    capsuleIds.push(id as KnowledgeCapsuleId);
+  }
+  return capsuleIds;
+}
+
+function parseCreateCapsuleSetInput(body: Record<string, unknown>): {
+  readonly displayName: string;
+  readonly description?: string;
+  readonly capsuleIds: readonly KnowledgeCapsuleId[];
+} {
+  const displayName = typeof body.displayName === "string" ? body.displayName.trim() : "";
+  if (displayName.length === 0) {
+    throw new InvalidRequest('Field "displayName" must be a non-empty string.');
+  }
+  const capsuleIds = parseSetCapsuleIds(body.capsuleIds);
+  const description =
+    typeof body.description === "string" && body.description.trim().length > 0
+      ? body.description.trim()
+      : undefined;
+  return description === undefined
+    ? { displayName, capsuleIds }
+    : { displayName, description, capsuleIds };
+}
+
+export async function handleCreateLocalKnowledgeCapsuleSet(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  return runHandler(async () => {
+    const input = parseCreateCapsuleSetInput(await readJsonObject(ctx.req));
+    const env = openStoreForDeps(deps);
+    try {
+      const set = composeCapsules(env.store, {
+        displayName: input.displayName,
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        capsuleIds: input.capsuleIds,
+      });
+      return {
+        status: 201,
+        body: {
+          capsuleSet: {
+            id: set.id,
+            displayName: set.displayName,
+            ...(set.description !== undefined ? { description: set.description } : {}),
+            capsuleIds: set.capsuleIds,
+            capsuleCount: set.capsuleIds.length,
+            composedAt: set.composedAt,
+          },
+        },
+      };
+    } catch (error) {
+      if (error instanceof CompositionError) {
+        return badRequest("INVALID_REQUEST", error.message);
+      }
+      throw error;
     } finally {
       env.close();
     }
