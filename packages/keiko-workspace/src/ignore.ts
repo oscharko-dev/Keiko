@@ -49,6 +49,25 @@ export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
   ".password-store",
   "id_ecdsa_sk",
   "id_ed25519_sk",
+  // Epic #532 security audit (H1): full-machine browse makes pure-credential FILES reachable in
+  // otherwise-allowed locations (not just credential dirs). These filenames hold secrets or secret
+  // state by convention, so they are denied outright — never listed, previewed, or grounded. Secrets
+  // that are merely content-shaped elsewhere are caught by the redaction layer instead.
+  "*.tfstate",
+  "*.tfstate.backup",
+  "kubeconfig",
+  ".rclone.conf",
+  "wp-config.php",
+  ".htpasswd",
+  ".bash_history",
+  ".zsh_history",
+  ".sh_history",
+  ".mysql_history",
+  ".psql_history",
+  ".python_history",
+  ".node_repl_history",
+  ".irb_history",
+  "service-account*.json",
   // deps
   "node_modules",
   // build

@@ -11,7 +11,10 @@ describe("redactQualityIntelligenceEvidence", () => {
     const input = {
       a: "Authorization: Bearer abcdefghijklmnop",
       b: "key=sk-AAAAAAAAAAAAAAAAAAAA",
-      c: "id_token=aaaaaaaa.bbbbbbbb.cccccccc",
+      // A BARE JWT shape (no secret key-name prefix) so the QI-specific jwt pattern is what scrubs
+      // it. (A `id_token=<jwt>` form is now caught earlier by the security package's key-name
+      // redaction — strictly stronger, but it would not exercise this QI bucket.)
+      c: "trace context aaaaaaaa.bbbbbbbb.cccccccc tail",
       d: "ok",
     };
     const { redacted, summary } = redactQualityIntelligenceEvidence(input);
