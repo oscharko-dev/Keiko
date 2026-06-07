@@ -90,7 +90,9 @@ describe("recordQualityIntelligenceRun + load + list", () => {
             id: "f-1",
             kind: "logic-defect",
             severity: "medium",
-            summaryRedacted: "id_token=aaaaaaaa.bbbbbbbb.cccccccc",
+            // Bare JWT shape exercises the QI jwt pattern; a `id_token=<jwt>` form is now redacted
+            // earlier by the security package's key-name pass and would not reach the jwt bucket.
+            summaryRedacted: "trace aaaaaaaa.bbbbbbbb.cccccccc tail",
           },
         ],
       },

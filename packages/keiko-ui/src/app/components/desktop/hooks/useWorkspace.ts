@@ -245,8 +245,10 @@ function useHydrate({ wsRef, setWins, setConns, zc }: UseHydrateArgs): void {
     } catch {
       init = null;
     }
-    if (init === null) init = defaultLayout(r.width, r.height) as unknown as AppWindow[];
-    zc.current = Math.max(1, ...init.map((w) => w.z));
+    // M1 (#532) — no seeded windows on first launch; the empty-state "New window" button
+    // in Workspace.tsx and the FAB (+) are always reachable even when `wins` is [].
+    if (init === null) init = [];
+    zc.current = init.length === 0 ? 1 : Math.max(1, ...init.map((w) => w.z));
     setWins(init);
     try {
       setConns(parsePersistedConnections(window.localStorage.getItem(CONN_LS), init));

@@ -105,6 +105,47 @@ describe("redact", () => {
     const uuid = "550e8400-e29b-41d4-a716-446655440000";
     expect(redact(`id ${uuid}`)).toContain(uuid);
   });
+
+  // Epic #532 security audit H1 — key-name-based value redaction for secrets with no token SHAPE,
+  // now reachable via full-machine file previews and grounded answers.
+  it("redacts a gcloud refresh_token value in JSON shape", () => {
+    const secret = "1//refreshTOKENvalue1234567890abcdef";
+    const result = redact(`{"client_id":"x.apps","refresh_token":"${secret}"}`);
+    expect(result).not.toContain(secret);
+    expect(result).toContain("refresh_token");
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts a service-account client_secret value", () => {
+    const secret = "GOCSPX-supersecretclientvalue99";
+    const result = redact(`"client_secret": "${secret}"`);
+    expect(result).not.toContain(secret);
+    expect(result).toContain("client_secret");
+  });
+
+  it("redacts a generic password assignment in env/ini shape", () => {
+    const result = redact("DB_PASSWORD=hunter2superSecretValue");
+    expect(result).not.toContain("hunter2superSecretValue");
+    expect(result).toContain("[REDACTED]");
+  });
+
+  it("redacts an aws_secret_access_key value by key name", () => {
+    const secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+    const result = redact(`aws_secret_access_key = ${secret}`);
+    expect(result).not.toContain(secret);
+  });
+
+  it("strips userinfo credentials from a DB/URL connection string", () => {
+    const result = redact("postgres://admin:s3cr3tPassw0rd@db.internal:5432/app");
+    expect(result).not.toContain("s3cr3tPassw0rd");
+    expect(result).toContain("postgres://");
+    expect(result).toContain("@db.internal:5432/app");
+  });
+
+  it("does not redact a benign 'password reset' sentence with no assignment", () => {
+    const prose = "Follow the password reset link to continue.";
+    expect(redact(prose)).toBe(prose);
+  });
 });
 
 // Secret-shaped fixtures are built by concatenation/repeat so no contiguous real-shaped token
