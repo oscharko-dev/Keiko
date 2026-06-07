@@ -15,13 +15,18 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge";
 import type {
   Chat,
+  ChatLocalKnowledgeScope,
   ChatMessage,
   GroundedAnswer,
   GroundedUncertainty,
   LocalKnowledgeEvidenceCitation,
   LocalKnowledgeGroundedAnswer,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { KnowledgeCapsule, KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
+import type {
+  KnowledgeCapsule,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   requestOpenAIEmbedding,
   type OpenAIEmbeddingAdapter,
@@ -33,9 +38,9 @@ import { currentGatewayConfig } from "./deps.js";
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 
-const DEFAULT_REFERENCE_BUDGET = 10;
-const MAX_EXCERPT_CHARS = 900;
-const MAX_PROMPT_REFERENCES = 8;
+export const DEFAULT_REFERENCE_BUDGET = 10;
+export const MAX_EXCERPT_CHARS = 900;
+export const MAX_PROMPT_REFERENCES = 8;
 
 interface CapsuleUsageSummary {
   readonly capsuleId: KnowledgeCapsuleId;
@@ -50,7 +55,7 @@ interface AskInput {
   readonly modelId: string | undefined;
 }
 
-interface SelectedLocalKnowledgeScope {
+export interface SelectedLocalKnowledgeScope {
   readonly capsules: readonly KnowledgeCapsule[];
   readonly scopeKind: "capsule" | "capsule-set";
   readonly scopeLabel: string;
@@ -75,7 +80,7 @@ function runtimeStateDir(deps: UiHandlerDeps): string | undefined {
   return dirname(deps.uiDbPath);
 }
 
-function openStoreForDeps(deps: UiHandlerDeps): {
+export function openStoreForDeps(deps: UiHandlerDeps): {
   readonly store: KnowledgeStore;
   close(): void;
 } {
@@ -108,7 +113,10 @@ function requestEmbeddingImpl(
   return deps.localKnowledgeEmbeddingRequest ?? requestOpenAIEmbedding;
 }
 
-function createEmbeddingAdapter(deps: UiHandlerDeps, modelIds: readonly string[]): OpenAIEmbeddingAdapter | RouteResult {
+export function createEmbeddingAdapter(
+  deps: UiHandlerDeps,
+  modelIds: readonly string[],
+): OpenAIEmbeddingAdapter | RouteResult {
   const config = currentGatewayConfig(deps);
   if (config === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
@@ -116,9 +124,7 @@ function createEmbeddingAdapter(deps: UiHandlerDeps, modelIds: readonly string[]
   for (const modelId of modelIds) {
     const provider = config.providers.find((entry) => entry.modelId === modelId);
     if (provider === undefined) {
-      return conflict(
-        `No configured embedding provider matches local knowledge model ${modelId}.`,
-      );
+      return conflict(`No configured embedding provider matches local knowledge model ${modelId}.`);
     }
   }
   return {
@@ -141,14 +147,13 @@ function createEmbeddingAdapter(deps: UiHandlerDeps, modelIds: readonly string[]
   };
 }
 
-function selectedCapsules(
-  chat: Chat,
+// Resolves ONE connector scope (capsule or capsule-set) to its capsules + display label. Extracted
+// from `selectedCapsules` so the hybrid path (#189 Slice 2) can resolve each of N connector scopes
+// independently; the single-connector path delegates here with `chat.localKnowledgeScope`.
+export function selectedCapsulesForScope(
+  scope: ChatLocalKnowledgeScope,
   store: KnowledgeStore,
 ): SelectedLocalKnowledgeScope | RouteResult {
-  const scope = chat.localKnowledgeScope;
-  if (scope === undefined) {
-    return badRequest("Chat has no local knowledge scope.");
-  }
   if (scope.kind === "capsule") {
     const capsule = getCapsule(store, scope.capsuleId);
     if (capsule === undefined) {
@@ -171,7 +176,18 @@ function selectedCapsules(
   return { capsules, scopeKind: "capsule-set", scopeLabel: set.displayName };
 }
 
-function scopeStateFailure(
+function selectedCapsules(
+  chat: Chat,
+  store: KnowledgeStore,
+): SelectedLocalKnowledgeScope | RouteResult {
+  const scope = chat.localKnowledgeScope;
+  if (scope === undefined) {
+    return badRequest("Chat has no local knowledge scope.");
+  }
+  return selectedCapsulesForScope(scope, store);
+}
+
+export function scopeStateFailure(
   selected: SelectedLocalKnowledgeScope,
 ): { readonly reason: string; readonly message: string } | undefined {
   if (selected.capsules.some((capsule) => capsule.lifecycleState === "indexing")) {
@@ -201,7 +217,9 @@ function scopeStateFailure(
   return undefined;
 }
 
-function renderCitationLabel(citation: AnswerGeneratorInput["references"][number]["citation"]): string {
+export function renderCitationLabel(
+  citation: AnswerGeneratorInput["references"][number]["citation"],
+): string {
   const parts = [citation.safeDisplayName];
   if (citation.pageLabel !== undefined) {
     parts.push(`page ${citation.pageLabel}`);
@@ -373,7 +391,10 @@ function persistGroundedExchange(
   return [user, assistant];
 }
 
-function citationStableId(citation: AnswerGeneratorInput["references"][number], marker: string): string {
+function citationStableId(
+  citation: AnswerGeneratorInput["references"][number],
+  marker: string,
+): string {
   return createHash("sha256")
     .update(`${marker}|${String(citation.capsuleId)}|${String(citation.chunkId)}`)
     .digest("hex")
@@ -464,10 +485,7 @@ function emitAnswerContextAudit(
   }
 }
 
-function localKnowledgeQuery(
-  chat: Chat,
-  input: AskInput,
-): Parameters<typeof runGroundedAnswer>[1] {
+function localKnowledgeQuery(chat: Chat, input: AskInput): Parameters<typeof runGroundedAnswer>[1] {
   return {
     conversationId: chat.id,
     text: input.content,
@@ -573,10 +591,7 @@ function buildStateFailureAnswer(
   } satisfies GroundedAnswer;
 }
 
-function resolveModel(
-  deps: UiHandlerDeps,
-  modelId: string,
-): ModelPort | RouteResult {
+function resolveModel(deps: UiHandlerDeps, modelId: string): ModelPort | RouteResult {
   const model = deps.modelPortFactory(modelId);
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
@@ -658,12 +673,7 @@ export async function handleLocalKnowledgeGroundedAsk(
         body: buildStateFailureAnswer(
           chat,
           selected,
-          persistGroundedExchange(
-            deps,
-            chat.id,
-            redactText(deps, input.content),
-            redactedMessage,
-          ),
+          persistGroundedExchange(deps, chat.id, redactText(deps, input.content), redactedMessage),
           { ...stateFailure, message: redactedMessage },
         ),
       };
