@@ -199,6 +199,40 @@ describe("RelationshipInspectorPanel", () => {
       });
       expect(screen.queryByLabelText(/reads context/i)).toBeNull();
     });
+
+    it("uses live activity stream state with lifecycle fallback in the activity section", async () => {
+      mockGetRelationship.mockResolvedValue(BASE_REL);
+      mockGetExplain.mockResolvedValue(BASE_EXPLAIN);
+      const { container, rerender } = render(
+        <RelationshipInspectorPanel
+          relationshipId="rel-abc"
+          densityMode="standard"
+          onClearFocus={vi.fn()}
+          onViewImpact={vi.fn()}
+        />,
+      );
+      await waitFor(() => {
+        expect(container.querySelector('[data-activity-state="active"]')).not.toBeNull();
+      });
+
+      rerender(
+        <RelationshipInspectorPanel
+          relationshipId="rel-abc"
+          densityMode="standard"
+          onClearFocus={vi.fn()}
+          onViewImpact={vi.fn()}
+          activityMap={new Map([["rel-abc", "high-throughput"]])}
+          throughputMap={new Map([["rel-abc", 61]])}
+          animateBadges={false}
+          highContrast
+        />,
+      );
+
+      await waitFor(() => {
+        expect(container.querySelector('[data-activity-state="high-throughput"]')).not.toBeNull();
+      });
+      expect(screen.getByText("High throughput (61)")).toBeDefined();
+    });
   });
 
   describe("action gating by lifecycle", () => {

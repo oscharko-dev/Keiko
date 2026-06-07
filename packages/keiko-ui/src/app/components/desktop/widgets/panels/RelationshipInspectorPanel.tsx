@@ -190,7 +190,7 @@ function EndpointSection({
 
 function LifecycleSection({ lifecycle }: { lifecycle: RelationshipLifecycleState }): ReactNode {
   const descId = `lifecycle-desc-${lifecycle}`;
-  const style = LIFECYCLE_CHIP_STYLES[lifecycle];
+  const style = LIFECYCLE_CHIP_STYLES[lifecycle] ?? LIFECYCLE_CHIP_STYLES.draft;
   return (
     <>
       <SectionLabel>Lifecycle status</SectionLabel>
@@ -229,26 +229,22 @@ interface TransitionRow {
 function ActivitySection({
   type,
   lifecycle,
+  activity,
+  throughputCount,
+  animateBadges,
+  highContrast,
   transitions,
   densityMode,
 }: {
   type: RelationshipType;
   lifecycle: RelationshipLifecycleState;
+  activity: RelationshipActivityState;
+  throughputCount?: number | undefined;
+  animateBadges: boolean;
+  highContrast: boolean;
   transitions: readonly TransitionRow[];
   densityMode: DensityMode;
 }): ReactNode {
-  // Map lifecycle → activity state for current badge (simplified; #541 wires live SSE)
-  const activityState: RelationshipActivityState =
-    lifecycle === "active"
-      ? "active"
-      : lifecycle === "blocked"
-        ? "blocked"
-        : lifecycle === "stale"
-          ? "degraded"
-          : lifecycle === "revoked"
-            ? "failed"
-            : "inactive";
-
   // Per-density cap for inline transition rows (visual-density-rules.md table)
   const transitionCap = densityMode === "minimal" ? 3 : 5;
   const visibleTransitions = transitions.slice(0, transitionCap);
@@ -264,7 +260,10 @@ function ActivitySection({
             <RelationshipEdgeBadge
               type={type}
               lifecycle={lifecycle}
-              activity={activityState}
+              activity={activity}
+              throughputCount={throughputCount}
+              animateOverride={animateBadges}
+              highContrast={highContrast}
             />
           </span>
         </div>
@@ -527,6 +526,21 @@ interface DenialDetails {
   readonly messages: readonly string[];
 }
 
+function lifecycleToActivity(lifecycle: RelationshipLifecycleState): RelationshipActivityState {
+  switch (lifecycle) {
+    case "active":
+      return "active";
+    case "blocked":
+      return "blocked";
+    case "stale":
+      return "degraded";
+    case "revoked":
+      return "failed";
+    default:
+      return "inactive";
+  }
+}
+
 function toDenialDetails(
   reasons: readonly RelationshipValidationError[] | null | undefined,
 ): DenialDetails | null {
@@ -642,6 +656,14 @@ export interface RelationshipInspectorPanelProps {
   readonly onClearFocus?: () => void;
   /** Called when "View Impact" is triggered — #542 wires this. */
   readonly onViewImpact?: (id: string) => void;
+  /** Current transient activity state keyed by relationship id. */
+  readonly activityMap?: ReadonlyMap<string, RelationshipActivityState>;
+  /** Throughput counts for high-throughput badges. */
+  readonly throughputMap?: ReadonlyMap<string, number>;
+  /** True when motion is allowed for activity badges. */
+  readonly animateBadges?: boolean;
+  /** True when prefers-contrast: more is active. */
+  readonly highContrast?: boolean;
 }
 
 // ─── Component ─────────────────────────────────────────────────────────────────
@@ -651,6 +673,10 @@ export function RelationshipInspectorPanel({
   densityMode = "minimal",
   onClearFocus,
   onViewImpact,
+  activityMap = new Map(),
+  throughputMap = new Map(),
+  animateBadges = true,
+  highContrast = false,
 }: RelationshipInspectorPanelProps): ReactNode {
   const [rel, setRel] = useState<ApiRelationship | null>(null);
   const [explain, setExplain] = useState<ExplainResult | null>(null);
@@ -831,6 +857,9 @@ export function RelationshipInspectorPanel({
   const showDenialSection =
     visibleDenial !== null &&
     (rel?.lifecycle === "blocked" || rel?.lifecycle === "revoked" || mutationDenial !== null);
+  const activity =
+    rel !== null ? (activityMap.get(rel.id) ?? lifecycleToActivity(rel.lifecycle)) : "inactive";
+  const throughputCount = rel !== null ? throughputMap.get(rel.id) : undefined;
 
   // ─── Aria-busy container while loading ────────────────────────────────────
 
@@ -908,12 +937,16 @@ export function RelationshipInspectorPanel({
           <LifecycleSection lifecycle={rel.lifecycle} />
 
           {/* Section 5: Activity */}
-          <ActivitySection
-            type={rel.type}
-            lifecycle={rel.lifecycle}
-            transitions={explain?.lifecycle ?? []}
-            densityMode={densityMode}
-          />
+            <ActivitySection
+              type={rel.type}
+              lifecycle={rel.lifecycle}
+              activity={activity}
+              throughputCount={throughputCount}
+              animateBadges={animateBadges}
+              highContrast={highContrast}
+              transitions={explain?.lifecycle ?? []}
+              densityMode={densityMode}
+            />
 
           {/* Section 6: Authority status (verbatim) */}
           <AuthoritySection />

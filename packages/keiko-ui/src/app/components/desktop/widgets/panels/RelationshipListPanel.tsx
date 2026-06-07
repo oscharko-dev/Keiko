@@ -142,6 +142,57 @@ function lifecycleToActivity(lc: RelationshipLifecycleState): RelationshipActivi
   }
 }
 
+const ACTIVITY_PRIORITY: Record<RelationshipActivityState, number> = {
+  "high-throughput": 0,
+  processing: 1,
+  active: 2,
+  blocked: 3,
+  failed: 4,
+  degraded: 5,
+  queued: 6,
+  completed: 7,
+  inactive: 8,
+};
+
+function resolveRelationshipActivity(
+  id: string,
+  lifecycle: RelationshipLifecycleState,
+  activityMap: ReadonlyMap<string, RelationshipActivityState>,
+): RelationshipActivityState {
+  return activityMap.get(id) ?? lifecycleToActivity(lifecycle);
+}
+
+function formatActivityLabel(activity: RelationshipActivityState, count: number): string {
+  const relationshipNoun = count === 1 ? "relationship" : "relationships";
+  switch (activity) {
+    case "high-throughput":
+      return `${count} high-throughput ${relationshipNoun}`;
+    default:
+      return `${count} ${activity} ${relationshipNoun}`;
+  }
+}
+
+function summarizeOverflowActivities(
+  items: readonly ApiRelationship[],
+  activityMap: ReadonlyMap<string, RelationshipActivityState>,
+): string {
+  const counts = new Map<RelationshipActivityState, number>();
+  for (const item of items) {
+    const activity = resolveRelationshipActivity(item.id, item.lifecycle, activityMap);
+    counts.set(activity, (counts.get(activity) ?? 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .sort((a, b) => {
+      if (b[1] !== a[1]) return b[1] - a[1];
+      const aPriority = ACTIVITY_PRIORITY[a[0]] ?? Number.MAX_SAFE_INTEGER;
+      const bPriority = ACTIVITY_PRIORITY[b[0]] ?? Number.MAX_SAFE_INTEGER;
+      return aPriority - bPriority;
+    })
+    .map(([activity, count]) => formatActivityLabel(activity, count))
+    .join(", ");
+}
+
 // ─── Props ─────────────────────────────────────────────────────────────────────
 
 export interface RelationshipListPanelProps {
@@ -155,6 +206,14 @@ export interface RelationshipListPanelProps {
   readonly onFilterChange: (newParams: Partial<RelationshipFilters>) => void;
   /** Working directory / workspace scope for bounded queries. */
   readonly workspaceId?: string | undefined;
+  /** Current transient activity state keyed by relationship id. */
+  readonly activityMap?: ReadonlyMap<string, RelationshipActivityState>;
+  /** Throughput counts for high-throughput badges. */
+  readonly throughputMap?: ReadonlyMap<string, number>;
+  /** True when motion is allowed for activity badges. */
+  readonly animateBadges?: boolean;
+  /** True when prefers-contrast: more is active. */
+  readonly highContrast?: boolean;
 }
 
 // ─── Component ─────────────────────────────────────────────────────────────────
@@ -164,6 +223,10 @@ export function RelationshipListPanel({
   selectedId,
   onSelect,
   onFilterChange,
+  activityMap = new Map(),
+  throughputMap = new Map(),
+  animateBadges = true,
+  highContrast = false,
 }: RelationshipListPanelProps): ReactNode {
   // Density from localStorage; URL param ?relDensity= overrides for this session only
   const [density, setDensity] = useState<DensityMode>(() => {
@@ -319,14 +382,25 @@ export function RelationshipListPanel({
   // ─── Derived rendering: apply focus-mode opacity dimming ─────────────────
 
   const visibleItems = useMemo(() => {
+    const parsed = parseFilters(filters);
+    const activityFiltered =
+      parsed.activities.length === 0
+        ? items
+        : items.filter((item) =>
+            parsed.activities.includes(
+              resolveRelationshipActivity(item.id, item.lifecycle, activityMap),
+            ),
+          );
     // Density cap (visual-density-rules.md §"Per-density rendering caps")
-    return items.slice(0, DENSITY_EDGE_CAP[density]);
-  }, [items, density]);
+    return activityFiltered.slice(0, DENSITY_EDGE_CAP[density]);
+  }, [activityMap, density, filters, items]);
 
   // Animation cap: first 25 get animated badges; rest get static aggregate
   const animatedItems = visibleItems.slice(0, ANIMATION_CAP);
-  const extraAnimated =
-    visibleItems.length > ANIMATION_CAP ? visibleItems.length - ANIMATION_CAP : 0;
+  const overflowItems = visibleItems.slice(ANIMATION_CAP);
+  const extraAnimated = overflowItems.length;
+  const overflowSummary =
+    extraAnimated > 0 ? summarizeOverflowActivities(overflowItems, activityMap) : "";
 
   // ─── Accessible filter-change announcement ────────────────────────────────
   // aria-live="polite" on a visually-hidden region (ui-blueprint.md §"Filtering")
@@ -465,7 +539,7 @@ export function RelationshipListPanel({
         >
           {animatedItems.map((item) => {
             const isSelected = item.id === selectedId;
-            const activity = lifecycleToActivity(item.lifecycle);
+            const activity = resolveRelationshipActivity(item.id, item.lifecycle, activityMap);
             const isFocusedNeighbour = focusMode && isSelected;
             const dimmed = focusMode && !isSelected;
             return (
@@ -497,6 +571,9 @@ export function RelationshipListPanel({
                     type={item.type as RelationshipType}
                     lifecycle={item.lifecycle}
                     activity={activity}
+                    throughputCount={throughputMap.get(item.id)}
+                    animateOverride={animateBadges}
+                    highContrast={highContrast}
                   />
                   <span
                     style={{
@@ -526,7 +603,7 @@ export function RelationshipListPanel({
               style={{ fontSize: 12, color: "var(--fg-muted)", padding: "4px 6px" }}
               data-testid="animation-cap-aggregate"
             >
-              +{String(extraAnimated)} more relationship{extraAnimated !== 1 ? "s" : ""}
+              +{String(extraAnimated)} more: {overflowSummary}
             </div>
           )}
         </div>

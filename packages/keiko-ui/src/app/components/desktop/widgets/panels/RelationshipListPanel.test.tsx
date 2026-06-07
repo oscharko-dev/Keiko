@@ -69,6 +69,10 @@ function renderPanel(
     selectedId: string;
     onSelect: (id: string) => void;
     onFilterChange: (p: Partial<RelationshipFilters>) => void;
+    activityMap: ReadonlyMap<string, import("@oscharko-dev/keiko-contracts").RelationshipActivityState>;
+    throughputMap: ReadonlyMap<string, number>;
+    animateBadges: boolean;
+    highContrast: boolean;
   }> = {},
 ) {
   const onSelect = overrides.onSelect ?? vi.fn();
@@ -82,6 +86,12 @@ function renderPanel(
         selectedId={overrides.selectedId}
         onSelect={onSelect}
         onFilterChange={onFilterChange}
+        {...(overrides.activityMap !== undefined ? { activityMap: overrides.activityMap } : {})}
+        {...(overrides.throughputMap !== undefined ? { throughputMap: overrides.throughputMap } : {})}
+        {...(overrides.animateBadges !== undefined
+          ? { animateBadges: overrides.animateBadges }
+          : {})}
+        {...(overrides.highContrast !== undefined ? { highContrast: overrides.highContrast } : {})}
       />,
     ),
   };
@@ -237,6 +247,52 @@ describe("RelationshipListPanel", () => {
       expect(rowBtn).not.toBeNull();
       fireEvent.keyDown(rowBtn as HTMLElement, { key: "Enter" });
       expect(onSelect).toHaveBeenCalledWith("rel-002");
+    });
+  });
+
+  describe("activity stream wiring", () => {
+    it("uses live activity and throughput state for rendered badges", async () => {
+      const rel = makeRelationship("rel-live");
+      mockListRelationships.mockResolvedValue({
+        entries: [rel],
+        truncated: false,
+        nextCursor: null,
+      });
+      const { container } = renderPanel({
+        activityMap: new Map([["rel-live", "high-throughput"]]),
+        throughputMap: new Map([["rel-live", 73]]),
+        animateBadges: false,
+        highContrast: true,
+      });
+      await waitFor(() => {
+        expect(container.querySelector('[data-activity-state="high-throughput"]')).not.toBeNull();
+      });
+      expect(screen.getByText("High throughput (73)")).toBeDefined();
+    });
+
+    it("renders a stateful overflow aggregate instead of generic text", async () => {
+      const entries = Array.from({ length: 27 }, (_, i) => makeRelationship(`rel-${i}`));
+      mockListRelationships.mockResolvedValue({
+        entries,
+        truncated: false,
+        nextCursor: null,
+      });
+      renderPanel({
+        filters: { relDensity: "dense" },
+        activityMap: new Map([
+          ["rel-25", "processing"],
+          ["rel-26", "blocked"],
+        ]),
+      });
+      await waitFor(() => {
+        expect(screen.getByTestId("animation-cap-aggregate")).toBeDefined();
+      });
+      expect(screen.getByTestId("animation-cap-aggregate").textContent).toContain(
+        "+2 more: 1 processing relationship, 1 blocked relationship",
+      );
+      expect(screen.getByTestId("animation-cap-aggregate").textContent).not.toContain(
+        "+2 more relationships",
+      );
     });
   });
 

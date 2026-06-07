@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "./store/schema.js";
 import { listRelationshipAuditEntries } from "./store/relationship-audit.js";
+import { QueueEventSink } from "./sink.js";
 import {
   createRelationshipStorePort,
   handleRelationshipCreate,
@@ -37,6 +38,7 @@ import {
 import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { STREAMING } from "./routes.js";
+import { createRunRegistry } from "./runs.js";
 
 interface FakeReq extends EventEmitter {
   headers: Record<string, string>;
@@ -67,20 +69,22 @@ function makeReq(opts: {
 function makeCtx(req: FakeReq, params: Record<string, string> = {}): RouteContext {
   const url = new URL(`http://localhost${req.url}`);
   // The minimum ServerResponse interface the SSE handler touches.
-  let writtenHead: { status?: number; headers?: Record<string, string> } = {};
+  const writtenHead: { status?: number; headers?: Record<string, string> } = {};
   let body = "";
+  let ended = false;
   const res = {
     writeHead(status: number, headers: Record<string, string>): void {
-      writtenHead = { status, headers };
+      writtenHead.status = status;
+      writtenHead.headers = headers;
     },
     write(chunk: string): boolean {
       body += chunk;
       return true;
     },
     end(): void {
-      /* no-op */
+      ended = true;
     },
-    _sse: { writtenHead, body: (): string => body },
+    _sse: { writtenHead, body: (): string => body, ended: (): boolean => ended },
   } as unknown as ServerResponse;
   return {
     req: req as unknown as IncomingMessage,
@@ -107,6 +111,7 @@ function buildDeps(
   workspaceId: string | undefined,
   relationship: RelationshipHandlerDeps["store"],
   redactor: (value: unknown) => unknown,
+  registry = createRunRegistry(),
 ): UiHandlerDeps {
   const rel: RelationshipHandlerDeps = {
     scopeResolver: (): { readonly workspaceId: string } | undefined =>
@@ -117,6 +122,7 @@ function buildDeps(
   return {
     relationship: rel,
     redactor,
+    registry,
   } as unknown as UiHandlerDeps;
 }
 
@@ -1057,16 +1063,114 @@ describe("GET /api/relationships/:id/dependencies + impact + health + explain + 
     expect((res.body as { decision: { allowed: boolean } }).decision.allowed).toBe(true);
   });
 
-  it("events returns the STREAMING sentinel and writes a hello event", () => {
+  it("events emits allowlisted relationship:activity SSE snapshots derived from the run registry", async () => {
     const store = freshStore();
     const { redactor } = trackingRedactor();
-    const deps = buildDeps("ws-a", store, redactor);
+    const registry = createRunRegistry();
+    const sink = new QueueEventSink();
+    const runId = "run-activity-01";
+    const deps = buildDeps("ws-a", store, redactor, registry);
+    const seedReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "activity-1" },
+      body: producesEvidenceBody(runId, "evidence-001"),
+    });
+    const seedRes = await handleRelationshipCreate(makeCtx(seedReq), deps);
+    expect(seedRes.status).toBe(201);
+    registry.register({
+      runId,
+      fingerprint: "fp-1",
+      modelId: "model-1",
+      sink,
+      cancel: (): void => undefined,
+    });
+    sink.emit({
+      schemaVersion: "1",
+      runId,
+      fingerprint: "fp-1",
+      seq: 0,
+      ts: Date.now(),
+      type: "run:started",
+    });
     const req = makeReq({ method: "GET", url: "/api/relationships/events" });
     const ctx = makeCtx(req);
     const result = handleRelationshipEvents(ctx, deps);
     expect(result).toBe(STREAMING);
-    // The hello event was written synchronously; close the stream to clean up the keep-alive.
+    const body = (ctx.res as unknown as { _sse: { body(): string } })._sse.body();
+    expect(body).toContain("event: relationship:activity");
+    const match = /data: (.+)\n/u.exec(body);
+    expect(match).not.toBeNull();
+    const payload = JSON.parse(match?.[1] ?? "{}") as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      kind: "relationship:activity",
+      state: "queued",
+    });
+    expect(typeof payload.id).toBe("string");
+    expect(Object.keys(payload).sort()).toEqual(["id", "kind", "state", "timestamp"]);
     req.emit("close");
+  });
+
+  it("events?poll=1 returns a finite NDJSON body with the same allowlisted snapshot contract", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const registry = createRunRegistry();
+    const sink = new QueueEventSink();
+    const runId = "run-activity-02";
+    const deps = buildDeps("ws-a", store, redactor, registry);
+    const seedReq = makeReq({
+      method: "POST",
+      url: "/api/relationships",
+      headers: { "idempotency-key": "activity-2" },
+      body: producesEvidenceBody(runId, "evidence-002"),
+    });
+    const seedRes = await handleRelationshipCreate(makeCtx(seedReq), deps);
+    expect(seedRes.status).toBe(201);
+    registry.register({
+      runId,
+      fingerprint: "fp-2",
+      modelId: "model-2",
+      sink,
+      cancel: (): void => undefined,
+    });
+    sink.emit({
+      schemaVersion: "1",
+      runId,
+      fingerprint: "fp-2",
+      seq: 0,
+      ts: Date.now(),
+      type: "run:started",
+    });
+    sink.emit({
+      schemaVersion: "1",
+      runId,
+      fingerprint: "fp-2",
+      seq: 1,
+      ts: Date.now(),
+      type: "model:call:started",
+    });
+    const req = makeReq({ method: "GET", url: "/api/relationships/events?poll=1" });
+    const ctx = makeCtx(req);
+    const result = handleRelationshipEvents(ctx, deps);
+    expect(result).toBe(STREAMING);
+    const sse = (ctx.res as unknown as {
+      _sse: { body(): string; ended(): boolean; writtenHead: { status?: number; headers?: Record<string, string> } };
+    })._sse;
+    expect(sse.writtenHead.status).toBe(200);
+    expect(sse.writtenHead.headers?.["Content-Type"]).toContain("application/x-ndjson");
+    const lines = sse
+      .body()
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0);
+    expect(lines.length).toBeGreaterThan(0);
+    const payload = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      kind: "relationship:activity",
+      state: "active",
+    });
+    expect(Object.keys(payload).sort()).toEqual(["id", "kind", "state", "timestamp"]);
+    expect(sse.ended()).toBe(true);
   });
 });
 

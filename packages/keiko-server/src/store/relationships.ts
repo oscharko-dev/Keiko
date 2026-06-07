@@ -652,7 +652,14 @@ export function computeImpact(db: DatabaseSync, options: ImpactWalkOptions): Dep
 export function graphHealth(db: DatabaseSync, workspaceId: string): RelationshipHealthSummary {
   const totals = computeLifecycleTotals(db, workspaceId);
   const findings = computeHealthFindings(db, workspaceId);
-  return { checkedAt: Date.now(), totals, truncated: false, findings };
+  const truncated =
+    findings.orphanedEndpointsTruncated ||
+    findings.staleRelationshipsTruncated ||
+    findings.blockedRelationshipsTruncated ||
+    findings.failedRelationshipsTruncated ||
+    findings.invalidReferencesTruncated ||
+    findings.cycleScanTruncated;
+  return { checkedAt: Date.now(), totals, truncated, findings };
 }
 
 function computeLifecycleTotals(

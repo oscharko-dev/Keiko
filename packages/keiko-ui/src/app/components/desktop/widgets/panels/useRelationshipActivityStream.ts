@@ -49,6 +49,9 @@ const EVENTS_URL = "/api/relationships/events";
 /** Polling fallback interval in ms. */
 const POLL_INTERVAL_MS = 5_000;
 
+/** Hard cap for in-memory activity tracking. */
+const MAX_TRACKED_RELATIONSHIPS = 512;
+
 // ─── SSE event payload allowlist ───────────────────────────────────────────────
 // Only these keys are accepted from inbound SSE data. Everything else is dropped.
 // (activity-state.md §4 / retention-and-privacy.md §5.1)
@@ -61,7 +64,7 @@ const ALLOWED_PAYLOAD_KEYS = new Set<string>(["kind", "id", "state", "timestamp"
 
 function isForbiddenKey(key: string): boolean {
   const lower = key.toLowerCase();
-  return RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS.some((sub) => lower.includes(sub));
+  return RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS.some((sub: string) => lower.includes(sub));
 }
 
 // Recursively checks every key at every depth in an object.
@@ -164,12 +167,15 @@ export function useRelationshipActivityStream(
 ): RelationshipActivityStreamState {
   // Mutable ref map for last-seen timestamp per id (for MIN_STATE_INTERVAL_MS debounce).
   const lastUpdateRef = useRef<Map<string, number>>(new Map());
+  const visibleRef = useRef<boolean>(typeof document === "undefined" || document.visibilityState === "visible");
 
   // React state: activity map (id → state) and throughput counts.
   const [activityMap, setActivityMap] = useState<ReadonlyMap<string, RelationshipActivityState>>(
     new Map(),
   );
   const [throughputMap, setThroughputMap] = useState<ReadonlyMap<string, number>>(new Map());
+  const activityMapRef = useRef<ReadonlyMap<string, RelationshipActivityState>>(new Map());
+  const throughputMapRef = useRef<ReadonlyMap<string, number>>(new Map());
 
   // animate: true when reduced-motion is NOT requested and disable() has not been called.
   const [reducedMotion, setReducedMotion] = useState<boolean>(() => {
@@ -182,6 +188,73 @@ export function useRelationshipActivityStream(
 
   const disable = useCallback((): void => {
     setUserDisabled(true);
+  }, []);
+
+  const pruneState = useCallback((now: number, keepInactive: boolean): void => {
+    const nextActivityMap = new Map(activityMapRef.current);
+    const deletedIds = new Set<string>();
+    const throughputIdsToClear = new Set<string>();
+    let activityChanged = false;
+
+    for (const [id, state] of nextActivityMap) {
+      const last = lastUpdateRef.current.get(id) ?? 0;
+      const age = now - last;
+
+      if (age >= ACTIVITY_WINDOW_MS && state !== "inactive") {
+        nextActivityMap.set(id, "inactive");
+        throughputIdsToClear.add(id);
+        activityChanged = true;
+      }
+
+      if (!keepInactive && age >= ACTIVITY_WINDOW_MS * 2) {
+        nextActivityMap.delete(id);
+        deletedIds.add(id);
+        throughputIdsToClear.add(id);
+        activityChanged = true;
+      }
+    }
+
+    if (nextActivityMap.size > MAX_TRACKED_RELATIONSHIPS) {
+      const evictionCandidates = Array.from(nextActivityMap.keys())
+        .sort((left, right) => {
+          const leftState = nextActivityMap.get(left);
+          const rightState = nextActivityMap.get(right);
+          if (leftState === "inactive" && rightState !== "inactive") return -1;
+          if (leftState !== "inactive" && rightState === "inactive") return 1;
+          return (lastUpdateRef.current.get(left) ?? 0) - (lastUpdateRef.current.get(right) ?? 0);
+        })
+        .slice(0, nextActivityMap.size - MAX_TRACKED_RELATIONSHIPS);
+
+      for (const id of evictionCandidates) {
+        nextActivityMap.delete(id);
+        deletedIds.add(id);
+        throughputIdsToClear.add(id);
+        activityChanged = true;
+      }
+    }
+
+    if (activityChanged) {
+      activityMapRef.current = nextActivityMap;
+      setActivityMap(nextActivityMap);
+    }
+
+    if (deletedIds.size > 0) {
+      for (const id of deletedIds) {
+        lastUpdateRef.current.delete(id);
+      }
+    }
+
+    if (throughputIdsToClear.size > 0) {
+      let throughputChanged = false;
+      const nextThroughputMap = new Map(throughputMapRef.current);
+      for (const id of throughputIdsToClear) {
+        if (nextThroughputMap.delete(id)) throughputChanged = true;
+      }
+      if (throughputChanged) {
+        throughputMapRef.current = nextThroughputMap;
+        setThroughputMap(nextThroughputMap);
+      }
+    }
   }, []);
 
   // Track the MediaQueryList so we can remove the listener on cleanup.
@@ -199,6 +272,8 @@ export function useRelationshipActivityStream(
 
   // ── Apply a parsed activity event ─────────────────────────────────────────
   const applyEvent = useCallback((event: ActivityEvent): void => {
+    if (!visibleRef.current) return;
+
     const now = Date.now();
     const last = lastUpdateRef.current.get(event.id) ?? 0;
 
@@ -210,6 +285,7 @@ export function useRelationshipActivityStream(
     setActivityMap((prev) => {
       const next = new Map(prev);
       next.set(event.id, event.state);
+      activityMapRef.current = next;
       return next;
     });
 
@@ -217,6 +293,7 @@ export function useRelationshipActivityStream(
       setThroughputMap((prev) => {
         const next = new Map(prev);
         next.set(event.id, event.count as number);
+        throughputMapRef.current = next;
         return next;
       });
     } else {
@@ -225,6 +302,7 @@ export function useRelationshipActivityStream(
         if (!prev.has(event.id)) return prev;
         const next = new Map(prev);
         next.delete(event.id);
+        throughputMapRef.current = next;
         return next;
       });
     }
@@ -234,43 +312,33 @@ export function useRelationshipActivityStream(
   // Every T=60s, entries that have not been refreshed in that window revert to
   // "inactive" (activity-state.md §5.2 — idle relationships return to inactive).
   useEffect(() => {
+    if (typeof window === "undefined") return;
     const timer = setInterval(() => {
-      const now = Date.now();
-      setActivityMap((prev) => {
-        let changed = false;
-        const next = new Map(prev);
-        for (const [id, state] of next) {
-          if (state === "inactive") continue;
-          const last = lastUpdateRef.current.get(id) ?? 0;
-          if (now - last > ACTIVITY_WINDOW_MS) {
-            next.set(id, "inactive");
-            changed = true;
-          }
-        }
-        return changed ? next : prev;
-      });
+      if (!visibleRef.current) return;
+      pruneState(Date.now(), false);
     }, ACTIVITY_WINDOW_MS / 4);
 
     return (): void => {
       clearInterval(timer);
     };
-  }, []);
+  }, [pruneState]);
 
   // ── Page visibility pause (activity-state.md §5.5) ────────────────────────
   // When the page is hidden, mark the epoch so window expiry works on resume.
   useEffect(() => {
     if (typeof document === "undefined") return;
     const handler = (): void => {
-      if (document.visibilityState === "hidden") {
-        // Nothing to do — the interval is still running but transitions will be
-        // skipped due to MIN_STATE_INTERVAL_MS during the hidden window.
+      visibleRef.current = document.visibilityState === "visible";
+      if (visibleRef.current) {
+        pruneState(Date.now(), true);
       }
     };
+    visibleRef.current = document.visibilityState === "visible";
     document.addEventListener("visibilitychange", handler);
     return (): void => {
       document.removeEventListener("visibilitychange", handler);
     };
-  }, []);
+  }, [pruneState]);
 
   // ── SSE + polling fallback ─────────────────────────────────────────────────
   useEffect(() => {
@@ -278,8 +346,7 @@ export function useRelationshipActivityStream(
 
     let closed = false;
     let es: EventSource | null = null;
-    let pollTimer: ReturnType<typeof setTimeout> | null = null;
-    let usePoll = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
     function handleRawData(data: string): void {
       let parsed: unknown;
@@ -293,41 +360,29 @@ export function useRelationshipActivityStream(
       applyEvent(event);
     }
 
-    function startPolling(): void {
-      if (closed || usePoll) return;
-      usePoll = true;
-
-      function poll(): void {
-        if (closed) return;
-        const params = new URLSearchParams();
-        if (workspaceId !== undefined) params.set("workspaceId", workspaceId);
-
-        fetch(`/api/relationships/events?${params.toString()}&poll=1`)
-          .then(async (res) => {
-            if (closed) return;
-            if (!res.ok) return;
-            const text = await res.text();
-            // BFF returns newline-delimited JSON for poll=1
-            for (const line of text.split("\n")) {
-              const trimmed = line.trim();
-              if (trimmed.length === 0) continue;
-              handleRawData(trimmed);
-            }
-          })
-          .catch(() => {
-            // swallow — polling is best-effort
-          })
-          .finally(() => {
-            if (!closed) {
-              pollTimer = setTimeout(poll, POLL_INTERVAL_MS);
-            }
-          });
+    function clearReconnectTimer(): void {
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
       }
+    }
 
-      poll();
+    function closeStream(): void {
+      es?.close();
+      es = null;
+    }
+
+    function scheduleReconnect(): void {
+      if (closed || reconnectTimer !== null || !visibleRef.current) return;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        startSSE();
+      }, POLL_INTERVAL_MS);
     }
 
     function startSSE(): void {
+      if (closed || !visibleRef.current) return;
+
       const url =
         workspaceId !== undefined
           ? `${EVENTS_URL}?workspaceId=${encodeURIComponent(workspaceId)}`
@@ -336,7 +391,7 @@ export function useRelationshipActivityStream(
       try {
         es = new EventSource(url);
       } catch {
-        startPolling();
+        scheduleReconnect();
         return;
       }
 
@@ -351,25 +406,33 @@ export function useRelationshipActivityStream(
 
       es.onerror = (): void => {
         if (closed) return;
-        es?.close();
-        es = null;
-        // Fall back to polling after an SSE error.
-        startPolling();
+        closeStream();
+        scheduleReconnect();
       };
     }
 
     startSSE();
 
+    const onVisibilityChange = (): void => {
+      visibleRef.current = document.visibilityState === "visible";
+      if (!visibleRef.current) {
+        clearReconnectTimer();
+        closeStream();
+        return;
+      }
+      pruneState(Date.now(), true);
+      if (es === null) startSSE();
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
     return (): void => {
       closed = true;
-      es?.close();
-      es = null;
-      if (pollTimer !== null) {
-        clearTimeout(pollTimer);
-        pollTimer = null;
-      }
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      clearReconnectTimer();
+      closeStream();
     };
-  }, [workspaceId, applyEvent]);
+  }, [workspaceId, applyEvent, pruneState]);
 
   return {
     activityMap,
