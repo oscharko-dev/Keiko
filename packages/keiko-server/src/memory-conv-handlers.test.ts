@@ -626,10 +626,9 @@ describe("handleMemoryCaptureFromConversation", () => {
         }),
         deps,
       );
-      const projectMemories = vault.listMemoriesByScope(
-        { kind: "project", projectId: chat.projectPath as unknown as MemoryUserId },
-        { includeExpired: true },
-      );
+      const projectMemories = vault.listMemoriesByScope(projectScope(chat.projectPath), {
+        includeExpired: true,
+      });
       // No project-scoped memories should have been written for a chat with no detected intent.
       expect(projectMemories.length).toBe(0);
       // And nothing was added to the user scope either.
