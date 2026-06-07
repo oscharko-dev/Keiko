@@ -73,7 +73,7 @@ function fakeModel(content: string): ModelPort {
 
 // Deterministic one-hot vector per "concept" so cosine is exactly 1 for the same concept and 0
 // across concepts. The query maps to the same concept as the memory we expect to surface.
-const CONCEPT_AXIS: Readonly<Record<string, number>> = { product: 0, weather: 1, query: 0 };
+const CONCEPT_AXIS = { product: 0, weather: 1, query: 0 } as const;
 
 function vectorFor(text: string): Float32Array {
   const axis =
@@ -185,7 +185,9 @@ function storeEmbedding(vault: MemoryVaultStore, id: string, text: string): void
 
 async function restart(handlerDeps: UiHandlerDeps): Promise<void> {
   await new Promise<void>((resolve) => {
-    server.close(() => { resolve(); });
+    server.close(() => {
+      resolve();
+    });
   });
   server = createUiServer({ staticRoot, csp: buildCspHeader([]), port, handlerDeps });
   await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
@@ -237,7 +239,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await new Promise<void>((resolve) => {
-    server.close(() => { resolve(); });
+    server.close(() => {
+      resolve();
+    });
   });
   store.close();
   rmSync(staticRoot, { recursive: true, force: true });

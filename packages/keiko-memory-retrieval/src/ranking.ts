@@ -29,7 +29,7 @@ export interface RankMemoriesQuery {
   readonly weights: RankingWeights;
   // Per-memory cosine similarity in [0,1] keyed by memory id (#204). When undefined, the ranker
   // zeroes the semantic weight so output is byte-identical to pre-semantic lexical behaviour.
-  readonly semanticById?: ReadonlyMap<MemoryId, number>;
+  readonly semanticById?: ReadonlyMap<MemoryId, number> | undefined;
 }
 
 export interface RankMemoriesOptions {

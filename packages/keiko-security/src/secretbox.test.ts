@@ -48,7 +48,7 @@ describe("sealString / openString", () => {
     const k = key();
     const [prefix, nonce, ctPart] = sealString(k, "secret").split(".");
     const ct = Buffer.from(ctPart ?? "", "base64url");
-    ct[0] = ct[0] ^ 0xff; // flip a bit in the ciphertext
+    ct[0] = (ct[0] ?? 0) ^ 0xff; // flip a bit in the ciphertext
     const tampered = `${prefix ?? ""}.${nonce ?? ""}.${ct.toString("base64url")}`;
     expect(() => openString(k, tampered)).toThrow(SecretboxError);
   });
@@ -105,7 +105,7 @@ describe("sealBytes / openBytes", () => {
   it("throws SecretboxError when the binary envelope is tampered", () => {
     const k = key();
     const sealed = sealBytes(k, randomBytes(32));
-    sealed[sealed.length - 1] = sealed[sealed.length - 1] ^ 0xff;
+    sealed[sealed.length - 1] = (sealed[sealed.length - 1] ?? 0) ^ 0xff;
     expect(() => openBytes(k, sealed)).toThrow(SecretboxError);
   });
 
