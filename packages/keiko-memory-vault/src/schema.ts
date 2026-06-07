@@ -17,8 +17,14 @@
 // require a schema change every time a payload kind landed (#205 ships only two kinds today).
 
 import type { DatabaseSync } from "node:sqlite";
+import type { MemoryContentCipher } from "./cipher.js";
+import { encryptExistingContent } from "./migrate-encrypt.js";
 
-export const MEMORY_VAULT_SCHEMA_VERSION = 1;
+// v2 = encryption-at-rest (ADR-0035). v1 stored content columns in plaintext; v2 seals them via an
+// eager code sweep (no column changes). The bump is one-way: a v2 DB is unreadable by v1 code.
+export const MEMORY_VAULT_SCHEMA_VERSION = 2;
+
+const ENCRYPTION_VERSION = 2;
 
 interface Migration {
   readonly version: number;
@@ -118,15 +124,21 @@ function setUserVersion(db: DatabaseSync, v: number): void {
   db.exec(`PRAGMA user_version = ${String(v)}`);
 }
 
-export function runMigrations(db: DatabaseSync): void {
+export function runMigrations(db: DatabaseSync, cipher: MemoryContentCipher): void {
   const start = currentUserVersion(db);
-  const pending = MIGRATIONS.filter((m) => m.version > start);
-  if (pending.length === 0) return;
+  const pendingDdl = MIGRATIONS.filter((m) => m.version > start);
+  const needsEncryption = start < ENCRYPTION_VERSION;
+  if (pendingDdl.length === 0 && !needsEncryption) return;
   db.exec("BEGIN");
   try {
-    for (const m of pending) {
+    for (const m of pendingDdl) {
       db.exec(m.sql);
       setUserVersion(db, m.version);
+    }
+    if (needsEncryption) {
+      // Idempotent: skips values already sealed, so a fresh DB (no rows) and a re-run are no-ops.
+      encryptExistingContent(db, cipher);
+      setUserVersion(db, ENCRYPTION_VERSION);
     }
     db.exec("COMMIT");
   } catch (error) {

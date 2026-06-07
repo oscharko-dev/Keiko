@@ -12,6 +12,7 @@ import type {
   MemoryStatus,
   MemoryType,
 } from "@oscharko-dev/keiko-contracts/memory";
+import type { MemoryContentCipher } from "./cipher.js";
 
 export type MemoryEmbeddingMetric = "cosine" | "euclidean" | "dot";
 
@@ -118,4 +119,9 @@ export interface MemoryVaultFactoryOptions {
   readonly newTombstoneId?: () => string;
   readonly redactString?: (input: string) => string;
   readonly onMemoryEvent?: (event: MemoryEvent) => void;
+  // Test-only injection seams for encryption-at-rest (ADR-0035). Production callers pass neither:
+  // createMemoryVault resolves the key internally via resolveVaultKey. `cipher` overrides the whole
+  // cipher; `vaultKey` supplies a deterministic 32-byte key without touching the keychain/keyfile.
+  readonly cipher?: MemoryContentCipher;
+  readonly vaultKey?: Buffer;
 }

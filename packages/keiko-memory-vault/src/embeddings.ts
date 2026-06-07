@@ -9,6 +9,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryEmbeddingInput, MemoryEmbeddingMetric, MemoryEmbeddingRow } from "./types.js";
+import type { MemoryContentCipher } from "./cipher.js";
 import { MemoryStorageError } from "./errors.js";
 
 // Hard upper bound on vector dimensions. The largest production embedding model in scope today
@@ -79,8 +80,11 @@ export function upsertEmbeddingRow(
   memoryId: MemoryId,
   embedding: MemoryEmbeddingInput,
   nowMs: number,
+  cipher: MemoryContentCipher,
 ): void {
-  const bytes = encodeVectorLE(embedding.vector);
+  // The vector is memory CONTENT (ADR-0035), so the packed LE bytes are sealed before they touch
+  // the BLOB column. vector_dimensions / vector_metric stay cleartext for retrieval-side dispatch.
+  const bytes = cipher.sealBytes(encodeVectorLE(embedding.vector));
   db.prepare(UPSERT_SQL).run(
     memoryId,
     embedding.provider,
@@ -103,17 +107,29 @@ function narrowMetric(raw: string): MemoryEmbeddingMetric {
   return raw as MemoryEmbeddingMetric;
 }
 
+function openVectorBytes(stored: Uint8Array, cipher: MemoryContentCipher): Buffer {
+  // The BLOB is a sealed binary envelope (0x01||nonce||ct||tag). A legacy pre-encryption row that
+  // the migration has not yet swept is plain LE bytes with no version prefix; we fall back to using
+  // them verbatim so a half-migrated DB still reads. openBytes throws on a real auth failure.
+  if (stored.length > 0 && stored[0] === 0x01) {
+    return cipher.openBytes(Buffer.from(stored));
+  }
+  return Buffer.from(stored);
+}
+
 export function getEmbeddingRow(
   db: DatabaseSync,
   memoryId: MemoryId,
+  cipher: MemoryContentCipher,
 ): MemoryEmbeddingRow | undefined {
   const row = db.prepare(SELECT_SQL).get(memoryId) as unknown as EmbeddingDbRow | undefined;
   if (row === undefined) return undefined;
+  const plainVector = openVectorBytes(row.vector, cipher);
   // Read-side soundness: a tampered DB row (or a future schema drift) must not silently land a
-  // bad metric string in the typed return shape, and the BLOB length must match the declared
-  // dimension count so callers can rely on `vector.length === dimensions`.
+  // bad metric string in the typed return shape, and the DECRYPTED BLOB length must match the
+  // declared dimension count so callers can rely on `vector.length === dimensions`.
   const expectedBytes = row.vector_dimensions * BYTES_PER_FLOAT32;
-  if (row.vector.byteLength !== expectedBytes) {
+  if (plainVector.byteLength !== expectedBytes) {
     throw new MemoryStorageError(
       "schema-mismatch",
       "Stored embedding vector byte length does not match declared dimensions.",
@@ -125,7 +141,7 @@ export function getEmbeddingRow(
     modelId: row.model_id,
     dimensions: row.vector_dimensions,
     metric: narrowMetric(row.vector_metric),
-    vector: decodeVectorLE(row.vector, row.vector_dimensions),
+    vector: decodeVectorLE(plainVector, row.vector_dimensions),
     createdAt: row.created_at,
   };
   return row.model_revision === null ? base : { ...base, modelRevision: row.model_revision };

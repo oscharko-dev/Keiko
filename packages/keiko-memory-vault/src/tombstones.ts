@@ -13,6 +13,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/memory";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import type { MemoryTombstone } from "./types.js";
+import type { MemoryContentCipher } from "./cipher.js";
 
 interface TombstoneRow {
   readonly id: string;
@@ -38,7 +39,8 @@ WHERE scope_kind = ? AND scope_coordinate = ?
 ORDER BY forgotten_at ASC
 `;
 
-function rowToTombstone(row: TombstoneRow): MemoryTombstone {
+// `reason` is the only free-text tombstone column, so it is the only sealed one (ADR-0035).
+function rowToTombstone(row: TombstoneRow, cipher: MemoryContentCipher): MemoryTombstone {
   const base = {
     id: row.id,
     memoryId: row.memory_id as MemoryId,
@@ -48,10 +50,15 @@ function rowToTombstone(row: TombstoneRow): MemoryTombstone {
     forgottenAt: row.forgotten_at,
     forgetterSurface: row.forgetter_surface,
   };
-  return row.reason === null ? base : { ...base, reason: row.reason };
+  return row.reason === null ? base : { ...base, reason: cipher.openString(row.reason) };
 }
 
-export function insertTombstoneRow(db: DatabaseSync, tombstone: MemoryTombstone): void {
+export function insertTombstoneRow(
+  db: DatabaseSync,
+  tombstone: MemoryTombstone,
+  cipher: MemoryContentCipher,
+): void {
+  const reason = tombstone.reason === undefined ? null : cipher.sealString(tombstone.reason);
   db.prepare(INSERT_SQL).run(
     tombstone.id,
     tombstone.memoryId,
@@ -60,16 +67,17 @@ export function insertTombstoneRow(db: DatabaseSync, tombstone: MemoryTombstone)
     tombstone.type,
     tombstone.forgottenAt,
     tombstone.forgetterSurface,
-    tombstone.reason ?? null,
+    reason,
   );
 }
 
 export function listTombstonesByScopeRows(
   db: DatabaseSync,
   scope: MemoryScope,
+  cipher: MemoryContentCipher,
 ): readonly MemoryTombstone[] {
   const rows = db
     .prepare(LIST_BY_SCOPE_SQL)
     .all(scopeKindOf(scope), scopeCoordinateOf(scope)) as unknown as readonly TombstoneRow[];
-  return rows.map(rowToTombstone);
+  return rows.map((row) => rowToTombstone(row, cipher));
 }
