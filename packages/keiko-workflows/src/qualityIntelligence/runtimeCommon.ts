@@ -163,6 +163,12 @@ export async function withStage<T>(
     if (caught instanceof StageCancelledError) {
       throw caught;
     }
+    if (isCancelled(ctx.signal)) {
+      // The stage work threw because the run was cancelled mid-flight (e.g. the model call's
+      // AbortSignal fired and the gateway rejected). That is a cancellation, not a stage failure:
+      // do not emit stage:failed, and let the finaliser classify the run as "cancelled".
+      throw new StageCancelledError();
+    }
     emit(ctx, { kind: "stage:failed", stageName, reasonSummary: safeReasonSummary(caught) });
     throw caught;
   } finally {
@@ -277,7 +283,9 @@ export function finaliseFailureOrCancellation(
   caught: unknown,
   args: FinaliseArgs,
 ): QualityIntelligenceRunSummary {
-  if (caught instanceof StageCancelledError) {
+  // A StageCancelledError, or any error raised while the run signal is aborted, is a cancellation
+  // (defense-in-depth: an abort-induced rejection that bypassed withStage must not look like a failure).
+  if (caught instanceof StageCancelledError || isCancelled(ctx.signal)) {
     emit(ctx, { kind: "run:cancelled" });
     return Object.freeze<QualityIntelligenceRunSummary>({
       runId: ctx.plan.id,
