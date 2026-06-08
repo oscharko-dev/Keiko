@@ -1078,6 +1078,77 @@ describe("PATCH /api/chats", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  // ─── Operator-configurable grounding limits ───────────────────────────────────
+  it("rejects a connectedScopes list exceeding a custom-lowered maxConnectedSources (2)", async () => {
+    // Inject a gateway config with grounding.maxConnectedSources = 2 so the runtime cap is 2.
+    const lowCapConfig = {
+      ...customModelConfig(CHAT_MODEL),
+      grounding: { maxConnectedSources: 2 },
+    };
+    await restartWithDeps({ config: lowCapConfig });
+
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const threeScopes = Array.from({ length: 3 }, (_unused, i) => ({
+      kind: "files" as const,
+      relativePaths: [`src/f${String(i)}`],
+      connectedAtMs: 1,
+    }));
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ connectedScopes: threeScopes }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { message: string } };
+    // Error message must reflect the configured number (2), not the constant 16.
+    expect(body.error.message).toContain("2");
+  });
+
+  it("missing-config uses default maxConnectedSources of 16 (rejects 17)", async () => {
+    // Default config has maxConnectedSources = 16; 17 entries must be rejected.
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    const seventeen = Array.from({ length: 17 }, (_unused, i) => ({
+      kind: "files" as const,
+      relativePaths: [`src/f${String(i)}`],
+      connectedAtMs: 1,
+    }));
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ connectedScopes: seventeen }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("over-ceiling grounding value is clamped (maxConnectedSources 9999 → 64)", async () => {
+    // GROUNDING_LIMIT_CEILINGS.maxConnectedSources is 64; 9999 must be clamped to it.
+    const overCeilConfig = {
+      ...customModelConfig(CHAT_MODEL),
+      grounding: { maxConnectedSources: 9999 },
+    };
+    await restartWithDeps({ config: overCeilConfig });
+
+    store.createProject(projDir);
+    const c = store.createChat(projDir, "t", "m");
+    // 65 entries > ceiling 64 → must be rejected (clamped to 64, not 9999).
+    const tooMany = Array.from({ length: 65 }, (_unused, i) => ({
+      kind: "files" as const,
+      relativePaths: [`src/f${String(i)}`],
+      connectedAtMs: 1,
+    }));
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ connectedScopes: tooMany }),
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { message: string } };
+    // Error message must show the clamped ceiling (64), not the unclamped value.
+    expect(body.error.message).toContain("64");
+  });
 });
 
 // ─── Route 20: DELETE /api/chats ─────────────────────────────────────────────

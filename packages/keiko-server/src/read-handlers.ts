@@ -35,10 +35,16 @@ import {
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentGatewayConfigPresent } from "./deps.js";
+import {
+  currentGatewayConfig,
+  currentGatewayConfigPresent,
+  currentGroundingLimits,
+} from "./deps.js";
 import { validateProjectPath } from "./store/validation.js";
 
 // Route 2 — resolved config (SafeGatewayConfig, never apiKey/baseUrl) or null when no config was resolved.
+// effectiveGroundingLimits carries the runtime-resolved limits (file config + env) so the UI can
+// surface caps without a separate API call.
 export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const config = currentGatewayConfig(deps);
   return {
@@ -46,6 +52,7 @@ export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
     body: {
       config: config === undefined ? null : toSafeObject(config),
       configPresent: currentGatewayConfigPresent(deps),
+      effectiveGroundingLimits: currentGroundingLimits(deps),
     },
   };
 }

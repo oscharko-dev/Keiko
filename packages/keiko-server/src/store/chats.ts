@@ -8,6 +8,7 @@ import {
   type SelectedScopeKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
+  DEFAULT_GROUNDING_LIMITS,
   MAX_CONNECTED_SOURCES,
   MAX_LOCAL_KNOWLEDGE_SOURCES,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -466,17 +467,20 @@ function validatePatchScope(scope: unknown): void {
 }
 
 // Epic #532 — validate the multi-source list. Each entry runs the same defense-in-depth shape
-// check as the single field; the list is bounded by MAX_CONNECTED_SOURCES (a strict subset of the
-// BFF gate). undefined/null are pass-through (leave-unchanged / clear-all).
-function validatePatchScopes(scopes: unknown): void {
+// check as the single field; the list is bounded by maxSources (defaults to
+// DEFAULT_GROUNDING_LIMITS.maxConnectedSources — a strict subset of the BFF gate). Callers may
+// supply a lower operator-configured cap; the store stays self-defending when no limit is passed.
+// undefined/null are pass-through (leave-unchanged / clear-all).
+function validatePatchScopes(
+  scopes: unknown,
+  maxSources: number = DEFAULT_GROUNDING_LIMITS.maxConnectedSources,
+): void {
   if (scopes === undefined || scopes === null) return;
   if (!Array.isArray(scopes)) {
     throw invalidRequest("connectedScopes must be an array or null.");
   }
-  if (scopes.length > MAX_CONNECTED_SOURCES) {
-    throw invalidRequest(
-      `connectedScopes must contain at most ${String(MAX_CONNECTED_SOURCES)} sources.`,
-    );
+  if (scopes.length > maxSources) {
+    throw invalidRequest(`connectedScopes must contain at most ${String(maxSources)} sources.`);
   }
   for (const scope of scopes) {
     if (typeof scope !== "object" || scope === null || Array.isArray(scope)) {
@@ -495,16 +499,21 @@ function validatePatchLocalKnowledgeScope(scope: unknown): void {
 }
 
 // Epic #189 — validate the multi-source connector list. Each entry runs the same defense-in-depth
-// shape check as the single field; the list is bounded by MAX_LOCAL_KNOWLEDGE_SOURCES (a strict
-// subset of the BFF gate). undefined/null are pass-through (leave-unchanged / clear-all).
-function validatePatchLocalKnowledgeScopes(scopes: unknown): void {
+// shape check as the single field; the list is bounded by maxSources (defaults to
+// DEFAULT_GROUNDING_LIMITS.maxLocalKnowledgeSources — a strict subset of the BFF gate). Callers
+// may supply a lower operator-configured cap; the store stays self-defending when no limit is
+// passed. undefined/null are pass-through (leave-unchanged / clear-all).
+function validatePatchLocalKnowledgeScopes(
+  scopes: unknown,
+  maxSources: number = DEFAULT_GROUNDING_LIMITS.maxLocalKnowledgeSources,
+): void {
   if (scopes === undefined || scopes === null) return;
   if (!Array.isArray(scopes)) {
     throw invalidRequest("localKnowledgeScopes must be an array or null.");
   }
-  if (scopes.length > MAX_LOCAL_KNOWLEDGE_SOURCES) {
+  if (scopes.length > maxSources) {
     throw invalidRequest(
-      `localKnowledgeScopes must contain at most ${String(MAX_LOCAL_KNOWLEDGE_SOURCES)} sources.`,
+      `localKnowledgeScopes must contain at most ${String(maxSources)} sources.`,
     );
   }
   for (const scope of scopes) {
@@ -515,16 +524,21 @@ function validatePatchLocalKnowledgeScopes(scopes: unknown): void {
   }
 }
 
-function validateChatPatch(patch: UpdateChatPatch): void {
+interface ChatPatchLimits {
+  readonly maxConnectedSources?: number;
+  readonly maxLocalKnowledgeSources?: number;
+}
+
+function validateChatPatch(patch: UpdateChatPatch, limits?: ChatPatchLimits): void {
   // Runtime defense: handlers may pass widened (unknown) input cast to UpdateChatPatch.
   const raw: unknown = patch.status;
   if (raw !== undefined && (typeof raw !== "string" || !VALID_CHAT_STATUSES.has(raw))) {
     throw invalidRequest("Invalid status.");
   }
   validatePatchScope(patch.connectedScope);
-  validatePatchScopes(patch.connectedScopes);
+  validatePatchScopes(patch.connectedScopes, limits?.maxConnectedSources);
   validatePatchLocalKnowledgeScope(patch.localKnowledgeScope);
-  validatePatchLocalKnowledgeScopes(patch.localKnowledgeScopes);
+  validatePatchLocalKnowledgeScopes(patch.localKnowledgeScopes, limits?.maxLocalKnowledgeSources);
 }
 
 // Epic #532 — resolve the effective scope-patch intent. `connectedScopes` SUPERSEDES the legacy
