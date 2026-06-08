@@ -23,6 +23,7 @@ import {
   buildUiHandlerDeps,
   DEFAULT_UI_PORT,
   UI_HOST,
+  UiStoreError,
   type UiHandlerDeps,
 } from "@oscharko-dev/keiko-server";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -267,6 +268,42 @@ async function maybeReExecForSqlite(env: EnvSource, deps: UiCliDeps): Promise<nu
   return reExecWithSqliteFlag(env, spawnFn);
 }
 
+function buildHandlerDepsOrReport(
+  parsed: UiCliArgs,
+  effectiveEnv: EnvSource,
+  io: CliIo,
+): UiHandlerDeps | number {
+  try {
+    return buildUiHandlerDeps({
+      configPath: resolveUiConfigPath(parsed, effectiveEnv),
+      evidenceDir: parsed.evidenceDir,
+      uiDbPath: parsed.uiDbPath,
+      env: effectiveEnv,
+    });
+  } catch (error) {
+    if (error instanceof UiStoreError) {
+      io.err(`keiko ui: ${error.message}\n`);
+      return 2;
+    }
+    throw error;
+  }
+}
+
+function ensureStaticRoot(staticRoot: string, io: CliIo): boolean {
+  if (existsSync(staticRoot)) {
+    return true;
+  }
+  io.err(`keiko ui: UI assets not found at ${staticRoot}. Run \`npm run build:ui\` first.\n`);
+  return false;
+}
+
+async function maybeWaitForShutdown(server: Server, deps: UiCliDeps): Promise<void> {
+  if (deps.createServer !== undefined) {
+    return;
+  }
+  await waitForShutdown(server);
+}
+
 export async function runUiCli(
   args: readonly string[],
   io: CliIo,
@@ -282,17 +319,12 @@ export async function runUiCli(
     return 2;
   }
   const staticRoot = deps.staticRoot ?? defaultStaticRoot();
-  if (!existsSync(staticRoot)) {
-    io.err(`keiko ui: UI assets not found at ${staticRoot}. Run \`npm run build:ui\` first.\n`);
+  if (!ensureStaticRoot(staticRoot, io)) {
     return 1;
   }
   const csp = await loadCspHeader(deps.hashesFile ?? join(staticRoot, "..", "csp-hashes.json"));
-  const handlerDeps = buildUiHandlerDeps({
-    configPath: resolveUiConfigPath(parsed, effectiveEnv),
-    evidenceDir: parsed.evidenceDir,
-    uiDbPath: parsed.uiDbPath,
-    env: effectiveEnv,
-  });
+  const handlerDeps = buildHandlerDepsOrReport(parsed, effectiveEnv, io);
+  if (typeof handlerDeps === "number") return handlerDeps;
   const factory = deps.createServer ?? createUiServer;
   const server = await factory({ staticRoot, csp, port: parsed.port, handlerDeps });
   applyServerTimeouts(server);
@@ -300,8 +332,6 @@ export async function runUiCli(
   io.out(`Keiko UI listening on http://${UI_HOST}:${String(parsed.port)}\n`);
   // Block only in the real CLI path (no injected factory). Injected-server tests skip blocking so
   // they don't hang; the real process must stay alive until signalled.
-  if (deps.createServer === undefined) {
-    await waitForShutdown(server);
-  }
+  await maybeWaitForShutdown(server, deps);
   return 0;
 }
