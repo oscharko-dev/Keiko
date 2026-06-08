@@ -119,6 +119,45 @@ function bodyToString(body: BodyInit | null | undefined): string | undefined {
   throw new TypeError("gateway HTTP fallback supports string request bodies only");
 }
 
+// Converts a Node IncomingMessage into a streaming web Response, enforcing the
+// byte cap inline and destroying the request when the consumer cancels. Unlike a
+// Buffer.concat-on-end approach this delivers SSE chunks incrementally (#152), so
+// the CA-bundle fallback streams tokens instead of buffering the whole response.
+export function streamingResponseFromNode(
+  res: import("node:http").IncomingMessage,
+  onCancel: () => void,
+  maxBytes: number = MAX_RESPONSE_BYTES,
+): Response {
+  let total = 0;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller): void {
+      res.on("data", (chunk: Buffer) => {
+        total += chunk.length;
+        if (total > maxBytes) {
+          controller.error(new Error("gateway response exceeded the size limit"));
+          onCancel();
+          return;
+        }
+        controller.enqueue(new Uint8Array(chunk));
+      });
+      res.on("end", () => {
+        controller.close();
+      });
+      res.on("error", (error) => {
+        controller.error(error);
+      });
+    },
+    cancel(): void {
+      onCancel();
+    },
+  });
+  return new Response(body, {
+    status: res.statusCode ?? 500,
+    statusText: res.statusMessage ?? "",
+    headers: headersFromNode(res.headers),
+  });
+}
+
 function fetchWithCaBundle(url: string, init: RequestInit): Promise<Response> {
   const body = bodyToString(init.body);
   const headers = headersToRecord(init.headers);
@@ -132,27 +171,7 @@ function fetchWithCaBundle(url: string, init: RequestInit): Promise<Response> {
         signal: init.signal ?? undefined,
       },
       (res) => {
-        const chunks: Buffer[] = [];
-        let total = 0;
-        res.on("data", (chunk: Buffer) => {
-          total += chunk.length;
-          if (total > MAX_RESPONSE_BYTES) {
-            req.destroy();
-            reject(new Error("gateway response exceeded the size limit"));
-            return;
-          }
-          chunks.push(chunk);
-        });
-        res.on("end", () => {
-          resolve(
-            new Response(Buffer.concat(chunks), {
-              status: res.statusCode ?? 500,
-              statusText: res.statusMessage ?? "",
-              headers: headersFromNode(res.headers),
-            }),
-          );
-        });
-        res.on("error", reject);
+        resolve(streamingResponseFromNode(res, () => req.destroy()));
       },
     );
     req.on("error", reject);

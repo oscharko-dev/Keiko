@@ -1,3 +1,5 @@
+import { PassThrough } from "node:stream";
+import type { IncomingMessage } from "node:http";
 import { rootCertificates } from "node:tls";
 import { describe, expect, it } from "vitest";
 import {
@@ -8,6 +10,7 @@ import {
   MAX_RESPONSE_BYTES,
   readJsonCapped,
   readSseStream,
+  streamingResponseFromNode,
 } from "./http.js";
 
 // ---------------------------------------------------------------------------
@@ -240,5 +243,83 @@ describe("readSseStream", () => {
     }) as Response;
     const chunks = await collect(readSseStream(nullBody));
     expect(chunks).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// streamingResponseFromNode — incremental delivery, byte cap, error, headers
+// ---------------------------------------------------------------------------
+
+// Builds a PassThrough that mimics the IncomingMessage surface used by streamingResponseFromNode.
+function makePassThrough(
+  statusCode = 200,
+  statusMessage = "OK",
+  headers: Record<string, string> = {},
+): PassThrough & { statusCode: number; statusMessage: string; headers: Record<string, string> } {
+  const pt = new PassThrough() as PassThrough & {
+    statusCode: number;
+    statusMessage: string;
+    headers: Record<string, string>;
+  };
+  pt.statusCode = statusCode;
+  pt.statusMessage = statusMessage;
+  pt.headers = headers;
+  return pt;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-empty-function
+function noop(): void {}
+
+describe("streamingResponseFromNode", () => {
+  it("delivers chunks incrementally before end() is called (mutation guard: buffered impl hangs)", async () => {
+    const src = makePassThrough();
+    const res = streamingResponseFromNode(src as unknown as IncomingMessage, noop);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const reader = res.body!.getReader();
+    const dec = new TextDecoder();
+
+    // Write first chunk and read it back WITHOUT calling src.end() yet.
+    // A Buffer.concat-on-end implementation would never resolve this read.
+    src.write("hello");
+    const first = await reader.read();
+    expect(first.done).toBe(false);
+    expect(dec.decode(first.value)).toBe("hello");
+
+    // Continue writing and finish.
+    src.write("world");
+    src.end();
+    const second = await reader.read();
+    expect(second.done).toBe(false);
+    expect(dec.decode(second.value)).toBe("world");
+
+    const terminal = await reader.read();
+    expect(terminal.done).toBe(true);
+  });
+
+  it("rejects the reader when cumulative bytes exceed maxBytes", async () => {
+    const src = makePassThrough();
+    const res = streamingResponseFromNode(src as unknown as IncomingMessage, noop, 4);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const reader = res.body!.getReader();
+
+    src.write("hello world"); // 11 bytes > 4
+    await expect(reader.read()).rejects.toThrow(/size limit/);
+  });
+
+  it("propagates a stream error to the reader", async () => {
+    const src = makePassThrough();
+    const res = streamingResponseFromNode(src as unknown as IncomingMessage, noop);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const reader = res.body!.getReader();
+
+    src.emit("error", new Error("boom"));
+    await expect(reader.read()).rejects.toThrow("boom");
+  });
+
+  it("preserves status code and headers from the IncomingMessage", () => {
+    const src = makePassThrough(200, "OK", { "content-type": "text/event-stream" });
+    const res = streamingResponseFromNode(src as unknown as IncomingMessage, noop);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
   });
 });
