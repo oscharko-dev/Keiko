@@ -15,6 +15,8 @@
 import {
   listQualityIntelligenceRuns,
   loadQualityIntelligenceRun,
+  loadQualityIntelligenceCandidates,
+  type QualityIntelligenceCandidateRow,
 } from "@oscharko-dev/keiko-evidence";
 import type {
   QualityIntelligenceUiRunSummary,
@@ -22,9 +24,12 @@ import type {
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceUiFindingSummary,
   QualityIntelligenceUiEvidenceRef,
+  QualityIntelligenceUiCandidate,
 } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { loadRunReviewState, candidateReviewStateOf, runReviewStateOf } from "./reviewStore.js";
+import { qiRunRegistry } from "./runRegistry.js";
 
 // Issue #646 — bound manifest loading on the run-list path. Default 100 keeps the local BFF
 // responsive on large evidence stores; the max cap of 500 mirrors the QI run-detail budget so
@@ -62,11 +67,33 @@ function projectRunSummary(
   };
 }
 
-function projectRunDetail(
-  manifest: ReturnType<typeof loadQualityIntelligenceRun>,
-): QualityIntelligenceUiRunDetail | null {
-  if (manifest === undefined) return null;
+interface RunDetailInputs {
+  readonly manifest: NonNullable<ReturnType<typeof loadQualityIntelligenceRun>>;
+  readonly candidateRows: readonly QualityIntelligenceCandidateRow[];
+  readonly reviewArtifact: ReturnType<typeof loadRunReviewState>;
+}
 
+function projectCandidate(
+  row: QualityIntelligenceCandidateRow,
+  reviewArtifact: ReturnType<typeof loadRunReviewState>,
+): QualityIntelligenceUiCandidate {
+  return {
+    id: row.id,
+    title: row.title,
+    preconditions: row.preconditions,
+    steps: row.steps,
+    expectedResults: row.expectedResults,
+    priority: row.priority,
+    riskClass: row.riskClass,
+    tags: row.tags,
+    status: row.status,
+    reviewState: candidateReviewStateOf(reviewArtifact, row.id),
+    derivedFromAtomIds: row.derivedFromAtomIds,
+  };
+}
+
+function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDetail {
+  const { manifest, candidateRows, reviewArtifact } = inputs;
   const findingRefs: QualityIntelligenceUiFindingSummary[] = manifest.findings.map((f) => ({
     id: f.id,
     kind: f.kind,
@@ -76,12 +103,13 @@ function projectRunDetail(
     summaryRedacted: f.summaryRedacted,
   }));
 
-  // Candidate ids are derived from finding candidateId references (where present).
-  // The manifest itself does not store a flat candidateIds list; we project unique
-  // candidate IDs that appear in evidence refs provenance.
-  // For the scaffold, use provenanceRefs.envelopeIds as candidate references
-  // since the full candidate list is a domain concern deferred to #281.
-  const candidateIds: string[] = [...manifest.provenanceRefs.envelopeIds];
+  const candidates: QualityIntelligenceUiCandidate[] = candidateRows.map((row) =>
+    projectCandidate(row, reviewArtifact),
+  );
+  // Real candidate ids now come from the persisted candidate artifact (#280); fall back to the
+  // manifest evidence-ref envelope ids only when no candidate body was recorded (legacy/failed run).
+  const candidateIds: string[] =
+    candidates.length > 0 ? candidates.map((c) => c.id) : [...manifest.provenanceRefs.envelopeIds];
 
   const evidenceRefs: QualityIntelligenceUiEvidenceRef[] = manifest.evidenceRefs.map((r) => ({
     envelopeId: r.envelopeId,
@@ -100,7 +128,9 @@ function projectRunDetail(
     },
     findingRefs,
     candidateIds,
+    candidates,
     evidenceRefs,
+    reviewState: runReviewStateOf(reviewArtifact),
     manifestSchemaVersion: manifest.qiEvidenceSchemaVersion,
   };
 }
@@ -148,10 +178,18 @@ export function handleListQiRuns(ctx: RouteContext, deps: UiHandlerDeps): RouteR
   const limit = limitOutcome.limit;
   const evidenceDir = resolveEvidenceDir(deps);
   try {
-    const runIds = listQualityIntelligenceRuns({ evidenceDir });
-    const totalRunIds = runIds.length;
+    // In-flight runs (not yet persisted to evidence) appear first so a running run is visible
+    // immediately. Completed runs come from evidence (restart-safe).
+    const active = qiRunRegistry.listActiveSummaries();
+    const activeIds = new Set(active.map((r) => r.id));
+    const runIds = listQualityIntelligenceRuns({ evidenceDir }).filter((id) => !activeIds.has(id));
+    const totalRunIds = active.length + runIds.length;
     const truncated = totalRunIds > limit;
     const runs: QualityIntelligenceUiRunSummary[] = [];
+    for (const summary of active) {
+      if (runs.length >= limit) break;
+      runs.push(summary);
+    }
     // Issue #646: stop iterating as soon as the bounded slice is full so we never load more
     // manifests than the route promised. A single corrupt manifest still skips its slot, but
     // we do NOT advance past `limit` to refill it — the goal is bounded work per request.
@@ -200,13 +238,17 @@ export function handleGetQiRun(ctx: RouteContext, deps: UiHandlerDeps): RouteRes
         body: { error: { code: "NOT_FOUND", message: "Quality Intelligence run not found" } },
       };
     }
-    const detail = projectRunDetail(manifest);
-    if (detail === null) {
-      return {
-        status: 404,
-        body: { error: { code: "NOT_FOUND", message: "Quality Intelligence run not found" } },
-      };
-    }
+    const candidatesArtifact =
+      evidenceDir === undefined
+        ? undefined
+        : loadQualityIntelligenceCandidates(id, { evidenceDir });
+    const reviewArtifact =
+      evidenceDir === undefined ? undefined : loadRunReviewState(id, evidenceDir);
+    const detail = projectRunDetail({
+      manifest,
+      candidateRows: candidatesArtifact?.candidates ?? [],
+      reviewArtifact,
+    });
     return { status: 200, body: detail };
     // Static codes only — never echo OS fs error text (CWE-209).
   } catch {

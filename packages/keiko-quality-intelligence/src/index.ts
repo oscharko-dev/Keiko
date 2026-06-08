@@ -50,3 +50,15 @@ export * as QualityIntelligenceReview from "./review/index.js";
 // Pure adversarial-input predicates: path-safety, oversize guards, prompt-injection
 // scrubber. No IO; layered defence beside `QualityIntelligenceIngestion`.
 export * as QualityIntelligenceHardening from "./hardening/index.js";
+
+// ─── Export sub-namespace (Issue #283) ─────────────────────────────────────────
+// Pure-domain export adapters (CSV / JSON / TMS mappings) + bundle serialiser. No IO; the
+// server tier owns persistence + connector authorisation. TMS-targeted bundles must attest
+// redaction (enforced by the contract invariant).
+export * as QualityIntelligenceExport from "./export/index.js";
+
+// ─── Generation sub-namespace (Issue #272/#278/#279) ───────────────────────────
+// Pure model-routed generation prep + recovery: trusted prompt assembly, requirements-text
+// ingestion into content-bearing atoms, and deterministic model-output → candidate parsing.
+// No IO, no model call; the server tier supplies the Keiko Model Gateway port.
+export * as QualityIntelligenceGeneration from "./generation/index.js";

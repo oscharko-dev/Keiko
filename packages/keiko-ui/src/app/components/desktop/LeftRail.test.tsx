@@ -1,9 +1,11 @@
 // Issue #189 — tests for the LeftRail navigation links.
-// Verifies that all page-route links (MemoriaViva, Quality Intelligence,
-// Local Knowledge) render with correct href and accessible name.
+// Verifies that the remaining page-route links (MemoriaViva, Local Knowledge) render with correct
+// href and accessible name. Epic #270 — Quality Intelligence is now a Workspace tool window (not a
+// page route): it renders as a tool button that calls onTool("quality").
 // Epic #518 — also verifies aria-pressed state on toggle buttons (WCAG 4.1.2).
 
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { LeftRail } from "./LeftRail";
 
@@ -50,11 +52,34 @@ describe("LeftRail — page-route links", () => {
     expect(link).toHaveAttribute("href", "/memoriaviva");
   });
 
-  it("renders the Quality Intelligence link with correct href and accessible name", () => {
+  it("renders Quality Intelligence as a tool button (not a page-route link)", () => {
     renderRail();
-    const link = screen.getByRole("link", { name: "Quality Intelligence" });
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "/quality-intelligence");
+    expect(screen.getByRole("button", { name: "Quality Intelligence" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Quality Intelligence" })).not.toBeInTheDocument();
+  });
+
+  it("opens the Quality Intelligence hub via onTool('quality') when clicked", async () => {
+    const onTool = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <LeftRail
+        openTools={new Set()}
+        onTool={onTool}
+        onNewChat={vi.fn()}
+        theme="dark"
+        onToggleTheme={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Quality Intelligence" }));
+    expect(onTool).toHaveBeenCalledWith("quality");
+  });
+
+  it("marks the Quality Intelligence button pressed when its window is open", () => {
+    renderRail(new Set(["quality"]));
+    expect(screen.getByRole("button", { name: "Quality Intelligence" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   it("renders the Local Knowledge link with correct href and accessible name", () => {
