@@ -1,8 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import type { ModelCapability } from "@/lib/types";
-import { isAgentWorkflowModel, directoryPickerError } from "./NewWindowDialog";
+import { isAgentWorkflowModel, directoryPickerError, NewWindowDialog } from "./NewWindowDialog";
 import { ApiError } from "@/lib/api";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
+
+vi.mock("@/lib/api", () => ({
+  ApiError: class ApiError extends Error {
+    constructor(
+      public readonly code: string,
+      message: string,
+      public readonly status: number,
+    ) {
+      super(message);
+    }
+  },
+  fetchModels: vi.fn(async () => ({ models: [] })),
+  fetchProjects: vi.fn(async () => ({ projects: [] })),
+  startRun: vi.fn(),
+  createProject: vi.fn(),
+  updateProject: vi.fn(),
+  fetchFilesDirectories: vi.fn(async () => ({ entries: [] })),
+}));
 
 function model(patch: Partial<ModelCapability>): ModelCapability {
   return {
@@ -44,6 +63,16 @@ describe("isAgentWorkflowModel", () => {
 describe("chat window config", () => {
   it("does not expose a dead model field in the new-window dialog", () => {
     expect(WIN_TYPES.chat.config?.some((field) => field.key === "model")).toBe(false);
+  });
+});
+
+// GAP-C3 (#146): the "Keiko-Mode coming soon" disabled toggle must not render
+describe("NewWindowDialog: no Keiko-Mode coming-soon toggle (#146 GAP-C3)", () => {
+  it("does not render 'coming soon' text in the agents dialog", () => {
+    render(
+      <NewWindowDialog type="agents" types={WIN_TYPES} onConfirm={vi.fn()} onClose={vi.fn()} />,
+    );
+    expect(screen.queryByText(/coming soon/i)).toBeNull();
   });
 });
 

@@ -892,22 +892,6 @@ function AgentLauncher({
         </button>
       ) : null}
       {renderWorkflowFields()}
-      <div className="permctl agent-disabled-perm" aria-disabled="true">
-        <div className="perm-toggle" data-on={true}>
-          {/* eslint-disable-next-line @next/next/no-img-element -- raw SVG sized by .perm-orca */}
-          <img className="perm-orca" src="/assets/keiko-logo.svg" alt="" />
-          <span className="perm-tt">
-            <span className="perm-name">Keiko-Mode</span>
-            <span className="perm-desc">coming soon</span>
-          </span>
-          <span className="perm-sw on">
-            <span />
-          </span>
-        </div>
-        <div className="perm-note">
-          Runs are dry-run only. Apply requires explicit review and Apply.
-        </div>
-      </div>
       <div className="dlg-agent-actions">
         <button
           type="button"

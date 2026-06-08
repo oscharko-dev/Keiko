@@ -1016,27 +1016,82 @@ export function useChatSession(): UseChatSessionResult {
   }, []);
 
   // Issue #151 / AC#1 — reactive context-pressure estimate. Derives from the
-  // selected model's capability + current draft + visible history. Connected-
-  // context byte counts from #177/#189/#204 are passed through as zero today;
-  // they wire up to the estimator when those surfaces expose byte budgets in
-  // a follow-up. The fields exist on the contract so consumers (BFF, audit,
-  // UI) can carry the breakdown end-to-end without contract churn.
+  // selected model's capability + current draft + visible history, plus
+  // best-effort byte estimates from the last grounded and memory responses.
+  //
+  // All three connected-context fields are APPROXIMATE and labelled as such in
+  // the UI. They use the LAST known values so the indicator updates reactively
+  // after each turn without requiring a round-trip before the next send.
+  //
+  // Sources (fields that genuinely exist on the wire types):
+  //   repoContextPackBytes   — GroundedAnswerContextPackSummary.usage.excerptBytes
+  //                            (connected-context and hybrid folder evidence)
+  //   knowledgeCapsuleBytes  — LocalKnowledgeGroundedAnswerContextSummary.referenceBudget × 4
+  //                            (token budget converted to bytes; no raw byte field on the wire)
+  //   memoryContextBytes     — ConversationMemoryContextWire.text.length
+  //                            (the injected memory block is UTF-16 encoded; byte length
+  //                            approximates closely enough for the pressure indicator)
   const budget = useMemo<ConversationBudgetEstimate | undefined>(() => {
     const capability = state.models.find((m) => m.id === state.selectedModel);
     if (capability === undefined) return undefined;
     const history: readonly { readonly role: string; readonly content: string }[] = state.messages
       .filter((m) => m.role === "user" || m.role === "assistant")
       .map((m) => ({ role: m.role, content: m.content }));
+
+    // Derive best-effort bytes from the last grounded answer. The shape narrows
+    // by groundingKind so we only read fields that exist on each variant.
+    let repoContextPackBytes = 0;
+    let knowledgeCapsuleBytes = 0;
+    if (latestGrounded !== undefined) {
+      if (
+        latestGrounded.groundingKind === "connected-context" ||
+        latestGrounded.groundingKind === "hybrid"
+      ) {
+        const pack =
+          latestGrounded.groundingKind === "hybrid"
+            ? latestGrounded.contextPack.folder
+            : latestGrounded.contextPack;
+        repoContextPackBytes = pack.usage.excerptBytes;
+      }
+      if (
+        latestGrounded.groundingKind === "local-knowledge" ||
+        latestGrounded.groundingKind === "hybrid"
+      ) {
+        const lk =
+          latestGrounded.groundingKind === "hybrid"
+            ? latestGrounded.contextPack.knowledge
+            : latestGrounded.contextPack;
+        // The local-knowledge context summary carries a token budget, not a byte
+        // count. Multiply by 4 (chars/token) as a conservative byte estimate.
+        knowledgeCapsuleBytes = lk.referenceBudget * 4;
+      }
+    }
+
+    // Memory context bytes: only when memory is enabled and a non-empty context
+    // text was returned by the last ungrounded send.
+    const memoryContextBytes =
+      memoryEnabled && latestMemory !== undefined && latestMemory.context.enabled
+        ? latestMemory.context.text.length
+        : 0;
+
     return estimateConversationBudget({
       modelContextWindow: capability.contextWindow,
       modelMaxOutputTokens: capability.maxOutputTokens,
       userDraftText: draft,
       conversationHistory: history,
-      // TODO(#151 follow-up): wire repoContextPackBytes from #177 surface,
-      // knowledgeCapsuleBytes from #189, memoryContextBytes from #204. The
-      // estimator already counts them; this turn passes zero by omission.
+      repoContextPackBytes,
+      knowledgeCapsuleBytes,
+      memoryContextBytes,
     });
-  }, [state.models, state.selectedModel, state.messages, draft]);
+  }, [
+    state.models,
+    state.selectedModel,
+    state.messages,
+    draft,
+    latestGrounded,
+    latestMemory,
+    memoryEnabled,
+  ]);
 
   // Issue #153 — governed workflow handoff from the Conversation Center. Three guard rails:
   //   1. The selected model must satisfy the STRICTER workflow filter (AC#2).

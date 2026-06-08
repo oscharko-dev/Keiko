@@ -3021,10 +3021,6 @@ select.set-input {
   color: var(--fg-faint);
   line-height: 1.45;
 }
-.agent-disabled-perm {
-  opacity: 0.76;
-  pointer-events: none;
-}
 .dlg-agent-warning {
   display: flex;
   align-items: center;
