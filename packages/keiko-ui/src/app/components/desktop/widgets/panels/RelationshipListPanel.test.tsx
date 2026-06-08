@@ -40,7 +40,7 @@ vi.mock("../../../../relationships/api.js", () => ({
   },
 }));
 
-import { listRelationships } from "../../../../relationships/api";
+import { listRelationships, RelationshipApiError } from "../../../../relationships/api";
 
 const mockListRelationships = vi.mocked(listRelationships);
 
@@ -69,7 +69,10 @@ function renderPanel(
     selectedId: string;
     onSelect: (id: string) => void;
     onFilterChange: (p: Partial<RelationshipFilters>) => void;
-    activityMap: ReadonlyMap<string, import("@oscharko-dev/keiko-contracts").RelationshipActivityState>;
+    activityMap: ReadonlyMap<
+      string,
+      import("@oscharko-dev/keiko-contracts").RelationshipActivityState
+    >;
     throughputMap: ReadonlyMap<string, number>;
     animateBadges: boolean;
     highContrast: boolean;
@@ -87,7 +90,9 @@ function renderPanel(
         onSelect={onSelect}
         onFilterChange={onFilterChange}
         {...(overrides.activityMap !== undefined ? { activityMap: overrides.activityMap } : {})}
-        {...(overrides.throughputMap !== undefined ? { throughputMap: overrides.throughputMap } : {})}
+        {...(overrides.throughputMap !== undefined
+          ? { throughputMap: overrides.throughputMap }
+          : {})}
         {...(overrides.animateBadges !== undefined
           ? { animateBadges: overrides.animateBadges }
           : {})}
@@ -133,13 +138,16 @@ describe("RelationshipListPanel", () => {
   });
 
   describe("error state", () => {
-    // TODO(#543): same selector tightening as the Inspector test — #543 hardening
-    // replaces the text regex with a role-based query and re-enables.
-    it.skip("surfaces server error message verbatim in lk-alert", async () => {
-      mockListRelationships.mockRejectedValue(new Error("Server error: upstream timeout"));
+    // #543 hardening: the list panel surfaces a RelationshipApiError message verbatim; a plain Error
+    // maps to generic copy. Assert the verbatim path with a role-based query (robust to the alert's
+    // internal span/button layout).
+    it("surfaces server error message verbatim in lk-alert", async () => {
+      mockListRelationships.mockRejectedValue(
+        new RelationshipApiError("relationship/upstream", "Server error: upstream timeout", 504),
+      );
       renderPanel();
       await waitFor(() => {
-        expect(screen.getByText(/upstream timeout/i)).toBeDefined();
+        expect(screen.getByRole("alert").textContent).toContain("upstream timeout");
       });
     });
   });

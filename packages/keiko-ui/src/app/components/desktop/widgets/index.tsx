@@ -20,6 +20,7 @@ import { SettingsPanel } from "./panels/SettingsPanel";
 import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
 import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
 import { QiRunCard } from "./quality-intelligence/QiRunCard";
+import { RelationshipsView } from "../../../relationships/RelationshipsView";
 
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const v = cfg[key];
@@ -89,6 +90,10 @@ registerWindowRender("qiRun", (cfg) => {
     </div>
   );
 });
+
+// Epic #532 — Relationship engine hub. Singleton tool window mirroring the QI hub: the governed
+// relationship graph lives inside the Workspace, not as a full-page route.
+registerWindowRender("relationships", () => <RelationshipsView />);
 
 registerWindowRender("files", (cfg, ctx) => {
   const root = str(cfg, "root");

@@ -153,6 +153,15 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "evidence-reference",
   },
+  // Epic #532 — Relationship engine hub: governance metadata over the relationship graph. Reads
+  // durable relationship rows (V5 UI-store, ADR-0031) and references evidence artifacts; grants no
+  // model/tool/fs/workflow authority. Mutations (create/archive/revoke) are explicit user actions.
+  relationships: {
+    lifecycle: ["idle", "live", "degraded", "blocked", "error"],
+    trustBoundary: ["ui", "evidence"],
+    authority: "user-confirm",
+    persistence: "durable.ui",
+  },
 };
 
 // ─── Module-evaluation validation ─────────────────────────────────────────

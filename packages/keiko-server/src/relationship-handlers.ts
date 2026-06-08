@@ -273,6 +273,9 @@ const MAX_BODY_BYTES = 16 * 1024;
 const ACTIVITY_WINDOW_MS = 60_000;
 const ACTIVITY_HIGH_THROUGHPUT_THRESHOLD = 50;
 const ACTIVITY_SSE_REFRESH_MS = 5_000;
+// EventSource reconnect backoff advertised in the initial `retry:` directive (SSE spec). Matches
+// the refresh cadence so a dropped stream re-establishes on roughly the same beat.
+const ACTIVITY_SSE_RETRY_MS = 5_000;
 const ACTIVITY_MAX_RUNS = 64;
 
 const RUN_PROCESSING_EVENT_TYPES = new Set([
@@ -1928,6 +1931,14 @@ function handleEventsImpl(ctx: RouteContext, deps: UiHandlerDeps): RouteResult |
     return STREAMING;
   }
   res.writeHead(200, SSE_HEADERS);
+  // Flush headers + emit an initial liveness frame so the EventSource client fires `onopen`
+  // immediately, even on an idle workspace with no activity snapshots. Without this, the stream
+  // sends 0 bytes until the first activity transition or the 30s ping, leaving the client stuck in
+  // "connecting" and unable to distinguish a live-but-quiet stream from a dead one. The frame is a
+  // `retry:` reconnect directive plus an SSE comment (`:` lines are ignored by EventSource), so it
+  // carries no relationship payload and never trips the activity allowlist.
+  res.flushHeaders();
+  res.write(`retry: ${String(ACTIVITY_SSE_RETRY_MS)}\n: connected\n\n`);
   let lastEmitted = new Map<string, string>();
   const emitSnapshots = (): void => {
     const next = new Map<string, string>();

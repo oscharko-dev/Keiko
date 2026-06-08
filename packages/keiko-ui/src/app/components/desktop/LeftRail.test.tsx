@@ -88,6 +88,37 @@ describe("LeftRail — page-route links", () => {
     expect(link).toBeInTheDocument();
     expect(link).toHaveAttribute("href", "/local-knowledge");
   });
+
+  // Epic #532 — Relationships mirrors Quality Intelligence: a singleton tool button, not a route.
+  it("renders Relationships as a tool button (not a page-route link)", () => {
+    renderRail();
+    expect(screen.getByRole("button", { name: "Relationships" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Relationships" })).not.toBeInTheDocument();
+  });
+
+  it("opens the Relationships window via onTool('relationships') when clicked", async () => {
+    const onTool = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <LeftRail
+        openTools={new Set()}
+        onTool={onTool}
+        onNewChat={vi.fn()}
+        theme="dark"
+        onToggleTheme={vi.fn()}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Relationships" }));
+    expect(onTool).toHaveBeenCalledWith("relationships");
+  });
+
+  it("marks the Relationships button pressed when its window is open", () => {
+    renderRail(new Set(["relationships"]));
+    expect(screen.getByRole("button", { name: "Relationships" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
 });
 
 describe("LeftRail — aria-pressed on toggle buttons (WCAG 4.1.2)", () => {
