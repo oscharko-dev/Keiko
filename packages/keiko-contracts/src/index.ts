@@ -285,8 +285,14 @@ export type {
   DesktopChatSendRequestWire,
   BffErrorCode,
   BffError,
+  GroundingLimits,
 } from "./bff-wire.js";
-export { buildGroundedAnswerContextPackSummary } from "./bff-wire.js";
+export {
+  buildGroundedAnswerContextPackSummary,
+  DEFAULT_GROUNDING_LIMITS,
+  GROUNDING_LIMIT_CEILINGS,
+  resolveGroundingLimits,
+} from "./bff-wire.js";
 
 // ─── Connected repository context (Issue #178 / Epic #177) ──────────────────────
 export type {

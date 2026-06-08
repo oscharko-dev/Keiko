@@ -657,3 +657,106 @@ describe("parseGatewayConfig top-level capabilities array", () => {
     });
   });
 });
+
+describe("parseGatewayConfig grounding block", () => {
+  it("grounding is undefined when the block is absent (no-config behaviour unchanged)", () => {
+    const config = parseGatewayConfig(validRaw());
+    expect(config.grounding).toBeUndefined();
+  });
+
+  it("parses a valid grounding block with a single positive-integer field", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { maxConnectedSources: 4 },
+    };
+    const config = parseGatewayConfig(raw);
+    expect(config.grounding?.maxConnectedSources).toBe(4);
+  });
+
+  it("parses all grounding fields when all are provided as positive integers", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: {
+        maxConnectedSources: 8,
+        maxLocalKnowledgeSources: 8,
+        maxPromptReferences: 4,
+        maxExcerptChars: 500,
+        referenceBudget: 5,
+        hybridMaxCandidates: 12,
+        hybridMaxExcerptBytes: 65536,
+      },
+    };
+    const config = parseGatewayConfig(raw);
+    expect(config.grounding?.maxConnectedSources).toBe(8);
+    expect(config.grounding?.maxLocalKnowledgeSources).toBe(8);
+    expect(config.grounding?.maxPromptReferences).toBe(4);
+    expect(config.grounding?.maxExcerptChars).toBe(500);
+    expect(config.grounding?.referenceBudget).toBe(5);
+    expect(config.grounding?.hybridMaxCandidates).toBe(12);
+    expect(config.grounding?.hybridMaxExcerptBytes).toBe(65536);
+  });
+
+  it("clamps an over-ceiling value (9999) to the ceiling (64) rather than rejecting it", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { maxConnectedSources: 9999 },
+    };
+    const config = parseGatewayConfig(raw);
+    expect(config.grounding?.maxConnectedSources).toBe(64);
+  });
+
+  it("throws ConfigInvalidError for a non-integer grounding field (1.5)", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { maxConnectedSources: 1.5 },
+    };
+    expect(() => parseGatewayConfig(raw)).toThrow(ConfigInvalidError);
+    expect(() => parseGatewayConfig(raw)).toThrow(/grounding\.maxConnectedSources/);
+  });
+
+  it("throws ConfigInvalidError for a zero grounding field (not positive)", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { referenceBudget: 0 },
+    };
+    expect(() => parseGatewayConfig(raw)).toThrow(ConfigInvalidError);
+    expect(() => parseGatewayConfig(raw)).toThrow(/grounding\.referenceBudget/);
+  });
+
+  it("throws ConfigInvalidError for a negative grounding field", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { maxPromptReferences: -5 },
+    };
+    expect(() => parseGatewayConfig(raw)).toThrow(ConfigInvalidError);
+  });
+
+  it("ignores unknown keys in the grounding block (forward-compat)", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { maxConnectedSources: 4, unknownFutureKey: 99 },
+    };
+    expect(() => parseGatewayConfig(raw)).not.toThrow();
+    const config = parseGatewayConfig(raw);
+    expect(config.grounding?.maxConnectedSources).toBe(4);
+  });
+});
+
+describe("toSafeObject grounding field", () => {
+  it("includes resolved grounding limits when the config has a grounding block", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { maxConnectedSources: 4 },
+    };
+    const config = parseGatewayConfig(raw);
+    const safe = toSafeObject(config);
+    expect(safe.grounding?.maxConnectedSources).toBe(4);
+  });
+
+  it("omits grounding from the safe object when no grounding block was configured", () => {
+    const config = parseGatewayConfig(validRaw());
+    const safe = toSafeObject(config);
+    expect(safe.grounding).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(safe, "grounding")).toBe(false);
+  });
+});
