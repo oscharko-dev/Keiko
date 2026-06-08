@@ -503,7 +503,11 @@ export function enforcedNoEvidenceReason(
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
 ): string | undefined {
   if (result.noEvidence) return result.reason ?? "no-evidence";
-  if (result.answer.trim().length === 0) return "empty-answer";
+  const answer = result.answer.trim();
+  if (answer.length === 0) return "empty-answer";
+  if (answer.toLowerCase() === "no evidence found in the selected knowledge scope.") {
+    return "no-evidence";
+  }
   // #189: an answer with retrieved references but no model-emitted [n] markers is still grounded
   // (the references were in the model's context) — it is NOT "no evidence". buildLocalKnowledgeCitations
   // rescues the references as citations rather than discarding a correct, evidence-backed answer.

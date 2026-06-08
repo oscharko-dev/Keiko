@@ -85,4 +85,15 @@ describe("local-knowledge citation rescue (#189)", () => {
       "empty-answer",
     );
   });
+
+  it("flags the canonical no-evidence sentence even when the runner did not set noEvidence", () => {
+    expect(
+      enforcedNoEvidenceReason(
+        result({
+          answer: "No evidence found in the selected knowledge scope.",
+          references: [ref(1)],
+        }),
+      ),
+    ).toBe("no-evidence");
+  });
 });

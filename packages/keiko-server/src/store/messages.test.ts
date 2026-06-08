@@ -601,6 +601,34 @@ describe("listMessages", () => {
     expect(list.map((m) => m.content)).toEqual(["A", "B"]);
   });
 
+  it("preserves insertion order when two messages share the same timestamp", () => {
+    store.createMessages([
+      {
+        chatId,
+        role: "user",
+        content: "user first",
+        timestamp: 50,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+      {
+        chatId,
+        role: "assistant",
+        content: "assistant second",
+        timestamp: 50,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      },
+    ]);
+    expect(store.listMessages(chatId).map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
   it("returns an empty array for an unknown chatId (no throw)", () => {
     expect(store.listMessages("nope")).toEqual([]);
   });
