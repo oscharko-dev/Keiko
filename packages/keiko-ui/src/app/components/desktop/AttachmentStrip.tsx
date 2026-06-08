@@ -13,7 +13,11 @@
 
 import { useCallback, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { Icons } from "./Icons";
-import type { AttachmentRejectionReason, PendingAttachment } from "./hooks/useChatSession";
+import type {
+  AttachmentRejectionReason,
+  PendingAttachment,
+  SentDocumentDisclosure,
+} from "./hooks/useChatSession";
 import type { ModelCapability } from "@/lib/types";
 
 // ─── Human-readable rejection messages (AC #2) ────────────────────────────────
@@ -254,6 +258,44 @@ export function AttachRejectionAlert({ reason, mimeType }: AttachRejectionAlertP
   return (
     <div role="alert" className="attach-rejection-alert">
       {rejectionMessage(reason, mimeType)}
+    </div>
+  );
+}
+
+// ─── SentDocumentsNote (Issue #148) ───────────────────────────────────────────
+//
+// After a send that included attached documents, discloses which documents contributed
+// extracted context and whether any was truncated to fit the bounded context budget. Only the
+// basename is shown — never a path (AC #4 of #147). role="status" announces politely so it does
+// not interrupt the assistant reply that lands at the same time.
+
+interface SentDocumentsNoteProps {
+  readonly documents: readonly SentDocumentDisclosure[];
+}
+
+export function SentDocumentsNote({ documents }: SentDocumentsNoteProps): ReactNode {
+  if (documents.length === 0) return null;
+  const anyTruncated = documents.some((doc) => doc.truncated);
+  return (
+    <div role="status" className="sent-docs-note" aria-label="Documents included as context">
+      <span className="sent-docs-note-label">
+        {documents.length === 1
+          ? "Document included as context:"
+          : "Documents included as context:"}
+      </span>
+      <ul className="sent-docs-note-list">
+        {documents.map((doc) => (
+          <li key={doc.id} className="sent-docs-note-item">
+            {doc.displayName}
+            {doc.truncated ? <span className="sent-docs-note-trunc"> (truncated)</span> : null}
+          </li>
+        ))}
+      </ul>
+      {anyTruncated ? (
+        <span className="sent-docs-note-hint">
+          Some document text was truncated to fit the context limit.
+        </span>
+      ) : null}
     </div>
   );
 }

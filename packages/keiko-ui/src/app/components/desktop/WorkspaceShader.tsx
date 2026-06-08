@@ -309,6 +309,15 @@ export function WorkspaceShader(): ReactNode {
     if (canvas === null) return;
     const host = canvas.parentElement;
     if (host === null) return;
+    // WCAG 2.3.3 — skip continuous animation for users who prefer reduced motion.
+    // The canvas remains transparent; the solid --bg colour shows through (same
+    // graceful fallback as the no-WebGL path documented in setupShader).
+    if (
+      typeof window !== "undefined" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      return;
+    }
     return setupShader(host, canvas);
   }, []);
 

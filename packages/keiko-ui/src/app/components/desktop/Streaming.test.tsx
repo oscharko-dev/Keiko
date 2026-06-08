@@ -20,6 +20,7 @@ import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { useChatSession, type ChatSessionApi } from "./hooks/useChatSession";
 import * as api from "@/lib/api";
 import type { Chat, ChatMessage, DesktopChatSendResponse, ModelCapability } from "@/lib/types";
+import type { StreamHandlers } from "@/lib/api";
 
 // ─── UI test helpers ──────────────────────────────────────────────────────────
 
@@ -80,6 +81,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     rejectMemoryCandidate: vi.fn(),
     clearHistory: vi.fn(),
     launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
+    lastSentDocuments: [],
     ...overrides,
   };
 }
@@ -159,6 +161,21 @@ function userMessage(content: string): ChatMessage {
     role: "user",
     content,
     timestamp: 1,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  };
+}
+
+function assistantMessage(id: string, content: string): ChatMessage {
+  return {
+    id,
+    chatId: "chat-1",
+    role: "assistant",
+    content,
+    timestamp: 2,
     runId: undefined,
     workflowId: undefined,
     workflowStatus: undefined,
@@ -253,6 +270,59 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
   });
 });
 
+// ─── Streaming typing indicator + pending bubble (Issue #152) ──────────────────
+// While the stream is contacting the model the pending assistant turn is shown as
+// the TypingBubble. Once tokens flow (sendStatus "streaming") the growing assistant
+// bubble IS the progress signal, so the redundant typing dots are suppressed and the
+// empty pre-token assistant bubble is hidden — verified live against the Azure gateway.
+
+describe("ChatWindow streaming typing indicator (Issue #152)", () => {
+  it("shows the typing indicator while contacting (before the first token)", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [userMessage("hi")],
+        sendStatus: "contacting",
+        sending: true,
+      }),
+    );
+    expect(screen.getByLabelText("Keiko is responding")).toBeInTheDocument();
+  });
+
+  it("suppresses the typing indicator once tokens are streaming (no dots over live text)", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [userMessage("hi"), assistantMessage("a-stream", "The TCP/IP stack")],
+        sendStatus: "streaming",
+        sending: true,
+      }),
+    );
+    // Mutation guard: reverting the `sendStatus !== "streaming"` condition makes the
+    // typing bubble reappear alongside the live assistant text, failing this.
+    expect(screen.queryByLabelText("Keiko is responding")).toBeNull();
+  });
+
+  it("hides the empty pre-token assistant bubble, keeping only non-empty turns", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          userMessage("hi"),
+          assistantMessage("a-empty", ""),
+          assistantMessage("a-full", "Final answer."),
+        ],
+        sendStatus: "idle",
+        sending: false,
+      }),
+    );
+    // Mutation guard: dropping the `content.length > 0` filter renders the empty
+    // assistant bubble too, making this length assertion fail.
+    expect(document.querySelectorAll('article[data-role="assistant"]')).toHaveLength(1);
+    expect(screen.getByText("Final answer.")).toBeInTheDocument();
+  });
+});
+
 // ─── Pure label helper — the only progress signal per the engineering note ────
 
 describe("sendStatusLabel (Issue #152 — no fake progress percentages)", () => {
@@ -307,8 +377,11 @@ function mockBootstrap(): void {
     createdAt: 1,
     updatedAt: 2,
   };
+  // The buffered-path lifecycle tests below exercise sendDesktopChat; pin the model to
+  // non-streaming so they take the buffered branch (the streaming branch is covered by the
+  // dedicated "Layer 3 SSE streaming" describe with its own sendDesktopChatStream spy).
   vi.spyOn(api, "fetchModels").mockResolvedValue({
-    models: [chatModelCapability("example-chat-model")],
+    models: [{ ...chatModelCapability("example-chat-model"), streaming: false }],
   });
   vi.spyOn(api, "fetchProjects").mockResolvedValue({
     projects: [
@@ -601,5 +674,313 @@ describe("useChatSession bootstrap eligibility filter (Issue #144 AC #1/#2)", ()
     expect(modelIds).not.toContain("test-embed-only");
     expect(modelIds).not.toContain("test-ocr-only");
     expect(view.result.current.models.every((m) => m.kind === "chat")).toBe(true);
+  });
+});
+
+// ─── Layer 3 SSE streaming — sendDesktopChatStream integration ───────────────
+//
+// These tests drive the real useChatSession hook. sendDesktopChatStream is
+// spied on at the module boundary so we can control when tokens and done/error/
+// cancel events fire. Each test is mutation-robust: a single-line deletion in
+// the production accumulation or replacement logic causes the assertion to fail.
+
+describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
+  const PROJECT_PATH_STREAM = "/proj-stream";
+
+  function streamingChat(): Chat {
+    return {
+      id: "chat-stream",
+      projectPath: PROJECT_PATH_STREAM,
+      title: "t",
+      selectedModel: "streaming-model",
+      branchLabel: undefined,
+      status: undefined,
+      connectedScope: undefined,
+      localKnowledgeScope: undefined,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+  }
+
+  function mockBootstrapStreaming(): void {
+    vi.spyOn(api, "fetchModels").mockResolvedValue({
+      models: [chatModelCapability("streaming-model")],
+    });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({
+      projects: [
+        {
+          path: PROJECT_PATH_STREAM,
+          name: "proj-stream",
+          favorite: false,
+          createdAt: 0,
+          lastOpenedAt: 0,
+          available: true,
+        },
+      ],
+    });
+    vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [streamingChat()] });
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+  }
+
+  function nonStreamingModelCapability(id: string): ModelCapability {
+    return { ...chatModelCapability(id), streaming: false };
+  }
+
+  async function bootStreamingHook(): Promise<
+    ReturnType<typeof renderHook<ChatSessionApi, unknown>>
+  > {
+    const view = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(view.result.current.loading).toBe(false);
+      expect(view.result.current.activeChat).toBeDefined();
+    });
+    return view;
+  }
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    api.clearModelCacheForTests();
+    mockBootstrapStreaming();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // ST-L3-1 — happy path: two tokens then done.
+  // Mutation: removing the onToken accumulation would leave the bubble with
+  // only the second token (or empty). Removing the onDone replacement would
+  // leave the temp row in the message list.
+  it("accumulates token deltas into the temp bubble and replaces it with canonical messages on done", async () => {
+    let capturedHandlers: StreamHandlers | undefined;
+    vi.spyOn(api, "sendDesktopChatStream").mockImplementation(
+      (_input, _signal, handlers): Promise<void> => {
+        capturedHandlers = handlers;
+        return new Promise<void>(() => undefined);
+      },
+    );
+
+    const canonicalAssistant: ChatMessage = {
+      id: "assistant-canonical",
+      chatId: "chat-stream",
+      role: "assistant",
+      content: "Hello world",
+      timestamp: 10,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    };
+
+    const view = await bootStreamingHook();
+    act(() => view.result.current.setDraft("hi"));
+    let sendPromise: Promise<void> | undefined;
+    act(() => {
+      sendPromise = view.result.current.sendMessage();
+    });
+
+    // Wait until sendDesktopChatStream is called (contacting state).
+    await waitFor(() => {
+      expect(view.result.current.sendStatus).toBe("contacting");
+      expect(capturedHandlers).toBeDefined();
+    });
+
+    // Fire two tokens — status must flip to streaming and content accumulates.
+    act(() => {
+      capturedHandlers?.onToken("Hello ");
+    });
+    await waitFor(() => {
+      expect(view.result.current.sendStatus).toBe("streaming");
+    });
+    const afterFirstToken = view.result.current.messages.find((m) => m.role === "assistant");
+    expect(afterFirstToken?.content).toBe("Hello ");
+
+    act(() => {
+      capturedHandlers?.onToken("world");
+    });
+    await waitFor(() => {
+      const bubble = view.result.current.messages.find((m) => m.role === "assistant");
+      expect(bubble?.content).toBe("Hello world");
+    });
+
+    // Fire done — canonical messages replace the temp rows.
+    act(() => {
+      capturedHandlers?.onDone({
+        chat: { ...streamingChat(), updatedAt: 99 },
+        messages: [
+          {
+            id: "user-canonical",
+            chatId: "chat-stream",
+            role: "user",
+            content: "hi",
+            timestamp: 5,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          canonicalAssistant,
+        ],
+      });
+    });
+    await sendPromise;
+
+    await waitFor(() => {
+      expect(view.result.current.sendStatus).toBe("completed");
+    });
+    // The canonical assistant message must be present by its server-assigned id.
+    const canonical = view.result.current.messages.find((m) => m.id === "assistant-canonical");
+    expect(canonical).toBeDefined();
+    expect(canonical?.content).toBe("Hello world");
+    // No temp rows remain (id starts with "stream-").
+    const tempRows = view.result.current.messages.filter((m) => m.id.startsWith("stream-"));
+    expect(tempRows).toHaveLength(0);
+  });
+
+  // ST-L3-2 — cancel mid-stream: no partial assistant message kept (AC#3).
+  it("removes the temp assistant bubble on cancel, leaving only the user prompt (AC#3)", async () => {
+    let capturedHandlers: StreamHandlers | undefined;
+    vi.spyOn(api, "sendDesktopChatStream").mockImplementation(
+      (_input, _signal, handlers): Promise<void> => {
+        capturedHandlers = handlers;
+        return new Promise<void>(() => undefined);
+      },
+    );
+
+    const view = await bootStreamingHook();
+    act(() => view.result.current.setDraft("tell me a story"));
+    let sendPromise: Promise<void> | undefined;
+    act(() => {
+      sendPromise = view.result.current.sendMessage();
+    });
+
+    await waitFor(() => {
+      expect(capturedHandlers).toBeDefined();
+    });
+
+    // Fire a token to get into streaming state.
+    act(() => {
+      capturedHandlers?.onToken("Once ");
+    });
+    await waitFor(() => {
+      expect(view.result.current.sendStatus).toBe("streaming");
+    });
+
+    // Cancel — onCancelled fires.
+    act(() => {
+      capturedHandlers?.onCancelled();
+    });
+    await sendPromise;
+
+    expect(view.result.current.sendStatus).toBe("cancelled");
+    // AC#3: no partial assistant content.
+    const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
+    expect(assistants).toHaveLength(0);
+    // The user's prompt stays visible.
+    const users = view.result.current.messages.filter((m) => m.role === "user");
+    expect(users.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // ST-L3-3 — non-streaming model: sendDesktopChatStream must NOT be called.
+  it("uses sendDesktopChat (not sendDesktopChatStream) for a non-streaming model", async () => {
+    vi.restoreAllMocks();
+    api.clearModelCacheForTests();
+    const nonStreamChat: Chat = {
+      ...streamingChat(),
+      selectedModel: "non-stream-model",
+    };
+    vi.spyOn(api, "fetchModels").mockResolvedValue({
+      models: [nonStreamingModelCapability("non-stream-model")],
+    });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({
+      projects: [
+        {
+          path: PROJECT_PATH_STREAM,
+          name: "proj-stream",
+          favorite: false,
+          createdAt: 0,
+          lastOpenedAt: 0,
+          available: true,
+        },
+      ],
+    });
+    vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [nonStreamChat] });
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+
+    const bufferedSpy = vi.spyOn(api, "sendDesktopChat").mockResolvedValue({
+      chat: nonStreamChat,
+      messages: [
+        {
+          id: "a1",
+          chatId: nonStreamChat.id,
+          role: "assistant",
+          content: "buffered answer",
+          timestamp: 5,
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: undefined,
+          shortResult: undefined,
+          taskType: undefined,
+        },
+      ],
+    });
+    const streamSpy = vi.spyOn(api, "sendDesktopChatStream");
+
+    const view = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(view.result.current.loading).toBe(false);
+      expect(view.result.current.activeChat).toBeDefined();
+    });
+
+    act(() => view.result.current.setDraft("hello"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(view.result.current.sendStatus).toBe("completed");
+    expect(bufferedSpy).toHaveBeenCalledOnce();
+    expect(streamSpy).not.toHaveBeenCalled();
+    const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
+    expect(assistants[0]?.content).toBe("buffered answer");
+  });
+
+  // ST-L3-4 — StreamingUnavailableError before stream: falls back to sendDesktopChat.
+  it("falls back to sendDesktopChat when sendDesktopChatStream throws StreamingUnavailableError", async () => {
+    const streamSpy = vi
+      .spyOn(api, "sendDesktopChatStream")
+      .mockRejectedValue(new api.StreamingUnavailableError("STREAMING_UNSUPPORTED", "no stream"));
+
+    const bufferedSpy = vi.spyOn(api, "sendDesktopChat").mockResolvedValue({
+      chat: streamingChat(),
+      messages: [
+        {
+          id: "a-fallback",
+          chatId: "chat-stream",
+          role: "assistant",
+          content: "fallback answer",
+          timestamp: 9,
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: undefined,
+          shortResult: undefined,
+          taskType: undefined,
+        },
+      ],
+    });
+
+    const view = await bootStreamingHook();
+    act(() => view.result.current.setDraft("use fallback"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(view.result.current.sendStatus).toBe("completed");
+    // The streaming path was attempted.
+    expect(streamSpy).toHaveBeenCalledOnce();
+    // The buffered fallback was used and produced the answer.
+    expect(bufferedSpy).toHaveBeenCalledOnce();
+    const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
+    expect(assistants[0]?.content).toBe("fallback answer");
   });
 });

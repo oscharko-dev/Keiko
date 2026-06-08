@@ -9,3 +9,4 @@ export * from "./workspace.js";
 export * from "./tools.js";
 export * from "./harness.js";
 export * from "./verification.js";
+export * from "./secretbox.js";

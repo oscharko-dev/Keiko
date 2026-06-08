@@ -119,6 +119,45 @@ function bodyToString(body: BodyInit | null | undefined): string | undefined {
   throw new TypeError("gateway HTTP fallback supports string request bodies only");
 }
 
+// Converts a Node IncomingMessage into a streaming web Response, enforcing the
+// byte cap inline and destroying the request when the consumer cancels. Unlike a
+// Buffer.concat-on-end approach this delivers SSE chunks incrementally (#152), so
+// the CA-bundle fallback streams tokens instead of buffering the whole response.
+export function streamingResponseFromNode(
+  res: import("node:http").IncomingMessage,
+  onCancel: () => void,
+  maxBytes: number = MAX_RESPONSE_BYTES,
+): Response {
+  let total = 0;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller): void {
+      res.on("data", (chunk: Buffer) => {
+        total += chunk.length;
+        if (total > maxBytes) {
+          controller.error(new Error("gateway response exceeded the size limit"));
+          onCancel();
+          return;
+        }
+        controller.enqueue(new Uint8Array(chunk));
+      });
+      res.on("end", () => {
+        controller.close();
+      });
+      res.on("error", (error) => {
+        controller.error(error);
+      });
+    },
+    cancel(): void {
+      onCancel();
+    },
+  });
+  return new Response(body, {
+    status: res.statusCode ?? 500,
+    statusText: res.statusMessage ?? "",
+    headers: headersFromNode(res.headers),
+  });
+}
+
 function fetchWithCaBundle(url: string, init: RequestInit): Promise<Response> {
   const body = bodyToString(init.body);
   const headers = headersToRecord(init.headers);
@@ -132,27 +171,7 @@ function fetchWithCaBundle(url: string, init: RequestInit): Promise<Response> {
         signal: init.signal ?? undefined,
       },
       (res) => {
-        const chunks: Buffer[] = [];
-        let total = 0;
-        res.on("data", (chunk: Buffer) => {
-          total += chunk.length;
-          if (total > MAX_RESPONSE_BYTES) {
-            req.destroy();
-            reject(new Error("gateway response exceeded the size limit"));
-            return;
-          }
-          chunks.push(chunk);
-        });
-        res.on("end", () => {
-          resolve(
-            new Response(Buffer.concat(chunks), {
-              status: res.statusCode ?? 500,
-              statusText: res.statusMessage ?? "",
-              headers: headersFromNode(res.headers),
-            }),
-          );
-        });
-        res.on("error", reject);
+        resolve(streamingResponseFromNode(res, () => req.destroy()));
       },
     );
     req.on("error", reject);
@@ -199,4 +218,70 @@ export async function readJsonCapped(
   }
   parts.push(decoder.decode());
   return JSON.parse(parts.join("")) as unknown;
+}
+
+// Splits an SSE buffer on newlines, keeping the trailing partial line (no newline yet)
+// for the next read. Returns the complete lines and the leftover remainder so a
+// `data: {...}` payload split across two reads is never parsed half-formed.
+function splitSseBuffer(buffer: string): {
+  readonly lines: readonly string[];
+  readonly rest: string;
+} {
+  const segments = buffer.split("\n");
+  const rest = segments.pop() ?? "";
+  return { lines: segments, rest };
+}
+
+// Yields the parsed JSON payload of a single complete SSE line, or a sentinel.
+// "done" → the stream's `data: [DONE]` terminator; "skip" → blank or non-data line.
+type SseLineResult =
+  | { readonly kind: "value"; readonly value: unknown }
+  | { readonly kind: "done" }
+  | { readonly kind: "skip" };
+
+function parseSseLine(rawLine: string): SseLineResult {
+  const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+  if (line.length === 0 || !line.startsWith("data:")) {
+    return { kind: "skip" };
+  }
+  const payload = line.slice("data:".length).trimStart();
+  if (payload === "[DONE]") {
+    return { kind: "done" };
+  }
+  return { kind: "value", value: JSON.parse(payload) as unknown };
+}
+
+// Reads a Server-Sent-Events response as a stream of parsed JSON `data:` payloads.
+// Incomplete lines are buffered across reads; `data: [DONE]` terminates; cumulative
+// bytes are capped exactly like readJsonCapped. A null body yields nothing.
+export async function* readSseStream(
+  response: Response,
+  maxBytes: number = MAX_RESPONSE_BYTES,
+): AsyncGenerator {
+  if (response.body === null) {
+    return;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error("response body exceeded the size limit");
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const { lines, rest } = splitSseBuffer(buffer);
+    buffer = rest;
+    for (const line of lines) {
+      const result = parseSseLine(line);
+      if (result.kind === "done") return;
+      if (result.kind === "value") yield result.value;
+    }
+  }
+  const tail = parseSseLine(buffer + decoder.decode());
+  if (tail.kind === "value") yield tail.value;
 }

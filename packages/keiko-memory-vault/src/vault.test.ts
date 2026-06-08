@@ -19,6 +19,10 @@ import {
   type MemoryVaultStore,
 } from "./index.js";
 
+// Deterministic injected key so the vault tests never touch the OS keychain or write a keyfile,
+// and so encrypted-at-rest reads are reproducible across the suite (ADR-0035).
+const TEST_VAULT_KEY = Buffer.alloc(32, 7);
+
 const cleanups: string[] = [];
 
 afterEach(() => {
@@ -42,6 +46,7 @@ function openVault(
   return createMemoryVault({
     memoryDir: dir,
     env: { KEIKO_MEMORY_DIR: dir },
+    vaultKey: TEST_VAULT_KEY,
     now: () => nowSeq.value,
     newTombstoneId: () => {
       idCounter.value += 1;
@@ -255,11 +260,7 @@ describe("validator gate fires BEFORE any SQL touches", () => {
       schemaVersion: "999",
       body: "after",
     };
-    const updated = v.updateMemory(
-      "m1" as MemoryId,
-      patch,
-      1_700_000_000_077,
-    );
+    const updated = v.updateMemory("m1" as MemoryId, patch, 1_700_000_000_077);
     expect(updated.id).toBe("m1");
     expect(updated.scope).toEqual({ kind: "user", userId: "u-1" as UserId });
     expect(updated.createdAt).toBe(1_700_000_000_000);
@@ -427,6 +428,7 @@ describe("boundary redaction is applied at insert + update", () => {
     const vault = createMemoryVault({
       memoryDir: dir,
       env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
       now: () => 1,
       newTombstoneId: () => "t-1",
       redactString: (s) => s.replace(/secret-\w+/g, "[REDACTED]"),

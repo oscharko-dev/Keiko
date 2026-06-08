@@ -1,6 +1,6 @@
 "use client";
 
-// Issue #211 — Memory Center detail panel.
+// Issue #211 — MemoriaViva detail panel.
 // Shows provenance, validity interval, tags, scope, sensitivity, stale reason.
 // Fetches by id on mount; id comes from the URL segment passed by the page.
 //
@@ -143,9 +143,9 @@ function RecordHeader({ record }: { readonly record: MemoryRecord }): ReactNode 
   return (
     <header className="mc-detail-header">
       <Link
-        href="/memory"
+        href="/memoriaviva"
         className="mc-back-link lk-btn lk-btn-ghost"
-        aria-label="Back to Memory Center"
+        aria-label="Back to MemoriaViva"
       >
         ← Back
       </Link>

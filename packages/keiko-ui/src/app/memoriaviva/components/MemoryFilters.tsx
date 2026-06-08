@@ -1,6 +1,6 @@
 "use client";
 
-// Issue #211 — Memory Center filter chips.
+// Issue #211 — MemoriaViva filter chips.
 // Each axis (scope / type / status / sensitivity) renders as a row of toggle buttons.
 // Active filters are pushed to URL search params so the view is deep-linkable.
 //

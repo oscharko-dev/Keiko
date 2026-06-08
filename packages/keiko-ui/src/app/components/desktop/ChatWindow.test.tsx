@@ -75,6 +75,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     rejectMemoryCandidate: vi.fn(),
     clearHistory: vi.fn(),
     launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
+    lastSentDocuments: [],
     ...overrides,
   };
 }
@@ -204,7 +205,7 @@ describe("ChatWindow memory disclosure", () => {
     await user.click(disclosureButton);
     expect(disclosureButton).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Use pnpm")).toBeInTheDocument();
-    expect(screen.getByText(/Used 42 of 1200 memory tokens/i)).toBeInTheDocument();
+    expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
   });
 });
 
@@ -360,5 +361,86 @@ describe("ChatWindow memory controls", () => {
     expect(screen.getByText("Use TypeScript strict mode.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Accept" }));
     await waitFor(() => expect(acceptMemoryCandidate).toHaveBeenCalledWith("prop-1"));
+  });
+});
+
+// ─── GAP-C1 / GAP-C2 / GAP-C3 / MINOR honesty tests (#146) ──────────────────
+
+describe("ChatWindow: no ornamental Build-mode button (#146 GAP-C1)", () => {
+  it("does not render a button with text 'Build' when a chat is active", () => {
+    renderWindow(makeSession({ activeChat: makeChat() }));
+    expect(screen.queryByRole("button", { name: /build/i })).toBeNull();
+  });
+
+  it("still renders the Launch workflow button when the model is workflow-eligible", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        selectedModel: "wf-model",
+        models: [
+          {
+            id: "wf-model",
+            kind: "chat",
+            contextWindow: 8000,
+            maxOutputTokens: 1000,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: true,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test fixture",
+            preferredUseCases: [],
+            knownLimitations: [],
+          },
+        ],
+        messages: [
+          {
+            id: "m1",
+            chatId: "chat-1",
+            role: "user",
+            content: "hi",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+    expect(screen.getByRole("button", { name: /launch workflow/i })).toBeInTheDocument();
+  });
+});
+
+describe("ChatWindow: no 'example-workspace' placeholder label (#146 MINOR)", () => {
+  it("never renders the literal 'example-workspace' text anywhere in the tree", () => {
+    // Neither in the no-project nor in the active-project path should a hardcoded
+    // 'example-workspace' placeholder appear. EmptyComposerState shows a real
+    // project name or a generic hint, never a fake placeholder.
+    renderWindow(makeSession({ activeProject: undefined }));
+    expect(screen.queryByText(/example-workspace/i)).toBeNull();
+  });
+
+  it("shows the real project name in the empty-state sub-heading when a project is active", () => {
+    // EmptyComposerState renders "Working in <name>…" when an activeChat exists.
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        activeProject: {
+          path: "/home/user/myproject",
+          name: "myproject",
+          available: true,
+          favorite: false,
+          createdAt: 1,
+          lastOpenedAt: 2,
+        },
+      }),
+    );
+    // The empty-state sub renders "Working in myproject. What would you like to explore?"
+    expect(screen.getByText(/Working in myproject/)).toBeInTheDocument();
   });
 });

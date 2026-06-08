@@ -1,5 +1,5 @@
-// Issue #211 — Server Component entry for the /memory/detail route.
-// Memory Center: detail view for a single memory record. Uses a query-parameter
+// Issue #211 — Server Component entry for the /memoriaviva/detail route.
+// MemoriaViva: detail view for a single memory record. Uses a query-parameter
 // route (`?id=...`) instead of a Next.js dynamic segment because the UI ships
 // as a static export (ADR-0011 D1) and dynamic segments require a non-empty
 // generateStaticParams set — which we cannot enumerate at build time. The
@@ -10,14 +10,14 @@ import { Suspense } from "react";
 import { MemoryDetailClient } from "./MemoryDetailClient";
 
 export const metadata = {
-  title: "Memory Detail — Keiko",
+  title: "MemoriaViva Detail — Keiko",
 };
 
 export default function MemoryDetailPage(): ReactNode {
   return (
     <main
       className="lk-page"
-      aria-label="Memory detail"
+      aria-label="MemoriaViva detail"
       style={{ background: "var(--bg)", color: "var(--fg)", fontFamily: "var(--font-ui)" }}
     >
       <Suspense

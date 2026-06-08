@@ -59,3 +59,14 @@ export {
   type SuppressionReason,
   type SuppressionResult,
 } from "./suppression.js";
+
+// ─── Maintenance planner (#204) ──────────────────────────────────────────────
+export {
+  effectiveStrength,
+  planMemoryMaintenance,
+  MEMORY_MAINTENANCE_DEFAULTS,
+  type MemoryAccessStatLike,
+  type MemoryMaintenancePlan,
+  type MemoryMaintenancePolicy,
+  type PlanMaintenanceOptions,
+} from "./maintenance.js";

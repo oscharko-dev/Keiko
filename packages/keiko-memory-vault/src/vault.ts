@@ -20,7 +20,8 @@ import type {
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { openMemoryDatabase } from "./db.js";
-import { resolveMemoryDbPath } from "./paths.js";
+import { resolveMemoryDir, resolveMemoryDbPath } from "./paths.js";
+import { createMemoryContentCipher, resolveVaultKey, type MemoryContentCipher } from "./cipher.js";
 import { scopeCoordinateOf, scopeKindOf } from "./scope-key.js";
 import {
   deleteMemoryRow,
@@ -37,6 +38,7 @@ import {
   listOutgoingEdgeRows,
 } from "./edges.js";
 import { getEmbeddingRow, upsertEmbeddingRow } from "./embeddings.js";
+import { getAccessStatsRows, recordAccessRows, type MemoryAccessStat } from "./access.js";
 import { insertTombstoneRow, listTombstonesByScopeRows } from "./tombstones.js";
 import {
   gateDeleteOptions,
@@ -64,6 +66,7 @@ interface ResolvedOptions {
   readonly newTombstoneId: () => string;
   readonly redactString: (input: string) => string;
   readonly emit: (event: MemoryEvent) => void;
+  readonly cipher: MemoryContentCipher;
 }
 
 const IDENTITY: (s: string) => string = (s) => s;
@@ -75,13 +78,30 @@ function defaultEnv(): Readonly<Record<string, string | undefined>> {
   return process.env;
 }
 
-function resolveOptions(opts: MemoryVaultFactoryOptions | undefined): ResolvedOptions {
+function resolveOptions(
+  opts: MemoryVaultFactoryOptions | undefined,
+  cipher: MemoryContentCipher,
+): ResolvedOptions {
   return {
     now: opts?.now ?? ((): number => Date.now()),
     newTombstoneId: opts?.newTombstoneId ?? ((): string => randomUUID()),
     redactString: opts?.redactString ?? IDENTITY,
     emit: opts?.onMemoryEvent ?? NOOP_EMIT,
+    cipher,
   };
+}
+
+// Resolve the content cipher. Precedence: an explicitly injected cipher (tests), then an injected
+// raw key (tests/CI), then the real tiered resolver (KEIKO_MEMORY_KEY > keychain > keyfile). The
+// public factory never requires any of these — production callers get the tiered resolver.
+function resolveCipher(
+  opts: MemoryVaultFactoryOptions | undefined,
+  env: Readonly<Record<string, string | undefined>>,
+): MemoryContentCipher {
+  if (opts?.cipher !== undefined) return opts.cipher;
+  if (opts?.vaultKey !== undefined) return createMemoryContentCipher(opts.vaultKey);
+  const memoryDir = resolveMemoryDir(opts?.memoryDir, env);
+  return createMemoryContentCipher(resolveVaultKey(env, memoryDir).key);
 }
 
 // Validate-then-redact for inserts. The validator runs on the CALLER-SUPPLIED record so a
@@ -114,8 +134,12 @@ function mergePatch(existing: MemoryRecord, patch: MemoryUpdatePatch, nowMs: num
   return next;
 }
 
-function existingMemoryOrThrow(db: DatabaseSync, id: MemoryId): MemoryRecord {
-  const existing = getMemoryRow(db, id);
+function existingMemoryOrThrow(
+  db: DatabaseSync,
+  id: MemoryId,
+  cipher: MemoryContentCipher,
+): MemoryRecord {
+  const existing = getMemoryRow(db, id, cipher);
   if (existing === undefined) {
     throw new MemoryStorageError("not-found", "Memory not found.");
   }
@@ -145,7 +169,7 @@ function runDelete(
   options: DeleteMemoryOptions,
   opts: ResolvedOptions,
 ): { tombstone: MemoryTombstone | undefined } {
-  const existing = getMemoryRow(db, id);
+  const existing = getMemoryRow(db, id, opts.cipher);
   if (existing === undefined) {
     throw new MemoryStorageError("not-found", "Memory not found.");
   }
@@ -156,7 +180,7 @@ function runDelete(
   try {
     deleteMemoryRow(db, id);
     if (tombstone !== undefined) {
-      insertTombstoneRow(db, tombstone);
+      insertTombstoneRow(db, tombstone, opts.cipher);
     }
     db.exec("COMMIT");
   } catch (error) {
@@ -168,28 +192,33 @@ function runDelete(
 
 type MemoryMutators = Pick<
   MemoryVaultStore,
-  "insertMemory" | "updateMemory" | "deleteMemory" | "getMemory" | "listMemories" | "listMemoriesByScope"
+  | "insertMemory"
+  | "updateMemory"
+  | "deleteMemory"
+  | "getMemory"
+  | "listMemories"
+  | "listMemoriesByScope"
 >;
 
 function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMutators {
   return {
     insertMemory: (record: MemoryRecord): MemoryRecord => {
       const ready = preparedForWrite(record, opts);
-      insertMemoryRow(db, ready);
+      insertMemoryRow(db, ready, opts.cipher);
       opts.emit({ kind: "memory:inserted", record: ready });
       return ready;
     },
     updateMemory: (id: MemoryId, patch: MemoryUpdatePatch, nowMs: number): MemoryRecord => {
-      const existing = existingMemoryOrThrow(db, id);
+      const existing = existingMemoryOrThrow(db, id, opts.cipher);
       const merged = mergePatch(existing, patch, nowMs);
       const ready = preparedForWrite(merged, opts);
-      updateMemoryRow(db, ready);
+      updateMemoryRow(db, ready, opts.cipher);
       opts.emit({ kind: "memory:updated", record: ready });
       return ready;
     },
     deleteMemory: (id: MemoryId, options: DeleteMemoryOptions): void => {
       gateDeleteOptions(options);
-      const existing = existingMemoryOrThrow(db, id);
+      const existing = existingMemoryOrThrow(db, id, opts.cipher);
       const { tombstone } = runDelete(db, id, options, opts);
       opts.emit({
         kind: "memory:deleted",
@@ -201,11 +230,11 @@ function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMut
         opts.emit({ kind: "memory:tombstoned", tombstone });
       }
     },
-    getMemory: (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id),
+    getMemory: (id: MemoryId): MemoryRecord | undefined => getMemoryRow(db, id, opts.cipher),
     listMemories: (options?: ListMemoriesOptions): readonly MemoryRecord[] => {
       const effective = options ?? {};
       const nowMs = effective.nowMs ?? opts.now();
-      return listMemoriesRows(db, effective, nowMs);
+      return listMemoriesRows(db, effective, nowMs, opts.cipher);
     },
     listMemoriesByScope: (
       scope: MemoryScope,
@@ -214,7 +243,7 @@ function buildMemoryMutators(db: DatabaseSync, opts: ResolvedOptions): MemoryMut
       gateMemoryScope(scope);
       const effective = options ?? {};
       const nowMs = effective.nowMs ?? opts.now();
-      return listMemoriesByScopeRows(db, scope, effective, nowMs);
+      return listMemoriesByScopeRows(db, scope, effective, nowMs, opts.cipher);
     },
   };
 }
@@ -228,20 +257,22 @@ type EdgeAndEmbeddingOps = Pick<
   | "upsertEmbedding"
   | "getEmbedding"
   | "listTombstonesByScope"
+  | "recordAccess"
+  | "getAccessStats"
 >;
 
 function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): EdgeAndEmbeddingOps {
   return {
     insertEdge: (edge: MemoryEdge): MemoryEdge => {
       const ready = preparedEdgeForWrite(edge, opts);
-      insertEdgeRow(db, ready);
+      insertEdgeRow(db, ready, opts.cipher);
       opts.emit({ kind: "edge:inserted", edge: ready });
       return ready;
     },
     listOutgoingEdges: (memoryId: MemoryId): readonly MemoryEdge[] =>
-      listOutgoingEdgeRows(db, memoryId),
+      listOutgoingEdgeRows(db, memoryId, opts.cipher),
     listIncomingEdges: (memoryId: MemoryId): readonly MemoryEdge[] =>
-      listIncomingEdgeRows(db, memoryId),
+      listIncomingEdgeRows(db, memoryId, opts.cipher),
     deleteEdge: (edgeId: MemoryEdgeId): void => {
       const removed = deleteEdgeRow(db, edgeId);
       if (!removed) {
@@ -251,10 +282,10 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
     },
     upsertEmbedding: (memoryId: MemoryId, embedding: MemoryEmbeddingInput): void => {
       gateEmbeddingInput(embedding);
-      if (getMemoryRow(db, memoryId) === undefined) {
+      if (getMemoryRow(db, memoryId, opts.cipher) === undefined) {
         throw new MemoryStorageError("not-found", "Memory not found.");
       }
-      upsertEmbeddingRow(db, memoryId, embedding, opts.now());
+      upsertEmbeddingRow(db, memoryId, embedding, opts.now(), opts.cipher);
       opts.emit({
         kind: "embedding:upserted",
         memoryId,
@@ -263,11 +294,16 @@ function buildEdgeAndEmbeddingOps(db: DatabaseSync, opts: ResolvedOptions): Edge
       });
     },
     getEmbedding: (memoryId: MemoryId): MemoryEmbeddingRow | undefined =>
-      getEmbeddingRow(db, memoryId),
+      getEmbeddingRow(db, memoryId, opts.cipher),
     listTombstonesByScope: (scope: MemoryScope): readonly MemoryTombstone[] => {
       gateMemoryScope(scope);
-      return listTombstonesByScopeRows(db, scope);
+      return listTombstonesByScopeRows(db, scope, opts.cipher);
     },
+    recordAccess: (ids: readonly MemoryId[], nowMs: number): void => {
+      recordAccessRows(db, ids, nowMs);
+    },
+    getAccessStats: (ids?: readonly MemoryId[]): ReadonlyMap<MemoryId, MemoryAccessStat> =>
+      getAccessStatsRows(db, ids),
   };
 }
 
@@ -284,6 +320,7 @@ function buildStore(db: DatabaseSync, opts: ResolvedOptions): MemoryVaultStore {
 export function createMemoryVault(options?: MemoryVaultFactoryOptions): MemoryVaultStore {
   const env = options?.env ?? defaultEnv();
   const dbPath = resolveMemoryDbPath(options?.memoryDir, env);
-  const db = openMemoryDatabase(dbPath);
-  return buildStore(db, resolveOptions(options));
+  const cipher = resolveCipher(options, env);
+  const db = openMemoryDatabase(dbPath, cipher);
+  return buildStore(db, resolveOptions(options, cipher));
 }

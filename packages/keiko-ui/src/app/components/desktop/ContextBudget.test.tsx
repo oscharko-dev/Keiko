@@ -119,6 +119,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     rejectMemoryCandidate: vi.fn(),
     clearHistory: vi.fn(),
     launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
+    lastSentDocuments: [],
     ...overrides,
   };
 }
@@ -424,5 +425,162 @@ describe("useChatSession Enter-key budget guard (CB-F3)", () => {
     });
 
     expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// GAP-D (#151) — budget estimate includes memory / repo / knowledge bytes.
+// A one-line revert of any of these three contributions must fail the test.
+// ───────────────────────────────────────────────────────────────────────────
+
+describe("useChatSession budget accounts for connected context (#151 GAP-D)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    api.clearModelCacheForTests();
+    // Large context window so pressure stays "low" unless we deliberately tip it.
+    mockBootstrap(makeModel({ id: "gapd-model", contextWindow: 200_000, maxOutputTokens: 4_000 }));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("includes memoryContextBytes when memory is enabled and latestMemory has context text", async () => {
+    // After bootstrap, inject a memory result by simulating a completed send.
+    const memoryText = "a".repeat(2_000); // 2000 bytes → 500 tokens estimated
+
+    vi.spyOn(api, "sendDesktopChat").mockResolvedValue({
+      chat: makeChat({ projectPath: CB_PROJECT_PATH, selectedModel: "gapd-model" }),
+      messages: [
+        {
+          id: "a1",
+          chatId: "chat-1",
+          role: "assistant",
+          content: "ok",
+          timestamp: 2,
+          runId: undefined,
+          workflowId: undefined,
+          workflowStatus: undefined,
+          shortResult: undefined,
+          taskType: undefined,
+        },
+      ],
+      memory: {
+        context: {
+          enabled: true,
+          text: memoryText,
+          memories: [],
+          budget: { tokens: 1200, used: 500 },
+        },
+        actions: [],
+      },
+    });
+
+    const view = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(view.result.current.loading).toBe(false);
+      expect(view.result.current.activeChat).toBeDefined();
+    });
+
+    act(() => view.result.current.setDraft("hello"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    // After the send, latestMemory is populated and budget must include the bytes.
+    await waitFor(() => {
+      const budget = view.result.current.budget;
+      expect(budget).toBeDefined();
+      // memoryBytes in the breakdown must be > 0 (2000 / 4 = 500 tokens)
+      expect(budget?.breakdown.memoryBytes).toBeGreaterThan(0);
+    });
+  });
+
+  it("includes repoContextPackBytes when latestGrounded is a connected-context answer", async () => {
+    const excerptBytes = 8_000;
+
+    vi.spyOn(api, "askGrounded").mockResolvedValue({
+      groundingKind: "connected-context",
+      userMessageId: "u1",
+      assistantMessageId: "a1",
+      content: "grounded answer",
+      citations: [],
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 100,
+      contextPack: {
+        schemaVersion: "1",
+        scopeId: "scope-aabbccdd",
+        scopeKind: "files",
+        fileCount: 3,
+        queryKind: "natural-language",
+        usage: {
+          searchCalls: 1,
+          filesRead: 3,
+          excerptBytes,
+          modelInputTokens: 200,
+          modelOutputTokens: 50,
+          elapsedMs: 100,
+          rerankCalls: 0,
+        },
+        budget: {
+          searchCallsMax: 10,
+          filesReadMax: 50,
+          excerptBytesMax: 50_000,
+          modelInputTokensMax: 50_000,
+          modelOutputTokensMax: 4_000,
+          elapsedMsMax: 30_000,
+          rerankCallsMax: 3,
+        },
+        citationCount: 2,
+        omittedCount: 0,
+        omittedCounts: {
+          "outside-scope": 0,
+          binary: 0,
+          generated: 0,
+          ignored: 0,
+          "size-exceeded": 0,
+          "near-duplicate": 0,
+          "low-relevance": 0,
+          "redacted-only": 0,
+          "budget-exhausted": 0,
+          "tool-unavailable": 0,
+        },
+        uncertaintyCount: 0,
+        elapsedMs: 100,
+      },
+    });
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+    vi.spyOn(api, "fetchChats").mockResolvedValue({
+      chats: [makeChat({ projectPath: CB_PROJECT_PATH, selectedModel: "gapd-model" })],
+    });
+
+    const view = renderHook(() => useChatSession());
+    await waitFor(() => {
+      expect(view.result.current.loading).toBe(false);
+      expect(view.result.current.activeChat).toBeDefined();
+    });
+
+    // Attach a connected scope so the chat routes through sendGrounded.
+    act(() => {
+      view.result.current.replaceChat(
+        makeChat({
+          projectPath: CB_PROJECT_PATH,
+          selectedModel: "gapd-model",
+          connectedScope: { kind: "files", relativePaths: ["src"], connectedAtMs: 1 },
+        }),
+      );
+    });
+
+    act(() => view.result.current.setDraft("repo question"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    await waitFor(() => {
+      const budget = view.result.current.budget;
+      expect(budget).toBeDefined();
+      // repoContextBytes must reflect the excerptBytes from the grounded answer.
+      expect(budget?.breakdown.repoContextBytes).toBeGreaterThan(0);
+    });
   });
 });

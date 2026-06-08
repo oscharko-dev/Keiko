@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
+import { redact } from "@oscharko-dev/keiko-security";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
@@ -119,16 +120,24 @@ export function internalError(message: string): RouteResult {
   return { status: 500, body: errorBody("INTERNAL", message) };
 }
 
-function gatewayErrorResult(error: GatewayError): RouteResult {
+// Issue #154 (GAP-B) — the dynamic `error.message` of a GatewayError may echo the provider base
+// URL, an `Authorization: Bearer …` header, or an `api-key: …` value back from the provider's
+// response. It is scrubbed through the SAME boundary as the desktop chat path
+// (redact + currentRedactionSecrets) before crossing the browser wire. The static `error.code`
+// enum and the fixed cancellation string carry no caller data and stay verbatim. Reading the LIVE
+// secrets via currentRedactionSecrets(deps) (not the startup snapshot) scrubs apiKey/baseUrl values
+// added through PATCH /api/gateway/config after process start (Epic #177).
+function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResult {
   if (error instanceof CancelledError) {
     return { status: 499, body: errorBody(error.code, "Grounded request was cancelled.") };
   }
   const status = error.code === "GATEWAY_AUTHENTICATION" ? 401 : error.retryable ? 503 : 502;
-  return { status, body: errorBody(error.code, error.message) };
+  const message = redact(error.message, currentRedactionSecrets(deps));
+  return { status, body: errorBody(error.code, message) };
 }
 
-export function mappedGatewayError(error: unknown): RouteResult | undefined {
-  return error instanceof GatewayError ? gatewayErrorResult(error) : undefined;
+export function mappedGatewayError(error: unknown, deps: UiHandlerDeps): RouteResult | undefined {
+  return error instanceof GatewayError ? gatewayErrorResult(error, deps) : undefined;
 }
 
 export function isValidGroundedPack(pack: ConnectedContextPack): boolean {
@@ -589,7 +598,7 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
   if (!isValidGroundedPack(output.pack)) {
     return internalError("Grounded answer context pack failed validation.");
   }
-  const cancelResult = ensureRouteNotCancelled(workerCtx.signal);
+  const cancelResult = ensureRouteNotCancelled(workerCtx.signal, deps);
   if (cancelResult !== undefined) return cancelResult;
   const userContent = redactString(deps.redactor, content);
   const assistantContent = redactString(deps.redactor, output.assistantContent);
@@ -625,12 +634,15 @@ function isRouteResult(value: OrchestratorOutput | RouteResult): value is RouteR
   return "status" in value;
 }
 
-function ensureRouteNotCancelled(signal: AbortSignal): RouteResult | undefined {
+function ensureRouteNotCancelled(
+  signal: AbortSignal,
+  deps: UiHandlerDeps,
+): RouteResult | undefined {
   try {
     ensureNotCancelled(signal);
     return undefined;
   } catch (error) {
-    const gatewayResult = mappedGatewayError(error);
+    const gatewayResult = mappedGatewayError(error, deps);
     if (gatewayResult !== undefined) return gatewayResult;
     throw error;
   }
@@ -653,7 +665,7 @@ async function runGroundedRunner(
     if (error instanceof ClarificationNeededError) {
       return badRequest(error.message);
     }
-    const gatewayResult = mappedGatewayError(error);
+    const gatewayResult = mappedGatewayError(error, workerCtx.deps);
     if (gatewayResult !== undefined) return gatewayResult;
     throw error;
   }

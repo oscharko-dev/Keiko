@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { runMigrations } from "./schema.js";
+import type { MemoryContentCipher } from "./cipher.js";
 
 export function preparedDatabase(target: string): DatabaseSync {
   const db = new DatabaseSync(target);
@@ -62,12 +63,12 @@ export function quarantineCorruptDb(target: string, snapshot?: SidecarSnapshot):
   rotateSidecar(`${target}-shm`, `${target}-shm.corrupt.${ts}`, snapshot?.hadShm === true);
 }
 
-export function openMemoryDatabase(dbPath: string): DatabaseSync {
+export function openMemoryDatabase(dbPath: string, cipher: MemoryContentCipher): DatabaseSync {
   ensureDirHardened(dirname(dbPath));
   let db = preparedDatabase(dbPath);
   try {
     db.exec("PRAGMA journal_mode = WAL");
-    runMigrations(db);
+    runMigrations(db, cipher);
   } catch {
     // SQLite's close() on a WAL-enabled handle may checkpoint and unlink -wal/-shm,
     // so we must SNAPSHOT sidecar existence BEFORE close, then close, then rename
@@ -79,7 +80,7 @@ export function openMemoryDatabase(dbPath: string): DatabaseSync {
     quarantineCorruptDb(dbPath, { hadWal, hadShm });
     db = preparedDatabase(dbPath);
     db.exec("PRAGMA journal_mode = WAL");
-    runMigrations(db);
+    runMigrations(db, cipher);
   }
   chmodIfPresent(dbPath, 0o600);
   chmodIfPresent(`${dbPath}-wal`, 0o600);

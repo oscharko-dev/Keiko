@@ -20,6 +20,7 @@ import {
   AttachDropZone,
   AttachmentStrip,
   AttachRejectionAlert,
+  SentDocumentsNote,
 } from "./AttachmentStrip";
 import { isRunSummaryMessage, LaunchWorkflowButton, RunSummaryCard } from "./WorkflowHandoff";
 import { Toggle } from "./widgets/shared/Toggle";
@@ -85,15 +86,22 @@ function timeLabel(timestamp: number): string {
 // RunSummaryCards (the chat-side projection of the run). Other system messages keep
 // the historical "filtered out of the visible log" behaviour.
 function visibleOnly(messages: readonly ChatMessage[]): ChatMessage[] {
+  // Issue #152 — the streaming path inserts an empty assistant bubble before the first token
+  // arrives; while it is empty the pending turn is represented by the TypingBubble, so an empty
+  // assistant turn is hidden here to avoid a duplicate "Keiko" bubble during the contacting wait.
+  // Persisted assistant turns are never empty (createAssistantMessage substitutes a placeholder).
   return messages.filter(
-    (m) => m.role === "user" || m.role === "assistant" || isRunSummaryMessage(m),
+    (m) =>
+      m.role === "user" ||
+      (m.role === "assistant" && m.content.length > 0) ||
+      isRunSummaryMessage(m),
   );
 }
 
 // No fallback to a placeholder model id — when no eligible models are
 // configured the caller renders a noEligibleModels error instead (AC #4).
 function modelList(models: readonly ModelCapability[]): readonly ModelCapability[] {
-  return models;
+  return models.filter((model) => model.kind === "chat");
 }
 
 function onComposerKeyDown(
@@ -212,10 +220,6 @@ function ComposerBar({
     <div className="cmp-bar">
       {/* Issue #147: real AttachButton replaces the placeholder "Attach (coming soon)" button */}
       <AttachButton model={selectedModelCapability} onFiles={onAttachFiles} />
-      <button type="button" className="cmp-mode" title="Mode">
-        <Icons.spark size={14} style={{ color: "var(--accent)" }} /> Build
-        <Icons.chevron size={12} />
-      </button>
       <span className="spacer" />
       {/* AC #3: loading state — show a "Loading models…" option while bootstrapping */}
       <label className="cmp-model mono" title={selectTitle}>
@@ -529,7 +533,6 @@ function ChatHero({
   readonly ready: boolean;
 }): ReactNode {
   const { loading, activeProject, setDraft, sendMessage } = session;
-  const folder = activeProject?.name ?? "example-workspace";
   return (
     <form
       className="composer composer-compact"
@@ -549,11 +552,13 @@ function ChatHero({
         }
       />
       <div className="cmp-context">
-        <button type="button" className="chip">
-          <Icons.folder size={14} style={{ color: "var(--accent)" }} />
-          <span className="chip-label">{folder}</span>
-          <Icons.chevron size={12} style={{ color: "var(--fg-faint)" }} />
-        </button>
+        {activeProject !== undefined && (
+          <button type="button" className="chip">
+            <Icons.folder size={14} style={{ color: "var(--accent)" }} />
+            <span className="chip-label">{activeProject.name}</span>
+            <Icons.chevron size={12} style={{ color: "var(--fg-faint)" }} />
+          </button>
+        )}
         <button type="button" className="chip">
           <Icons.cube size={14} style={{ color: "var(--fg-dim)" }} />
           <span className="chip-label">Work locally</span>
@@ -973,7 +978,7 @@ function MemoryActionCard({
     return (
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
-          <strong>Memory update detected</strong>
+          <strong>MemoriaViva update detected</strong>
           <span>{action.memoryId}</span>
         </div>
         <p>
@@ -988,7 +993,7 @@ function MemoryActionCard({
     return (
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
-          <strong>Memory forget detected</strong>
+          <strong>MemoriaViva forget detected</strong>
           <span>{action.requiresConfirmation ? "Confirmation required" : action.memoryId}</span>
         </div>
         <p>{`Matched memory ${action.memoryId} for a forget operation.`}</p>
@@ -998,7 +1003,7 @@ function MemoryActionCard({
   return (
     <article className="chat-memory-action">
       <div className="chat-memory-action-head">
-        <strong>Memory action not created</strong>
+        <strong>MemoriaViva action not created</strong>
       </div>
       <p>{action.reason}</p>
     </article>
@@ -1034,7 +1039,7 @@ function MemoryPanel({
             onChange={setMemoryEnabled}
             label="Enable memory for the next request"
           />
-          <span>Memory {memoryEnabled ? "on" : "off"}</span>
+          <span>MemoriaViva {memoryEnabled ? "on" : "off"}</span>
         </div>
         <label className="chat-memory-budget">
           <span>Budget</span>
@@ -1062,10 +1067,10 @@ function MemoryPanel({
         <div id={disclosureId} className="chat-memory-disclosure">
           <p className="chat-memory-summary">
             {latestMemory === undefined
-              ? "Memory disclosure appears after the next response."
+              ? "MemoriaViva disclosure appears after the next response."
               : latestMemory.context.enabled
-                ? `Used ${String(latestMemory.context.budget.used)} of ${String(latestMemory.context.budget.tokens)} memory tokens.`
-                : "Memory was disabled for the last request."}
+                ? `Used ${String(latestMemory.context.budget.used)} of ${String(latestMemory.context.budget.tokens)} MemoriaViva tokens.`
+                : "MemoriaViva was disabled for the last request."}
           </p>
           {latestMemory?.context.memories.map((memory) => (
             <article key={memory.memoryId} className="chat-memory-item">
@@ -1103,6 +1108,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
     draft,
     loading,
     sending,
+    sendStatus,
     error,
     noEligibleModels,
     sendMessage,
@@ -1111,6 +1117,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
     replaceChat,
     latestGrounded,
     latestMemory,
+    lastSentDocuments,
     memoryEnabled,
     setMemoryEnabled,
     memoryBudgetTokens,
@@ -1181,7 +1188,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
             {visible.map((message) => (
               <ChatBubble key={message.id} message={message} />
             ))}
-            {sending ? (
+            {sending && sendStatus !== "streaming" ? (
               <div className="chatw-typing-row">
                 <TypingBubble />
                 {activeChat?.connectedScope !== undefined ||
@@ -1198,6 +1205,8 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
               </div>
             ) : null}
             <GroundedAnswerPanel chat={activeChat} answer={latestGrounded} busy={sending} />
+            {/* Issue #148 — disclose which attached documents contributed extracted context. */}
+            <SentDocumentsNote documents={lastSentDocuments} />
           </div>
         )}
       </div>

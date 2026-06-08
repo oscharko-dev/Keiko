@@ -48,6 +48,7 @@ export interface RecordOverrides {
   readonly type?: MemoryRecord["type"];
   readonly body?: string;
   readonly confidence?: number;
+  readonly sensitivity?: MemoryRecord["provenance"]["sensitivity"];
   readonly validFrom?: number;
   readonly validUntil?: number;
   readonly status?: MemoryRecord["status"];
@@ -67,7 +68,7 @@ function buildProvenance(
     sourceKind: "explicit-user-instruction",
     capturedAt: overrides.capturedAt ?? createdAt,
     confidence: overrides.confidence ?? 0.9,
-    sensitivity: "confidential",
+    sensitivity: overrides.sensitivity ?? "confidential",
   };
   if (overrides.sourceConversationId === undefined) return base;
   return {

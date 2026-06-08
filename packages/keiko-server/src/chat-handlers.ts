@@ -25,6 +25,7 @@ import type {
   MemoryScope,
 } from "@oscharko-dev/keiko-contracts/memory";
 import { retrieveMemoryContext } from "@oscharko-dev/keiko-memory-retrieval";
+import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import {
   extractCandidatesFromUserText,
   type CaptureContext,
@@ -56,7 +57,9 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { buildMemoryRecordFromProposal } from "./memory-record-builders.js";
+import { cosineSimilarity, embedAndStoreMemory, embedMemoryText } from "./memory-embedding.js";
 import { recordMemoryAudit } from "./memory-audit-handler.js";
+import { captureSalientFromTurn } from "./memory-salience.js";
 
 const DEFAULT_CHAT_MODEL = "example-chat-model";
 const DEFAULT_CHAT_TITLE = "New chat";
@@ -64,7 +67,7 @@ const MAX_BODY_BYTES = 128_000;
 const MAX_CHAT_INPUT_CHARS = 16_000;
 const MAX_CONTEXT_MESSAGES = 24;
 
-interface GatewayConversationMessage {
+export interface GatewayConversationMessage {
   readonly role: "system" | "user" | "assistant";
   readonly content: string;
 }
@@ -227,7 +230,7 @@ function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record
 // values added through PATCH /api/gateway/config after process start are scrubbed too. The
 // `deps.redactionSecrets` field is the startup snapshot frozen by buildUiHandlerDeps and would
 // miss any runtime-added apiKey/baseUrl.
-function redactErrorMessage(message: string, deps: UiHandlerDeps): string {
+export function redactErrorMessage(message: string, deps: UiHandlerDeps): string {
   return redact(message, currentRedactionSecrets(deps));
 }
 
@@ -236,7 +239,7 @@ function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResu
   return { status, body: errorBody(error.code, redactErrorMessage(error.message, deps)) };
 }
 
-function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): RouteResult {
+export function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): RouteResult {
   if (error instanceof GatewayError) {
     return gatewayErrorResult(error, deps);
   }
@@ -275,7 +278,7 @@ function conversationForGateway(messages: readonly ChatMessage[]): GatewayConver
   ];
 }
 
-interface SendDesktopChatRequest {
+export interface SendDesktopChatRequest {
   readonly chatId: string;
   readonly projectPath: string;
   readonly content: string;
@@ -536,7 +539,10 @@ function invalidChatModelResult(modelId: string, deps: UiHandlerDeps): RouteResu
   };
 }
 
-function createUserMessage(deps: UiHandlerDeps, request: SendDesktopChatRequest): ChatMessage {
+export function createUserMessage(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+): ChatMessage {
   return deps.store.createMessage({
     chatId: request.chatId,
     role: "user",
@@ -550,7 +556,7 @@ function createUserMessage(deps: UiHandlerDeps, request: SendDesktopChatRequest)
   });
 }
 
-function createAssistantMessage(
+export function createAssistantMessage(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   content: string,
@@ -596,7 +602,7 @@ function applyDocumentContextToLatestUserTurn(
   return out;
 }
 
-function emptyMemoryResult(enabled: boolean): ConversationMemoryResultWire {
+export function emptyMemoryResult(enabled: boolean): ConversationMemoryResultWire {
   return {
     context: {
       enabled,
@@ -632,28 +638,51 @@ function recordConversationMemoryRetrieval(
   recordMemoryAudit({ evidenceStore: deps.evidenceStore }, event);
 }
 
-function buildMemoryResult(
-  request: SendDesktopChatRequest,
+// Gathers the candidate memory ids the retrieval layer will rank for these scopes, so the caller
+// can score each against the query embedding BEFORE retrieval runs. A superset of the eventually-
+// ranked set is harmless: ids the ranker filters out simply never read their semantic score.
+function gatherCandidateIds(
+  vault: MemoryVaultStore,
+  scopes: readonly MemoryScope[],
+): readonly MemoryId[] {
+  const port = vaultAsQueryPort(vault);
+  const ids: MemoryId[] = [];
+  const seen = new Set<string>();
+  for (const scope of scopes) {
+    for (const record of port.listByScope(scope)) {
+      if (seen.has(record.id)) continue;
+      seen.add(record.id);
+      ids.push(record.id);
+    }
+  }
+  return ids;
+}
+
+// Builds the per-memory semantic score map for the candidate set, or undefined when no embedding
+// model is configured (query embedding null) — that undefined drives the byte-identical lexical
+// fallback in the ranker. A candidate whose stored vector is missing or dimension-mismatched is
+// simply omitted from the map (semantic subscore 0 for it).
+async function buildSemanticScores(
   deps: UiHandlerDeps,
-  context: ConversationMemoryRuntimeContext,
+  vault: MemoryVaultStore,
+  queryText: string,
+  candidateIds: readonly MemoryId[],
+): Promise<ReadonlyMap<MemoryId, number> | undefined> {
+  const queryEmbedding = await embedMemoryText(deps, queryText);
+  if (queryEmbedding === null) return undefined;
+  const scores = new Map<MemoryId, number>();
+  for (const id of candidateIds) {
+    const stored = vault.getEmbedding(id);
+    if (stored === undefined) continue;
+    scores.set(id, cosineSimilarity(queryEmbedding.vector, stored.vector));
+  }
+  return scores;
+}
+
+function toMemoryResult(
+  retrieval: ReturnType<typeof retrieveMemoryContext>,
 ): ConversationMemoryResultWire {
-  const memory = request.memory;
-  if (memory === undefined) {
-    return emptyMemoryResult(false);
-  }
-  if (deps.memoryVault === undefined || !memory.enabled) {
-    return emptyMemoryResult(memory.enabled);
-  }
-  const retrieval = retrieveMemoryContext(
-    {
-      scopes: conversationMemoryScopes(context),
-      queryText: request.content,
-      ...(memory.budgetTokens !== undefined ? { budgetTokens: memory.budgetTokens } : {}),
-      nowMs: Date.now(),
-    },
-    vaultAsQueryPort(deps.memoryVault),
-  );
-  const result = {
+  return {
     context: {
       enabled: true,
       text: retrieval.contextBlock.text,
@@ -666,6 +695,46 @@ function buildMemoryResult(
     },
     actions: [],
   };
+}
+
+export async function buildMemoryResult(
+  request: SendDesktopChatRequest,
+  deps: UiHandlerDeps,
+  context: ConversationMemoryRuntimeContext,
+): Promise<ConversationMemoryResultWire> {
+  const memory = request.memory;
+  if (memory === undefined) {
+    return emptyMemoryResult(false);
+  }
+  const vault = deps.memoryVault;
+  if (vault === undefined || !memory.enabled) {
+    return emptyMemoryResult(memory.enabled);
+  }
+  const scopes = conversationMemoryScopes(context);
+  const semanticById = await buildSemanticScores(
+    deps,
+    vault,
+    request.content,
+    gatherCandidateIds(vault, scopes),
+  );
+  const retrieval = retrieveMemoryContext(
+    {
+      scopes,
+      queryText: request.content,
+      ...(memory.budgetTokens !== undefined ? { budgetTokens: memory.budgetTokens } : {}),
+      ...(semanticById !== undefined ? { semanticById } : {}),
+      nowMs: Date.now(),
+    },
+    vaultAsQueryPort(vault),
+  );
+  // Reinforcement reflex (#204): every recall is an access. Bumping the access counter for the
+  // included memories feeds the decay/reinforcement maintenance cycle so frequently-recalled
+  // memories strengthen over time. Guarded above (vault is defined here).
+  const includedIds = retrieval.contextBlock.memories.map((item) => item.memoryId);
+  if (includedIds.length > 0) {
+    vault.recordAccess(includedIds, Date.now());
+  }
+  const result = toMemoryResult(retrieval);
   recordConversationMemoryRetrieval(deps, context, result.context.memories);
   return result;
 }
@@ -682,22 +751,24 @@ function buildCaptureContext(input: ConversationMemoryRuntimeContext): CaptureCo
   };
 }
 
-function captureActionFromOutcome(
+async function captureActionFromOutcome(
   outcome: CaptureOutcome,
   deps: UiHandlerDeps,
-): ConversationMemoryActionWire | null {
+): Promise<ConversationMemoryActionWire | null> {
   switch (outcome.kind) {
     case "candidate": {
       if (deps.memoryVault === undefined) return null;
       const proposalId = outcome.proposal.proposalId as unknown as MemoryId;
       const record = buildMemoryRecordFromProposal(proposalId, outcome);
       if (record === null) return null;
-      deps.memoryVault.insertMemory(record);
+      const inserted = deps.memoryVault.insertMemory(record);
+      // Best-effort embed-on-capture (#204): swallowed on failure / no model — never breaks capture.
+      await embedAndStoreMemory(deps, deps.memoryVault, inserted.id, inserted.body);
       return {
         kind: "candidate",
-        proposalId: String(record.id),
-        body: record.body,
-        scopeLabel: scopeLabel(record.scope),
+        proposalId: String(inserted.id),
+        body: inserted.body,
+        scopeLabel: scopeLabel(inserted.scope),
         requiresApproval: outcome.requiresApproval,
       };
     }
@@ -720,11 +791,11 @@ function captureActionFromOutcome(
   }
 }
 
-function captureMemoryActions(
+async function captureMemoryActions(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
   context: ConversationMemoryRuntimeContext,
-): readonly ConversationMemoryActionWire[] {
+): Promise<readonly ConversationMemoryActionWire[]> {
   if (request.memory === undefined || !request.memory.enabled || deps.memoryVault === undefined) {
     return [];
   }
@@ -733,10 +804,59 @@ function captureMemoryActions(
   });
   const actions: ConversationMemoryActionWire[] = [];
   for (const outcome of outcomes) {
-    const action = captureActionFromOutcome(outcome, deps);
+    const action = await captureActionFromOutcome(outcome, deps);
     if (action !== null) actions.push(action);
   }
   return actions;
+}
+
+// Merges the regex intent capture (synchronous) with model-assisted salience capture (async).
+// Regex runs FIRST so its inserts are part of the vault state the salience extractor reads for
+// dedup. Salience reuses the same `memory.enabled` gate; when memory is off, both paths no-op.
+export async function collectMemoryActions(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  memoryContext: ConversationMemoryRuntimeContext | undefined,
+  modelId: string,
+  assistantText: string,
+): Promise<readonly ConversationMemoryActionWire[]> {
+  if (memoryContext === undefined) {
+    return [];
+  }
+  const regexActions = await captureMemoryActions(request, deps, memoryContext);
+  const salientActions = await captureSalientFromTurn(
+    deps,
+    request,
+    memoryContext,
+    modelId,
+    assistantText,
+  );
+  return [...regexActions, ...salientActions];
+}
+
+// On the first turn of a freshly-created chat (still bearing the default title), adopt the user's
+// message prefix as the title; otherwise just pin the selected model.
+export function buildChatPatch(
+  chat: Chat,
+  request: SendDesktopChatRequest,
+  modelId: string,
+): { selectedModel: string; title?: string } {
+  return chat.title === DEFAULT_CHAT_TITLE
+    ? { selectedModel: modelId, title: request.content.slice(0, 60) }
+    : { selectedModel: modelId };
+}
+
+// #152 — assembles the exact gateway prompt for the latest user turn (history + document context +
+// memory text). Shared by the buffered (persistModelChatTurn) and streaming
+// (handleSendDesktopChatStream) paths so both send a byte-identical prompt. `memoryText` is
+// `memory.context.text`.
+export function buildGatewayMessages(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  memoryText: string,
+): GatewayConversationMessage[] {
+  const history = conversationForGateway(deps.store.listMessages(request.chatId));
+  return applyDocumentContextToLatestUserTurn(history, request, memoryText);
 }
 
 async function persistModelChatTurn(
@@ -754,10 +874,9 @@ async function persistModelChatTurn(
     const memory =
       memoryContext === undefined
         ? emptyMemoryResult(false)
-        : buildMemoryResult(request, deps, memoryContext);
+        : await buildMemoryResult(request, deps, memoryContext);
     const userMessage = createUserMessage(deps, request);
-    const history = conversationForGateway(deps.store.listMessages(request.chatId));
-    const messages = applyDocumentContextToLatestUserTurn(history, request, memory.context.text);
+    const messages = buildGatewayMessages(deps, request, memory.context.text);
     const response = await model.call(
       {
         modelId,
@@ -772,12 +891,14 @@ async function persistModelChatTurn(
     // grounded-QA path (grounded-qa.ts line 549) which already applies deps.redactor here.
     const redactedContent = deps.redactor(response.content) as string;
     const assistantMessage = createAssistantMessage(deps, request, redactedContent);
-    const memoryActions =
-      memoryContext === undefined ? [] : captureMemoryActions(request, deps, memoryContext);
-    const chatPatch =
-      chat.title === DEFAULT_CHAT_TITLE
-        ? { selectedModel: modelId, title: request.content.slice(0, 60) }
-        : { selectedModel: modelId };
+    const memoryActions = await collectMemoryActions(
+      deps,
+      request,
+      memoryContext,
+      modelId,
+      redactedContent,
+    );
+    const chatPatch = buildChatPatch(chat, request, modelId);
     return {
       status: 200,
       body: {
@@ -847,10 +968,23 @@ function resolveDesktopMemoryContext(
   return resolveConversationMemoryContext(deps, normalizedProjectPath, request.chatId);
 }
 
-export async function handleSendDesktopChat(
+// #152 — the front-matter shared by the buffered and streaming send paths: parse → normalize path →
+// find chat → resolve+validate model → #149 modality guardrail → resolve memory context. Returns a
+// RouteResult on ANY failure (the streaming path RETURNS it as a JSON error BEFORE any SSE header, so
+// the client can fall back to the buffered route). On success it returns the validated send context.
+// Behaviour-preserving extraction from handleSendDesktopChat — the ordering of every guardrail is
+// unchanged, so the buffered path's tests stay byte-identical.
+export interface PreparedDesktopChatSend {
+  readonly request: SendDesktopChatRequest;
+  readonly chat: Chat;
+  readonly modelId: string;
+  readonly memoryContext: ConversationMemoryRuntimeContext | undefined;
+}
+
+export async function prepareDesktopChatSend(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-): Promise<RouteResult> {
+): Promise<PreparedDesktopChatSend | RouteResult> {
   const body = await readJsonObject(ctx.req);
   if (isRouteResult(body)) return body;
   const request = sendRequestFromBody(body);
@@ -879,5 +1013,15 @@ export async function handleSendDesktopChat(
   }
   const memoryContext = resolveDesktopMemoryContext(deps, request, normalizedProjectPath);
   if (isRouteResult(memoryContext)) return memoryContext;
+  return { request, chat, modelId, memoryContext };
+}
+
+export async function handleSendDesktopChat(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const prepared = await prepareDesktopChatSend(ctx, deps);
+  if (isRouteResult(prepared)) return prepared;
+  const { request, chat, modelId, memoryContext } = prepared;
   return persistModelChatTurn(deps, request, chat, modelId, memoryContext);
 }

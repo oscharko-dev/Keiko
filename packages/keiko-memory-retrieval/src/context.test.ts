@@ -8,7 +8,15 @@ function included(id: string, score = 1): IncludedMemory {
   return {
     memoryId: memoryId(id),
     score,
-    subscores: { relevance: 0, recency: 0, confidence: 0, pinned: 0, correction: 0, graph: 0 },
+    subscores: {
+      relevance: 0,
+      recency: 0,
+      confidence: 0,
+      pinned: 0,
+      correction: 0,
+      graph: 0,
+      semantic: 0,
+    },
     inclusionReason: `id ${id}`,
   };
 }

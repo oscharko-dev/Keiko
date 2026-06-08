@@ -88,6 +88,7 @@ describe("public barrel", () => {
         "FORGET_SELECTOR_KINDS",
         "GovernanceError",
         "KEIKO_MEMORY_GOVERNANCE_VERSION",
+        "MEMORY_MAINTENANCE_DEFAULTS",
         "buildArchiveOperation",
         "buildConflictTransitions",
         "buildCorrection",
@@ -96,7 +97,9 @@ describe("public barrel", () => {
         "buildPinOperation",
         "buildUnpinOperation",
         "detectConflictPair",
+        "effectiveStrength",
         "isMemorySuppressedFromRetrieval",
+        "planMemoryMaintenance",
         "selectMemoriesForForget",
       ].sort(),
     );

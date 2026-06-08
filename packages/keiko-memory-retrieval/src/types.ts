@@ -56,6 +56,12 @@ export interface RankingWeights {
   readonly pinned: number;
   readonly correction: number;
   readonly graph: number;
+  // Embedding-based similarity of the query to the memory body (#204). Weighted at least as
+  // high as `relevance` because cross-lingual / paraphrase recall is the stronger signal. The
+  // subscore is 0 for every memory when no per-memory semantic scores are supplied, AND the
+  // ranker zeroes this weight in that case so the denominator (and therefore every score) is
+  // byte-identical to the pre-semantic lexical behaviour.
+  readonly semantic: number;
 }
 
 // Defaults are documented at the request-type boundary; this table is the single source of
@@ -68,6 +74,7 @@ export const DEFAULT_RANKING_WEIGHTS: RankingWeights = Object.freeze({
   pinned: 0.3,
   correction: 0.1,
   graph: 0.15,
+  semantic: 0.25,
 });
 
 export const DEFAULT_BUDGET_TOKENS = 1500;
@@ -89,7 +96,13 @@ export interface MemoryRetrievalRequest {
   readonly correctionBoost?: number;
   readonly graphProximityBoost?: number;
   readonly relevanceWeight?: number;
+  readonly semanticWeight?: number;
   readonly staleConfidenceThreshold?: number;
+  // Per-memory cosine similarity (in [0,1]) of the query embedding to each candidate's stored
+  // embedding, keyed by memory id (#204). Computed by the caller (which owns the embedding
+  // gateway and the vault's stored vectors); the retrieval layer stays pure and IO-free. When
+  // undefined or empty, the ranker falls back to byte-identical lexical behaviour.
+  readonly semanticById?: ReadonlyMap<MemoryId, number>;
 }
 
 // ─── Result + included/omitted ───────────────────────────────────────────────
@@ -113,6 +126,9 @@ export interface IncludedSubscores {
   readonly pinned: number;
   readonly correction: number;
   readonly graph: number;
+  // Cosine similarity in [0,1] of the query embedding to this memory's stored embedding (#204).
+  // 0 when no semantic scores were supplied for this memory.
+  readonly semantic: number;
 }
 
 export interface IncludedMemory {

@@ -40,6 +40,8 @@ import {
   type LocalKnowledgeGroundedAnswerContextSummary,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
+import { redact } from "@oscharko-dev/keiko-security";
+
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
@@ -658,7 +660,7 @@ export async function runHybridGroundedAsk(ctx: HybridGroundedAskCtx): Promise<R
   try {
     return await runHybridWithStore(ctx, env.store);
   } catch (error) {
-    return mapHybridError(error);
+    return mapHybridError(error, ctx.deps);
   } finally {
     env.close();
   }
@@ -735,9 +737,15 @@ async function answerAndAssemble(
   return { status: 200, body: answer };
 }
 
-function mapHybridError(error: unknown): RouteResult {
-  const gatewayResult = mappedGatewayError(error);
+// Issue #154 (GAP-B) — a GatewayError is redacted inside mappedGatewayError (shared with the
+// single-source path). The non-gateway `Error` fallback carries an arbitrary dynamic message that
+// can echo a provider endpoint or token, so it is scrubbed through the SAME boundary before it
+// reaches the wire.
+function mapHybridError(error: unknown, deps: UiHandlerDeps): RouteResult {
+  const gatewayResult = mappedGatewayError(error, deps);
   if (gatewayResult !== undefined) return gatewayResult;
-  if (error instanceof Error) return internalError(error.message);
+  if (error instanceof Error) {
+    return internalError(redact(error.message, currentRedactionSecrets(deps)));
+  }
   throw error;
 }

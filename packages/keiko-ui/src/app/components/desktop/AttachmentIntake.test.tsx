@@ -108,6 +108,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     rejectMemoryCandidate: vi.fn(),
     clearHistory: vi.fn(),
     launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
+    lastSentDocuments: [],
     ...overrides,
   };
 }
@@ -310,7 +311,7 @@ describe("AC #3 — pending attachment removal", () => {
   // leaves the attachment in pendingAttachments and fails this test.
   it("clears pending attachments after a successful send (ATT-F4)", async () => {
     const projectPath = "/att-proj";
-    const model = makeModelCapability({ id: "att-model" });
+    const model = makeModelCapability({ id: "att-model", streaming: false });
     const bootChat = makeChat({ id: "att-chat", projectPath, selectedModel: "att-model" });
 
     vi.spyOn(api, "fetchModels").mockResolvedValue({ models: [model] });

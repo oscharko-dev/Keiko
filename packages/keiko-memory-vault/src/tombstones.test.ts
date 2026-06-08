@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,17 +9,12 @@ import type {
   UserId,
   WorkspaceId,
 } from "@oscharko-dev/keiko-contracts/memory";
-import { runMigrations } from "./schema.js";
 import type { MemoryTombstone } from "./types.js";
 import { insertTombstoneRow, listTombstonesByScopeRows } from "./tombstones.js";
 import { createMemoryVault } from "./index.js";
+import { openTestDb, TEST_CIPHER } from "./_support.js";
 
-function openDb(): DatabaseSync {
-  const db = new DatabaseSync(":memory:");
-  db.exec("PRAGMA foreign_keys = ON");
-  runMigrations(db);
-  return db;
-}
+const TEST_VAULT_KEY = Buffer.alloc(32, 7);
 
 function makeTombstone(
   overrides: Partial<MemoryTombstone> & Pick<MemoryTombstone, "id" | "memoryId">,
@@ -40,43 +34,45 @@ const workspaceScope: MemoryScope = { kind: "workspace", workspaceId: "u-1" as W
 
 describe("tombstones", () => {
   it("inserts and lists in forgotten_at ASC order", () => {
-    const db = openDb();
+    const db = openTestDb();
     insertTombstoneRow(
       db,
       makeTombstone({ id: "t2", memoryId: "m2" as MemoryId, forgottenAt: 200 }),
+      TEST_CIPHER,
     );
     insertTombstoneRow(
       db,
       makeTombstone({ id: "t1", memoryId: "m1" as MemoryId, forgottenAt: 100 }),
+      TEST_CIPHER,
     );
-    const rows = listTombstonesByScopeRows(db, userScope);
+    const rows = listTombstonesByScopeRows(db, userScope, TEST_CIPHER);
     expect(rows.map((r) => r.id)).toEqual(["t1", "t2"]);
     db.close();
   });
 
   it("preserves all fields on round-trip when reason is set", () => {
-    const db = openDb();
+    const db = openTestDb();
     const t = makeTombstone({
       id: "t1",
       memoryId: "m1" as MemoryId,
       reason: "explicit user-requested deletion",
     });
-    insertTombstoneRow(db, t);
-    expect(listTombstonesByScopeRows(db, userScope)).toEqual([t]);
+    insertTombstoneRow(db, t, TEST_CIPHER);
+    expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER)).toEqual([t]);
     db.close();
   });
 
   it("omits reason on round-trip when absent (exactOptionalPropertyTypes)", () => {
-    const db = openDb();
-    insertTombstoneRow(db, makeTombstone({ id: "t1", memoryId: "m1" as MemoryId }));
-    const [back] = listTombstonesByScopeRows(db, userScope);
+    const db = openTestDb();
+    insertTombstoneRow(db, makeTombstone({ id: "t1", memoryId: "m1" as MemoryId }), TEST_CIPHER);
+    const [back] = listTombstonesByScopeRows(db, userScope, TEST_CIPHER);
     expect(back).toBeDefined();
     expect(Object.prototype.hasOwnProperty.call(back, "reason")).toBe(false);
     db.close();
   });
 
   it("enforces scope-kind isolation (user u-1 cannot see workspace u-1)", () => {
-    const db = openDb();
+    const db = openTestDb();
     insertTombstoneRow(
       db,
       makeTombstone({
@@ -85,6 +81,7 @@ describe("tombstones", () => {
         scopeKind: "user",
         scopeCoordinate: "u-1",
       }),
+      TEST_CIPHER,
     );
     insertTombstoneRow(
       db,
@@ -94,24 +91,31 @@ describe("tombstones", () => {
         scopeKind: "workspace",
         scopeCoordinate: "u-1",
       }),
+      TEST_CIPHER,
     );
-    expect(listTombstonesByScopeRows(db, userScope).map((r) => r.id)).toEqual(["tu"]);
-    expect(listTombstonesByScopeRows(db, workspaceScope).map((r) => r.id)).toEqual(["tw"]);
+    expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER).map((r) => r.id)).toEqual(["tu"]);
+    expect(listTombstonesByScopeRows(db, workspaceScope, TEST_CIPHER).map((r) => r.id)).toEqual([
+      "tw",
+    ]);
     db.close();
   });
 
   it("does NOT have a foreign key to memories — survives the memory being absent", () => {
-    const db = openDb();
-    insertTombstoneRow(db, makeTombstone({ id: "t1", memoryId: "never-existed" as MemoryId }));
-    expect(listTombstonesByScopeRows(db, userScope).map((r) => r.memoryId)).toEqual([
+    const db = openTestDb();
+    insertTombstoneRow(
+      db,
+      makeTombstone({ id: "t1", memoryId: "never-existed" as MemoryId }),
+      TEST_CIPHER,
+    );
+    expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER).map((r) => r.memoryId)).toEqual([
       "never-existed",
     ]);
     db.close();
   });
 
   it("returns an empty list for a scope with no tombstones", () => {
-    const db = openDb();
-    expect(listTombstonesByScopeRows(db, userScope)).toEqual([]);
+    const db = openTestDb();
+    expect(listTombstonesByScopeRows(db, userScope, TEST_CIPHER)).toEqual([]);
     db.close();
   });
 });
@@ -159,6 +163,7 @@ describe("AC4: hard delete leaves the tombstones table empty", () => {
     const vault = createMemoryVault({
       memoryDir: dir,
       env: { KEIKO_MEMORY_DIR: dir },
+      vaultKey: TEST_VAULT_KEY,
       now: () => 1_700_000_000_000,
       newTombstoneId: () => "t-never",
     });

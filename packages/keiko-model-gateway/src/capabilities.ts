@@ -44,6 +44,40 @@ export function listCapabilities(): readonly ModelCapability[] {
   return CAPABILITY_REGISTRY;
 }
 
+// Issue #144 / Epic #142: conservative name-based heuristic for embedding model ids.
+// Matches ids that contain an embed token on a word boundary (dash, underscore, slash,
+// dot, or start/end of string). Also matches `ada-002` which is OpenAI's legacy
+// embedding model name that predates the `text-embedding-*` convention.
+// ReDoS-safe: no nested quantifiers, linear worst-case.
+export const EMBEDDING_ID_PATTERN =
+  /(?:^|[-_/. ])(?:text-)?embed(?:ding)?s?(?:[-_/. ]|$)|ada-002(?:$|[-_/. ])/i;
+
+export function isLikelyEmbeddingModelId(id: string): boolean {
+  return EMBEDDING_ID_PATTERN.test(id);
+}
+
+export function createDefaultEmbeddingCapability(modelId: string): ModelCapability {
+  return {
+    id: modelId,
+    kind: "embedding",
+    contextWindow: 8_191,
+    maxOutputTokens: 0,
+    toolCalling: false,
+    structuredOutput: false,
+    streaming: false,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "low",
+    latencyClass: "fast",
+    throughputHint: "runtime-configured embedding endpoint",
+    preferredUseCases: ["Embeddings"],
+    knownLimitations: [
+      "Runtime-configured capability; validate against the target endpoint before production use",
+    ],
+  };
+}
+
 export function createDefaultChatCapability(modelId: string): ModelCapability {
   return {
     id: modelId,

@@ -4,9 +4,11 @@ import type { ModelCapability } from "@oscharko-dev/keiko-contracts";
 import {
   CAPABILITY_REGISTRY,
   createDefaultChatCapability,
+  createDefaultEmbeddingCapability,
   explainConversationIneligibility,
   findCapability,
   isConversationEligibleModel,
+  isLikelyEmbeddingModelId,
   listCapabilities,
   resolveCostClass,
   selectCheapest,
@@ -177,5 +179,106 @@ describe("explainConversationIneligibility", () => {
 
   it("returns 'ocr-vision-only' for an ocr-vision capability", () => {
     expect(explainConversationIneligibility(ocrVisionCapability())).toBe("ocr-vision-only");
+  });
+});
+
+// Issue #144 / Epic #142: embedding-id heuristic — positive matches.
+describe("isLikelyEmbeddingModelId — positive cases", () => {
+  it("matches 'text-embedding-3-large'", () => {
+    expect(isLikelyEmbeddingModelId("text-embedding-3-large")).toBe(true);
+  });
+
+  it("matches 'text-embedding-3-small'", () => {
+    expect(isLikelyEmbeddingModelId("text-embedding-3-small")).toBe(true);
+  });
+
+  it("matches 'text-embedding-ada-002'", () => {
+    expect(isLikelyEmbeddingModelId("text-embedding-ada-002")).toBe(true);
+  });
+
+  it("matches 'acme-embed' (embed token at end after dash boundary)", () => {
+    expect(isLikelyEmbeddingModelId("acme-embed")).toBe(true);
+  });
+
+  it("matches 'embeddings-v2' (embed token at start)", () => {
+    expect(isLikelyEmbeddingModelId("embeddings-v2")).toBe(true);
+  });
+
+  it("matches 'nomic-embed-text'", () => {
+    expect(isLikelyEmbeddingModelId("nomic-embed-text")).toBe(true);
+  });
+
+  it("matches 'model/embed' (slash boundary)", () => {
+    expect(isLikelyEmbeddingModelId("model/embed")).toBe(true);
+  });
+
+  it("matches 'model_embed_v1' (underscore boundary)", () => {
+    expect(isLikelyEmbeddingModelId("model_embed_v1")).toBe(true);
+  });
+});
+
+// Issue #144 / Epic #142: embedding-id heuristic — negative matches (must not catch chat models).
+describe("isLikelyEmbeddingModelId — negative cases", () => {
+  it("does not match 'gpt-oss-120b'", () => {
+    expect(isLikelyEmbeddingModelId("gpt-oss-120b")).toBe(false);
+  });
+
+  it("does not match 'mistral-large-3'", () => {
+    expect(isLikelyEmbeddingModelId("mistral-large-3")).toBe(false);
+  });
+
+  it("does not match 'llama-4-maverick-vision'", () => {
+    expect(isLikelyEmbeddingModelId("llama-4-maverick-vision")).toBe(false);
+  });
+
+  it("does not match 'claude-3-7-sonnet'", () => {
+    expect(isLikelyEmbeddingModelId("claude-3-7-sonnet")).toBe(false);
+  });
+
+  it("does not match 'gpt-4o'", () => {
+    expect(isLikelyEmbeddingModelId("gpt-4o")).toBe(false);
+  });
+
+  it("does not match empty string", () => {
+    expect(isLikelyEmbeddingModelId("")).toBe(false);
+  });
+});
+
+// Issue #144 / Epic #142: default embedding capability factory — field shape and eligibility.
+describe("createDefaultEmbeddingCapability", () => {
+  it("returns kind:'embedding' for the provided id", () => {
+    const cap = createDefaultEmbeddingCapability("text-embedding-3-large");
+    expect(cap.kind).toBe("embedding");
+    expect(cap.id).toBe("text-embedding-3-large");
+  });
+
+  it("sets workflowEligible to false", () => {
+    expect(createDefaultEmbeddingCapability("text-embedding-3-large").workflowEligible).toBe(false);
+  });
+
+  it("sets toolCalling to false", () => {
+    expect(createDefaultEmbeddingCapability("text-embedding-3-large").toolCalling).toBe(false);
+  });
+
+  it("sets structuredOutput to false", () => {
+    expect(createDefaultEmbeddingCapability("text-embedding-3-large").structuredOutput).toBe(false);
+  });
+
+  it("sets streaming to false", () => {
+    expect(createDefaultEmbeddingCapability("text-embedding-3-large").streaming).toBe(false);
+  });
+
+  it("sets maxOutputTokens to 0 (embeddings produce vectors, not tokens)", () => {
+    expect(createDefaultEmbeddingCapability("text-embedding-3-large").maxOutputTokens).toBe(0);
+  });
+
+  it("is NOT conversation-eligible (AC #143/#144: excluded from conversation dropdown)", () => {
+    const cap = createDefaultEmbeddingCapability("text-embedding-3-large");
+    expect(isConversationEligibleModel(cap)).toBe(false);
+  });
+
+  it("explains ineligibility as 'embedding-only'", () => {
+    const cap = createDefaultEmbeddingCapability("text-embedding-3-large");
+    expect(explainConversationIneligibility(cap)).toBe("embedding-only");
   });
 });

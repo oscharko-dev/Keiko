@@ -37,6 +37,7 @@
     "@oscharko-dev/keiko-harness": "*",
     "@oscharko-dev/keiko-sdk": "*",
     "@oscharko-dev/keiko-workflows": "*",
-    "@oscharko-dev/keiko-server": "*"
+    "@oscharko-dev/keiko-server": "*",
+    "@oscharko-dev/keiko-memory-vault": "*"
   }
 }

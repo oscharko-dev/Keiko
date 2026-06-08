@@ -487,10 +487,6 @@ export function AgentRunWidget({
             {linkedFilePath}
           </span>
         ) : null}
-        <span className="arun-perm" aria-disabled="true">
-          <Icons.plugins size={11} />
-          permissions coming soon
-        </span>
       </div>
 
       {input !== null ? (

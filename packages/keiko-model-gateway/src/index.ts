@@ -23,6 +23,7 @@ export type {
   FinishReason,
   GatewayConfig,
   GatewayRequest,
+  GatewayStreamChunk,
   LatencyClass,
   ModelCapability,
   ModelKind,

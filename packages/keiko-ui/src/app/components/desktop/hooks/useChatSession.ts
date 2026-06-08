@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError,
+  StreamingUnavailableError,
   askGrounded,
   createDesktopChat,
   createProject,
@@ -11,15 +12,18 @@ import {
   fetchModels,
   fetchProjects,
   sendDesktopChat,
+  sendDesktopChatStream,
   startChatRun,
   updateChat,
 } from "@/lib/api";
+import type { SseDonePayload } from "@/lib/api";
 import { acceptMemoryProposal, rejectMemoryProposal } from "@/lib/memory-api";
 import { findChatWorkflow } from "@/lib/chat-workflow-catalog";
 import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
 import type {
   Chat,
   ChatMessage,
+  ConversationDocumentContextWire,
   ConversationMemoryRequestWire,
   ConversationMemoryResultWire,
   ConversationBudgetEstimate,
@@ -28,6 +32,7 @@ import type {
   ProjectWithAvailability,
 } from "@/lib/types";
 import { estimateConversationBudget, isConversationEligibleModel } from "@/lib/types";
+import { extractDocumentContext, type PendingDocument } from "./documentContext";
 
 // ─── Attachment types (Issue #147) ────────────────────────────────────────────
 //
@@ -53,6 +58,20 @@ export interface PendingAttachment {
   readonly sizeBytes: number;
   // Defined for image kind; undefined for document kind (AC #4 — no path leaked)
   readonly previewDataUrl?: string | undefined;
+  // Issue #148 — the underlying File, retained so the send path can extract a
+  // document's text into bounded conversation context. Never serialized to the
+  // chip UI (no path/bytes are surfaced from it). Undefined only in synthetic
+  // test fixtures that construct a PendingAttachment without a source File.
+  readonly file?: File | undefined;
+}
+
+// Issue #148 — disclosure projection for documents that contributed extracted text to the most
+// recent send. Carries only basename + truncation flag (never a path or bytes) so the UI can
+// tell the user which documents were included and whether any was cut.
+export interface SentDocumentDisclosure {
+  readonly id: string;
+  readonly displayName: string;
+  readonly truncated: boolean;
 }
 
 // Hard 8 MiB byte limit. Server enforces its own limit in #149; this client-side
@@ -182,7 +201,7 @@ function sortChats(chats: readonly Chat[]): Chat[] {
 // available. Callers must NOT fall back to a placeholder id — downstream
 // surfaces branch on undefined to show a clear "no model" error (AC #1 / #4).
 export function pickChatModelId(models: readonly ModelCapability[]): string | undefined {
-  return models[0]?.id;
+  return models.find(isConversationEligibleModel)?.id;
 }
 
 // Reopened chats can persist a model id that is no longer present in the
@@ -192,7 +211,10 @@ export function resolveSelectedModelId(
   current: string | undefined,
   models: readonly ModelCapability[],
 ): string | undefined {
-  if (current !== undefined && models.some((model) => model.id === current)) {
+  if (
+    current !== undefined &&
+    models.some((model) => model.id === current && isConversationEligibleModel(model))
+  ) {
     return current;
   }
   return pickChatModelId(models);
@@ -254,6 +276,9 @@ export interface UseChatSessionResult {
   ) => Promise<{ ok: true } | { ok: false; reason: AttachmentRejectionReason }>;
   readonly removePendingAttachment: (id: string) => void;
   readonly clearPendingAttachments: () => void;
+  // Issue #148 — documents that contributed extracted text to the most recent send, for the
+  // post-send disclosure note. Empty until a send includes at least one readable document.
+  readonly lastSentDocuments: readonly SentDocumentDisclosure[];
   // Issue #151 — approximate context-window pressure estimate for the active
   // chat. undefined while the selected model is unresolved. Token counts are
   // approximate; UI copy must say so.
@@ -417,6 +442,9 @@ export function useChatSession(): UseChatSessionResult {
   const modelsRef = useRef<readonly ModelCapability[]>([]);
   // Issue #147 — pending-attachment state. Cleared after a successful send (AC #3).
   const [pendingAttachments, setPendingAttachments] = useState<readonly PendingAttachment[]>([]);
+  // Issue #148 — documents that contributed extracted context to the most recent send. Drives
+  // the post-send disclosure note (which docs were included + whether any was truncated).
+  const [lastSentDocuments, setLastSentDocuments] = useState<readonly SentDocumentDisclosure[]>([]);
 
   // addPendingAttachment validates MIME type, model capability, and byte limit before
   // adding the attachment to state. Returns ok:false + reason on rejection (AC #1/#2).
@@ -463,6 +491,8 @@ export function useChatSession(): UseChatSessionResult {
         mimeType: file.type,
         sizeBytes: file.size,
         previewDataUrl,
+        // Issue #148 — retain the File so the send path can extract document text.
+        file,
       };
       setPendingAttachments((previous) => [...previous, attachment]);
       return { ok: true };
@@ -479,6 +509,34 @@ export function useChatSession(): UseChatSessionResult {
   const clearPendingAttachments = useCallback(() => {
     setPendingAttachments([]);
   }, []);
+
+  // Issue #148 — extract bounded text from the pending DOCUMENT attachments for the send body.
+  // Images are excluded here (they stay on the metadata-only attachments path). A document with
+  // no retained File (synthetic fixture) is skipped. Read failures surface a fixed, path-safe
+  // alert and never abort the send. Returns the wire entries to attach plus a disclosure list.
+  const buildDocumentContext = useCallback(async (): Promise<{
+    readonly entries: readonly ConversationDocumentContextWire[];
+    readonly disclosures: readonly SentDocumentDisclosure[];
+  }> => {
+    const documents: PendingDocument[] = pendingAttachments
+      .filter((a) => a.kind === "document" && a.file !== undefined)
+      .map((a) => ({
+        id: a.id,
+        name: a.name,
+        mimeType: a.mimeType,
+        sizeBytes: a.sizeBytes,
+        file: a.file as File,
+      }));
+    if (documents.length === 0) return { entries: [], disclosures: [] };
+    const { entries, failures } = await extractDocumentContext(documents);
+    if (failures.length > 0) setError(failures.join(" "));
+    const disclosures = entries.map((e) => ({
+      id: e.id,
+      displayName: e.displayName,
+      truncated: e.truncated,
+    }));
+    return { entries, disclosures };
+  }, [pendingAttachments]);
 
   const clearLatestMemory = useCallback(() => {
     setLatestMemory(undefined);
@@ -724,6 +782,8 @@ export function useChatSession(): UseChatSessionResult {
       // citations from a previous conversation's last grounded turn.
       setLatestGrounded(undefined);
       setLatestMemory(undefined);
+      // Issue #148 — clear the document-disclosure note so it never bleeds across chats.
+      setLastSentDocuments([]);
       try {
         const messagePayload = await fetchChatMessages(chat.id, chat.projectPath);
         const selectedModel = resolveSelectedModelId(chat.selectedModel, state.models);
@@ -761,7 +821,131 @@ export function useChatSession(): UseChatSessionResult {
     [openNewChat],
   );
 
-  const sendUngrounded = useCallback(
+  // Removes a temp optimistic message from state by id (AC#3 — no partial kept).
+  const removeTempMessage = useCallback((id: string): void => {
+    setState((previous) => ({
+      ...previous,
+      messages: previous.messages.filter((m) => m.id !== id),
+    }));
+  }, []);
+
+  // Builds the StreamHandlers for a streaming request. Extracted to keep
+  // streamUngrounded within the 50-line function limit.
+  const buildStreamHandlers = useCallback(
+    (
+      tempAssistantId: string,
+      optimisticId: string,
+      resolve: (status: SendStatus) => void,
+    ): import("@/lib/api").StreamHandlers => {
+      let statusFlippedToStreaming = false;
+      return {
+        onToken: (text: string): void => {
+          if (!statusFlippedToStreaming) {
+            updateSendStatus("streaming");
+            statusFlippedToStreaming = true;
+          }
+          setState((previous) => ({
+            ...previous,
+            messages: previous.messages.map((m) =>
+              m.id === tempAssistantId ? { ...m, content: m.content + text } : m,
+            ),
+          }));
+        },
+        onDone: (payload: SseDonePayload): void => {
+          setState((previous) => ({
+            ...previous,
+            activeChat: payload.chat,
+            chats: sortChats([
+              payload.chat,
+              ...previous.chats.filter((existing) => existing.id !== payload.chat.id),
+            ]),
+            messages: [
+              ...previous.messages.filter((m) => m.id !== optimisticId && m.id !== tempAssistantId),
+              ...Array.from(payload.messages),
+            ],
+          }));
+          if (payload.memory !== undefined) setLatestMemory(payload.memory);
+          resolve("completed");
+        },
+        onError: ({ message }: { message: string }): void => {
+          setError(message);
+          removeTempMessage(tempAssistantId);
+          resolve("failed");
+        },
+        onCancelled: (): void => {
+          removeTempMessage(tempAssistantId);
+          resolve("cancelled");
+        },
+      };
+    },
+    [removeTempMessage, updateSendStatus],
+  );
+
+  // Issue #152 Layer 3 — streaming path for canStream models. Inserts a temp
+  // assistant bubble that accumulates token deltas, then replaces it with the
+  // canonical messages on done. On cancel/error the temp bubble is removed so
+  // no partial content persists (AC#3).
+  const streamUngrounded = useCallback(
+    (
+      chat: Chat,
+      project: ProjectWithAvailability,
+      content: string,
+      optimisticId: string,
+      modelId: string,
+      signal: AbortSignal,
+      documentContext: readonly ConversationDocumentContextWire[],
+    ): Promise<SendStatus> => {
+      const tempAssistantId = `stream-${String(Date.now())}`;
+      setState((previous) => ({
+        ...previous,
+        messages: [
+          ...previous.messages,
+          {
+            id: tempAssistantId,
+            chatId: chat.id,
+            role: "assistant" as const,
+            content: "",
+            timestamp: Date.now(),
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }));
+      const requestBody = {
+        chatId: chat.id,
+        projectPath: project.path,
+        content,
+        modelId,
+        memory: buildMemoryRequest(chat, project),
+        ...(documentContext.length > 0 ? { documentContext } : {}),
+      };
+      return new Promise<SendStatus>((resolve, reject) => {
+        const handlers = buildStreamHandlers(tempAssistantId, optimisticId, resolve);
+        sendDesktopChatStream(requestBody, signal, handlers).catch((caught: unknown) => {
+          removeTempMessage(tempAssistantId);
+          if (caught instanceof StreamingUnavailableError) {
+            // Pre-stream failure (e.g. STREAMING_UNSUPPORTED, or a JSON error before any SSE
+            // header). Reject so sendUngrounded falls back to the buffered path instead of
+            // surfacing a hard failure to the user.
+            reject(caught);
+          } else if (caught instanceof DOMException && caught.name === "AbortError") {
+            resolve("cancelled");
+          } else {
+            resolve("failed");
+          }
+        });
+      });
+    },
+    [buildMemoryRequest, buildStreamHandlers, removeTempMessage],
+  );
+
+  // Issue #152 Layer 3 — non-streaming fallback path (canStream=false or
+  // StreamingUnavailableError pre-stream). Kept separate so sendUngrounded
+  // stays within the 50-line function limit.
+  const sendUngroundedBuffered = useCallback(
     async (
       chat: Chat,
       project: ProjectWithAvailability,
@@ -769,14 +953,11 @@ export function useChatSession(): UseChatSessionResult {
       optimisticId: string,
       modelId: string,
       signal: AbortSignal,
+      documentContext: readonly ConversationDocumentContextWire[],
     ): Promise<SendStatus> => {
       try {
-        // Issue #152 — non-streaming providers see a stable "contacting" wait
-        // until the response lands (AC#4). When the BFF gains a true streaming
-        // surface we'll transition to "streaming" on the first delta.
-        // TODO(#152 follow-up): wire SSE for true streaming when the BFF
-        // adds a /api/desktop/chat/stream surface.
         updateSendStatus("contacting");
+        // Issue #148 — byte-bounded document context on the request body.
         const result = await sendDesktopChat(
           {
             chatId: chat.id,
@@ -784,12 +965,10 @@ export function useChatSession(): UseChatSessionResult {
             content,
             modelId,
             memory: buildMemoryRequest(chat, project),
+            ...(documentContext.length > 0 ? { documentContext } : {}),
           },
           signal,
         );
-        // Issue #152 — the request may have been cancelled while the response
-        // was in flight. Honor the cancel and do NOT persist the assistant
-        // reply as a completed answer (AC#3).
         if (signal.aborted) return "cancelled";
         setState((previous) => ({
           ...previous,
@@ -806,10 +985,6 @@ export function useChatSession(): UseChatSessionResult {
         setLatestMemory(result.memory);
         return "completed";
       } catch (caught) {
-        // Aborted ungrounded requests are not errors — silently fall back to
-        // a cancelled state, preserving the user message (the optimistic row
-        // was the user's own input; AC#3 says we don't persist a fake
-        // assistant answer, but we keep the user's message visible).
         if (caught instanceof DOMException && caught.name === "AbortError") {
           return "cancelled";
         }
@@ -827,6 +1002,56 @@ export function useChatSession(): UseChatSessionResult {
       }
     },
     [buildMemoryRequest, updateSendStatus],
+  );
+
+  const sendUngrounded = useCallback(
+    async (
+      chat: Chat,
+      project: ProjectWithAvailability,
+      content: string,
+      optimisticId: string,
+      modelId: string,
+      signal: AbortSignal,
+      documentContext: readonly ConversationDocumentContextWire[],
+    ): Promise<SendStatus> => {
+      const canStream = state.models.find((m) => m.id === modelId)?.streaming === true;
+      if (!canStream) {
+        return sendUngroundedBuffered(
+          chat,
+          project,
+          content,
+          optimisticId,
+          modelId,
+          signal,
+          documentContext,
+        );
+      }
+      updateSendStatus("contacting");
+      try {
+        return await streamUngrounded(
+          chat,
+          project,
+          content,
+          optimisticId,
+          modelId,
+          signal,
+          documentContext,
+        );
+      } catch (caught) {
+        // StreamingUnavailableError before SSE headers — fall back to buffered.
+        if (!(caught instanceof StreamingUnavailableError)) throw caught;
+      }
+      return sendUngroundedBuffered(
+        chat,
+        project,
+        content,
+        optimisticId,
+        modelId,
+        signal,
+        documentContext,
+      );
+    },
+    [state.models, sendUngroundedBuffered, streamUngrounded, updateSendStatus],
   );
 
   // When the active chat carries either a Files connected scope or a local-knowledge scope,
@@ -969,9 +1194,22 @@ export function useChatSession(): UseChatSessionResult {
       // routing predicate, not the underlying send path.
       const isGrounded =
         chat.connectedScope !== undefined || chat.localKnowledgeScope !== undefined;
+      // Issue #148 — extract bounded document text for the ungrounded path only. The grounded
+      // path derives its context from the repo/local-knowledge scope, not from attachments.
+      const { entries: documentContext, disclosures } = isGrounded
+        ? { entries: [] as readonly ConversationDocumentContextWire[], disclosures: [] }
+        : await buildDocumentContext();
       const terminal = isGrounded
         ? await sendGrounded(chat, project, content, optimistic.id, modelId, controller.signal)
-        : await sendUngrounded(chat, project, content, optimistic.id, modelId, controller.signal);
+        : await sendUngrounded(
+            chat,
+            project,
+            content,
+            optimistic.id,
+            modelId,
+            controller.signal,
+            documentContext,
+          );
       // If cancelSend already flipped the status to "cancelled", do not
       // override it with a stale "completed" — cancellation wins.
       if (sendStatusRef.current === "cancelled") {
@@ -987,6 +1225,8 @@ export function useChatSession(): UseChatSessionResult {
       if (terminal === "completed") {
         // AC #3 (#147): clear pending attachments after a successful send.
         clearPendingAttachments();
+        // Issue #148 — record which documents contributed context so the UI can disclose them.
+        setLastSentDocuments(disclosures);
       }
     } finally {
       sendControllerRef.current = null;
@@ -1000,6 +1240,7 @@ export function useChatSession(): UseChatSessionResult {
     state.messages,
     sendGrounded,
     sendUngrounded,
+    buildDocumentContext,
     clearPendingAttachments,
     updateSendStatus,
   ]);
@@ -1016,27 +1257,82 @@ export function useChatSession(): UseChatSessionResult {
   }, []);
 
   // Issue #151 / AC#1 — reactive context-pressure estimate. Derives from the
-  // selected model's capability + current draft + visible history. Connected-
-  // context byte counts from #177/#189/#204 are passed through as zero today;
-  // they wire up to the estimator when those surfaces expose byte budgets in
-  // a follow-up. The fields exist on the contract so consumers (BFF, audit,
-  // UI) can carry the breakdown end-to-end without contract churn.
+  // selected model's capability + current draft + visible history, plus
+  // best-effort byte estimates from the last grounded and memory responses.
+  //
+  // All three connected-context fields are APPROXIMATE and labelled as such in
+  // the UI. They use the LAST known values so the indicator updates reactively
+  // after each turn without requiring a round-trip before the next send.
+  //
+  // Sources (fields that genuinely exist on the wire types):
+  //   repoContextPackBytes   — GroundedAnswerContextPackSummary.usage.excerptBytes
+  //                            (connected-context and hybrid folder evidence)
+  //   knowledgeCapsuleBytes  — LocalKnowledgeGroundedAnswerContextSummary.referenceBudget × 4
+  //                            (token budget converted to bytes; no raw byte field on the wire)
+  //   memoryContextBytes     — ConversationMemoryContextWire.text.length
+  //                            (the injected memory block is UTF-16 encoded; byte length
+  //                            approximates closely enough for the pressure indicator)
   const budget = useMemo<ConversationBudgetEstimate | undefined>(() => {
     const capability = state.models.find((m) => m.id === state.selectedModel);
     if (capability === undefined) return undefined;
     const history: readonly { readonly role: string; readonly content: string }[] = state.messages
       .filter((m) => m.role === "user" || m.role === "assistant")
       .map((m) => ({ role: m.role, content: m.content }));
+
+    // Derive best-effort bytes from the last grounded answer. The shape narrows
+    // by groundingKind so we only read fields that exist on each variant.
+    let repoContextPackBytes = 0;
+    let knowledgeCapsuleBytes = 0;
+    if (latestGrounded !== undefined) {
+      if (
+        latestGrounded.groundingKind === "connected-context" ||
+        latestGrounded.groundingKind === "hybrid"
+      ) {
+        const pack =
+          latestGrounded.groundingKind === "hybrid"
+            ? latestGrounded.contextPack.folder
+            : latestGrounded.contextPack;
+        repoContextPackBytes = pack.usage.excerptBytes;
+      }
+      if (
+        latestGrounded.groundingKind === "local-knowledge" ||
+        latestGrounded.groundingKind === "hybrid"
+      ) {
+        const lk =
+          latestGrounded.groundingKind === "hybrid"
+            ? latestGrounded.contextPack.knowledge
+            : latestGrounded.contextPack;
+        // The local-knowledge context summary carries a token budget, not a byte
+        // count. Multiply by 4 (chars/token) as a conservative byte estimate.
+        knowledgeCapsuleBytes = lk.referenceBudget * 4;
+      }
+    }
+
+    // Memory context bytes: only when memory is enabled and a non-empty context
+    // text was returned by the last ungrounded send.
+    const memoryContextBytes =
+      memoryEnabled && latestMemory !== undefined && latestMemory.context.enabled
+        ? latestMemory.context.text.length
+        : 0;
+
     return estimateConversationBudget({
       modelContextWindow: capability.contextWindow,
       modelMaxOutputTokens: capability.maxOutputTokens,
       userDraftText: draft,
       conversationHistory: history,
-      // TODO(#151 follow-up): wire repoContextPackBytes from #177 surface,
-      // knowledgeCapsuleBytes from #189, memoryContextBytes from #204. The
-      // estimator already counts them; this turn passes zero by omission.
+      repoContextPackBytes,
+      knowledgeCapsuleBytes,
+      memoryContextBytes,
     });
-  }, [state.models, state.selectedModel, state.messages, draft]);
+  }, [
+    state.models,
+    state.selectedModel,
+    state.messages,
+    draft,
+    latestGrounded,
+    latestMemory,
+    memoryEnabled,
+  ]);
 
   // Issue #153 — governed workflow handoff from the Conversation Center. Three guard rails:
   //   1. The selected model must satisfy the STRICTER workflow filter (AC#2).
@@ -1146,6 +1442,7 @@ export function useChatSession(): UseChatSessionResult {
     addPendingAttachment,
     removePendingAttachment,
     clearPendingAttachments,
+    lastSentDocuments,
     budget,
     memoryEnabled,
     setMemoryEnabled,

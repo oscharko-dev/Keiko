@@ -29,12 +29,7 @@ function formatError(err: unknown): string {
 }
 
 function isTerminalState(state: MemoryConsolidationJob["state"]): boolean {
-  return (
-    state === "completed" ||
-    state === "failed" ||
-    state === "canceled" ||
-    state === "skipped"
-  );
+  return state === "completed" || state === "failed" || state === "canceled" || state === "skipped";
 }
 
 function formatDateTime(value?: number): string {
@@ -208,14 +203,14 @@ export function MemoryConsolidation({
     <>
       <header className="lk-header">
         <div style={{ display: "grid", gap: 4 }}>
-          <h1 className="lk-title">Memory Consolidation</h1>
+          <h1 className="lk-title">MemoriaViva Consolidation</h1>
           <p style={{ margin: 0, color: "var(--muted)" }}>
-            Start a bounded consolidation job, inspect its output, and cancel it while it is
-            still queued or running.
+            Start a bounded consolidation job, inspect its output, and cancel it while it is still
+            queued or running.
           </p>
         </div>
-        <Link href="/memory" className="lk-btn lk-btn-ghost lk-btn-lg">
-          Back to Memory Center
+        <Link href="/memoriaviva" className="lk-btn lk-btn-ghost lk-btn-lg">
+          Back to MemoriaViva
         </Link>
       </header>
 
@@ -337,9 +332,7 @@ export function MemoryConsolidation({
         }}
       >
         {activeJob === null ? (
-          <p style={{ margin: 0, color: "var(--muted)" }}>
-            No consolidation job started yet.
-          </p>
+          <p style={{ margin: 0, color: "var(--muted)" }}>No consolidation job started yet.</p>
         ) : (
           <>
             <div
@@ -413,7 +406,11 @@ export function MemoryConsolidation({
       {activeJob?.result !== undefined ? (
         <section
           aria-label="Consolidation results"
-          style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}
+          style={{
+            display: "grid",
+            gap: 16,
+            gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+          }}
         >
           <article
             style={{

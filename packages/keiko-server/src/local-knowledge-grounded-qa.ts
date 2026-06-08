@@ -503,7 +503,11 @@ export function enforcedNoEvidenceReason(
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
 ): string | undefined {
   if (result.noEvidence) return result.reason ?? "no-evidence";
-  if (result.answer.trim().length === 0) return "empty-answer";
+  const answer = result.answer.trim();
+  if (answer.length === 0) return "empty-answer";
+  if (answer.toLowerCase() === "no evidence found in the selected knowledge scope.") {
+    return "no-evidence";
+  }
   // #189: an answer with retrieved references but no model-emitted [n] markers is still grounded
   // (the references were in the model's context) — it is NOT "no evidence". buildLocalKnowledgeCitations
   // rescues the references as citations rather than discarding a correct, evidence-backed answer.
@@ -697,7 +701,12 @@ export async function handleLocalKnowledgeGroundedAsk(
     if ("status" in answer) return answer;
     return { status: 200, body: answer };
   } catch (error) {
-    return internalError(error instanceof Error ? error.message : "Local knowledge ask failed.");
+    // Issue #154 (GAP-B) — this catch-all surfaces an arbitrary dynamic error message (a gateway
+    // failure during the scoped answer can echo a provider endpoint or token). Scrub it through the
+    // same redactor the content path uses before it reaches the wire; the fixed fallback is static.
+    const message =
+      error instanceof Error ? redactText(deps, error.message) : "Local knowledge ask failed.";
+    return internalError(message);
   } finally {
     env.close();
   }

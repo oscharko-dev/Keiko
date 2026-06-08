@@ -27,6 +27,9 @@ export interface RankMemoriesQuery {
   readonly queryText?: string;
   readonly nowMs: number;
   readonly weights: RankingWeights;
+  // Per-memory cosine similarity in [0,1] keyed by memory id (#204). When undefined, the ranker
+  // zeroes the semantic weight so output is byte-identical to pre-semantic lexical behaviour.
+  readonly semanticById?: ReadonlyMap<MemoryId, number> | undefined;
 }
 
 export interface RankMemoriesOptions {
@@ -45,6 +48,7 @@ function baselineSubscores(record: MemoryRecord, query: RankMemoriesQuery): Incl
     pinned: record.pinned ? 1 : 0,
     correction: record.type === "correction" ? 1 : 0,
     graph: 0,
+    semantic: query.semanticById?.get(record.id) ?? 0,
   };
 }
 
@@ -55,9 +59,10 @@ function weightedScore(s: IncludedSubscores, w: RankingWeights): number {
     s.confidence * w.confidence +
     s.pinned * w.pinned +
     s.correction * w.correction +
-    s.graph * w.graph;
+    s.graph * w.graph +
+    s.semantic * w.semantic;
   const totalWeight =
-    w.relevance + w.recency + w.confidence + w.pinned + w.correction + w.graph;
+    w.relevance + w.recency + w.confidence + w.pinned + w.correction + w.graph + w.semantic;
   if (totalWeight <= 0) return 0;
   return raw / totalWeight;
 }
@@ -66,6 +71,9 @@ function topContributor(s: IncludedSubscores, w: RankingWeights): string {
   const parts: readonly { readonly key: keyof IncludedSubscores; readonly value: number }[] = [
     { key: "pinned", value: s.pinned * w.pinned },
     { key: "correction", value: s.correction * w.correction },
+    // Semantic before relevance/recency/confidence so the stronger embedding signal wins a tie
+    // against the lexical signals; pinned/correction stay above it as today.
+    { key: "semantic", value: s.semantic * w.semantic },
     { key: "relevance", value: s.relevance * w.relevance },
     { key: "recency", value: s.recency * w.recency },
     { key: "confidence", value: s.confidence * w.confidence },
@@ -91,6 +99,7 @@ function inclusionReasonText(key: keyof IncludedSubscores, value: number): strin
     pinned: "pinned memory",
     correction: "recent correction overrides older facts",
     graph: "graph proximity to other top memories",
+    semantic: "semantic similarity to query",
   };
   return `top signal: ${label[key]}`;
 }
@@ -134,6 +143,17 @@ function sortByRank(
   });
 }
 
+// Byte-identity guarantee (#204): when the caller supplied NO per-memory semantic scores, the
+// semantic weight is forced to 0 so it leaves the weighted sum AND its denominator untouched —
+// every score, reason, and ordering is identical to the pre-semantic lexical ranker. Only when
+// `semanticById` is present does the configured semantic weight participate.
+function effectiveWeights(query: RankMemoriesQuery): RankingWeights {
+  if (query.semanticById === undefined) {
+    return { ...query.weights, semantic: 0 };
+  }
+  return query.weights;
+}
+
 export function rankMemories(
   memories: readonly MemoryRecord[],
   query: RankMemoriesQuery,
@@ -142,9 +162,10 @@ export function rankMemories(
   if (memories.length === 0) return [];
   const recordById = new Map<MemoryId, MemoryRecord>();
   for (const m of memories) recordById.set(m.id, m);
+  const weights = effectiveWeights(query);
 
   // Pass 1 — baseline.
-  const baseline = memories.map((m) => entryFor(m, baselineSubscores(m, query), query.weights));
+  const baseline = memories.map((m) => entryFor(m, baselineSubscores(m, query), weights));
   const baselineSorted = sortByRank(baseline, recordById);
 
   // No edges supplied → skip pass 2 entirely (cost saving + identical result).
@@ -160,7 +181,7 @@ export function rankMemories(
     const base = baselineSubscores(m, query);
     const graph = graphProximityScore(m.id, edges, highRankIds);
     const subscores: IncludedSubscores = { ...base, graph };
-    return entryFor(m, subscores, query.weights);
+    return entryFor(m, subscores, weights);
   });
   return sortByRank(layered, recordById);
 }

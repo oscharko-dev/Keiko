@@ -31,9 +31,9 @@ The epic does not introduce a new visual surface. The hardening contract is ther
 
 ### Run
 
-- `npx vitest run src/app/components/desktop/Footer.test.tsx src/app/components/desktop/AppShell.commands.test.ts src/app/components/desktop/LeftRail.test.tsx src/app/components/desktop/RightRail.test.tsx src/app/components/desktop/Workspace.test.tsx src/app/components/desktop/widgets/panels/ProjectPanel.test.tsx` (run from `packages/keiko-ui`) — 6 files, 32 tests passing.
-- `npx vitest run src/app/components/desktop/WorkspaceShell.a11y.test.tsx src/app/components/desktop/modals/GatewaySetupDialog.test.tsx` (run from `packages/keiko-ui`) — 2 files, 6 tests passing, including shell `jest-axe` coverage and dialog focus restoration.
-- `npm -w @oscharko-dev/keiko-ui test -- --run` — package suite passes with 67 files, 779 tests passing, 3 skipped.
+- `npx vitest run src/app/components/desktop/Footer.test.tsx src/app/components/desktop/AppShell.commands.test.ts src/app/components/desktop/LeftRail.test.tsx src/app/components/desktop/RightRail.test.tsx src/app/components/desktop/Workspace.test.tsx src/app/components/desktop/widgets/panels/ProjectPanel.test.tsx` (run from `packages/keiko-ui`) — 6 files, 44 tests passing.
+- `npx vitest run src/app/components/desktop/WorkspaceShell.a11y.test.tsx src/app/components/desktop/modals/GatewaySetupDialog.test.tsx` (run from `packages/keiko-ui`) — 2 files, 7 tests passing, including shell `jest-axe` coverage and dialog focus restoration.
+- `npm -w @oscharko-dev/keiko-ui test -- --run` — package suite passes with 79 files, 970 tests passing, 3 skipped.
 
 ### Outcome
 
@@ -47,7 +47,7 @@ PASS for the shell and workspace surfaces exercised above. This is evidence of r
 - `useKeyboardShortcuts`: one `keydown` listener on `window`. Conflict detection is `O(n)` at startup over the binding list (≤ 17 entries per the [UX blueprint minimum shortcut set](518-ux-blueprint.md#minimum-shortcut-set-the-contract-527-must-wire)).
 - `validateWorkspaceDescriptorMeta`: one pass per descriptor; six rules; module-evaluation only.
 - `workspace-persistence` (#598, #600): linear sanitization over the persisted window / connection lists before browser-local write or restore, including descriptor-aware filtering and browser-local secret-shaped config handling.
-- `WIN_META` table: 19 entries; constant.
+- `WIN_META` table: 20 entries; constant.
 
 ### Run
 
@@ -83,8 +83,8 @@ Per [ADR-0030](../adr/ADR-0030-workspace-security-evidence.md), the workspace fo
 
 ### Static-analysis sweep
 
-- `npm run arch:check` — 1070 modules / 2620 dependencies cruised, 0 violations.
-- `npm run arch:check:negative` — gate fired on 23 expected fixtures (`exit=0`, all 23 negative fixtures proven live).
+- `npm run arch:check` — 1123 modules / 2796 dependencies cruised, 0 violations.
+- `npm run arch:check:negative` — gate fired on 32 expected fixtures (`exit=0`, all 32 negative fixtures proven live).
 
 ### Credential / CSP / WebSocket / WebRTC
 
@@ -136,15 +136,17 @@ PASS. No new runtime, devtime, or vendored code dependency introduced. No `bundl
 
 ## Regression verification — local command list
 
+> **Note:** the verification counts below are a point-in-time snapshot at the originally pinned SHA (`6ba594db`) and move with ordinary repository activity (for example, the keiko-contracts total includes tests from unrelated areas). The stable #518-specific addition is the 16 keiko-contracts descriptor tests plus the UI slices recorded in the child-issue matrix above.
+
 | Command                                              | Result | Notes                                  |
 | ---------------------------------------------------- | ------ | -------------------------------------- |
 | `npm -w @oscharko-dev/keiko-contracts run typecheck` | PASS   | `tsc -b tsconfig.json --noEmit`        |
 | `npm -w @oscharko-dev/keiko-ui run typecheck`        | PASS   | `tsc --noEmit`                         |
 | `npm -w @oscharko-dev/keiko-contracts run build`     | PASS   | `tsc -b tsconfig.json`                 |
-| `npm -w @oscharko-dev/keiko-contracts test -- --run` | PASS   | 21 files, 872 tests                    |
-| `npm -w @oscharko-dev/keiko-ui test -- --run`        | PASS   | 67 files, 779 tests passing, 3 skipped |
-| `npm run arch:check`                                 | PASS   | 1070 modules, 2620 deps, 0 violations  |
-| `npm run arch:check:negative`                        | PASS   | gate fired on 23 expected fixtures     |
+| `npm -w @oscharko-dev/keiko-contracts test -- --run` | PASS   | 21 files, 877 tests                    |
+| `npm -w @oscharko-dev/keiko-ui test -- --run`        | PASS   | 79 files, 970 tests passing, 3 skipped |
+| `npm run arch:check`                                 | PASS   | 1123 modules, 2796 deps, 0 violations  |
+| `npm run arch:check:negative`                        | PASS   | gate fired on 32 expected fixtures     |
 | `npm run lint`                                       | PASS   | repository-wide eslint now green       |
 
 ## Required CI gates

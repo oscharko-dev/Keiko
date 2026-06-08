@@ -6,7 +6,11 @@
 // shared with the tools package via contracts. Re-export them here as part of the
 // harness package surface.
 
-import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayRequest,
+  GatewayStreamChunk,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
 import type {
   ToolCallMetadata,
   ToolCallRequest,
@@ -19,6 +23,14 @@ export type { ToolCallMetadata, ToolCallRequest, ToolCallResult, ToolPort };
 
 export interface ModelPort {
   readonly call: (request: GatewayRequest, signal: AbortSignal) => Promise<NormalizedResponse>;
+  // Optional streaming variant (#152). Present only on ports backed by a streaming-capable
+  // gateway; absent on buffered-only ports. Yields content deltas then a terminal `done` chunk
+  // carrying the redacted NormalizedResponse. Keeping it optional leaves every existing
+  // ModelPort and its tests valid without a streaming implementation.
+  readonly callStream?: (
+    request: GatewayRequest,
+    signal: AbortSignal,
+  ) => AsyncIterable<GatewayStreamChunk>;
 }
 
 export interface EventSink {

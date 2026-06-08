@@ -15,4 +15,6 @@ export { isKeikoApiKeyEnvName, keikoApiKeySecretValues } from "./secrets.js";
 
 export { canonicalise, sha256Hex, sha256Base64 } from "./hashing.js";
 
+export { sealString, openString, sealBytes, openBytes, isSealed } from "./secretbox.js";
+
 export * from "./errors/index.js";
