@@ -283,7 +283,7 @@ describe("desktop chat routes", () => {
   });
 
   // eslint-disable-next-line complexity
-  it("injects retrieved memory into the prompt and persists candidate proposals from chat intents", async () => {
+  it("does not retrieve unrelated memories before persisting candidate proposals from chat intents", async () => {
     const memoryDir = join(tmp, "memory-vault");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
@@ -320,18 +320,17 @@ describe("desktop chat routes", () => {
         actions: { kind: string; proposalId?: string }[];
       };
     };
-    expect(seenRequests[0]?.messages.at(-1)?.content).toContain("Included memory context:");
-    expect(seenRequests[0]?.messages.at(-1)?.content).toContain("Use pnpm instead of npm");
+    expect(seenRequests[0]?.messages.at(-1)?.content).not.toContain("Included memory context:");
+    expect(seenRequests[0]?.messages.at(-1)?.content).not.toContain("Use pnpm instead of npm");
     expect(body.memory?.context.enabled).toBe(true);
-    expect(body.memory?.context.memories).toHaveLength(1);
+    expect(body.memory?.context.memories).toHaveLength(0);
     expect(body.memory?.actions[0]?.kind).toBe("candidate");
     const proposalId = body.memory?.actions[0]?.proposalId;
     expect(proposalId).toBeDefined();
     if (proposalId !== undefined) {
       expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
     }
-    // Reinforcement reflex (#204): the recalled memory's access counter is bumped on retrieval.
-    expect(memoryVault.getAccessStats([recalled.id]).get(recalled.id)?.accessCount).toBe(1);
+    expect(memoryVault.getAccessStats([recalled.id]).get(recalled.id)?.accessCount ?? 0).toBe(0);
     memoryVault.close();
   });
 

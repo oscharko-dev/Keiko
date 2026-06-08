@@ -256,6 +256,74 @@ describe("handleMemoryRetrieveContext", () => {
     expect(body.included).toHaveLength(1);
   });
 
+  it("suppresses proposed memories from conversation retrieval until they are accepted", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "proposed-suppressed");
+    const capture = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that the formatter unique-token-xyz is biome",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+    const outcomes = asJson(capture).outcomes as readonly {
+      proposal?: { proposalId: string };
+    }[];
+    const proposalId = outcomes[0]?.proposal?.proposalId;
+    if (proposalId === undefined) {
+      throw new Error("expected a proposed memory to be persisted");
+    }
+
+    const result = await handleMemoryRetrieveContext(
+      makeCtx({
+        projectPath: chat.projectPath,
+        chatId: chat.chatId,
+        queryText: "Which formatter should I use?",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const body = asJson(result);
+    expect(body.included).toEqual([]);
+    expect((body.contextBlock as { text: string }).text).toBe("");
+    expect(body.omitted).toContainEqual({
+      memoryId: proposalId,
+      reason: "suppressed-by-status",
+      suppressionDetail: "proposed",
+    });
+  });
+
+  it("omits unrelated accepted memories below the relevance floor when a query is present", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "relevance-floor");
+    const scope = projectScope(chat.projectPath);
+    insertAcceptedMemory(vault, { body: "the formatter is biome", scope });
+    const unrelated = insertAcceptedMemory(vault, {
+      body: "deploys happen on Tuesdays",
+      scope,
+    });
+
+    const result = await handleMemoryRetrieveContext(
+      makeCtx({
+        projectPath: chat.projectPath,
+        chatId: chat.chatId,
+        queryText: "Which formatter should I use?",
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const body = asJson(result);
+    const block = body.contextBlock as { text: string };
+    expect(block.text).toContain("the formatter is biome");
+    expect(block.text).not.toContain("deploys happen on Tuesdays");
+    expect(body.omitted).toContainEqual({
+      memoryId: unrelated.id,
+      reason: "below-threshold",
+    });
+  });
+
   it("returns 400 when queryText or budgetTokens are invalid", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
@@ -465,6 +533,46 @@ describe("handleMemoryCaptureFromConversation", () => {
     expect(outcomes[0]?.kind).toBe("candidate");
     expect(typeof outcomes[0]?.proposal?.proposalId).toBe("string");
     expect((outcomes[0]?.proposal?.body ?? "").length).toBeGreaterThan(0);
+  });
+
+  it("rejects provider base URLs at the capture boundary and persists nothing", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-provider-url");
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that our provider base URL is https://llm.internal.example.com/v1",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(asJson(result).outcomes).toEqual([
+      { kind: "rejected", reason: "provider-base-url" },
+    ]);
+    expect(vault.listMemoriesByScope(projectScope(chat.projectPath), { includeExpired: true })).toEqual(
+      [],
+    );
+  });
+
+  it("rejects raw log excerpts at the capture boundary and persists nothing", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-raw-log");
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "remember that this raw log matters: ERROR 2026-06-08T06:00:00Z worker failed at module X with stack trace line 1 at foo() line 2 at bar()",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(asJson(result).outcomes).toEqual([
+      { kind: "rejected", reason: "raw-log-content" },
+    ]);
+    expect(vault.listMemoriesByScope(projectScope(chat.projectPath), { includeExpired: true })).toEqual(
+      [],
+    );
   });
 
   it("resolves an explicit forget intent against in-scope memories", async () => {

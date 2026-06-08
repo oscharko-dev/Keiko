@@ -50,9 +50,12 @@ describe("isMemorySuppressedFromRetrieval — status branch", () => {
     expect(isMemorySuppressedFromRetrieval(m, FIXED_NOW_MS)).toEqual({ suppressed: false });
   });
 
-  it("does NOT suppress proposed memories on the predicate alone (review-queue surfaces them)", () => {
+  it("suppresses proposed memories for retrieval", () => {
     const m = makeRecord({ status: "proposed", confidence: 0.95 });
-    expect(isMemorySuppressedFromRetrieval(m, FIXED_NOW_MS).suppressed).toBe(false);
+    expect(isMemorySuppressedFromRetrieval(m, FIXED_NOW_MS)).toEqual({
+      suppressed: true,
+      reason: "proposed",
+    });
   });
 
   it("does NOT suppress superseded by status alone (retrieval layer's includeSuperseded toggle decides)", () => {

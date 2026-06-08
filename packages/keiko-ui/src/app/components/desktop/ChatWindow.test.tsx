@@ -73,6 +73,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     clearLatestMemory: vi.fn(),
     acceptMemoryCandidate: vi.fn(),
     rejectMemoryCandidate: vi.fn(),
+    forgetMemoryAction: vi.fn(),
     clearHistory: vi.fn(),
     launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
     lastSentDocuments: [],
@@ -361,6 +362,71 @@ describe("ChatWindow memory controls", () => {
     expect(screen.getByText("Use TypeScript strict mode.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Accept" }));
     await waitFor(() => expect(acceptMemoryCandidate).toHaveBeenCalledWith("prop-1"));
+  });
+
+  it("requires inline confirmation before executing a forget action", async () => {
+    const forgetMemoryAction = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "- pref: strict TypeScript",
+            memories: [],
+            budget: { tokens: 1200, used: 180 },
+          },
+          actions: [
+            {
+              kind: "forget",
+              memoryId: "mem-forget-1",
+              requiresConfirmation: true,
+            },
+          ],
+        },
+        forgetMemoryAction,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /no memory included/i }));
+    await user.click(screen.getByRole("button", { name: /review forget/i }));
+    await user.click(screen.getByRole("button", { name: /forget permanently/i }));
+    await waitFor(() => expect(forgetMemoryAction).toHaveBeenCalledWith("mem-forget-1"));
+  });
+
+  it("shows an inline error when the forget action fails", async () => {
+    const forgetMemoryAction = vi.fn().mockRejectedValue(new Error("forget failed"));
+    const user = userEvent.setup();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        latestMemory: {
+          context: {
+            enabled: true,
+            text: "- pref: strict TypeScript",
+            memories: [],
+            budget: { tokens: 1200, used: 180 },
+          },
+          actions: [
+            {
+              kind: "forget",
+              memoryId: "mem-forget-1",
+              requiresConfirmation: true,
+            },
+          ],
+        },
+        forgetMemoryAction,
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: /no memory included/i }));
+    await user.click(screen.getByRole("button", { name: /review forget/i }));
+    await user.click(screen.getByRole("button", { name: /forget permanently/i }));
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(screen.getByText(/forget failed/i)).toBeInTheDocument();
+    });
   });
 });
 
