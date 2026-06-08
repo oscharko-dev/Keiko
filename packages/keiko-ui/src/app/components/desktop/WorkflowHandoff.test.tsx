@@ -114,6 +114,60 @@ function systemRunSummaryMessage(overrides: Partial<ChatMessage> = {}): ChatMess
   };
 }
 
+function connectedGroundedAnswer() {
+  return {
+    groundingKind: "connected-context" as const,
+    userMessageId: "msg-u",
+    assistantMessageId: "msg-a",
+    content: "Repository-grounded answer.",
+    citations: [],
+    uncertainty: [],
+    omittedCount: 0,
+    elapsedMs: 20,
+    contextPack: {
+      schemaVersion: "1" as const,
+      scopeId: "scope-1",
+      scopeKind: "files" as const,
+      fileCount: 1,
+      queryKind: "natural-language" as const,
+      usage: {
+        searchCalls: 1,
+        filesRead: 1,
+        excerptBytes: 100,
+        modelInputTokens: 50,
+        modelOutputTokens: 20,
+        elapsedMs: 0,
+        rerankCalls: 0,
+      },
+      budget: {
+        searchCallsMax: 10,
+        filesReadMax: 10,
+        excerptBytesMax: 1000,
+        modelInputTokensMax: 1000,
+        modelOutputTokensMax: 500,
+        elapsedMsMax: 1000,
+        rerankCallsMax: Number.POSITIVE_INFINITY,
+      },
+      citationCount: 0,
+      omittedCount: 0,
+      omittedCounts: {
+        "outside-scope": 0,
+        binary: 0,
+        generated: 0,
+        ignored: 0,
+        "size-exceeded": 0,
+        "near-duplicate": 0,
+        "low-relevance": 0,
+        "redacted-only": 0,
+        "budget-exhausted": 0,
+        "tool-unavailable": 0,
+      },
+      uncertaintyCount: 0,
+      elapsedMs: 20,
+    },
+  };
+}
+
 function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
   return {
     projects: [],
@@ -155,6 +209,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     rejectMemoryCandidate: vi.fn(),
     clearHistory: vi.fn(),
     launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "run-42" }),
+    launchGroundedWorkflowHandoff: vi.fn().mockResolvedValue({ ok: true, runId: "run-42" }),
     lastSentDocuments: [],
     ...overrides,
   };
@@ -262,6 +317,43 @@ describe("WorkflowHandoff — launch action (AC#1, AC#3)", () => {
     expect(call?.workflowId).toBe("unit-test-generation");
     expect(call?.modelId).toBe("wf-model");
     expect(call?.text).toBe("src/example.ts");
+  });
+
+  it("launches a grounded workflow with explicit editable paths and default checks", async () => {
+    const launch = vi.fn().mockResolvedValue({ ok: true as const, runId: "run-99" });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScope: { kind: "files", relativePaths: ["src/example.ts"], connectedAtMs: 1 },
+        }),
+        activeProject: makeProject(),
+        models: [workflowEligibleModel("wf-model")],
+        selectedModel: "wf-model",
+        messages: [userMessage("hi")],
+        latestGrounded: connectedGroundedAnswer(),
+        launchGroundedWorkflowHandoff: launch,
+      }),
+    );
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /launch grounded workflow/i }));
+    await user.click(screen.getByRole("button", { name: /generate unit tests/i }));
+    await user.type(screen.getByLabelText(/target file/i), "src/example.ts");
+    await user.type(
+      screen.getByLabelText(/editable paths \(explicit, workspace-relative, one per line\)/i),
+      "tests/example.test.ts",
+    );
+    await user.click(screen.getByRole("button", { name: /^launch$/i }));
+
+    await waitFor(() => expect(launch).toHaveBeenCalledOnce());
+    expect(launch).toHaveBeenCalledWith({
+      assistantMessageId: "msg-a",
+      modelId: "wf-model",
+      workflowKind: "unit-test-generation",
+      input: { target: { kind: "file", filePath: "src/example.ts" } },
+      editablePaths: ["tests/example.test.ts"],
+      expectedChecks: ["tests"],
+      unknowns: [],
+    });
   });
 });
 
@@ -462,5 +554,58 @@ describe("useChatSession.launchWorkflowFromConversation (Issue #153)", () => {
 
     expect(outcome).toMatchObject({ reason: "missing-chat" });
     expect(startChatRun).not.toHaveBeenCalled();
+  });
+});
+
+describe("useChatSession.launchGroundedWorkflowHandoff", () => {
+  beforeEach(() => {
+    vi.spyOn(api, "fetchModels").mockResolvedValue({ models: [workflowEligibleModel("wf-model")] });
+    vi.spyOn(api, "fetchProjects").mockResolvedValue({
+      projects: [makeProject()],
+    });
+    vi.spyOn(api, "fetchChats").mockResolvedValue({ chats: [makeChat()] });
+    vi.spyOn(api, "fetchChatMessages").mockResolvedValue({ messages: [] });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("POSTs the grounded handoff request and returns the runId", async () => {
+    const start = vi.spyOn(api, "startGroundedWorkflowHandoff").mockResolvedValue({
+      run: { runId: "run-77", fingerprint: "fp" },
+      messages: [userMessage("Requested grounded unit-test generation."), systemRunSummaryMessage()],
+    });
+    const { result } = renderHook(() => useChatSession());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let outcome:
+      | { ok: true; runId: string }
+      | { ok: false; reason: string; message?: string | undefined }
+      | undefined;
+    await act(async () => {
+      outcome = await result.current.launchGroundedWorkflowHandoff({
+        assistantMessageId: "msg-a",
+        modelId: "wf-model",
+        workflowKind: "unit-test-generation",
+        input: { target: { kind: "file", filePath: "src/example.ts" } },
+        editablePaths: ["tests/example.test.ts"],
+        expectedChecks: ["tests"],
+        unknowns: ["Need API confirmation"],
+      });
+    });
+
+    expect(outcome).toEqual({ ok: true, runId: "run-77" });
+    expect(start).toHaveBeenCalledOnce();
+    expect(start.mock.calls[0]?.[0]).toMatchObject({
+      assistantMessageId: "msg-a",
+      modelId: "wf-model",
+      workflowKind: "unit-test-generation",
+      input: { target: { kind: "file", filePath: "src/example.ts" } },
+      editablePaths: ["tests/example.test.ts"],
+      expectedChecks: ["tests"],
+      unknowns: ["Need API confirmation"],
+    });
+    expect(typeof start.mock.calls[0]?.[0]?.requestedAtMs).toBe("number");
   });
 });

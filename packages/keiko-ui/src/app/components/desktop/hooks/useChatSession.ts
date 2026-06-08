@@ -13,6 +13,7 @@ import {
   fetchProjects,
   sendDesktopChat,
   sendDesktopChatStream,
+  startGroundedWorkflowHandoff,
   startChatRun,
   updateChat,
 } from "@/lib/api";
@@ -27,9 +28,11 @@ import type {
   ConversationMemoryRequestWire,
   ConversationMemoryResultWire,
   ConversationBudgetEstimate,
+  ExpectedCheck,
   GroundedAnswer as GroundedAnswerWire,
   ModelCapability,
   ProjectWithAvailability,
+  WorkflowKind,
 } from "@/lib/types";
 import { estimateConversationBudget, isConversationEligibleModel } from "@/lib/types";
 import { extractDocumentContext, type PendingDocument } from "./documentContext";
@@ -310,6 +313,9 @@ export interface UseChatSessionResult {
   readonly launchWorkflowFromConversation: (
     input: LaunchWorkflowFromConversationInput,
   ) => Promise<LaunchWorkflowFromConversationResult>;
+  readonly launchGroundedWorkflowHandoff: (
+    input: LaunchGroundedWorkflowHandoffInput,
+  ) => Promise<LaunchGroundedWorkflowHandoffResult>;
 }
 
 export interface LaunchWorkflowFromConversationInput {
@@ -329,6 +335,24 @@ export type LaunchWorkflowFromConversationResult =
         | "missing-chat"
         | "missing-input"
         | "request-failed";
+      readonly message?: string;
+    };
+
+export interface LaunchGroundedWorkflowHandoffInput {
+  readonly assistantMessageId: string;
+  readonly modelId: string;
+  readonly workflowKind: WorkflowKind;
+  readonly input: Record<string, unknown>;
+  readonly editablePaths: readonly string[];
+  readonly expectedChecks?: readonly ExpectedCheck[] | undefined;
+  readonly unknowns?: readonly string[] | undefined;
+}
+
+export type LaunchGroundedWorkflowHandoffResult =
+  | { readonly ok: true; readonly runId: string }
+  | {
+      readonly ok: false;
+      readonly reason: "missing-chat" | "missing-model" | "request-failed";
       readonly message?: string;
     };
 
@@ -1400,6 +1424,44 @@ export function useChatSession(): UseChatSessionResult {
     [state.activeChat, state.activeProject, state.models],
   );
 
+  const launchGroundedWorkflowHandoff = useCallback(
+    async (
+      input: LaunchGroundedWorkflowHandoffInput,
+    ): Promise<LaunchGroundedWorkflowHandoffResult> => {
+      if (isInFlight(sendStatusRef.current)) {
+        return { ok: false, reason: "request-failed", message: "A request is already in flight." };
+      }
+      if (state.activeChat === undefined) {
+        return { ok: false, reason: "missing-chat" };
+      }
+      if (input.modelId.trim().length === 0) {
+        return { ok: false, reason: "missing-model" };
+      }
+      try {
+        const result = await startGroundedWorkflowHandoff({
+          assistantMessageId: input.assistantMessageId,
+          modelId: input.modelId,
+          workflowKind: input.workflowKind,
+          input: input.input,
+          editablePaths: input.editablePaths,
+          ...(input.expectedChecks === undefined ? {} : { expectedChecks: input.expectedChecks }),
+          ...(input.unknowns === undefined ? {} : { unknowns: input.unknowns }),
+          requestedAtMs: Date.now(),
+        });
+        setState((previous) => ({
+          ...previous,
+          messages: Array.from(result.messages),
+        }));
+        return { ok: true, runId: result.run.runId };
+      } catch (caught) {
+        const message = errorMessage(caught);
+        setError(message);
+        return { ok: false, reason: "request-failed", message };
+      }
+    },
+    [state.activeChat],
+  );
+
   // Issue #184 — local cache update after a connected-scope PATCH (or any other surgical wire
   // mutation on the active Chat). Only the matched id is updated; the chat list keeps its
   // existing sort order so the pill flip is non-disruptive. activeChat is rewritten when its
@@ -1454,5 +1516,6 @@ export function useChatSession(): UseChatSessionResult {
     rejectMemoryCandidate,
     clearHistory,
     launchWorkflowFromConversation,
+    launchGroundedWorkflowHandoff,
   };
 }

@@ -46,6 +46,12 @@ import {
 } from "./grounded-orchestrator.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { rememberGroundedTurn } from "./grounded-turn-registry.js";
+import {
+  normalizeGroundedAnswerPayload,
+  type GroundedAnswerPayload,
+  type GroundedAnswerResult,
+} from "./grounded-answer.js";
 import {
   badRequest,
   buildCitations,
@@ -289,7 +295,7 @@ export function defaultRetriever(signal: AbortSignal): GroundedRetriever {
 export type MultiSourceAnswerer = (
   question: string,
   labeledPacks: readonly LabeledPack[],
-) => Promise<string>;
+) => Promise<GroundedAnswerPayload>;
 
 export function createMultiSourceAnswerer(
   model: ModelPort,
@@ -297,7 +303,7 @@ export function createMultiSourceAnswerer(
   redactor: Redactor,
   signal: AbortSignal,
 ): MultiSourceAnswerer {
-  return async (question, labeledPacks): Promise<string> => {
+  return async (question, labeledPacks): Promise<GroundedAnswerResult> => {
     ensureNotCancelled(signal);
     const response = await model.call(
       {
@@ -308,7 +314,13 @@ export function createMultiSourceAnswerer(
       signal,
     );
     const content = response.content.trim();
-    return content.length > 0 ? content : "The model returned an empty response.";
+    return {
+      content: content.length > 0 ? content : "The model returned an empty response.",
+      usage: {
+        promptTokens: response.usage.promptTokens,
+        completionTokens: response.usage.completionTokens,
+      },
+    };
   };
 }
 
@@ -419,7 +431,7 @@ function persistPerSourceEvidence(
 function assembleMultiSourceAnswer(
   ctx: MultiSourceAskInput,
   sources: readonly RetrievedSource[],
-  assistantRaw: string,
+  assistant: GroundedAnswerResult,
   ids: { readonly userMessageId: string; readonly assistantMessageId: string },
 ): GroundedAnswer {
   const { redactor } = ctx.deps;
@@ -431,18 +443,27 @@ function assembleMultiSourceAnswer(
       src.elapsedMs,
     ),
   );
+  const mergedSummary = mergeContextPackSummaries(summaries);
   const { firstRunId } = persistPerSourceEvidence(ctx, sources);
   return {
     groundingKind: "connected-context",
     userMessageId: ids.userMessageId,
     assistantMessageId: ids.assistantMessageId,
     evidenceRunId: firstRunId,
-    content: redactString(redactor, assistantRaw),
+    content: redactString(redactor, assistant.content),
     citations,
     uncertainty: mergedUncertainty(sources, redactor),
     omittedCount: sources.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs: sources.reduce((acc, src) => acc + src.elapsedMs, 0),
-    contextPack: mergeContextPackSummaries(summaries),
+    contextPack: {
+      ...mergedSummary,
+      usage: {
+        ...mergedSummary.usage,
+        modelInputTokens: mergedSummary.usage.modelInputTokens + assistant.usage.promptTokens,
+        modelOutputTokens:
+          mergedSummary.usage.modelOutputTokens + assistant.usage.completionTokens,
+      },
+    },
   };
 }
 
@@ -460,11 +481,13 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     return sources;
   }
   const retrieved = sources;
-  let assistantRaw: string;
+  let assistant: GroundedAnswerResult;
   try {
-    assistantRaw = await ctx.answerer(
-      ctx.content,
-      retrieved.map((s) => ({ label: s.label, pack: s.pack })),
+    assistant = normalizeGroundedAnswerPayload(
+      await ctx.answerer(
+        ctx.content,
+        retrieved.map((s) => ({ label: s.label, pack: s.pack })),
+      ),
     );
   } catch (error) {
     return mapMultiSourceError(error, ctx.deps);
@@ -473,11 +496,18 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
     ctx.deps,
     ctx.chat.id,
     redactString(ctx.deps.redactor, ctx.content),
-    redactString(ctx.deps.redactor, assistantRaw),
+    redactString(ctx.deps.redactor, assistant.content),
   );
-  const answer = assembleMultiSourceAnswer(ctx, retrieved, assistantRaw, {
+  const answer = assembleMultiSourceAnswer(ctx, retrieved, assistant, {
     userMessageId: userMessage.id,
     assistantMessageId: assistantMessage.id,
+  });
+  rememberGroundedTurn({
+    assistantMessageId: assistantMessage.id,
+    chatId: ctx.chat.id,
+    workspaceRoot: retrieved[0]?.pack.scope.workspaceRoot ?? ctx.chat.projectPath,
+    evidenceRunId: answer.evidenceRunId,
+    packs: retrieved.map((source) => source.pack),
   });
   return { status: 200, body: answer };
 }

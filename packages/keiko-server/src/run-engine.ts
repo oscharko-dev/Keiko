@@ -47,6 +47,7 @@ import {
   type RunIdentity,
 } from "./evidence.js";
 import { createWorkflowMemoryPort } from "./memory-workflow-port.js";
+import { buildGovernedHandoffEvidence } from "./governed-workflow.js";
 
 export interface StartRunResult {
   readonly runId: string;
@@ -126,6 +127,8 @@ function workflowFingerprint(request: RunRequest): string {
     taskInput: { taskType, input: request.input },
     limits: request.limits ?? {},
     modelId: request.modelId,
+    governedHandoff: request.governedHandoff ?? null,
+    governedHandoffSourceGroundedRunId: request.governedHandoffSourceGroundedRunId ?? null,
     workingDirectory: workspaceRoot(request),
     dryRun: true,
     harnessVersion: HARNESS_VERSION,
@@ -155,7 +158,12 @@ function unitTestAppliable(
   report: UnitTestWorkflowReport,
 ): AppliableSnapshot | undefined {
   return report.status === "dry-run" && report.proposedDiff !== undefined
-    ? { kind: "unit-tests", payload: request.input, limits: request.limits }
+    ? {
+        kind: "unit-tests",
+        payload: request.input,
+        limits: request.limits,
+        governedHandoff: request.governedHandoff,
+      }
     : undefined;
 }
 
@@ -164,7 +172,12 @@ function bugAppliable(
   report: BugInvestigationReport,
 ): AppliableSnapshot | undefined {
   return report.status === "fix-proposed" && report.proposedDiff !== undefined
-    ? { kind: "bug-investigation", payload: request.input, limits: request.limits }
+    ? {
+        kind: "bug-investigation",
+        payload: request.input,
+        limits: request.limits,
+        governedHandoff: request.governedHandoff,
+      }
     : undefined;
 }
 
@@ -193,6 +206,9 @@ function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: strin
     sink,
     signal: controller.signal,
     idSource: (): string => runId,
+    ...(ctx.request.governedHandoff === undefined
+      ? {}
+      : { workflowHandoff: ctx.request.governedHandoff }),
     ...(ctx.memoryVault !== undefined && ctx.evidence !== undefined
       ? {
           memoryPort: createWorkflowMemoryPort({
@@ -473,6 +489,12 @@ function persistOutcome(
     outcome.report,
     identity.sink.buffered(),
     ctx.evidence,
+    ctx.request.governedHandoff === undefined
+      ? undefined
+      : buildGovernedHandoffEvidence({
+          request: ctx.request.governedHandoff,
+          sourceGroundedRunId: ctx.request.governedHandoffSourceGroundedRunId,
+        }),
   );
 }
 
@@ -498,7 +520,10 @@ export async function applyRun(
 ): Promise<unknown> {
   const input = isRecord(snapshot.payload) ? snapshot.payload : {};
   const limitsOverride = snapshot.limits !== undefined ? { limits: snapshot.limits } : {};
-  const deps = { model };
+  const deps =
+    snapshot.governedHandoff === undefined
+      ? { model }
+      : { model, workflowHandoff: snapshot.governedHandoff };
   if (snapshot.kind === "unit-tests") {
     const report = await generateUnitTests(
       { ...input, modelId, apply: true, ...limitsOverride } as unknown as UnitTestWorkflowInput,

@@ -410,6 +410,54 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     // Answerer invoked exactly once
     expect(answererSeen.count).toBe(1);
   });
+
+  it("strips planner scaffolding from hybrid answers and carries final model usage", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Alpha Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/alpha.ts"],
+      connectedAtMs: NOW,
+      root: "/home/u/alpha-repo",
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "What is alpha?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(
+          new Map([["src/alpha.ts", folderPack("src/alpha.ts", 0.7, "alpha-atom")]]),
+        ),
+        connectorRetrieve: singleConnectorRetrieve(capId),
+        answer: () =>
+          Promise.resolve({
+            content: [
+              "Searching for alpha context",
+              '{ "query": "alpha", "tool": "repo.searchText" }',
+              "Hybrid grounded answer.",
+            ].join("\n"),
+            usage: { promptTokens: 9, completionTokens: 3 },
+          }),
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.content).toBe("Hybrid grounded answer.");
+    expect(answer.contextPack.folder.usage.modelInputTokens).toBe(14);
+    expect(answer.contextPack.folder.usage.modelOutputTokens).toBe(5);
+    const assistant = store
+      .listMessages(chatId)
+      .find((message) => message.id === answer.assistantMessageId);
+    expect(assistant?.content).toBe("Hybrid grounded answer.");
+  });
 });
 
 // ─── Case 2: ≥2 connectors, 0 folders ────────────────────────────────────────

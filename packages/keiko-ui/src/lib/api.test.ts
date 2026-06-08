@@ -10,6 +10,7 @@ import {
   fetchFilesTree,
   fetchModels,
   fetchProjects,
+  startGroundedWorkflowHandoff,
   fetchWorkspaceSummary,
   updateChatConnectedScope,
 } from "./api";
@@ -395,5 +396,54 @@ describe("askGrounded", () => {
     controller.abort();
 
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+});
+
+describe("startGroundedWorkflowHandoff", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("POSTs the request body and CSRF header to /api/chats/messages/grounded/handoff", async () => {
+    const response = {
+      run: { runId: "run-42", fingerprint: "fp-42" },
+      messages: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(response));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await startGroundedWorkflowHandoff({
+      assistantMessageId: "msg-a",
+      modelId: "wf-model",
+      workflowKind: "unit-test-generation",
+      input: { target: { kind: "file", filePath: "src/example.ts" } },
+      editablePaths: ["tests/example.test.ts"],
+      expectedChecks: ["tests"],
+      unknowns: ["Need API confirmation"],
+      requestedAtMs: 123,
+    });
+
+    expect(result).toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/chats/messages/grounded/handoff",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          assistantMessageId: "msg-a",
+          modelId: "wf-model",
+          workflowKind: "unit-test-generation",
+          input: { target: { kind: "file", filePath: "src/example.ts" } },
+          editablePaths: ["tests/example.test.ts"],
+          expectedChecks: ["tests"],
+          unknowns: ["Need API confirmation"],
+          requestedAtMs: 123,
+        }),
+        headers: expect.objectContaining({
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Keiko-CSRF": "1",
+        }),
+      }),
+    );
   });
 });

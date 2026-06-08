@@ -8,6 +8,7 @@ import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { ContextPack, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { validatePatch, type PatchValidation } from "@oscharko-dev/keiko-tools";
+import { governedPatchRejectionCode } from "../governed-handoff.js";
 import { isTestPath } from "./conventions.js";
 import { parseModelOutput } from "./parse.js";
 import { buildPrompt } from "./prompt.js";
@@ -89,7 +90,9 @@ async function attemptOnce(
   });
   const effectiveDiff = validation.normalizedDiff ?? parsed.diff;
   const guardCode = validation.ok
-    ? (emptyPatchRejection(effectiveDiff, validation) ?? productionGuard(workspace, validation))
+    ? (emptyPatchRejection(effectiveDiff, validation) ??
+      productionGuard(workspace, validation) ??
+      governedPatchRejectionCode(state.deps.workflowHandoff, validation))
     : validation.reasons[0]?.code;
   emitValidation(state, validation, guardCode);
   if (validation.ok && guardCode === undefined) {

@@ -435,6 +435,42 @@ describe("handleGroundedAsk", () => {
     );
   });
 
+  it("production path strips planner scaffolding and threads final model usage into contextPack", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    seedScopedRepo(projectPath);
+    const seenRequests: GatewayRequest[] = [];
+    const result = await handleGroundedAsk(
+      ctx(
+        JSON.stringify({
+          chatId,
+          content: GROUNDED_FIXTURE_QUESTION,
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      deps(
+        fakeModel(
+          [
+            "Searching for MyClass usage",
+            '{ "query": "MyClass", "tool": "repo.searchText" }',
+            "Grounded answer [src/foo.ts:1-3]",
+          ].join("\n"),
+          seenRequests,
+        ),
+      ),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.content).toBe("Grounded answer [src/foo.ts:1-3]");
+    expect(answer.contextPack.usage.modelInputTokens).toBe(41);
+    expect(answer.contextPack.usage.modelOutputTokens).toBe(7);
+    const assistant = store
+      .listMessages(chatId)
+      .find((message) => message.id === answer.assistantMessageId);
+    expect(assistant?.content).toBe("Grounded answer [src/foo.ts:1-3]");
+  });
+
   it("production path redacts secret-shaped user text before building the gateway prompt", async () => {
     const { chatId, projectPath } = await setupChatWithScope();
     seedScopedRepo(projectPath);

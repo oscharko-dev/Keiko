@@ -69,6 +69,11 @@ import {
 } from "./local-knowledge-grounded-qa.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
 import {
+  normalizeGroundedAnswerPayload,
+  type GroundedAnswerPayload,
+  type GroundedAnswerResult,
+} from "./grounded-answer.js";
+import {
   buildCitations,
   buildQuery,
   buildSelectedScopeFrom,
@@ -112,7 +117,7 @@ export type ConnectorRetrieve = (
   scope: ChatLocalKnowledgeScope,
   selected: SelectedLocalKnowledgeScope,
 ) => Promise<RetrievalResult>;
-export type HybridAnswerer = (system: string, user: string) => Promise<string>;
+export type HybridAnswerer = (system: string, user: string) => Promise<GroundedAnswerPayload>;
 
 export interface HybridGroundedAskCtx {
   readonly chat: Chat;
@@ -350,7 +355,7 @@ export function createHybridAnswerer(
   modelId: string,
   signal: AbortSignal,
 ): HybridAnswerer {
-  return async (system, user): Promise<string> => {
+  return async (system, user): Promise<GroundedAnswerResult> => {
     ensureNotCancelled(signal);
     const response = await model.call(
       {
@@ -364,7 +369,13 @@ export function createHybridAnswerer(
       signal,
     );
     const content = response.content.trim();
-    return content.length > 0 ? content : "The model returned an empty response.";
+    return {
+      content: content.length > 0 ? content : "The model returned an empty response.",
+      usage: {
+        promptTokens: response.usage.promptTokens,
+        completionTokens: response.usage.completionTokens,
+      },
+    };
   };
 }
 
@@ -610,7 +621,7 @@ function assembleHybridAnswer(
   ctx: HybridGroundedAskCtx,
   sources: RetrievedSources,
   store: KnowledgeStore,
-  assistantRaw: string,
+  assistant: GroundedAnswerResult,
   ids: { readonly userMessageId: string; readonly assistantMessageId: string },
 ): HybridGroundedAnswer {
   const { redactor } = ctx.deps;
@@ -619,11 +630,12 @@ function assembleHybridAnswer(
   const evidenceRunId = persistFolderEvidence(ctx, sources.folders);
   persistConnectorAudit(store, sources.connectors);
   const elapsedMs = sources.folders.reduce((acc, src) => acc + src.elapsedMs, 0);
+  const summary = folderSummary(sources.folders, redactor);
   return {
     groundingKind: "hybrid",
     ...ids,
     evidenceRunId,
-    content: redactString(redactor, assistantRaw),
+    content: redactString(redactor, assistant.content),
     citations,
     knowledgeCitations,
     uncertainty: [
@@ -636,7 +648,14 @@ function assembleHybridAnswer(
       kind: "hybrid",
       folderSourceCount: sources.folderSourceCount,
       connectorSourceCount: sources.connectorSourceCount,
-      folder: folderSummary(sources.folders, redactor),
+      folder: {
+        ...summary,
+        usage: {
+          ...summary.usage,
+          modelInputTokens: summary.usage.modelInputTokens + assistant.usage.promptTokens,
+          modelOutputTokens: summary.usage.modelOutputTokens + assistant.usage.completionTokens,
+        },
+      },
       knowledge: knowledgeSummary(ctx.chat, sources.connectors, knowledgeCitations.length),
     },
   };
@@ -714,12 +733,14 @@ async function answerAndAssemble(
     store,
     ctx.deps.redactor,
   );
-  const assistantRaw = await answerer.answer(HYBRID_SYSTEM_PROMPT, user);
+  const assistant = normalizeGroundedAnswerPayload(
+    await answerer.answer(HYBRID_SYSTEM_PROMPT, user),
+  );
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
     ctx.chat.id,
     redactString(ctx.deps.redactor, ctx.content),
-    redactString(ctx.deps.redactor, assistantRaw),
+    redactString(ctx.deps.redactor, assistant.content),
   );
   const answer = assembleHybridAnswer(
     ctx,
@@ -731,7 +752,7 @@ async function answerAndAssemble(
       connectorSourceCount: meta.connectorScopeCount,
     },
     store,
-    assistantRaw,
+    assistant,
     { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
   );
   return { status: 200, body: answer };
