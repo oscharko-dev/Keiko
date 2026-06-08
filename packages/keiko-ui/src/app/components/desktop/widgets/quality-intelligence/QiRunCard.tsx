@@ -7,8 +7,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { QualityIntelligenceUiRunDetail } from "@oscharko-dev/keiko-contracts";
-import { fetchQiRunDetail, reviewQiRun, type QiReviewAction } from "@/lib/quality-intelligence-api";
+import type {
+  QualityIntelligenceUiRunDetail,
+  QualityIntelligenceCandidateEditableFields,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  editQiCandidate,
+  fetchQiRunDetail,
+  reviewQiRun,
+  type QiReviewAction,
+} from "@/lib/quality-intelligence-api";
 import { CandidatesPane } from "./CandidatesPane";
 import { ExportBar } from "./ExportBar";
 import {
@@ -25,6 +33,7 @@ export interface QiRunCardProps {
   /** Seam for tests. */
   readonly fetchDetailImpl?: typeof fetchQiRunDetail;
   readonly reviewImpl?: typeof reviewQiRun;
+  readonly editImpl?: typeof editQiCandidate;
 }
 
 function SummaryStrip({ detail }: { readonly detail: QualityIntelligenceUiRunDetail }): ReactNode {
@@ -89,6 +98,7 @@ export function QiRunCard({
   runId,
   fetchDetailImpl = fetchQiRunDetail,
   reviewImpl = reviewQiRun,
+  editImpl = editQiCandidate,
 }: QiRunCardProps): ReactNode {
   const [detail, setDetail] = useState<QualityIntelligenceUiRunDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -129,6 +139,20 @@ export function QiRunCard({
     [reviewImpl, runId, loadDetail],
   );
 
+  const handleEdit = useCallback(
+    async (
+      candidateId: string,
+      edited: QualityIntelligenceCandidateEditableFields,
+    ): Promise<void> => {
+      try {
+        await editImpl(runId, candidateId, edited);
+      } finally {
+        await loadDetail();
+      }
+    },
+    [editImpl, runId, loadDetail],
+  );
+
   return (
     <div className="qi-run-card" data-testid="qi-run-card">
       <header className="qi-run-card-head">
@@ -157,7 +181,11 @@ export function QiRunCard({
                 </h3>
                 {detail.candidates.length > 0 ? <ExportBar runId={runId} /> : null}
               </div>
-              <CandidatesPane candidates={detail.candidates} onReview={handleReview} />
+              <CandidatesPane
+                candidates={detail.candidates}
+                onReview={handleReview}
+                onEdit={handleEdit}
+              />
             </section>
           </>
         )}

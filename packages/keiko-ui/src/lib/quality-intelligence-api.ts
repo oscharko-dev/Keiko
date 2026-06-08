@@ -7,6 +7,8 @@
 import type {
   QualityIntelligenceUiRunSummary,
   QualityIntelligenceUiRunDetail,
+  QualityIntelligenceUiCandidate,
+  QualityIntelligenceCandidateEditableFields,
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceRunStreamMessage,
 } from "@oscharko-dev/keiko-contracts";
@@ -176,6 +178,35 @@ export async function reviewQiRun(
       body: JSON.stringify({ action, ...(candidateId !== undefined ? { candidateId } : {}) }),
     },
   );
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/quality-intelligence/runs/:id/edit  (Issue #727, Epic #712)
+// ---------------------------------------------------------------------------
+
+/**
+ * Edit a generated candidate's fields inline. Returns the server's redacted, BFF-safe projection of
+ * the updated candidate. Only the changed fields are submitted (`edited`); the server merges them
+ * over the existing row and records provenance + an audit entry.
+ */
+export async function editQiCandidate(
+  runId: string,
+  candidateId: string,
+  edited: QualityIntelligenceCandidateEditableFields,
+  editorLabel?: string,
+): Promise<QualityIntelligenceUiCandidate> {
+  const res = await fetchJson<{ candidate: QualityIntelligenceUiCandidate }>(
+    `/api/quality-intelligence/runs/${encodeURIComponent(runId)}/edit`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        candidateId,
+        edited,
+        ...(editorLabel !== undefined ? { editorLabel } : {}),
+      }),
+    },
+  );
+  return res.candidate;
 }
 
 // ---------------------------------------------------------------------------

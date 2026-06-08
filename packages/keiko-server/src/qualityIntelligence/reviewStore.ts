@@ -23,9 +23,14 @@ const REVIEW_STATES: ReadonlySet<string> = new Set(
 
 export type QiReviewAction = "approve" | "reject" | "request-changes" | "reopen" | "withdraw";
 
+// An inline edit (Epic #712, Issue #726) is an auditable candidate action that does NOT transition
+// review state — it records who edited which candidate when. The audit log carries it alongside the
+// review decisions; `fromState`/`toState` are the candidate's current review state (unchanged).
+export type QiAuditAction = QiReviewAction | "edit";
+
 export interface QiReviewAuditEntry {
   readonly at: string;
-  readonly action: QiReviewAction;
+  readonly action: QiAuditAction;
   readonly scope: "run" | "candidate";
   readonly candidateId?: string;
   readonly reviewerLabel: string;
@@ -132,6 +137,43 @@ export const applyReviewDecision = (input: ApplyReviewDecisionInput): QiReviewSt
     runId: input.runId,
     runState: isCandidate ? current.runState : toState,
     candidateStates,
+    auditLog: [...current.auditLog, audit],
+    lastUpdatedAt: input.now,
+  };
+  storeFor(input.evidenceDir).record(input.runId, next);
+  return next;
+};
+
+// ─── Inline-edit audit (Epic #712, Issue #726) ──────────────────────────────────
+
+export interface AppendEditAuditInput {
+  readonly runId: string;
+  readonly evidenceDir: string;
+  readonly candidateId: string;
+  readonly reviewerLabel: string;
+  readonly now: string;
+}
+
+/**
+ * Append an append-only `edit` audit entry for an inline candidate edit. Review state is NOT
+ * transitioned — `fromState`/`toState` are the candidate's existing review state. Persists and
+ * returns the updated review artifact (created empty on first use).
+ */
+export const appendEditAudit = (input: AppendEditAuditInput): QiReviewStateArtifact => {
+  const current =
+    loadRunReviewState(input.runId, input.evidenceDir) ?? emptyArtifact(input.runId, input.now);
+  const state = candidateReviewStateOf(current, input.candidateId);
+  const audit: QiReviewAuditEntry = {
+    at: input.now,
+    action: "edit",
+    scope: "candidate",
+    candidateId: input.candidateId,
+    reviewerLabel: input.reviewerLabel,
+    fromState: state,
+    toState: state,
+  };
+  const next: QiReviewStateArtifact = {
+    ...current,
     auditLog: [...current.auditLog, audit],
     lastUpdatedAt: input.now,
   };

@@ -60,12 +60,16 @@ export {
   recordQualityIntelligenceCandidates,
   loadQualityIntelligenceCandidates,
   deleteQualityIntelligenceCandidates,
+  applyQualityIntelligenceCandidateEdit,
 } from "./candidatesArtifact.js";
 export type {
   QualityIntelligenceCandidateRow,
   QualityIntelligenceCandidatesArtifact,
   QualityIntelligenceCandidatesStoreOptions,
   RecordQualityIntelligenceCandidatesInput,
+  ApplyQualityIntelligenceCandidateEditInput,
+  ApplyQualityIntelligenceCandidateEditResult,
+  QualityIntelligenceCandidateEditErrorReason,
 } from "./candidatesArtifact.js";
 export {
   createNodeContainedJsonArtifactStore,

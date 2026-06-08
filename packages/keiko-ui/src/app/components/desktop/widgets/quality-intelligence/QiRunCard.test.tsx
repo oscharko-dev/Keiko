@@ -103,4 +103,28 @@ describe("QiRunCard", () => {
     render(<QiRunCard runId="qi-run-aaaa1111" fetchDetailImpl={failing} />);
     expect(await screen.findByTestId("qi-error-state")).toBeInTheDocument();
   });
+
+  it("routes an inline edit through the edit seam and reloads the detail (Epic #712)", async () => {
+    const user = userEvent.setup();
+    const detail = makeDetail("qi-run-aaaa1111", [makeCandidate("tc-1", "Login")]);
+    const fetchImpl = fetchOk(detail);
+    const editImpl = vi
+      .fn()
+      .mockResolvedValue(
+        makeCandidate("tc-1", "Edited login"),
+      ) as unknown as typeof import("@/lib/quality-intelligence-api").editQiCandidate;
+
+    render(<QiRunCard runId="qi-run-aaaa1111" fetchDetailImpl={fetchImpl} editImpl={editImpl} />);
+    await user.click(await screen.findByRole("button", { name: /^edit$/i }));
+    const titleInput = screen.getByLabelText("Title");
+    await user.clear(titleInput);
+    await user.type(titleInput, "Edited login");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(editImpl).toHaveBeenCalledWith("qi-run-aaaa1111", "tc-1", { title: "Edited login" });
+    });
+    // Detail is reloaded after the edit (initial load + post-edit reload).
+    expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
 });

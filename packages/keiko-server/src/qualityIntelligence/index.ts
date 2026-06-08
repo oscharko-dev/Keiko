@@ -50,13 +50,17 @@ export { executeQiRun, QiIngestionError, QiGenerationError } from "./runExecutio
 // Issue #282 — review-state companion store (read + mutation seams).
 export {
   applyReviewDecision,
+  appendEditAudit,
   loadRunReviewState,
   runReviewStateOf,
   candidateReviewStateOf,
   type QiReviewAction,
+  type QiAuditAction,
   type QiReviewStateArtifact,
 } from "./reviewStore.js";
 // Issue #282 — review-action route group.
 export { QI_REVIEW_ROUTE_GROUP, handleQiReview } from "./reviewRoutes.js";
 // Issue #283 — export route group (local serialise + TMS dry-run preview).
 export { QI_EXPORT_ROUTE_GROUP, handleQiExport } from "./exportRoutes.js";
+// Issue #726 (Epic #712) — inline-edit route group.
+export { QI_EDIT_ROUTE_GROUP, handleQiEditCandidate } from "./editRoutes.js";

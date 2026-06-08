@@ -395,3 +395,61 @@ describe("CandidatesPane — edge cases", () => {
     expect(approveButtons).toHaveLength(25);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests — inline editing (Epic #712, Issue #727)
+// ---------------------------------------------------------------------------
+
+describe("CandidatesPane — inline editing", () => {
+  it("renders no Edit button when onEdit is absent", () => {
+    render(<CandidatesPane candidates={[makeCandidate()]} />);
+    expect(screen.queryByRole("button", { name: /^edit$/i })).not.toBeInTheDocument();
+  });
+
+  it("renders an Edit button per card when onEdit is provided", () => {
+    render(<CandidatesPane candidates={[makeCandidate()]} onEdit={vi.fn()} />);
+    expect(screen.getByRole("button", { name: /^edit$/i })).toBeInTheDocument();
+  });
+
+  it("clicking Edit reveals the inline edit form pre-filled with the candidate title", async () => {
+    const user = userEvent.setup();
+    const c = makeCandidate({ title: "Original title" });
+    render(<CandidatesPane candidates={[c]} onEdit={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    expect(screen.getByRole("form", { name: /edit original title/i })).toBeInTheDocument();
+    expect(screen.getByLabelText("Title")).toHaveValue("Original title");
+  });
+
+  it("editing the title and saving calls onEdit with only the changed field", async () => {
+    const user = userEvent.setup();
+    const c = makeCandidate({ title: "Old title" });
+    const onEdit = vi.fn().mockResolvedValue(undefined);
+    render(<CandidatesPane candidates={[c]} onEdit={onEdit} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    const titleInput = screen.getByLabelText("Title");
+    await user.clear(titleInput);
+    await user.type(titleInput, "New title");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    expect(onEdit).toHaveBeenCalledWith(c.id, { title: "New title" });
+  });
+
+  it("Cancel hides the form without calling onEdit", async () => {
+    const user = userEvent.setup();
+    const onEdit = vi.fn();
+    render(<CandidatesPane candidates={[makeCandidate()]} onEdit={onEdit} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    expect(onEdit).not.toHaveBeenCalled();
+  });
+
+  it("Escape cancels the edit form without calling onEdit", async () => {
+    const user = userEvent.setup();
+    const onEdit = vi.fn();
+    render(<CandidatesPane candidates={[makeCandidate()]} onEdit={onEdit} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    await user.type(screen.getByLabelText("Title"), "{Escape}");
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    expect(onEdit).not.toHaveBeenCalled();
+  });
+});

@@ -54,6 +54,7 @@ const QI_SOURCE_FILES: readonly string[] = [
   "sourceEnvelope.ts",
   "evidenceAtom.ts",
   "testCaseCandidate.ts",
+  "editableRevision.ts",
   "coverageMap.ts",
   "validationFinding.ts",
   "runPlanAndEvents.ts",

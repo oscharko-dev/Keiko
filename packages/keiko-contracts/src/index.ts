@@ -659,6 +659,12 @@ export {
   QUALITY_INTELLIGENCE_EXPORT_ADAPTERS,
   QUALITY_INTELLIGENCE_TMS_ADAPTERS,
 } from "./qualityIntelligence/index.js";
+// Issue #725 (Epic #712) added inline-edit revision contracts.
+export type {
+  QualityIntelligenceCandidateEditProvenance,
+  QualityIntelligenceCandidateEditableFields,
+  QualityIntelligenceCandidateEditedRevision,
+} from "./qualityIntelligence/editableRevision.js";
 
 // ─── Workspace UI interaction substrate (Epic #518 / Issue #527; ADR-0028) ──
 // Typed Command + Action + KeyChord contracts consumed by @oscharko-dev/keiko-ui.

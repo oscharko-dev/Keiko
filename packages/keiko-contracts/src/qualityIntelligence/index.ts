@@ -82,6 +82,13 @@ export {
   QUALITY_INTELLIGENCE_TEST_CASE_STATUSES,
 } from "./testCaseCandidate.js";
 
+// ─── Inline-edit revision (Epic #712, Issue #725) ────────────────────────────────
+export type {
+  QualityIntelligenceCandidateEditProvenance,
+  QualityIntelligenceCandidateEditableFields,
+  QualityIntelligenceCandidateEditedRevision,
+} from "./editableRevision.js";
+
 // ─── Coverage map ──────────────────────────────────────────────────────────────
 export type {
   QualityIntelligenceCoverageKind,

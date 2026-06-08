@@ -123,6 +123,7 @@ import {
   QI_RUN_EXECUTION_ROUTE_GROUP,
   QI_REVIEW_ROUTE_GROUP,
   QI_EXPORT_ROUTE_GROUP,
+  QI_EDIT_ROUTE_GROUP,
 } from "./qualityIntelligence/index.js";
 
 export interface ApiError {
@@ -403,6 +404,9 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // POST routes (/runs/:id/review, /runs/:id/export) disambiguate against /runs/:id/cancel.
   ...QI_REVIEW_ROUTE_GROUP,
   ...QI_EXPORT_ROUTE_GROUP,
+  // Issue #726 (Epic #712) — inline candidate editing. Literal-suffix POST /runs/:id/edit
+  // disambiguates against /runs/:id/cancel just like /review and /export above.
+  ...QI_EDIT_ROUTE_GROUP,
   // Issue #539 (Epic #532) — relationship engine routes. The api-contract.md §2 ordering
   // is preserved; literal-suffix paths (validate, impact, health, events) come BEFORE the
   // `:id`-templated routes so matchRoute returns the literal handler instead of binding

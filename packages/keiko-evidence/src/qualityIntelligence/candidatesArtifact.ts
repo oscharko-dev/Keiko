@@ -34,6 +34,9 @@ export interface QualityIntelligenceCandidatesArtifact {
   readonly runId: string;
   readonly generatedAt: string;
   readonly candidates: readonly QualityIntelligenceCandidateRow[];
+  // Append-only provenance for inline edits (Epic #712, Issue #725). Optional → the schema literal
+  // stays at 1 and a pre-#712 artifact (no edits) parses unchanged.
+  readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
 }
 
 const toRow = (
@@ -112,3 +115,85 @@ export const deleteQualityIntelligenceCandidates = (
   runId: string,
   options: QualityIntelligenceCandidatesStoreOptions,
 ): boolean => storeFor(options.evidenceDir).delete(runId);
+
+// ─── Inline edit (Epic #712, Issue #725) ────────────────────────────────────────
+//
+// An edit UPDATES the matched candidate row in place (so export/BFF reflect the new text without
+// any change) AND appends a provenance entry to `editedRevisions[]`. Edited fields are redacted via
+// the mandatory `input.redact` BEFORE merge+persist — never write an unredacted edited body to disk.
+
+type EditableFields = QualityIntelligence.QualityIntelligenceCandidateEditableFields;
+type EditProvenance = QualityIntelligence.QualityIntelligenceCandidateEditProvenance;
+type EditedRevision = QualityIntelligence.QualityIntelligenceCandidateEditedRevision;
+
+export type QualityIntelligenceCandidateEditErrorReason =
+  | "artifact-not-found"
+  | "candidate-not-found"
+  | "no-edited-fields";
+
+export type ApplyQualityIntelligenceCandidateEditResult =
+  | { readonly ok: true; readonly candidate: QualityIntelligenceCandidateRow }
+  | { readonly ok: false; readonly reason: QualityIntelligenceCandidateEditErrorReason };
+
+export interface ApplyQualityIntelligenceCandidateEditInput {
+  readonly runId: string;
+  readonly candidateId: string;
+  readonly editedFields: EditableFields;
+  readonly provenance: EditProvenance;
+  readonly evidenceDir: string;
+  readonly redact: (value: unknown) => unknown;
+}
+
+const EDITABLE_KEYS = [
+  "title",
+  "preconditions",
+  "steps",
+  "expectedResults",
+  "priority",
+  "riskClass",
+  "tags",
+] as const;
+
+const hasEditedField = (fields: EditableFields): boolean =>
+  EDITABLE_KEYS.some((key) => fields[key] !== undefined);
+
+const mergeRow = (
+  row: QualityIntelligenceCandidateRow,
+  fields: EditableFields,
+): QualityIntelligenceCandidateRow => ({
+  ...row,
+  ...(fields.title !== undefined ? { title: fields.title } : {}),
+  ...(fields.preconditions !== undefined ? { preconditions: [...fields.preconditions] } : {}),
+  ...(fields.steps !== undefined ? { steps: [...fields.steps] } : {}),
+  ...(fields.expectedResults !== undefined ? { expectedResults: [...fields.expectedResults] } : {}),
+  ...(fields.priority !== undefined ? { priority: fields.priority } : {}),
+  ...(fields.riskClass !== undefined ? { riskClass: fields.riskClass } : {}),
+  ...(fields.tags !== undefined ? { tags: [...fields.tags] } : {}),
+});
+
+export const applyQualityIntelligenceCandidateEdit = (
+  input: ApplyQualityIntelligenceCandidateEditInput,
+): ApplyQualityIntelligenceCandidateEditResult => {
+  if (!hasEditedField(input.editedFields)) return { ok: false, reason: "no-edited-fields" };
+  const store = storeFor(input.evidenceDir);
+  const artifact = store.load(input.runId);
+  if (artifact === undefined) return { ok: false, reason: "artifact-not-found" };
+  const existing = artifact.candidates.find((row) => row.id === input.candidateId);
+  if (existing === undefined) return { ok: false, reason: "candidate-not-found" };
+  const redactedFields = input.redact(input.editedFields) as EditableFields;
+  const updatedRow = mergeRow(existing, redactedFields);
+  const candidates = artifact.candidates.map((row) =>
+    row.id === input.candidateId ? updatedRow : row,
+  );
+  const revision: EditedRevision = {
+    candidateId: input.candidateId,
+    provenance: input.provenance,
+    editedFields: redactedFields,
+  };
+  store.record(input.runId, {
+    ...artifact,
+    candidates,
+    editedRevisions: [...(artifact.editedRevisions ?? []), revision],
+  });
+  return { ok: true, candidate: updatedRow };
+};
