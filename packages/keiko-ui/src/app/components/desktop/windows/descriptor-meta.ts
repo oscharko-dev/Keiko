@@ -139,6 +139,20 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "read-only",
     persistence: "transient",
   },
+  // Epic #270 — QI hub: launches model-routed, evidence-backed runs (user-confirmed authority).
+  quality: {
+    lifecycle: ["idle", "running", "results", "error"],
+    trustBoundary: ["ui", "model", "evidence"],
+    authority: "user-confirm",
+    persistence: "evidence-reference",
+  },
+  // Epic #270 — QI run result card: shows an evidence-backed run; review/export are user-confirmed.
+  qiRun: {
+    lifecycle: ["running", "final", "needs-review", "verified", "failed", "cancelled"],
+    trustBoundary: ["ui", "model", "evidence"],
+    authority: "user-confirm",
+    persistence: "evidence-reference",
+  },
 };
 
 // ─── Module-evaluation validation ─────────────────────────────────────────

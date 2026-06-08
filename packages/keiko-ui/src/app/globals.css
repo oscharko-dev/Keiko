@@ -7355,42 +7355,7 @@ select.dlg-input {
    ============================================================ */
 
 /* Three-column panel layout */
-.qi-layout {
-  display: grid;
-  grid-template-columns: 280px 1fr 300px;
-  gap: 0;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-}
-
-/* Shared column */
-.qi-col {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.qi-col + .qi-col {
-  border-left: 1px solid var(--line);
-}
-
-.qi-col-runs {
-  background: var(--surface);
-}
-
-.qi-col-detail {
-  background: var(--bg);
-}
-
-.qi-col-findings {
-  background: var(--surface);
-}
-
-/* Column header */
+/* Column header (shared by the QI hub run list and run-card section headers). */
 .qi-col-header {
   display: flex;
   align-items: center;
@@ -7565,54 +7530,10 @@ select.dlg-input {
   color: var(--fg-muted);
 }
 
-/* Detail definition list */
-.qi-detail-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  margin: 0;
-  padding: 8px 16px;
-}
-
-.qi-detail-row {
-  display: grid;
-  grid-template-columns: 140px 1fr;
-  gap: 8px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line-soft);
-  align-items: baseline;
-}
-
-.qi-detail-row:last-child {
-  border-bottom: none;
-}
-
-.qi-detail-label {
-  font-size: 12px;
-  color: var(--fg-muted);
-  font-weight: 500;
-}
-
-.qi-detail-value {
-  font-size: 13px;
-  color: var(--fg);
-  word-break: break-all;
-}
-
 /* Monospace strings (IDs, hashes) */
 .qi-monospace {
   font-family: var(--font-mono);
   font-size: 11px;
-}
-
-/* Reference lists (candidate IDs, evidence refs) */
-.qi-ref-list {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
 }
 
 /* Findings list */
@@ -7983,25 +7904,25 @@ select.dlg-input {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--fg-muted);
-  margin: 16px 0 8px;
-  padding: 0 16px;
-}
-.qi-detail-candidates {
-  padding-bottom: 16px;
+  margin: 0;
+  padding: 0;
 }
 .qi-cand-cards {
   list-style: none;
   margin: 0;
-  padding: 0 16px;
-  display: flex;
-  flex-direction: column;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
   gap: 10px;
+  align-items: start;
 }
 .qi-cand-card {
   background: var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm, 6px);
   padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
 }
 .qi-cand-header {
   display: flex;
@@ -8077,7 +7998,8 @@ select.dlg-input {
   flex-wrap: wrap;
 }
 .qi-cand-more {
-  margin: 12px 16px 0;
+  margin: 12px 0 0;
+  justify-self: start;
 }
 .qi-review-badge {
   font-size: 10px;
@@ -8115,9 +8037,6 @@ select.dlg-input {
   color: var(--fg);
 }
 /* Export control */
-.qi-detail-export {
-  padding: 0 16px 4px;
-}
 .qi-export {
   display: flex;
   align-items: center;
@@ -8138,4 +8057,112 @@ select.dlg-input {
   white-space: pre-wrap;
   margin: 8px 0 0;
   font-family: var(--font-mono, monospace);
+}
+
+/* ─── Epic #270 — QI Workspace windows (hub + run card) ───────────────────── */
+
+/* Hub: vertical fill — launcher on top, scrollable run list below. */
+.qi-hub {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.qi-hub .qi-launcher {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+}
+.qi-hub-runs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Run result card */
+.qi-run-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.qi-run-card-head {
+  flex-shrink: 0;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.qi-run-card-head .qi-run-id {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qi-run-card-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Run summary strip: clean horizontal wrap, no cramped vertical stack. */
+.qi-run-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+}
+.qi-run-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.qi-run-summary-item dt {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  margin: 0;
+}
+.qi-run-summary-item dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg);
+}
+.qi-run-summary-review {
+  text-transform: capitalize;
+}
+
+.qi-run-cases,
+.qi-run-findings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.qi-run-cases-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.qi-skeleton-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card);
 }

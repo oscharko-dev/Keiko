@@ -18,6 +18,8 @@ import { IntegrationsWidget } from "./cards/IntegrationsWidget";
 import { KeikoTwinPanel } from "./panels/KeikoTwinPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
+import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
+import { QiRunCard } from "./quality-intelligence/QiRunCard";
 
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const v = cfg[key];
@@ -66,6 +68,26 @@ registerWindowRender("resources", () => <ResourcesPanel />);
 registerWindowRender("activity", () => <TimelinePanel />);
 registerWindowRender("keiko", () => <KeikoTwinPanel />);
 registerWindowRender("settings", () => <SettingsPanel />);
+
+// Epic #270 — Quality Intelligence. The hub is a singleton tool window; selecting/finishing a run
+// opens a `qiRun` result card on the canvas (one per run, keyed by cfg.runId).
+registerWindowRender("quality", (_cfg, ctx) => (
+  <QiHubPanel
+    openRun={(runId) => {
+      ctx.openWindow("qiRun", { runId });
+    }}
+  />
+));
+registerWindowRender("qiRun", (cfg) => {
+  const runId = str(cfg, "runId");
+  return runId !== undefined && runId !== "" ? (
+    <QiRunCard runId={runId} />
+  ) : (
+    <div className="lk-empty">
+      <p className="lk-empty-body">Open a run from the Quality Intelligence hub.</p>
+    </div>
+  );
+});
 
 registerWindowRender("files", (cfg, ctx) => {
   const root = str(cfg, "root");
