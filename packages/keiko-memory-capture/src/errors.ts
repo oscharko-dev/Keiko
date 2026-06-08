@@ -9,6 +9,8 @@
 export type RejectionReason =
   | "credential-shape"
   | "private-credential-path"
+  | "provider-base-url"
+  | "raw-log-content"
   | "customer-identifier"
   | "empty-content"
   | "exceeds-length-limit"

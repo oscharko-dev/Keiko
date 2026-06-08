@@ -102,6 +102,17 @@ describe("extractWorkflowOutcomeCandidates", () => {
     expect(results[0]).toEqual({ kind: "rejected", reason: "credential-shape" });
   });
 
+  it("rejects raw log excerpts in structuredReport", () => {
+    const results = extractWorkflowOutcomeCandidates(
+      outcome({
+        structuredReport:
+          "ERROR 2026-06-08T06:00:00Z worker failed at module X with stack trace line 1 at foo() line 2 at bar()",
+      }),
+      ctx(),
+    );
+    expect(results[0]).toEqual({ kind: "rejected", reason: "raw-log-content" });
+  });
+
   it("rejects an empty structuredReport with empty-content", () => {
     const results = extractWorkflowOutcomeCandidates(outcome({ structuredReport: "   " }), ctx());
     expect(results[0]).toEqual({ kind: "rejected", reason: "empty-content" });

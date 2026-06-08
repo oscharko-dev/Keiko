@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
   StreamingUnavailableError,
@@ -18,7 +19,7 @@ import {
   updateChat,
 } from "@/lib/api";
 import type { SseDonePayload } from "@/lib/api";
-import { acceptMemoryProposal, rejectMemoryProposal } from "@/lib/memory-api";
+import { acceptMemoryProposal, forgetMemory, rejectMemoryProposal } from "@/lib/memory-api";
 import { findChatWorkflow } from "@/lib/chat-workflow-catalog";
 import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
 import type {
@@ -294,6 +295,7 @@ export interface UseChatSessionResult {
   readonly clearLatestMemory: () => void;
   readonly acceptMemoryCandidate: (proposalId: string) => Promise<void>;
   readonly rejectMemoryCandidate: (proposalId: string) => Promise<void>;
+  readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
   // Issue #151 / AC#4 — reset the in-memory history for the next prompt
   // WITHOUT deleting the conversation row. The chat row in `chats` is
   // preserved; only `messages` is cleared. Downstream wiring for
@@ -603,6 +605,20 @@ export function useChatSession(): UseChatSessionResult {
             ...previous,
             actions: previous.actions.filter(
               (action) => !(action.kind === "candidate" && action.proposalId === proposalId),
+            ),
+          },
+    );
+  }, []);
+
+  const forgetMemoryAction = useCallback(async (memoryId: string): Promise<void> => {
+    await forgetMemory(memoryId as MemoryId, "user-initiated forget from Conversation Center");
+    setLatestMemory((previous) =>
+      previous === undefined
+        ? previous
+        : {
+            ...previous,
+            actions: previous.actions.filter(
+              (action) => !(action.kind === "forget" && action.memoryId === memoryId),
             ),
           },
     );
@@ -1514,6 +1530,7 @@ export function useChatSession(): UseChatSessionResult {
     clearLatestMemory,
     acceptMemoryCandidate,
     rejectMemoryCandidate,
+    forgetMemoryAction,
     clearHistory,
     launchWorkflowFromConversation,
     launchGroundedWorkflowHandoff,

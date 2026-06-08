@@ -207,6 +207,7 @@ function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
     clearLatestMemory: vi.fn(),
     acceptMemoryCandidate: vi.fn(),
     rejectMemoryCandidate: vi.fn(),
+    forgetMemoryAction: vi.fn(),
     clearHistory: vi.fn(),
     launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "run-42" }),
     launchGroundedWorkflowHandoff: vi.fn().mockResolvedValue({ ok: true, runId: "run-42" }),

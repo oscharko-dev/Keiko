@@ -81,6 +81,14 @@ describe("extractCandidatesFromUserText", () => {
     expect(result[0]).toEqual({ kind: "rejected", reason: "credential-shape" });
   });
 
+  it("rejects provider base URLs before creating a candidate", () => {
+    const result = extractCandidatesFromUserText(
+      "remember that our provider base URL is https://llm.internal.example.com/v1",
+      ctx(),
+    );
+    expect(result[0]).toEqual({ kind: "rejected", reason: "provider-base-url" });
+  });
+
   it("priority: forget wins over remember when both could match", () => {
     // Construct a string that would match both — 'remember about forget' vs 'forget about remember'.
     // The grammar is constructed so the forget regex fires first per the EXTRACTORS order.
@@ -125,6 +133,19 @@ describe("extractCandidatesFromWorkflowOutcome", () => {
     };
     expect(extractCandidatesFromWorkflowOutcome(outcome, ctx())).toEqual([
       { kind: "rejected", reason: "exceeds-length-limit" },
+    ]);
+  });
+
+  it("rejects raw log workflow reports before they become candidates", () => {
+    const outcome: WorkflowOutcomeInput = {
+      runId: "wr-1" as WorkflowRunId,
+      outcomeKind: "success",
+      structuredReport:
+        "ERROR 2026-06-08T06:00:00Z worker failed at module X with stack trace line 1 at foo() line 2 at bar()",
+      capturedAt: 0,
+    };
+    expect(extractCandidatesFromWorkflowOutcome(outcome, ctx())).toEqual([
+      { kind: "rejected", reason: "raw-log-content" },
     ]);
   });
 });

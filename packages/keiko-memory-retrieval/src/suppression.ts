@@ -28,6 +28,7 @@ export type SuppressionReason =
   | "forgotten"
   | "conflicted"
   | "expired"
+  | "proposed"
   | "rejected"
   | "stale-low-confidence";
 
@@ -66,6 +67,7 @@ function statusSuppression(status: MemoryStatus): SuppressionResult | null {
       // or derived it from the validity window.
       return { suppressed: true, reason: "expired" };
     case "proposed":
+      return { suppressed: true, reason: "proposed" };
     case "accepted":
     case "superseded":
       return null;
