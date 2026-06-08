@@ -25,10 +25,11 @@ import {
   effectiveScopes,
   removeConnectorScope,
   removeScope,
-  MAX_SCOPES,
 } from "./hooks/workspaceActions";
-import { updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
-import type { ChatLocalKnowledgeScope } from "@/lib/types";
+import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
+import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
+import type { ChatLocalKnowledgeScope, GroundingLimits } from "@/lib/types";
+import { recordReadsContextRelationship } from "../../relationships/connector-relationship";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
@@ -199,6 +200,14 @@ function AppShellInner(): ReactNode {
   const twin = useTwin();
   const session = useChatSession();
   const wsRef = useRef<HTMLDivElement>(null);
+  // Operator-configurable grounding caps — fetched once on mount, fall back to compile-time
+  // defaults until /api/config resolves (or if an older server omits effectiveGroundingLimits).
+  const [groundingLimits, setGroundingLimits] = useState<GroundingLimits>(DEFAULT_GROUNDING_LIMITS);
+  useEffect(() => {
+    fetchConfig()
+      .then((res) => setGroundingLimits(res.effectiveGroundingLimits))
+      .catch(() => undefined);
+  }, []);
   // Epic #532 — a Files↔Chat relationship edge binds/unbinds the folder on the active chat's
   // connectedScopes (1+N), so the gesture actually grounds the chat against the connected folder(s).
   const handleScopeBind = useCallback(
@@ -206,15 +215,19 @@ function AppShellInner(): ReactNode {
       const chat = session.activeChat;
       if (chat === undefined) return;
       const current = effectiveScopes(chat);
-      const next = appendScope(current, filesRoot, Date.now());
+      const next = appendScope(current, filesRoot, Date.now(), groundingLimits.maxConnectedSources);
       if (next === null || next === current) return;
       void updateChatConnectedScopes(chat.id, next)
         .then((res) => {
           session.replaceChat(res.chat);
+          // Epic #532 unification — also record the green edge as a governed reads-context
+          // relationship so the connection is validated, audited, and visible in the relationship
+          // graph. Best-effort: never blocks or breaks the grounding scope bind above.
+          recordReadsContextRelationship(chat.id, filesRoot);
         })
         .catch(() => undefined);
     },
-    [session],
+    [session, groundingLimits.maxConnectedSources],
   );
   const handleScopeUnbind = useCallback(
     (filesRoot: string): void => {
@@ -236,7 +249,7 @@ function AppShellInner(): ReactNode {
       const chat = session.activeChat;
       if (chat === undefined) return;
       const current = effectiveLocalKnowledgeScopes(chat);
-      const next = appendConnectorScope(current, scope, MAX_SCOPES);
+      const next = appendConnectorScope(current, scope, groundingLimits.maxLocalKnowledgeSources);
       if (next === current) return;
       void updateChatLocalKnowledgeScopes(chat.id, next)
         .then((res) => {
@@ -244,7 +257,7 @@ function AppShellInner(): ReactNode {
         })
         .catch(() => undefined);
     },
-    [session],
+    [session, groundingLimits.maxLocalKnowledgeSources],
   );
   const handleConnectorUnbind = useCallback(
     (scope: ChatLocalKnowledgeScope): void => {

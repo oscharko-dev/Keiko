@@ -18,6 +18,7 @@ import {
   type RetrievalResult,
 } from "@oscharko-dev/keiko-local-knowledge";
 import type { RetrievalReference } from "@oscharko-dev/keiko-contracts";
+import { rerankAndSelect, type RerankInput, type SelectedCandidate } from "./grounded-rerank.js";
 
 import {
   CANDIDATE_OMISSION_REASONS,
@@ -45,7 +46,7 @@ import { redact } from "@oscharko-dev/keiko-security";
 import type { RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { Redactor, UiHandlerDeps } from "./deps.js";
-import { currentRedactionSecrets } from "./deps.js";
+import { currentGroundingLimits, currentRedactionSecrets } from "./deps.js";
 import type { Chat } from "./store/index.js";
 import { type RetrievalOnlyOutput } from "./grounded-orchestrator.js";
 import {
@@ -57,13 +58,10 @@ import {
   type GroundedRetriever,
 } from "./grounded-qa-multi-source.js";
 import {
-  DEFAULT_REFERENCE_BUDGET,
-  MAX_EXCERPT_CHARS,
   MAX_PROMPT_REFERENCES,
   buildSelectedScopeSourceLookup,
   createEmbeddingAdapter,
   openStoreForDeps,
-  renderCitationLabel,
   projectLocalKnowledgeCitation,
   scopeStateFailure,
   selectedCapsulesForScope,
@@ -81,7 +79,6 @@ import {
   buildSelectedScopeFrom,
   deriveScopeIdFrom,
   ensureNotCancelled,
-  evidenceLines,
   internalError,
   isValidGroundedPack,
   mappedGatewayError,
@@ -156,6 +153,98 @@ interface SkippedConnector {
 interface ConnectorRetrieval {
   readonly retrieved: readonly RetrievedConnector[];
   readonly skipped: readonly SkippedConnector[];
+}
+
+// ─── Unified RRF payload types ────────────────────────────────────────────────
+
+interface FolderPayload {
+  readonly kind: "folder";
+  readonly scopePath: string;
+  readonly lineRange: { readonly startLine: number; readonly endLine: number } | undefined;
+  readonly score: number;
+  readonly stableId: string;
+}
+
+interface ConnectorPayload {
+  readonly kind: "connector";
+  readonly reference: RetrievalReference;
+  readonly lookup: ReturnType<typeof buildSelectedScopeSourceLookup>;
+}
+
+type HybridPayload = FolderPayload | ConnectorPayload;
+
+// Builds a single RRF-selected set that covers both folder and connector candidates. The selected
+// set is the SOLE source of truth for both the prompt and the citations; the two paths must not
+// diverge from this point forward.
+function folderRerankInputs(
+  folders: readonly RetrievedFolder[],
+  redactor: Redactor,
+): RerankInput<HybridPayload>[] {
+  return folders.flatMap((src) =>
+    src.pack.files.flatMap((file) =>
+      file.excerpts.map((excerpt) => ({
+        kind: "folder" as const,
+        redactedText: redactString(redactor, excerpt.content),
+        engineScore: excerpt.atom.score,
+        sourceLabel: src.label,
+        tieKey: excerpt.atom.stableId,
+        payload: {
+          kind: "folder" as const,
+          scopePath: excerpt.atom.scopePath,
+          lineRange: excerpt.atom.lineRange,
+          score: excerpt.atom.score,
+          stableId: excerpt.atom.stableId,
+        },
+      })),
+    ),
+  );
+}
+
+function connectorRerankInputs(
+  connectors: readonly RetrievedConnector[],
+  store: KnowledgeStore,
+  redactor: Redactor,
+  maxPromptReferences: number,
+  maxExcerptChars: number,
+): RerankInput<HybridPayload>[] {
+  return connectors.flatMap((src) => {
+    const lookup = buildSelectedScopeSourceLookup(store, src.selected);
+    return src.references.slice(0, maxPromptReferences).map((reference) => ({
+      kind: "connector" as const,
+      redactedText: redactString(
+        redactor,
+        readCitationExcerpt(store, reference.capsuleId, reference.citation, maxExcerptChars),
+      ),
+      engineScore: reference.score,
+      sourceLabel: src.label,
+      tieKey: String(reference.chunkId),
+      payload: { kind: "connector" as const, reference, lookup },
+    }));
+  });
+}
+
+function buildUnifiedSelection(
+  ctx: HybridGroundedAskCtx,
+  folders: readonly RetrievedFolder[],
+  connectors: readonly RetrievedConnector[],
+  store: KnowledgeStore,
+): readonly SelectedCandidate<HybridPayload>[] {
+  const limits = currentGroundingLimits(ctx.deps);
+  const { redactor } = ctx.deps;
+  const inputs: RerankInput<HybridPayload>[] = [
+    ...folderRerankInputs(folders, redactor),
+    ...connectorRerankInputs(
+      connectors,
+      store,
+      redactor,
+      limits.maxPromptReferences,
+      limits.maxExcerptChars,
+    ),
+  ];
+  return rerankAndSelect(inputs, {
+    maxCandidates: limits.hybridMaxCandidates,
+    maxExcerptBytes: limits.hybridMaxExcerptBytes,
+  });
 }
 
 // ─── Folder retrieval (mirrors runMultiSourceAsk's loop) ──────────────────────
@@ -289,67 +378,35 @@ const HYBRID_SYSTEM_PROMPT =
   `${GROUNDED_SYSTEM_PROMPT} Connector excerpts are indexed-document citations: attribute every ` +
   "connector claim to its source label and the matching [n] marker in addition to any file reference.";
 
-function folderSections(
-  folders: readonly RetrievedFolder[],
-  redactor: Redactor,
-): readonly string[] {
-  return folders.flatMap((src, index) => [
-    `### Folder source ${String(index + 1)}: ${src.label}`,
-    "Repository evidence excerpts:",
-    ...evidenceLines(src.pack, redactor),
-    "",
-  ]);
-}
-
-function connectorSections(
-  connectors: readonly RetrievedConnector[],
-  store: KnowledgeStore,
-): readonly string[] {
-  return connectors.flatMap((src, index) => [
-    `### Connector source ${String(index + 1)}: ${src.label}`,
-    ...connectorReferenceLines(src.references, store),
-    "",
-  ]);
-}
-
-function connectorReferenceLines(
-  references: readonly RetrievalReference[],
-  store: KnowledgeStore,
-): readonly string[] {
-  const lines: string[] = [];
-  const used = references.slice(0, MAX_PROMPT_REFERENCES);
-  for (let i = 0; i < used.length; i += 1) {
-    const reference = used[i];
-    if (reference === undefined) continue;
-    lines.push(`[${String(i + 1)}] ${renderCitationLabel(reference.citation)}`);
-    const excerpt = readCitationExcerpt(
-      store,
-      reference.capsuleId,
-      reference.citation,
-      MAX_EXCERPT_CHARS,
-    );
-    lines.push("```text", excerpt.length > 0 ? excerpt : "(No excerpt text available.)", "```");
-  }
-  return lines;
-}
-
-function buildHybridUserMessage(
+// Builds the user message from the SAME selected set used for citations. Each candidate gets a
+// single global [n] marker that is consistent with the citation arrays. redactedText is
+// already redacted — do NOT pass it through redactString again.
+function buildRerankedHybridUserMessage(
   question: string,
-  folders: readonly RetrievedFolder[],
-  connectors: readonly RetrievedConnector[],
-  store: KnowledgeStore,
+  selected: readonly SelectedCandidate<HybridPayload>[],
   redactor: Redactor,
 ): string {
-  return [
+  const folderCount = selected.filter((s) => s.kind === "folder").length;
+  const connectorCount = selected.filter((s) => s.kind === "connector").length;
+  const lines: string[] = [
     "User question:",
     redactString(redactor, question),
     "",
-    `Connected sources: ${String(folders.length)} folder(s), ${String(connectors.length)} connector(s).`,
-    "Attribute every claim to its source label and evidence/citation marker.",
+    `Connected sources: ${String(folderCount)} folder(s), ${String(connectorCount)} connector(s).`,
+    "Cite every claim by its [n] marker and source label.",
     "",
-    ...folderSections(folders, redactor),
-    ...connectorSections(connectors, store),
-  ].join("\n");
+  ];
+  for (const candidate of selected) {
+    const kindLabel = candidate.kind === "folder" ? "Folder" : "Connector";
+    lines.push(`[${String(candidate.marker)}] ### ${kindLabel} source: ${candidate.sourceLabel}`);
+    lines.push("```text");
+    lines.push(
+      candidate.redactedText.length > 0 ? candidate.redactedText : "(No excerpt text available.)",
+    );
+    lines.push("```");
+    lines.push("");
+  }
+  return lines.join("\n");
 }
 
 export function createHybridAnswerer(
@@ -383,29 +440,32 @@ export function createHybridAnswerer(
 
 // ─── Citations + summaries ────────────────────────────────────────────────────
 
-function mergedFolderCitations(
-  folders: readonly RetrievedFolder[],
+// Both citation arrays are derived from the SAME selected set so that the [n] markers in the
+// prompt are always consistent with the citation arrays surfaced to the client.
+function selectedFolderCitations(
+  selected: readonly SelectedCandidate<HybridPayload>[],
   redactor: Redactor,
 ): readonly GroundedEvidenceCitation[] {
-  const citations = folders.flatMap((src) =>
-    buildCitations(src.pack, redactor).map((c) => ({ ...c, source: src.label })),
-  );
-  return [...citations].sort((a, b) => b.score - a.score);
+  return selected
+    .filter((s): s is SelectedCandidate<FolderPayload> => s.kind === "folder")
+    .map((s) => ({
+      scopePath: redactString(redactor, s.payload.scopePath),
+      lineRange: s.payload.lineRange,
+      score: s.payload.score,
+      stableId: redactString(redactor, s.payload.stableId),
+      source: s.sourceLabel,
+      marker: s.marker,
+    }));
 }
 
-function mergedConnectorCitations(
-  connectors: readonly RetrievedConnector[],
-  store: KnowledgeStore,
+function selectedConnectorCitations(
+  selected: readonly SelectedCandidate<HybridPayload>[],
 ): readonly LocalKnowledgeEvidenceCitation[] {
-  return connectors.flatMap((src) =>
-    src.references.slice(0, MAX_PROMPT_REFERENCES).map((reference, i) =>
-      projectLocalKnowledgeCitation(
-        reference,
-        `[${String(i + 1)}]`,
-        buildSelectedScopeSourceLookup(store, src.selected),
-      ),
-    ),
-  );
+  return selected
+    .filter((s): s is SelectedCandidate<ConnectorPayload> => s.kind === "connector")
+    .map((s) =>
+      projectLocalKnowledgeCitation(s.payload.reference, `[${String(s.marker)}]`, s.payload.lookup),
+    );
 }
 
 function zeroExploration(): GroundedAnswerContextPackSummary["usage"] {
@@ -494,16 +554,16 @@ function connectorSourceCount(connectors: readonly RetrievedConnector[]): number
 
 // One merged knowledge summary across every connector. Counts are aggregated so the wire shape
 // stays a single LocalKnowledgeGroundedAnswerContextSummary even when N connectors contributed.
+// referencesUsed = connector candidates in the SHARED selected set; referenceBudget = the shared
+// hybridMaxCandidates cap so the invariant referencesUsed <= referenceBudget always holds.
 function knowledgeSummary(
   chat: Chat,
   connectors: readonly RetrievedConnector[],
   citationCount: number,
+  referencesUsed: number,
+  referenceBudget: number,
 ): LocalKnowledgeGroundedAnswerContextSummary {
   const capsuleCount = connectors.reduce((acc, src) => acc + src.selected.capsules.length, 0);
-  const referencesUsed = connectors.reduce(
-    (acc, src) => acc + Math.min(src.references.length, MAX_PROMPT_REFERENCES),
-    0,
-  );
   const label = connectors.map((src) => src.label).join("+");
   const scopeKind = connectors.length === 1 ? connectors[0]?.selected.scopeKind : "capsule-set";
   return {
@@ -514,7 +574,7 @@ function knowledgeSummary(
     capsuleCount,
     sourceCount: connectorSourceCount(connectors),
     citationCount,
-    referenceBudget: DEFAULT_REFERENCE_BUDGET,
+    referenceBudget,
     referencesUsed,
   };
 }
@@ -610,16 +670,50 @@ interface RetrievedSources {
   readonly connectorSourceCount: number;
 }
 
+function buildHybridContextPack(
+  ctx: HybridGroundedAskCtx,
+  sources: RetrievedSources,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  limits: ReturnType<typeof currentGroundingLimits>,
+  summary: GroundedAnswerContextPackSummary,
+  assistant: GroundedAnswerResult,
+  knowledgeCitationCount: number,
+): HybridGroundedAnswer["contextPack"] {
+  const selectedConnectorCount = selected.filter((s) => s.kind === "connector").length;
+  return {
+    kind: "hybrid",
+    folderSourceCount: sources.folderSourceCount,
+    connectorSourceCount: sources.connectorSourceCount,
+    folder: {
+      ...summary,
+      usage: {
+        ...summary.usage,
+        modelInputTokens: summary.usage.modelInputTokens + assistant.usage.promptTokens,
+        modelOutputTokens: summary.usage.modelOutputTokens + assistant.usage.completionTokens,
+      },
+    },
+    knowledge: knowledgeSummary(
+      ctx.chat,
+      sources.connectors,
+      knowledgeCitationCount,
+      selectedConnectorCount,
+      limits.hybridMaxCandidates,
+    ),
+  };
+}
+
 function assembleHybridAnswer(
   ctx: HybridGroundedAskCtx,
   sources: RetrievedSources,
   store: KnowledgeStore,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  limits: ReturnType<typeof currentGroundingLimits>,
   assistant: GroundedAnswerResult,
   ids: { readonly userMessageId: string; readonly assistantMessageId: string },
 ): HybridGroundedAnswer {
   const { redactor } = ctx.deps;
-  const citations = mergedFolderCitations(sources.folders, redactor);
-  const knowledgeCitations = mergedConnectorCitations(sources.connectors, store);
+  const citations = selectedFolderCitations(selected, redactor);
+  const knowledgeCitations = selectedConnectorCitations(selected);
   const evidenceRunId = persistFolderEvidence(ctx, sources.folders);
   persistConnectorAudit(store, sources.connectors);
   const elapsedMs = sources.folders.reduce((acc, src) => acc + src.elapsedMs, 0);
@@ -637,20 +731,15 @@ function assembleHybridAnswer(
     ],
     omittedCount: sources.folders.reduce((acc, src) => acc + src.pack.omitted.length, 0),
     elapsedMs,
-    contextPack: {
-      kind: "hybrid",
-      folderSourceCount: sources.folderSourceCount,
-      connectorSourceCount: sources.connectorSourceCount,
-      folder: {
-        ...summary,
-        usage: {
-          ...summary.usage,
-          modelInputTokens: summary.usage.modelInputTokens + assistant.usage.promptTokens,
-          modelOutputTokens: summary.usage.modelOutputTokens + assistant.usage.completionTokens,
-        },
-      },
-      knowledge: knowledgeSummary(ctx.chat, sources.connectors, knowledgeCitations.length),
-    },
+    contextPack: buildHybridContextPack(
+      ctx,
+      sources,
+      selected,
+      limits,
+      summary,
+      assistant,
+      knowledgeCitations.length,
+    ),
   };
 }
 
@@ -719,13 +808,9 @@ async function answerAndAssemble(
 ): Promise<RouteResult> {
   const answerer = resolveHybridAnswerer(ctx);
   if ("status" in answerer) return answerer;
-  const user = buildHybridUserMessage(
-    ctx.content,
-    folders,
-    meta.connectorResult.retrieved,
-    store,
-    ctx.deps.redactor,
-  );
+  const limits = currentGroundingLimits(ctx.deps);
+  const selected = buildUnifiedSelection(ctx, folders, meta.connectorResult.retrieved, store);
+  const user = buildRerankedHybridUserMessage(ctx.content, selected, ctx.deps.redactor);
   const assistant = normalizeGroundedAnswerPayload(
     await answerer.answer(HYBRID_SYSTEM_PROMPT, user),
   );
@@ -745,6 +830,8 @@ async function answerAndAssemble(
       connectorSourceCount: meta.connectorScopeCount,
     },
     store,
+    selected,
+    limits,
     assistant,
     { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
   );

@@ -9,6 +9,7 @@ import type {
   NormalizedResponse,
   GatewayRequest,
 } from "@oscharko-dev/keiko-contracts";
+import type { GroundingLimits } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 export type {
   ModelKind,
@@ -50,6 +51,7 @@ export interface GatewayConfig {
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[] | undefined;
+  readonly grounding?: Partial<GroundingLimits> | undefined;
 }
 
 // ─── Provider adapter interface (runtime port — STAYS local) ──────────────────

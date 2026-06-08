@@ -26,6 +26,7 @@ import type {
   FilesDirectoryListing,
   FilesPreviewResponse,
   FilesTreeResponse,
+  GroundingLimits,
   MessageResponse,
   MessagesResponse,
   ModelCapability,
@@ -38,6 +39,7 @@ import type {
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
+import { DEFAULT_GROUNDING_LIMITS } from "./types";
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -105,8 +107,18 @@ export async function fetchHealth(): Promise<{ status: "ok"; version: string }> 
 export async function fetchConfig(): Promise<{
   config: SafeGatewayConfig | null;
   configPresent: boolean;
+  effectiveGroundingLimits: GroundingLimits;
 }> {
-  return fetchJson("/api/config");
+  const raw = await fetchJson<{
+    config: SafeGatewayConfig | null;
+    configPresent: boolean;
+    effectiveGroundingLimits?: GroundingLimits;
+  }>("/api/config");
+  return {
+    config: raw.config,
+    configPresent: raw.configPresent,
+    effectiveGroundingLimits: raw.effectiveGroundingLimits ?? DEFAULT_GROUNDING_LIMITS,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -382,22 +394,6 @@ export async function updateChat(id: string, patch: UpdateChatInput): Promise<Ch
   return fetchJson(`/api/chats?id=${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
-  });
-}
-
-// Issue #184 — binds a Files-window scope to a chat. `null` clears the binding; a
-// ChatConnectedScope object sets/replaces it. All path validation runs at the BFF boundary;
-// invalid input surfaces as ApiError with HTTP 400 invalid_request.
-export async function updateChatConnectedScope(
-  chatId: string,
-  scope: ChatConnectedScope | null,
-): Promise<ChatResponse> {
-  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      connectedScope: scope,
-      ...(scope !== null ? { localKnowledgeScope: null } : {}),
-    }),
   });
 }
 

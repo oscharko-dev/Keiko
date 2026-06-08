@@ -27,6 +27,12 @@ export interface SelectedScope {
   readonly relativePaths: readonly string[];
   readonly conversationId: string | undefined;
   readonly connectedAtMs: number;
+  // True when the user EXPLICITLY connected this folder/files to the chat (a Files↔Chat edge or a
+  // scope pill), as opposed to an implicit whole-workspace default. The planner relaxes its
+  // "too-generic" / "scope-empty" clarification gate for explicit connections: the user has already
+  // narrowed the search to a folder they chose, so a plain natural-language question ("explain the
+  // architecture") should search that folder rather than be refused for lacking a file/symbol anchor.
+  readonly explicitConnection?: boolean;
 }
 
 // ─── Evidence ledger reference ────────────────────────────────────────────────

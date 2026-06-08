@@ -26,7 +26,10 @@ export type WindowType =
   // Epic #270 — Quality Intelligence: a singleton hub (start runs + run list) plus per-run result
   // cards. QI lives inside the Workspace like every other window, not as a full-page route.
   | "quality"
-  | "qiRun";
+  | "qiRun"
+  // Epic #532 — Relationship engine: a singleton tool window (graph list + inspector + impact +
+  // health). Like QI, it lives inside the Workspace, not as a full-page route.
+  | "relationships";
 
 export interface WindowSize {
   readonly w: number;
@@ -352,6 +355,21 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tiny: { w: 280, h: 200 },
     config: [{ key: "runId", label: "Run ID", type: "text", def: "" }],
   },
+  // Epic #532 — Relationship engine hub. Singleton tool window: browse the governed relationship
+  // graph (list + filters), inspect a relationship (type/lifecycle/activity/audit/evidence/impact),
+  // and review bounded impact, dependency, and health surfaces. Opens once from the LeftRail.
+  relationships: {
+    title: "Relationships",
+    icon: "branch",
+    accent: true,
+    desc: "Inspect the relationship graph",
+    w: 760,
+    h: 600,
+    min: { w: 360, h: 320 },
+    tiny: { w: 300, h: 220 },
+    tool: true,
+    singleton: true,
+  },
 };
 
 const RENDER_REGISTRY = new Map<
@@ -419,6 +437,7 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "agents",
   "integ",
   "quality",
+  "relationships",
   "keiko",
   "project",
   "search",

@@ -6,6 +6,11 @@
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
+import {
+  DEFAULT_GROUNDING_LIMITS,
+  resolveGroundingLimits,
+  type GroundingLimits,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   CircuitBreakerConfig,
   CostClass,
@@ -51,6 +56,7 @@ export interface SafeGatewayConfig {
   readonly providers: readonly SafeProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[] | undefined;
+  readonly grounding?: Partial<GroundingLimits> | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -500,6 +506,32 @@ function requireNonNegativeInt(value: unknown, path: string): number {
   return value;
 }
 
+function parseGroundingLimits(raw: unknown): GroundingLimits | undefined {
+  if (!isRecord(raw) || raw.grounding === undefined) {
+    return undefined;
+  }
+  const block = raw.grounding;
+  if (!isRecord(block)) {
+    throw new ConfigInvalidError("grounding must be an object");
+  }
+  const partial: { -readonly [K in keyof GroundingLimits]?: number } = {};
+  for (const key of Object.keys(DEFAULT_GROUNDING_LIMITS) as (keyof GroundingLimits)[]) {
+    const value = block[key];
+    if (value !== undefined) {
+      // Reject non-integer / non-positive — resolveGroundingLimits silently coerces,
+      // but the config layer must fail loudly on a malformed explicit value.
+      if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+        throw new ConfigInvalidError(`grounding.${key} must be a positive integer`);
+      }
+      // Over-ceiling values are clamped (not rejected) by resolveGroundingLimits.
+      // Record the validated value; the resolver applies the ceiling.
+      partial[key] = value;
+    }
+    // Unknown keys in the grounding block are ignored (forward-compat).
+  }
+  return resolveGroundingLimits(partial);
+}
+
 function parseCircuitBreaker(raw: unknown): CircuitBreakerConfig {
   const source = isRecord(raw) ? raw : {};
   return {
@@ -546,10 +578,12 @@ export function parseGatewayConfig(raw: unknown, env: EnvSource = {}): GatewayCo
     mergedCapabilities.set(capability.id, capability);
   }
   const capabilities: readonly ModelCapability[] = [...mergedCapabilities.values()];
+  const grounding = parseGroundingLimits(raw);
   return {
     providers,
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),
     ...(capabilities.length === 0 ? {} : { capabilities }),
+    ...(grounding !== undefined ? { grounding } : {}),
   };
 }
 
@@ -581,5 +615,6 @@ export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
     })),
     circuitBreaker: config.circuitBreaker,
     ...(config.capabilities === undefined ? {} : { capabilities: config.capabilities }),
+    ...(config.grounding !== undefined ? { grounding: config.grounding } : {}),
   };
 }

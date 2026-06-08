@@ -41,8 +41,13 @@ import {
   deleteRelationship,
   RelationshipApiError,
 } from "../../../../relationships/api";
-import type { ApiRelationship, ExplainResult } from "../../../../relationships/api";
+import type {
+  ApiRelationship,
+  ExplainResult,
+  DependencyReport,
+} from "../../../../relationships/api";
 import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge";
+import { RelationshipImpactCard } from "./RelationshipImpactCard";
 
 // ─── Authority disclaimer constant (inspector-spec.md §6) ─────────────────────
 // Verbatim string — never interpolated, never translated (Wave 3 non-goal).
@@ -408,26 +413,48 @@ function AuditSection({
   );
 }
 
-// ─── Section 8: Evidence references (stub — #542 wires live data) ─────────────
+// ─── Section 8: Evidence references (#542) ────────────────────────────────────
 
-function EvidenceSection({ relationshipId }: { relationshipId: string }): ReactNode {
-  // Inline: at most 5 references; "View all N" link for more (inspector-spec.md §8).
-  // Stub: #541/#542 wire the actual evidence reference list via the evidence viewer.
+// Evidence relevance is structural (taxonomy.md): a relationship references evidence when one of
+// its endpoints is an evidence-run (e.g. `produces-evidence` targets one). We surface those run ids
+// as references. We intentionally do NOT render a navigation link to an evidence page — there is no
+// in-workspace evidence viewer route, and navigating away would break the Workspace window model;
+// the run id is the durable reference an operator carries into `keiko evidence show <runId>`.
+function evidenceReferenceIds(rel: ApiRelationship): readonly string[] {
+  const ids: string[] = [];
+  if (rel.source.kind === "evidence-run") ids.push(rel.source.id);
+  if (rel.target.kind === "evidence-run") ids.push(rel.target.id);
+  return ids;
+}
+
+function EvidenceSection({ rel }: { rel: ApiRelationship }): ReactNode {
+  const refs = evidenceReferenceIds(rel);
   return (
     <>
       <SectionLabel>Evidence references</SectionLabel>
-      <div className="rb-rows">
-        <div className="rb-row">
-          <a
-            href={`/evidence?relId=${encodeURIComponent(relationshipId)}`}
-            className="rb-row-v"
-            style={{ color: "var(--accent)", fontSize: 12 }}
-            aria-label={`View evidence references for relationship ${relationshipId}`}
-          >
-            View evidence references
-          </a>
+      {refs.length === 0 ? (
+        <p
+          style={{ fontSize: 12, color: "var(--fg-muted)", margin: "0 0 4px" }}
+          data-testid="evidence-empty"
+        >
+          No evidence references for this relationship.
+        </p>
+      ) : (
+        <div className="rb-rows">
+          {refs.map((runId) => (
+            <div className="rb-row" key={runId}>
+              <span className="rb-row-k">Evidence run</span>
+              <span
+                className="rb-row-v mono"
+                aria-label={`Evidence run reference ${runId}`}
+                title={runId}
+              >
+                {runId}
+              </span>
+            </div>
+          ))}
         </div>
-      </div>
+      )}
     </>
   );
 }
@@ -438,12 +465,20 @@ function ImpactSection({
   relationshipId,
   forwardCount,
   reverseCount,
-  onViewImpact,
+  outgoing,
+  incoming,
+  expanded,
+  onToggle,
+  onSelectRelationship,
 }: {
   relationshipId: string;
   forwardCount: number | null;
   reverseCount: number | null;
-  onViewImpact: () => void;
+  outgoing: DependencyReport | null;
+  incoming: DependencyReport | null;
+  expanded: boolean;
+  onToggle: () => void;
+  onSelectRelationship: (id: string) => void;
 }): ReactNode {
   return (
     <>
@@ -466,14 +501,29 @@ function ImpactSection({
           <button
             type="button"
             className="arun-btn"
-            onClick={onViewImpact}
-            aria-label={`View impact for relationship ${relationshipId}`}
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-controls="rb-impact-detail"
+            aria-label={
+              expanded
+                ? `Hide impact for relationship ${relationshipId}`
+                : `View impact for relationship ${relationshipId}`
+            }
             data-testid="view-impact-btn"
           >
-            View Impact
+            {expanded ? "Hide impact" : "View impact"}
           </button>
         </div>
       </div>
+      {expanded && (
+        <div id="rb-impact-detail">
+          <RelationshipImpactCard
+            outgoing={outgoing}
+            incoming={incoming}
+            onSelectRelationship={onSelectRelationship}
+          />
+        </div>
+      )}
     </>
   );
 }
@@ -526,16 +576,16 @@ interface DenialDetails {
   readonly messages: readonly string[];
 }
 
+// Fallback activity when the live SSE stream has no entry for this relationship. Mirrors the
+// server's activityStateFromLifecycle: a durable lifecycle is not a transient activity. Only
+// blocked/stale imply a derived activity; everything else (incl. active) is "inactive" until a
+// live event arrives. Previously active→active made every committed relationship read as busy.
 function lifecycleToActivity(lifecycle: RelationshipLifecycleState): RelationshipActivityState {
   switch (lifecycle) {
-    case "active":
-      return "active";
     case "blocked":
       return "blocked";
     case "stale":
       return "degraded";
-    case "revoked":
-      return "failed";
     default:
       return "inactive";
   }
@@ -686,9 +736,13 @@ export function RelationshipInspectorPanel({
   const [mutationError, setMutationError] = useState<string | null>(null);
   const [mutationDenial, setMutationDenial] = useState<DenialDetails | null>(null);
 
-  // Impact counts (forward = outgoing dependencies, reverse = incoming)
-  const [forwardCount, setForwardCount] = useState<number | null>(null);
-  const [reverseCount, setReverseCount] = useState<number | null>(null);
+  // Impact: the full bounded dependency walk in both directions (#542). The forward/reverse counts
+  // are the summary; the reports back the expandable RelationshipImpactCard.
+  const [outgoingReport, setOutgoingReport] = useState<DependencyReport | null>(null);
+  const [incomingReport, setIncomingReport] = useState<DependencyReport | null>(null);
+  const [impactExpanded, setImpactExpanded] = useState(false);
+  const forwardCount = outgoingReport === null ? null : outgoingReport.relationships.length;
+  const reverseCount = incomingReport === null ? null : incomingReport.relationships.length;
 
   // Skeleton debounce: only show skeleton after 500 ms (inspector-spec.md §"Loading state")
   const [showSkeleton, setShowSkeleton] = useState(false);
@@ -700,6 +754,10 @@ export function RelationshipInspectorPanel({
     setError(null);
     setLoading(true);
     setMutationDenial(null);
+    // Reset the per-relationship impact walk so a new selection never shows the previous one's graph.
+    setOutgoingReport(null);
+    setIncomingReport(null);
+    setImpactExpanded(false);
     // 500 ms skeleton threshold
     const timer = setTimeout(() => {
       if (fetchGeneration.current === generation) {
@@ -715,19 +773,23 @@ export function RelationshipInspectorPanel({
       setRel(fetchedRel);
       setExplain(fetchedExplain);
 
-      // Fetch impact counts (bounded; errors are non-fatal here)
+      // Fetch the bounded dependency walk in both directions (#542). maxDepth is the server cap
+      // (MAX_IMPACT_DEPTH=3) rather than the depth-1 default, so the impact card shows the full
+      // transitive reachable set an operator needs before a delete/revoke — still bounded, with the
+      // truncation note covering anything beyond the cap. Errors are non-fatal: the impact surface
+      // degrades to "unavailable" without breaking the rest of the inspector.
       try {
         const [fwd, rev] = await Promise.all([
-          getDependencies(id, { direction: "outgoing", maxRelationships: 512 }),
-          getDependencies(id, { direction: "incoming", maxRelationships: 512 }),
+          getDependencies(id, { direction: "outgoing", maxDepth: 3, maxRelationships: 512 }),
+          getDependencies(id, { direction: "incoming", maxDepth: 3, maxRelationships: 512 }),
         ]);
         if (fetchGeneration.current !== generation) {
           return;
         }
-        setForwardCount(fwd.relationships.length);
-        setReverseCount(rev.relationships.length);
+        setOutgoingReport(fwd);
+        setIncomingReport(rev);
       } catch {
-        // Impact counts are advisory; do not fail the inspector
+        // Impact is advisory; do not fail the inspector.
       }
     } catch (err) {
       if (fetchGeneration.current !== generation) {
@@ -799,7 +861,9 @@ export function RelationshipInspectorPanel({
         const msg =
           err instanceof RelationshipApiError ? err.message : "Mutation failed. Please retry.";
         setMutationError(msg);
-        setMutationDenial(err instanceof RelationshipApiError ? toDenialDetails(err.reasons) : null);
+        setMutationDenial(
+          err instanceof RelationshipApiError ? toDenialDetails(err.reasons) : null,
+        );
       } finally {
         setMutating(false);
       }
@@ -831,9 +895,19 @@ export function RelationshipInspectorPanel({
     }
   }, [rel]);
 
+  // "View impact" now expands the bounded dependency walk inline (#542) instead of being a no-op.
   const handleViewImpact = useCallback(() => {
-    if (rel !== null) onViewImpact?.(rel.id);
-  }, [rel, onViewImpact]);
+    setImpactExpanded((v) => !v);
+  }, []);
+
+  // Navigate the inspector to another relationship (clicked inside the impact card). Reuses the
+  // parent's focus callback — selecting a related relationship is exactly "focus this id".
+  const handleSelectRelated = useCallback(
+    (id: string) => {
+      onViewImpact?.(id);
+    },
+    [onViewImpact],
+  );
 
   const handleViewEvidence = useCallback(() => {
     if (rel !== null) {
@@ -937,16 +1011,16 @@ export function RelationshipInspectorPanel({
           <LifecycleSection lifecycle={rel.lifecycle} />
 
           {/* Section 5: Activity */}
-            <ActivitySection
-              type={rel.type}
-              lifecycle={rel.lifecycle}
-              activity={activity}
-              throughputCount={throughputCount}
-              animateBadges={animateBadges}
-              highContrast={highContrast}
-              transitions={explain?.lifecycle ?? []}
-              densityMode={densityMode}
-            />
+          <ActivitySection
+            type={rel.type}
+            lifecycle={rel.lifecycle}
+            activity={activity}
+            throughputCount={throughputCount}
+            animateBadges={animateBadges}
+            highContrast={highContrast}
+            transitions={explain?.lifecycle ?? []}
+            densityMode={densityMode}
+          />
 
           {/* Section 6: Authority status (verbatim) */}
           <AuthoritySection />
@@ -964,22 +1038,23 @@ export function RelationshipInspectorPanel({
           />
 
           {/* Section 8: Evidence references */}
-          <EvidenceSection relationshipId={rel.id} />
+          <EvidenceSection rel={rel} />
 
-          {/* Section 9: Impact summary */}
+          {/* Section 9: Impact summary + bounded dependency walk (#542) */}
           <ImpactSection
             relationshipId={rel.id}
             forwardCount={forwardCount}
             reverseCount={reverseCount}
-            onViewImpact={handleViewImpact}
+            outgoing={outgoingReport}
+            incoming={incomingReport}
+            expanded={impactExpanded}
+            onToggle={handleViewImpact}
+            onSelectRelationship={handleSelectRelated}
           />
 
           {/* Section 10: Denial reason (conditional) */}
           {showDenialSection && visibleDenial !== null && (
-            <DenialSection
-              codes={visibleDenial.codes}
-              messages={visibleDenial.messages}
-            />
+            <DenialSection codes={visibleDenial.codes} messages={visibleDenial.messages} />
           )}
 
           {/* Action buttons */}

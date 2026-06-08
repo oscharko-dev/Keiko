@@ -84,10 +84,51 @@ export interface DependencyReport {
   readonly endpoints: readonly DependencyNode[];
 }
 
+// ─── Graph health (api-contract.md §4.10) ─────────────────────────────────────
+// Mirrors the server's RelationshipHealthSummary / RelationshipHealthFindings. The findings are
+// the six categorized defect classes #542 exposes; each carries a `*Truncated` flag so the UI can
+// state truncation explicitly (the store bounds every category at MAX_RELATIONSHIPS_PER_QUERY).
+
+export interface HealthEndpointRef {
+  readonly kind: RelationshipObjectKind;
+  readonly id: string;
+}
+
+export interface HealthRelationshipRef {
+  readonly id: string;
+  readonly type: RelationshipType;
+  readonly source: HealthEndpointRef;
+  readonly target: HealthEndpointRef;
+  readonly lifecycle: RelationshipLifecycleState;
+}
+
+export interface HealthFindings {
+  readonly orphanedEndpoints: readonly HealthEndpointRef[];
+  readonly orphanedEndpointsTruncated: boolean;
+  readonly staleRelationships: readonly HealthRelationshipRef[];
+  readonly staleRelationshipsTruncated: boolean;
+  readonly blockedRelationships: readonly HealthRelationshipRef[];
+  readonly blockedRelationshipsTruncated: boolean;
+  readonly failedRelationships: readonly HealthRelationshipRef[];
+  readonly failedRelationshipsTruncated: boolean;
+  readonly invalidReferences: readonly HealthRelationshipRef[];
+  readonly invalidReferencesTruncated: boolean;
+  readonly cycleParticipants: readonly HealthRelationshipRef[];
+  readonly cycleScanTruncated: boolean;
+}
+
 export interface HealthResult {
   readonly checkedAt: number;
   readonly totals: Readonly<Record<RelationshipLifecycleState, number>>;
+  readonly truncated: boolean;
+  readonly findings: HealthFindings;
 }
+
+// ─── Bounded impact / dependency walk (api-contract.md §4.4) ───────────────────
+// The impact endpoint walks from an OBJECT endpoint; dependencies walk from a RELATIONSHIP. Both
+// return the same bounded report shape (endpoints + relationships + truncation), differing only in
+// the origin field (`origin` vs `rootRelationshipId`), which the UI does not need to distinguish.
+export type ImpactReport = DependencyReport;
 
 // ─── Proposal types ────────────────────────────────────────────────────────────
 

@@ -125,18 +125,18 @@ function parseFilters(params: RelationshipFilters): {
   };
 }
 
-// ─── Lifecycle → activity mapping (simplified; #541 wires live SSE) ───────────
-
+// ─── Lifecycle → activity fallback (when the live SSE stream has no entry) ─────
+// Must mirror the server's activityStateFromLifecycle (relationship-handlers.ts): a durable
+// lifecycle is NOT a transient activity. Only blocked/stale lifecycles imply a derived activity;
+// active/draft/archived/superseded/revoked are "inactive" until a live event says otherwise.
+// Mapping active→active previously made every committed relationship falsely read "a model call
+// is in progress" even on a fully idle workspace.
 function lifecycleToActivity(lc: RelationshipLifecycleState): RelationshipActivityState {
   switch (lc) {
-    case "active":
-      return "active";
     case "blocked":
       return "blocked";
     case "stale":
       return "degraded";
-    case "revoked":
-      return "failed";
     default:
       return "inactive";
   }

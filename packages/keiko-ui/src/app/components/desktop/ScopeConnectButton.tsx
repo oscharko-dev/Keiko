@@ -10,8 +10,9 @@
 // 24×24 target via min-w/min-h utilities, disabled state announced via aria-disabled.
 
 import { useId, useState, type ReactNode } from "react";
-import { ApiError, updateChatConnectedScope } from "@/lib/api";
-import type { Chat, SelectedScopeKind } from "@/lib/types";
+import { ApiError, updateChatConnectedScopes } from "@/lib/api";
+import type { Chat, ChatConnectedScope, SelectedScopeKind } from "@/lib/types";
+import { effectiveScopes } from "./hooks/workspaceActions";
 
 export interface ScopeConnectButtonProps {
   readonly chatId: string;
@@ -23,8 +24,11 @@ export interface ScopeConnectButtonProps {
   // button: the spec calls out "Select a folder or file first" so the user has a hint.
   readonly candidateRelativePaths: readonly string[];
   readonly onConnected?: (chat: Chat) => void;
+  // The active chat object, used to read the current connectedScopes list so the bind is
+  // additive (N+1 model). When omitted the button connects a fresh single-scope list.
+  readonly chat?: Chat;
   // Injectable wire seam for tests. Defaults to the real BFF helper.
-  readonly updateScope?: typeof updateChatConnectedScope;
+  readonly updateScope?: typeof updateChatConnectedScopes;
   // Injectable clock seam for tests. Defaults to Date.now.
   readonly now?: () => number;
 }
@@ -51,7 +55,8 @@ export function ScopeConnectButton({
   currentScopeKind,
   candidateRelativePaths,
   onConnected,
-  updateScope = updateChatConnectedScope,
+  chat,
+  updateScope = updateChatConnectedScopes,
   now = Date.now,
 }: ScopeConnectButtonProps): ReactNode {
   const hintId = useId();
@@ -67,11 +72,24 @@ export function ScopeConnectButton({
     setError(null);
     setBusy(true);
     try {
-      const response = await updateScope(chatId, {
+      // Epic #532 / #189 — additive bind: append the new scope to the existing list
+      // so connectedScopes grows (N+1 model) and localKnowledgeScopes is never touched.
+      const newScope: ChatConnectedScope = {
         kind: scopeKind,
-        relativePaths: candidateRelativePaths,
+        relativePaths: [...candidateRelativePaths],
         connectedAtMs: now(),
-      });
+      };
+      const current = effectiveScopes(chat ?? {});
+      // De-dupe: replace an existing scope with the same kind+paths rather than duplicating.
+      const filtered = current.filter(
+        (s) =>
+          !(
+            s.kind === newScope.kind &&
+            JSON.stringify(s.relativePaths) === JSON.stringify(newScope.relativePaths)
+          ),
+      );
+      const next = [...filtered, newScope];
+      const response = await updateScope(chatId, next);
       onConnected?.(response.chat);
     } catch (caught) {
       setError(formatErrorMessage(caught));

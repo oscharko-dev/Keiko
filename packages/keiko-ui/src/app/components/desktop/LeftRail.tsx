@@ -136,6 +136,19 @@ export function LeftRail({
         >
           <Icons.localKnowledge size={19} />
         </Link>
+        {/* Epic #532 — Relationships opens as a singleton Workspace window (not a page route). */}
+        <button
+          type="button"
+          className="rail-btn"
+          data-side="left"
+          data-active={openTools.has("relationships") ? "true" : "false"}
+          aria-label="Relationships"
+          aria-pressed={openTools.has("relationships")}
+          title="Relationships"
+          onClick={() => onTool("relationships")}
+        >
+          <Icons.branch size={19} />
+        </button>
       </div>
       <div className="rail-div" />
       <button

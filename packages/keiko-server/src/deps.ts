@@ -50,6 +50,10 @@ import {
   createRelationshipStorePort,
   type RelationshipHandlerDeps,
 } from "./relationship-handlers.js";
+import {
+  resolveGroundingLimits,
+  type GroundingLimits,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 
 // A redactor applied to every LIVE (non-manifest) payload before it reaches the browser (D9). It is
 // `deepRedactStrings` composed with the audit redactor; reused, never a new regex.
@@ -265,6 +269,49 @@ export function currentGatewayConfig(deps: UiHandlerDeps): GatewayConfig | undef
 export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
   return deps.gatewayConfig?.present() ?? deps.configPresent;
 }
+
+// Module-level: read KEIKO_GROUNDING_* env overrides ONCE at load (mirrors KEIKO_MODEL_* env
+// reads). Each value is parsed as a positive integer; unparseable values are silently ignored so
+// misconfigured env does not prevent the server from starting.
+function parseEnvPositiveInt(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 1 ? n : undefined;
+}
+
+const ENV_GROUNDING_OVERRIDES: Partial<GroundingLimits> = ((): Partial<GroundingLimits> => {
+  const env = process.env;
+  const partial: { -readonly [K in keyof GroundingLimits]?: GroundingLimits[K] } = {};
+  const maxConnectedSources = parseEnvPositiveInt(env.KEIKO_GROUNDING_MAX_CONNECTED_SOURCES);
+  if (maxConnectedSources !== undefined) partial.maxConnectedSources = maxConnectedSources;
+  const maxLocalKnowledgeSources = parseEnvPositiveInt(
+    env.KEIKO_GROUNDING_MAX_LOCAL_KNOWLEDGE_SOURCES,
+  );
+  if (maxLocalKnowledgeSources !== undefined)
+    partial.maxLocalKnowledgeSources = maxLocalKnowledgeSources;
+  const maxPromptReferences = parseEnvPositiveInt(env.KEIKO_GROUNDING_MAX_PROMPT_REFERENCES);
+  if (maxPromptReferences !== undefined) partial.maxPromptReferences = maxPromptReferences;
+  const maxExcerptChars = parseEnvPositiveInt(env.KEIKO_GROUNDING_MAX_EXCERPT_CHARS);
+  if (maxExcerptChars !== undefined) partial.maxExcerptChars = maxExcerptChars;
+  const referenceBudget = parseEnvPositiveInt(env.KEIKO_GROUNDING_REFERENCE_BUDGET);
+  if (referenceBudget !== undefined) partial.referenceBudget = referenceBudget;
+  const hybridMaxCandidates = parseEnvPositiveInt(env.KEIKO_GROUNDING_HYBRID_MAX_CANDIDATES);
+  if (hybridMaxCandidates !== undefined) partial.hybridMaxCandidates = hybridMaxCandidates;
+  const hybridMaxExcerptBytes = parseEnvPositiveInt(env.KEIKO_GROUNDING_HYBRID_MAX_EXCERPT_BYTES);
+  if (hybridMaxExcerptBytes !== undefined) partial.hybridMaxExcerptBytes = hybridMaxExcerptBytes;
+  return partial;
+})();
+
+// Resolves the effective grounding limits at call time: file config → env overrides → ceilings.
+// Env overrides win over file config. Re-reads currentGatewayConfig each call so runtime config
+// updates (e.g. first-run UI onboarding) are honored immediately. Never stored as a frozen field.
+export function currentGroundingLimits(deps: UiHandlerDeps): GroundingLimits {
+  const fileGrounding = currentGatewayConfig(deps)?.grounding;
+  return resolveGroundingLimits({ ...fileGrounding, ...ENV_GROUNDING_OVERRIDES });
+}
+
+// Re-export GroundingLimits so callers (read-handlers, store-handlers) only need one import.
+export type { GroundingLimits };
 
 function configSecretValues(config: GatewayConfig | undefined): readonly string[] {
   // Epic #177 audit: include both `apiKey` and `baseUrl` so error-message and evidence

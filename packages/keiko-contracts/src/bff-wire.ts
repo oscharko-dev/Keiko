@@ -53,17 +53,79 @@ export interface ChatConnectedScope {
   readonly root?: string;
 }
 
+// ─── Grounding limits (operator-configurable fan-out caps) ───────────────────────
+// Shape for all grounded Q&A fan-out limits. An operator may tune these via the gateway config
+// `grounding` block; absent → DEFAULT_GROUNDING_LIMITS are used (behaviour identical to before).
+// Every value must be a positive integer; over-ceiling values are clamped by resolveGroundingLimits.
+
+export interface GroundingLimits {
+  readonly maxConnectedSources: number; // folder sources per chat (was MAX_CONNECTED_SOURCES)
+  readonly maxLocalKnowledgeSources: number; // connector sources per chat (was MAX_LOCAL_KNOWLEDGE_SOURCES)
+  readonly maxPromptReferences: number; // connector refs retrieved/surfaced per connector (was MAX_PROMPT_REFERENCES)
+  readonly maxExcerptChars: number; // per connector excerpt cap (was MAX_EXCERPT_CHARS)
+  readonly referenceBudget: number; // connector reference budget (was DEFAULT_REFERENCE_BUDGET)
+  readonly hybridMaxCandidates: number; // NEW: shared global top-K for the hybrid rerank
+  readonly hybridMaxExcerptBytes: number; // NEW: shared excerpt-byte budget for the hybrid rerank
+}
+
+export const DEFAULT_GROUNDING_LIMITS: GroundingLimits = {
+  maxConnectedSources: 16,
+  maxLocalKnowledgeSources: 16,
+  maxPromptReferences: 8,
+  maxExcerptChars: 900,
+  referenceBudget: 10,
+  hybridMaxCandidates: 24,
+  hybridMaxExcerptBytes: 131_072,
+} as const;
+
+// Hard safety ceilings: an operator config may TUNE a limit but never raise it past these
+// (preserves the original DoS-bounding intent of the fan-out caps).
+export const GROUNDING_LIMIT_CEILINGS: GroundingLimits = {
+  maxConnectedSources: 64,
+  maxLocalKnowledgeSources: 64,
+  maxPromptReferences: 64,
+  maxExcerptChars: 20_000,
+  referenceBudget: 256,
+  hybridMaxCandidates: 256,
+  hybridMaxExcerptBytes: 524_288,
+} as const;
+
+// Pure resolver: fill each field from `partial` when it is a positive integer, else the default;
+// then clamp to the ceiling. Invalid (non-positive / non-integer) present fields fall back to the
+// default here (the gateway parse layer is responsible for REJECTING malformed config explicitly).
+export function resolveGroundingLimits(partial?: Partial<GroundingLimits>): GroundingLimits {
+  const pick = (key: keyof GroundingLimits): number => {
+    const supplied = partial?.[key];
+    const resolved =
+      supplied !== undefined && Number.isInteger(supplied) && supplied >= 1
+        ? supplied
+        : DEFAULT_GROUNDING_LIMITS[key];
+    return Math.min(resolved, GROUNDING_LIMIT_CEILINGS[key]);
+  };
+  return {
+    maxConnectedSources: pick("maxConnectedSources"),
+    maxLocalKnowledgeSources: pick("maxLocalKnowledgeSources"),
+    maxPromptReferences: pick("maxPromptReferences"),
+    maxExcerptChars: pick("maxExcerptChars"),
+    referenceBudget: pick("referenceBudget"),
+    hybridMaxCandidates: pick("hybridMaxCandidates"),
+    hybridMaxExcerptBytes: pick("hybridMaxExcerptBytes"),
+  };
+}
+
 // Epic #532 — a sane cap on the number of folders/files one chat may connect at once. The BFF
 // rejects PATCHes whose connectedScopes list exceeds this; the store enforces the same as a
 // defense-in-depth subset. Bounds retrieval fan-out cost (each source runs an independent,
 // budget-split retrieval pass), so total work stays bounded regardless of N.
-export const MAX_CONNECTED_SOURCES = 16;
+// Kept for back-compat; new code should read from a resolved GroundingLimits instance instead.
+export const MAX_CONNECTED_SOURCES = DEFAULT_GROUNDING_LIMITS.maxConnectedSources;
 
 // Epic #189 — sibling of MAX_CONNECTED_SOURCES for the local-knowledge (connector) source list. A
 // chat may bind multiple capsules/capsule-sets at once; the BFF rejects PATCHes whose
 // localKnowledgeScopes list exceeds this, and the store enforces the same as a defense-in-depth
 // subset. Bounds the connector fan-out cost in the hybrid grounded path (Slice 2).
-export const MAX_LOCAL_KNOWLEDGE_SOURCES = 16;
+// Kept for back-compat; new code should read from a resolved GroundingLimits instance instead.
+export const MAX_LOCAL_KNOWLEDGE_SOURCES = DEFAULT_GROUNDING_LIMITS.maxLocalKnowledgeSources;
 
 export type ChatLocalKnowledgeScope =
   | {
@@ -385,6 +447,7 @@ export interface SafeGatewayConfig {
   readonly providers: readonly SafeProviderConfig[];
   readonly circuitBreaker: SafeCircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[];
+  readonly grounding?: GroundingLimits;
 }
 
 // ─── Workflow descriptor wire shapes (BFF /api/workflows) ─────────────────────────
@@ -485,6 +548,9 @@ export interface GroundedEvidenceCitation {
   // (the connected root's basename; disambiguated with a short hash when two sources share a
   // basename). Absent for legacy single-source answers, which carry no per-source attribution.
   readonly source?: string;
+  // Global evidence marker in the hybrid reranked prompt ([n]); absent for non-hybrid
+  // (folder-only) answers.
+  readonly marker?: number;
 }
 
 export interface GroundedUncertainty {

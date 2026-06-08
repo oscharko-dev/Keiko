@@ -77,6 +77,10 @@ function makeCtx(req: FakeReq, params: Record<string, string> = {}): RouteContex
       writtenHead.status = status;
       writtenHead.headers = headers;
     },
+    flushHeaders(): void {
+      // no-op: the real ServerResponse flushes headers to the socket; the SSE handler calls this
+      // to deliver `onopen` promptly. Nothing to assert here beyond "it is callable".
+    },
     write(chunk: string): boolean {
       body += chunk;
       return true;
@@ -1111,6 +1115,26 @@ describe("GET /api/relationships/:id/dependencies + impact + health + explain + 
     req.emit("close");
   });
 
+  it("events emits an initial liveness frame on an idle workspace so the client fires onopen", () => {
+    // No relationships, no runs: collectActivitySnapshots returns nothing. Before the #541 fix the
+    // stream sent 0 bytes until the 30s ping; now it flushes a `retry:` + `: connected` frame so the
+    // EventSource client opens immediately and can tell a quiet stream from a dead one.
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const registry = createRunRegistry();
+    const deps = buildDeps("ws-idle", store, redactor, registry);
+    const req = makeReq({ method: "GET", url: "/api/relationships/events" });
+    const ctx = makeCtx(req);
+    const result = handleRelationshipEvents(ctx, deps);
+    expect(result).toBe(STREAMING);
+    const body = (ctx.res as unknown as { _sse: { body(): string } })._sse.body();
+    expect(body).toContain("retry: 5000");
+    expect(body).toContain(": connected");
+    // Idle: no activity event frames, and no payload leaked.
+    expect(body).not.toContain("event: relationship:activity");
+    req.emit("close");
+  });
+
   it("events?poll=1 returns a finite NDJSON body with the same allowlisted snapshot contract", async () => {
     const store = freshStore();
     const { redactor } = trackingRedactor();
@@ -1153,9 +1177,15 @@ describe("GET /api/relationships/:id/dependencies + impact + health + explain + 
     const ctx = makeCtx(req);
     const result = handleRelationshipEvents(ctx, deps);
     expect(result).toBe(STREAMING);
-    const sse = (ctx.res as unknown as {
-      _sse: { body(): string; ended(): boolean; writtenHead: { status?: number; headers?: Record<string, string> } };
-    })._sse;
+    const sse = (
+      ctx.res as unknown as {
+        _sse: {
+          body(): string;
+          ended(): boolean;
+          writtenHead: { status?: number; headers?: Record<string, string> };
+        };
+      }
+    )._sse;
     expect(sse.writtenHead.status).toBe(200);
     expect(sse.writtenHead.headers?.["Content-Type"]).toContain("application/x-ndjson");
     const lines = sse

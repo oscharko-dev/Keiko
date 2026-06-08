@@ -539,13 +539,14 @@ export function filesChatBindRoot(a: AppWindow, b: AppWindow): string | null {
 
 /**
  * Appends a new source to the current scopes list (de-duped by root, capped at
- * MAX_SCOPES). Returns null when the root is empty/not absolute (caller should
- * surface "browse/choose a folder first").
+ * `maxScopes` — defaults to MAX_SCOPES). Returns null when the root is empty/not
+ * absolute (caller should surface "browse/choose a folder first").
  */
 export function appendScope(
   current: readonly ChatConnectedScope[],
   root: string,
   now: number,
+  maxScopes: number = MAX_SCOPES,
 ): readonly ChatConnectedScope[] | null {
   if (!isAbsoluteRoot(root)) return null;
   if (current.some((s) => s.root === root)) return current;
@@ -556,7 +557,7 @@ export function appendScope(
     connectedAtMs: now,
   };
   const combined = [...current, next];
-  return combined.length > MAX_SCOPES ? combined.slice(-MAX_SCOPES) : combined;
+  return combined.length > maxScopes ? combined.slice(-maxScopes) : combined;
 }
 
 /**

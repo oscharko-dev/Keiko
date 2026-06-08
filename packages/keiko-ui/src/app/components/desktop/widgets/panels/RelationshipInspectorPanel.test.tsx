@@ -139,15 +139,17 @@ describe("RelationshipInspectorPanel", () => {
   });
 
   describe("error state", () => {
-    // TODO(#543): selector tightening — the rendered error text is broken across spans
-    // in the current alert layout; #543 hardening replaces the regex matcher with a
-    // role-based query and re-enables.
-    it.skip("shows server error message verbatim in lk-alert", async () => {
-      mockGetRelationship.mockRejectedValue(new Error("upstream read failed"));
+    // #543 hardening: the inspector surfaces a RelationshipApiError message verbatim. A plain Error
+    // is mapped to the generic backend-unreachable copy, so this asserts the verbatim path with a
+    // role-based query (robust to the alert's internal span/button layout).
+    it("shows server error message verbatim in lk-alert", async () => {
+      mockGetRelationship.mockRejectedValue(
+        new RelationshipApiError("relationship/upstream-read", "upstream read failed", 502),
+      );
       mockGetExplain.mockResolvedValue(BASE_EXPLAIN);
       renderInspector("rel-abc");
       await waitFor(() => {
-        expect(screen.getByText(/upstream read failed/i)).toBeDefined();
+        expect(screen.getByRole("alert").textContent).toContain("upstream read failed");
       });
     });
   });
@@ -182,12 +184,13 @@ describe("RelationshipInspectorPanel", () => {
       });
     });
 
-    // TODO(#543): the kind text appears in both the source row and the impact preview,
-    // producing a multi-match; #543 hardening scopes the query to the source-row container.
-    it.skip("renders the source endpoint kind", async () => {
+    // #543 hardening: the source kind ("workflow-run") legitimately appears more than once (the
+    // RELATIONSHIP summary line and the SOURCE endpoint row), so assert presence with a multi-match
+    // tolerant query instead of getByText (which throws on multiple matches).
+    it("renders the source endpoint kind", async () => {
       renderInspector("rel-abc");
       await waitFor(() => {
-        expect(screen.getByText(/workflow-run/i)).toBeDefined();
+        expect(screen.getAllByText(/workflow-run/i).length).toBeGreaterThan(0);
       });
     });
 
@@ -201,7 +204,10 @@ describe("RelationshipInspectorPanel", () => {
     });
 
     it("uses live activity stream state with lifecycle fallback in the activity section", async () => {
-      mockGetRelationship.mockResolvedValue(BASE_REL);
+      // Fallback path: with no live SSE entry, the activity derives from lifecycle and MUST mirror
+      // the server (blocked → blocked). An "active" lifecycle would fall back to "inactive" — a
+      // durable lifecycle is not a transient activity (see lifecycleToActivity).
+      mockGetRelationship.mockResolvedValue({ ...BASE_REL, lifecycle: "blocked" });
       mockGetExplain.mockResolvedValue(BASE_EXPLAIN);
       const { container, rerender } = render(
         <RelationshipInspectorPanel
@@ -212,7 +218,7 @@ describe("RelationshipInspectorPanel", () => {
         />,
       );
       await waitFor(() => {
-        expect(container.querySelector('[data-activity-state="active"]')).not.toBeNull();
+        expect(container.querySelector('[data-activity-state="blocked"]')).not.toBeNull();
       });
 
       rerender(
@@ -379,34 +385,33 @@ describe("RelationshipInspectorPanel", () => {
         buttonName: /reconnect/i,
         expectedMessage: "Reconnect transition denied verbatim by the server.",
       },
-    ])("keeps %s denial reasons visible after a failed patch mutation", async ({
-      lifecycle,
-      buttonName,
-      expectedMessage,
-    }) => {
-      mockGetRelationship.mockResolvedValue({ ...BASE_REL, lifecycle });
-      mockGetExplain.mockResolvedValue(BASE_EXPLAIN);
-      mockPatchRelationship.mockRejectedValue(
-        new RelationshipApiError("relationship/denied", "Transition denied.", 409, [
-          {
-            code: "denied/lifecycle-illegal-transition",
-            message: expectedMessage,
-          },
-        ]),
-      );
-      renderInspector("rel-abc");
-      await waitFor(() => {
-        expect(screen.getByRole("button", { name: buttonName })).toBeDefined();
-      });
-      fireEvent.click(screen.getByRole("button", { name: buttonName }));
-      await waitFor(() => {
-        expect(screen.getByTestId("denial-section")).toBeDefined();
-      });
-      expect(screen.getByText(expectedMessage)).toBeDefined();
-      fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
-      expect(screen.queryByText("Transition denied.")).toBeNull();
-      expect(screen.getByText(expectedMessage)).toBeDefined();
-    });
+    ])(
+      "keeps %s denial reasons visible after a failed patch mutation",
+      async ({ lifecycle, buttonName, expectedMessage }) => {
+        mockGetRelationship.mockResolvedValue({ ...BASE_REL, lifecycle });
+        mockGetExplain.mockResolvedValue(BASE_EXPLAIN);
+        mockPatchRelationship.mockRejectedValue(
+          new RelationshipApiError("relationship/denied", "Transition denied.", 409, [
+            {
+              code: "denied/lifecycle-illegal-transition",
+              message: expectedMessage,
+            },
+          ]),
+        );
+        renderInspector("rel-abc");
+        await waitFor(() => {
+          expect(screen.getByRole("button", { name: buttonName })).toBeDefined();
+        });
+        fireEvent.click(screen.getByRole("button", { name: buttonName }));
+        await waitFor(() => {
+          expect(screen.getByTestId("denial-section")).toBeDefined();
+        });
+        expect(screen.getByText(expectedMessage)).toBeDefined();
+        fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+        expect(screen.queryByText("Transition denied.")).toBeNull();
+        expect(screen.getByText(expectedMessage)).toBeDefined();
+      },
+    );
 
     it("keeps revoke denial reasons visible after a failed delete mutation", async () => {
       mockGetRelationship.mockResolvedValue({ ...BASE_REL, lifecycle: "active" });

@@ -8,7 +8,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig } from "./deps.js";
+import { currentGatewayConfig, currentGroundingLimits } from "./deps.js";
 import { findCapability, findConfiguredCapability } from "@oscharko-dev/keiko-model-gateway";
 import {
   UiStoreError,
@@ -43,10 +43,6 @@ import {
   isValidScopePath,
   type SelectedScopeKind,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import {
-  MAX_CONNECTED_SOURCES,
-  MAX_LOCAL_KNOWLEDGE_SOURCES,
-} from "@oscharko-dev/keiko-contracts/bff-wire";
 
 const MAX_STORE_BODY_BYTES = 256_000;
 const SELECTED_SCOPE_KIND_SET: ReadonlySet<SelectedScopeKind> = new Set(SELECTED_SCOPE_KINDS);
@@ -695,11 +691,12 @@ function optionalLocalKnowledgeScope(
 }
 
 // Epic #189 — parse the multi-source connector list (capsules/capsule-sets). undefined → absent;
-// null → clear all; array → fully validated list bounded by MAX_LOCAL_KNOWLEDGE_SOURCES. Each entry
-// runs the same shape validator as the single field. Capsule existence is checked in the grounded
-// path, not here (shape-only, like optionalConnectedScopes).
+// null → clear all; array → fully validated list bounded by the runtime maxLocalKnowledgeSources
+// cap. Each entry runs the same shape validator as the single field. Capsule existence is checked
+// in the grounded path, not here (shape-only, like optionalConnectedScopes).
 function optionalLocalKnowledgeScopes(
   body: Record<string, unknown>,
+  maxSources: number,
 ): readonly ChatLocalKnowledgeScope[] | null | undefined {
   if (!("localKnowledgeScopes" in body)) return undefined;
   const raw = body.localKnowledgeScopes;
@@ -707,9 +704,9 @@ function optionalLocalKnowledgeScopes(
   if (!Array.isArray(raw)) {
     throw new InvalidRequest('Field "localKnowledgeScopes" must be an array or null.');
   }
-  if (raw.length > MAX_LOCAL_KNOWLEDGE_SOURCES) {
+  if (raw.length > maxSources) {
     throw new InvalidRequest(
-      `Field "localKnowledgeScopes" must contain at most ${String(MAX_LOCAL_KNOWLEDGE_SOURCES)} sources.`,
+      `Field "localKnowledgeScopes" must contain at most ${String(maxSources)} sources.`,
     );
   }
   return raw.map((entry) => parseLocalKnowledgeScopeObject(entry));
@@ -743,10 +740,12 @@ function optionalConnectedScope(
 
 // Epic #532 — parse the multi-source connectedScopes list. undefined → field absent; null →
 // clear all; array → fully validated list. Each entry runs the same shape validators (incl. the
-// optional root) as the single field; the list is bounded by MAX_CONNECTED_SOURCES. Live-filesystem
-// access (realpath + deny-list + redaction) for each scope runs later in handleUpdateChat.
+// optional root) as the single field; the list is bounded by the runtime maxConnectedSources cap.
+// Live-filesystem access (realpath + deny-list + redaction) for each scope runs later in
+// handleUpdateChat.
 function optionalConnectedScopes(
   body: Record<string, unknown>,
+  maxSources: number,
 ): readonly ChatConnectedScope[] | null | undefined {
   if (!("connectedScopes" in body)) return undefined;
   const raw = body.connectedScopes;
@@ -754,9 +753,9 @@ function optionalConnectedScopes(
   if (!Array.isArray(raw)) {
     throw new InvalidRequest('Field "connectedScopes" must be an array or null.');
   }
-  if (raw.length > MAX_CONNECTED_SOURCES) {
+  if (raw.length > maxSources) {
     throw new InvalidRequest(
-      `Field "connectedScopes" must contain at most ${String(MAX_CONNECTED_SOURCES)} sources.`,
+      `Field "connectedScopes" must contain at most ${String(maxSources)} sources.`,
     );
   }
   return raw.map((entry) => parseConnectedScopeObject(entry));
@@ -764,11 +763,16 @@ function optionalConnectedScopes(
 
 // Epic #189/#532 — the four grounding-source patch fields (connected folders + local-knowledge
 // connectors, each single + plural). Extracted so buildChatPatch stays under the complexity gate.
-function groundingScopePatchFields(body: Record<string, unknown>): Partial<UpdateChatPatch> {
+// Receives deps so runtime-resolved grounding limits are used for the source-count caps.
+function groundingScopePatchFields(
+  body: Record<string, unknown>,
+  deps: UiHandlerDeps,
+): Partial<UpdateChatPatch> {
+  const limits = currentGroundingLimits(deps);
   const connectedScope = optionalConnectedScope(body);
-  const connectedScopes = optionalConnectedScopes(body);
+  const connectedScopes = optionalConnectedScopes(body, limits.maxConnectedSources);
   const localKnowledgeScope = optionalLocalKnowledgeScope(body);
-  const localKnowledgeScopes = optionalLocalKnowledgeScopes(body);
+  const localKnowledgeScopes = optionalLocalKnowledgeScopes(body, limits.maxLocalKnowledgeSources);
   return {
     ...(connectedScope !== undefined ? { connectedScope } : {}),
     ...(connectedScopes !== undefined ? { connectedScopes } : {}),
@@ -786,7 +790,7 @@ function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): Upd
     ...(title !== undefined ? { title } : {}),
     ...(selectedModel !== undefined ? { selectedModel } : {}),
     ...(branchLabel !== undefined ? { branchLabel } : {}),
-    ...groundingScopePatchFields(body),
+    ...groundingScopePatchFields(body, deps),
   };
   if (statusRaw === undefined) return patch;
   if (statusRaw !== "open" && statusRaw !== "closed") {
