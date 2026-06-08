@@ -99,6 +99,16 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
           return list.map((w) => (w.id === existing.id ? { ...w, z: ++zc.current } : w));
         }
       }
+      // Epic #270 — QI run cards are identified by runId: opening a run that already has a card
+      // focuses it instead of stacking a duplicate (the per-run "n+1" model is per-run, not per-click).
+      const dedupeRunId = type === "qiRun" ? cfg?.["runId"] : undefined;
+      if (typeof dedupeRunId === "string" && dedupeRunId.length > 0) {
+        const existing = list.find((w) => w.type === "qiRun" && w.cfg["runId"] === dedupeRunId);
+        if (existing !== undefined) {
+          createdId = existing.id;
+          return list.map((w) => (w.id === existing.id ? { ...w, z: ++zc.current } : w));
+        }
+      }
       const { x, y } = addPosition(vp, t.w, t.h, list.length, 40);
       const id = t.singleton === true ? type : `${type}-${Date.now().toString(36)}`;
       createdId = id;

@@ -9,6 +9,7 @@ import type {
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSource,
+  KnowledgeSourceScope,
   CapsuleLifecycleState,
   CapsuleHealth,
   ParserDiagnostic,
@@ -205,22 +206,18 @@ export async function cancelIndexing(
 
 // ---------------------------------------------------------------------------
 // POST /api/local-knowledge/capsules/:id/connection
-// Issue #189 — SOURCE-CONNECT: feed a folder of documents into a connector capsule.
-// Body: { scope: { kind: "folder", rootPath, recursive }, displayName? }
+// Issue #189 / #682 — connect a folder, repository, or explicit file set.
+// Body: { scope, displayName? }
 // Returns 201 with the updated capsule detail (same shape as GET /capsules/:id,
 // now including the new source under sources/sourceCount).
 // Errors 400 for denied paths (~/.ssh, .git, …), non-existent paths, or non-directories.
 // ---------------------------------------------------------------------------
 
-export interface FolderScope {
-  readonly kind: "folder";
-  readonly rootPath: string;
-  readonly recursive: boolean;
-}
+export type ConnectCapsuleSourceScope = KnowledgeSourceScope;
 
 export async function connectCapsuleSource(
   capsuleId: KnowledgeCapsuleId,
-  scope: FolderScope,
+  scope: ConnectCapsuleSourceScope,
   displayName?: string,
 ): Promise<CapsuleDetailResponse> {
   return fetchJson<CapsuleDetailResponse>(

@@ -26,7 +26,7 @@ export function fingerprintFor(query: RetrievalQuery): string {
 // `maxMatchesReturned` budget was exhausted on the first alphabetically-scanned files and the
 // rest of a multi-file scope was never read (a `docs/` connect would only ever surface its
 // first file, never the file the question was actually about). We mirror the exploration
-// planner's fixed English stop-word policy (planner/anchors.ts in keiko-workflows — duplicated
+// planner's fixed English stop-word policy (planner/anchors.ts in keiko-workflows - duplicated
 // here rather than imported because the architecture forbids keiko-workspace depending on the
 // higher-level keiko-workflows package): strip surrounding punctuation, drop single-character and
 // stop-word tokens, and keep `adr-0022`/`file.ts`-style hyphenated and dotted identifiers intact.
@@ -117,11 +117,45 @@ const NL_STOP_WORDS: ReadonlySet<string> = new Set([
   "answer",
 ]);
 
+const DEFINITION_INTENT_TOKENS: ReadonlySet<string> = new Set([
+  "define",
+  "defined",
+  "definition",
+  "declare",
+  "declared",
+  "declaration",
+  "implement",
+  "implements",
+  "implemented",
+  "implementation",
+]);
+
+const HTTP_METHOD_TOKENS: ReadonlySet<string> = new Set([
+  "get",
+  "post",
+  "put",
+  "patch",
+  "delete",
+  "head",
+  "options",
+]);
+
+interface NaturalLanguageIntent {
+  readonly definitionIntent: boolean;
+  readonly symbolTokens: readonly string[];
+  readonly routeTokens: readonly string[];
+  readonly httpMethods: readonly string[];
+}
+
 // Strip leading/trailing non-alphanumeric characters (Unicode-aware) while preserving internal
 // punctuation such as the hyphen in "ADR-0022" or the dot in "file.ts". Anchored, single
-// character-class quantifiers only — linear in input length (ReDoS-safe).
+// character-class quantifiers only - linear in input length (ReDoS-safe).
 function normalizeNaturalLanguageToken(raw: string): string {
   return raw.replace(/^[^\p{L}\p{N}]+/u, "").replace(/[^\p{L}\p{N}]+$/u, "");
+}
+
+function naturalLanguageNormalizedTokens(rawTokens: readonly string[]): readonly string[] {
+  return rawTokens.map(normalizeNaturalLanguageToken).filter((t) => t.length > 0);
 }
 
 // Extract the content tokens a relevance score should be computed over. Falls back to the
@@ -131,17 +165,117 @@ function naturalLanguageContentTokens(
   rawTokens: readonly string[],
   caseSensitive: boolean,
 ): readonly string[] {
-  const normalized = rawTokens
-    .map(normalizeNaturalLanguageToken)
-    .filter((t) => t.length > 0)
-    .map((t) => (caseSensitive ? t : t.toLowerCase()));
+  const normalized = naturalLanguageNormalizedTokens(rawTokens).map((t) =>
+    caseSensitive ? t : t.toLowerCase(),
+  );
   const content = normalized.filter((t) => t.length >= 2 && !NL_STOP_WORDS.has(t.toLowerCase()));
   return content.length > 0 ? content : normalized;
 }
 
+function uniqueStrings(values: readonly string[]): readonly string[] {
+  return [...new Set(values)];
+}
+
+function isDefinitionIntentToken(token: string): boolean {
+  return DEFINITION_INTENT_TOKENS.has(token.toLowerCase());
+}
+
+function isSymbolLikeToken(token: string): boolean {
+  return /[A-Z_]/u.test(token) || token.includes("-");
+}
+
+function analyzeNaturalLanguageIntent(
+  normalizedTokens: readonly string[],
+  caseSensitive: boolean,
+): NaturalLanguageIntent {
+  const lowered = normalizedTokens.map((t) => t.toLowerCase());
+  const definitionIntent = lowered.some(isDefinitionIntentToken);
+  const symbolTokens = uniqueStrings(
+    normalizedTokens
+      .filter((t) => isSymbolLikeToken(t) && !DEFINITION_INTENT_TOKENS.has(t.toLowerCase()))
+      .map((t) => (caseSensitive ? t : t.toLowerCase())),
+  );
+  const routeTokens = uniqueStrings(
+    normalizedTokens
+      .filter((t) => t.includes("/"))
+      .map((t) => (caseSensitive ? t : t.toLowerCase())),
+  );
+  const httpMethods = uniqueStrings(
+    lowered.filter((t) => HTTP_METHOD_TOKENS.has(t)).map((t) => (caseSensitive ? t : t.toLowerCase())),
+  );
+  return { definitionIntent, symbolTokens, routeTokens, httpMethods };
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function lineLooksLikeImport(line: string): boolean {
+  return /^\s*import\b/u.test(line) || /^\s*export\s*\{/u.test(line);
+}
+
+function lineLooksLikeSymbolDefinition(
+  line: string,
+  symbolToken: string,
+  caseSensitive: boolean,
+): boolean {
+  const escaped = escapeRegExp(symbolToken);
+  const flags = caseSensitive ? "u" : "iu";
+  const patterns = [
+    new RegExp(`\\b(?:export\\s+)?(?:async\\s+)?function\\s+${escaped}\\b`, flags),
+    new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${escaped}\\b`, flags),
+    new RegExp(`\\b(?:export\\s+)?(?:class|interface|type|enum)\\s+${escaped}\\b`, flags),
+    new RegExp(`\\b${escaped}\\s*[:=]\\s*(?:async\\s*)?\\(`, flags),
+  ];
+  return patterns.some((pattern) => pattern.test(line));
+}
+
+function lineLooksLikeRouteDeclaration(
+  line: string,
+  haystack: string,
+  intent: NaturalLanguageIntent,
+): boolean {
+  const routeHit = intent.routeTokens.some((token) => haystack.includes(token));
+  const methodHit = intent.httpMethods.some((method) => haystack.includes(`"${method}"`));
+  if (!routeHit || !methodHit) {
+    return false;
+  }
+  return line.includes("method:") || line.includes("pattern:");
+}
+
+function adjustedDefinitionIntentScore(
+  line: string,
+  haystack: string,
+  baseScore: number,
+  intent: NaturalLanguageIntent,
+  caseSensitive: boolean,
+): number {
+  if (!intent.definitionIntent) {
+    return baseScore;
+  }
+  let bonus = 0;
+  let penalty = 0;
+  for (const symbolToken of intent.symbolTokens) {
+    if (!haystack.includes(symbolToken)) {
+      continue;
+    }
+    if (lineLooksLikeSymbolDefinition(line, symbolToken, caseSensitive)) {
+      bonus = Math.max(bonus, 0.75);
+    } else if (lineLooksLikeImport(line)) {
+      penalty = Math.max(penalty, 0.2);
+    }
+  }
+  if (lineLooksLikeRouteDeclaration(line, haystack, intent)) {
+    bonus = Math.max(bonus, 0.65);
+  }
+  return Math.max(0, Math.min(1, baseScore + bonus - penalty));
+}
+
 function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
   const rawTokens = query.text.split(/\s+/).filter((t) => t.length > 0);
+  const normalizedTokens = naturalLanguageNormalizedTokens(rawTokens);
   const tokens = naturalLanguageContentTokens(rawTokens, query.caseSensitive);
+  const intent = analyzeNaturalLanguageIntent(normalizedTokens, query.caseSensitive);
   const total = tokens.length;
   return {
     match: (line: string): number => {
@@ -155,7 +289,16 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
           hits += 1;
         }
       }
-      return hits === 0 ? 0 : hits / total;
+      if (hits === 0) {
+        return 0;
+      }
+      return adjustedDefinitionIntentScore(
+        line,
+        haystack,
+        hits / total,
+        intent,
+        query.caseSensitive,
+      );
     },
   };
 }
@@ -173,7 +316,7 @@ function buildExactSymbolMatcher(query: RetrievalQuery): LineMatcher {
   };
 }
 
-// Cap regex source length and refuse the classical catastrophic-backtracking shapes — any
+// Cap regex source length and refuse the classical catastrophic-backtracking shapes - any
 // group `(...)` or character class `[...]` followed by a `+` / `*` / `{n,}` quantifier. The
 // per-call elapsedMsMax cannot interrupt a synchronous `RegExp.exec` once it has entered a
 // pathological backtrack, so the only safe defense is to refuse the pattern at compile time.

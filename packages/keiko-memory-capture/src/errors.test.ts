@@ -17,6 +17,8 @@ describe("CaptureRejection", () => {
     const reasons: readonly RejectionReason[] = [
       "credential-shape",
       "private-credential-path",
+      "provider-base-url",
+      "raw-log-content",
       "customer-identifier",
       "empty-content",
       "exceeds-length-limit",
@@ -25,6 +27,6 @@ describe("CaptureRejection", () => {
       "restricted-sensitivity",
       "scope-not-resolvable",
     ];
-    expect(reasons).toHaveLength(9);
+    expect(reasons).toHaveLength(11);
   });
 });

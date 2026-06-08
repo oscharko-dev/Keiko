@@ -27,8 +27,16 @@ import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Icons } from "./Icons";
 import { CHAT_WORKFLOW_CATALOG, findChatWorkflow } from "@/lib/chat-workflow-catalog";
 import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
-import type { ChatMessage, ModelCapability } from "@/lib/types";
 import type {
+  ChatMessage,
+  ExpectedCheck,
+  GroundedAnswer,
+  ModelCapability,
+  WorkflowKind,
+} from "@/lib/types";
+import type {
+  LaunchGroundedWorkflowHandoffInput,
+  LaunchGroundedWorkflowHandoffResult,
   LaunchWorkflowFromConversationInput,
   LaunchWorkflowFromConversationResult,
 } from "./hooks/useChatSession";
@@ -262,6 +270,462 @@ function humanReason(outcome: { reason: string; message?: string | undefined }):
     default:
       return "Could not launch the workflow.";
   }
+}
+
+const GROUNDED_WORKFLOW_CHOICES: ReadonlyArray<{
+  readonly workflowKind: WorkflowKind;
+  readonly label: string;
+  readonly description: string;
+}> = [
+  {
+    workflowKind: "unit-test-generation",
+    label: "Generate unit tests",
+    description: "Use the grounded evidence as read-only context and propose in-scope test changes.",
+  },
+  {
+    workflowKind: "bug-investigation",
+    label: "Investigate bug",
+    description: "Investigate a bug against the grounded evidence and keep writes inside approved paths.",
+  },
+  {
+    workflowKind: "verification",
+    label: "Run verification",
+    description: "Run verification against the grounded workspace context without granting write access.",
+  },
+] as const;
+
+const GROUNDED_CHECK_CHOICES: readonly ExpectedCheck[] = [
+  "verify",
+  "lint",
+  "typecheck",
+  "tests",
+  "manual",
+] as const;
+
+function defaultChecks(workflowKind: WorkflowKind): readonly ExpectedCheck[] {
+  return workflowKind === "unit-test-generation" ? ["tests"] : ["verify"];
+}
+
+function splitLines(value: string): readonly string[] {
+  return value
+    .split(/\r?\n|,/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function groundedHumanReason(
+  outcome: LaunchGroundedWorkflowHandoffResult,
+): string {
+  if (outcome.ok) return "";
+  if (outcome.message !== undefined && outcome.message.length > 0) return outcome.message;
+  switch (outcome.reason) {
+    case "missing-chat":
+      return "Open a chat with the grounded answer you want to hand off.";
+    case "missing-model":
+      return "Pick a model before launching the grounded workflow.";
+    default:
+      return "Could not launch the grounded workflow.";
+  }
+}
+
+function buildGroundedInput(
+  workflowKind: WorkflowKind,
+  unitTargetMode: "file" | "module" | "changedFiles",
+  unitTargetValue: string,
+  bugDescription: string,
+  bugTargetFiles: string,
+  verifyTargetFiles: string,
+): { readonly ok: true; readonly input: Record<string, unknown> } | {
+  readonly ok: false;
+  readonly message: string;
+} {
+  if (workflowKind === "unit-test-generation") {
+    if (unitTargetMode === "changedFiles") {
+      const filePaths = splitLines(unitTargetValue);
+      return filePaths.length === 0
+        ? { ok: false, message: "Provide at least one changed file." }
+        : { ok: true, input: { target: { kind: "changedFiles", filePaths } } };
+    }
+    const trimmed = unitTargetValue.trim();
+    if (trimmed.length === 0) {
+      return {
+        ok: false,
+        message: unitTargetMode === "module" ? "Provide a module directory." : "Provide a target file.",
+      };
+    }
+    return unitTargetMode === "module"
+      ? { ok: true, input: { target: { kind: "module", moduleDir: trimmed } } }
+      : { ok: true, input: { target: { kind: "file", filePath: trimmed } } };
+  }
+  if (workflowKind === "bug-investigation") {
+    const targetFiles = splitLines(bugTargetFiles);
+    const description = bugDescription.trim();
+    if (description.length === 0 && targetFiles.length === 0) {
+      return {
+        ok: false,
+        message: "Provide at least a bug description or one suspected target file.",
+      };
+    }
+    return {
+      ok: true,
+      input: {
+        report: {
+          ...(description.length === 0 ? {} : { description }),
+          ...(targetFiles.length === 0 ? {} : { targetFiles }),
+        },
+      },
+    };
+  }
+  const targetFiles = splitLines(verifyTargetFiles);
+  return {
+    ok: true,
+    input: targetFiles.length === 0 ? {} : { targetFiles },
+  };
+}
+
+export interface LaunchGroundedWorkflowButtonProps {
+  readonly answer: GroundedAnswer | undefined;
+  readonly modelId: string | undefined;
+  readonly busy?: boolean | undefined;
+  readonly launch: (
+    input: LaunchGroundedWorkflowHandoffInput,
+  ) => Promise<LaunchGroundedWorkflowHandoffResult>;
+}
+
+export function LaunchGroundedWorkflowButton({
+  answer,
+  modelId,
+  busy,
+  launch,
+}: LaunchGroundedWorkflowButtonProps): ReactNode {
+  const [open, setOpen] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  if (answer === undefined || answer.groundingKind !== "connected-context" || modelId === undefined) {
+    return null;
+  }
+  return (
+    <>
+      <button
+        ref={triggerRef}
+        type="button"
+        className="cmp-mode"
+        title="Launch a governed workflow from this grounded answer"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        disabled={busy === true}
+        onClick={() => setOpen(true)}
+      >
+        <Icons.spark size={14} style={{ color: "var(--accent)" }} /> Launch grounded workflow
+        <Icons.chevron size={12} />
+      </button>
+      {open ? (
+        <GroundedWorkflowDialog
+          answer={answer}
+          modelId={modelId}
+          launch={launch}
+          onClose={() => {
+            setOpen(false);
+            triggerRef.current?.focus();
+          }}
+        />
+      ) : null}
+    </>
+  );
+}
+
+interface GroundedWorkflowDialogProps {
+  readonly answer: Extract<GroundedAnswer, { readonly groundingKind: "connected-context" }>;
+  readonly modelId: string;
+  readonly launch: (
+    input: LaunchGroundedWorkflowHandoffInput,
+  ) => Promise<LaunchGroundedWorkflowHandoffResult>;
+  readonly onClose: () => void;
+}
+
+function GroundedWorkflowDialog({
+  answer,
+  modelId,
+  launch,
+  onClose,
+}: GroundedWorkflowDialogProps): ReactNode {
+  const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const [workflowKind, setWorkflowKind] = useState<WorkflowKind | undefined>();
+  const [unitTargetMode, setUnitTargetMode] = useState<"file" | "module" | "changedFiles">("file");
+  const [unitTargetValue, setUnitTargetValue] = useState("");
+  const [bugDescription, setBugDescription] = useState("");
+  const [bugTargetFiles, setBugTargetFiles] = useState("");
+  const [verifyTargetFiles, setVerifyTargetFiles] = useState("");
+  const [editablePaths, setEditablePaths] = useState("");
+  const [unknowns, setUnknowns] = useState("");
+  const [expectedChecks, setExpectedChecks] = useState<readonly ExpectedCheck[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+
+  useEffect(() => {
+    dialogRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
+    if (workflowKind !== undefined) {
+      setExpectedChecks(defaultChecks(workflowKind));
+    }
+  }, [workflowKind]);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent): void {
+      if (event.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const dialog = dialogRef.current;
+      if (dialog === null) return;
+      const focusables = getFocusable(dialog);
+      if (focusables.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || active === dialog)) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  function toggleCheck(check: ExpectedCheck): void {
+    setExpectedChecks((current) =>
+      current.includes(check) ? current.filter((entry) => entry !== check) : [...current, check],
+    );
+  }
+
+  async function handleSubmit(): Promise<void> {
+    if (workflowKind === undefined) return;
+    const built = buildGroundedInput(
+      workflowKind,
+      unitTargetMode,
+      unitTargetValue,
+      bugDescription,
+      bugTargetFiles,
+      verifyTargetFiles,
+    );
+    if (!built.ok) {
+      setError(built.message);
+      return;
+    }
+    if (expectedChecks.length === 0) {
+      setError("Select at least one expected check.");
+      return;
+    }
+    setSubmitting(true);
+    setError(undefined);
+    const outcome = await launch({
+      assistantMessageId: answer.assistantMessageId,
+      modelId,
+      workflowKind,
+      input: built.input,
+      editablePaths: splitLines(editablePaths),
+      expectedChecks,
+      unknowns: splitLines(unknowns),
+    });
+    setSubmitting(false);
+    if (outcome.ok) {
+      onClose();
+      return;
+    }
+    setError(groundedHumanReason(outcome));
+  }
+
+  const choice = GROUNDED_WORKFLOW_CHOICES.find((entry) => entry.workflowKind === workflowKind);
+
+  return (
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      tabIndex={-1}
+      className="wf-dialog-overlay"
+    >
+      <div className="wf-dialog">
+        <h2 id={titleId} className="wf-dialog-title">
+          Grounded workflow handoff
+        </h2>
+        {choice === undefined ? (
+          <ul className="wf-dialog-list" aria-label="Available grounded workflows">
+            {GROUNDED_WORKFLOW_CHOICES.map((entry) => (
+              <li key={entry.workflowKind}>
+                <button
+                  type="button"
+                  className="wf-dialog-choice"
+                  onClick={() => setWorkflowKind(entry.workflowKind)}
+                >
+                  <span className="wf-dialog-choice-label">{entry.label}</span>
+                  <span className="wf-dialog-choice-desc">{entry.description}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="wf-dialog-form">
+            <p className="wf-dialog-form-desc">{choice.description}</p>
+            {workflowKind === "unit-test-generation" ? (
+              <>
+                <label className="wf-dialog-field">
+                  Target mode
+                  <select
+                    className="wf-dialog-input mono"
+                    value={unitTargetMode}
+                    onChange={(event) =>
+                      setUnitTargetMode(
+                        event.target.value as "file" | "module" | "changedFiles",
+                      )
+                    }
+                  >
+                    <option value="file">File</option>
+                    <option value="module">Module</option>
+                    <option value="changedFiles">Changed files</option>
+                  </select>
+                </label>
+                <label className="wf-dialog-field">
+                  {unitTargetMode === "module"
+                    ? "Module directory"
+                    : unitTargetMode === "changedFiles"
+                      ? "Changed files (one per line)"
+                      : "Target file"}
+                  <textarea
+                    className="wf-dialog-input mono"
+                    rows={unitTargetMode === "changedFiles" ? 3 : 2}
+                    value={unitTargetValue}
+                    onChange={(event) => setUnitTargetValue(event.target.value)}
+                    placeholder={
+                      unitTargetMode === "module"
+                        ? "src/components"
+                        : unitTargetMode === "changedFiles"
+                          ? "src/a.ts\nsrc/b.ts"
+                          : "src/example.ts"
+                    }
+                  />
+                </label>
+              </>
+            ) : null}
+            {workflowKind === "bug-investigation" ? (
+              <>
+                <label className="wf-dialog-field">
+                  Bug description
+                  <textarea
+                    className="wf-dialog-input mono"
+                    rows={3}
+                    value={bugDescription}
+                    onChange={(event) => setBugDescription(event.target.value)}
+                    placeholder="Describe the failing behavior or regression."
+                  />
+                </label>
+                <label className="wf-dialog-field">
+                  Suspected target files (one per line)
+                  <textarea
+                    className="wf-dialog-input mono"
+                    rows={2}
+                    value={bugTargetFiles}
+                    onChange={(event) => setBugTargetFiles(event.target.value)}
+                    placeholder="src/app.ts\nsrc/lib/foo.ts"
+                  />
+                </label>
+              </>
+            ) : null}
+            {workflowKind === "verification" ? (
+              <label className="wf-dialog-field">
+                Target files (optional, one per line)
+                <textarea
+                  className="wf-dialog-input mono"
+                  rows={2}
+                  value={verifyTargetFiles}
+                  onChange={(event) => setVerifyTargetFiles(event.target.value)}
+                  placeholder="src/app.ts\nsrc/lib/foo.ts"
+                />
+              </label>
+            ) : null}
+            <label className="wf-dialog-field">
+              Editable paths (explicit, workspace-relative, one per line)
+              <textarea
+                className="wf-dialog-input mono"
+                rows={3}
+                value={editablePaths}
+                onChange={(event) => setEditablePaths(event.target.value)}
+                placeholder="src/example.test.ts"
+              />
+            </label>
+            <fieldset className="wf-dialog-field" style={{ border: 0, padding: 0, margin: 0 }}>
+              <legend>Expected checks</legend>
+              <div className="wf-dialog-form" style={{ gap: 8 }}>
+                {GROUNDED_CHECK_CHOICES.map((check) => (
+                  <label key={check} className="wf-dialog-choice-desc" style={{ display: "flex", gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={expectedChecks.includes(check)}
+                      onChange={() => toggleCheck(check)}
+                    />
+                    <span>{check}</span>
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            <label className="wf-dialog-field">
+              Unknowns (optional, one per line)
+              <textarea
+                className="wf-dialog-input mono"
+                rows={2}
+                value={unknowns}
+                onChange={(event) => setUnknowns(event.target.value)}
+                placeholder="Need confirmation on public API behavior"
+              />
+            </label>
+            {error !== undefined ? (
+              <div role="alert" className="wf-dialog-error">
+                {error}
+              </div>
+            ) : null}
+            <div className="wf-dialog-actions">
+              <button
+                type="button"
+                className="wf-dialog-cancel"
+                onClick={() => setWorkflowKind(undefined)}
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                className="wf-dialog-launch"
+                disabled={submitting}
+                onClick={() => {
+                  void handleSubmit();
+                }}
+              >
+                {submitting ? "Launching…" : "Launch"}
+              </button>
+            </div>
+          </div>
+        )}
+        <button
+          type="button"
+          className="wf-dialog-close"
+          aria-label="Close grounded workflow handoff"
+          onClick={onClose}
+        >
+          <Icons.close size={14} />
+        </button>
+      </div>
+    </div>
+  );
 }
 
 // ─── 3. Run summary card for system chat messages ────────────────────────────

@@ -5,6 +5,7 @@
 // unit-test workflow's (ADR-0009 D5) because both barrels are re-exported from the package root.
 
 import type { MemoryWorkflowPort } from "@oscharko-dev/keiko-contracts";
+import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { PatchChangeKind, SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -85,6 +86,9 @@ export interface BugInvestigationDeps {
   // composes a scoped memory context block into the prompt and emits memory lifecycle events.
   // Read-only — the port cannot bypass the existing apply gates / scope guard / patch limits.
   readonly memoryPort?: MemoryWorkflowPort | undefined;
+  // Optional governed grounded-context handoff contract. When present, accepted dry-run patches
+  // and apply-mode writes must stay within patchScope.editablePaths and the declared limits.
+  readonly workflowHandoff?: WorkflowHandoffRequest | undefined;
 }
 
 // ─── Report (D3) ─────────────────────────────────────────────────────────────────

@@ -22,7 +22,11 @@ export type WindowType =
   | "notifications"
   | "resources"
   // Epic #189 Slice 3 — Local Knowledge connector picker window.
-  | "connector";
+  | "connector"
+  // Epic #270 — Quality Intelligence: a singleton hub (start runs + run list) plus per-run result
+  // cards. QI lives inside the Workspace like every other window, not as a full-page route.
+  | "quality"
+  | "qiRun";
 
 export interface WindowSize {
   readonly w: number;
@@ -46,6 +50,15 @@ export interface WindowRenderContext {
   readonly linkedRoot: string | null;
   readonly linkedFilePath: string | undefined;
   readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
+  /**
+   * Open another Workspace window from inside this one (e.g. the QI hub opening a per-run result
+   * card). Singleton targets focus the existing instance; others spawn a new card carrying `cfg`.
+   * Returns the new/focused window id, or null when the workspace viewport is not ready.
+   */
+  readonly openWindow: (
+    type: WindowType,
+    cfg?: Record<string, string | number | boolean>,
+  ) => string | null;
 }
 
 export interface WindowTypeDef {
@@ -313,6 +326,32 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     config: [],
     cta: "Select connector",
   },
+  // Epic #270 — Quality Intelligence hub. Singleton tool window: start a run (requirements or
+  // workspace folder) and browse past runs. Selecting/finishing a run opens a `qiRun` result card.
+  quality: {
+    title: "Quality Intelligence",
+    icon: "check",
+    accent: true,
+    desc: "Design & review test cases",
+    w: 384,
+    h: 580,
+    min: { w: 300, h: 320 },
+    tiny: { w: 260, h: 200 },
+    tool: true,
+    singleton: true,
+  },
+  // Epic #270 — Quality Intelligence run result card. Non-singleton: one card per run (keyed by
+  // cfg.runId). Shows the generated test cases, per-candidate review, and export.
+  qiRun: {
+    title: "QI Run",
+    icon: "check",
+    desc: "Generated test cases",
+    w: 760,
+    h: 660,
+    min: { w: 320, h: 280 },
+    tiny: { w: 280, h: 200 },
+    config: [{ key: "runId", label: "Run ID", type: "text", def: "" }],
+  },
 };
 
 const RENDER_REGISTRY = new Map<
@@ -379,6 +418,7 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "review",
   "agents",
   "integ",
+  "quality",
   "keiko",
   "project",
   "search",

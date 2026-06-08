@@ -2,6 +2,7 @@
 // Epic #189 Slice 3 M1 — plural connector-scope helpers + Connector↔Chat binding.
 
 import { describe, expect, it } from "vitest";
+import type { Dispatch, SetStateAction } from "react";
 import {
   MAX_SCOPES,
   appendConnectorScope,
@@ -10,6 +11,7 @@ import {
   effectiveLocalKnowledgeScopes,
   effectiveScopes,
   filesChatBindRoot,
+  makeMutations,
   removeConnectorScope,
   removeScope,
   resolvedFilesRoot,
@@ -261,5 +263,41 @@ describe("connectorChatBind", () => {
   it("returns null when the connector cfg is missing selectedKind", () => {
     const connector = win("connector", { selectedId: "cap-abc" });
     expect(connectorChatBind(connector, win("chat"))).toBeNull();
+  });
+});
+
+describe("makeMutations.add — QI run-card dedup (#270)", () => {
+  function harness(): {
+    add: ReturnType<typeof makeMutations>["add"];
+    cards: () => readonly AppWindow[];
+  } {
+    let wins: AppWindow[] | null = [];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const zc = { current: 0 };
+    const worldVP = (): { x: number; y: number; w: number; h: number } => ({
+      x: 0,
+      y: 0,
+      w: 1000,
+      h: 800,
+    });
+    const { add } = makeMutations({ setWins, zc, worldVP });
+    return { add, cards: () => (wins ?? []).filter((w) => w.type === "qiRun") };
+  }
+
+  it("focuses the existing card when the same runId is opened again (no duplicate)", () => {
+    const h = harness();
+    const id1 = h.add("qiRun", { runId: "qi-run-1" });
+    const id2 = h.add("qiRun", { runId: "qi-run-1" });
+    expect(id2).toBe(id1);
+    expect(h.cards()).toHaveLength(1);
+  });
+
+  it("opens a separate card for a different runId", () => {
+    const h = harness();
+    h.add("qiRun", { runId: "qi-run-1" });
+    h.add("qiRun", { runId: "qi-run-2" });
+    expect(h.cards()).toHaveLength(2);
   });
 });

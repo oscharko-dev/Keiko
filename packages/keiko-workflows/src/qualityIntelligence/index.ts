@@ -41,3 +41,15 @@ export type {
   QualityIntelligenceTestDesignInput,
   QualityIntelligenceValidationInput,
 } from "./runEntries.js";
+
+// Model-routed (live LLM) test-design entry (Issue #272/#273/#279).
+export { runQualityIntelligenceModelRoutedTestDesign } from "./modelRoutedTestDesign.js";
+export type {
+  QualityIntelligenceCandidatesSink,
+  QualityIntelligenceGenerationPort,
+  QualityIntelligenceGenerationPortArgs,
+  QualityIntelligenceGenerationPortResult,
+  QualityIntelligenceIngestedAtom,
+  QualityIntelligenceModelRoutedTestDesignDeps,
+  QualityIntelligenceModelRoutedTestDesignInput,
+} from "./modelRoutedTestDesign.js";

@@ -60,6 +60,7 @@ export function persistWorkflowEvidence(
   report: unknown,
   events: readonly StreamEvent[],
   ctx: EvidencePersistContext,
+  governedHandoff?: EvidenceManifest["governedHandoff"],
 ): EvidenceReport {
   return persistWorkflowEvidenceCore(
     {
@@ -75,6 +76,7 @@ export function persistWorkflowEvidence(
     report,
     events,
     { ...ctx, costClassResolver: resolveCostClass },
+    { governedHandoff },
   );
 }
 

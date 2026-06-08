@@ -231,6 +231,28 @@ describe("retrieveMemoryContext — AC4 stale suppression", () => {
     }
   });
 
+  it("omits proposed memories from retrieval results until accepted", () => {
+    const accepted = buildRecord({ id: "accepted", body: "formatter is biome", updatedAt: now });
+    const proposed = buildRecord({
+      id: "proposed",
+      status: "proposed",
+      body: "formatter unique-token-xyz is biome",
+      updatedAt: now,
+    });
+    const { port } = portReturning({ "user:u1": [accepted, proposed] });
+    const result = retrieveMemoryContext(
+      baseRequest({ queryText: "Which formatter should I use?", budgetTokens: 500 }),
+      port,
+    );
+    expect(result.included.map((i) => i.memoryId)).toEqual([memoryId("accepted")]);
+    expect(result.contextBlock.text).not.toContain("unique-token-xyz");
+    expect(result.omitted).toContainEqual({
+      memoryId: memoryId("proposed"),
+      reason: "suppressed-by-status",
+      suppressionDetail: "proposed",
+    });
+  });
+
   it("requests archived, forgotten, and expired rows from the port for explainable omissions", () => {
     const optionsSeen: unknown[] = [];
     const expired = buildRecord({ id: "exp", validFrom: 0, validUntil: now - 1 });
@@ -369,5 +391,31 @@ describe("retrieveMemoryContext — type filter + explainability + determinism",
       port,
     );
     expect(result.included.filter((i) => i.memoryId === memoryId("shared")).length).toBe(1);
+  });
+
+  it("omits accepted memories with zero lexical and semantic relevance when a query is present", () => {
+    const formatter = buildRecord({
+      id: "formatter",
+      body: "the formatter is biome",
+      updatedAt: now,
+      confidence: 0.95,
+    });
+    const schedule = buildRecord({
+      id: "schedule",
+      body: "deploys happen on Tuesdays",
+      updatedAt: now,
+      confidence: 0.95,
+    });
+    const { port } = portReturning({ "user:u1": [formatter, schedule] });
+    const result = retrieveMemoryContext(
+      baseRequest({ queryText: "Which formatter should I use?", budgetTokens: 500 }),
+      port,
+    );
+    expect(result.included.map((i) => i.memoryId)).toEqual([memoryId("formatter")]);
+    expect(result.contextBlock.text).not.toContain("deploys happen on Tuesdays");
+    expect(result.omitted).toContainEqual({
+      memoryId: memoryId("schedule"),
+      reason: "below-threshold",
+    });
   });
 });

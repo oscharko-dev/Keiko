@@ -139,9 +139,9 @@ Consequence for #529: closed with documented deferral evidence pointing to the e
 The existing `WindowTypeDef` interface in `WindowsRegistry.ts` remains the object taxonomy seam, while the governance metadata lands in a parallel sidecar table typed by `WorkspaceDescriptorMeta`:
 
 ```
-type WindowGovernanceMeta = WorkspaceDescriptorMeta;
-
-const WIN_META: Readonly<Record<WindowType, WindowGovernanceMeta>>;
+// WorkspaceDescriptorMeta is defined in keiko-contracts/src/workspace-descriptors.ts
+// (WIN_META is typed directly as Record<WindowType, WorkspaceDescriptorMeta>)
+const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>>;
 ```
 
 A metadata validator (`validateWorkspaceDescriptorMeta`) refuses entries that:

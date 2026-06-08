@@ -363,6 +363,50 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(answer.evidenceRunId).toBe(puts[0]?.runId);
   });
 
+  it("strips planner scaffolding from merged answers and carries final model usage", async () => {
+    const scopeA: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: NOW,
+      root: "/home/u/api",
+    };
+    const scopeB: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/b.ts"],
+      connectedAtMs: NOW,
+      root: "/home/u/web",
+    };
+    const chatId = makeChat([scopeA, scopeB]);
+    const byPath = new Map<string, ConnectedContextPack>([
+      ["src/a.ts", scopePack("src/a.ts", 0.3, "low")],
+      ["src/b.ts", scopePack("src/b.ts", 0.9, "high")],
+    ]);
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain both" })),
+      recordingDeps([]),
+      undefined,
+      seam(packPerScope(byPath), () =>
+        Promise.resolve({
+          content: [
+            "We need to call search",
+            '{ "query": "explain both", "tool": "repo.searchText" }',
+            "Merged grounded answer.",
+          ].join("\n"),
+          usage: { promptTokens: 13, completionTokens: 4 },
+        }),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    expect(answer.content).toBe("Merged grounded answer.");
+    expect(answer.contextPack.usage.modelInputTokens).toBe(33);
+    expect(answer.contextPack.usage.modelOutputTokens).toBe(14);
+    const assistant = store
+      .listMessages(chatId)
+      .find((message) => message.id === answer.assistantMessageId);
+    expect(assistant?.content).toBe("Merged grounded answer.");
+  });
+
   it("MAX_CONNECTED_SOURCES: 16 sources all retrieve and merge", async () => {
     const scopes: ChatConnectedScope[] = Array.from({ length: 16 }, (_unused, i) => ({
       kind: "directory" as const,

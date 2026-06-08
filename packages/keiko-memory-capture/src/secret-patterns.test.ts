@@ -100,6 +100,44 @@ describe("scanForSecrets — private-credential-path patterns", () => {
   });
 });
 
+describe("scanForSecrets — provider base URLs", () => {
+  it("rejects provider base URLs called out explicitly in natural language", () => {
+    expect(
+      scanForSecrets(
+        "remember that our provider base URL is https://llm.internal.example.com/v1",
+      ),
+    ).toBe("provider-base-url");
+  });
+
+  it("rejects an OpenAI-compatible endpoint URL even without nearby provider wording", () => {
+    expect(scanForSecrets("https://gateway.example.invalid/openai/v1")).toBe(
+      "provider-base-url",
+    );
+  });
+
+  it("does not reject an ordinary documentation URL", () => {
+    expect(scanForSecrets("remember that docs live at https://docs.example.com/setup")).toBeNull();
+  });
+});
+
+describe("scanForSecrets — raw log content", () => {
+  it("rejects severity plus ISO timestamp log lines", () => {
+    expect(
+      scanForSecrets("ERROR 2026-06-08T06:00:00Z worker failed while processing module X"),
+    ).toBe("raw-log-content");
+  });
+
+  it("rejects stack-trace style content with repeated frames", () => {
+    expect(scanForSecrets("stack trace line 1 at foo() line 2 at bar()")).toBe(
+      "raw-log-content",
+    );
+  });
+
+  it("does not reject plain prose that mentions a module failure", () => {
+    expect(scanForSecrets("remember that module X failed during a deploy rehearsal")).toBeNull();
+  });
+});
+
 describe("scanForSecrets — customer-identifier matchers (caller-injected)", () => {
   it("returns customer-identifier when a caller matcher fires", () => {
     const matchers = [/\bAcmeCorp\b/];
@@ -134,5 +172,9 @@ describe("scanForSecrets — benign content", () => {
 
   it("returns null for a path that is not a credential store", () => {
     expect(scanForSecrets("see src/utils/parser.ts for the helper")).toBeNull();
+  });
+
+  it("returns null for a general-purpose API docs note without a provider endpoint shape", () => {
+    expect(scanForSecrets("The API docs are at https://docs.example.com/reference")).toBeNull();
   });
 });

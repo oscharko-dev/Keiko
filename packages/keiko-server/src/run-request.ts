@@ -7,6 +7,8 @@
 // are enforced by the workflow/harness entry points the engine calls; the BFF never reimplements
 // them.
 
+import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
+
 export type RunKind = "unit-tests" | "bug-investigation" | "explain-plan" | "verify";
 
 export interface RunRequest {
@@ -17,6 +19,9 @@ export interface RunRequest {
   readonly input: Record<string, unknown>;
   // Optional per-run limits, passed through to the workflow/harness.
   readonly limits: Record<string, unknown> | undefined;
+  // Present only for governed grounded-context workflow launches.
+  readonly governedHandoff?: WorkflowHandoffRequest | undefined;
+  readonly governedHandoffSourceGroundedRunId?: string | undefined;
 }
 
 export interface RunRequestError {

@@ -12,14 +12,85 @@
 
 import { useState, type ReactNode } from "react";
 import { ApiError, updateChatConnectedScopes } from "@/lib/api";
+import type { GroundedAnswerContextPackSummary } from "@/lib/types";
 import { effectiveScopes } from "./hooks/workspaceActions";
 import type { Chat, ChatConnectedScope } from "@/lib/types";
 
 export interface ConnectedScopePillProps {
   readonly chat: Chat;
   readonly onDisconnect?: (chat: Chat) => void;
+  readonly lastGroundedBudgetStatus?: LastGroundedBudgetStatus | undefined;
   // Injectable wire seam for tests. Defaults to the real BFF helper.
   readonly updateScopes?: typeof updateChatConnectedScopes;
+}
+
+type GroundedBudgetPressure = "low" | "moderate" | "high" | "exceeded";
+
+const PRESSURE_LABEL: Readonly<Record<GroundedBudgetPressure, string>> = {
+  low: "Low",
+  moderate: "Moderate",
+  high: "High",
+  exceeded: "Exceeded",
+};
+
+const PRESSURE_CLASS: Readonly<Record<GroundedBudgetPressure, string>> = {
+  low: "cmp-budget-badge cmp-budget-badge-low",
+  moderate: "cmp-budget-badge cmp-budget-badge-moderate",
+  high: "cmp-budget-badge cmp-budget-badge-high",
+  exceeded: "cmp-budget-badge cmp-budget-badge-exceeded",
+};
+
+export interface LastGroundedBudgetStatus {
+  readonly pressure: GroundedBudgetPressure;
+  readonly label: string;
+  readonly summary: string;
+}
+
+function formatTokenCount(tokens: number): string {
+  if (tokens >= 1000) {
+    return `${(tokens / 1000).toFixed(1)}k`;
+  }
+  return tokens.toString();
+}
+
+function finiteRatio(used: number, budget: number): number | undefined {
+  if (!Number.isFinite(budget) || budget <= 0) {
+    return undefined;
+  }
+  return used / budget;
+}
+
+export function buildLastGroundedBudgetStatus(
+  contextPack: GroundedAnswerContextPackSummary | undefined,
+): LastGroundedBudgetStatus | undefined {
+  if (contextPack === undefined) {
+    return undefined;
+  }
+  const { usage, budget } = contextPack;
+  const ratios = [
+    finiteRatio(usage.searchCalls, budget.searchCallsMax),
+    finiteRatio(usage.filesRead, budget.filesReadMax),
+    finiteRatio(usage.excerptBytes, budget.excerptBytesMax),
+    finiteRatio(usage.modelInputTokens, budget.modelInputTokensMax),
+    finiteRatio(usage.modelOutputTokens, budget.modelOutputTokensMax),
+    finiteRatio(contextPack.elapsedMs, budget.elapsedMsMax),
+    finiteRatio(usage.rerankCalls, budget.rerankCallsMax),
+  ].filter((ratio): ratio is number => ratio !== undefined);
+  const maxRatio = ratios.length === 0 ? 0 : Math.max(...ratios);
+  const pressure: GroundedBudgetPressure =
+    maxRatio > 1
+      ? "exceeded"
+      : maxRatio >= 0.85
+        ? "high"
+        : maxRatio >= 0.6
+          ? "moderate"
+          : "low";
+  const totalTokens = usage.modelInputTokens + usage.modelOutputTokens;
+  return {
+    pressure,
+    label: PRESSURE_LABEL[pressure],
+    summary: `Last grounded run: ${formatTokenCount(totalTokens)} tokens, ${String(usage.filesRead)} files`,
+  };
 }
 
 function lastSegment(path: string): string {
@@ -136,6 +207,7 @@ function ScopePillItem({
 export function ConnectedScopePill({
   chat,
   onDisconnect,
+  lastGroundedBudgetStatus,
   updateScopes = updateChatConnectedScopes,
 }: ConnectedScopePillProps): ReactNode {
   const scopes = effectiveScopes(chat);
@@ -153,6 +225,19 @@ export function ConnectedScopePill({
           updateScopes={updateScopes}
         />
       ))}
+      {lastGroundedBudgetStatus !== undefined ? (
+        <span className="scope-pill-wrap">
+          <span
+            className="scope-pill-detail"
+            style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}
+          >
+            <span className={PRESSURE_CLASS[lastGroundedBudgetStatus.pressure]}>
+              {lastGroundedBudgetStatus.label}
+            </span>
+            <span>{lastGroundedBudgetStatus.summary}</span>
+          </span>
+        </span>
+      ) : null}
     </span>
   );
 }

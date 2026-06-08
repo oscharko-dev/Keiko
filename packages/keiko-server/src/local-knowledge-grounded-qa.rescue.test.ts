@@ -55,10 +55,12 @@ describe("local-knowledge citation rescue (#189)", () => {
     const citations = buildLocalKnowledgeCitations(
       result({ references: [ref(1), ref(2)], citations: [] }),
       undefined,
+      () => "Alpha Capsule / Product Manual",
     );
     expect(citations).toHaveLength(2);
     expect(citations.map((c) => c.marker)).toEqual(["[1]", "[2]"]);
-    expect(citations[0]?.label).toContain("manual-1.md");
+    expect(citations[0]?.label).toBe("manual-1.md");
+    expect(citations[0]?.source).toBe("Alpha Capsule / Product Manual");
     expect(citations[0]?.score).toBe(0.9);
   });
 
@@ -69,9 +71,13 @@ describe("local-knowledge citation rescue (#189)", () => {
         citations: [{ reference: ref(1), marker: "[1]", index: 1, citation: ref(1).citation }],
       }),
       undefined,
+      () => "Alpha Capsule / Product Manual",
     );
     expect(citations).toHaveLength(1);
     expect(citations[0]?.marker).toBe("[1]");
+    expect(citations[0]?.label).toBe("manual-1.md");
+    expect(citations[0]?.source).toBe("Alpha Capsule / Product Manual");
+    expect(citations[0]?.label.includes("chunk")).toBe(false);
   });
 
   it("still returns no evidence for a genuinely empty retrieval", () => {

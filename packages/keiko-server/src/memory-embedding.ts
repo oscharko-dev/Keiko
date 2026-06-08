@@ -28,19 +28,10 @@ import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import { selectEmbeddingModelId } from "./local-knowledge-handlers.js";
 
 const MEMORY_VECTOR_METRIC = "cosine" as const;
-const EMBEDDING_MODEL_PATTERN = /embed/i;
-
-// selectEmbeddingModelId falls back to providers[0] when no model id matches /embed/i — that
-// fallback can be a CHAT model, which must never be used to embed. Re-check the resolved id so a
-// chat-only gateway yields undefined and the caller stays on the lexical path. #204 hard rule.
 export function selectMemoryEmbeddingModelId(
   config: GatewayConfig | undefined,
 ): string | undefined {
-  const modelId = selectEmbeddingModelId(config);
-  if (modelId === undefined || !EMBEDDING_MODEL_PATTERN.test(modelId)) {
-    return undefined;
-  }
-  return modelId;
+  return selectEmbeddingModelId(config);
 }
 
 function providerForModel(
@@ -100,7 +91,7 @@ export type MemoryEmbedder = (text: string) => Promise<MemoryEmbeddingInput | nu
 
 // Builds an embedder from a gateway config, or returns null when no embedding-capable model is
 // configured (or its provider is absent). The CLI backfill and the conversation paths both compose
-// through this single factory so model selection + the /embed/ re-check live in one place.
+// through this single factory so capability-aware model selection lives in one place.
 export function createMemoryEmbedder(
   config: GatewayConfig | undefined,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,

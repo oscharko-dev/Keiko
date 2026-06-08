@@ -93,6 +93,8 @@ export type {
   UpdateChatMessagePatch,
   PatchChatMessageBody,
   PatchMessageResponse,
+  GroundedWorkflowHandoffRequest,
+  GroundedWorkflowHandoffResponse,
   GroundedAskRequest,
   GroundedEvidenceCitation,
   GroundedUncertainty,
@@ -162,6 +164,8 @@ export type {
   BrowserEventKind,
   BrowserEventEnvelope,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+
+export type { ExpectedCheck, WorkflowKind } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 
 // ─── SSE stream aggregation (UI-internal — see ./sse-types for rationale) ──────────
 export type { HarnessEvent, HarnessEventType, TerminalEventType, SseStatus } from "./sse-types";

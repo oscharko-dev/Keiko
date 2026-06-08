@@ -92,6 +92,38 @@ describe("buildWorkflowManifest", () => {
     });
     expect(manifest.context?.workspaceRoot).toBe("/repo");
   });
+
+  it("preserves governed grounded handoff provenance when provided", () => {
+    const manifest = buildWorkflowManifest(
+      identity(),
+      [],
+      {
+        workflowId: "unit-test-generation",
+        status: "dry-run",
+        proposedDiff: "--- /dev/null\n+++ b/tests/add.test.ts\n",
+        addedTestFiles: [{ path: "tests/add.test.ts", estimatedTestCount: 1 }],
+      },
+      undefined,
+      {
+        governedHandoff: {
+          sourceGroundedRunId: "grounded-run-1",
+          contextPackStableIdHash: "a".repeat(64),
+          workflowKind: "unit-test-generation",
+          editablePathCount: 1,
+          readOnlyPathCount: 2,
+          evidenceAtomCount: 3,
+          expectedChecks: ["tests"],
+          approvalTokenHash: "b".repeat(64),
+        },
+      },
+    );
+    expect(manifest.governedHandoff).toMatchObject({
+      sourceGroundedRunId: "grounded-run-1",
+      workflowKind: "unit-test-generation",
+      editablePathCount: 1,
+      expectedChecks: ["tests"],
+    });
+  });
 });
 
 describe("persistWorkflowEvidence", () => {

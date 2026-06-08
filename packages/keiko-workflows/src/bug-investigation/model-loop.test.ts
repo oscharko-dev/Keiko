@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_PATCH_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import { runBugModelLoop } from "./model-loop.js";
 import { buildBugRunState } from "./internal.js";
 import { computeBugFingerprint } from "./emit.js";
@@ -55,6 +56,7 @@ function state(
   model: BugInvestigationDeps["model"],
   fs: BugInvestigationDeps["fs"],
   limits?: BugInvestigationInput["limits"],
+  overrides: Partial<BugInvestigationDeps> = {},
 ): BugRunState {
   const input: BugInvestigationInput = {
     workspaceRoot: ROOT,
@@ -62,7 +64,11 @@ function state(
     modelId: "m",
     ...(limits === undefined ? {} : { limits }),
   };
-  return buildBugRunState(input, { model, fs }, computeBugFingerprint(input.report, input.modelId));
+  return buildBugRunState(
+    input,
+    { model, fs, ...overrides },
+    computeBugFingerprint(input.report, input.modelId),
+  );
 }
 
 const evidence = parseFailureEvidence({ description: "bug" });
@@ -231,6 +237,37 @@ describe("runBugModelLoop (D6/D10)", () => {
     );
     expect(result.accepted).toBeUndefined();
     expect(result.lastRejectionCode).toBe("line-limit");
+  });
+
+  it("rejects a patch that falls outside the governed editablePaths", async () => {
+    const { fs, workspace } = ws();
+    const model = scriptedModel([response({ content: FIX })]);
+    const result = await runBugModelLoop(
+      state(model.port, fs, undefined, {
+        workflowHandoff: {
+          schemaVersion: "1",
+          contextPackStableId: "pl-1234567890abcdef",
+          workflowKind: "bug-investigation",
+          patchScope: {
+            schemaVersion: "1",
+            editablePaths: ["src/other.ts"],
+            readOnlyPaths: ["src/buggy.ts"],
+            evidenceAtomIds: ["atom-1"],
+            limits: DEFAULT_PATCH_SCOPE_LIMITS,
+            expectedChecks: ["verify"],
+            unknowns: [],
+          },
+          requestedAtMs: 1,
+          userApprovalToken: "a".repeat(64),
+        },
+      }),
+      workspace,
+      { description: "bug" },
+      evidence,
+      makePack([]),
+    );
+    expect(result.accepted).toBeUndefined();
+    expect(result.lastRejectionCode).toBe("out-of-scope");
   });
 
   it("stops at the maxModelCalls ceiling", async () => {

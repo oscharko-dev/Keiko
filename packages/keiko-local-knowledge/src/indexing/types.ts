@@ -142,7 +142,7 @@ export interface IndexingDocumentSkippedEvent {
   readonly kind: "document-skipped";
   readonly jobId: string;
   readonly documentId: DocumentId;
-  readonly reason: "unchanged" | "already-embedded";
+  readonly reason: "unchanged" | "already-embedded" | "unsupported";
 }
 
 export interface IndexingDocumentFailedEvent {

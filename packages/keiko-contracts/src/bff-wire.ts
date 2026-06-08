@@ -24,6 +24,7 @@ import {
   type SelectedScopeKind,
 } from "./connected-context.js";
 import type { CapsuleSetId, KnowledgeCapsuleId } from "./local-knowledge.js";
+import type { ExpectedCheck, WorkflowKind } from "./workflow-handoff.js";
 
 export interface Project {
   readonly path: string;
@@ -220,6 +221,22 @@ export interface MessagesResponse {
 
 export interface MessageResponse {
   readonly message: ChatMessage;
+}
+
+export interface GroundedWorkflowHandoffRequest {
+  readonly assistantMessageId: string;
+  readonly modelId: string;
+  readonly workflowKind: WorkflowKind;
+  readonly input: Record<string, unknown>;
+  readonly editablePaths: readonly string[];
+  readonly expectedChecks?: readonly ExpectedCheck[] | undefined;
+  readonly unknowns?: readonly string[] | undefined;
+  readonly requestedAtMs: number;
+}
+
+export interface GroundedWorkflowHandoffResponse {
+  readonly run: { readonly runId: string; readonly fingerprint: string };
+  readonly messages: readonly ChatMessage[];
 }
 
 // ─── Desktop chat bootstrap (BFF /api/desktop/chat/bootstrap) ─────────────────────

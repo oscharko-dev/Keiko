@@ -30,6 +30,7 @@ import type {
 
 import { assembleContextBlock } from "./context.js";
 import { RetrievalError } from "./errors.js";
+import { tokenize } from "./relevance.js";
 import { rankMemories, type RankMemoriesQuery } from "./ranking.js";
 import { isMemorySuppressed } from "./suppression.js";
 import {
@@ -38,6 +39,7 @@ import {
   DEFAULT_MAX_INCLUDED,
   DEFAULT_RANKING_WEIGHTS,
   DEFAULT_STALE_CONFIDENCE_THRESHOLD,
+  type IncludedMemory,
   type MemoryQueryPort,
   type MemoryRetrievalRequest,
   type MemoryRetrievalResult,
@@ -227,6 +229,50 @@ function buildEdgesIndex(
   return map;
 }
 
+function hasPositiveSemanticSignal(
+  semanticById: MemoryRetrievalRequest["semanticById"],
+): boolean {
+  if (semanticById === undefined) return false;
+  for (const score of semanticById.values()) {
+    if (score > 0) return true;
+  }
+  return false;
+}
+
+function hasQuerySignal(request: MemoryRetrievalRequest): boolean {
+  const lexicalSignal =
+    request.queryText !== undefined && tokenize(request.queryText).length > 0;
+  return lexicalSignal || hasPositiveSemanticSignal(request.semanticById);
+}
+
+interface ThresholdStep {
+  readonly ranked: readonly IncludedMemory[];
+  readonly omitted: readonly OmittedMemory[];
+}
+
+function applyRelevanceFloor(
+  ranked: readonly IncludedMemory[],
+  request: MemoryRetrievalRequest,
+): ThresholdStep {
+  if (!hasQuerySignal(request)) {
+    return { ranked, omitted: [] };
+  }
+  const kept: IncludedMemory[] = [];
+  const omitted: OmittedMemory[] = [];
+  for (const entry of ranked) {
+    if (
+      entry.subscores.relevance === 0 &&
+      entry.subscores.semantic === 0 &&
+      entry.subscores.graph === 0
+    ) {
+      omitted.push({ memoryId: entry.memoryId, reason: "below-threshold" });
+      continue;
+    }
+    kept.push(entry);
+  }
+  return { ranked: kept, omitted };
+}
+
 export function retrieveMemoryContext(
   request: MemoryRetrievalRequest,
   port: MemoryQueryPort,
@@ -250,13 +296,14 @@ export function retrieveMemoryContext(
     rankQuery,
     edgesByMemory === undefined ? {} : { edgesByMemory },
   );
-  const assembled = assembleContextBlock(ranked, filtered.candidates, {
+  const thresholded = applyRelevanceFloor(ranked, request);
+  const assembled = assembleContextBlock(thresholded.ranked, filtered.candidates, {
     budgetTokens: resolved.budgetTokens,
     maxIncluded: resolved.maxIncluded,
   });
   return {
     ...assembled,
-    omitted: [...filtered.omitted, ...assembled.omitted],
+    omitted: [...filtered.omitted, ...thresholded.omitted, ...assembled.omitted],
     request,
   };
 }

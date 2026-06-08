@@ -3,8 +3,13 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { ConnectedScopePill } from "./ConnectedScopePill";
-import type { Chat, ChatConnectedScope, ChatResponse } from "@/lib/types";
+import { buildLastGroundedBudgetStatus, ConnectedScopePill } from "./ConnectedScopePill";
+import type {
+  Chat,
+  ChatConnectedScope,
+  ChatResponse,
+  GroundedAnswerContextPackSummary,
+} from "@/lib/types";
 
 function makeChat(overrides: Partial<Chat> = {}): Chat {
   return {
@@ -18,6 +23,53 @@ function makeChat(overrides: Partial<Chat> = {}): Chat {
     localKnowledgeScope: undefined,
     createdAt: 1,
     updatedAt: 2,
+    ...overrides,
+  };
+}
+
+function contextPack(
+  overrides: Partial<GroundedAnswerContextPackSummary> = {},
+): GroundedAnswerContextPackSummary {
+  return {
+    schemaVersion: "1",
+    scopeId: "scope-1234",
+    scopeKind: "files",
+    fileCount: 1,
+    queryKind: "natural-language",
+    usage: {
+      searchCalls: 2,
+      filesRead: 5,
+      excerptBytes: 4000,
+      modelInputTokens: 1100,
+      modelOutputTokens: 300,
+      elapsedMs: 0,
+      rerankCalls: 0,
+    },
+    budget: {
+      searchCallsMax: 10,
+      filesReadMax: 6,
+      excerptBytesMax: 10000,
+      modelInputTokensMax: 5000,
+      modelOutputTokensMax: 1000,
+      elapsedMsMax: 10000,
+      rerankCallsMax: Number.POSITIVE_INFINITY,
+    },
+    citationCount: 1,
+    omittedCount: 0,
+    omittedCounts: {
+      "outside-scope": 0,
+      binary: 0,
+      generated: 0,
+      ignored: 0,
+      "size-exceeded": 0,
+      "near-duplicate": 0,
+      "low-relevance": 0,
+      "redacted-only": 0,
+      "budget-exhausted": 0,
+      "tool-unavailable": 0,
+    },
+    uncertaintyCount: 0,
+    elapsedMs: 1000,
     ...overrides,
   };
 }
@@ -130,5 +182,23 @@ describe("ConnectedScopePill", () => {
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("offline");
     });
+  });
+
+  it("renders the last grounded budget badge and summary", () => {
+    const chat = makeChat({
+      connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
+    });
+    const status = buildLastGroundedBudgetStatus(
+      contextPack({ usage: { ...contextPack().usage, filesRead: 5 } }),
+    );
+    render(
+      <ConnectedScopePill
+        chat={chat}
+        updateScopes={vi.fn()}
+        lastGroundedBudgetStatus={status}
+      />,
+    );
+    expect(screen.getByText("Moderate")).toBeInTheDocument();
+    expect(screen.getByText(/Last grounded run:/)).toHaveTextContent("1.4k tokens, 5 files");
   });
 });

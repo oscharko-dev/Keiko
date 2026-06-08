@@ -9,7 +9,11 @@ import {
   type ReactNode,
 } from "react";
 import { useChatSessionContext } from "./context/ChatSessionContext";
-import { ConnectedScopePill } from "./ConnectedScopePill";
+import {
+  buildLastGroundedBudgetStatus,
+  ConnectedScopePill,
+  type LastGroundedBudgetStatus,
+} from "./ConnectedScopePill";
 import { ConnectorScopePill } from "./ConnectorScopePill";
 import { BudgetIndicator, BUDGET_EXCEEDED_ALERT_ID } from "./ContextBudget";
 import { GroundedAnswer } from "./GroundedAnswer";
@@ -22,7 +26,12 @@ import {
   AttachRejectionAlert,
   SentDocumentsNote,
 } from "./AttachmentStrip";
-import { isRunSummaryMessage, LaunchWorkflowButton, RunSummaryCard } from "./WorkflowHandoff";
+import {
+  isRunSummaryMessage,
+  LaunchGroundedWorkflowButton,
+  LaunchWorkflowButton,
+  RunSummaryCard,
+} from "./WorkflowHandoff";
 import { Toggle } from "./widgets/shared/Toggle";
 import { isBudgetExceeded, type ChatSessionApi, type SendStatus } from "./hooks/useChatSession";
 import type { AttachmentRejectionReason } from "./hooks/useChatSession";
@@ -866,9 +875,11 @@ function LocalKnowledgeScopeControl({
 function ChatScopeHeader({
   chat,
   onChatChanged,
+  lastGroundedBudgetStatus,
 }: {
   readonly chat: Chat;
   readonly onChatChanged: (chat: Chat) => void;
+  readonly lastGroundedBudgetStatus: LastGroundedBudgetStatus | undefined;
 }): ReactNode {
   return (
     <div
@@ -876,7 +887,11 @@ function ChatScopeHeader({
       style={{ padding: "6px 12px", display: "flex", gap: 12, flexWrap: "wrap" }}
     >
       {/* Folder pills: one per connected folder/file source (1+N, #532). Self-guards to null. */}
-      <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
+      <ConnectedScopePill
+        chat={chat}
+        onDisconnect={onChatChanged}
+        lastGroundedBudgetStatus={lastGroundedBudgetStatus}
+      />
       {/* Connector pills: one per Local Knowledge connector source (#189 Slice 3 M4). Mixed N. */}
       <ConnectorScopePill chat={chat} onDisconnect={onChatChanged} />
       <LocalKnowledgeScopeControl chat={chat} onChatChanged={onChatChanged} />
@@ -892,10 +907,14 @@ function GroundedAnswerPanel({
   chat,
   answer,
   busy,
+  selectedModelId,
+  launchGroundedWorkflowHandoff,
 }: {
   readonly chat: Chat | undefined;
   readonly answer: GroundedAnswerWire | undefined;
   readonly busy: boolean;
+  readonly selectedModelId: string | undefined;
+  readonly launchGroundedWorkflowHandoff: ChatSessionApi["launchGroundedWorkflowHandoff"];
 }): ReactNode {
   if (chat === undefined) return null;
   // Show the grounded panel when the chat has ANY scope binding (folder or connector, singular or
@@ -911,6 +930,12 @@ function GroundedAnswerPanel({
   return (
     <div className="chatw-grounded" aria-live="polite">
       <GroundedAnswer answer={answer} busy={busy} />
+      <LaunchGroundedWorkflowButton
+        answer={answer}
+        modelId={selectedModelId}
+        busy={busy}
+        launch={launchGroundedWorkflowHandoff}
+      />
     </div>
   );
 }
@@ -919,13 +944,16 @@ function MemoryActionCard({
   action,
   acceptCandidate,
   rejectCandidate,
+  forgetMemoryAction,
 }: {
   readonly action: ConversationMemoryActionWire;
   readonly acceptCandidate: (proposalId: string) => Promise<void>;
   readonly rejectCandidate: (proposalId: string) => Promise<void>;
+  readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
 }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const [confirmForget, setConfirmForget] = useState(false);
   if (action.kind === "candidate") {
     return (
       <article className="chat-memory-action">
@@ -990,6 +1018,16 @@ function MemoryActionCard({
     );
   }
   if (action.kind === "forget") {
+    const executeForget = (): void => {
+      setBusy(true);
+      setError(undefined);
+      void forgetMemoryAction(action.memoryId)
+        .then(() => setConfirmForget(false))
+        .catch((caught) => {
+          setError(caught instanceof Error ? caught.message : "Unable to forget memory.");
+        })
+        .finally(() => setBusy(false));
+    };
     return (
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
@@ -997,6 +1035,45 @@ function MemoryActionCard({
           <span>{action.requiresConfirmation ? "Confirmation required" : action.memoryId}</span>
         </div>
         <p>{`Matched memory ${action.memoryId} for a forget operation.`}</p>
+        <div className="chat-memory-action-buttons">
+          {!action.requiresConfirmation ? (
+            <button type="button" disabled={busy} onClick={executeForget}>
+              Forget
+            </button>
+          ) : !confirmForget ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setError(undefined);
+                setConfirmForget(true);
+              }}
+            >
+              Review forget
+            </button>
+          ) : (
+            <>
+              <button type="button" disabled={busy} onClick={executeForget}>
+                Forget permanently
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setError(undefined);
+                  setConfirmForget(false);
+                }}
+              >
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+        {error !== undefined ? (
+          <div role="alert" className="cmp-err">
+            {error}
+          </div>
+        ) : null}
       </article>
     );
   }
@@ -1018,6 +1095,7 @@ function MemoryPanel({
   latestMemory,
   acceptCandidate,
   rejectCandidate,
+  forgetMemoryAction,
 }: {
   readonly memoryEnabled: boolean;
   readonly setMemoryEnabled: (next: boolean) => void;
@@ -1026,6 +1104,7 @@ function MemoryPanel({
   readonly latestMemory: ConversationMemoryResultWire | undefined;
   readonly acceptCandidate: (proposalId: string) => Promise<void>;
   readonly rejectCandidate: (proposalId: string) => Promise<void>;
+  readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const disclosureId = "chat-memory-disclosure";
@@ -1093,6 +1172,7 @@ function MemoryPanel({
               action={action}
               acceptCandidate={acceptCandidate}
               rejectCandidate={rejectCandidate}
+              forgetMemoryAction={forgetMemoryAction}
             />
           ))}
         </div>
@@ -1111,6 +1191,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
     sendStatus,
     error,
     noEligibleModels,
+    selectedModel,
     sendMessage,
     cancelGrounded,
     activeChat,
@@ -1124,11 +1205,22 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
     setMemoryBudgetTokens,
     acceptMemoryCandidate,
     rejectMemoryCandidate,
+    launchGroundedWorkflowHandoff,
+    forgetMemoryAction,
   } = session;
   // AC #1: block ready when no model is available — do not allow submission.
   const ready = draft.trim().length > 0 && !sending && !loading && !noEligibleModels;
   const visible = visibleOnly(messages);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const lastGroundedBudgetStatus = buildLastGroundedBudgetStatus(
+    latestGrounded === undefined
+      ? undefined
+      : latestGrounded.groundingKind === "connected-context"
+        ? latestGrounded.contextPack
+        : latestGrounded.groundingKind === "hybrid"
+          ? latestGrounded.contextPack.folder
+          : undefined,
+  );
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -1140,7 +1232,11 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
       <div className="chatw chatw-mini">
         {linkedRoot !== null ? <ChatContext root={linkedRoot} /> : null}
         {activeChat !== undefined ? (
-          <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
+          <ChatScopeHeader
+            chat={activeChat}
+            onChatChanged={replaceChat}
+            lastGroundedBudgetStatus={lastGroundedBudgetStatus}
+          />
         ) : null}
         {noEligibleModels ? <NoModelAlert /> : null}
         <MiniChat session={session} ready={ready} />
@@ -1152,7 +1248,11 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
     <div className="chatw">
       {linkedRoot !== null ? <ChatContext root={linkedRoot} /> : null}
       {activeChat !== undefined ? (
-        <ChatScopeHeader chat={activeChat} onChatChanged={replaceChat} />
+        <ChatScopeHeader
+          chat={activeChat}
+          onChatChanged={replaceChat}
+          lastGroundedBudgetStatus={lastGroundedBudgetStatus}
+        />
       ) : null}
       {activeChat !== undefined ? (
         <MemoryPanel
@@ -1163,6 +1263,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
           latestMemory={latestMemory}
           acceptCandidate={acceptMemoryCandidate}
           rejectCandidate={rejectMemoryCandidate}
+          forgetMemoryAction={forgetMemoryAction}
         />
       ) : null}
       {noEligibleModels ? (
@@ -1204,7 +1305,13 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
                 ) : null}
               </div>
             ) : null}
-            <GroundedAnswerPanel chat={activeChat} answer={latestGrounded} busy={sending} />
+            <GroundedAnswerPanel
+              chat={activeChat}
+              answer={latestGrounded}
+              busy={sending}
+              selectedModelId={selectedModel}
+              launchGroundedWorkflowHandoff={launchGroundedWorkflowHandoff}
+            />
             {/* Issue #148 — disclose which attached documents contributed extracted context. */}
             <SentDocumentsNote documents={lastSentDocuments} />
           </div>

@@ -146,7 +146,7 @@ The empty state never falls back to rendering the bare "Active window" sections;
 
 While `GET /api/relationships/:id` ([api-contract.md §4.4](api-contract.md)) is in flight:
 
-- Each `rb-rows` block renders skeleton placeholders (3 lines per block) — reuses the existing `lk-status` skeleton pattern referenced in [518-ui-blueprint.md "Visual state catalogue"](../workspace/518-ui-blueprint.md).
+- Each `rb-rows` block renders skeleton placeholders (3 lines per block) — reuses the existing `.rv-skel` / `.rv-loading` skeleton pattern referenced in [518-ui-blueprint.md "Visual state catalogue"](../workspace/518-ui-blueprint.md).
 - The skeleton is shown only after a 500 ms threshold to avoid flash on fast responses.
 - `aria-busy="true"` is applied to the inspector container while loading.
 - No spinner is shown above the section level; the existing `chat-spin` (`globals.css:396`) is used only inside `aria-busy` containers if the load exceeds 2 seconds.

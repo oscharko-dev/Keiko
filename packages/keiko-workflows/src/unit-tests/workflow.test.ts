@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_PATCH_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import { generateUnitTests } from "./workflow.js";
 import type { UnitTestWorkflowDeps, UnitTestWorkflowInput } from "./types.js";
 import { SKIP_UNRESOLVED } from "./verify-stage.js";
@@ -150,6 +151,33 @@ describe("generateUnitTests — production-code guard (AC #9, D6)", () => {
     await generateUnitTests(input(), deps(model.port, { sink: sink.sink }));
     const validated = sink.events().filter((e) => e.type === "patch:validated");
     expect(validated.some((e) => e.rejectionCode === "out-of-scope")).toBe(true);
+  });
+
+  it("rejects a patch that falls outside the governed editablePaths", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input(),
+      deps(model.port, {
+        workflowHandoff: {
+          schemaVersion: "1",
+          contextPackStableId: "pl-1234567890abcdef",
+          workflowKind: "unit-test-generation",
+          patchScope: {
+            schemaVersion: "1",
+            editablePaths: ["tests/other.test.ts"],
+            readOnlyPaths: ["src/add.ts"],
+            evidenceAtomIds: ["atom-1"],
+            limits: DEFAULT_PATCH_SCOPE_LIMITS,
+            expectedChecks: ["tests"],
+            unknowns: [],
+          },
+          requestedAtMs: 1,
+          userApprovalToken: "a".repeat(64),
+        },
+      }),
+    );
+    expect(report.status).toBe("rejected");
+    expect(report.nextActions[0]).toContain("out-of-scope");
   });
 
   it("recovers when a retry produces an in-scope patch", async () => {

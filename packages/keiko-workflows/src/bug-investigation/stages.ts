@@ -12,8 +12,10 @@ import {
   renderDryRun,
   type PatchApplyResult,
 } from "@oscharko-dev/keiko-tools";
+import { nodeWorkspaceWriter } from "@oscharko-dev/keiko-tools/internal/writer";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { createScopedWriter } from "../governed-handoff.js";
 import { assembleBugReport } from "./report.js";
 import { runBugVerification } from "./verify-stage.js";
 import {
@@ -209,12 +211,20 @@ function applyBugPatch(
   accepted: AcceptedBugPatch,
 ): { readonly fs: typeof nodeWorkspaceFs; readonly applyResult: PatchApplyResult } {
   const fs = state.deps.fs ?? nodeWorkspaceFs;
+  const writer =
+    state.deps.workflowHandoff === undefined
+      ? state.deps.writer
+      : createScopedWriter(
+          state.deps.writer ?? nodeWorkspaceWriter,
+          workspace.root,
+          state.deps.workflowHandoff.patchScope.editablePaths,
+        );
   const applyResult = applyPatch(workspace, accepted.diff, {
     applyEnabled: true,
     signal: state.signal,
     fs,
     limits: patchLimitsFrom(state.limits),
-    ...(state.deps.writer === undefined ? {} : { writer: state.deps.writer }),
+    ...(writer === undefined ? {} : { writer }),
   });
   return { fs, applyResult };
 }
