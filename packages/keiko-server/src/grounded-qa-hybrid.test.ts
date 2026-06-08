@@ -385,25 +385,44 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     // mutation: dropping redactString in assembleHybridAnswer → content mismatch
     expect(answer.content).toBe(HYBRID_ANSWER_SENTINEL);
 
-    // Folder citations: non-empty; EVERY citation carries the folder's source label
-    // mutation: removing `.source` tag from mergedFolderCitations → forEach fails
+    // Folder citations: non-empty; EVERY citation carries the folder's source label AND a marker.
+    // mutation: removing `.source` tag from selectedFolderCitations → forEach fails
+    // mutation: removing marker from selectedFolderCitations → marker check fails
     expect(answer.citations.length).toBeGreaterThan(0);
     for (const citation of answer.citations) {
       expect(citation.source).toBe("alpha-repo");
+      expect(typeof citation.marker).toBe("number");
+      expect(Number(citation.marker) >= 1).toBe(true);
     }
 
-    // Connector citations: non-empty; EVERY citation carries the connector's source label
-    // mutation: removing `.source` tag from mergedConnectorCitations → forEach fails
+    // Connector citations: non-empty; EVERY citation carries the connector's source label.
+    // mutation: removing `.source` tag from selectedConnectorCitations → forEach fails
     expect(answer.knowledgeCitations.length).toBeGreaterThan(0);
     for (const kc of answer.knowledgeCitations) {
       expect(kc.source?.startsWith(`${connectorLabel} / `)).toBe(true);
     }
+
+    // Global [n] marker sequence: all markers across both citation arrays are distinct positive
+    // integers. Folder and connector markers come from the SAME sequence (no resets per kind).
+    // mutation: using per-kind index resets → markers clash between kinds
+    const folderMarkers = answer.citations.map((c) => Number(c.marker));
+    const connectorMarkers = answer.knowledgeCitations.map((kc) =>
+      parseInt(kc.marker.replace(/^\[(\d+)\]$/, "$1"), 10),
+    );
+    const allMarkers = [...folderMarkers, ...connectorMarkers];
+    expect(new Set(allMarkers).size).toBe(allMarkers.length);
 
     // contextPack: kind === "hybrid" with correct folderSourceCount and connectorSourceCount
     // mutation: swapping the two counts → at least one count assertion fails
     expect(answer.contextPack.kind).toBe("hybrid");
     expect(answer.contextPack.folderSourceCount).toBe(1);
     expect(answer.contextPack.connectorSourceCount).toBe(1);
+
+    // referencesUsed ≤ referenceBudget (hybridMaxCandidates) — invariant from ADR-0036
+    // mutation: using pre-RRF sum instead of selected count → violates invariant when budget shrinks
+    expect(answer.contextPack.knowledge.referencesUsed).toBeLessThanOrEqual(
+      answer.contextPack.knowledge.referenceBudget,
+    );
 
     // Messages persisted in the UiStore
     const messages = store.listMessages(chatId);
@@ -585,8 +604,8 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
 
     // The indexing capsule must NOT appear in knowledgeCitations
     // mutation: removing scopeStateFailure skip guard → indexing connector retrieves and appears
-    const indexingCitations = answer.knowledgeCitations.filter(
-      (kc) => kc.source?.startsWith("Indexing Docs / "),
+    const indexingCitations = answer.knowledgeCitations.filter((kc) =>
+      kc.source?.startsWith("Indexing Docs / "),
     );
     expect(indexingCitations).toHaveLength(0);
 
@@ -752,5 +771,144 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
     // Type narrowing confirms we got the right answer shape (throws if wrong groundingKind)
     const lkAnswer = asLocalKnowledge(answer);
     expect(lkAnswer.contextPack.kind).toBe("local-knowledge");
+  });
+});
+
+// ─── Case 5: RRF anti-dominance — high-rank connector beats low-rank folder ───
+//
+// A connector ranked 1st among connectors receives the same RRF score as a folder ranked 1st
+// among folders: 1/(60+1). Tie-break rule: connector wins. So when both engines produce exactly
+// one candidate each, the connector must get marker=1 and the folder must get marker=2.
+// Dropping the tiebreak rule would swap them and fail the marker assertions.
+
+describe("RRF anti-dominance — connector selected above folder at equal fused score", () => {
+  it("assigns marker=1 to the connector and marker=2 to the folder when both rank 1st in their engine", async () => {
+    // Arrange: folder score=0.5 (rank 1 among folders); connector score=0.5 (rank 1 among connectors).
+    // Both get RRF score 1/(60+1). Tie-break: connector wins → connector marker=1, folder marker=2.
+    const { capsuleId: capId, label: connectorLabel } = await seedReadyCapsule("Tie Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/tie.ts"],
+      connectedAtMs: NOW,
+      root: "/home/u/tie-repo",
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+
+    const packMap = new Map([["src/tie.ts", folderPack("src/tie.ts", 0.5, "tie-atom")]]);
+    const hybrid: HybridSeam = {
+      folderRetriever: folderRetrieverFor(packMap),
+      connectorRetrieve: singleConnectorRetrieve(capId),
+      answer: sentinelAnswerer(),
+    };
+
+    // Act
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Tie question?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+
+    // Connector citation uses marker [1] (wins the tiebreak)
+    // mutation: swapping connector/folder tiebreak → connector gets [2] and this fails
+    expect(answer.knowledgeCitations.length).toBeGreaterThan(0);
+    expect(answer.knowledgeCitations[0]?.marker).toBe("[1]");
+
+    // Folder citation uses marker 2 (loses the tiebreak)
+    // mutation: swapping connector/folder tiebreak → folder gets marker=1 and this fails
+    expect(answer.citations.length).toBeGreaterThan(0);
+    expect(answer.citations[0]?.marker).toBe(2);
+
+    // Both citation arrays still non-empty and source-tagged — the shared budget keeps both
+    expect(answer.citations[0]?.source).toBe("tie-repo");
+    expect(answer.knowledgeCitations[0]?.source?.startsWith(`${connectorLabel} / `)).toBe(true);
+  });
+});
+
+// ─── Case 6: Shared byte budget excludes oversized folder excerpt ─────────────
+//
+// When hybridMaxExcerptBytes is set just below the folder excerpt's byte size, the folder
+// candidate is excluded from the selected set while the connector candidate (empty excerpt = 0
+// bytes, always fits first) is kept. This proves the shared budget governs BOTH engines and
+// that a large folder excerpt cannot crowd out a smaller connector excerpt.
+
+describe("shared byte budget — oversized folder excerpt excluded in favour of connector", () => {
+  it("excludes a folder excerpt that exceeds the per-budget cap when a connector excerpt fits", async () => {
+    // Arrange: folder excerpt = "evidence for src/big.ts" (23 bytes).
+    // Set hybridMaxExcerptBytes=10 via config.grounding so the folder excerpt doesn't fit after
+    // the connector. Connector excerpt is "" (no real doc in store) = 0 bytes → selected first
+    // (anti-dominance tiebreak). hybridMaxCandidates=2 so both are eligible; the byte budget alone
+    // gates the folder out.
+    const { capsuleId: capId } = await seedReadyCapsule("Budget Docs");
+    const folderScope: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/big.ts"],
+      connectedAtMs: NOW,
+      root: "/home/u/budget-repo",
+    };
+    const connectorScope: ChatLocalKnowledgeScope = {
+      kind: "capsule",
+      capsuleId: capId,
+      connectedAtMs: NOW,
+    };
+    const chatId = makeHybridChat([folderScope], [connectorScope]);
+
+    const packMap = new Map([["src/big.ts", folderPack("src/big.ts", 0.5, "big-atom")]]);
+    // Config with a tight byte budget: connector (0 bytes) fits; folder (23 bytes) does not.
+    const budgetDeps = hybridDeps({
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        grounding: {
+          maxConnectedSources: 16,
+          maxLocalKnowledgeSources: 16,
+          maxPromptReferences: 8,
+          maxExcerptChars: 900,
+          referenceBudget: 10,
+          hybridMaxCandidates: 2,
+          hybridMaxExcerptBytes: 10,
+        },
+      },
+      configPresent: true,
+    });
+    const hybrid: HybridSeam = {
+      folderRetriever: folderRetrieverFor(packMap),
+      connectorRetrieve: singleConnectorRetrieve(capId),
+      answer: sentinelAnswerer(),
+    };
+
+    // Act
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "Budget question?" })),
+      budgetDeps,
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    const answer = asHybrid(result.body as GroundedAnswer);
+
+    // Connector citation present (0-byte excerpt fits within 10-byte budget)
+    // mutation: removing byte budget enforcement → folder would also appear
+    expect(answer.knowledgeCitations.length).toBeGreaterThan(0);
+
+    // Folder citation absent (23-byte excerpt exceeds remaining budget after connector)
+    // mutation: removing byte budget enforcement → folder citation appears and length > 0
+    expect(answer.citations).toHaveLength(0);
+
+    // referencesUsed ≤ referenceBudget invariant holds even under a tight budget
+    expect(answer.contextPack.knowledge.referencesUsed).toBeLessThanOrEqual(
+      answer.contextPack.knowledge.referenceBudget,
+    );
   });
 });
