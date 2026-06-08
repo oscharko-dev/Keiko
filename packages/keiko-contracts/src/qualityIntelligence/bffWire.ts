@@ -92,6 +92,17 @@ export interface QualityIntelligenceUiAtomCoverage {
 }
 
 /**
+ * Weak-test flag surfaced when the adversarial test-quality judge (Epic #736) classified a
+ * candidate as weak. Carries only the redacted judge rationale and the finding severity — never
+ * raw model output. Absent on a candidate that the judge rated strong or that was never judged.
+ */
+export interface QualityIntelligenceUiWeakTestFlag {
+  readonly severity: QualityIntelligenceSeverity;
+  /** Single-sentence reason, already passed through the QI redaction pipeline. */
+  readonly rationale: string;
+}
+
+/**
  * Single-run detail projection.
  * Adds full finding rows, candidate id refs, evidence refs, and the manifest schema
  * version. Never carries raw prompts, model output, credentials, or provider URLs.
@@ -121,6 +132,11 @@ export interface QualityIntelligenceUiRunDetail {
   readonly coveragePercentage: number;
   /** Per-atom coverage classification (refs + status; empty when no matrix is available). */
   readonly coverageByAtom: readonly QualityIntelligenceUiAtomCoverage[];
+  /**
+   * Mean test-quality judge score [0-100] (Epic #736); null when the judge stage was skipped,
+   * unavailable, or the run produced no candidates to score.
+   */
+  readonly qualityScore: number | null;
 }
 
 /**
@@ -142,6 +158,11 @@ export interface QualityIntelligenceUiCandidate {
   /** Per-candidate review decision (Issue #282); "open" until a reviewer acts. */
   readonly reviewState: QualityIntelligenceReviewState;
   readonly derivedFromAtomIds: readonly string[];
+  /**
+   * Present only when the adversarial test-quality judge (Epic #736) flagged this candidate as
+   * weak. Omitted entirely when the candidate was rated strong or was never judged.
+   */
+  readonly weakTestFlag?: QualityIntelligenceUiWeakTestFlag;
 }
 
 // ─── Run start request (Issue #280/#281) ────────────────────────────────────────

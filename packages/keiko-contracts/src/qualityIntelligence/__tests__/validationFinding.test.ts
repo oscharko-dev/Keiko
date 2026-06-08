@@ -45,13 +45,15 @@ const narrow = (f: QualityIntelligenceValidationFinding): string => {
       return f.kind;
     case "coverage-gap":
       return f.kind;
+    case "test-quality":
+      return f.kind;
     default:
       return assertQualityIntelligenceNever(f);
   }
 };
 
 describe("QualityIntelligenceValidationFinding", () => {
-  it("enumerates all seven kinds", () => {
+  it("enumerates all eight kinds", () => {
     expect(QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS).toEqual<
       readonly QualityIntelligenceValidationFindingKind[]
     >([
@@ -62,6 +64,7 @@ describe("QualityIntelligenceValidationFinding", () => {
       "policy-violation",
       "manual-rejection",
       "coverage-gap",
+      "test-quality",
     ]);
   });
 

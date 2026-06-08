@@ -632,6 +632,7 @@ export type {
   QualityIntelligenceUiRunSummary,
   QualityIntelligenceUiRunTotals,
   QualityIntelligenceUiCandidate,
+  QualityIntelligenceUiWeakTestFlag,
   QualityIntelligenceInlineSource,
   QualityIntelligenceInlineSourceKind,
   QualityIntelligenceRequirementsSource,
@@ -654,6 +655,12 @@ export type {
   QualityIntelligencePriority,
   QualityIntelligenceRiskClass,
   QualityIntelligenceTestCaseStatus,
+} from "./qualityIntelligence/index.js";
+// Epic #736 (Issue #746) added the test-quality rubric judge contracts as flat re-exports.
+export type {
+  TestQualityDimensionName,
+  TestQualityRubricDimension,
+  TestQualityJudgeVerdict,
 } from "./qualityIntelligence/index.js";
 export {
   assertExportBundleInvariant,

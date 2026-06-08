@@ -58,6 +58,12 @@ export interface QualityIntelligenceFindingRow {
   readonly kind: QualityIntelligenceValidationFindingKind;
   readonly severity: QualityIntelligenceSeverity;
   readonly summaryRedacted: string;
+  /**
+   * Optional candidate this finding is scoped to (Epic #736). Present on candidate-scoped findings
+   * (e.g. test-quality, logic-defect) so the UI can associate a finding with a single test case;
+   * absent on run-scoped findings (e.g. policy-violation).
+   */
+  readonly candidateId?: string;
 }
 
 export interface QualityIntelligenceExportRow {
@@ -104,6 +110,8 @@ export interface QualityIntelligenceEvidenceManifest {
   readonly integrityHashes: QualityIntelligenceIntegrityHashes;
   /** Optional: per-atom coverage classification (refs + status, no raw text). Added in #738. */
   readonly coverageMatrix?: readonly QualityIntelligenceCoverageMatrixRow[];
+  /** Optional: mean test-quality judge score [0-100]; null when judge stage was skipped. Added in #736. */
+  readonly qualityScore?: number | null;
 }
 
 // ─── Validation ────────────────────────────────────────────────────────────────────
@@ -128,6 +136,7 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "redactionSummary",
   "integrityHashes",
   "coverageMatrix",
+  "qualityScore",
 ]);
 
 const ALLOWED_STATUSES: ReadonlySet<string> = new Set<string>([

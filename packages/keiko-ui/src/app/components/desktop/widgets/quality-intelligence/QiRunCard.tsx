@@ -14,6 +14,7 @@ import { ExportBar } from "./ExportBar";
 import {
   StatusBadge,
   SeverityBadge,
+  QualityScoreBadge,
   LoadingSkeleton,
   ErrorState,
   formatError,
@@ -43,6 +44,12 @@ function SummaryStrip({ detail }: { readonly detail: QualityIntelligenceUiRunDet
       <div className="qi-run-summary-item">
         <dt>Findings</dt>
         <dd>{detail.totals.findings.toString()}</dd>
+      </div>
+      <div className="qi-run-summary-item">
+        <dt>Quality</dt>
+        <dd>
+          <QualityScoreBadge score={detail.qualityScore} />
+        </dd>
       </div>
       <div className="qi-run-summary-item">
         <dt>Review</dt>

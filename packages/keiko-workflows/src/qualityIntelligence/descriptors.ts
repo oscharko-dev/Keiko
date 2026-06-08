@@ -96,7 +96,7 @@ export const QI_TEST_DESIGN_WORKFLOW_DESCRIPTOR: QualityIntelligenceWorkflowDesc
     description:
       "Derive intent, draft test-case candidates, build coverage map, validate, persist evidence. " +
       "Stages: plan, intent, candidates, coverage, validate, finalize.",
-    stageNames: ["plan", "intent", "candidates", "coverage", "validate", "finalize"],
+    stageNames: ["plan", "intent", "candidates", "judge", "coverage", "validate", "finalize"],
     emittedEventKinds: [...LIFECYCLE_EVENT_KINDS, "candidate:proposed", "finding:recorded"],
     defaultLimits: FROZEN_DEFAULT_LIMITS,
     preferredCostClass: "medium",

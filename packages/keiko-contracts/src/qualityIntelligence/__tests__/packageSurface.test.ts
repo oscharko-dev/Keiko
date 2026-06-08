@@ -62,6 +62,7 @@ const QI_SOURCE_FILES: readonly string[] = [
   "auditSummary.ts",
   "handoffEnvelope.ts",
   "bffWire.ts",
+  "testQualityRubric.ts",
   "index.ts",
 ];
 

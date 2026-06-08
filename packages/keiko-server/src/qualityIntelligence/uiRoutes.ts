@@ -26,6 +26,7 @@ import type {
   QualityIntelligenceUiEvidenceRef,
   QualityIntelligenceUiCandidate,
   QualityIntelligenceUiAtomCoverage,
+  QualityIntelligenceUiWeakTestFlag,
 } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -74,10 +75,29 @@ interface RunDetailInputs {
   readonly reviewArtifact: ReturnType<typeof loadRunReviewState>;
 }
 
+/**
+ * Build a candidateId → weak-test flag map from the persisted test-quality findings (Epic #736).
+ * Only findings of kind "test-quality" that carry a candidateId contribute; the first finding wins
+ * per candidate (the judge emits at most one test-quality finding per candidate).
+ */
+function buildWeakTestFlags(
+  manifest: NonNullable<ReturnType<typeof loadQualityIntelligenceRun>>,
+): ReadonlyMap<string, QualityIntelligenceUiWeakTestFlag> {
+  const flags = new Map<string, QualityIntelligenceUiWeakTestFlag>();
+  for (const f of manifest.findings) {
+    if (f.kind !== "test-quality" || f.candidateId === undefined) continue;
+    if (flags.has(f.candidateId)) continue;
+    flags.set(f.candidateId, { severity: f.severity, rationale: f.summaryRedacted });
+  }
+  return flags;
+}
+
 function projectCandidate(
   row: QualityIntelligenceCandidateRow,
   reviewArtifact: ReturnType<typeof loadRunReviewState>,
+  weakTestFlags: ReadonlyMap<string, QualityIntelligenceUiWeakTestFlag>,
 ): QualityIntelligenceUiCandidate {
+  const weakTestFlag = weakTestFlags.get(row.id);
   return {
     id: row.id,
     title: row.title,
@@ -90,6 +110,7 @@ function projectCandidate(
     status: row.status,
     reviewState: candidateReviewStateOf(reviewArtifact, row.id),
     derivedFromAtomIds: row.derivedFromAtomIds,
+    ...(weakTestFlag !== undefined ? { weakTestFlag } : {}),
   };
 }
 
@@ -122,8 +143,9 @@ function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDeta
     severity: f.severity,
     summaryRedacted: f.summaryRedacted,
   }));
+  const weakTestFlags = buildWeakTestFlags(manifest);
   const candidates: QualityIntelligenceUiCandidate[] = candidateRows.map((row) =>
-    projectCandidate(row, reviewArtifact),
+    projectCandidate(row, reviewArtifact, weakTestFlags),
   );
   const candidateIds: string[] =
     candidates.length > 0 ? candidates.map((c) => c.id) : [...manifest.provenanceRefs.envelopeIds];
@@ -150,6 +172,7 @@ function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDeta
     manifestSchemaVersion: manifest.qiEvidenceSchemaVersion,
     coveragePercentage: computeCoveragePercentage(coverageByAtom),
     coverageByAtom,
+    qualityScore: manifest.qualityScore ?? null,
   };
 }
 

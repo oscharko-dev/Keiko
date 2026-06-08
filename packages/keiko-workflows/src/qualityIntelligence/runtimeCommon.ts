@@ -50,6 +50,8 @@ export interface QualityIntelligenceRunSummary {
   readonly modelGatewayCallCount: number;
   readonly evidence?: QualityIntelligenceRecordResult | undefined;
   readonly reasonSummary?: string | undefined;
+  /** Mean test-quality judge score [0-100]; null when the judge stage was skipped or unavailable. */
+  readonly qualityScore?: number | null;
 }
 
 // ─── Run context ─────────────────────────────────────────────────────────────
@@ -228,6 +230,7 @@ export interface PersistArgs {
   readonly completedAt: string | undefined;
   readonly evidenceStore: QualityIntelligenceLocalStore;
   readonly coverageMatrix?: QualityIntelligenceRecordInput["coverageMatrix"];
+  readonly qualityScore?: number | null;
 }
 
 function mapFindingsToRows(
@@ -240,6 +243,7 @@ function mapFindingsToRows(
         kind: f.kind,
         severity: f.severity,
         summaryRedacted: f.summary,
+        ...(f.candidateId !== undefined ? { candidateId: String(f.candidateId) } : {}),
       }),
     ),
   );
@@ -266,6 +270,7 @@ export function persistRun(args: PersistArgs): QualityIntelligenceRecordResult {
     evidenceRefs,
     provenanceRefs: args.provenanceRefs,
     coverageMatrix: args.coverageMatrix,
+    ...(args.qualityScore !== undefined ? { qualityScore: args.qualityScore } : {}),
   };
   return recordQualityIntelligenceRun(input, { store: args.evidenceStore });
 }
