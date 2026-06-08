@@ -148,6 +148,23 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     expect(uncoveredRow?.status).toBe("uncovered");
   });
 
+  it("records the generating modelId and seed in evidence (Epic #761)", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [makeIngestedAtom("atom-1", "Requirement atom 1")];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: PLAN,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    await runQualityIntelligenceModelRoutedTestDesign(input, makeDeps(store));
+
+    const manifest = store.load(String(PLAN.id));
+    // The fake generation port reports modelId "test-model"; no seed is plumbed → seedUsed null.
+    expect(manifest?.modelId).toBe("test-model");
+    expect(manifest?.seedUsed).toBeNull();
+  });
+
   it("persists sourceFingerprints for each supplied envelope", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const ingestedAtoms = [

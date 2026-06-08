@@ -120,6 +120,12 @@ export interface QualityIntelligenceEvidenceManifest {
   readonly qualityScore?: number | null;
   /** Optional: per-envelope content fingerprints for drift detection (Epic #735, Issue #742). */
   readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];
+  /** Optional: model id that generated the candidates (Epic #761, Issue #763). */
+  readonly modelId?: string;
+  /** Optional: redaction-safe request parameter scalars (e.g. responseFormat, seed) (Epic #761). */
+  readonly modelParameters?: Record<string, unknown>;
+  /** Optional: seed used for deterministic sampling; null when model does not support seeding. */
+  readonly seedUsed?: number | null;
 }
 
 // ─── Validation ────────────────────────────────────────────────────────────────────
@@ -146,6 +152,9 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "coverageMatrix",
   "qualityScore",
   "sourceFingerprints",
+  "modelId",
+  "modelParameters",
+  "seedUsed",
 ]);
 
 const ALLOWED_STATUSES: ReadonlySet<string> = new Set<string>([

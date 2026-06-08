@@ -157,7 +157,7 @@ function makeRequest(
 /**
  * A start-run request with NO explicit `modelId`, to exercise the model-resolution fallback
  * (`resolveChatModelId`): with a configured provider it falls back to the first chat model; with no
- * configured provider it raises QI_NO_MODEL.
+ * configured provider it raises QI_CAPABILITY_UNAVAILABLE.
  */
 function requestWithoutModel(): QualityIntelligenceStartRunRequest {
   return { sources: [VALID_SOURCE] };
@@ -256,7 +256,7 @@ describe("executeQiRun — model selection", () => {
     expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBe(MODEL_ID);
   });
 
-  it("throws QiGenerationError QI_NO_MODEL when no model is configured and none is requested", async () => {
+  it("throws QiGenerationError QI_CAPABILITY_UNAVAILABLE when no model is configured and none is requested", async () => {
     const deps: UiHandlerDeps = {
       config: undefined,
       configPresent: false,
@@ -282,7 +282,7 @@ describe("executeQiRun — model selection", () => {
       expect.fail("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(QiGenerationError);
-      expect((err as QiGenerationError).code).toBe("QI_NO_MODEL");
+      expect((err as QiGenerationError).code).toBe("QI_CAPABILITY_UNAVAILABLE");
     }
   });
 });

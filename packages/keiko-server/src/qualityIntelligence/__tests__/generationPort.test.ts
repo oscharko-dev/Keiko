@@ -512,3 +512,62 @@ describe("createQiGenerationPort — no config (registry fallback)", () => {
     }
   });
 });
+
+// ─── Determinism-first request parameters (Epic #761, Issue #763) ──────────────
+
+/** Config whose capability advertises responseFormat support. */
+function configWithResponseFormat(modelId: string): ReturnType<typeof parseGatewayConfig> {
+  const capability: ModelCapability = {
+    id: modelId,
+    kind: "chat",
+    contextWindow: 128_000,
+    maxOutputTokens: 4_096,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "test",
+    preferredUseCases: ["Chat"],
+    knownLimitations: [],
+    supportsResponseFormat: true,
+  };
+  return parseGatewayConfig(
+    {
+      providers: [
+        { modelId, baseUrl: "https://fake.example.com/v1", apiKey: "fake-key", capability },
+      ],
+    },
+    {},
+  );
+}
+
+describe("createQiGenerationPort.generate — determinism-first parameters", () => {
+  it("sends a json_schema responseFormat when the model supports it", async () => {
+    const { deps, calls } = depsFor("rf-model", "{}", {
+      config: configWithResponseFormat("rf-model"),
+    });
+    const port = createPort(deps, "rf-model");
+    const result = await port.generate(args());
+    expect(calls[0]?.request.responseFormat?.type).toBe("json_schema");
+    expect(result.modelParameters?.responseFormat).toBe("json_schema");
+  });
+
+  it("omits responseFormat when the model does not advertise support", async () => {
+    const { deps, calls } = depsFor("plain-model");
+    const port = createPort(deps, "plain-model");
+    const result = await port.generate(args());
+    expect(calls[0]?.request.responseFormat).toBeUndefined();
+    expect(result.modelParameters).toBeUndefined();
+  });
+
+  it("always reports the modelId that produced the candidates", async () => {
+    const { deps } = depsFor("attributed-model");
+    const port = createPort(deps, "attributed-model");
+    const result = await port.generate(args());
+    expect(result.modelId).toBe("attributed-model");
+  });
+});

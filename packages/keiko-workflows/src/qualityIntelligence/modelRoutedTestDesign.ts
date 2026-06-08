@@ -66,6 +66,10 @@ export interface QualityIntelligenceGenerationPortResult {
   readonly rawText: string;
   readonly modelCallCount: number;
   readonly modelId: string;
+  /** Seed used for this generation, or null when the model does not support seeding (Epic #761). */
+  readonly seedUsed?: number | null;
+  /** Redaction-safe scalars describing request parameters (e.g. responseFormat, seed) (Epic #761). */
+  readonly modelParameters?: Record<string, unknown> | undefined;
 }
 
 /** Abstract model-generation seam. The server backs it with the real Keiko Model Gateway port. */
@@ -176,11 +180,19 @@ function toCoverageMatrixRows(
   );
 }
 
+/** Candidates plus the attribution metadata of the model call that produced them (Epic #761). */
+interface GenerationOutput {
+  readonly candidates: readonly Candidate[];
+  readonly modelId: string;
+  readonly seedUsed: number | null;
+  readonly modelParameters: Record<string, unknown> | undefined;
+}
+
 async function generateCandidates(
   ctx: RunContext,
   input: QualityIntelligenceModelRoutedTestDesignInput,
   deps: QualityIntelligenceModelRoutedTestDesignDeps,
-): Promise<readonly Candidate[]> {
+): Promise<GenerationOutput> {
   if (input.ingestedAtoms.length === 0) {
     throw new EmptyEvidenceError();
   }
@@ -212,7 +224,12 @@ async function generateCandidates(
   if (!parsed.recovered) {
     throw new UnparseableModelOutputError();
   }
-  return truncateCandidates(deduplicateCandidates(parsed.candidates), maxCandidates);
+  return {
+    candidates: truncateCandidates(deduplicateCandidates(parsed.candidates), maxCandidates),
+    modelId: result.modelId,
+    seedUsed: result.seedUsed ?? null,
+    modelParameters: result.modelParameters,
+  };
 }
 
 function candidateSummaryText(candidate: Candidate): string {
@@ -300,9 +317,10 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
   emitQueuedAndStarted(ctx);
   try {
     await withStage(ctx, "plan", async () => Promise.resolve());
-    const candidates = await withStage(ctx, "candidates", async () =>
+    const generation = await withStage(ctx, "candidates", async () =>
       generateCandidates(ctx, input, deps),
     );
+    const candidates = generation.candidates;
     emitCandidateProposed(ctx, candidates);
     const judgeResult = await withStage(ctx, "judge", async () => {
       if (deps.judge === undefined) {
@@ -354,6 +372,11 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         coverageMatrix,
         qualityScore: judgeResult.qualityScore,
         ...(sourceFingerprints.length > 0 ? { sourceFingerprints } : {}),
+        modelId: generation.modelId,
+        seedUsed: generation.seedUsed,
+        ...(generation.modelParameters !== undefined
+          ? { modelParameters: generation.modelParameters }
+          : {}),
       });
       deps.candidatesSink.record(candidates, completedAt);
       return Promise.resolve(result);

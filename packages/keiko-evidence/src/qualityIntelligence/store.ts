@@ -365,6 +365,12 @@ export interface QualityIntelligenceRecordInput {
   readonly qualityScore?: QualityIntelligenceEvidenceManifest["qualityScore"];
   /** Optional per-envelope content fingerprints for drift detection (Epic #735). */
   readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];
+  /** Optional model id that generated the candidates (Epic #761). */
+  readonly modelId?: string;
+  /** Optional redaction-safe request parameter scalars (Epic #761). */
+  readonly modelParameters?: Record<string, unknown>;
+  /** Optional seed used for deterministic sampling (Epic #761). */
+  readonly seedUsed?: number | null;
 }
 
 export interface QualityIntelligenceRecordOptions {
@@ -433,7 +439,12 @@ function optionalManifestFields(
 ): Partial<
   Pick<
     QualityIntelligenceEvidenceManifest,
-    "coverageMatrix" | "qualityScore" | "sourceFingerprints"
+    | "coverageMatrix"
+    | "qualityScore"
+    | "sourceFingerprints"
+    | "modelId"
+    | "modelParameters"
+    | "seedUsed"
   >
 > {
   return {
@@ -442,6 +453,9 @@ function optionalManifestFields(
     ...(input.sourceFingerprints !== undefined
       ? { sourceFingerprints: input.sourceFingerprints }
       : {}),
+    ...(input.modelId !== undefined ? { modelId: input.modelId } : {}),
+    ...(input.modelParameters !== undefined ? { modelParameters: input.modelParameters } : {}),
+    ...(input.seedUsed !== undefined ? { seedUsed: input.seedUsed } : {}),
   };
 }
 
