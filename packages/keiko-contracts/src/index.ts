@@ -642,6 +642,10 @@ export type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceExportBundleEntry,
   QualityIntelligenceTestCaseCandidate,
+  QualityIntelligenceReviewState,
+  QualityIntelligencePriority,
+  QualityIntelligenceRiskClass,
+  QualityIntelligenceTestCaseStatus,
 } from "./qualityIntelligence/index.js";
 export {
   assertExportBundleInvariant,

@@ -120,6 +120,8 @@ import {
   handleGetQiRun,
   QI_HANDOFF_ROUTE_GROUP,
   QI_RUN_EXECUTION_ROUTE_GROUP,
+  QI_REVIEW_ROUTE_GROUP,
+  QI_EXPORT_ROUTE_GROUP,
 } from "./qualityIntelligence/index.js";
 
 export interface ApiError {
@@ -391,6 +393,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // + cancel. The model-routed test-design workflow runs through the Keiko Model Gateway and
   // persists the manifest + candidate artifact through Keiko Evidence.
   ...QI_RUN_EXECUTION_ROUTE_GROUP,
+  // Issue #282/#283 (Epic #270) — Quality Intelligence review governance + export. Literal-suffix
+  // POST routes (/runs/:id/review, /runs/:id/export) disambiguate against /runs/:id/cancel.
+  ...QI_REVIEW_ROUTE_GROUP,
+  ...QI_EXPORT_ROUTE_GROUP,
   // Issue #539 (Epic #532) — relationship engine routes. The api-contract.md §2 ordering
   // is preserved; literal-suffix paths (validate, impact, health, events) come BEFORE the
   // `:id`-templated routes so matchRoute returns the literal handler instead of binding

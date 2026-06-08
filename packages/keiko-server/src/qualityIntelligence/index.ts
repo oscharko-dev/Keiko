@@ -56,3 +56,7 @@ export {
   type QiReviewAction,
   type QiReviewStateArtifact,
 } from "./reviewStore.js";
+// Issue #282 — review-action route group.
+export { QI_REVIEW_ROUTE_GROUP, handleQiReview } from "./reviewRoutes.js";
+// Issue #283 — export route group (local serialise + TMS dry-run preview).
+export { QI_EXPORT_ROUTE_GROUP, handleQiExport } from "./exportRoutes.js";

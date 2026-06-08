@@ -22,8 +22,16 @@ import type {
   QualityIntelligenceUiRunSummary,
   QualityIntelligenceUiRunDetail,
 } from "@oscharko-dev/keiko-contracts";
-import { fetchQiRuns, fetchQiRunDetail } from "@/lib/quality-intelligence-api";
+import {
+  fetchQiRuns,
+  fetchQiRunDetail,
+  reviewQiRun,
+  type QiReviewAction,
+} from "@/lib/quality-intelligence-api";
 import { ApiError } from "@/lib/api";
+import { RunLauncher } from "./RunLauncher";
+import { CandidatesPane } from "./CandidatesPane";
+import { ExportBar } from "./ExportBar";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -288,11 +296,15 @@ function RunSummaryPane({
   detail,
   loading,
   error,
+  onReview,
 }: {
   readonly selectedId: string | null;
   readonly detail: QualityIntelligenceUiRunDetail | null;
   readonly loading: boolean;
   readonly error: string | null;
+  readonly onReview?:
+    | ((candidateId: string, action: "approve" | "reject" | "request-changes" | "reopen") => void)
+    | undefined;
 }): ReactNode {
   if (selectedId === null) {
     return (
@@ -365,36 +377,42 @@ function RunSummaryPane({
               <dt className="qi-detail-label">Exports</dt>
               <dd className="qi-detail-value">{detail.totals.exports.toString()}</dd>
             </div>
-            {detail.candidateIds.length > 0 ? (
-              <div className="qi-detail-row">
-                <dt className="qi-detail-label">Candidate IDs</dt>
-                <dd className="qi-detail-value">
-                  <ul className="qi-ref-list">
-                    {detail.candidateIds.map((id: string) => (
-                      <li key={id} className="qi-monospace">
-                        {id}
-                      </li>
-                    ))}
-                  </ul>
-                </dd>
-              </div>
-            ) : null}
+            <div className="qi-detail-row">
+              <dt className="qi-detail-label">Review</dt>
+              <dd className="qi-detail-value">{detail.reviewState}</dd>
+            </div>
             {detail.evidenceRefs.length > 0 ? (
               <div className="qi-detail-row">
                 <dt className="qi-detail-label">Evidence refs</dt>
                 <dd className="qi-detail-value">
                   <ul className="qi-ref-list">
-                    {detail.evidenceRefs.map((ref: QualityIntelligenceUiRunDetail["evidenceRefs"][number]) => (
-                      <li key={`${ref.envelopeId}:${ref.atomId}`} className="qi-monospace">
-                        {ref.envelopeId.slice(0, 16)}…/{ref.atomId.slice(0, 12)}
-                      </li>
-                    ))}
+                    {detail.evidenceRefs.map(
+                      (ref: QualityIntelligenceUiRunDetail["evidenceRefs"][number]) => (
+                        <li key={`${ref.envelopeId}:${ref.atomId}`} className="qi-monospace">
+                          {ref.envelopeId.slice(0, 16)}…/{ref.atomId.slice(0, 12)}
+                        </li>
+                      ),
+                    )}
                   </ul>
                 </dd>
               </div>
             ) : null}
           </dl>
         )}
+        {!loading && detail !== null ? (
+          <section className="qi-detail-candidates" aria-label="Generated test cases">
+            <h3 className="qi-col-subtitle">
+              Test cases
+              <span className="qi-col-count">{detail.candidates.length.toString()}</span>
+            </h3>
+            {selectedId !== null && detail.candidates.length > 0 ? (
+              <div className="qi-detail-export">
+                <ExportBar runId={selectedId} />
+              </div>
+            ) : null}
+            <CandidatesPane candidates={detail.candidates} onReview={onReview} />
+          </section>
+        ) : null}
       </div>
     </section>
   );
@@ -531,11 +549,36 @@ export function QualityIntelligencePanel({
     [loadDetail],
   );
 
+  const handleRunCompleted = useCallback(
+    (runId: string): void => {
+      void loadRuns();
+      setSelectedId(runId);
+      void loadDetail(runId);
+    },
+    [loadRuns, loadDetail],
+  );
+
+  const handleReview = useCallback(
+    (candidateId: string, action: QiReviewAction): void => {
+      if (selectedId === null) return;
+      const runId = selectedId;
+      void (async (): Promise<void> => {
+        try {
+          await reviewQiRun(runId, action, candidateId);
+        } finally {
+          await loadDetail(runId);
+        }
+      })();
+    },
+    [selectedId, loadDetail],
+  );
+
   return (
     <>
       <header className="lk-header">
         <h1 className="lk-title">Quality Intelligence</h1>
       </header>
+      <RunLauncher onRunCompleted={handleRunCompleted} />
       <div className="qi-layout">
         <RunList
           runs={runs}
@@ -552,6 +595,7 @@ export function QualityIntelligencePanel({
           detail={detail}
           loading={detailLoading}
           error={detailError}
+          onReview={handleReview}
         />
         <FindingsPane detail={detail} loading={detailLoading} />
       </div>
