@@ -58,6 +58,36 @@ function fakeModel(content: string): ModelPort {
   };
 }
 
+function scriptedIdentityRecallModel(): ModelPort {
+  return {
+    call(request): Promise<NormalizedResponse> {
+      seenRequests.push(request);
+      const system = request.messages[0]?.content ?? "";
+      const latestUser = request.messages.at(-1)?.content ?? "";
+      let content = "Hallo!";
+      if (system.includes("You extract durable memories from a chat turn")) {
+        content = "[]";
+      } else if (latestUser.includes("What is my name?")) {
+        content = latestUser.includes("The user's name is Paul.") ? "Paul" : "unbekannt";
+      }
+      return Promise.resolve({
+        modelId: request.modelId,
+        content,
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: "desktop-chat-test",
+          promptTokens: 7,
+          completionTokens: 3,
+          latencyMs: 11,
+          costClass: "high",
+        },
+      });
+    },
+  };
+}
+
 function deps(
   model: ModelPort = fakeModel("test response"),
   overrides: Partial<UiHandlerDeps> = {},
@@ -331,6 +361,92 @@ describe("desktop chat routes", () => {
       expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
     }
     expect(memoryVault.getAccessStats([recalled.id]).get(recalled.id)?.accessCount ?? 0).toBe(0);
+    memoryVault.close();
+  });
+
+  // eslint-disable-next-line complexity
+  it("captures an ambient identity statement, requires acceptance, and recalls it in a new chat", async () => {
+    const memoryDir = join(tmp, "memory-vault-ambient-identity");
+    mkdirSync(memoryDir);
+    const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    await restartWithDeps(deps(scriptedIdentityRecallModel(), { memoryVault }));
+
+    const createChatA = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const chatA = (await createChatA.json()) as { chat: { id: string } };
+
+    const introduceRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: chatA.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Hallo Keiko, ich bin Paul.",
+        memory: { enabled: true, context: {} },
+      }),
+    });
+    expect(introduceRes.status).toBe(200);
+    const introduceBody = (await introduceRes.json()) as {
+      memory?: {
+        context: { memories: unknown[] };
+        actions: { kind: string; proposalId?: string; body?: string }[];
+      };
+    };
+    expect(introduceBody.memory?.context.memories).toHaveLength(0);
+    expect(introduceBody.memory?.actions).toHaveLength(1);
+    expect(introduceBody.memory?.actions[0]).toMatchObject({
+      kind: "candidate",
+      body: "The user's name is Paul.",
+    });
+    const proposalId = introduceBody.memory?.actions[0]?.proposalId;
+    expect(typeof proposalId).toBe("string");
+    if (proposalId === undefined) {
+      throw new Error("expected ambient identity capture to return a proposal id");
+    }
+    expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("proposed");
+
+    const acceptRes = await fetch(
+      `${base()}/api/memory/proposals/${encodeURIComponent(proposalId)}/accept`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Keiko-CSRF": "1" },
+        body: "{}",
+      },
+    );
+    expect(acceptRes.status).toBe(200);
+    expect(memoryVault.getMemory(proposalId as MemoryId)?.status).toBe("accepted");
+
+    const createChatB = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const chatB = (await createChatB.json()) as { chat: { id: string } };
+
+    const recallRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: chatB.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "What is my name?",
+        memory: { enabled: true, context: {} },
+      }),
+    });
+    expect(recallRes.status).toBe(200);
+    const recallBody = (await recallRes.json()) as {
+      messages: { role: string; content: string }[];
+      memory?: { context: { memories: { bodyExcerpt: string }[] } };
+    };
+    expect(recallBody.memory?.context.memories).toHaveLength(1);
+    expect(recallBody.memory?.context.memories[0]?.bodyExcerpt).toContain("Paul");
+    expect(recallBody.messages[1]?.content).toBe("Paul");
+    expect(seenRequests[2]?.messages.at(-1)?.content).toContain("The user's name is Paul.");
     memoryVault.close();
   });
 

@@ -535,6 +535,37 @@ describe("handleMemoryCaptureFromConversation", () => {
     expect((outcomes[0]?.proposal?.body ?? "").length).toBeGreaterThan(0);
   });
 
+  // eslint-disable-next-line complexity
+  it("captures an ambient identity statement as a reviewable user-scoped candidate", async () => {
+    const vault = makeVault();
+    const deps = makeDeps({ memoryVault: vault });
+    const chat = registerChat(deps, "capture-ambient-identity");
+    const result = await handleMemoryCaptureFromConversation(
+      makeCtx({
+        text: "Hallo Keiko, ich bin Paul.",
+        context: { projectPath: chat.projectPath, chatId: chat.chatId },
+      }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    const outcomes = asJson(result).outcomes as readonly {
+      kind: string;
+      proposal?: { proposalId: string; body: string; scope?: { kind: string; userId?: string } };
+    }[];
+    expect(outcomes).toHaveLength(1);
+    expect(outcomes[0]?.kind).toBe("candidate");
+    expect(outcomes[0]?.proposal?.body).toBe("The user's name is Paul.");
+    expect(outcomes[0]?.proposal?.scope).toEqual({ kind: "user", userId: "local-operator" });
+    const proposalId = outcomes[0]?.proposal?.proposalId;
+    expect(typeof proposalId).toBe("string");
+    if (proposalId !== undefined) {
+      const stored = vault.getMemory(proposalId as unknown as MemoryId);
+      expect(stored?.status).toBe("proposed");
+      expect(stored?.scope).toEqual({ kind: "user", userId: "local-operator" });
+      expect(stored?.body).toBe("The user's name is Paul.");
+    }
+  });
+
   it("rejects provider base URLs at the capture boundary and persists nothing", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });

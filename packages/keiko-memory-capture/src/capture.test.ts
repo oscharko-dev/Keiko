@@ -71,8 +71,32 @@ describe("extractCandidatesFromUserText", () => {
     expect(result[0].proposal.type).toBe("correction");
   });
 
+  it("emits a user-scoped identity candidate for a natural German self-introduction", () => {
+    const result = extractCandidatesFromUserText("Hallo Keiko, ich bin Paul.", ctx());
+    expect(result[0]?.kind).toBe("candidate");
+    if (result[0]?.kind !== "candidate") return;
+    expect(result[0].proposal.type).toBe("semantic-fact");
+    expect(result[0].proposal.body).toBe("The user's name is Paul.");
+    expect(result[0].proposal.scope).toEqual({ kind: "user", userId: "u-1" });
+    expect(result[0].proposal.provenance.sourceKind).toBe("system-default");
+    expect(result[0].proposal.provenance.captureRationale).toBe(
+      "Automatically inferred from conversation (identity statement)",
+    );
+  });
+
+  it("captures strong name phrases even without title casing", () => {
+    const result = extractCandidatesFromUserText("my name is paul", ctx());
+    expect(result[0]?.kind).toBe("candidate");
+    if (result[0]?.kind !== "candidate") return;
+    expect(result[0].proposal.body).toBe("The user's name is paul.");
+  });
+
   it("returns [] when no intent matches", () => {
     expect(extractCandidatesFromUserText("what is the weather", ctx())).toEqual([]);
+  });
+
+  it("does not over-capture non-identity 'I am ...' statements", () => {
+    expect(extractCandidatesFromUserText("I am working on the build", ctx())).toEqual([]);
   });
 
   it("rejects with credential-shape for credential bodies", () => {
