@@ -5,7 +5,7 @@
 // default, SSE replay+ready+live framing+terminal close, cancel, GET projection, the apply gate
 // (409 when not appliable), and that NO secret-shaped string appears in ANY response body.
 
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -804,5 +804,124 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
     const firstResult = await first;
     expect(firstResult.status).toBe(200);
     expect(localRegistry.get("race-run")?.applyReport).toBeDefined();
+  });
+});
+
+// GAP-E — workspace detection failures during run launch must return 400, not 500.
+// A directory with no .git / package.json causes WorkspaceNotFoundError inside startRun.
+// The fix catches WorkspaceError at the run-launch boundary and maps it to a safe 4xx.
+// A one-line revert of the catch (removing the WorkspaceError branch) makes these tests see a 500.
+describe("GAP-E — workspace detection failure returns 400 not 500 (run launch resilience)", () => {
+  let noMarkerWorkspace: string;
+
+  beforeEach(() => {
+    // A plain directory with no .git or package.json — detectWorkspace throws WorkspaceNotFoundError.
+    noMarkerWorkspace = mkdtempSync(join(tmpdir(), "keiko-no-marker-"));
+    mkdirSync(join(noMarkerWorkspace, "somefile"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(noMarkerWorkspace, { recursive: true, force: true });
+  });
+
+  it("POST /api/runs explain-plan with no workspace marker → 400 with path-safe message", async () => {
+    await start(fakeModel("an explanation"), { registerWorkspace: false });
+    // Re-register the no-marker workspace so the allowlist check passes but detectWorkspace fails.
+    const store = createInMemoryUiStore();
+    store.createProject(noMarkerWorkspace);
+    await new Promise<void>((res) =>
+      server.close(() => {
+        res();
+      }),
+    );
+    registry = createRunRegistry();
+    evidenceStore = createInMemoryEvidenceStore();
+    server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      port,
+      handlerDeps: {
+        config: undefined,
+        configPresent: false,
+        evidenceStore,
+        env: {},
+        redactor: buildRedactor({}),
+        registry,
+        modelPortFactory: (): ModelPort => fakeModel("an explanation"),
+        store,
+      },
+    });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+
+    const res = await fetch(`${base()}/api/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        taskType: "explain-plan",
+        input: { filePath: "src/add.ts", workspaceRoot: noMarkerWorkspace },
+        modelId: "m",
+      }),
+    });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: { code: string; message: string } };
+    expect(json.error.code).toBe("WORKSPACE_UNAVAILABLE");
+    // The absolute path must NOT appear in the response body.
+    expect(JSON.stringify(json)).not.toContain(noMarkerWorkspace);
+  });
+
+  it("POST /api/chats/runs explain-plan with no workspace marker → 400 with path-safe message, summary marked failed", async () => {
+    const store = createInMemoryUiStore();
+    store.createProject(noMarkerWorkspace);
+    const chat = store.createChat(noMarkerWorkspace, "test chat", "m");
+
+    await start(fakeModel("an explanation"), { registerWorkspace: false });
+    await new Promise<void>((res) =>
+      server.close(() => {
+        res();
+      }),
+    );
+    registry = createRunRegistry();
+    evidenceStore = createInMemoryEvidenceStore();
+    server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      port,
+      handlerDeps: {
+        config: undefined,
+        configPresent: false,
+        evidenceStore,
+        env: {},
+        redactor: buildRedactor({}),
+        registry,
+        modelPortFactory: (): ModelPort => fakeModel("an explanation"),
+        store,
+      },
+    });
+    await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+
+    const res = await fetch(`${base()}/api/chats/runs`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        chatId: chat.id,
+        projectPath: noMarkerWorkspace,
+        run: {
+          taskType: "explain-plan",
+          input: { filePath: "src/add.ts", workspaceRoot: noMarkerWorkspace },
+          modelId: "m",
+        },
+        user: { content: "Explain this plan.", timestamp: 1 },
+        summary: { content: "Explain started", timestamp: 2 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: { code: string; message: string } };
+    expect(json.error.code).toBe("WORKSPACE_UNAVAILABLE");
+    // The absolute path must NOT appear in the response body.
+    expect(JSON.stringify(json)).not.toContain(noMarkerWorkspace);
+    // The persisted summary message must be marked failed (not stuck as "running").
+    const messages = store.listMessages(chat.id);
+    const summary = messages.find((m) => m.role === "system");
+    expect(summary?.workflowStatus).toBe("failed");
   });
 });
