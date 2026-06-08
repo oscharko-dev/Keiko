@@ -16,7 +16,10 @@ export type {
   UsageMetadata,
   WorkflowDescriptor,
   WorkflowInputSpec,
+  GroundingLimits,
 } from "@oscharko-dev/keiko-contracts";
+
+export { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts";
 
 // Issue #144 / Epic #142: pure conversation-eligibility helpers re-exported
 // from keiko-contracts. UI cannot import from keiko-model-gateway (ADR-0019

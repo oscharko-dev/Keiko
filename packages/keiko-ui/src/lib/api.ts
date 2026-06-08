@@ -26,6 +26,7 @@ import type {
   FilesDirectoryListing,
   FilesPreviewResponse,
   FilesTreeResponse,
+  GroundingLimits,
   MessageResponse,
   MessagesResponse,
   ModelCapability,
@@ -38,6 +39,7 @@ import type {
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
+import { DEFAULT_GROUNDING_LIMITS } from "./types";
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -105,8 +107,18 @@ export async function fetchHealth(): Promise<{ status: "ok"; version: string }> 
 export async function fetchConfig(): Promise<{
   config: SafeGatewayConfig | null;
   configPresent: boolean;
+  effectiveGroundingLimits: GroundingLimits;
 }> {
-  return fetchJson("/api/config");
+  const raw = await fetchJson<{
+    config: SafeGatewayConfig | null;
+    configPresent: boolean;
+    effectiveGroundingLimits?: GroundingLimits;
+  }>("/api/config");
+  return {
+    config: raw.config,
+    configPresent: raw.configPresent,
+    effectiveGroundingLimits: raw.effectiveGroundingLimits ?? DEFAULT_GROUNDING_LIMITS,
+  };
 }
 
 // ---------------------------------------------------------------------------
