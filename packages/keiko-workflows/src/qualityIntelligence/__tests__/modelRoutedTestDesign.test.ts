@@ -14,6 +14,7 @@ import { runQualityIntelligenceModelRoutedTestDesign } from "../modelRoutedTestD
 import type {
   QualityIntelligenceModelRoutedTestDesignInput,
   QualityIntelligenceModelRoutedTestDesignDeps,
+  QualityIntelligenceJudgePort,
 } from "../modelRoutedTestDesign.js";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -174,5 +175,191 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     // No atom-3 row in a 2-atom run
     const hasAtom3Gap = gapFindings.some((f) => f.summaryRedacted.includes("atom-3"));
     expect(hasAtom3Gap).toBe(false);
+  });
+});
+
+// ─── Judge stage wiring ──────────────────────────────────────────────────────
+
+const WEAK_VERDICT = {
+  verdict: "weak" as const,
+  dimensions: [
+    { name: "verifiability" as const, score: 20, rationale: "unclear" },
+    { name: "atomicity" as const, score: 20, rationale: "too many" },
+    { name: "determinism" as const, score: 20, rationale: "flaky" },
+    { name: "ac-fidelity" as const, score: 20, rationale: "mismatched" },
+  ],
+  overallRationale: "weak test",
+};
+
+const STRONG_VERDICT = {
+  verdict: "strong" as const,
+  dimensions: [
+    { name: "verifiability" as const, score: 90, rationale: "clear" },
+    { name: "atomicity" as const, score: 85, rationale: "single action" },
+    { name: "determinism" as const, score: 95, rationale: "deterministic" },
+    { name: "ac-fidelity" as const, score: 80, rationale: "matches" },
+  ],
+  overallRationale: "strong test",
+};
+
+function makeDepsWithJudge(
+  evidenceStore: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
+  judgeImpl: QualityIntelligenceJudgePort["judge"],
+): QualityIntelligenceModelRoutedTestDesignDeps {
+  return {
+    sink: { emit: () => undefined },
+    evidenceStore,
+    candidatesSink: { record: () => undefined },
+    generate: {
+      generate: () =>
+        Promise.resolve({
+          rawText: MODEL_OUTPUT_COVERING_TWO,
+          modelCallCount: 1,
+          modelId: "test-model",
+        }),
+    },
+    judge: { judge: judgeImpl },
+    clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
+  };
+}
+
+describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", () => {
+  const JUDGE_PLAN: QualityIntelligence.QualityIntelligenceRunPlan = {
+    id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-001"),
+    requestedAt: "2026-06-08T00:00:00.000Z",
+    plannerKind: "model-routed",
+    stages: [],
+  };
+
+  const JUDGE_PROVENANCE = {
+    envelopeIds: ["env-1"],
+    auditSummaryId:
+      "audit-judge-001" as QualityIntelligenceEvidenceManifest["provenanceRefs"]["auditSummaryId"],
+  } as const;
+
+  it("emits test-quality findings for weak candidates", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: JUDGE_PLAN,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps = makeDepsWithJudge(store, () => Promise.resolve(WEAK_VERDICT));
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+
+    const manifest = store.load(String(JUDGE_PLAN.id));
+    expect(manifest).toBeDefined();
+    if (manifest === undefined) throw new Error("manifest not found");
+
+    const qualityFindings = manifest.findings.filter((f) => f.kind === "test-quality");
+    // Both candidates are weak → 2 test-quality findings
+    expect(qualityFindings.length).toBe(2);
+    // Each test-quality finding is candidate-scoped so the UI can flag the exact test (#748).
+    expect(qualityFindings.every((f) => typeof f.candidateId === "string")).toBe(true);
+  });
+
+  it("sets a lower qualityScore when candidates are weak", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-002"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps = makeDepsWithJudge(store, () => Promise.resolve(WEAK_VERDICT));
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBeDefined();
+    expect(summary.qualityScore).not.toBeNull();
+    // Pass-rate formula (#747): every candidate weak → 0 strong of N → score 0.
+    expect(summary.qualityScore).toBe(0);
+  });
+
+  it("computes qualityScore as the strong-candidate pass rate (1 strong of 2 → 50)", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-005"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    let call = 0;
+    const deps = makeDepsWithJudge(store, () => {
+      call += 1;
+      return Promise.resolve(call === 1 ? STRONG_VERDICT : WEAK_VERDICT);
+    });
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBe(50);
+
+    const manifest = store.load(String(input.plan.id));
+    const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
+    // Only the weak candidate is flagged.
+    expect(qualityFindings.length).toBe(1);
+  });
+
+  it("does not emit test-quality findings for strong candidates", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-003"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps = makeDepsWithJudge(store, () => Promise.resolve(STRONG_VERDICT));
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+
+    const manifest = store.load(String(input.plan.id));
+    const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
+    expect(qualityFindings.length).toBe(0);
+  });
+
+  it("returns qualityScore: null when no judge is configured", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-004"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    // No judge in deps
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, makeDeps(store));
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBeNull();
   });
 });

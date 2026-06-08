@@ -80,6 +80,14 @@ export interface QualityIntelligenceCandidatesSink {
   readonly record: (candidates: readonly Candidate[], generatedAt: string) => void;
 }
 
+/** Abstract model-judge seam (Epic #736, Issue #747). The server backs it with the gateway judge port. */
+export interface QualityIntelligenceJudgePort {
+  readonly judge: (
+    candidateText: string,
+    signal?: AbortSignal,
+  ) => Promise<QI.TestQualityJudgeVerdict>;
+}
+
 export interface QualityIntelligenceModelRoutedTestDesignInput {
   readonly plan: QI.QualityIntelligenceRunPlan;
   readonly envelopes: readonly QI.QualityIntelligenceSourceEnvelope[];
@@ -93,6 +101,8 @@ export interface QualityIntelligenceModelRoutedTestDesignDeps {
   readonly evidenceStore: QualityIntelligenceLocalStore;
   readonly candidatesSink: QualityIntelligenceCandidatesSink;
   readonly generate: QualityIntelligenceGenerationPort;
+  /** Optional model-judge for test-quality scoring (Epic #736). Absent → judge stage is skipped. */
+  readonly judge?: QualityIntelligenceJudgePort | undefined;
   readonly clock?: QualityIntelligenceClock | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly limits?: QualityIntelligenceWorkflowLimits | undefined;
@@ -205,6 +215,68 @@ async function generateCandidates(
   return truncateCandidates(deduplicateCandidates(parsed.candidates), maxCandidates);
 }
 
+function candidateSummaryText(candidate: Candidate): string {
+  const parts = [
+    `Title: ${candidate.title}`,
+    `Steps: ${candidate.steps.join("; ")}`,
+    `Expected: ${candidate.expectedResults.join("; ")}`,
+  ];
+  return parts.join("\n");
+}
+
+function buildTestQualityFinding(
+  runId: QI.QualityIntelligenceRunId,
+  candidate: Candidate,
+  score: number,
+  ordinal: number,
+): QI.QualityIntelligenceTestQualityFinding {
+  const payload = ["v1-tq", String(runId), String(candidate.id), String(ordinal)].join("");
+  const idStr = `qi-finding-${sha256Hex(payload).slice(0, 32)}`;
+  const severity: QI.QualityIntelligenceSeverity = score < 30 ? "high" : "medium";
+  return Object.freeze({
+    kind: "test-quality",
+    id: QI.asQualityIntelligenceValidationFindingId(idStr),
+    runId,
+    candidateId: candidate.id,
+    severity,
+    summary: `Test quality score ${String(Math.round(score))}/100 — candidate judged weak.`,
+    evidenceAtomIds: Object.freeze([...candidate.derivedFromAtomIds]),
+  });
+}
+
+interface JudgeStageResult {
+  readonly findings: readonly QI.QualityIntelligenceTestQualityFinding[];
+  readonly qualityScore: number | null;
+}
+
+async function runJudgeStage(
+  ctx: RunContext,
+  candidates: readonly Candidate[],
+  judge: QualityIntelligenceJudgePort,
+): Promise<JudgeStageResult> {
+  if (candidates.length === 0) return { findings: Object.freeze([]), qualityScore: null };
+  const findings: QI.QualityIntelligenceTestQualityFinding[] = [];
+  let strongCount = 0;
+  let scored = 0;
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i];
+    if (candidate === undefined) continue;
+    scored += 1;
+    const text = candidateSummaryText(candidate);
+    const verdict = await judge.judge(text, ctx.signal);
+    if (verdict.verdict === "strong") {
+      strongCount += 1;
+      continue;
+    }
+    const scores = verdict.dimensions.map((d) => d.score);
+    const mean = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
+    findings.push(buildTestQualityFinding(ctx.plan.id, candidate, mean, i));
+  }
+  // Per-run quality score = share of candidates the judge rated "strong", as a percentage (#747).
+  const qualityScore = scored === 0 ? null : (strongCount / scored) * 100;
+  return { findings: Object.freeze(findings), qualityScore };
+}
+
 /**
  * Execute a model-routed QI test-design run end to end. Emits the standard QI run-event envelope,
  * fails the run with a safe reason when the model output is unusable (rather than silently emitting
@@ -232,6 +304,15 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
       generateCandidates(ctx, input, deps),
     );
     emitCandidateProposed(ctx, candidates);
+    const judgeResult = await withStage(ctx, "judge", async () => {
+      if (deps.judge === undefined) {
+        return Promise.resolve<JudgeStageResult>({
+          findings: Object.freeze([]),
+          qualityScore: null,
+        });
+      }
+      return runJudgeStage(ctx, candidates, deps.judge);
+    });
     const atoms = input.ingestedAtoms.map((a) => a.atom);
     const coverageMap = await withStage(ctx, "coverage", async () =>
       Promise.resolve(buildCoverageMap({ runId: input.plan.id, atoms, candidates })),
@@ -251,6 +332,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
     const allFindings: readonly QI.QualityIntelligenceValidationFinding[] = [
       ...gapFindings,
       ...rawFindings,
+      ...judgeResult.findings,
     ];
     const findings = truncateFindings(allFindings, ctx.limits.maxFindingsPerRun);
     emitFindingsRecorded(ctx, findings);
@@ -266,6 +348,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         completedAt,
         evidenceStore: deps.evidenceStore,
         coverageMatrix,
+        qualityScore: judgeResult.qualityScore,
       });
       deps.candidatesSink.record(candidates, completedAt);
       return Promise.resolve(result);
@@ -278,6 +361,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
       eventsEmitted: ctx.sequence,
       modelGatewayCallCount: ctx.modelGatewayCallCount,
       evidence,
+      qualityScore: judgeResult.qualityScore,
     });
   } catch (caught: unknown) {
     return finaliseFailureOrCancellation(ctx, caught, {

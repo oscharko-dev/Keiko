@@ -108,6 +108,7 @@ export type {
   QualityIntelligencePolicyViolationFinding,
   QualityIntelligenceManualRejectionFinding,
   QualityIntelligenceCoverageGapFinding,
+  QualityIntelligenceTestQualityFinding,
   QualityIntelligenceValidationFinding,
 } from "./validationFinding.js";
 export {
@@ -183,6 +184,13 @@ export type {
 } from "./handoffEnvelope.js";
 export { QUALITY_INTELLIGENCE_HANDOFF_PROMPTED_ACTIONS } from "./handoffEnvelope.js";
 
+// ─── Test-quality rubric (Epic #736, Issue #746) ─────────────────────────────
+export type {
+  TestQualityDimensionName,
+  TestQualityRubricDimension,
+  TestQualityJudgeVerdict,
+} from "./testQualityRubric.js";
+
 // ─── BFF wire shapes (Issue #280) ─────────────────────────────────────────────
 export type {
   QualityIntelligenceUiRunTotals,
@@ -192,6 +200,7 @@ export type {
   QualityIntelligenceUiEvidenceRef,
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceUiAtomCoverage,
+  QualityIntelligenceUiWeakTestFlag,
   QualityIntelligenceUiCandidate,
   QualityIntelligenceInlineSourceKind,
   QualityIntelligenceRequirementsSource,

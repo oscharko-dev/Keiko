@@ -33,6 +33,7 @@ function makeDetail(
   candidates: readonly QualityIntelligenceUiCandidate[],
   coverageByAtom: readonly QualityIntelligenceUiAtomCoverage[] = [],
   coveragePercentage = 0,
+  qualityScore: number | null = null,
 ): QualityIntelligenceUiRunDetail {
   return {
     id: runId,
@@ -48,6 +49,7 @@ function makeDetail(
     manifestSchemaVersion: 1,
     coveragePercentage,
     coverageByAtom,
+    qualityScore,
   };
 }
 
@@ -152,5 +154,37 @@ describe("QiRunCard", () => {
     const detail = makeDetail("qi-run-cov2", [], atoms, 50);
     render(<QiRunCard runId="qi-run-cov2" fetchDetailImpl={fetchOk(detail)} />);
     expect(await screen.findByLabelText(/Atom atom-b: Uncovered/i)).toBeInTheDocument();
+  });
+
+  it("renders the quality score badge with the rounded score and tier class", async () => {
+    const detail = makeDetail("qi-run-q1", [makeCandidate("tc-1", "A test")], [], 0, 84.6);
+    render(<QiRunCard runId="qi-run-q1" fetchDetailImpl={fetchOk(detail)} />);
+    const badge = await screen.findByTestId("qi-quality-badge");
+    expect(badge).toHaveTextContent("85");
+    expect(badge).toHaveAttribute("aria-label", "Quality score: 85 out of 100");
+    // 70-89 → mid tier (amber).
+    expect(badge.className).toContain("qi-quality-mid");
+  });
+
+  it("renders an em-dash quality badge when qualityScore is null", async () => {
+    const detail = makeDetail("qi-run-q2", [], [], 0, null);
+    render(<QiRunCard runId="qi-run-q2" fetchDetailImpl={fetchOk(detail)} />);
+    const badge = await screen.findByTestId("qi-quality-badge");
+    expect(badge).toHaveTextContent("—");
+    expect(badge).toHaveAttribute("aria-label", "Quality score: not available");
+  });
+
+  it("applies the high tier class for a score of 90 or above", async () => {
+    const detail = makeDetail("qi-run-q3", [], [], 0, 100);
+    render(<QiRunCard runId="qi-run-q3" fetchDetailImpl={fetchOk(detail)} />);
+    const badge = await screen.findByTestId("qi-quality-badge");
+    expect(badge.className).toContain("qi-quality-high");
+  });
+
+  it("applies the low tier class for a score below 70", async () => {
+    const detail = makeDetail("qi-run-q4", [], [], 0, 42);
+    render(<QiRunCard runId="qi-run-q4" fetchDetailImpl={fetchOk(detail)} />);
+    const badge = await screen.findByTestId("qi-quality-badge");
+    expect(badge.className).toContain("qi-quality-low");
   });
 });

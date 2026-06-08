@@ -360,6 +360,8 @@ export interface QualityIntelligenceRecordInput {
   readonly provenanceRefs: QualityIntelligenceEvidenceManifest["provenanceRefs"];
   /** Optional coverage matrix (per-atom status, refs only). Added in #738. */
   readonly coverageMatrix?: QualityIntelligenceEvidenceManifest["coverageMatrix"];
+  /** Optional mean test-quality judge score [0-100]; null when judge was skipped. Added in #736. */
+  readonly qualityScore?: QualityIntelligenceEvidenceManifest["qualityScore"];
 }
 
 export interface QualityIntelligenceRecordOptions {
@@ -422,6 +424,16 @@ function resolveStore(
 //
 // The store is wired via options.store (explicit, e.g. in-memory for tests) or options.evidenceDir
 // (resolve to a node adapter). Either MUST be supplied.
+/** Optional manifest fields that are only present when supplied (exactOptionalPropertyTypes). */
+function optionalManifestFields(
+  input: QualityIntelligenceRecordInput,
+): Partial<Pick<QualityIntelligenceEvidenceManifest, "coverageMatrix" | "qualityScore">> {
+  return {
+    ...(input.coverageMatrix !== undefined ? { coverageMatrix: input.coverageMatrix } : {}),
+    ...(input.qualityScore !== undefined ? { qualityScore: input.qualityScore } : {}),
+  };
+}
+
 export function recordQualityIntelligenceRun(
   input: QualityIntelligenceRecordInput,
   options: QualityIntelligenceRecordOptions = {},
@@ -470,7 +482,7 @@ export function recordQualityIntelligenceRun(
     provenanceRefs: redacted.provenanceRefs,
     redactionSummary: summary,
     integrityHashes,
-    ...(input.coverageMatrix !== undefined ? { coverageMatrix: input.coverageMatrix } : {}),
+    ...optionalManifestFields(input),
   };
   return { manifest, location: store.record(manifest) };
 }

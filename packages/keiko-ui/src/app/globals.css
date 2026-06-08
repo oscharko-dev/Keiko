@@ -7638,6 +7638,56 @@ select.dlg-input {
   color: var(--fg-muted);
 }
 
+/* Quality score badge tiers (Epic #736 / Issue #748). Each tier reuses a token pairing already
+   proven ≥4.5:1 against --card in BOTH themes:
+   - high: --accent-text on --accent-dim (accent-text is the WCAG-safe green in light, --accent in dark)
+   - mid:  --warn on 20% warn (same pairing as .qi-sev-high; --warn is darkened in light to ≥5.8:1)
+   - low:  --fg on 22% danger (same pairing as .qi-badge-failed; --fg always contrasts with --card) */
+.qi-quality-high {
+  background: var(--accent-dim);
+  color: var(--accent-text);
+}
+.qi-quality-mid {
+  background: color-mix(in oklch, var(--warn) 20%, transparent);
+  color: var(--warn);
+}
+.qi-quality-low {
+  background: color-mix(in oklch, var(--danger) 22%, transparent);
+  color: var(--fg);
+}
+
+/* Per-candidate weak-test flag (Epic #736 / Issue #748). */
+.qi-weak-flag {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 4px 0 2px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in oklch, var(--danger) 40%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--danger) 10%, var(--card));
+}
+.qi-weak-flag-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--fg);
+}
+.qi-weak-flag-icon {
+  color: var(--danger);
+}
+.qi-weak-flag-reason {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+
 /* Monospace strings (IDs, hashes) */
 .qi-monospace {
   font-family: var(--font-mono);

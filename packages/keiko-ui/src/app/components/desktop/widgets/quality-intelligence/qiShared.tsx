@@ -4,6 +4,7 @@
 // Used by the QI hub (run list) and the per-run result card. Pure, no data fetching.
 
 import type { ReactNode } from "react";
+import type { QualityIntelligenceUiWeakTestFlag } from "@oscharko-dev/keiko-contracts";
 import { ApiError } from "@/lib/api";
 
 export function formatError(err: unknown): string {
@@ -72,6 +73,65 @@ export function SeverityBadge({ severity }: { readonly severity: string }): Reac
     <span aria-label={`Severity: ${severity}`} className={`qi-sev ${cls}`}>
       {severity}
     </span>
+  );
+}
+
+// Quality score badge (Epic #736 / Issue #748). Colour tier is driven by the rounded score:
+// ≥90 strong (green), 70-89 mixed (amber), <70 weak (red). null renders an em-dash placeholder.
+// Each tier reuses a token combination already proven ≥4.5:1 in both themes (see globals.css).
+function qualityTierClass(rounded: number): string {
+  if (rounded >= 90) return "qi-quality-high";
+  if (rounded >= 70) return "qi-quality-mid";
+  return "qi-quality-low";
+}
+
+export function QualityScoreBadge({ score }: { readonly score: number | null }): ReactNode {
+  if (score === null) {
+    return (
+      <span
+        aria-label="Quality score: not available"
+        className="qi-badge qi-badge-default"
+        data-testid="qi-quality-badge"
+      >
+        —
+      </span>
+    );
+  }
+  const rounded = Math.round(score);
+  return (
+    <span
+      aria-label={`Quality score: ${rounded.toString()} out of 100`}
+      className={`qi-badge ${qualityTierClass(rounded)}`}
+      data-testid="qi-quality-badge"
+    >
+      {rounded.toString()}
+    </span>
+  );
+}
+
+// Per-candidate weak-test flag (Epic #736 / Issue #748). Surfaced only when the adversarial judge
+// rated a candidate weak. The redacted rationale is the judge's reason; it is named for assistive
+// tech via the role="note" container's aria-label and shown inline for sighted users.
+export function WeakTestFlag({
+  flag,
+}: {
+  readonly flag: QualityIntelligenceUiWeakTestFlag;
+}): ReactNode {
+  return (
+    <div
+      role="note"
+      aria-label={`Weak test flagged by the quality judge: ${flag.rationale}`}
+      className="qi-weak-flag"
+      data-testid="qi-weak-flag"
+    >
+      <span className="qi-weak-flag-badge">
+        <span aria-hidden="true" className="qi-weak-flag-icon">
+          ⚠
+        </span>
+        Weak test
+      </span>
+      <p className="qi-weak-flag-reason">{flag.rationale}</p>
+    </div>
   );
 }
 

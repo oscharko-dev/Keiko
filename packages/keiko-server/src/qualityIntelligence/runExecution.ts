@@ -30,6 +30,7 @@ import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-con
 import type { UiHandlerDeps } from "../deps.js";
 import { ingestInlineSources, QiIngestionError } from "./runIngestion.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
+import { createQiJudgePort } from "./judgePort.js";
 
 const PLAN_STAGES: readonly QI.QualityIntelligenceRunStage[] = Object.freeze([
   { name: "plan", descriptor: "qi:plan" },
@@ -131,6 +132,7 @@ export async function executeQiRun(
       deps,
       runId,
       evidenceDir,
+      modelId,
       generate,
       onEvent: input.onEvent,
       signal: input.signal,
@@ -142,9 +144,22 @@ interface WorkflowDepsInput {
   readonly deps: UiHandlerDeps;
   readonly runId: string;
   readonly evidenceDir: string;
+  readonly modelId: string;
   readonly generate: ReturnType<typeof createQiGenerationPort>;
   readonly onEvent: (event: QI.QualityIntelligenceRunEvent) => void;
   readonly signal: AbortSignal;
+}
+
+function buildJudgePortIfAvailable(
+  deps: UiHandlerDeps,
+  modelId: string,
+): ReturnType<typeof createQiJudgePort> | undefined {
+  try {
+    return createQiJudgePort(deps, modelId);
+  } catch {
+    // Judge port creation failures are non-fatal: the judge stage is optional.
+    return undefined;
+  }
 }
 
 function buildWorkflowDeps(args: WorkflowDepsInput): QualityIntelligenceModelRoutedTestDesignDeps {
@@ -165,6 +180,7 @@ function buildWorkflowDeps(args: WorkflowDepsInput): QualityIntelligenceModelRou
       },
     },
     generate: args.generate,
+    judge: buildJudgePortIfAvailable(args.deps, args.modelId),
     signal: args.signal,
   };
 }

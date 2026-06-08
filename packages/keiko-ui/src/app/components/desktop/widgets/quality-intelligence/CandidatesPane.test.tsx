@@ -347,6 +347,51 @@ describe("CandidatesPane — progressive rendering", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests — weak-test flag (Epic #736 / Issue #748)
+// ---------------------------------------------------------------------------
+
+describe("CandidatesPane — weak-test flag", () => {
+  it("renders the weak-test flag with its rationale when the judge flagged the candidate", () => {
+    const c = makeCandidate({
+      weakTestFlag: {
+        severity: "high",
+        rationale: "Test quality score 22/100 — candidate judged weak.",
+      },
+    });
+    render(<CandidatesPane candidates={[c]} />);
+    expect(screen.getByTestId("qi-weak-flag")).toBeInTheDocument();
+    expect(screen.getByText(/Test quality score 22\/100/)).toBeInTheDocument();
+  });
+
+  it("names the weak-test flag for assistive tech via an accessible note", () => {
+    const c = makeCandidate({
+      weakTestFlag: { severity: "medium", rationale: "Vague expected results." },
+    });
+    render(<CandidatesPane candidates={[c]} />);
+    expect(
+      screen.getByRole("note", {
+        name: /Weak test flagged by the quality judge: Vague expected results\./i,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not render a weak-test flag when the candidate has none", () => {
+    render(<CandidatesPane candidates={[makeCandidate()]} />);
+    expect(screen.queryByTestId("qi-weak-flag")).not.toBeInTheDocument();
+  });
+
+  it("renders a weak-test flag only on the flagged candidate among several", () => {
+    const flagged = makeCandidate({
+      title: "Weak one",
+      weakTestFlag: { severity: "high", rationale: "Non-deterministic steps." },
+    });
+    const strong = makeCandidate({ title: "Strong one" });
+    render(<CandidatesPane candidates={[flagged, strong]} />);
+    expect(screen.getAllByTestId("qi-weak-flag")).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — boundary and edge cases
 // ---------------------------------------------------------------------------
 

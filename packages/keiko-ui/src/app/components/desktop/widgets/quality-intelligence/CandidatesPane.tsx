@@ -14,6 +14,7 @@ import type {
   QualityIntelligenceCandidateEditableFields,
 } from "@oscharko-dev/keiko-contracts";
 import { CandidateEditForm } from "./CandidateEditForm";
+import { WeakTestFlag } from "./qiShared";
 
 const INITIAL_VISIBLE = 25;
 
@@ -135,6 +136,7 @@ function CandidateView({
           <ReviewBadge state={candidate.reviewState} />
         </div>
       </div>
+      {candidate.weakTestFlag !== undefined ? <WeakTestFlag flag={candidate.weakTestFlag} /> : null}
       <StringList items={candidate.preconditions} label="Preconditions" />
       <StringList items={candidate.steps} label="Steps" />
       <StringList items={candidate.expectedResults} label="Expected results" />
