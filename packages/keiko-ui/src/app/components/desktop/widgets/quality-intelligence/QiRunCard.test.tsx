@@ -1,5 +1,6 @@
-// Epic #270 — QiRunCard tests. The card fetches a run's detail by id, renders the summary + the
-// generated test cases, and routes per-candidate review decisions through the review seam.
+// Epic #270 / #734 — QiRunCard tests. The card fetches a run's detail by id, renders the summary +
+// the generated test cases, routes per-candidate review decisions, and shows coverage intelligence
+// (coverage % badge and gap radar for uncovered/weakly-covered atoms).
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -8,6 +9,7 @@ import { QiRunCard } from "./QiRunCard";
 import type {
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceUiCandidate,
+  QualityIntelligenceUiAtomCoverage,
 } from "@oscharko-dev/keiko-contracts";
 
 function makeCandidate(id: string, title: string): QualityIntelligenceUiCandidate {
@@ -29,6 +31,8 @@ function makeCandidate(id: string, title: string): QualityIntelligenceUiCandidat
 function makeDetail(
   runId: string,
   candidates: readonly QualityIntelligenceUiCandidate[],
+  coverageByAtom: readonly QualityIntelligenceUiAtomCoverage[] = [],
+  coveragePercentage = 0,
 ): QualityIntelligenceUiRunDetail {
   return {
     id: runId,
@@ -42,6 +46,8 @@ function makeDetail(
     evidenceRefs: [],
     reviewState: "open",
     manifestSchemaVersion: 1,
+    coveragePercentage,
+    coverageByAtom,
   };
 }
 
@@ -126,5 +132,25 @@ describe("QiRunCard", () => {
     });
     // Detail is reloaded after the edit (initial load + post-edit reload).
     expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("renders the coverage percentage badge when coverageByAtom is non-empty", async () => {
+    const atoms: QualityIntelligenceUiAtomCoverage[] = [
+      { atomId: "atom-1", status: "covered", confidence: 0.9 },
+      { atomId: "atom-2", status: "covered", confidence: 0.8 },
+    ];
+    const detail = makeDetail("qi-run-cov1", [], atoms, 100);
+    render(<QiRunCard runId="qi-run-cov1" fetchDetailImpl={fetchOk(detail)} />);
+    expect(await screen.findByTestId("qi-coverage-pct")).toHaveTextContent("100%");
+  });
+
+  it("renders uncovered atom in the gap radar with an accessible label", async () => {
+    const atoms: QualityIntelligenceUiAtomCoverage[] = [
+      { atomId: "atom-a", status: "covered", confidence: 0.9 },
+      { atomId: "atom-b", status: "uncovered", confidence: 0.1 },
+    ];
+    const detail = makeDetail("qi-run-cov2", [], atoms, 50);
+    render(<QiRunCard runId="qi-run-cov2" fetchDetailImpl={fetchOk(detail)} />);
+    expect(await screen.findByLabelText(/Atom atom-b: Uncovered/i)).toBeInTheDocument();
   });
 });

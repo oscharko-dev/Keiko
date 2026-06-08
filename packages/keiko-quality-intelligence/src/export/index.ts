@@ -36,6 +36,10 @@ export {
   SPREADSHEET_SAFE_CSV_HEADERS,
   startsWithFormulaLead,
   XRAY_CSV_HEADERS,
+  adaptToTraceabilityCsv,
+  adaptToTraceabilityMarkdown,
+  TRACEABILITY_HEADERS,
+  type QualityIntelligenceTraceabilityRow,
 } from "./adapters/index.js";
 
 export { serializeExportBundle, type SerializedExportBundle } from "./serialize.js";

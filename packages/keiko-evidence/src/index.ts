@@ -117,6 +117,7 @@ export {
   type QualityIntelligenceRunDeletedEvent,
   type QualityIntelligenceRunSnapshotEntry,
   type QualityIntelligenceSchemaValidationResult,
+  type QualityIntelligenceCoverageMatrixRow,
 } from "./qualityIntelligence/index.js";
 
 export {

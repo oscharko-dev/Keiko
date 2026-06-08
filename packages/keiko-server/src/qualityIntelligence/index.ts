@@ -64,3 +64,5 @@ export { QI_REVIEW_ROUTE_GROUP, handleQiReview } from "./reviewRoutes.js";
 export { QI_EXPORT_ROUTE_GROUP, handleQiExport } from "./exportRoutes.js";
 // Issue #726 (Epic #712) — inline-edit route group.
 export { QI_EDIT_ROUTE_GROUP, handleQiEditCandidate } from "./editRoutes.js";
+// Issue #740 (Epic #734) — requirement↔test traceability matrix export route group.
+export { QI_TRACEABILITY_ROUTE_GROUP, handleQiTraceabilityExport } from "./traceabilityRoutes.js";

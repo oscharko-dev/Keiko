@@ -94,6 +94,63 @@ function FindingsList({ detail }: { readonly detail: QualityIntelligenceUiRunDet
   );
 }
 
+const COVERAGE_STATUS_LABEL: Readonly<Record<"covered" | "weakly-covered" | "uncovered", string>> =
+  {
+    covered: "Covered",
+    "weakly-covered": "Weakly covered",
+    uncovered: "Uncovered",
+  };
+
+const COVERAGE_STATUS_CLASS: Readonly<Record<"covered" | "weakly-covered" | "uncovered", string>> =
+  {
+    covered: "qi-cov-covered",
+    "weakly-covered": "qi-cov-weak",
+    uncovered: "qi-cov-uncovered",
+  };
+
+function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDetail }): ReactNode {
+  if (detail.coverageByAtom.length === 0) return null;
+  const gaps = detail.coverageByAtom.filter((r) => r.status !== "covered");
+  return (
+    <section className="qi-coverage-panel" aria-label="Coverage">
+      <h3 className="qi-col-subtitle">
+        Coverage
+        <span
+          className="qi-badge qi-badge-default"
+          aria-label={`Coverage: ${detail.coveragePercentage.toFixed(0)}%`}
+          data-testid="qi-coverage-pct"
+        >
+          {detail.coveragePercentage.toFixed(0)}%
+        </span>
+      </h3>
+      {gaps.length > 0 ? (
+        <section className="qi-coverage-gaps" aria-label="Gap radar">
+          <h4 className="qi-col-subtitle">Gap radar</h4>
+          <ul className="qi-coverage-gap-list" aria-label="Uncovered and weakly covered atoms">
+            {gaps.map((row) => {
+              const label = COVERAGE_STATUS_LABEL[row.status];
+              const cls = COVERAGE_STATUS_CLASS[row.status];
+              return (
+                <li
+                  key={row.atomId}
+                  className="qi-coverage-gap-item"
+                  aria-label={`Atom ${row.atomId}: ${label}`}
+                >
+                  <span className="qi-coverage-atom-id qi-monospace">{row.atomId}</span>
+                  <span className={`qi-badge ${cls}`} aria-hidden="true">
+                    {label}
+                  </span>
+                  <span className="qi-sr-only">{label}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      ) : null}
+    </section>
+  );
+}
+
 export function QiRunCard({
   runId,
   fetchDetailImpl = fetchQiRunDetail,
@@ -173,6 +230,7 @@ export function QiRunCard({
           <>
             <SummaryStrip detail={detail} />
             <FindingsList detail={detail} />
+            <CoveragePanel detail={detail} />
             <section className="qi-run-cases" aria-label="Generated test cases">
               <div className="qi-run-cases-head">
                 <h3 className="qi-col-subtitle">

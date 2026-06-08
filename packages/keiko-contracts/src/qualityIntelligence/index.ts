@@ -107,6 +107,7 @@ export type {
   QualityIntelligenceMutationDefectFinding,
   QualityIntelligencePolicyViolationFinding,
   QualityIntelligenceManualRejectionFinding,
+  QualityIntelligenceCoverageGapFinding,
   QualityIntelligenceValidationFinding,
 } from "./validationFinding.js";
 export {
@@ -190,6 +191,7 @@ export type {
   QualityIntelligenceUiFindingSummary,
   QualityIntelligenceUiEvidenceRef,
   QualityIntelligenceUiRunDetail,
+  QualityIntelligenceUiAtomCoverage,
   QualityIntelligenceUiCandidate,
   QualityIntelligenceInlineSourceKind,
   QualityIntelligenceRequirementsSource,

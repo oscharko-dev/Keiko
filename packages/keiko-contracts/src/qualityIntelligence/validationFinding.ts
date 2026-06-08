@@ -21,7 +21,8 @@ export type QualityIntelligenceValidationFindingKind =
   | "semantic-defect"
   | "mutation-defect"
   | "policy-violation"
-  | "manual-rejection";
+  | "manual-rejection"
+  | "coverage-gap";
 
 export const QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS: readonly QualityIntelligenceValidationFindingKind[] =
   [
@@ -31,6 +32,7 @@ export const QUALITY_INTELLIGENCE_VALIDATION_FINDING_KINDS: readonly QualityInte
     "mutation-defect",
     "policy-violation",
     "manual-rejection",
+    "coverage-gap",
   ] as const;
 
 export type QualityIntelligenceSeverity = "critical" | "high" | "medium" | "low";
@@ -91,10 +93,15 @@ export interface QualityIntelligenceManualRejectionFinding extends QualityIntell
   readonly kind: "manual-rejection";
 }
 
+export interface QualityIntelligenceCoverageGapFinding extends QualityIntelligenceValidationFindingCommon {
+  readonly kind: "coverage-gap";
+}
+
 export type QualityIntelligenceValidationFinding =
   | QualityIntelligenceLogicDefectFinding
   | QualityIntelligenceFaithfulnessDefectFinding
   | QualityIntelligenceSemanticDefectFinding
   | QualityIntelligenceMutationDefectFinding
   | QualityIntelligencePolicyViolationFinding
-  | QualityIntelligenceManualRejectionFinding;
+  | QualityIntelligenceManualRejectionFinding
+  | QualityIntelligenceCoverageGapFinding;

@@ -10,8 +10,19 @@ export type { IntentSummary } from "./domain/intentDerivation.js";
 export { designTestCaseCandidates } from "./domain/testDesignModel.js";
 export type { DesignTestCaseCandidatesInput } from "./domain/testDesignModel.js";
 
-export { buildCoverageMap } from "./domain/coverageRelevance.js";
-export type { BuildCoverageMapInput } from "./domain/coverageRelevance.js";
+export {
+  buildAtomCoverageStatuses,
+  buildCoverageMap,
+  classifyAtomCoverage,
+  COVERAGE_THRESHOLD_COVERED,
+  COVERAGE_THRESHOLD_WEAKLY_COVERED,
+  runCoveragePercentage,
+} from "./domain/coverageRelevance.js";
+export type {
+  AtomCoverageStatus,
+  BuildCoverageMapInput,
+  CoverageStatus,
+} from "./domain/coverageRelevance.js";
 
 export {
   computeCandidateEquivalenceSignature,
