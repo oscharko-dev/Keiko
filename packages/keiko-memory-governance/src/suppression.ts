@@ -25,6 +25,7 @@ export type SuppressionReason =
   | "forgotten"
   | "conflicted"
   | "expired"
+  | "proposed"
   | "rejected"
   | "stale-low-confidence";
 
@@ -70,12 +71,13 @@ function statusSuppression(status: MemoryStatus): SuppressionResult | null {
       // status or derived it from the validity window.
       return { suppressed: true, reason: "expired" };
     case "proposed":
+      return { suppressed: true, reason: "proposed" };
     case "accepted":
     case "superseded":
-      // proposed/accepted/superseded are pass-through here. Superseded records are still
-      // readable in audit views; the retrieval layer applies its own includeSuperseded
-      // toggle on top of this predicate. proposed records are visible to the Memory
-      // Center review queue.
+      // accepted/superseded are pass-through here. Superseded records are still readable
+      // in audit views; the retrieval layer applies its own includeSuperseded toggle on
+      // top of this predicate. Review queues surface proposed records through direct
+      // status filtering rather than retrieval.
       return null;
     default: {
       const _exhaustive: never = status;

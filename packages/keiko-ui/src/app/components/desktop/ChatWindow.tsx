@@ -919,13 +919,16 @@ function MemoryActionCard({
   action,
   acceptCandidate,
   rejectCandidate,
+  forgetMemoryAction,
 }: {
   readonly action: ConversationMemoryActionWire;
   readonly acceptCandidate: (proposalId: string) => Promise<void>;
   readonly rejectCandidate: (proposalId: string) => Promise<void>;
+  readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
 }): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const [confirmForget, setConfirmForget] = useState(false);
   if (action.kind === "candidate") {
     return (
       <article className="chat-memory-action">
@@ -990,6 +993,16 @@ function MemoryActionCard({
     );
   }
   if (action.kind === "forget") {
+    const executeForget = (): void => {
+      setBusy(true);
+      setError(undefined);
+      void forgetMemoryAction(action.memoryId)
+        .then(() => setConfirmForget(false))
+        .catch((caught) => {
+          setError(caught instanceof Error ? caught.message : "Unable to forget memory.");
+        })
+        .finally(() => setBusy(false));
+    };
     return (
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
@@ -997,6 +1010,45 @@ function MemoryActionCard({
           <span>{action.requiresConfirmation ? "Confirmation required" : action.memoryId}</span>
         </div>
         <p>{`Matched memory ${action.memoryId} for a forget operation.`}</p>
+        <div className="chat-memory-action-buttons">
+          {!action.requiresConfirmation ? (
+            <button type="button" disabled={busy} onClick={executeForget}>
+              Forget
+            </button>
+          ) : !confirmForget ? (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => {
+                setError(undefined);
+                setConfirmForget(true);
+              }}
+            >
+              Review forget
+            </button>
+          ) : (
+            <>
+              <button type="button" disabled={busy} onClick={executeForget}>
+                Forget permanently
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setError(undefined);
+                  setConfirmForget(false);
+                }}
+              >
+                Cancel
+              </button>
+            </>
+          )}
+        </div>
+        {error !== undefined ? (
+          <div role="alert" className="cmp-err">
+            {error}
+          </div>
+        ) : null}
       </article>
     );
   }
@@ -1018,6 +1070,7 @@ function MemoryPanel({
   latestMemory,
   acceptCandidate,
   rejectCandidate,
+  forgetMemoryAction,
 }: {
   readonly memoryEnabled: boolean;
   readonly setMemoryEnabled: (next: boolean) => void;
@@ -1026,6 +1079,7 @@ function MemoryPanel({
   readonly latestMemory: ConversationMemoryResultWire | undefined;
   readonly acceptCandidate: (proposalId: string) => Promise<void>;
   readonly rejectCandidate: (proposalId: string) => Promise<void>;
+  readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const disclosureId = "chat-memory-disclosure";
@@ -1093,6 +1147,7 @@ function MemoryPanel({
               action={action}
               acceptCandidate={acceptCandidate}
               rejectCandidate={rejectCandidate}
+              forgetMemoryAction={forgetMemoryAction}
             />
           ))}
         </div>
@@ -1124,6 +1179,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
     setMemoryBudgetTokens,
     acceptMemoryCandidate,
     rejectMemoryCandidate,
+    forgetMemoryAction,
   } = session;
   // AC #1: block ready when no model is available — do not allow submission.
   const ready = draft.trim().length > 0 && !sending && !loading && !noEligibleModels;
@@ -1163,6 +1219,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
           latestMemory={latestMemory}
           acceptCandidate={acceptMemoryCandidate}
           rejectCandidate={rejectMemoryCandidate}
+          forgetMemoryAction={forgetMemoryAction}
         />
       ) : null}
       {noEligibleModels ? (

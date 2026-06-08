@@ -73,6 +73,14 @@ describe("tryExtractRemember", () => {
     expect(outcome).toEqual({ kind: "rejected", reason: "credential-shape" });
   });
 
+  it("rejects provider base URLs in remember bodies", () => {
+    const outcome = tryExtractRemember(
+      "remember that our provider base URL is https://llm.internal.example.com/v1",
+      ctx(),
+    );
+    expect(outcome).toEqual({ kind: "rejected", reason: "provider-base-url" });
+  });
+
   it("returns null for unrelated text", () => {
     expect(tryExtractRemember("what is the weather", ctx())).toBeNull();
   });
@@ -189,6 +197,18 @@ describe("tryExtractCorrection", () => {
     expect(tryExtractCorrection(`actually, ${shape}`, ctx())).toEqual({
       kind: "rejected",
       reason: "credential-shape",
+    });
+  });
+
+  it("rejects raw log excerpts inside correction bodies", () => {
+    expect(
+      tryExtractCorrection(
+        "actually, ERROR 2026-06-08T06:00:00Z worker failed at module X with stack trace line 1 at foo() line 2 at bar()",
+        ctx(),
+      ),
+    ).toEqual({
+      kind: "rejected",
+      reason: "raw-log-content",
     });
   });
 });
