@@ -541,6 +541,9 @@ export interface GroundedEvidenceCitation {
   // (the connected root's basename; disambiguated with a short hash when two sources share a
   // basename). Absent for legacy single-source answers, which carry no per-source attribution.
   readonly source?: string;
+  // Global evidence marker in the hybrid reranked prompt ([n]); absent for non-hybrid
+  // (folder-only) answers.
+  readonly marker?: number;
 }
 
 export interface GroundedUncertainty {
