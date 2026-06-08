@@ -441,3 +441,53 @@ describe("RunLauncher — error path", () => {
     expect(screen.getByRole("button", { name: /generate test cases/i })).not.toBeDisabled();
   });
 });
+
+describe("RunLauncher — connected Files source (#270 Slice 1)", () => {
+  const ROOT = "/work/fachkonzept";
+
+  it("enables Generate from a connected folder with no manual input", () => {
+    render(<RunLauncher onRunCompleted={vi.fn()} connectedRoot={ROOT} />);
+    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toBeDisabled();
+  });
+
+  it("renders the connected-source banner with the folder path", () => {
+    render(<RunLauncher onRunCompleted={vi.fn()} connectedRoot={ROOT} />);
+    expect(screen.getByTestId("qi-connected-source")).toHaveTextContent(ROOT);
+  });
+
+  it("generates from the connected folder as a workspace source", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={vi.fn()} connectedRoot={ROOT} />);
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({ kind: "workspace", path: ROOT });
+  });
+
+  it("lets manual requirements text override the connected folder", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={vi.fn()} connectedRoot={ROOT} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Login must work");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({ kind: "requirements", text: "Login must work" });
+  });
+
+  it("shows no connected-source banner when nothing is connected", () => {
+    render(<RunLauncher onRunCompleted={vi.fn()} />);
+    expect(screen.queryByTestId("qi-connected-source")).not.toBeInTheDocument();
+  });
+});

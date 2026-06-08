@@ -237,7 +237,9 @@ export function WindowFrame({
   const Icon = Icons[def.icon];
   const zoom = win.zoom ?? 1;
   const linkedRoot =
-    win.type === "chat" || win.type === "agents" ? api.linkedFilesRoot(win.id) : null;
+    win.type === "chat" || win.type === "agents" || win.type === "quality"
+      ? api.linkedFilesRoot(win.id)
+      : null;
   const linkedFilePath =
     win.type === "agents" ? api.linkedFilesContext(win.id)?.activeFilePath : undefined;
   const ew = win.w / zoom;

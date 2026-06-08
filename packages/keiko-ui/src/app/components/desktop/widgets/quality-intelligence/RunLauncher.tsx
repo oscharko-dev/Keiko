@@ -58,11 +58,24 @@ function reduceProgress(prev: Progress, msg: QualityIntelligenceRunStreamMessage
 export interface RunLauncherProps {
   readonly onRunCompleted?: ((runId: string) => void) | undefined;
   readonly startImpl?: typeof startQiRun;
+  /**
+   * Folder bound via a Workspace relationship edge to a Files window (Epic #270 Slice 1). When
+   * present it is the default "Generate" source — so a knowledge worker connects a Fachkonzept
+   * folder and generates from it without typing a path. Manual input (below) still overrides it.
+   * (Single-file granularity lands in the next slice.)
+   */
+  readonly connectedRoot?: string | null;
+}
+
+function baseName(p: string): string {
+  const parts = p.split(/[\\/]/u).filter((s) => s.length > 0);
+  return parts.length > 0 ? (parts[parts.length - 1] ?? p) : p;
 }
 
 export function RunLauncher({
   onRunCompleted,
   startImpl = startQiRun,
+  connectedRoot = null,
 }: RunLauncherProps): ReactNode {
   const [label, setLabel] = useState("");
   const [sourceKind, setSourceKind] = useState<"requirements" | "workspace">("requirements");
@@ -75,7 +88,10 @@ export function RunLauncher({
   const abortRef = useRef<AbortController | null>(null);
   const completedRunIdRef = useRef<string | null>(null);
 
-  const ready = sourceKind === "requirements" ? text.trim().length > 0 : path.trim().length > 0;
+  const connected = connectedRoot ?? null;
+  const manualReady =
+    sourceKind === "requirements" ? text.trim().length > 0 : path.trim().length > 0;
+  const ready = manualReady || connected !== null;
 
   const onMessage = useCallback((msg: QualityIntelligenceRunStreamMessage): void => {
     if (msg.type === "accepted") completedRunIdRef.current = msg.runId;
@@ -91,10 +107,17 @@ export function RunLauncher({
     completedRunIdRef.current = null;
     const controller = new AbortController();
     abortRef.current = controller;
+    // Precedence: explicit manual input wins; otherwise the connected Files source is the default.
     const source =
-      sourceKind === "requirements"
+      sourceKind === "requirements" && text.trim().length > 0
         ? ({ kind: "requirements", label: label.trim() || "Requirements", text } as const)
-        : ({ kind: "workspace", label: label.trim() || "Folder", path: path.trim() } as const);
+        : sourceKind === "workspace" && path.trim().length > 0
+          ? ({ kind: "workspace", label: label.trim() || "Folder", path: path.trim() } as const)
+          : ({
+              kind: "workspace",
+              label: label.trim() || baseName(connected ?? ""),
+              path: connected ?? "",
+            } as const);
     const request: QualityIntelligenceStartRunRequest = { sources: [source], profileId };
     try {
       await startImpl(request, controller.signal, onMessage);
@@ -114,6 +137,7 @@ export function RunLauncher({
     label,
     profileId,
     running,
+    connected,
     onMessage,
     onRunCompleted,
     startImpl,
@@ -129,6 +153,15 @@ export function RunLauncher({
         <h2 className="qi-col-title">New run</h2>
       </header>
       <div className="qi-launcher-body">
+        {connected !== null ? (
+          <div className="qi-connected-source" data-testid="qi-connected-source">
+            <span className="qi-connected-kind">Connected folder</span>
+            <span className="qi-connected-path qi-monospace" title={connected}>
+              {connected}
+            </span>
+            <span className="qi-connected-hint">Generate uses the connected source.</span>
+          </div>
+        ) : null}
         <div className="qi-launcher-row">
           <label className="qi-field">
             <span className="qi-field-label">Source label</span>

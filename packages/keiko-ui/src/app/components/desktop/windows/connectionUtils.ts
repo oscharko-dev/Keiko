@@ -14,7 +14,7 @@ export const CONNECTABLE: Readonly<Record<string, readonly string[]>> = {
   agents: ["files", "terminal", "plugins", "review", "browser", "agents", "keiko"],
   // Epic #189 Slice 3 M3 — a Chat window can bind to a Connector window via a relationship edge.
   chat: ["files", "browser", "plugins", "keiko", "connector"],
-  files: ["agents", "chat"],
+  files: ["agents", "chat", "quality"],
   terminal: ["agents"],
   plugins: ["agents", "chat"],
   review: ["agents"],
@@ -22,6 +22,9 @@ export const CONNECTABLE: Readonly<Record<string, readonly string[]>> = {
   keiko: ["agents", "chat"],
   // A Connector window can bind to a Chat window (triggers localKnowledgeScopes binding).
   connector: ["chat"],
+  // Epic #270 — Quality Intelligence binds to a Files window: the connected folder (or the active
+  // file) becomes the source for "Generate test cases". (Connector/capsule binding lands next slice.)
+  quality: ["files"],
 };
 
 export function canConnect(a: string | undefined, b: string | undefined): boolean {
@@ -38,7 +41,11 @@ function configRoot(cfg: Record<string, unknown> | undefined): string {
 export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
   const filesSide: WinSnapshot | null = a.type === "files" ? a : b.type === "files" ? b : null;
   const other = filesSide === null ? null : filesSide === a ? b : a;
-  if (filesSide !== null && other !== null && (other.type === "chat" || other.type === "agents")) {
+  if (
+    filesSide !== null &&
+    other !== null &&
+    (other.type === "chat" || other.type === "agents" || other.type === "quality")
+  ) {
     return `uses ${configRoot(filesSide.cfg)}/`;
   }
   const pair: readonly [string, string] = [a.type, b.type];

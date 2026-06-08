@@ -7761,6 +7761,34 @@ select.dlg-input {
   gap: 10px;
   padding: 12px 16px 16px;
 }
+/* Connected-source banner (Epic #270 Slice 1): shown when a Files window is bound to the QI hub. */
+.qi-connected-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--line));
+  border-radius: var(--radius-sm, 6px);
+  background: color-mix(in oklch, var(--accent) 12%, var(--card));
+}
+.qi-connected-kind {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg);
+}
+.qi-connected-path {
+  font-size: 11px;
+  color: var(--fg);
+  word-break: break-all;
+}
+.qi-connected-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  width: 100%;
+}
 .qi-field {
   display: flex;
   flex-direction: column;
