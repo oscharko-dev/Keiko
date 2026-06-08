@@ -366,12 +366,12 @@ describe("resolveGroundingLimits", () => {
   });
 
   it("falls back to the default for a non-integer value (1.5)", () => {
-    const result = resolveGroundingLimits({ maxConnectedSources: 1.5 } as Partial<GroundingLimits>);
+    const result = resolveGroundingLimits({ maxConnectedSources: 1.5 });
     expect(result.maxConnectedSources).toBe(DEFAULT_GROUNDING_LIMITS.maxConnectedSources);
   });
 
   it("falls back to the default for a negative value (-1)", () => {
-    const result = resolveGroundingLimits({ maxConnectedSources: -1 } as Partial<GroundingLimits>);
+    const result = resolveGroundingLimits({ maxConnectedSources: -1 });
     expect(result.maxConnectedSources).toBe(DEFAULT_GROUNDING_LIMITS.maxConnectedSources);
   });
 
@@ -382,7 +382,7 @@ describe("resolveGroundingLimits", () => {
 
   it("result satisfies the GroundingLimits shape (all fields present and positive)", () => {
     const result = resolveGroundingLimits();
-    for (const key of Object.keys(DEFAULT_GROUNDING_LIMITS) as Array<keyof GroundingLimits>) {
+    for (const key of Object.keys(DEFAULT_GROUNDING_LIMITS) as (keyof GroundingLimits)[]) {
       expect(typeof result[key]).toBe("number");
       expect(result[key]).toBeGreaterThan(0);
     }

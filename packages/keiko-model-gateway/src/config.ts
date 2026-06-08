@@ -56,7 +56,7 @@ export interface SafeGatewayConfig {
   readonly providers: readonly SafeProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[] | undefined;
-  readonly grounding?: GroundingLimits | undefined;
+  readonly grounding?: Partial<GroundingLimits> | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -515,7 +515,7 @@ function parseGroundingLimits(raw: unknown): GroundingLimits | undefined {
     throw new ConfigInvalidError("grounding must be an object");
   }
   const partial: { -readonly [K in keyof GroundingLimits]?: number } = {};
-  for (const key of Object.keys(DEFAULT_GROUNDING_LIMITS) as Array<keyof GroundingLimits>) {
+  for (const key of Object.keys(DEFAULT_GROUNDING_LIMITS) as (keyof GroundingLimits)[]) {
     const value = block[key];
     if (value !== undefined) {
       // Reject non-integer / non-positive — resolveGroundingLimits silently coerces,
@@ -525,7 +525,7 @@ function parseGroundingLimits(raw: unknown): GroundingLimits | undefined {
       }
       // Over-ceiling values are clamped (not rejected) by resolveGroundingLimits.
       // Record the validated value; the resolver applies the ceiling.
-      partial[key] = value as number;
+      partial[key] = value;
     }
     // Unknown keys in the grounding block are ignored (forward-compat).
   }

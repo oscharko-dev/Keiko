@@ -94,16 +94,23 @@ export const GROUNDING_LIMIT_CEILINGS: GroundingLimits = {
 // then clamp to the ceiling. Invalid (non-positive / non-integer) present fields fall back to the
 // default here (the gateway parse layer is responsible for REJECTING malformed config explicitly).
 export function resolveGroundingLimits(partial?: Partial<GroundingLimits>): GroundingLimits {
-  const result = {} as Record<keyof GroundingLimits, number>;
-  for (const key of Object.keys(DEFAULT_GROUNDING_LIMITS) as Array<keyof GroundingLimits>) {
+  const pick = (key: keyof GroundingLimits): number => {
     const supplied = partial?.[key];
     const resolved =
-      Number.isInteger(supplied) && (supplied as number) >= 1
-        ? (supplied as number)
+      supplied !== undefined && Number.isInteger(supplied) && supplied >= 1
+        ? supplied
         : DEFAULT_GROUNDING_LIMITS[key];
-    result[key] = Math.min(resolved, GROUNDING_LIMIT_CEILINGS[key]);
-  }
-  return result as GroundingLimits;
+    return Math.min(resolved, GROUNDING_LIMIT_CEILINGS[key]);
+  };
+  return {
+    maxConnectedSources: pick("maxConnectedSources"),
+    maxLocalKnowledgeSources: pick("maxLocalKnowledgeSources"),
+    maxPromptReferences: pick("maxPromptReferences"),
+    maxExcerptChars: pick("maxExcerptChars"),
+    referenceBudget: pick("referenceBudget"),
+    hybridMaxCandidates: pick("hybridMaxCandidates"),
+    hybridMaxExcerptBytes: pick("hybridMaxExcerptBytes"),
+  };
 }
 
 // Epic #532 — a sane cap on the number of folders/files one chat may connect at once. The BFF

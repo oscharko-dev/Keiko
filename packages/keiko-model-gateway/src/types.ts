@@ -51,7 +51,7 @@ export interface GatewayConfig {
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[] | undefined;
-  readonly grounding?: GroundingLimits | undefined;
+  readonly grounding?: Partial<GroundingLimits> | undefined;
 }
 
 // ─── Provider adapter interface (runtime port — STAYS local) ──────────────────
