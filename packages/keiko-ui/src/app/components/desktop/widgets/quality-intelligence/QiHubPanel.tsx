@@ -15,6 +15,8 @@ import { StatusBadge, LoadingSkeleton, ErrorState, formatError, formatDate } fro
 export interface QiHubPanelProps {
   /** Opens a Workspace window — wired to the render context so the hub can spawn run cards. */
   readonly openRun: (runId: string) => void;
+  /** Folder bound via a relationship edge to a Files window (Epic #270 Slice 1). */
+  readonly connectedRoot?: string | null;
   /** Seam for tests. */
   readonly fetchRunsImpl?: typeof fetchQiRuns;
 }
@@ -48,7 +50,11 @@ function RunRow({
   );
 }
 
-export function QiHubPanel({ openRun, fetchRunsImpl = fetchQiRuns }: QiHubPanelProps): ReactNode {
+export function QiHubPanel({
+  openRun,
+  connectedRoot = null,
+  fetchRunsImpl = fetchQiRuns,
+}: QiHubPanelProps): ReactNode {
   const [runs, setRuns] = useState<readonly QualityIntelligenceUiRunSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +85,7 @@ export function QiHubPanel({ openRun, fetchRunsImpl = fetchQiRuns }: QiHubPanelP
 
   return (
     <div className="qi-hub">
-      <RunLauncher onRunCompleted={handleRunCompleted} />
+      <RunLauncher onRunCompleted={handleRunCompleted} connectedRoot={connectedRoot} />
       <section className="qi-hub-runs" aria-label="Quality Intelligence runs">
         <header className="qi-col-header">
           <h2 className="qi-col-title">Runs</h2>

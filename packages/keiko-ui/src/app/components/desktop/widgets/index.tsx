@@ -76,6 +76,7 @@ registerWindowRender("quality", (_cfg, ctx) => (
     openRun={(runId) => {
       ctx.openWindow("qiRun", { runId });
     }}
+    connectedRoot={ctx.linkedRoot}
   />
 ));
 registerWindowRender("qiRun", (cfg) => {
