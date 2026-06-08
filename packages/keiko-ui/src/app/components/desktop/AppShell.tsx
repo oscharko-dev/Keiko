@@ -29,6 +29,7 @@ import {
 } from "./hooks/workspaceActions";
 import { updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
 import type { ChatLocalKnowledgeScope } from "@/lib/types";
+import { recordReadsContextRelationship } from "../../relationships/connector-relationship";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
@@ -211,6 +212,10 @@ function AppShellInner(): ReactNode {
       void updateChatConnectedScopes(chat.id, next)
         .then((res) => {
           session.replaceChat(res.chat);
+          // Epic #532 unification — also record the green edge as a governed reads-context
+          // relationship so the connection is validated, audited, and visible in the relationship
+          // graph. Best-effort: never blocks or breaks the grounding scope bind above.
+          recordReadsContextRelationship(chat.id, filesRoot);
         })
         .catch(() => undefined);
     },
