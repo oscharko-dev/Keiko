@@ -454,7 +454,7 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
   try {
     sources = await retrieveAllSources(ctx, query, perScopeBudget, labels);
   } catch (error) {
-    return mapMultiSourceError(error);
+    return mapMultiSourceError(error, ctx.deps);
   }
   if (isRouteResult(sources)) {
     return sources;
@@ -467,7 +467,7 @@ export async function runMultiSourceAsk(ctx: MultiSourceAskInput): Promise<Route
       retrieved.map((s) => ({ label: s.label, pack: s.pack })),
     );
   } catch (error) {
-    return mapMultiSourceError(error);
+    return mapMultiSourceError(error, ctx.deps);
   }
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
@@ -486,9 +486,9 @@ function isRouteResult(value: readonly RetrievedSource[] | RouteResult): value i
   return !Array.isArray(value);
 }
 
-function mapMultiSourceError(error: unknown): RouteResult {
+function mapMultiSourceError(error: unknown, deps: UiHandlerDeps): RouteResult {
   if (error instanceof ClarificationNeededError) return badRequest(error.message);
-  const gatewayResult = mappedGatewayError(error);
+  const gatewayResult = mappedGatewayError(error, deps);
   if (gatewayResult !== undefined) return gatewayResult;
   throw error;
 }
