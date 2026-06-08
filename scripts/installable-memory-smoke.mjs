@@ -407,8 +407,8 @@ async function main() {
     ui = await startInstalledUi(installRoot, configPath, uiDbPath, memoryDir);
     const homeHtml = await fetchText(`${ui.baseUrl}/`);
     assert(homeHtml.includes("Keiko"), "home page did not contain the Keiko shell marker");
-    const memoryHtml = await fetchText(`${ui.baseUrl}/memory`);
-    assert(memoryHtml.includes("Memory Center"), "/memory did not render the Memory Center route");
+    const memoryHtml = await fetchText(`${ui.baseUrl}/memoriaviva`);
+    assert(memoryHtml.includes("MemoriaViva"), "/memoriaviva did not render the MemoriaViva route");
 
     const rememberChatId = await createChat(ui.baseUrl, projectA);
     const remember = await sendChat(
