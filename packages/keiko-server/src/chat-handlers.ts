@@ -67,7 +67,7 @@ const MAX_BODY_BYTES = 128_000;
 const MAX_CHAT_INPUT_CHARS = 16_000;
 const MAX_CONTEXT_MESSAGES = 24;
 
-interface GatewayConversationMessage {
+export interface GatewayConversationMessage {
   readonly role: "system" | "user" | "assistant";
   readonly content: string;
 }
@@ -230,7 +230,7 @@ function chatEnvelope(deps: UiHandlerDeps, project: Project, chat: Chat): Record
 // values added through PATCH /api/gateway/config after process start are scrubbed too. The
 // `deps.redactionSecrets` field is the startup snapshot frozen by buildUiHandlerDeps and would
 // miss any runtime-added apiKey/baseUrl.
-function redactErrorMessage(message: string, deps: UiHandlerDeps): string {
+export function redactErrorMessage(message: string, deps: UiHandlerDeps): string {
   return redact(message, currentRedactionSecrets(deps));
 }
 
@@ -239,7 +239,7 @@ function gatewayErrorResult(error: GatewayError, deps: UiHandlerDeps): RouteResu
   return { status, body: errorBody(error.code, redactErrorMessage(error.message, deps)) };
 }
 
-function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): RouteResult {
+export function desktopChatErrorResult(error: unknown, deps: UiHandlerDeps): RouteResult {
   if (error instanceof GatewayError) {
     return gatewayErrorResult(error, deps);
   }
@@ -278,7 +278,7 @@ function conversationForGateway(messages: readonly ChatMessage[]): GatewayConver
   ];
 }
 
-interface SendDesktopChatRequest {
+export interface SendDesktopChatRequest {
   readonly chatId: string;
   readonly projectPath: string;
   readonly content: string;
@@ -539,7 +539,10 @@ function invalidChatModelResult(modelId: string, deps: UiHandlerDeps): RouteResu
   };
 }
 
-function createUserMessage(deps: UiHandlerDeps, request: SendDesktopChatRequest): ChatMessage {
+export function createUserMessage(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+): ChatMessage {
   return deps.store.createMessage({
     chatId: request.chatId,
     role: "user",
@@ -553,7 +556,7 @@ function createUserMessage(deps: UiHandlerDeps, request: SendDesktopChatRequest)
   });
 }
 
-function createAssistantMessage(
+export function createAssistantMessage(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   content: string,
@@ -599,7 +602,7 @@ function applyDocumentContextToLatestUserTurn(
   return out;
 }
 
-function emptyMemoryResult(enabled: boolean): ConversationMemoryResultWire {
+export function emptyMemoryResult(enabled: boolean): ConversationMemoryResultWire {
   return {
     context: {
       enabled,
@@ -694,7 +697,7 @@ function toMemoryResult(
   };
 }
 
-async function buildMemoryResult(
+export async function buildMemoryResult(
   request: SendDesktopChatRequest,
   deps: UiHandlerDeps,
   context: ConversationMemoryRuntimeContext,
@@ -810,7 +813,7 @@ async function captureMemoryActions(
 // Merges the regex intent capture (synchronous) with model-assisted salience capture (async).
 // Regex runs FIRST so its inserts are part of the vault state the salience extractor reads for
 // dedup. Salience reuses the same `memory.enabled` gate; when memory is off, both paths no-op.
-async function collectMemoryActions(
+export async function collectMemoryActions(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
   memoryContext: ConversationMemoryRuntimeContext | undefined,
@@ -833,7 +836,7 @@ async function collectMemoryActions(
 
 // On the first turn of a freshly-created chat (still bearing the default title), adopt the user's
 // message prefix as the title; otherwise just pin the selected model.
-function buildChatPatch(
+export function buildChatPatch(
   chat: Chat,
   request: SendDesktopChatRequest,
   modelId: string,
@@ -841,6 +844,19 @@ function buildChatPatch(
   return chat.title === DEFAULT_CHAT_TITLE
     ? { selectedModel: modelId, title: request.content.slice(0, 60) }
     : { selectedModel: modelId };
+}
+
+// #152 — assembles the exact gateway prompt for the latest user turn (history + document context +
+// memory text). Shared by the buffered (persistModelChatTurn) and streaming
+// (handleSendDesktopChatStream) paths so both send a byte-identical prompt. `memoryText` is
+// `memory.context.text`.
+export function buildGatewayMessages(
+  deps: UiHandlerDeps,
+  request: SendDesktopChatRequest,
+  memoryText: string,
+): GatewayConversationMessage[] {
+  const history = conversationForGateway(deps.store.listMessages(request.chatId));
+  return applyDocumentContextToLatestUserTurn(history, request, memoryText);
 }
 
 async function persistModelChatTurn(
@@ -860,8 +876,7 @@ async function persistModelChatTurn(
         ? emptyMemoryResult(false)
         : await buildMemoryResult(request, deps, memoryContext);
     const userMessage = createUserMessage(deps, request);
-    const history = conversationForGateway(deps.store.listMessages(request.chatId));
-    const messages = applyDocumentContextToLatestUserTurn(history, request, memory.context.text);
+    const messages = buildGatewayMessages(deps, request, memory.context.text);
     const response = await model.call(
       {
         modelId,
@@ -953,10 +968,23 @@ function resolveDesktopMemoryContext(
   return resolveConversationMemoryContext(deps, normalizedProjectPath, request.chatId);
 }
 
-export async function handleSendDesktopChat(
+// #152 — the front-matter shared by the buffered and streaming send paths: parse → normalize path →
+// find chat → resolve+validate model → #149 modality guardrail → resolve memory context. Returns a
+// RouteResult on ANY failure (the streaming path RETURNS it as a JSON error BEFORE any SSE header, so
+// the client can fall back to the buffered route). On success it returns the validated send context.
+// Behaviour-preserving extraction from handleSendDesktopChat — the ordering of every guardrail is
+// unchanged, so the buffered path's tests stay byte-identical.
+export interface PreparedDesktopChatSend {
+  readonly request: SendDesktopChatRequest;
+  readonly chat: Chat;
+  readonly modelId: string;
+  readonly memoryContext: ConversationMemoryRuntimeContext | undefined;
+}
+
+export async function prepareDesktopChatSend(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-): Promise<RouteResult> {
+): Promise<PreparedDesktopChatSend | RouteResult> {
   const body = await readJsonObject(ctx.req);
   if (isRouteResult(body)) return body;
   const request = sendRequestFromBody(body);
@@ -985,5 +1013,15 @@ export async function handleSendDesktopChat(
   }
   const memoryContext = resolveDesktopMemoryContext(deps, request, normalizedProjectPath);
   if (isRouteResult(memoryContext)) return memoryContext;
+  return { request, chat, modelId, memoryContext };
+}
+
+export async function handleSendDesktopChat(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const prepared = await prepareDesktopChatSend(ctx, deps);
+  if (isRouteResult(prepared)) return prepared;
+  const { request, chat, modelId, memoryContext } = prepared;
   return persistModelChatTurn(deps, request, chat, modelId, memoryContext);
 }

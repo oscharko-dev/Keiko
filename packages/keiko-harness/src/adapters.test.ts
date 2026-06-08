@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CancelledError,
   type GatewayRequest,
+  type GatewayStreamChunk,
   type NormalizedResponse,
   type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -54,6 +55,30 @@ describe("GatewayModelPort", () => {
     await expect(
       port.call({ modelId: "m", messages: [] }, new AbortController().signal),
     ).rejects.toBeInstanceOf(CancelledError);
+  });
+
+  it("callStream delegates to gateway.chatStream with the run signal and yields its chunks", async () => {
+    let seen: AbortSignal | undefined;
+    const chunks: GatewayStreamChunk[] = [
+      { type: "delta", token: "he" },
+      { type: "delta", token: "llo" },
+      { type: "done", response: response() },
+    ];
+    const port = new GatewayModelPort({
+      chat: (): Promise<NormalizedResponse> => Promise.resolve(response()),
+      // eslint-disable-next-line @typescript-eslint/require-await
+      chatStream: async function* (req: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
+        seen = req.cancellationSignal;
+        yield* chunks;
+      },
+    });
+    const controller = new AbortController();
+    const received: GatewayStreamChunk[] = [];
+    for await (const chunk of port.callStream({ modelId: "m", messages: [] }, controller.signal)) {
+      received.push(chunk);
+    }
+    expect(seen).toBe(controller.signal);
+    expect(received).toEqual(chunks);
   });
 });
 

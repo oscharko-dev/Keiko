@@ -26,8 +26,8 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 93 route contract including local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, the QI Conversation Center handoff route, the relationship engine routes (Epic #532), and the memory maintenance route (#204)", () => {
-    expect(API_ROUTES).toHaveLength(93);
+  it("declares the 94 route contract including local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, the QI Conversation Center handoff route, the relationship engine routes (Epic #532), the memory maintenance route (#204), and the desktop chat SSE streaming route (#152)", () => {
+    expect(API_ROUTES).toHaveLength(94);
   });
 
   it("includes the Quality Intelligence UI read routes (#280)", () => {
@@ -192,6 +192,10 @@ describe("API route contract", () => {
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat"),
+    ).toBeDefined();
+    // Issue #152 — additive SSE streaming surface alongside the buffered send route.
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat/stream"),
     ).toBeDefined();
   });
 

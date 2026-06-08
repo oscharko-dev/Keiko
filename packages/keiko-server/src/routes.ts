@@ -39,6 +39,7 @@ import {
   handleUpdateMessage,
 } from "./store-handlers.js";
 import { handleCreateDesktopChat, handleSendDesktopChat } from "./chat-handlers.js";
+import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
 import {
   handleListMemories,
   handleMemoryReviewQueue,
@@ -202,6 +203,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
+  { method: "POST", pattern: "/api/desktop/chat/stream", handler: handleSendDesktopChatStream },
   // ADR-0018 — bounded permitted-command execution. PTY routes (shells/sessions/WS upgrade) and
   // the WebSocket upgrade handler in server.ts are removed; commands run via synchronous POST.
   { method: "GET", pattern: "/api/terminal/policy", handler: handleTerminalPolicy },
