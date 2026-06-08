@@ -86,8 +86,15 @@ function timeLabel(timestamp: number): string {
 // RunSummaryCards (the chat-side projection of the run). Other system messages keep
 // the historical "filtered out of the visible log" behaviour.
 function visibleOnly(messages: readonly ChatMessage[]): ChatMessage[] {
+  // Issue #152 — the streaming path inserts an empty assistant bubble before the first token
+  // arrives; while it is empty the pending turn is represented by the TypingBubble, so an empty
+  // assistant turn is hidden here to avoid a duplicate "Keiko" bubble during the contacting wait.
+  // Persisted assistant turns are never empty (createAssistantMessage substitutes a placeholder).
   return messages.filter(
-    (m) => m.role === "user" || m.role === "assistant" || isRunSummaryMessage(m),
+    (m) =>
+      m.role === "user" ||
+      (m.role === "assistant" && m.content.length > 0) ||
+      isRunSummaryMessage(m),
   );
 }
 
@@ -1101,6 +1108,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
     draft,
     loading,
     sending,
+    sendStatus,
     error,
     noEligibleModels,
     sendMessage,
@@ -1180,7 +1188,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
             {visible.map((message) => (
               <ChatBubble key={message.id} message={message} />
             ))}
-            {sending ? (
+            {sending && sendStatus !== "streaming" ? (
               <div className="chatw-typing-row">
                 <TypingBubble />
                 {activeChat?.connectedScope !== undefined ||

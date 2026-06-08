@@ -169,6 +169,21 @@ function userMessage(content: string): ChatMessage {
   };
 }
 
+function assistantMessage(id: string, content: string): ChatMessage {
+  return {
+    id,
+    chatId: "chat-1",
+    role: "assistant",
+    content,
+    timestamp: 2,
+    runId: undefined,
+    workflowId: undefined,
+    workflowStatus: undefined,
+    shortResult: undefined,
+    taskType: undefined,
+  };
+}
+
 // ─── ChatWindow UI tests — lifecycle indicator + Cancel button (AC#1, AC#3) ────
 
 describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
@@ -252,6 +267,59 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
     );
     expect(screen.getByRole("button", { name: "Send message" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Cancel response" })).toBeNull();
+  });
+});
+
+// ─── Streaming typing indicator + pending bubble (Issue #152) ──────────────────
+// While the stream is contacting the model the pending assistant turn is shown as
+// the TypingBubble. Once tokens flow (sendStatus "streaming") the growing assistant
+// bubble IS the progress signal, so the redundant typing dots are suppressed and the
+// empty pre-token assistant bubble is hidden — verified live against the Azure gateway.
+
+describe("ChatWindow streaming typing indicator (Issue #152)", () => {
+  it("shows the typing indicator while contacting (before the first token)", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [userMessage("hi")],
+        sendStatus: "contacting",
+        sending: true,
+      }),
+    );
+    expect(screen.getByLabelText("Keiko is responding")).toBeInTheDocument();
+  });
+
+  it("suppresses the typing indicator once tokens are streaming (no dots over live text)", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [userMessage("hi"), assistantMessage("a-stream", "The TCP/IP stack")],
+        sendStatus: "streaming",
+        sending: true,
+      }),
+    );
+    // Mutation guard: reverting the `sendStatus !== "streaming"` condition makes the
+    // typing bubble reappear alongside the live assistant text, failing this.
+    expect(screen.queryByLabelText("Keiko is responding")).toBeNull();
+  });
+
+  it("hides the empty pre-token assistant bubble, keeping only non-empty turns", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          userMessage("hi"),
+          assistantMessage("a-empty", ""),
+          assistantMessage("a-full", "Final answer."),
+        ],
+        sendStatus: "idle",
+        sending: false,
+      }),
+    );
+    // Mutation guard: dropping the `content.length > 0` filter renders the empty
+    // assistant bubble too, making this length assertion fail.
+    expect(document.querySelectorAll('article[data-role="assistant"]')).toHaveLength(1);
+    expect(screen.getByText("Final answer.")).toBeInTheDocument();
   });
 });
 
