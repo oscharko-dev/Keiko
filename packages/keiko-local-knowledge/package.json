@@ -29,7 +29,7 @@
     "@oscharko-dev/keiko-contracts": "*",
     "@oscharko-dev/keiko-model-gateway": "*",
     "@oscharko-dev/keiko-workspace": "*",
-    "@types/yauzl": "^2.10.3",
+    "@types/yauzl": "^3.3.0",
     "pdfjs-dist": "^6.0.227",
     "yauzl": "^3.3.2"
   }
