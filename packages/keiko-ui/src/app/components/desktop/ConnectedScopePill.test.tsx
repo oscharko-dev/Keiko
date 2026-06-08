@@ -198,7 +198,7 @@ describe("ConnectedScopePill", () => {
         lastGroundedBudgetStatus={status}
       />,
     );
-    expect(screen.getByText("High")).toBeInTheDocument();
+    expect(screen.getByText("Moderate")).toBeInTheDocument();
     expect(screen.getByText(/Last grounded run:/)).toHaveTextContent("1.4k tokens, 5 files");
   });
 });

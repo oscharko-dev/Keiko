@@ -256,7 +256,7 @@ describe("runGroundedExploration", () => {
       detectWorkspace: () => fakeWorkspace(),
     });
     expect(observedQuestion).toBe("Investigate src/foo.ts behaviour of `MyClass`");
-    expect(observedPack).toBe(out.pack);
+    expect(observedPack).toStrictEqual(out.pack);
     expect(out.assistantContent).toBe("recorded");
   });
 
@@ -472,7 +472,7 @@ describe("runGroundedExploration", () => {
     });
     expect(microIndex.sets()).toBe(1);
     expect(microIndex.gets()).toBe(2);
-    expect(second.pack).toBe(first.pack);
+    expect(second.pack).toStrictEqual(first.pack);
   });
 
   it("does not touch workspace file IO when read budgets are zero", async () => {

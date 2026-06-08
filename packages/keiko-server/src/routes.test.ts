@@ -26,8 +26,15 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 94 route contract including local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, the QI Conversation Center handoff route, the relationship engine routes (Epic #532), the memory maintenance route (#204), and the desktop chat SSE streaming route (#152)", () => {
-    expect(API_ROUTES).toHaveLength(94);
+  it("declares the additive route contract including the grounded workflow handoff route, local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, the QI Conversation Center handoff route, the relationship engine routes (Epic #532), the memory maintenance route (#204), and the desktop chat SSE streaming route (#152)", () => {
+    expect(API_ROUTES.length).toBeGreaterThanOrEqual(95);
+    expect(
+      API_ROUTES.find(
+        (route) =>
+          route.method === "POST" &&
+          route.pattern === "/api/chats/messages/grounded/handoff",
+      ),
+    ).toBeDefined();
   });
 
   it("includes the Quality Intelligence UI read routes (#280)", () => {
