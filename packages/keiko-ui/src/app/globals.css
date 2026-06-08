@@ -664,7 +664,9 @@ button {
   padding: 0 12px;
   background: var(--surface);
   font-size: 11.5px;
-  color: var(--fg-dim);
+  /* --fg-muted meets WCAG 1.4.3 ≥4.5:1 on both themes; --fg-dim (prior value)
+     measured 4.17:1 on dark (FAIL). Override rules on child segments are unaffected. */
+  color: var(--fg-muted);
 }
 .ft-seg {
   display: flex;
@@ -5171,6 +5173,16 @@ select.dlg-input {
 .rail-new:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+/* focus rings for header toolbar buttons (WCAG 2.4.7) */
+.hd-tool:focus-visible,
+.tb-btn:focus-visible,
+.tb-newtab:focus-visible,
+.edm-trigger:focus-visible,
+.modesw-opt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
 }
 /* syntax token classes from syntaxHighlight.ts */
 .hl-com {

@@ -41,6 +41,7 @@ function RailButton({
       data-active={active ? "true" : "false"}
       data-side="left"
       aria-label={tool.label}
+      aria-pressed={active}
       title={tool.label}
       onClick={onClick}
     >
@@ -151,6 +152,7 @@ export function LeftRail({
         data-side="left"
         data-active={openTools.has("settings") ? "true" : "false"}
         aria-label="Settings"
+        aria-pressed={openTools.has("settings")}
         title="Settings"
         onClick={() => onTool("settings")}
       >
