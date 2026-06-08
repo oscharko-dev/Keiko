@@ -10,6 +10,7 @@ import type { ReactNode } from "react";
 import type {
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceCandidateEditableFields,
+  QualityIntelligenceInlineSource,
 } from "@oscharko-dev/keiko-contracts";
 import {
   editQiCandidate,
@@ -18,6 +19,8 @@ import {
   type QiReviewAction,
 } from "@/lib/quality-intelligence-api";
 import { CandidatesPane } from "./CandidatesPane";
+import { DriftPanel } from "./DriftPanel";
+import type { DriftPanelProps } from "./DriftPanel";
 import { ExportBar } from "./ExportBar";
 import {
   StatusBadge,
@@ -31,10 +34,17 @@ import {
 
 export interface QiRunCardProps {
   readonly runId: string;
+  /**
+   * The source this run was launched from (Epic #735). When present, the card offers drift
+   * re-check + targeted regeneration; when absent, that affordance is hidden.
+   */
+  readonly connectedSource?: DriftPanelProps["connectedSource"] | undefined;
   /** Seam for tests. */
   readonly fetchDetailImpl?: typeof fetchQiRunDetail;
   readonly reviewImpl?: typeof reviewQiRun;
   readonly editImpl?: typeof editQiCandidate;
+  readonly reCheckImpl?: DriftPanelProps["reCheckImpl"];
+  readonly regenerateImpl?: DriftPanelProps["regenerateImpl"];
 }
 
 function SummaryStrip({ detail }: { readonly detail: QualityIntelligenceUiRunDetail }): ReactNode {
@@ -160,9 +170,12 @@ function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDe
 
 export function QiRunCard({
   runId,
+  connectedSource,
   fetchDetailImpl = fetchQiRunDetail,
   reviewImpl = reviewQiRun,
   editImpl = editQiCandidate,
+  reCheckImpl,
+  regenerateImpl,
 }: QiRunCardProps): ReactNode {
   const [detail, setDetail] = useState<QualityIntelligenceUiRunDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -238,6 +251,15 @@ export function QiRunCard({
             <SummaryStrip detail={detail} />
             <FindingsList detail={detail} />
             <CoveragePanel detail={detail} />
+            {connectedSource !== undefined ? (
+              <DriftPanel
+                runId={runId}
+                connectedSource={connectedSource}
+                onRegenerated={() => void loadDetail()}
+                reCheckImpl={reCheckImpl}
+                regenerateImpl={regenerateImpl}
+              />
+            ) : null}
             <section className="qi-run-cases" aria-label="Generated test cases">
               <div className="qi-run-cases-head">
                 <h3 className="qi-col-subtitle">

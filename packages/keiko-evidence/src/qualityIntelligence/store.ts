@@ -47,6 +47,7 @@ import {
   validateQualityIntelligenceEvidenceManifest,
   type QualityIntelligenceEvidenceManifest,
   type QualityIntelligenceIntegrityHashes,
+  type QualityIntelligenceSourceFingerprintRow,
 } from "./manifestSchema.js";
 import {
   redactQualityIntelligenceEvidence,
@@ -362,6 +363,8 @@ export interface QualityIntelligenceRecordInput {
   readonly coverageMatrix?: QualityIntelligenceEvidenceManifest["coverageMatrix"];
   /** Optional mean test-quality judge score [0-100]; null when judge was skipped. Added in #736. */
   readonly qualityScore?: QualityIntelligenceEvidenceManifest["qualityScore"];
+  /** Optional per-envelope content fingerprints for drift detection (Epic #735). */
+  readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];
 }
 
 export interface QualityIntelligenceRecordOptions {
@@ -427,10 +430,18 @@ function resolveStore(
 /** Optional manifest fields that are only present when supplied (exactOptionalPropertyTypes). */
 function optionalManifestFields(
   input: QualityIntelligenceRecordInput,
-): Partial<Pick<QualityIntelligenceEvidenceManifest, "coverageMatrix" | "qualityScore">> {
+): Partial<
+  Pick<
+    QualityIntelligenceEvidenceManifest,
+    "coverageMatrix" | "qualityScore" | "sourceFingerprints"
+  >
+> {
   return {
     ...(input.coverageMatrix !== undefined ? { coverageMatrix: input.coverageMatrix } : {}),
     ...(input.qualityScore !== undefined ? { qualityScore: input.qualityScore } : {}),
+    ...(input.sourceFingerprints !== undefined
+      ? { sourceFingerprints: input.sourceFingerprints }
+      : {}),
   };
 }
 

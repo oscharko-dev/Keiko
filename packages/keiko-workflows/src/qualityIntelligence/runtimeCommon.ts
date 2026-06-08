@@ -231,6 +231,7 @@ export interface PersistArgs {
   readonly evidenceStore: QualityIntelligenceLocalStore;
   readonly coverageMatrix?: QualityIntelligenceRecordInput["coverageMatrix"];
   readonly qualityScore?: number | null;
+  readonly sourceFingerprints?: QualityIntelligenceRecordInput["sourceFingerprints"];
 }
 
 function mapFindingsToRows(
@@ -271,6 +272,9 @@ export function persistRun(args: PersistArgs): QualityIntelligenceRecordResult {
     provenanceRefs: args.provenanceRefs,
     coverageMatrix: args.coverageMatrix,
     ...(args.qualityScore !== undefined ? { qualityScore: args.qualityScore } : {}),
+    ...(args.sourceFingerprints !== undefined
+      ? { sourceFingerprints: args.sourceFingerprints }
+      : {}),
   };
   return recordQualityIntelligenceRun(input, { store: args.evidenceStore });
 }

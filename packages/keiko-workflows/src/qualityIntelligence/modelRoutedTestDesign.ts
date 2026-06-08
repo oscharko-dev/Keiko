@@ -338,6 +338,10 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
     emitFindingsRecorded(ctx, findings);
     const evidence = await withStage(ctx, "finalize", async () => {
       const completedAt = ctx.clock.nowIso();
+      const sourceFingerprints = input.envelopes.map((e) => ({
+        envelopeId: String(e.id),
+        integrityHashSha256Hex: e.provenance.integrityHashSha256Hex,
+      }));
       const result = persistRun({
         ctx,
         status: "succeeded",
@@ -349,6 +353,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         evidenceStore: deps.evidenceStore,
         coverageMatrix,
         qualityScore: judgeResult.qualityScore,
+        ...(sourceFingerprints.length > 0 ? { sourceFingerprints } : {}),
       });
       deps.candidatesSink.record(candidates, completedAt);
       return Promise.resolve(result);

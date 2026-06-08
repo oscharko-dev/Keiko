@@ -118,6 +118,7 @@ export {
   type QualityIntelligenceRunSnapshotEntry,
   type QualityIntelligenceSchemaValidationResult,
   type QualityIntelligenceCoverageMatrixRow,
+  type QualityIntelligenceSourceFingerprintRow,
 } from "./qualityIntelligence/index.js";
 
 export {

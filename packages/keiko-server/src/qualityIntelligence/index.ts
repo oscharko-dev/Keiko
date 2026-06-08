@@ -66,3 +66,9 @@ export { QI_EXPORT_ROUTE_GROUP, handleQiExport } from "./exportRoutes.js";
 export { QI_EDIT_ROUTE_GROUP, handleQiEditCandidate } from "./editRoutes.js";
 // Issue #740 (Epic #734) — requirement↔test traceability matrix export route group.
 export { QI_TRACEABILITY_ROUTE_GROUP, handleQiTraceabilityExport } from "./traceabilityRoutes.js";
+// Issue #743 (Epic #735) — drift re-check + targeted regeneration route group.
+export {
+  QI_RECHECK_ROUTE_GROUP,
+  handleQiReCheck,
+  handleQiRegenerateStale,
+} from "./reCheckRoutes.js";

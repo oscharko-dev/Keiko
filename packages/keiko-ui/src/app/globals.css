@@ -7688,6 +7688,51 @@ select.dlg-input {
   color: var(--fg-muted);
 }
 
+/* Living Tests drift panel (Epic #735 / Issue #744). */
+.qi-drift-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.qi-drift-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+/* stale: --warn text on a warn tint (same pairing as .qi-sev-high; AA in both themes). */
+.qi-drift-stale {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--warn);
+}
+.qi-drift-icon-warn {
+  font-size: 13px;
+}
+/* fresh: accent-text on transparent — accent-text is the WCAG-safe green in both themes. */
+.qi-drift-fresh {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--accent-text);
+}
+.qi-drift-icon-ok {
+  font-size: 13px;
+}
+.qi-drift-regenerated {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
 /* Monospace strings (IDs, hashes) */
 .qi-monospace {
   font-family: var(--font-mono);

@@ -21,6 +21,7 @@ import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
 import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
 import { QiRunCard } from "./quality-intelligence/QiRunCard";
 import { RelationshipsView } from "../../../relationships/RelationshipsView";
+import type { QualityIntelligenceInlineSource } from "@oscharko-dev/keiko-contracts";
 
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const v = cfg[key];
@@ -30,6 +31,25 @@ function str(cfg: Record<string, unknown>, key: string): string | undefined {
 function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
   const v = cfg[key];
   return typeof v === "boolean" ? v : undefined;
+}
+
+// Reconstruct the QI run source from a qiRun window's cfg so the run card can re-check drift
+// (Epic #735). A connected file takes precedence over a connected folder; absent both → undefined
+// (the card then hides the drift affordance).
+function qiConnectedSource(
+  cfg: Record<string, unknown>,
+): QualityIntelligenceInlineSource | undefined {
+  const filePath = str(cfg, "connectedFilePath");
+  if (filePath !== undefined && filePath.length > 0) {
+    const label = filePath.split("/").pop() ?? filePath;
+    return { kind: "file", label, path: filePath };
+  }
+  const root = str(cfg, "connectedRoot");
+  if (root !== undefined && root.length > 0) {
+    const label = root.split("/").pop() ?? root;
+    return { kind: "workspace", label, path: root };
+  }
+  return undefined;
 }
 
 function agentAccess(cfg: Record<string, unknown>): "ask" | "full" | undefined {
@@ -75,7 +95,15 @@ registerWindowRender("settings", () => <SettingsPanel />);
 registerWindowRender("quality", (_cfg, ctx) => (
   <QiHubPanel
     openRun={(runId) => {
-      ctx.openWindow("qiRun", { runId });
+      ctx.openWindow("qiRun", {
+        runId,
+        ...(ctx.linkedFilePath !== undefined && ctx.linkedFilePath !== null
+          ? { connectedFilePath: ctx.linkedFilePath }
+          : {}),
+        ...(ctx.linkedRoot !== undefined && ctx.linkedRoot !== null
+          ? { connectedRoot: ctx.linkedRoot }
+          : {}),
+      });
     }}
     connectedRoot={ctx.linkedRoot}
     connectedFilePath={ctx.linkedFilePath ?? null}
@@ -83,8 +111,9 @@ registerWindowRender("quality", (_cfg, ctx) => (
 ));
 registerWindowRender("qiRun", (cfg) => {
   const runId = str(cfg, "runId");
+  const connectedSource = qiConnectedSource(cfg);
   return runId !== undefined && runId !== "" ? (
-    <QiRunCard runId={runId} />
+    <QiRunCard runId={runId} connectedSource={connectedSource} />
   ) : (
     <div className="lk-empty">
       <p className="lk-empty-body">Open a run from the Quality Intelligence hub.</p>

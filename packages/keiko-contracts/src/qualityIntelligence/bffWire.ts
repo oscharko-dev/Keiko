@@ -165,6 +165,40 @@ export interface QualityIntelligenceUiCandidate {
   readonly weakTestFlag?: QualityIntelligenceUiWeakTestFlag;
 }
 
+// ─── Living Tests drift report (Epic #735, Issue #743/#744) ──────────────────────
+
+/** Why a single candidate is stale: its source changed, or its source is gone. */
+export interface QualityIntelligenceUiStalenessEntry {
+  readonly candidateId: string;
+  readonly reason: "source-changed" | "source-removed";
+  readonly envelopeId: string;
+}
+
+/**
+ * Response of `POST /api/quality-intelligence/runs/:id/re-check`. Reports which generated tests
+ * are still fresh and which drifted because their source fingerprint changed (or vanished) since
+ * the run was recorded. Refs only — no raw source text.
+ */
+export interface QualityIntelligenceUiStalenessReport {
+  readonly runId: string;
+  /** changedStale.length + orphanedStale.length. */
+  readonly staleCount: number;
+  readonly fresh: readonly string[];
+  readonly changedStale: readonly QualityIntelligenceUiStalenessEntry[];
+  readonly orphanedStale: readonly QualityIntelligenceUiStalenessEntry[];
+}
+
+/**
+ * Response of `POST /api/quality-intelligence/runs/:id/regenerate-stale`. Targeted regeneration
+ * writes a NEW immutable run; `runId` is that new run's id. Fresh candidates + human edits are
+ * preserved (`preservedCount`); only the stale subset is regenerated (`regeneratedCount`).
+ */
+export interface QualityIntelligenceUiRegenerateResult {
+  readonly runId: string;
+  readonly regeneratedCount: number;
+  readonly preservedCount: number;
+}
+
 // ─── Run start request (Issue #280/#281) ────────────────────────────────────────
 
 export type QualityIntelligenceInlineSourceKind = "requirements" | "workspace" | "file";
