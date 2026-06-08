@@ -773,12 +773,15 @@ export function RelationshipInspectorPanel({
       setRel(fetchedRel);
       setExplain(fetchedExplain);
 
-      // Fetch the bounded dependency walk in both directions (#542). Errors are non-fatal: the
-      // impact surface degrades to "unavailable" without breaking the rest of the inspector.
+      // Fetch the bounded dependency walk in both directions (#542). maxDepth is the server cap
+      // (MAX_IMPACT_DEPTH=3) rather than the depth-1 default, so the impact card shows the full
+      // transitive reachable set an operator needs before a delete/revoke — still bounded, with the
+      // truncation note covering anything beyond the cap. Errors are non-fatal: the impact surface
+      // degrades to "unavailable" without breaking the rest of the inspector.
       try {
         const [fwd, rev] = await Promise.all([
-          getDependencies(id, { direction: "outgoing", maxRelationships: 512 }),
-          getDependencies(id, { direction: "incoming", maxRelationships: 512 }),
+          getDependencies(id, { direction: "outgoing", maxDepth: 3, maxRelationships: 512 }),
+          getDependencies(id, { direction: "incoming", maxDepth: 3, maxRelationships: 512 }),
         ]);
         if (fetchGeneration.current !== generation) {
           return;
