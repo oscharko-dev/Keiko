@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MemoryId } from "@oscharko-dev/keiko-contracts";
 import {
   ApiError,
   StreamingUnavailableError,
@@ -586,7 +587,7 @@ export function useChatSession(): UseChatSessionResult {
   }, []);
 
   const forgetMemoryAction = useCallback(async (memoryId: string): Promise<void> => {
-    await forgetMemory(memoryId, "user-initiated forget from Conversation Center");
+    await forgetMemory(memoryId as MemoryId, "user-initiated forget from Conversation Center");
     setLatestMemory((previous) =>
       previous === undefined
         ? previous

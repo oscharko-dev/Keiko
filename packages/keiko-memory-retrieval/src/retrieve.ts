@@ -260,7 +260,11 @@ function applyRelevanceFloor(
   const kept: IncludedMemory[] = [];
   const omitted: OmittedMemory[] = [];
   for (const entry of ranked) {
-    if (entry.subscores.relevance === 0 && entry.subscores.semantic === 0) {
+    if (
+      entry.subscores.relevance === 0 &&
+      entry.subscores.semantic === 0 &&
+      entry.subscores.graph === 0
+    ) {
       omitted.push({ memoryId: entry.memoryId, reason: "below-threshold" });
       continue;
     }

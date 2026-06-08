@@ -64,12 +64,14 @@ function graphSubscoreFor(
 function runLongRangeUnderstanding(): { passed: boolean; evidence: string } {
   const { request, portWithEdges, portNoEdges } = loadDecisionsFixture();
   const withGraph = graphSubscoreFor(portWithEdges, request, LINKED_ID);
-  const withoutGraph = graphSubscoreFor(portNoEdges, request, LINKED_ID);
+  const withoutEdges = retrieveMemoryContext(request, portNoEdges);
+  const withoutGraph = withoutEdges.included.find((m) => String(m.memoryId) === LINKED_ID)?.subscores.graph;
+  const omittedReason = withoutEdges.omitted.find((m) => String(m.memoryId) === LINKED_ID)?.reason;
   const positivePass = withGraph !== undefined && withGraph > 0;
-  const controlPass = withoutGraph === 0;
+  const controlPass = withoutGraph === undefined && omittedReason === "below-threshold";
   return {
     passed: positivePass && controlPass,
-    evidence: `withEdges.graph=${String(withGraph)} noEdges.graph=${String(withoutGraph)}`,
+    evidence: `withEdges.graph=${String(withGraph)} noEdges.graph=${String(withoutGraph)} noEdges.omitted=${String(omittedReason)}`,
   };
 }
 
@@ -80,7 +82,7 @@ export async function run(scorecard: Scorecard): Promise<void> {
 }
 
 describe(SCENARIO_NAME, () => {
-  it("linked memory receives a non-zero graph subscore; control without edges is 0", () => {
+  it("linked memory is retained via graph signal; without edges it falls below threshold", () => {
     const { passed, evidence } = runLongRangeUnderstanding();
     expect(passed, evidence).toBe(true);
   });
