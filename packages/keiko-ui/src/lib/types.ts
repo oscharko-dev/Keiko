@@ -109,6 +109,7 @@ export type {
   MessageResponse,
   DesktopChatBootstrapResponse,
   DesktopChatSendResponse,
+  ConversationDocumentContextWire,
   ConversationMemoryActionWire,
   ConversationMemoryContextEntryWire,
   ConversationMemoryContextWire,

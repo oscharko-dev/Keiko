@@ -20,6 +20,7 @@ import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
 import type {
   Chat,
   ChatMessage,
+  ConversationDocumentContextWire,
   ConversationMemoryRequestWire,
   ConversationMemoryResultWire,
   ConversationBudgetEstimate,
@@ -28,6 +29,7 @@ import type {
   ProjectWithAvailability,
 } from "@/lib/types";
 import { estimateConversationBudget, isConversationEligibleModel } from "@/lib/types";
+import { extractDocumentContext, type PendingDocument } from "./documentContext";
 
 // ─── Attachment types (Issue #147) ────────────────────────────────────────────
 //
@@ -53,6 +55,20 @@ export interface PendingAttachment {
   readonly sizeBytes: number;
   // Defined for image kind; undefined for document kind (AC #4 — no path leaked)
   readonly previewDataUrl?: string | undefined;
+  // Issue #148 — the underlying File, retained so the send path can extract a
+  // document's text into bounded conversation context. Never serialized to the
+  // chip UI (no path/bytes are surfaced from it). Undefined only in synthetic
+  // test fixtures that construct a PendingAttachment without a source File.
+  readonly file?: File | undefined;
+}
+
+// Issue #148 — disclosure projection for documents that contributed extracted text to the most
+// recent send. Carries only basename + truncation flag (never a path or bytes) so the UI can
+// tell the user which documents were included and whether any was cut.
+export interface SentDocumentDisclosure {
+  readonly id: string;
+  readonly displayName: string;
+  readonly truncated: boolean;
 }
 
 // Hard 8 MiB byte limit. Server enforces its own limit in #149; this client-side
@@ -254,6 +270,9 @@ export interface UseChatSessionResult {
   ) => Promise<{ ok: true } | { ok: false; reason: AttachmentRejectionReason }>;
   readonly removePendingAttachment: (id: string) => void;
   readonly clearPendingAttachments: () => void;
+  // Issue #148 — documents that contributed extracted text to the most recent send, for the
+  // post-send disclosure note. Empty until a send includes at least one readable document.
+  readonly lastSentDocuments: readonly SentDocumentDisclosure[];
   // Issue #151 — approximate context-window pressure estimate for the active
   // chat. undefined while the selected model is unresolved. Token counts are
   // approximate; UI copy must say so.
@@ -417,6 +436,9 @@ export function useChatSession(): UseChatSessionResult {
   const modelsRef = useRef<readonly ModelCapability[]>([]);
   // Issue #147 — pending-attachment state. Cleared after a successful send (AC #3).
   const [pendingAttachments, setPendingAttachments] = useState<readonly PendingAttachment[]>([]);
+  // Issue #148 — documents that contributed extracted context to the most recent send. Drives
+  // the post-send disclosure note (which docs were included + whether any was truncated).
+  const [lastSentDocuments, setLastSentDocuments] = useState<readonly SentDocumentDisclosure[]>([]);
 
   // addPendingAttachment validates MIME type, model capability, and byte limit before
   // adding the attachment to state. Returns ok:false + reason on rejection (AC #1/#2).
@@ -463,6 +485,8 @@ export function useChatSession(): UseChatSessionResult {
         mimeType: file.type,
         sizeBytes: file.size,
         previewDataUrl,
+        // Issue #148 — retain the File so the send path can extract document text.
+        file,
       };
       setPendingAttachments((previous) => [...previous, attachment]);
       return { ok: true };
@@ -479,6 +503,34 @@ export function useChatSession(): UseChatSessionResult {
   const clearPendingAttachments = useCallback(() => {
     setPendingAttachments([]);
   }, []);
+
+  // Issue #148 — extract bounded text from the pending DOCUMENT attachments for the send body.
+  // Images are excluded here (they stay on the metadata-only attachments path). A document with
+  // no retained File (synthetic fixture) is skipped. Read failures surface a fixed, path-safe
+  // alert and never abort the send. Returns the wire entries to attach plus a disclosure list.
+  const buildDocumentContext = useCallback(async (): Promise<{
+    readonly entries: readonly ConversationDocumentContextWire[];
+    readonly disclosures: readonly SentDocumentDisclosure[];
+  }> => {
+    const documents: PendingDocument[] = pendingAttachments
+      .filter((a) => a.kind === "document" && a.file !== undefined)
+      .map((a) => ({
+        id: a.id,
+        name: a.name,
+        mimeType: a.mimeType,
+        sizeBytes: a.sizeBytes,
+        file: a.file as File,
+      }));
+    if (documents.length === 0) return { entries: [], disclosures: [] };
+    const { entries, failures } = await extractDocumentContext(documents);
+    if (failures.length > 0) setError(failures.join(" "));
+    const disclosures = entries.map((e) => ({
+      id: e.id,
+      displayName: e.displayName,
+      truncated: e.truncated,
+    }));
+    return { entries, disclosures };
+  }, [pendingAttachments]);
 
   const clearLatestMemory = useCallback(() => {
     setLatestMemory(undefined);
@@ -724,6 +776,8 @@ export function useChatSession(): UseChatSessionResult {
       // citations from a previous conversation's last grounded turn.
       setLatestGrounded(undefined);
       setLatestMemory(undefined);
+      // Issue #148 — clear the document-disclosure note so it never bleeds across chats.
+      setLastSentDocuments([]);
       try {
         const messagePayload = await fetchChatMessages(chat.id, chat.projectPath);
         const selectedModel = resolveSelectedModelId(chat.selectedModel, state.models);
@@ -769,6 +823,7 @@ export function useChatSession(): UseChatSessionResult {
       optimisticId: string,
       modelId: string,
       signal: AbortSignal,
+      documentContext: readonly ConversationDocumentContextWire[],
     ): Promise<SendStatus> => {
       try {
         // Issue #152 — non-streaming providers see a stable "contacting" wait
@@ -777,6 +832,9 @@ export function useChatSession(): UseChatSessionResult {
         // TODO(#152 follow-up): wire SSE for true streaming when the BFF
         // adds a /api/desktop/chat/stream surface.
         updateSendStatus("contacting");
+        // Issue #148 — the pre-extracted, byte-bounded document context travels on the
+        // request body so the model can actually read attached documents. Omitted (not
+        // sent as an empty array) when there are no documents so the wire stays minimal.
         const result = await sendDesktopChat(
           {
             chatId: chat.id,
@@ -784,6 +842,7 @@ export function useChatSession(): UseChatSessionResult {
             content,
             modelId,
             memory: buildMemoryRequest(chat, project),
+            ...(documentContext.length > 0 ? { documentContext } : {}),
           },
           signal,
         );
@@ -969,9 +1028,22 @@ export function useChatSession(): UseChatSessionResult {
       // routing predicate, not the underlying send path.
       const isGrounded =
         chat.connectedScope !== undefined || chat.localKnowledgeScope !== undefined;
+      // Issue #148 — extract bounded document text for the ungrounded path only. The grounded
+      // path derives its context from the repo/local-knowledge scope, not from attachments.
+      const { entries: documentContext, disclosures } = isGrounded
+        ? { entries: [] as readonly ConversationDocumentContextWire[], disclosures: [] }
+        : await buildDocumentContext();
       const terminal = isGrounded
         ? await sendGrounded(chat, project, content, optimistic.id, modelId, controller.signal)
-        : await sendUngrounded(chat, project, content, optimistic.id, modelId, controller.signal);
+        : await sendUngrounded(
+            chat,
+            project,
+            content,
+            optimistic.id,
+            modelId,
+            controller.signal,
+            documentContext,
+          );
       // If cancelSend already flipped the status to "cancelled", do not
       // override it with a stale "completed" — cancellation wins.
       if (sendStatusRef.current === "cancelled") {
@@ -987,6 +1059,8 @@ export function useChatSession(): UseChatSessionResult {
       if (terminal === "completed") {
         // AC #3 (#147): clear pending attachments after a successful send.
         clearPendingAttachments();
+        // Issue #148 — record which documents contributed context so the UI can disclose them.
+        setLastSentDocuments(disclosures);
       }
     } finally {
       sendControllerRef.current = null;
@@ -1000,6 +1074,7 @@ export function useChatSession(): UseChatSessionResult {
     state.messages,
     sendGrounded,
     sendUngrounded,
+    buildDocumentContext,
     clearPendingAttachments,
     updateSendStatus,
   ]);
@@ -1201,6 +1276,7 @@ export function useChatSession(): UseChatSessionResult {
     addPendingAttachment,
     removePendingAttachment,
     clearPendingAttachments,
+    lastSentDocuments,
     budget,
     memoryEnabled,
     setMemoryEnabled,

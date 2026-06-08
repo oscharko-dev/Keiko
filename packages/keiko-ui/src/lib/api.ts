@@ -10,6 +10,7 @@ import type {
   ChatLocalKnowledgeScope,
   ChatResponse,
   ChatsResponse,
+  ConversationDocumentContextWire,
   ConversationMemoryRequestWire,
   ChatStatus,
   ChatMessageRole,
@@ -531,6 +532,9 @@ export interface SendDesktopChatInput {
   content: string;
   modelId?: string;
   memory?: ConversationMemoryRequestWire;
+  // Issue #148 — client-extracted, byte-bounded text from attached documents. The server
+  // re-validates the caps before any of this reaches a model prompt.
+  documentContext?: readonly ConversationDocumentContextWire[];
 }
 
 // Issue #152 — accepts an optional AbortSignal so the Conversation Center can

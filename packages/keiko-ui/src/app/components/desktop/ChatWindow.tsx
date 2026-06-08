@@ -20,6 +20,7 @@ import {
   AttachDropZone,
   AttachmentStrip,
   AttachRejectionAlert,
+  SentDocumentsNote,
 } from "./AttachmentStrip";
 import { isRunSummaryMessage, LaunchWorkflowButton, RunSummaryCard } from "./WorkflowHandoff";
 import { Toggle } from "./widgets/shared/Toggle";
@@ -1108,6 +1109,7 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
     replaceChat,
     latestGrounded,
     latestMemory,
+    lastSentDocuments,
     memoryEnabled,
     setMemoryEnabled,
     memoryBudgetTokens,
@@ -1195,6 +1197,8 @@ export function ChatWindow({ mini = false, linkedRoot = null }: ChatWindowProps)
               </div>
             ) : null}
             <GroundedAnswerPanel chat={activeChat} answer={latestGrounded} busy={sending} />
+            {/* Issue #148 — disclose which attached documents contributed extracted context. */}
+            <SentDocumentsNote documents={lastSentDocuments} />
           </div>
         )}
       </div>
