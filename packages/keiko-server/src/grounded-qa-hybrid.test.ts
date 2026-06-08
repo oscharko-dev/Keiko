@@ -265,6 +265,9 @@ function connectorReference(
   safeDisplayName: string,
 ): RetrievalReference {
   const chunkId = `chunk-${String(n)}` as ChunkId;
+  const sourceId = String(capsuleId).startsWith("cap-")
+    ? (`src-${String(capsuleId).slice(4)}` as KnowledgeSourceId)
+    : (`src-${String(n)}` as KnowledgeSourceId);
   return {
     chunkId,
     capsuleId,
@@ -272,7 +275,7 @@ function connectorReference(
     citation: {
       documentId: `doc-${String(n)}` as DocumentId,
       capsuleId,
-      sourceId: `src-${String(n)}` as KnowledgeSourceId,
+      sourceId,
       chunkId,
       safeDisplayName,
     },
@@ -393,7 +396,7 @@ describe("hybrid grounded ask — 1 folder + 1 connector", () => {
     // mutation: removing `.source` tag from mergedConnectorCitations → forEach fails
     expect(answer.knowledgeCitations.length).toBeGreaterThan(0);
     for (const kc of answer.knowledgeCitations) {
-      expect(kc.source).toBe(connectorLabel);
+      expect(kc.source?.startsWith(`${connectorLabel} / `)).toBe(true);
     }
 
     // contextPack: kind === "hybrid" with correct folderSourceCount and connectorSourceCount
@@ -508,8 +511,8 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
     // Both connector labels must appear in knowledgeCitations
     // mutation: dropping one connector's retrieval → one label absent
     const kciLabels = answer.knowledgeCitations.map((kc) => kc.source);
-    expect(kciLabels).toContain(labelA);
-    expect(kciLabels).toContain(labelB);
+    expect(kciLabels.some((label) => label?.startsWith(`${labelA} / `))).toBe(true);
+    expect(kciLabels.some((label) => label?.startsWith(`${labelB} / `))).toBe(true);
 
     // Both labels must be DISTINCT (disambiguated by connectorLabels())
     // mutation: returning the same label for both → uniqueLabels.size === 1
@@ -568,7 +571,9 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
     // Ready connector's knowledge citations must be present
     // mutation: if the ready connector is also skipped, no citations appear
     expect(answer.knowledgeCitations.length).toBeGreaterThan(0);
-    const readyCitations = answer.knowledgeCitations.filter((kc) => kc.source === readyLabel);
+    const readyCitations = answer.knowledgeCitations.filter((kc) =>
+      kc.source?.startsWith(`${readyLabel} / `),
+    );
     expect(readyCitations.length).toBeGreaterThan(0);
 
     // The skipped connector must produce an uncertainty entry containing its label
@@ -581,7 +586,7 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
     // The indexing capsule must NOT appear in knowledgeCitations
     // mutation: removing scopeStateFailure skip guard → indexing connector retrieves and appears
     const indexingCitations = answer.knowledgeCitations.filter(
-      (kc) => kc.source === "Indexing Docs",
+      (kc) => kc.source?.startsWith("Indexing Docs / "),
     );
     expect(indexingCitations).toHaveLength(0);
 

@@ -1,9 +1,9 @@
 "use client";
 
 // Issue #198 — Destructive-action buttons for the capsule detail page.
-// Issue #189 — SOURCE-CONNECT: Connect a folder + Index now actions.
+// Issue #189 / #682 — SOURCE-CONNECT: connect folder/repository/files scopes + Index now actions.
 // Three modal actions: Delete, Refresh changed files, Repair failed files.
-// Two inline actions: Connect a folder (text input), Index now (button).
+// Two inline actions: Connect a source (manual scope input), Index now (button).
 // Delete requires typing the capsule display name before confirming (Foundry IQ pattern).
 // Refresh and Repair use a single "Are you sure?" step.
 //
@@ -19,7 +19,7 @@ import {
   repairCapsuleFailedFiles,
   startIndexing,
 } from "@/lib/local-knowledge-api";
-import type { CapsuleActionResponse } from "@/lib/local-knowledge-api";
+import type { CapsuleActionResponse, ConnectCapsuleSourceScope } from "@/lib/local-knowledge-api";
 import { ApiError } from "@/lib/api";
 
 // ---------------------------------------------------------------------------
@@ -67,32 +67,70 @@ function confirmButtonLabel(kind: ActionKind, busy: boolean): string {
 }
 
 // ---------------------------------------------------------------------------
-// ConnectFolderForm — Issue #189 SOURCE-CONNECT inline affordance
+// ConnectSourceForm — Issue #189 / #682 source connect affordance
 // ---------------------------------------------------------------------------
 
-interface ConnectFolderFormProps {
+interface ConnectSourceFormProps {
   readonly capsuleId: KnowledgeCapsuleId;
   readonly onConnected: () => void;
   readonly connectImpl?: typeof connectCapsuleSource;
 }
 
-function ConnectFolderForm({
+function parseFilesInput(value: string): readonly string[] {
+  return Array.from(
+    new Set(
+      value
+        .split(/\r?\n/u)
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0),
+    ),
+  );
+}
+
+function rootPathPlaceholder(kind: ConnectCapsuleSourceScope["kind"]): string {
+  if (kind === "repository") return "/absolute/path/to/repository";
+  if (kind === "files") return "/absolute/path/to/root";
+  return "/absolute/path/to/folder";
+}
+
+function buildScope(
+  kind: ConnectCapsuleSourceScope["kind"],
+  rootPath: string,
+  filesInput: string,
+): ConnectCapsuleSourceScope | null {
+  const trimmedRoot = rootPath.trim();
+  if (trimmedRoot === "") return null;
+  if (kind === "folder") {
+    return { kind: "folder", rootPath: trimmedRoot, recursive: true };
+  }
+  if (kind === "repository") {
+    return { kind: "repository", repositoryRoot: trimmedRoot };
+  }
+  const files = parseFilesInput(filesInput);
+  if (files.length === 0) return null;
+  return { kind: "files", rootPath: trimmedRoot, files };
+}
+
+function ConnectSourceForm({
   capsuleId,
   onConnected,
   connectImpl = connectCapsuleSource,
-}: ConnectFolderFormProps): ReactNode {
+}: ConnectSourceFormProps): ReactNode {
+  const [scopeKind, setScopeKind] = useState<ConnectCapsuleSourceScope["kind"]>("folder");
   const [rootPath, setRootPath] = useState("");
+  const [filesInput, setFilesInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const scope = buildScope(scopeKind, rootPath, filesInput);
 
   async function handleConnect(): Promise<void> {
-    const trimmed = rootPath.trim();
-    if (trimmed === "" || busy) return;
+    if (scope === null || busy) return;
     setBusy(true);
     setConnectError(null);
     try {
-      await connectImpl(capsuleId, { kind: "folder", rootPath: trimmed, recursive: true });
+      await connectImpl(capsuleId, scope);
       setRootPath("");
+      setFilesInput("");
       onConnected();
     } catch (error) {
       setConnectError(formatError(error));
@@ -102,10 +140,27 @@ function ConnectFolderForm({
   }
 
   return (
-    <div className="lkd-connect-form" aria-label="Connect a folder">
-      <label htmlFor="lkd-connect-path-input" className="lkd-connect-label">
-        Connect a folder
+    <div className="lkd-connect-form" aria-label="Connect a source">
+      <label htmlFor="lkd-connect-kind" className="lkd-connect-label">
+        Connect source
       </label>
+      <div className="lkd-connect-row" style={{ marginBottom: 8 }}>
+        <select
+          id="lkd-connect-kind"
+          className="dlg-input"
+          value={scopeKind}
+          disabled={busy}
+          aria-label="Source scope kind"
+          onChange={(e) => {
+            setScopeKind(e.target.value as ConnectCapsuleSourceScope["kind"]);
+            setConnectError(null);
+          }}
+        >
+          <option value="folder">Folder</option>
+          <option value="repository">Repository</option>
+          <option value="files">Files</option>
+        </select>
+      </div>
       <div className="lkd-connect-row">
         <input
           id="lkd-connect-path-input"
@@ -113,18 +168,39 @@ function ConnectFolderForm({
           className="dlg-input lkd-connect-input"
           value={rootPath}
           disabled={busy}
-          placeholder="/absolute/path/to/folder"
-          aria-label="Absolute folder path to connect"
+          placeholder={rootPathPlaceholder(scopeKind)}
+          aria-label={
+            scopeKind === "repository"
+              ? "Absolute repository path to connect"
+              : scopeKind === "files"
+                ? "Absolute root path for the selected files"
+                : "Absolute folder path to connect"
+          }
           autoComplete="off"
           onChange={(e: ChangeEvent<HTMLInputElement>) => setRootPath(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter") void handleConnect();
+            if (e.key === "Enter" && scopeKind !== "files") void handleConnect();
           }}
         />
+      </div>
+      {scopeKind === "files" ? (
+        <div className="lkd-connect-row" style={{ marginTop: 8 }}>
+          <textarea
+            className="dlg-input lkd-connect-input"
+            value={filesInput}
+            disabled={busy}
+            placeholder={"src/app.ts\nREADME.md"}
+            aria-label="Relative files to connect"
+            rows={4}
+            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setFilesInput(e.target.value)}
+          />
+        </div>
+      ) : null}
+      <div className="lkd-connect-row" style={{ marginTop: 8 }}>
         <button
           type="button"
           className="lk-btn lk-btn-ghost"
-          disabled={busy || rootPath.trim() === ""}
+          disabled={busy || scope === null}
           aria-busy={busy}
           onClick={() => void handleConnect()}
         >
@@ -417,7 +493,7 @@ export function CapsuleActions({
 
   return (
     <>
-      <ConnectFolderForm
+      <ConnectSourceForm
         capsuleId={capsuleId}
         onConnected={onActionComplete}
         connectImpl={connectCapsuleSourceImpl}

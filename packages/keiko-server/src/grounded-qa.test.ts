@@ -698,6 +698,8 @@ describe("handleGroundedAsk", () => {
       throw new Error("expected local-knowledge grounded answer");
     }
     expect(answer.citations).toHaveLength(1);
+    expect(answer.citations[0]?.source).toContain(" / ");
+    expect(answer.citations[0]?.label.includes("chunk")).toBe(false);
     expect(answer.content).toContain("indexed knowledge");
     expect(answer.contextPack.kind).toBe("local-knowledge");
     expect(firstGatewayRequest(requests).messages[1]?.content).toContain("alpha");
