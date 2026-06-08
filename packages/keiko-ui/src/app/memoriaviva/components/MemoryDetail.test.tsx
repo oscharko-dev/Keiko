@@ -16,7 +16,7 @@ import type {
 
 // ---------------------------------------------------------------------------
 // next/navigation + next/link mocks (required because MemoryDetail renders
-// RecordHeader which contains a <Link> pointing back to /memory)
+// RecordHeader which contains a <Link> pointing back to /memoriaviva)
 // ---------------------------------------------------------------------------
 
 vi.mock("next/navigation", () => ({

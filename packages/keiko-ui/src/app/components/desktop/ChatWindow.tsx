@@ -978,7 +978,7 @@ function MemoryActionCard({
     return (
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
-          <strong>Memory update detected</strong>
+          <strong>MemoriaViva update detected</strong>
           <span>{action.memoryId}</span>
         </div>
         <p>
@@ -993,7 +993,7 @@ function MemoryActionCard({
     return (
       <article className="chat-memory-action">
         <div className="chat-memory-action-head">
-          <strong>Memory forget detected</strong>
+          <strong>MemoriaViva forget detected</strong>
           <span>{action.requiresConfirmation ? "Confirmation required" : action.memoryId}</span>
         </div>
         <p>{`Matched memory ${action.memoryId} for a forget operation.`}</p>
@@ -1003,7 +1003,7 @@ function MemoryActionCard({
   return (
     <article className="chat-memory-action">
       <div className="chat-memory-action-head">
-        <strong>Memory action not created</strong>
+        <strong>MemoriaViva action not created</strong>
       </div>
       <p>{action.reason}</p>
     </article>
@@ -1039,7 +1039,7 @@ function MemoryPanel({
             onChange={setMemoryEnabled}
             label="Enable memory for the next request"
           />
-          <span>Memory {memoryEnabled ? "on" : "off"}</span>
+          <span>MemoriaViva {memoryEnabled ? "on" : "off"}</span>
         </div>
         <label className="chat-memory-budget">
           <span>Budget</span>
@@ -1067,10 +1067,10 @@ function MemoryPanel({
         <div id={disclosureId} className="chat-memory-disclosure">
           <p className="chat-memory-summary">
             {latestMemory === undefined
-              ? "Memory disclosure appears after the next response."
+              ? "MemoriaViva disclosure appears after the next response."
               : latestMemory.context.enabled
-                ? `Used ${String(latestMemory.context.budget.used)} of ${String(latestMemory.context.budget.tokens)} memory tokens.`
-                : "Memory was disabled for the last request."}
+                ? `Used ${String(latestMemory.context.budget.used)} of ${String(latestMemory.context.budget.tokens)} MemoriaViva tokens.`
+                : "MemoriaViva was disabled for the last request."}
           </p>
           {latestMemory?.context.memories.map((memory) => (
             <article key={memory.memoryId} className="chat-memory-item">

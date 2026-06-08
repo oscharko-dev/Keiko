@@ -26,7 +26,7 @@ const MCP_SERVERS: McpEntry[] = [
   { name: "GitHub", img: "github", desc: "Repos · PRs · issues", on: true },
   { name: "Playwright", img: "playwright", desc: "Browser automation", on: false },
   { name: "Brave Search", img: "brave", desc: "Web search", on: false },
-  { name: "Memory", icon: "cube", desc: "Knowledge graph", on: true },
+  { name: "MemoriaViva", icon: "cube", desc: "Knowledge graph", on: true },
 ];
 
 const CONNECTORS: ConnEntry[] = [

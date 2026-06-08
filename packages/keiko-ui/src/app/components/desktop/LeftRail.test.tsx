@@ -1,5 +1,5 @@
 // Issue #189 — tests for the LeftRail navigation links.
-// Verifies that all page-route links (Memory Center, Quality Intelligence,
+// Verifies that all page-route links (MemoriaViva, Quality Intelligence,
 // Local Knowledge) render with correct href and accessible name.
 
 import { render, screen } from "@testing-library/react";
@@ -37,14 +37,16 @@ function renderRail(): void {
 describe("LeftRail — page-route links", () => {
   it("renders the left rail as a labeled navigation landmark", () => {
     renderRail();
-    expect(screen.getByRole("navigation", { name: "Primary workspace navigation" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("navigation", { name: "Primary workspace navigation" }),
+    ).toBeInTheDocument();
   });
 
-  it("renders the Memory Center link with correct href and accessible name", () => {
+  it("renders the MemoriaViva link with correct href and accessible name", () => {
     renderRail();
-    const link = screen.getByRole("link", { name: "Memory Center" });
+    const link = screen.getByRole("link", { name: "MemoriaViva" });
     expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "/memory");
+    expect(link).toHaveAttribute("href", "/memoriaviva");
   });
 
   it("renders the Quality Intelligence link with correct href and accessible name", () => {

@@ -205,7 +205,7 @@ describe("ChatWindow memory disclosure", () => {
     await user.click(disclosureButton);
     expect(disclosureButton).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Use pnpm")).toBeInTheDocument();
-    expect(screen.getByText(/Used 42 of 1200 memory tokens/i)).toBeInTheDocument();
+    expect(screen.getByText(/Used 42 of 1200 MemoriaViva tokens/i)).toBeInTheDocument();
   });
 });
 

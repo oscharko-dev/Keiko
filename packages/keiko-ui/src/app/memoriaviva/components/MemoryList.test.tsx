@@ -116,12 +116,12 @@ describe("MemoryList — populated state", () => {
     });
   });
 
-  it("links each row to /memory/detail?id=:id", async () => {
+  it("links each row to /memoriaviva/detail?id=:id", async () => {
     const record = makeRecord({ id: makeMemoryId(42), body: "Linked memory" });
     render(<MemoryList fetchMemoriesImpl={fetchWith([record])} />);
     await waitFor(() => {
       const link = screen.getByRole("link", { name: /linked memory/i });
-      expect(link).toHaveAttribute("href", "/memory/detail?id=mem-42");
+      expect(link).toHaveAttribute("href", "/memoriaviva/detail?id=mem-42");
     });
   });
 
@@ -130,7 +130,7 @@ describe("MemoryList — populated state", () => {
     await waitFor(() => {
       expect(screen.getByRole("link", { name: /consolidation/i })).toHaveAttribute(
         "href",
-        "/memory/consolidation",
+        "/memoriaviva/consolidation",
       );
     });
   });

@@ -1,6 +1,6 @@
 "use client";
 
-// Issue #211 — Memory Center list with URL-state filter sync.
+// Issue #211 — MemoriaViva list with URL-state filter sync.
 // Uses useSearchParams (wrapped in Suspense by the parent page) to keep filters
 // deep-linkable. Filter state is read from / written to URL query params.
 //
@@ -97,7 +97,7 @@ function StatusBadge({ status }: { readonly status: string }): ReactNode {
 function MemoryRow({ record }: { readonly record: MemoryRecord }): ReactNode {
   return (
     <li>
-      <Link href={`/memory/detail?id=${encodeURIComponent(record.id)}`} className="mc-row">
+      <Link href={`/memoriaviva/detail?id=${encodeURIComponent(record.id)}`} className="mc-row">
         <div className="mc-row-main">
           <span className="mc-row-body">{record.body}</span>
           <div className="mc-row-meta">
@@ -185,7 +185,7 @@ export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProp
     (next: MemoryFilterState): void => {
       const qs = filtersToParams(next).toString();
       startTransition(() => {
-        router.push(`/memory${qs.length > 0 ? `?${qs}` : ""}`);
+        router.push(`/memoriaviva${qs.length > 0 ? `?${qs}` : ""}`);
       });
     },
     [router],
@@ -194,13 +194,13 @@ export function MemoryList({ fetchMemoriesImpl = fetchMemories }: MemoryListProp
   return (
     <>
       <header className="lk-header">
-        <h1 className="lk-title">Memory Center</h1>
+        <h1 className="lk-title">MemoriaViva</h1>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-          <Link href="/memory/consolidation" className="lk-btn lk-btn-ghost lk-btn-lg">
+          <Link href="/memoriaviva/consolidation" className="lk-btn lk-btn-ghost lk-btn-lg">
             Consolidation
           </Link>
           <Link
-            href="/memory/review-queue"
+            href="/memoriaviva/review-queue"
             className="lk-btn lk-btn-ghost lk-btn-lg mc-queue-link"
           >
             Review queue

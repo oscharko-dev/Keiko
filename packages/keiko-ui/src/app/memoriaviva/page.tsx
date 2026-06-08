@@ -1,5 +1,5 @@
-// Issue #211 — Server Component entry point for the /memory route.
-// Memory Center: list view with filters and review queue.
+// Issue #211 — Server Component entry point for the /memoriaviva route.
+// MemoriaViva: list view with filters and review queue.
 // Static export (ADR-0011 D1): fixed path, no generateStaticParams needed.
 // MemoryList uses useSearchParams → must be inside a Suspense boundary.
 
@@ -8,14 +8,14 @@ import { Suspense } from "react";
 import { MemoryList } from "./components/MemoryList";
 
 export const metadata = {
-  title: "Memory Center — Keiko",
+  title: "MemoriaViva — Keiko",
 };
 
 export default function MemoryCenterPage(): ReactNode {
   return (
     <main
       className="lk-page"
-      aria-label="Memory Center"
+      aria-label="MemoriaViva"
       style={{ background: "var(--bg)", color: "var(--fg)", fontFamily: "var(--font-ui)" }}
     >
       <Suspense

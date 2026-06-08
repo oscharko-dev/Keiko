@@ -1,6 +1,6 @@
 "use client";
 
-// Issue #211 — Memory Center review queue: proposed + conflicted records needing action.
+// Issue #211 — MemoriaViva review queue: proposed + conflicted records needing action.
 //
 // WCAG: role="status" aria-live="polite" on the count badge.
 // Accept/Reject action buttons inline per row (≥ 24px target via lk-btn).

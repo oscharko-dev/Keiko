@@ -254,7 +254,7 @@ function PersonaTab({
 const TAB_LABELS: readonly (readonly [Tab, string])[] = [
   ["policy", "Policy"],
   ["eval", "EVAL"],
-  ["memory", "Memory"],
+  ["memory", "MemoriaViva"],
   ["bridges", "Connections"],
   ["persona", "Persona"],
 ];

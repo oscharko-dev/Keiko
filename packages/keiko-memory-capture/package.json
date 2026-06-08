@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Internal memory-capture package: governed capture policy gate that turns raw user text and reviewed workflow outcomes into MemoryProposal / MemoryUpdate / MemoryForget / MemorySupersession envelopes. PRIMARY secret-prevention boundary (defence-in-depth on top of looksLikeSecretShape in keiko-contracts). Pure functions only; no IO, no clock, no randomness (caller supplies nowMs and newId via CaptureContext). ADR-0019 direction rule 3g (capture may depend only on keiko-contracts and keiko-security). Not published independently.",
+  "description": "MemoriaViva — Internal memory-capture package: governed capture policy gate that turns raw user text and reviewed workflow outcomes into MemoryProposal / MemoryUpdate / MemoryForget / MemorySupersession envelopes. PRIMARY secret-prevention boundary (defence-in-depth on top of looksLikeSecretShape in keiko-contracts). Pure functions only; no IO, no clock, no randomness (caller supplies nowMs and newId via CaptureContext). ADR-0019 direction rule 3g (capture may depend only on keiko-contracts and keiko-security). Not published independently.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

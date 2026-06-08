@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Internal memory-vault package: governed enterprise memory storage (node:sqlite). Scope-isolated CRUD, edges, embeddings, tombstones, validator-gated boundary, redaction-aware writes (ADR-0019 + Epic #204). Not published independently.",
+  "description": "MemoriaViva — Internal memory-vault package: governed enterprise memory storage (node:sqlite). Scope-isolated CRUD, edges, embeddings, tombstones, validator-gated boundary, redaction-aware writes (ADR-0019 + Epic #204). Not published independently.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
