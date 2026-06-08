@@ -4,7 +4,7 @@
 // have dedicated test cases that would fail if the condition were inverted or shifted.
 // Deterministic — no async, no network, no filesystem.
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -148,6 +148,134 @@ describe("ingestInlineSources — workspace folder (Issue #278)", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(QiIngestionError);
       expect((err as QiIngestionError).code).toBe("QI_SOURCE_EMPTY");
+    }
+  });
+});
+
+// ─── Single file (Issue #713) ────────────────────────────────────────────────
+
+describe("ingestInlineSources — single file (Issue #713)", () => {
+  const tmpDirs: string[] = [];
+  const makeDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-file-"));
+    tmpDirs.push(dir);
+    return dir;
+  };
+  const writeFile = (dir: string, name: string, content: string): string => {
+    const path = join(dir, name);
+    writeFileSync(path, content, "utf8");
+    return path;
+  };
+  const fileSource = (
+    label: string,
+    path: string,
+  ): { kind: "file"; label: string; path: string } => ({ kind: "file", label, path });
+  afterAll(() => {
+    for (const dir of tmpDirs) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("ingests exactly one supported document into a single repository-context atom", () => {
+    const dir = makeDir();
+    const path = writeFile(
+      dir,
+      "fachkonzept.md",
+      "# Funds Transfer\nThe system shall validate the IBAN before submitting a transfer.\n",
+    );
+    const result = ingest(input([fileSource("Fachkonzept", path)]));
+    expect(result.ingestedAtoms.length).toBe(1);
+    expect(result.envelopes).toHaveLength(1);
+    expect(result.envelopes[0]?.kind).toBe("repository-context");
+    expect(result.envelopes[0]?.provenance.origin).toBe("file");
+    expect(result.ingestedAtoms[0]?.canonicalText.includes("IBAN")).toBe(true);
+    expect(result.sourceSummaries[0]?.kind).toBe("file");
+    expect(result.sourceSummaries[0]?.atomCount).toBe(1);
+  });
+
+  it("ingests ONLY the connected file, not its siblings in the same folder", () => {
+    const dir = makeDir();
+    writeFile(dir, "other.md", "BRAVO sibling content that must not be ingested.\n");
+    const path = writeFile(dir, "spec.md", "ALPHA the only requirement that should appear.\n");
+    const result = ingest(input([fileSource("Spec", path)]));
+    const joined = result.ingestedAtoms.map((a) => a.canonicalText).join("\n");
+    expect(joined.includes("ALPHA")).toBe(true);
+    expect(joined.includes("BRAVO")).toBe(false);
+  });
+
+  it("classifies a source-code file as a code-fragment atom", () => {
+    const dir = makeDir();
+    const path = writeFile(
+      dir,
+      "service.ts",
+      "export const fee = (amount: number) => amount * 0.01;\n",
+    );
+    const result = ingest(input([fileSource("Service", path)]));
+    expect(result.ingestedAtoms[0]?.atom.kind).toBe("code-fragment");
+  });
+
+  it("throws QI_SOURCE_UNSUPPORTED for a binary/unsupported extension (e.g. .pdf)", () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "spec.pdf", "%PDF-1.7 not really parsed");
+    try {
+      ingest(input([fileSource("PDF", path)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
+    }
+  });
+
+  it("throws QI_SOURCE_UNSUPPORTED for a text-extension file with binary (NUL) content", () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "mislabelled.txt", `head${String.fromCharCode(0)}binary tail`);
+    try {
+      ingest(input([fileSource("Mislabelled", path)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
+    }
+  });
+
+  it("throws QI_SOURCE_TOO_LARGE when the file exceeds the single-file size limit", () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "huge.md", "a".repeat(196_609));
+    try {
+      ingest(input([fileSource("Huge", path)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_TOO_LARGE");
+    }
+  });
+
+  it("throws QI_SOURCE_EMPTY when the file contains only whitespace", () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "blank.md", "   \n\n\t  ");
+    try {
+      ingest(input([fileSource("Blank", path)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_EMPTY");
+    }
+  });
+
+  it("throws QI_WORKSPACE_NOT_FOUND when the file does not exist", () => {
+    const dir = makeDir();
+    try {
+      ingest(input([fileSource("Missing", join(dir, "nope.md"))]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_WORKSPACE_NOT_FOUND");
+    }
+  });
+
+  it("throws QI_SOURCE_DENIED for a supported file inside a denied credential directory", () => {
+    const dir = makeDir();
+    const sshDir = join(dir, ".ssh");
+    mkdirSync(sshDir);
+    const path = writeFile(sshDir, "notes.md", "secret notes that must never be ingested");
+    try {
+      ingest(input([fileSource("SshNotes", path)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_DENIED");
     }
   });
 });

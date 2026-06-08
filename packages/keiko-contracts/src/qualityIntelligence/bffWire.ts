@@ -135,7 +135,7 @@ export interface QualityIntelligenceUiCandidate {
 
 // ─── Run start request (Issue #280/#281) ────────────────────────────────────────
 
-export type QualityIntelligenceInlineSourceKind = "requirements" | "workspace";
+export type QualityIntelligenceInlineSourceKind = "requirements" | "workspace" | "file";
 
 /** A pasted free-text requirement blob the server splits into requirement atoms. */
 export interface QualityIntelligenceRequirementsSource {
@@ -151,9 +151,23 @@ export interface QualityIntelligenceWorkspaceSource {
   readonly path: string;
 }
 
+/**
+ * A single local file — one Fachkonzept document (Markdown / plain text / source file) the server
+ * ingests through keiko-workspace as exactly one source atom. The same path containment, deny
+ * rules, size cap, and redaction that protect the folder path apply identically here; binary or
+ * unsupported files are rejected with a coded, user-actionable error rather than partially
+ * ingested. `path` is an absolute local path resolved server-side (Epic #709, Issue #713).
+ */
+export interface QualityIntelligenceFileSource {
+  readonly kind: "file";
+  readonly label: string;
+  readonly path: string;
+}
+
 export type QualityIntelligenceInlineSource =
   | QualityIntelligenceRequirementsSource
-  | QualityIntelligenceWorkspaceSource;
+  | QualityIntelligenceWorkspaceSource
+  | QualityIntelligenceFileSource;
 
 /** Body of `POST /api/quality-intelligence/runs`. */
 export interface QualityIntelligenceStartRunRequest {

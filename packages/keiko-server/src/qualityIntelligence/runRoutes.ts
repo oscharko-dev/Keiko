@@ -72,6 +72,9 @@ function validateSource(raw: unknown): QualityIntelligenceInlineSource | undefin
   if (raw.kind === "workspace" && typeof raw.path === "string") {
     return { kind: "workspace", label: raw.label, path: raw.path };
   }
+  if (raw.kind === "file" && typeof raw.path === "string") {
+    return { kind: "file", label: raw.label, path: raw.path };
+  }
   return undefined;
 }
 

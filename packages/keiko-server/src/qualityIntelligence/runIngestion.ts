@@ -6,6 +6,7 @@
 // may touch the filesystem); the pure domain owns splitting + hashing. Oversize and unsupported
 // inputs fail with user-actionable errors (#278 AC) before any model prompt is built.
 
+import { dirname, relative, resolve } from "node:path";
 import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
@@ -16,10 +17,16 @@ import {
   detectWorkspaceAt,
   discoverWithStats,
   buildContextPackFromFiles,
+  readWorkspaceFile,
+  isDenied,
   DEFAULT_CONTEXT_REQUEST,
+  DEFAULT_READ_OPTIONS,
   WorkspaceError,
+  FileTooLargeError,
+  PathDeniedError,
+  PathEscapeError,
+  WorkspaceReadError,
 } from "@oscharko-dev/keiko-workspace";
-import type { ContextEntry } from "@oscharko-dev/keiko-contracts";
 import type { QualityIntelligenceIngestedAtom } from "@oscharko-dev/keiko-workflows";
 import type {
   QualityIntelligenceInlineSource,
@@ -124,7 +131,7 @@ const atomKindForPath = (path: string): "code-fragment" | "document-excerpt" =>
   CODE_EXTENSION.test(path) ? "code-fragment" : "document-excerpt";
 
 const workspaceAtom = (
-  entry: ContextEntry,
+  entry: { readonly path: string; readonly excerpt: string },
   envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
   index: number,
 ): QualityIntelligenceIngestedAtom => {
@@ -197,6 +204,116 @@ function ingestWorkspace(
   return { envelope, atoms };
 }
 
+// A single Fachkonzept document may use the full per-run workspace byte budget — it is the only
+// file — bounded so an oversized file fails with a user-actionable error instead of silently
+// dominating the prompt budget.
+const SINGLE_FILE_MAX_BYTES = WORKSPACE_BUDGET_BYTES;
+
+// Supported single-file document extensions: text-like documents + source files only. keiko-workspace
+// reads UTF-8 text and deliberately does not parse binary documents (PDF/Word/images/archives carry
+// a CVE-prone parser surface — Issue #148), so those are rejected with a coded error, never partially
+// ingested. Code files reuse the shared CODE_EXTENSION set above.
+const DOC_TEXT_EXTENSION =
+  /\.(?:md|markdown|txt|text|rst|adoc|asciidoc|json|ya?ml|xml|html?|csv|tsv|ini|toml|cfg|conf|properties|tex|org)$/iu;
+
+const isSupportedFilePath = (path: string): boolean =>
+  CODE_EXTENSION.test(path) || DOC_TEXT_EXTENSION.test(path);
+
+// Resolve a single file's workspace root and read it through the keiko-workspace boundary-checked
+// read path (`readWorkspaceFile`: lexical containment -> deny rules -> symlink realpath gate -> size
+// cap -> redaction). Every workspace failure is mapped to a safe, user-actionable QiIngestionError.
+function readSingleFileContent(
+  absFile: string,
+  label: string,
+): ReturnType<typeof readWorkspaceFile> {
+  let workspace: ReturnType<typeof detectWorkspaceAt>;
+  try {
+    workspace = detectWorkspaceAt(dirname(absFile));
+  } catch (error) {
+    if (error instanceof WorkspaceError) {
+      throw new QiIngestionError(
+        "QI_WORKSPACE_NOT_FOUND",
+        "The selected file could not be opened.",
+      );
+    }
+    throw error;
+  }
+  try {
+    return readWorkspaceFile(workspace, relative(workspace.root, absFile), {
+      ...DEFAULT_READ_OPTIONS,
+      maxBytes: SINGLE_FILE_MAX_BYTES,
+    });
+  } catch (error) {
+    if (error instanceof FileTooLargeError) {
+      throw new QiIngestionError(
+        "QI_SOURCE_TOO_LARGE",
+        `File "${label}" exceeds the single-file size limit.`,
+      );
+    }
+    if (error instanceof PathDeniedError || error instanceof PathEscapeError) {
+      throw new QiIngestionError("QI_SOURCE_DENIED", `File "${label}" is in a protected location.`);
+    }
+    if (error instanceof WorkspaceReadError) {
+      throw new QiIngestionError("QI_WORKSPACE_NOT_FOUND", "The selected file could not be read.");
+    }
+    throw error;
+  }
+}
+
+// Ingest a single local file by REUSING the keiko-workspace boundary-checked read path. No
+// independent file reader is added (Issue #713 stop condition). The same protections that guard the
+// folder path apply identically to the single file; binary / unsupported / oversized / denied /
+// empty inputs each fail with a safe, user-actionable code before any model prompt.
+function ingestFile(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "file" }>,
+  index: number,
+  registeredAt: string,
+): OneSource {
+  const label = sanitiseLabel(source.label);
+  const absFile = resolve(source.path);
+  if (!isSupportedFilePath(absFile)) {
+    throw new QiIngestionError(
+      "QI_SOURCE_UNSUPPORTED",
+      `File "${label}" is not a supported text document (binary formats such as PDF or Word are not ingested).`,
+    );
+  }
+  // Defense in depth: reject any path whose segments name a denied credential directory or file
+  // (.ssh, .aws, .env, *.pem, id_rsa, …) regardless of how the workspace root resolves below.
+  // isDenied inspects EVERY segment of the absolute path, so a denied ancestor directory cannot be
+  // hidden by rooting the read at the file's own parent directory.
+  if (isDenied(absFile)) {
+    throw new QiIngestionError("QI_SOURCE_DENIED", `File "${label}" is in a protected location.`);
+  }
+  const content = readSingleFileContent(absFile, label);
+  // keiko-workspace decodes as UTF-8; a NUL byte is the canonical binary marker. A binary file that
+  // slipped past the extension gate (e.g. a mis-named ".txt") is rejected here, never partially ingested.
+  if (content.text.includes("\u0000")) {
+    throw new QiIngestionError(
+      "QI_SOURCE_UNSUPPORTED",
+      `File "${label}" appears to be binary, not text.`,
+    );
+  }
+  if (content.text.trim().length === 0) {
+    throw new QiIngestionError("QI_SOURCE_EMPTY", `File "${label}" produced no usable content.`);
+  }
+  const envelopeId = envelopeIdFor(index, label, content.relativePath);
+  const envelope: QI.QualityIntelligenceSourceEnvelope = {
+    id: envelopeId,
+    kind: "repository-context",
+    displayLabel: label,
+    provenance: {
+      origin: "file",
+      registeredAt,
+      integrityHashSha256Hex: sha256Hex(`${content.relativePath}|${content.text}`),
+    },
+    localRef: String(envelopeId),
+  };
+  const atoms = [
+    workspaceAtom({ path: content.relativePath, excerpt: content.text }, envelopeId, 0),
+  ];
+  return { envelope, atoms };
+}
+
 function ingestOne(
   source: QualityIntelligenceInlineSource,
   index: number,
@@ -207,6 +324,8 @@ function ingestOne(
       return ingestRequirements(source, index, registeredAt);
     case "workspace":
       return ingestWorkspace(source, index, registeredAt);
+    case "file":
+      return ingestFile(source, index, registeredAt);
   }
 }
 

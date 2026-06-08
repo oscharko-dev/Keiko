@@ -241,7 +241,9 @@ export function WindowFrame({
       ? api.linkedFilesRoot(win.id)
       : null;
   const linkedFilePath =
-    win.type === "agents" ? api.linkedFilesContext(win.id)?.activeFilePath : undefined;
+    win.type === "agents" || win.type === "quality"
+      ? api.linkedFilesContext(win.id)?.activeFilePath
+      : undefined;
   const ew = win.w / zoom;
   const eh = win.h / zoom;
   const updateCfg = useCallback(

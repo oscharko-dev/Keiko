@@ -491,3 +491,74 @@ describe("RunLauncher — connected Files source (#270 Slice 1)", () => {
     expect(screen.queryByTestId("qi-connected-source")).not.toBeInTheDocument();
   });
 });
+
+describe("RunLauncher — connected single file (Epic #709, Issue #714)", () => {
+  const ROOT = "/work/fachkonzept";
+  const FILE = "/work/fachkonzept/funds-transfer.md";
+
+  it("enables Generate from a connected file with no manual input", () => {
+    render(<RunLauncher onRunCompleted={vi.fn()} connectedFilePath={FILE} />);
+    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toBeDisabled();
+  });
+
+  it("renders the connected-source banner labelled 'Connected file' with the file path", () => {
+    render(<RunLauncher onRunCompleted={vi.fn()} connectedFilePath={FILE} />);
+    const banner = screen.getByTestId("qi-connected-source");
+    expect(banner).toHaveTextContent("Connected file");
+    expect(banner).toHaveTextContent(FILE);
+  });
+
+  it("generates from the connected file as a 'file' source", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={vi.fn()} connectedFilePath={FILE} />);
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({ kind: "file", path: FILE });
+  });
+
+  it("prefers the connected file over the connected folder when both are present", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        onRunCompleted={vi.fn()}
+        connectedRoot={ROOT}
+        connectedFilePath={FILE}
+      />,
+    );
+
+    expect(screen.getByTestId("qi-connected-source")).toHaveTextContent("Connected file");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({ kind: "file", path: FILE });
+  });
+
+  it("lets manual requirements text override the connected file", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={vi.fn()} connectedFilePath={FILE} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Login must work");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({ kind: "requirements", text: "Login must work" });
+  });
+});
