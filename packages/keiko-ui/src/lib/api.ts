@@ -553,6 +553,210 @@ export async function sendDesktopChat(
 }
 
 // ---------------------------------------------------------------------------
+// Desktop chat SSE streaming — Issue #152 Layer 3
+// ---------------------------------------------------------------------------
+
+// Thrown pre-stream when the BFF responds with a non-SSE content-type (e.g.
+// STREAMING_UNSUPPORTED). The caller falls back to sendDesktopChat.
+export class StreamingUnavailableError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "StreamingUnavailableError";
+  }
+}
+
+// Typed SSE event payloads — no `any`.
+interface SseTokenPayload {
+  readonly text: string;
+}
+interface SseDonePayload {
+  readonly chat: import("./types").Chat;
+  readonly messages: readonly import("./types").ChatMessage[];
+  readonly usage?: import("@oscharko-dev/keiko-contracts/bff-wire").DesktopChatSendUsage;
+  readonly memory?: import("./types").ConversationMemoryResultWire;
+}
+interface SseErrorPayload {
+  readonly code: string;
+  readonly message: string;
+}
+
+// Narrow an unknown SSE data value to a specific payload shape.
+function asSseTokenPayload(value: unknown): SseTokenPayload | undefined {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "text" in value &&
+    typeof (value as Record<string, unknown>).text === "string"
+  ) {
+    return value as SseTokenPayload;
+  }
+  return undefined;
+}
+
+function asSseErrorPayload(value: unknown): SseErrorPayload | undefined {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "code" in value &&
+    "message" in value &&
+    typeof (value as Record<string, unknown>).code === "string" &&
+    typeof (value as Record<string, unknown>).message === "string"
+  ) {
+    return value as SseErrorPayload;
+  }
+  return undefined;
+}
+
+function asSseDonePayload(value: unknown): SseDonePayload | undefined {
+  if (typeof value === "object" && value !== null && "chat" in value && "messages" in value) {
+    return value as SseDonePayload;
+  }
+  return undefined;
+}
+
+export interface StreamHandlers {
+  readonly onToken: (text: string) => void;
+  readonly onDone: (payload: SseDonePayload) => void;
+  readonly onError: (payload: SseErrorPayload) => void;
+  readonly onCancelled: () => void;
+}
+
+// Re-export so callers (useChatSession.ts) can type the done payload without
+// reaching into the private SSE types above.
+export type { SseDonePayload };
+
+// Dispatches a parsed SSE (event, data) pair to the appropriate handler.
+function dispatchSseEvent(
+  eventName: string | undefined,
+  parsed: unknown,
+  handlers: StreamHandlers,
+): void {
+  switch (eventName) {
+    case "token": {
+      const token = asSseTokenPayload(parsed);
+      if (token !== undefined) handlers.onToken(token.text);
+      break;
+    }
+    case "done": {
+      const done = asSseDonePayload(parsed);
+      if (done !== undefined) handlers.onDone(done);
+      break;
+    }
+    case "error": {
+      const err = asSseErrorPayload(parsed);
+      if (err !== undefined) handlers.onError(err);
+      break;
+    }
+    case "cancelled": {
+      handlers.onCancelled();
+      break;
+    }
+  }
+}
+
+// Processes one chunk of lines from the SSE stream. Returns the updated
+// `pendingEvent` name (carries over across chunk boundaries).
+function processSseLines(
+  lines: readonly string[],
+  pendingEvent: string | undefined,
+  handlers: StreamHandlers,
+): string | undefined {
+  let current = pendingEvent;
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    if (line.startsWith("event:")) {
+      current = line.slice("event:".length).trim();
+    } else if (line.startsWith("data:")) {
+      const dataText = line.slice("data:".length).trim();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(dataText) as unknown;
+      } catch {
+        continue;
+      }
+      dispatchSseEvent(current, parsed, handlers);
+      current = undefined;
+    } else if (line === "") {
+      current = undefined;
+    }
+  }
+  return current;
+}
+
+// Reads `response.body` as a text/event-stream, buffering partial lines across
+// reads. Dispatches typed events to `handlers`. Respects the passed `signal` —
+// when aborted it stops reading without dispatching further events.
+async function consumeSseStream(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+  handlers: StreamHandlers,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let lineBuffer = "";
+  let pendingEvent: string | undefined;
+
+  try {
+    while (!signal.aborted) {
+      const read = await reader.read();
+      if (read.done) break;
+      lineBuffer += decoder.decode(read.value, { stream: true });
+      const lines = lineBuffer.split("\n");
+      lineBuffer = lines.pop() ?? "";
+      pendingEvent = processSseLines(lines, pendingEvent, handlers);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// Issue #152 Layer 3 — POST to /api/desktop/chat/stream with the same
+// headers/body as sendDesktopChat. If the response is NOT text/event-stream
+// (BFF returned a JSON pre-stream error), throws StreamingUnavailableError
+// so the caller can fall back. Otherwise reads the stream and dispatches to
+// handlers. Respects `signal` (abort stops reading immediately).
+export async function sendDesktopChatStream(
+  input: SendDesktopChatInput,
+  signal: AbortSignal,
+  handlers: StreamHandlers,
+): Promise<void> {
+  const res = await fetch("/api/desktop/chat/stream", {
+    method: "POST",
+    headers: {
+      Accept: "text/event-stream",
+      "Content-Type": "application/json",
+      "X-Keiko-CSRF": "1",
+    },
+    body: JSON.stringify(input),
+    signal,
+  });
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("text/event-stream")) {
+    // Pre-stream error — parse the JSON envelope and throw typed.
+    let code = "STREAMING_UNSUPPORTED";
+    let message = `HTTP ${res.status.toString()}`;
+    try {
+      const envelope = (await res.json()) as { error?: { code?: string; message?: string } };
+      code = envelope.error?.code ?? code;
+      message = envelope.error?.message ?? message;
+    } catch {
+      // parse failure — keep generic values, never log body
+    }
+    throw new StreamingUnavailableError(code, message);
+  }
+
+  if (res.body === null) {
+    throw new StreamingUnavailableError("STREAMING_UNSUPPORTED", "Response body was null.");
+  }
+
+  await consumeSseStream(res.body, signal, handlers);
+}
+
+// ---------------------------------------------------------------------------
 // Desktop terminal — ADR-0018 bounded permitted-command execution; client moved to
 // ./terminal-api.ts. The PTY routes (/api/terminal/shells, /sessions, WS upgrade) are removed.
 

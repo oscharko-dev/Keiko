@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ApiError,
+  StreamingUnavailableError,
   askGrounded,
   createDesktopChat,
   createProject,
@@ -11,9 +12,11 @@ import {
   fetchModels,
   fetchProjects,
   sendDesktopChat,
+  sendDesktopChatStream,
   startChatRun,
   updateChat,
 } from "@/lib/api";
+import type { SseDonePayload } from "@/lib/api";
 import { acceptMemoryProposal, rejectMemoryProposal } from "@/lib/memory-api";
 import { findChatWorkflow } from "@/lib/chat-workflow-catalog";
 import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
@@ -818,7 +821,131 @@ export function useChatSession(): UseChatSessionResult {
     [openNewChat],
   );
 
-  const sendUngrounded = useCallback(
+  // Removes a temp optimistic message from state by id (AC#3 — no partial kept).
+  const removeTempMessage = useCallback((id: string): void => {
+    setState((previous) => ({
+      ...previous,
+      messages: previous.messages.filter((m) => m.id !== id),
+    }));
+  }, []);
+
+  // Builds the StreamHandlers for a streaming request. Extracted to keep
+  // streamUngrounded within the 50-line function limit.
+  const buildStreamHandlers = useCallback(
+    (
+      tempAssistantId: string,
+      optimisticId: string,
+      resolve: (status: SendStatus) => void,
+    ): import("@/lib/api").StreamHandlers => {
+      let statusFlippedToStreaming = false;
+      return {
+        onToken: (text: string): void => {
+          if (!statusFlippedToStreaming) {
+            updateSendStatus("streaming");
+            statusFlippedToStreaming = true;
+          }
+          setState((previous) => ({
+            ...previous,
+            messages: previous.messages.map((m) =>
+              m.id === tempAssistantId ? { ...m, content: m.content + text } : m,
+            ),
+          }));
+        },
+        onDone: (payload: SseDonePayload): void => {
+          setState((previous) => ({
+            ...previous,
+            activeChat: payload.chat,
+            chats: sortChats([
+              payload.chat,
+              ...previous.chats.filter((existing) => existing.id !== payload.chat.id),
+            ]),
+            messages: [
+              ...previous.messages.filter((m) => m.id !== optimisticId && m.id !== tempAssistantId),
+              ...Array.from(payload.messages),
+            ],
+          }));
+          if (payload.memory !== undefined) setLatestMemory(payload.memory);
+          resolve("completed");
+        },
+        onError: ({ message }: { message: string }): void => {
+          setError(message);
+          removeTempMessage(tempAssistantId);
+          resolve("failed");
+        },
+        onCancelled: (): void => {
+          removeTempMessage(tempAssistantId);
+          resolve("cancelled");
+        },
+      };
+    },
+    [removeTempMessage, updateSendStatus],
+  );
+
+  // Issue #152 Layer 3 — streaming path for canStream models. Inserts a temp
+  // assistant bubble that accumulates token deltas, then replaces it with the
+  // canonical messages on done. On cancel/error the temp bubble is removed so
+  // no partial content persists (AC#3).
+  const streamUngrounded = useCallback(
+    (
+      chat: Chat,
+      project: ProjectWithAvailability,
+      content: string,
+      optimisticId: string,
+      modelId: string,
+      signal: AbortSignal,
+      documentContext: readonly ConversationDocumentContextWire[],
+    ): Promise<SendStatus> => {
+      const tempAssistantId = `stream-${String(Date.now())}`;
+      setState((previous) => ({
+        ...previous,
+        messages: [
+          ...previous.messages,
+          {
+            id: tempAssistantId,
+            chatId: chat.id,
+            role: "assistant" as const,
+            content: "",
+            timestamp: Date.now(),
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }));
+      const requestBody = {
+        chatId: chat.id,
+        projectPath: project.path,
+        content,
+        modelId,
+        memory: buildMemoryRequest(chat, project),
+        ...(documentContext.length > 0 ? { documentContext } : {}),
+      };
+      return new Promise<SendStatus>((resolve, reject) => {
+        const handlers = buildStreamHandlers(tempAssistantId, optimisticId, resolve);
+        sendDesktopChatStream(requestBody, signal, handlers).catch((caught: unknown) => {
+          removeTempMessage(tempAssistantId);
+          if (caught instanceof StreamingUnavailableError) {
+            // Pre-stream failure (e.g. STREAMING_UNSUPPORTED, or a JSON error before any SSE
+            // header). Reject so sendUngrounded falls back to the buffered path instead of
+            // surfacing a hard failure to the user.
+            reject(caught);
+          } else if (caught instanceof DOMException && caught.name === "AbortError") {
+            resolve("cancelled");
+          } else {
+            resolve("failed");
+          }
+        });
+      });
+    },
+    [buildMemoryRequest, buildStreamHandlers, removeTempMessage],
+  );
+
+  // Issue #152 Layer 3 — non-streaming fallback path (canStream=false or
+  // StreamingUnavailableError pre-stream). Kept separate so sendUngrounded
+  // stays within the 50-line function limit.
+  const sendUngroundedBuffered = useCallback(
     async (
       chat: Chat,
       project: ProjectWithAvailability,
@@ -829,15 +956,8 @@ export function useChatSession(): UseChatSessionResult {
       documentContext: readonly ConversationDocumentContextWire[],
     ): Promise<SendStatus> => {
       try {
-        // Issue #152 — non-streaming providers see a stable "contacting" wait
-        // until the response lands (AC#4). When the BFF gains a true streaming
-        // surface we'll transition to "streaming" on the first delta.
-        // TODO(#152 follow-up): wire SSE for true streaming when the BFF
-        // adds a /api/desktop/chat/stream surface.
         updateSendStatus("contacting");
-        // Issue #148 — the pre-extracted, byte-bounded document context travels on the
-        // request body so the model can actually read attached documents. Omitted (not
-        // sent as an empty array) when there are no documents so the wire stays minimal.
+        // Issue #148 — byte-bounded document context on the request body.
         const result = await sendDesktopChat(
           {
             chatId: chat.id,
@@ -849,9 +969,6 @@ export function useChatSession(): UseChatSessionResult {
           },
           signal,
         );
-        // Issue #152 — the request may have been cancelled while the response
-        // was in flight. Honor the cancel and do NOT persist the assistant
-        // reply as a completed answer (AC#3).
         if (signal.aborted) return "cancelled";
         setState((previous) => ({
           ...previous,
@@ -868,10 +985,6 @@ export function useChatSession(): UseChatSessionResult {
         setLatestMemory(result.memory);
         return "completed";
       } catch (caught) {
-        // Aborted ungrounded requests are not errors — silently fall back to
-        // a cancelled state, preserving the user message (the optimistic row
-        // was the user's own input; AC#3 says we don't persist a fake
-        // assistant answer, but we keep the user's message visible).
         if (caught instanceof DOMException && caught.name === "AbortError") {
           return "cancelled";
         }
@@ -889,6 +1002,56 @@ export function useChatSession(): UseChatSessionResult {
       }
     },
     [buildMemoryRequest, updateSendStatus],
+  );
+
+  const sendUngrounded = useCallback(
+    async (
+      chat: Chat,
+      project: ProjectWithAvailability,
+      content: string,
+      optimisticId: string,
+      modelId: string,
+      signal: AbortSignal,
+      documentContext: readonly ConversationDocumentContextWire[],
+    ): Promise<SendStatus> => {
+      const canStream = state.models.find((m) => m.id === modelId)?.streaming === true;
+      if (!canStream) {
+        return sendUngroundedBuffered(
+          chat,
+          project,
+          content,
+          optimisticId,
+          modelId,
+          signal,
+          documentContext,
+        );
+      }
+      updateSendStatus("contacting");
+      try {
+        return await streamUngrounded(
+          chat,
+          project,
+          content,
+          optimisticId,
+          modelId,
+          signal,
+          documentContext,
+        );
+      } catch (caught) {
+        // StreamingUnavailableError before SSE headers — fall back to buffered.
+        if (!(caught instanceof StreamingUnavailableError)) throw caught;
+      }
+      return sendUngroundedBuffered(
+        chat,
+        project,
+        content,
+        optimisticId,
+        modelId,
+        signal,
+        documentContext,
+      );
+    },
+    [state.models, sendUngroundedBuffered, streamUngrounded, updateSendStatus],
   );
 
   // When the active chat carries either a Files connected scope or a local-knowledge scope,
