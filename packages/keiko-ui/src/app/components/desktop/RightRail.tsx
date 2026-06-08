@@ -37,6 +37,7 @@ export function RightRail({ openTools, onTool }: RightRailProps): ReactNode {
               data-side="right"
               data-tip={tool.label}
               aria-label={tool.label}
+              aria-pressed={openTools.has(tool.id)}
               onClick={() => onTool(tool.id)}
             >
               <Icon size={19} />

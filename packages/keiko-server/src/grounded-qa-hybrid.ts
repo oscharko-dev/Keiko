@@ -6,7 +6,7 @@
 // byte-identical (AC). It composes the exported folder helpers (grounded-qa-multi-source.ts) and
 // connector seams (local-knowledge-grounded-qa.ts) without re-implementing retrieval.
 
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { resolveCostClass } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { persistConnectedContextEvidence } from "@oscharko-dev/keiko-evidence";
@@ -60,14 +60,21 @@ import {
   DEFAULT_REFERENCE_BUDGET,
   MAX_EXCERPT_CHARS,
   MAX_PROMPT_REFERENCES,
+  buildSelectedScopeSourceLookup,
   createEmbeddingAdapter,
   openStoreForDeps,
   renderCitationLabel,
+  projectLocalKnowledgeCitation,
   scopeStateFailure,
   selectedCapsulesForScope,
   type SelectedLocalKnowledgeScope,
 } from "./local-knowledge-grounded-qa.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import {
+  normalizeGroundedAnswerPayload,
+  type GroundedAnswerPayload,
+  type GroundedAnswerResult,
+} from "./grounded-answer.js";
 import {
   buildCitations,
   buildQuery,
@@ -112,7 +119,7 @@ export type ConnectorRetrieve = (
   scope: ChatLocalKnowledgeScope,
   selected: SelectedLocalKnowledgeScope,
 ) => Promise<RetrievalResult>;
-export type HybridAnswerer = (system: string, user: string) => Promise<string>;
+export type HybridAnswerer = (system: string, user: string) => Promise<GroundedAnswerPayload>;
 
 export interface HybridGroundedAskCtx {
   readonly chat: Chat;
@@ -350,7 +357,7 @@ export function createHybridAnswerer(
   modelId: string,
   signal: AbortSignal,
 ): HybridAnswerer {
-  return async (system, user): Promise<string> => {
+  return async (system, user): Promise<GroundedAnswerResult> => {
     ensureNotCancelled(signal);
     const response = await model.call(
       {
@@ -364,7 +371,13 @@ export function createHybridAnswerer(
       signal,
     );
     const content = response.content.trim();
-    return content.length > 0 ? content : "The model returned an empty response.";
+    return {
+      content: content.length > 0 ? content : "The model returned an empty response.",
+      usage: {
+        promptTokens: response.usage.promptTokens,
+        completionTokens: response.usage.completionTokens,
+      },
+    };
   };
 }
 
@@ -380,27 +393,18 @@ function mergedFolderCitations(
   return [...citations].sort((a, b) => b.score - a.score);
 }
 
-function connectorCitationStableId(reference: RetrievalReference, marker: string): string {
-  return createHash("sha256")
-    .update(`${marker}|${String(reference.capsuleId)}|${String(reference.chunkId)}`)
-    .digest("hex")
-    .slice(0, 16);
-}
-
 function mergedConnectorCitations(
   connectors: readonly RetrievedConnector[],
+  store: KnowledgeStore,
 ): readonly LocalKnowledgeEvidenceCitation[] {
   return connectors.flatMap((src) =>
-    src.references.slice(0, MAX_PROMPT_REFERENCES).map((reference, i) => {
-      const marker = `[${String(i + 1)}]`;
-      return {
-        stableId: connectorCitationStableId(reference, marker),
-        marker,
-        label: renderCitationLabel(reference.citation),
-        score: reference.score,
-        source: src.label,
-      };
-    }),
+    src.references.slice(0, MAX_PROMPT_REFERENCES).map((reference, i) =>
+      projectLocalKnowledgeCitation(
+        reference,
+        `[${String(i + 1)}]`,
+        buildSelectedScopeSourceLookup(store, src.selected),
+      ),
+    ),
   );
 }
 
@@ -610,20 +614,21 @@ function assembleHybridAnswer(
   ctx: HybridGroundedAskCtx,
   sources: RetrievedSources,
   store: KnowledgeStore,
-  assistantRaw: string,
+  assistant: GroundedAnswerResult,
   ids: { readonly userMessageId: string; readonly assistantMessageId: string },
 ): HybridGroundedAnswer {
   const { redactor } = ctx.deps;
   const citations = mergedFolderCitations(sources.folders, redactor);
-  const knowledgeCitations = mergedConnectorCitations(sources.connectors);
+  const knowledgeCitations = mergedConnectorCitations(sources.connectors, store);
   const evidenceRunId = persistFolderEvidence(ctx, sources.folders);
   persistConnectorAudit(store, sources.connectors);
   const elapsedMs = sources.folders.reduce((acc, src) => acc + src.elapsedMs, 0);
+  const summary = folderSummary(sources.folders, redactor);
   return {
     groundingKind: "hybrid",
     ...ids,
     evidenceRunId,
-    content: redactString(redactor, assistantRaw),
+    content: redactString(redactor, assistant.content),
     citations,
     knowledgeCitations,
     uncertainty: [
@@ -636,7 +641,14 @@ function assembleHybridAnswer(
       kind: "hybrid",
       folderSourceCount: sources.folderSourceCount,
       connectorSourceCount: sources.connectorSourceCount,
-      folder: folderSummary(sources.folders, redactor),
+      folder: {
+        ...summary,
+        usage: {
+          ...summary.usage,
+          modelInputTokens: summary.usage.modelInputTokens + assistant.usage.promptTokens,
+          modelOutputTokens: summary.usage.modelOutputTokens + assistant.usage.completionTokens,
+        },
+      },
       knowledge: knowledgeSummary(ctx.chat, sources.connectors, knowledgeCitations.length),
     },
   };
@@ -714,12 +726,14 @@ async function answerAndAssemble(
     store,
     ctx.deps.redactor,
   );
-  const assistantRaw = await answerer.answer(HYBRID_SYSTEM_PROMPT, user);
+  const assistant = normalizeGroundedAnswerPayload(
+    await answerer.answer(HYBRID_SYSTEM_PROMPT, user),
+  );
   const [userMessage, assistantMessage] = persistGroundedExchange(
     ctx.deps,
     ctx.chat.id,
     redactString(ctx.deps.redactor, ctx.content),
-    redactString(ctx.deps.redactor, assistantRaw),
+    redactString(ctx.deps.redactor, assistant.content),
   );
   const answer = assembleHybridAnswer(
     ctx,
@@ -731,7 +745,7 @@ async function answerAndAssemble(
       connectorSourceCount: meta.connectorScopeCount,
     },
     store,
-    assistantRaw,
+    assistant,
     { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
   );
   return { status: 200, body: answer };

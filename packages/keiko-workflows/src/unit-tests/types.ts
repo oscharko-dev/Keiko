@@ -5,6 +5,7 @@
 // is on. Every report shape is plain JSON-serializable so the #10 audit ledger can persist it.
 
 import type { MemoryWorkflowPort } from "@oscharko-dev/keiko-contracts";
+import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { SpawnFn, WorkspaceWriter } from "@oscharko-dev/keiko-tools";
 import type { TestFramework, WorkspaceFs } from "@oscharko-dev/keiko-workspace";
@@ -89,6 +90,9 @@ export interface UnitTestWorkflowDeps {
   // this workflow; threaded today for parity with investigateBug so consumers can inject a
   // single port across all workflows. Backward-compatible: ignored when undefined.
   readonly memoryPort?: MemoryWorkflowPort | undefined;
+  // Optional governed grounded-context handoff contract. When present, accepted dry-run patches
+  // and apply-mode writes must stay within patchScope.editablePaths and the declared limits.
+  readonly workflowHandoff?: WorkflowHandoffRequest | undefined;
 }
 
 // ─── Report (D3 + steering note A: proposedDiff) ─────────────────────────────────────

@@ -42,7 +42,9 @@ import { currentGatewayConfig, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import {
+  findConfiguredCapability,
   requestOpenAIEmbedding,
+  type GatewayConfig,
   type ModelProviderConfig,
   type OpenAIEmbeddingAdapter,
   type OpenAIEmbeddingOutcome,
@@ -50,6 +52,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
+import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
 
 const MAX_BODY_BYTES = 32_000;
 // F4 (Epic #189): cap unbounded BFF response collections so a worst-case capsule with
@@ -178,6 +181,63 @@ function runtimeStateDir(deps: UiHandlerDeps): string | undefined {
   return dirname(deps.uiDbPath);
 }
 
+interface RecoverableRunningJobRow {
+  readonly id: string;
+  readonly capsule_id: string;
+  readonly cancellation_requested: number;
+}
+
+function recoverAbandonedIndexingJobs(store: ReturnType<typeof openKnowledgeStore>): void {
+  const rows = store._internal.db
+    .prepare(
+      [
+        "SELECT id, capsule_id, cancellation_requested",
+        "FROM indexing_jobs",
+        "WHERE status = 'running'",
+        "ORDER BY started_at ASC, id ASC",
+      ].join(" "),
+    )
+    .all() as unknown as readonly RecoverableRunningJobRow[];
+  if (rows.length === 0) {
+    return;
+  }
+  const finishedAt = store._internal.now();
+  for (const row of rows) {
+    if (
+      localKnowledgeIndexingRegistry.isActiveCapsule(row.capsule_id) ||
+      localKnowledgeIndexingRegistry.isActiveJob(row.id)
+    ) {
+      continue;
+    }
+    const cancelled = row.cancellation_requested === 1;
+    store._internal.db
+      .prepare(
+        [
+          "UPDATE indexing_jobs SET",
+          "  status = :status,",
+          "  finished_at = :finished_at,",
+          "  last_error_code = :error_code,",
+          "  last_error_message = :error_message",
+          "WHERE id = :id AND status = 'running'",
+        ].join(" "),
+      )
+      .run({
+        status: cancelled ? "cancelled" : "failed",
+        finished_at: finishedAt,
+        error_code: cancelled ? "CANCELLED" : "INDEXING_INTERRUPTED",
+        error_message: cancelled
+          ? "Indexing was cancelled before the run could be finalized."
+          : "Indexing stopped unexpectedly before completion. Restart the run to finish indexing.",
+        id: row.id,
+      });
+    try {
+      updateCapsuleState(store, row.capsule_id as KnowledgeCapsuleId, "error");
+    } catch {
+      // informational only — the recovered job row is the durable source of truth
+    }
+  }
+}
+
 function openStoreForDeps(deps: UiHandlerDeps): {
   readonly store: ReturnType<typeof openKnowledgeStore>;
   readonly dbPath: string;
@@ -189,6 +249,7 @@ function openStoreForDeps(deps: UiHandlerDeps): {
   }
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
   const store = openKnowledgeStore({ dbPath });
+  recoverAbandonedIndexingJobs(store);
   return {
     store,
     dbPath,
@@ -210,25 +271,69 @@ function storageSizeBytes(dbPath: string): number {
   return total;
 }
 
+interface EmbeddingSelectionConfig {
+  readonly providers: readonly { readonly modelId: string }[];
+  readonly capabilities?: GatewayConfig["capabilities"];
+}
+
+function configuredCapabilityForModel(
+  config: EmbeddingSelectionConfig,
+  modelId: string,
+): ReturnType<typeof findConfiguredCapability> {
+  return findConfiguredCapability(config as GatewayConfig, modelId);
+}
+
+function isConfiguredEmbeddingModel(
+  config: EmbeddingSelectionConfig,
+  modelId: string,
+): boolean {
+  return configuredCapabilityForModel(config, modelId)?.kind === "embedding";
+}
+
+function configuredEmbeddingProvider(
+  config: GatewayConfig | undefined,
+  modelId: string,
+): ModelProviderConfig | undefined {
+  if (config === undefined) return undefined;
+  const provider = config.providers.find((entry) => entry.modelId === modelId);
+  if (provider === undefined) return undefined;
+  return isConfiguredEmbeddingModel(config, provider.modelId) ? provider : undefined;
+}
+
 function configuredProviderForCapsule(
   deps: UiHandlerDeps,
   capsule: KnowledgeCapsule,
 ): ModelProviderConfig | undefined {
-  const config = currentGatewayConfig(deps);
-  return config?.providers.find(
-    (provider) => provider.modelId === capsule.embeddingModelIdentity.modelId,
+  return configuredEmbeddingProvider(
+    currentGatewayConfig(deps),
+    capsule.embeddingModelIdentity.modelId,
   );
+}
+
+function embeddingCompatibilityReason(
+  config: GatewayConfig | undefined,
+  capsule: KnowledgeCapsule,
+): string | undefined {
+  if (config === undefined) return undefined;
+  const modelId = capsule.embeddingModelIdentity.modelId;
+  if (!config.providers.some((entry) => entry.modelId === modelId)) {
+    return "The configured embedding model no longer matches this capsule.";
+  }
+  if (configuredEmbeddingProvider(config, modelId) === undefined) {
+    return "The configured model for this capsule cannot serve embeddings.";
+  }
+  return undefined;
 }
 
 function vectorCompatibility(
   deps: UiHandlerDeps,
   capsule: KnowledgeCapsule,
 ): { readonly vectorCompatible: boolean; readonly staleReasons: readonly string[] } {
+  const config = currentGatewayConfig(deps);
   const reasons: string[] = [];
   const provider = configuredProviderForCapsule(deps, capsule);
-  if (currentGatewayConfig(deps) !== undefined && provider === undefined) {
-    reasons.push("The configured embedding model no longer matches this capsule.");
-  }
+  const embeddingReason = embeddingCompatibilityReason(config, capsule);
+  if (embeddingReason !== undefined) reasons.push(embeddingReason);
   if (capsule.lifecycleState === "stale") {
     reasons.push("The capsule is marked stale and should be refreshed.");
   }
@@ -236,7 +341,7 @@ function vectorCompatibility(
     reasons.push("The last indexing run ended with errors.");
   }
   return {
-    vectorCompatible: provider !== undefined || currentGatewayConfig(deps) === undefined,
+    vectorCompatible: provider !== undefined || config === undefined,
     staleReasons: reasons,
   };
 }
@@ -722,16 +827,14 @@ function defaultEmbeddingIdentity(modelId: string): KnowledgeCapsule["embeddingM
   };
 }
 
-// Issue #621: heuristic to select the first embedding-capable provider from the gateway
-// config. Falls back to providers[0] when no provider matches the embedding pattern so
-// that configs with a single provider still work without explicit labelling.
+// Issue #621 / #677: select the first provider whose resolved capability is embedding-capable.
+// Falling back to a chat model creates capsules that can never index successfully.
 export function selectEmbeddingModelId(
-  config: { readonly providers: readonly { readonly modelId: string }[] } | null | undefined,
+  config: EmbeddingSelectionConfig | null | undefined,
 ): string | undefined {
-  const providers = config?.providers;
-  if (providers === undefined || providers.length === 0) return undefined;
-  const match = providers.find((p) => /embed/i.test(p.modelId));
-  return match !== undefined ? match.modelId : providers[0]?.modelId;
+  if (config === undefined || config === null || config.providers.length === 0) return undefined;
+  return config.providers.find((provider) => isConfiguredEmbeddingModel(config, provider.modelId))
+    ?.modelId;
 }
 
 function createCapsuleStorageReference(capsuleId: string): string {
@@ -769,6 +872,7 @@ function requestRunningJobCancellation(
       "UPDATE indexing_jobs SET cancellation_requested = 1 WHERE id = :id AND capsule_id = :c",
     )
     .run({ id: jobId, c: capsuleId });
+  localKnowledgeIndexingRegistry.cancel(String(capsuleId));
   return true;
 }
 
@@ -847,24 +951,33 @@ async function runCapsuleIndexingJob(
   const adapter = createEmbeddingAdapter(provider, requestEmbeddingImpl(deps));
   const sourceIds =
     options.mode === "repair-failed" ? failedSourceIds(store, capsule.id) : undefined;
+  const controller = localKnowledgeIndexingRegistry.start(String(capsule.id));
   let terminal: IndexingTerminal | undefined;
-  for await (const event of runIndexingJob({
-    capsuleId: capsule.id,
-    ...(sourceIds !== undefined ? { sourceIds } : {}),
-    parserRegistry: createDefaultParserRegistry(),
-    workspaceFs: nodeWorkspaceFs,
-    embeddingAdapter: adapter,
-    auditSink: createSqliteAuditSink(store),
-    store,
-    force: options.force,
-  })) {
-    if (
-      event.kind === "job-completed" ||
-      event.kind === "job-failed" ||
-      event.kind === "job-cancelled"
-    ) {
-      terminal = event;
+  try {
+    for await (const event of runIndexingJob({
+      capsuleId: capsule.id,
+      ...(sourceIds !== undefined ? { sourceIds } : {}),
+      parserRegistry: createDefaultParserRegistry(),
+      workspaceFs: nodeWorkspaceFs,
+      embeddingAdapter: adapter,
+      auditSink: createSqliteAuditSink(store),
+      store,
+      force: options.force,
+      signal: controller.signal,
+    })) {
+      if (event.kind === "job-started") {
+        localKnowledgeIndexingRegistry.attachJobId(String(capsule.id), event.jobId);
+      }
+      if (
+        event.kind === "job-completed" ||
+        event.kind === "job-failed" ||
+        event.kind === "job-cancelled"
+      ) {
+        terminal = event;
+      }
     }
+  } finally {
+    localKnowledgeIndexingRegistry.complete(String(capsule.id));
   }
   return terminal;
 }
@@ -1092,7 +1205,7 @@ export async function handleCreateLocalKnowledgeCapsule(
       const configuredModelId = selectEmbeddingModelId(currentGatewayConfig(deps));
       if (configuredModelId === undefined) {
         return conflict(
-          "No configured embedding model is available for new capsules. Configure the Model Gateway first.",
+          "No configured embedding-capable model is available for new capsules. Configure the Model Gateway first.",
         );
       }
       const capsuleId = randomUUID() as KnowledgeCapsule["id"];
@@ -1159,7 +1272,7 @@ export async function handleStartLocalKnowledgeCapsuleIndexing(
       }
       if (configuredProviderForCapsule(deps, capsule) === undefined) {
         return conflict(
-          "No configured embedding model matches this capsule. Update the Model Gateway configuration before indexing it.",
+          "No configured embedding-capable model matches this capsule. Update the Model Gateway configuration before indexing it.",
         );
       }
       // LK-003 (Epic #189): refuse to start a second concurrent indexer for the same
@@ -1204,7 +1317,7 @@ export async function handleCancelLocalKnowledgeCapsuleIndexing(
       }
       if (!requestRunningJobCancellation(env.store, capsule.id)) {
         return conflict(
-          "No running indexing job was found for this capsule. External cancellation is limited to marking persisted running jobs for cancellation.",
+          "No running indexing job was found for this capsule.",
         );
       }
       return actionResponse(capsule.id);
@@ -1282,7 +1395,7 @@ export async function handleConnectLocalKnowledgeCapsule(
         displayName,
         tags: [],
         scope: guarded,
-      });
+      }, createSqliteAuditSink(env.store));
       const updated = getCapsule(env.store, capsule.id) ?? capsule;
       return {
         status: 201,
@@ -1349,7 +1462,7 @@ export async function handleReindexLocalKnowledgeCapsule(
       }
       if (configuredProviderForCapsule(deps, capsule) === undefined) {
         return conflict(
-          "No configured embedding model matches this capsule. Update the Model Gateway configuration before refreshing it.",
+          "No configured embedding-capable model matches this capsule. Update the Model Gateway configuration before refreshing it.",
         );
       }
       // LK-003 (Epic #189): same concurrent-run guard as the start handler.

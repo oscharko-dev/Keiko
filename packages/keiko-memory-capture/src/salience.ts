@@ -56,7 +56,7 @@ export const SALIENCE_SYSTEM_PROMPT = `You extract durable memories from a chat 
 Return ONLY a JSON array (no prose, no markdown fences). Each element:
 { "body": string, "type": string, "confidence": number, "scope": string, "tags": string[] }
 
-Capture ONLY facts the USER asserted about THEMSELVES or THEIR work that are durable and worth remembering: identity, stable preferences, project and technology facts, decisions, constraints, goals, environment, team, and recurring workflow lessons. Write each "body" as a concise, self-contained, third-person statement (e.g. "The user is building a fintech app called Atlas in Rust with PostgreSQL").
+Capture ONLY facts the USER asserted about THEMSELVES or THEIR work that are durable and worth remembering: identity, stable preferences, project and technology facts, decisions, constraints, goals, environment, team, and recurring workflow lessons. Write each "body" as a concise, self-contained, third-person statement (e.g. "The user is building a fintech app called Atlas in Rust with PostgreSQL"). Identity statements should be canonicalised the same way every time, for example "My name is Paul." / "Hallo Keiko, ich bin Paul." -> "The user's name is Paul.".
 
 Capture LIBERALLY — the bar is low; when in doubt, include it.
 

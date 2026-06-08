@@ -58,7 +58,7 @@ const FINALIZE_JOB_SQL = [
 const SELECT_RUNNING_BY_CAPSULE_SQL = [
   "SELECT id, capsule_id, source_ids_json, started_at, finished_at, status,",
   "  total_documents, processed_documents, failed_documents, skipped_documents,",
-  "  last_error_code, last_error_message, resume_token",
+  "  last_error_code, last_error_message, resume_token, cancellation_requested",
   "FROM indexing_jobs",
   "WHERE capsule_id = :c AND status = 'running'",
   // started_at DESC so the most recent abandoned run wins. Ties broken by id ASC for
@@ -70,7 +70,7 @@ const SELECT_RUNNING_BY_CAPSULE_SQL = [
 const SELECT_BY_ID_SQL = [
   "SELECT id, capsule_id, source_ids_json, started_at, finished_at, status,",
   "  total_documents, processed_documents, failed_documents, skipped_documents,",
-  "  last_error_code, last_error_message, resume_token",
+  "  last_error_code, last_error_message, resume_token, cancellation_requested",
   "FROM indexing_jobs",
   "WHERE id = :id",
 ].join(" ");
@@ -89,6 +89,7 @@ export interface IndexingJobRow {
   readonly last_error_code: string | null;
   readonly last_error_message: string | null;
   readonly resume_token: string | null;
+  readonly cancellation_requested: number;
 }
 
 export interface InsertJobInput {
@@ -161,6 +162,13 @@ export function selectRunningJobByCapsule(
 export function selectJobById(db: DatabaseSync, id: string): IndexingJobRow | undefined {
   const row = db.prepare(SELECT_BY_ID_SQL).get({ id });
   return row === undefined ? undefined : (row as unknown as IndexingJobRow);
+}
+
+export function isJobCancellationRequested(db: DatabaseSync, id: string): boolean {
+  const row = db
+    .prepare("SELECT cancellation_requested FROM indexing_jobs WHERE id = :id")
+    .get({ id }) as { readonly cancellation_requested: number } | undefined;
+  return row?.cancellation_requested === 1;
 }
 
 // ─── Row → IndexingJobRecord ──────────────────────────────────────────────────

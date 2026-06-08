@@ -43,6 +43,81 @@ function defaultProps(overrides: Partial<CapsuleActionsProps> = {}): CapsuleActi
 }
 
 // ---------------------------------------------------------------------------
+// Connect source
+// ---------------------------------------------------------------------------
+
+describe("CapsuleActions — connect source", () => {
+  it("connects a folder scope by default", async () => {
+    const user = userEvent.setup();
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    const onActionComplete = vi.fn();
+    render(
+      <CapsuleActions
+        {...defaultProps({ connectCapsuleSourceImpl, onActionComplete })}
+      />,
+    );
+
+    await user.type(screen.getByLabelText(/absolute folder path to connect/i), "/docs/manuals");
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    await waitFor(() => {
+      expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
+        kind: "folder",
+        rootPath: "/docs/manuals",
+        recursive: true,
+      });
+    });
+    expect(onActionComplete).toHaveBeenCalledOnce();
+  });
+
+  it("connects a repository scope", async () => {
+    const user = userEvent.setup();
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
+
+    await user.selectOptions(screen.getByLabelText(/source scope kind/i), "repository");
+    await user.type(screen.getByLabelText(/absolute repository path to connect/i), "/repo/app");
+    await user.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    await waitFor(() => {
+      expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
+        kind: "repository",
+        repositoryRoot: "/repo/app",
+      });
+    });
+  });
+
+  it("requires files input for files scopes and deduplicates file entries", async () => {
+    const user = userEvent.setup();
+    const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
+    render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
+
+    await user.selectOptions(screen.getByLabelText(/source scope kind/i), "files");
+    const connectButton = screen.getByRole("button", { name: /^connect$/i });
+    expect(connectButton).toBeDisabled();
+
+    await user.type(screen.getByLabelText(/absolute root path for the selected files/i), "/repo");
+    expect(connectButton).toBeDisabled();
+
+    await user.type(
+      screen.getByLabelText(/relative files to connect/i),
+      "src/app.ts{enter}README.md{enter}src/app.ts",
+    );
+    expect(connectButton).not.toBeDisabled();
+
+    await user.click(connectButton);
+
+    await waitFor(() => {
+      expect(connectCapsuleSourceImpl).toHaveBeenCalledWith(DEFAULT_ID, {
+        kind: "files",
+        rootPath: "/repo",
+        files: ["src/app.ts", "README.md"],
+      });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Modal open / close
 // ---------------------------------------------------------------------------
 

@@ -15,7 +15,10 @@
 //     owning chat (taskType=`qi-handoff`); the message content is a fixed, non-echoing
 //     descriptor — the envelope itself stays out of the message body.
 //   * If the chat-message ref is unknown → `404 QI_HANDOFF_UNKNOWN_CHAT_MESSAGE`.
-//   * No provider SDK imports. No outbound network call. No new runtime dependency.
+//   * No provider SDK imports. No new runtime dependency. A "design-tests" handoff additionally
+//     starts a model-routed QI run in the BACKGROUND from the chat's connected folder (through the
+//     Keiko Model Gateway + Harness, like any QI run) and links the run id back to the chat — this
+//     is the governed workflow handoff (Issue #281), not a parallel chat/agent/model channel.
 //   * Test Intelligence reference (TI) is acknowledged only by plain phrase; this file MUST
 //     NOT contain any reference to the prior external TI-namespace packages — enforced by
 //     `independenceGuard.test.ts` and the repo-wide `npm run check:qi-supply-chain` gate.
@@ -24,6 +27,7 @@
 // with sibling QI epic work (e.g. #280) — the dispatcher in `routes.ts` only needs to spread
 // the group.
 
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
@@ -35,6 +39,8 @@ import {
   type QiHandoffErrorBody,
 } from "./handoffErrors.js";
 import { containsForbiddenSecretShape } from "./connectorErrors.js";
+import { executeQiRun } from "./runExecution.js";
+import { qiRunRegistry } from "./runRegistry.js";
 
 // ─── Body reading ──────────────────────────────────────────────────────────────
 
@@ -248,17 +254,65 @@ const buildHandoffMessage = (
   resolved: ResolvedMessage,
   envelope: QualityIntelligence.QualityIntelligenceConversationCenterHandoff,
   now: () => number,
+  linkedRunId: string | undefined,
 ): NewChatMessage => ({
   chatId: resolved.chatId,
   role: "system",
   content: HANDOFF_CONTENT_BY_ACTION[envelope.promptedAction],
   timestamp: now(),
-  runId: envelope.runId,
+  runId: linkedRunId,
   workflowId: undefined,
   workflowStatus: undefined,
   shortResult: undefined,
   taskType: HANDOFF_TASK_TYPE,
 });
+
+// For a "design-tests" handoff, start a model-routed QI run in the BACKGROUND from the chat's
+// connected workspace folder. Fire-and-forget: the run registers with the in-flight registry (so it
+// surfaces in the run list) and persists to evidence on completion; the handoff returns the run id
+// immediately so the Conversation Center can link + poll it. The run goes through the Keiko Model
+// Gateway + Harness like any QI run — this is the governed workflow handoff (Issue #281), not a
+// parallel chat/agent/model path.
+const startHandoffRun = (deps: UiHandlerDeps, root: string): string => {
+  const runId = `qi-run-${randomUUID()}`;
+  const registeredAt = new Date().toISOString();
+  const controller = qiRunRegistry.register(runId, registeredAt);
+  const totals = { candidates: 0, findings: 0, exports: 0 };
+  void executeQiRun({
+    request: { sources: [{ kind: "workspace", label: "Conversation Center", path: root }] },
+    runId,
+    deps,
+    registeredAt,
+    signal: controller.signal,
+    onAccepted: () => undefined,
+    onEvent: (event: QualityIntelligence.QualityIntelligenceRunEvent) => {
+      if (event.payload.kind === "candidate:proposed") totals.candidates += 1;
+      if (event.payload.kind === "finding:recorded") totals.findings += 1;
+      qiRunRegistry.updateTotals(runId, totals);
+    },
+  })
+    .then((summary) => {
+      qiRunRegistry.complete(runId, summary.status);
+    })
+    .catch(() => {
+      qiRunRegistry.complete(runId, "failed");
+    });
+  return runId;
+};
+
+// Resolve the run id linked to a handoff: a "design-tests" handoff over a chat with a connected
+// folder starts a background run; otherwise it falls back to any run id the envelope already carried.
+const resolveHandoffRunId = (
+  deps: UiHandlerDeps,
+  envelope: QualityIntelligence.QualityIntelligenceConversationCenterHandoff,
+  chatId: string,
+): string | undefined => {
+  if (envelope.promptedAction !== "design-tests") return envelope.runId;
+  const chat = deps.store.findChatById(chatId);
+  const root = chat?.connectedScope?.root;
+  if (root !== undefined && root.length > 0) return startHandoffRun(deps, root);
+  return envelope.runId;
+};
 
 // ─── Handler ───────────────────────────────────────────────────────────────────
 
@@ -302,13 +356,16 @@ export const createHandleQiHandoff = (
       return errResult(404, "QI_HANDOFF_UNKNOWN_CHAT_MESSAGE");
     }
 
-    const persisted = deps.store.createMessage(buildHandoffMessage(resolved, envelope, now));
+    const linkedRunId = resolveHandoffRunId(deps, envelope, resolved.chatId);
+    const persisted = deps.store.createMessage(
+      buildHandoffMessage(resolved, envelope, now, linkedRunId),
+    );
 
     const body: QiHandoffSuccessBody = {
       handoffId: envelope.id,
       chatId: resolved.chatId,
       persistedMessageId: persisted.id,
-      ...(envelope.runId !== undefined ? { runId: envelope.runId } : {}),
+      ...(linkedRunId !== undefined ? { runId: linkedRunId } : {}),
     };
     return { status: 200, body };
   };

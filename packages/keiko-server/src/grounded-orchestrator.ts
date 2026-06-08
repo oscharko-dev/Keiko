@@ -54,13 +54,14 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { normalizeGroundedAnswerPayload, type GroundedAnswerPayload } from "./grounded-answer.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
 export interface GroundedAnswerer {
   // The seam the route uses: production supplies a Model Gateway-backed answerer, while tests can
   // keep deterministic answerers.
-  answer(question: string, pack: ConnectedContextPack): Promise<string>;
+  answer(question: string, pack: ConnectedContextPack): Promise<GroundedAnswerPayload>;
 }
 
 export interface OrchestratorInput {
@@ -618,9 +619,17 @@ export async function runGroundedExploration(
   const nowMs = deps.nowMs ?? Date.now;
   const start = nowMs();
   const { pack, plan } = await retrieveConnectedContextPack(input, deps);
-  const assistantContent = await deps.answerer.answer(input.query.text, pack);
+  const answer = normalizeGroundedAnswerPayload(await deps.answerer.answer(input.query.text, pack));
+  const groundedPack: ConnectedContextPack = {
+    ...pack,
+    usage: {
+      ...pack.usage,
+      modelInputTokens: answer.usage.promptTokens,
+      modelOutputTokens: answer.usage.completionTokens,
+    },
+  };
   const elapsedMs = Math.max(0, nowMs() - start);
-  return { pack, assistantContent, elapsedMs, plan };
+  return { pack: groundedPack, assistantContent: answer.content, elapsedMs, plan };
 }
 
 // Re-export DEFAULT_SEARCH_LIMITS for parity with #179 callers that import limits via the

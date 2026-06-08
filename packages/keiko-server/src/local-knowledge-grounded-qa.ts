@@ -5,6 +5,7 @@ import {
   createSqliteAuditSink,
   getCapsule,
   getCapsuleSet,
+  listCapsuleSources,
   openKnowledgeStore,
   readCitationExcerpt,
   resolveKnowledgeStorePath,
@@ -26,6 +27,7 @@ import type {
   KnowledgeCapsule,
   KnowledgeCapsuleId,
   KnowledgeSourceId,
+  RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
   requestOpenAIEmbedding,
@@ -60,6 +62,10 @@ export interface SelectedLocalKnowledgeScope {
   readonly scopeKind: "capsule" | "capsule-set";
   readonly scopeLabel: string;
 }
+
+export type LocalKnowledgeCitationSourceLookup = (
+  reference: RetrievalReference,
+) => string | undefined;
 
 function badRequest(message: string): RouteResult {
   return { status: 400, body: errorBody("BAD_REQUEST", message) };
@@ -229,8 +235,56 @@ export function renderCitationLabel(
   if (citation.sectionPath !== undefined && citation.sectionPath.length > 0) {
     parts.push(citation.sectionPath.join(" > "));
   }
-  parts.push(`chunk ${String(citation.chunkId)}`);
   return parts.join(" · ");
+}
+
+function sourceLookupKey(capsuleId: KnowledgeCapsuleId, sourceId: KnowledgeSourceId): string {
+  return `${String(capsuleId)}::${String(sourceId)}`;
+}
+
+function sourceLabel(
+  capsuleDisplayName: string | undefined,
+  sourceDisplayName: string | undefined,
+): string | undefined {
+  if (capsuleDisplayName === undefined) return sourceDisplayName;
+  if (sourceDisplayName === undefined) return capsuleDisplayName;
+  return `${capsuleDisplayName} / ${sourceDisplayName}`;
+}
+
+export function buildSelectedScopeSourceLookup(
+  store: KnowledgeStore,
+  selected: SelectedLocalKnowledgeScope,
+): LocalKnowledgeCitationSourceLookup {
+  const labels = new Map<string, string>();
+  const capsuleNames = new Map<string, string>();
+  for (const capsule of selected.capsules) {
+    capsuleNames.set(String(capsule.id), capsule.displayName);
+    for (const source of listCapsuleSources(store, capsule.id)) {
+      const label = sourceLabel(capsule.displayName, source.displayName);
+      if (label !== undefined) {
+        labels.set(sourceLookupKey(capsule.id, source.id), label);
+      }
+    }
+  }
+  return (reference: RetrievalReference): string | undefined => {
+    const label = labels.get(sourceLookupKey(reference.capsuleId, reference.citation.sourceId));
+    return label ?? capsuleNames.get(String(reference.capsuleId));
+  };
+}
+
+export function projectLocalKnowledgeCitation(
+  reference: RetrievalReference,
+  marker: string,
+  sourceLookup?: LocalKnowledgeCitationSourceLookup,
+): LocalKnowledgeEvidenceCitation {
+  const source = sourceLookup?.(reference);
+  return {
+    stableId: citationStableId(reference, marker),
+    marker,
+    label: renderCitationLabel(reference.citation),
+    score: reference.score,
+    ...(source !== undefined ? { source } : {}),
+  };
 }
 
 function buildReferenceLines(
@@ -517,33 +571,27 @@ export function enforcedNoEvidenceReason(
 export function buildLocalKnowledgeCitations(
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
   noEvidenceReason: string | undefined,
+  sourceLookup?: LocalKnowledgeCitationSourceLookup,
 ): readonly LocalKnowledgeEvidenceCitation[] {
   if (noEvidenceReason !== undefined) return [];
   // When the model emitted [n] markers, honour exactly what it cited.
   if (result.citations.length > 0) {
-    return result.citations.map((entry) => ({
-      stableId: citationStableId(entry.reference, entry.marker),
-      marker: entry.marker,
-      label: renderCitationLabel(entry.citation),
-      score: entry.reference.score,
-    }));
+    return result.citations.map((entry) =>
+      projectLocalKnowledgeCitation(entry.reference, entry.marker, sourceLookup),
+    );
   }
   // Rescue (#189): the answer is grounded in the retrieved references but the model emitted no
   // [n] markers (some models don't). Surface the references it was given — numbered in retrieval
   // order — instead of discarding a correct, evidence-backed answer.
   return result.references.slice(0, MAX_PROMPT_REFERENCES).map((reference, index) => {
     const marker = `[${String(index + 1)}]`;
-    return {
-      stableId: citationStableId(reference, marker),
-      marker,
-      label: renderCitationLabel(reference.citation),
-      score: reference.score,
-    };
+    return projectLocalKnowledgeCitation(reference, marker, sourceLookup);
   });
 }
 
 function buildLocalKnowledgeAnswer(
   chat: Chat,
+  store: KnowledgeStore,
   selected: SelectedLocalKnowledgeScope,
   persisted: readonly [ChatMessage, ChatMessage],
   result: Awaited<ReturnType<typeof runGroundedAnswer>>,
@@ -552,7 +600,11 @@ function buildLocalKnowledgeAnswer(
 ): LocalKnowledgeGroundedAnswer {
   const [user, assistant] = persisted;
   const noEvidenceReason = enforcedNoEvidenceReason(result);
-  const citations = buildLocalKnowledgeCitations(result, noEvidenceReason);
+  const citations = buildLocalKnowledgeCitations(
+    result,
+    noEvidenceReason,
+    buildSelectedScopeSourceLookup(store, selected),
+  );
   return {
     groundingKind: "local-knowledge",
     userMessageId: user.id,
@@ -653,9 +705,7 @@ async function runScopedGroundedAnswer(
   const elapsedMs = Date.now() - startedAt;
   const occurredAt = Date.now();
   emitRetrievalAudit(auditSink, selected, result, occurredAt);
-  if (result.references.length > 0) {
-    emitAnswerContextAudit(auditSink, result, occurredAt);
-  }
+  if (result.references.length > 0) emitAnswerContextAudit(auditSink, result, occurredAt);
   const noEvidenceReason = enforcedNoEvidenceReason(result);
   const assistantContent =
     noEvidenceReason === undefined
@@ -665,6 +715,7 @@ async function runScopedGroundedAnswer(
   const redactedAssistantContent = redactText(deps, assistantContent);
   const answer = buildLocalKnowledgeAnswer(
     chat,
+    env.store,
     selected,
     persistGroundedExchange(deps, chat.id, redactedUserContent, redactedAssistantContent),
     result,

@@ -60,6 +60,14 @@ const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
   /(^|[\s/])\.env(\.[A-Za-z0-9_-]+)?\b/i,
 ];
 
+const URL_CANDIDATE_RE = /\bhttps?:\/\/[^\s"'`<>]+/gi;
+const PROVIDER_CONTEXT_RE =
+  /\b(provider|gateway|base\s+url|base-url|api\s+endpoint|endpoint|openai-compatible)\b/i;
+const ISO_LOG_TIMESTAMP_RE = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z\b/;
+const LOG_SEVERITY_RE = /\b(trace|debug|info|warn(?:ing)?|error|fatal)\b/i;
+const STACK_TRACE_MARKER_RE = /\b(stack trace|traceback|exception stack)\b/i;
+const STACK_FRAME_RE = /\bat\s+[A-Za-z_$][\w.$<>]*(?:\s+\[[^\]]+\])?\([^)\n]*\)/g;
+
 function matchesAny(value: string, patterns: readonly RegExp[]): boolean {
   for (const pattern of patterns) {
     if (pattern.test(value)) {
@@ -67,6 +75,42 @@ function matchesAny(value: string, patterns: readonly RegExp[]): boolean {
     }
   }
   return false;
+}
+
+function looksLikeProviderBaseUrl(value: string): boolean {
+  for (const match of value.matchAll(URL_CANDIDATE_RE)) {
+    const raw = match[0];
+    const index = match.index;
+    let parsed: URL;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      continue;
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      continue;
+    }
+    const normalizedPath = parsed.pathname.replace(/\/+$/u, "");
+    const hasOpenAiBasePath =
+      normalizedPath === "/v1" ||
+      normalizedPath === "/openai/v1" ||
+      normalizedPath.endsWith("/openai/v1");
+    const snippet = value.slice(
+      Math.max(0, index - 48),
+      Math.min(value.length, index + raw.length + 24),
+    );
+    if (PROVIDER_CONTEXT_RE.test(snippet) || hasOpenAiBasePath) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function looksLikeRawLog(value: string): boolean {
+  const stackFrameCount = value.match(STACK_FRAME_RE)?.length ?? 0;
+  const hasSeverityWithTimestamp = LOG_SEVERITY_RE.test(value) && ISO_LOG_TIMESTAMP_RE.test(value);
+  const hasExplicitStackTrace = STACK_TRACE_MARKER_RE.test(value) && stackFrameCount >= 1;
+  return hasSeverityWithTimestamp || hasExplicitStackTrace || stackFrameCount >= 2;
 }
 
 // Returns the typed rejection class if `value` looks like a secret, credential-store path, or
@@ -82,6 +126,12 @@ export function scanForSecrets(
   }
   if (matchesAny(value, CREDENTIAL_PATH_PATTERNS)) {
     return "private-credential-path";
+  }
+  if (looksLikeProviderBaseUrl(value)) {
+    return "provider-base-url";
+  }
+  if (looksLikeRawLog(value)) {
+    return "raw-log-content";
   }
   if (matchesAny(value, customerIdentifierMatchers)) {
     return "customer-identifier";

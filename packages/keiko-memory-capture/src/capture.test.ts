@@ -71,14 +71,46 @@ describe("extractCandidatesFromUserText", () => {
     expect(result[0].proposal.type).toBe("correction");
   });
 
+  it("emits a user-scoped identity candidate for a natural German self-introduction", () => {
+    const result = extractCandidatesFromUserText("Hallo Keiko, ich bin Paul.", ctx());
+    expect(result[0]?.kind).toBe("candidate");
+    if (result[0]?.kind !== "candidate") return;
+    expect(result[0].proposal.type).toBe("semantic-fact");
+    expect(result[0].proposal.body).toBe("The user's name is Paul.");
+    expect(result[0].proposal.scope).toEqual({ kind: "user", userId: "u-1" });
+    expect(result[0].proposal.provenance.sourceKind).toBe("system-default");
+    expect(result[0].proposal.provenance.captureRationale).toBe(
+      "Automatically inferred from conversation (identity statement)",
+    );
+  });
+
+  it("captures strong name phrases even without title casing", () => {
+    const result = extractCandidatesFromUserText("my name is paul", ctx());
+    expect(result[0]?.kind).toBe("candidate");
+    if (result[0]?.kind !== "candidate") return;
+    expect(result[0].proposal.body).toBe("The user's name is paul.");
+  });
+
   it("returns [] when no intent matches", () => {
     expect(extractCandidatesFromUserText("what is the weather", ctx())).toEqual([]);
+  });
+
+  it("does not over-capture non-identity 'I am ...' statements", () => {
+    expect(extractCandidatesFromUserText("I am working on the build", ctx())).toEqual([]);
   });
 
   it("rejects with credential-shape for credential bodies", () => {
     const shape = "AKIA" + "ABCDEFGHIJKLMNOP";
     const result = extractCandidatesFromUserText(`remember that ${shape}`, ctx());
     expect(result[0]).toEqual({ kind: "rejected", reason: "credential-shape" });
+  });
+
+  it("rejects provider base URLs before creating a candidate", () => {
+    const result = extractCandidatesFromUserText(
+      "remember that our provider base URL is https://llm.internal.example.com/v1",
+      ctx(),
+    );
+    expect(result[0]).toEqual({ kind: "rejected", reason: "provider-base-url" });
   });
 
   it("priority: forget wins over remember when both could match", () => {
@@ -125,6 +157,19 @@ describe("extractCandidatesFromWorkflowOutcome", () => {
     };
     expect(extractCandidatesFromWorkflowOutcome(outcome, ctx())).toEqual([
       { kind: "rejected", reason: "exceeds-length-limit" },
+    ]);
+  });
+
+  it("rejects raw log workflow reports before they become candidates", () => {
+    const outcome: WorkflowOutcomeInput = {
+      runId: "wr-1" as WorkflowRunId,
+      outcomeKind: "success",
+      structuredReport:
+        "ERROR 2026-06-08T06:00:00Z worker failed at module X with stack trace line 1 at foo() line 2 at bar()",
+      capturedAt: 0,
+    };
+    expect(extractCandidatesFromWorkflowOutcome(outcome, ctx())).toEqual([
+      { kind: "rejected", reason: "raw-log-content" },
     ]);
   });
 });

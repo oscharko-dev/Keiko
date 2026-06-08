@@ -10,6 +10,7 @@ import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { ContextPack, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { validatePatch, type PatchValidation } from "@oscharko-dev/keiko-tools";
+import { governedPatchRejectionCode } from "../governed-handoff.js";
 import { isTestPath } from "../unit-tests/conventions.js";
 import { isSensitivePath } from "./guard.js";
 import { parseBugModelOutputCandidates } from "./parse.js";
@@ -148,6 +149,7 @@ function semanticGuard(
   workspace: WorkspaceInfo,
   validation: PatchValidation,
   requiresSourcePatch: boolean,
+  governedHandoff: BugRunState["deps"]["workflowHandoff"],
 ): string | undefined {
   if (validation.files.length === 0) {
     return "malformed";
@@ -155,6 +157,10 @@ function semanticGuard(
   const scopeCode = scopeGuard(validation);
   if (scopeCode !== undefined) {
     return scopeCode;
+  }
+  const governedCode = governedPatchRejectionCode(governedHandoff, validation);
+  if (governedCode !== undefined) {
+    return governedCode;
   }
   return requiresSourcePatch && validation.files.every((file) => isTestPath(workspace, file.path))
     ? "test-only"
@@ -176,9 +182,10 @@ function classifyValidated(
   parsed: ParsedBugOutput,
   validation: PatchValidation,
   requiresSourcePatch: boolean,
+  governedHandoff: BugRunState["deps"]["workflowHandoff"],
 ): AttemptResult {
   const guardCode = validation.ok
-    ? semanticGuard(workspace, validation, requiresSourcePatch)
+    ? semanticGuard(workspace, validation, requiresSourcePatch, governedHandoff)
     : validation.reasons[0]?.code;
   if (validation.ok && guardCode === undefined) {
     const accepted: AcceptedBugPatch = {
@@ -217,6 +224,7 @@ function validateCandidate(
     { ...parsed, diff: validation.normalizedDiff ?? parsed.diff },
     validation,
     requiresSourcePatch,
+    state.deps.workflowHandoff,
   );
   return { result, validation };
 }

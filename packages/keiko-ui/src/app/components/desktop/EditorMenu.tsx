@@ -84,6 +84,8 @@ export function EditorMenu({ project }: EditorMenuProps): ReactNode {
   const [open, setOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string>(readStoredId);
   const current = findEditor(selectedId);
+  const triggerLabel = `Open in ${current.name}`;
+  const accessibleLabel = `Open ${project} in ${current.name}`;
 
   useEffect(() => {
     try {
@@ -104,11 +106,13 @@ export function EditorMenu({ project }: EditorMenuProps): ReactNode {
         type="button"
         className="edm-trigger"
         onClick={() => setOpen((value) => !value)}
-        title={`Open ${project} in ${current.name}`}
+        title={accessibleLabel}
+        aria-label={accessibleLabel}
         aria-haspopup="menu"
         aria-expanded={open}
       >
         <EditorTile ed={current} size={20} />
+        <span className="edm-trigger-label">{triggerLabel}</span>
         <Icons.chevron size={13} style={{ color: "var(--fg-faint)" }} />
       </button>
       {open ? (

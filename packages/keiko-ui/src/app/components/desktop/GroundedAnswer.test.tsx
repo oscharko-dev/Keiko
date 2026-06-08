@@ -140,8 +140,9 @@ describe("GroundedAnswer", () => {
         {
           stableId: "lk-1",
           marker: "[1]",
-          label: "alpha.md · section 1 · chunk ch-1",
+          label: "alpha.md · section 1",
           score: 0.91,
+          source: "Alpha Capsule / Product Manual",
         },
       ],
       uncertainty: [],
@@ -162,7 +163,9 @@ describe("GroundedAnswer", () => {
     };
     render(<GroundedAnswer answer={a} busy={false} />);
     expect(screen.getByText("Knowledge scope: Alpha Capsule")).toBeInTheDocument();
-    expect(screen.getByText(/\[1\] alpha\.md/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/\[1\] Alpha Capsule \/ Product Manual · alpha\.md · section 1/),
+    ).toBeInTheDocument();
     expect(screen.getByText("1 / 10 references")).toBeInTheDocument();
   });
 
@@ -177,9 +180,9 @@ describe("GroundedAnswer", () => {
         {
           stableId: "hk-1",
           marker: "[1]",
-          label: "manual.pdf · p.287 · chunk ch-9",
+          label: "manual.pdf · p.287",
           score: 0.88,
-          source: "Quasar Manual",
+          source: "Quasar Manual / Product Docs",
         },
       ],
       uncertainty: [],
@@ -206,7 +209,7 @@ describe("GroundedAnswer", () => {
     render(<GroundedAnswer answer={a} busy={false} />);
     expect(screen.getByText(/Merged from the marketing folder/)).toBeInTheDocument();
     expect(screen.getByText(/src\/foo\.ts/)).toBeInTheDocument();
-    expect(screen.getByText(/manual\.pdf/)).toBeInTheDocument();
+    expect(screen.getByText(/\[1\] Quasar Manual \/ Product Docs · manual\.pdf · p\.287/)).toBeInTheDocument();
     expect(screen.getByText("Hybrid: 2 folder sources + 1 connector source")).toBeInTheDocument();
     expect(screen.getByText("Knowledge scope: Quasar Manual")).toBeInTheDocument();
   });

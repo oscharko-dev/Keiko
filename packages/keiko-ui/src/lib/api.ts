@@ -21,6 +21,8 @@ import type {
   EvidenceManifest,
   GroundedAnswer,
   GroundedAskRequest,
+  GroundedWorkflowHandoffRequest,
+  GroundedWorkflowHandoffResponse,
   FilesDirectoryListing,
   FilesPreviewResponse,
   FilesTreeResponse,
@@ -201,6 +203,15 @@ export async function startChatRun(body: StartChatRunInput): Promise<{
   messages: MessagesResponse["messages"];
 }> {
   return fetchJson("/api/chats/runs", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function startGroundedWorkflowHandoff(
+  body: GroundedWorkflowHandoffRequest,
+): Promise<GroundedWorkflowHandoffResponse> {
+  return fetchJson("/api/chats/messages/grounded/handoff", {
     method: "POST",
     body: JSON.stringify(body),
   });

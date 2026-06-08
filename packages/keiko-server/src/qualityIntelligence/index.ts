@@ -43,3 +43,20 @@ export {
   type QiHandoffErrorBody,
   type QiHandoffErrorCode,
 } from "./handoffErrors.js";
+// Issue #273/#280 — QI run execution (start + cancel) route group + in-flight registry.
+export { QI_RUN_EXECUTION_ROUTE_GROUP, handleStartQiRun, handleCancelQiRun } from "./runRoutes.js";
+export { qiRunRegistry, QiRunRegistry } from "./runRegistry.js";
+export { executeQiRun, QiIngestionError, QiGenerationError } from "./runExecution.js";
+// Issue #282 — review-state companion store (read + mutation seams).
+export {
+  applyReviewDecision,
+  loadRunReviewState,
+  runReviewStateOf,
+  candidateReviewStateOf,
+  type QiReviewAction,
+  type QiReviewStateArtifact,
+} from "./reviewStore.js";
+// Issue #282 — review-action route group.
+export { QI_REVIEW_ROUTE_GROUP, handleQiReview } from "./reviewRoutes.js";
+// Issue #283 — export route group (local serialise + TMS dry-run preview).
+export { QI_EXPORT_ROUTE_GROUP, handleQiExport } from "./exportRoutes.js";

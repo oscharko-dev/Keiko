@@ -6,6 +6,7 @@
 // registry is created via `createRunRegistry` and hung off the handler deps, never a module global,
 // so each server instance (and each test) owns an isolated registry with no cross-talk.
 
+import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import type { QueueEventSink } from "./sink.js";
 
 export type RunStatus = "running" | "completed" | "cancelled" | "failed";
@@ -18,6 +19,7 @@ export interface AppliableSnapshot {
   readonly kind: "unit-tests" | "bug-investigation";
   readonly payload: unknown;
   readonly limits: Record<string, unknown> | undefined;
+  readonly governedHandoff?: WorkflowHandoffRequest | undefined;
 }
 
 export interface RunRecord {

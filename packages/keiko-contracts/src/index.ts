@@ -624,6 +624,17 @@ export type {
   QualityIntelligenceUiRunListResponse,
   QualityIntelligenceUiRunSummary,
   QualityIntelligenceUiRunTotals,
+  QualityIntelligenceUiCandidate,
+  QualityIntelligenceInlineSource,
+  QualityIntelligenceInlineSourceKind,
+  QualityIntelligenceRequirementsSource,
+  QualityIntelligenceWorkspaceSource,
+  QualityIntelligenceStartRunRequest,
+  QualityIntelligenceRunStreamAccepted,
+  QualityIntelligenceRunStreamEvent,
+  QualityIntelligenceRunStreamDone,
+  QualityIntelligenceRunStreamError,
+  QualityIntelligenceRunStreamMessage,
 } from "./qualityIntelligence/bffWire.js";
 // Issue #283 added flat export-adapter consumers.
 export type {
@@ -631,6 +642,10 @@ export type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceExportBundleEntry,
   QualityIntelligenceTestCaseCandidate,
+  QualityIntelligenceReviewState,
+  QualityIntelligencePriority,
+  QualityIntelligenceRiskClass,
+  QualityIntelligenceTestCaseStatus,
 } from "./qualityIntelligence/index.js";
 export {
   assertExportBundleInvariant,

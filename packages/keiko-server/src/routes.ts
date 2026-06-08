@@ -65,6 +65,7 @@ import {
 } from "./memory-consolidation-handlers.js";
 import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
 import { handleGroundedAsk } from "./grounded-qa.js";
+import { handleGroundedWorkflowHandoff } from "./grounded-handoff.js";
 import { handleGatewaySetup } from "./gateway-setup.js";
 import {
   handleCreateTerminalExecution,
@@ -119,6 +120,9 @@ import {
   handleListQiRuns,
   handleGetQiRun,
   QI_HANDOFF_ROUTE_GROUP,
+  QI_RUN_EXECUTION_ROUTE_GROUP,
+  QI_REVIEW_ROUTE_GROUP,
+  QI_EXPORT_ROUTE_GROUP,
 } from "./qualityIntelligence/index.js";
 
 export interface ApiError {
@@ -200,6 +204,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
   // Issue #185 — grounded repository-aware Q&A. Composes #179-#183 behind the chat-scope binding.
   { method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },
+  {
+    method: "POST",
+    pattern: "/api/chats/messages/grounded/handoff",
+    handler: handleGroundedWorkflowHandoff,
+  },
   // Desktop canvas V1 — real chat against the configured gateway model without new agent scope.
   { method: "POST", pattern: "/api/desktop/chats", handler: handleCreateDesktopChat },
   { method: "POST", pattern: "/api/desktop/chat", handler: handleSendDesktopChat },
@@ -386,6 +395,14 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // keiko-evidence UNCHANGED (ADR-0023 D8).
   { method: "GET", pattern: "/api/quality-intelligence/runs", handler: handleListQiRuns },
   { method: "GET", pattern: "/api/quality-intelligence/runs/:id", handler: handleGetQiRun },
+  // Issue #273/#280 (Epic #270) — Quality Intelligence run execution: start (SSE progress stream)
+  // + cancel. The model-routed test-design workflow runs through the Keiko Model Gateway and
+  // persists the manifest + candidate artifact through Keiko Evidence.
+  ...QI_RUN_EXECUTION_ROUTE_GROUP,
+  // Issue #282/#283 (Epic #270) — Quality Intelligence review governance + export. Literal-suffix
+  // POST routes (/runs/:id/review, /runs/:id/export) disambiguate against /runs/:id/cancel.
+  ...QI_REVIEW_ROUTE_GROUP,
+  ...QI_EXPORT_ROUTE_GROUP,
   // Issue #539 (Epic #532) — relationship engine routes. The api-contract.md §2 ordering
   // is preserved; literal-suffix paths (validate, impact, health, events) come BEFORE the
   // `:id`-templated routes so matchRoute returns the literal handler instead of binding

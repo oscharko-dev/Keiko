@@ -41,6 +41,7 @@ function RailButton({
       data-active={active ? "true" : "false"}
       data-side="left"
       aria-label={tool.label}
+      aria-pressed={active}
       title={tool.label}
       onClick={onClick}
     >
@@ -111,17 +112,19 @@ export function LeftRail({
         >
           <Icons.brain size={19} />
         </Link>
-        {/* Issue #280 (Epic #270) — Quality Intelligence is a page route, not a window tool */}
-        <Link
-          href="/quality-intelligence"
+        {/* Epic #270 — Quality Intelligence opens as a singleton Workspace window (not a page route). */}
+        <button
+          type="button"
           className="rail-btn"
-          data-active="false"
           data-side="left"
+          data-active={openTools.has("quality") ? "true" : "false"}
           aria-label="Quality Intelligence"
+          aria-pressed={openTools.has("quality")}
           title="Quality Intelligence"
+          onClick={() => onTool("quality")}
         >
-          <Icons.review size={19} />
-        </Link>
+          <Icons.check size={19} />
+        </button>
         {/* Issue #189 — Local Knowledge is a page route, not a window tool */}
         <Link
           href="/local-knowledge"
@@ -151,6 +154,7 @@ export function LeftRail({
         data-side="left"
         data-active={openTools.has("settings") ? "true" : "false"}
         aria-label="Settings"
+        aria-pressed={openTools.has("settings")}
         title="Settings"
         onClick={() => onTool("settings")}
       >

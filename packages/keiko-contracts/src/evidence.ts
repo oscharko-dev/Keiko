@@ -273,6 +273,17 @@ export interface EvidenceConnectedContextAudit {
   };
 }
 
+export interface EvidenceGovernedWorkflowHandoff {
+  readonly sourceGroundedRunId: string;
+  readonly contextPackStableIdHash: string;
+  readonly workflowKind: string;
+  readonly editablePathCount: number;
+  readonly readOnlyPathCount: number;
+  readonly evidenceAtomCount: number;
+  readonly expectedChecks: readonly string[];
+  readonly approvalTokenHash: string;
+}
+
 export interface EvidenceManifest {
   readonly evidenceSchemaVersion: "1";
   readonly run: EvidenceRunIdentity;
@@ -290,6 +301,7 @@ export interface EvidenceManifest {
   readonly reasoning?: readonly EvidenceReasoningEntry[] | undefined;
   readonly browser?: EvidenceBrowserCapture | undefined;
   readonly connectedContext?: EvidenceConnectedContextAudit | undefined;
+  readonly governedHandoff?: EvidenceGovernedWorkflowHandoff | undefined;
 }
 
 // ─── Redaction config (D3) ──────────────────────────────────────────────────────

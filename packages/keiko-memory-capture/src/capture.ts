@@ -4,19 +4,19 @@
 // deterministic function of `(text, context, policy)`.
 //
 // Pre-flight order:
-//   1. Trim and reject empty input → `empty-content`.
-//   2. Length cap → `exceeds-length-limit`. The cap is applied BEFORE secret scanning so we do
+//   1. Trim and reject empty input -> `empty-content`.
+//   2. Length cap -> `exceeds-length-limit`. The cap is applied BEFORE secret scanning so we do
 //      not run the (cheap but unbounded) regex sweep on adversarially-large input.
 //   3. Restricted-default short-circuit: if the caller pinned the policy default to
-//      `restricted` the request is rejected directly — applyPolicy throws on this combination,
+//      `restricted` the request is rejected directly - applyPolicy throws on this combination,
 //      so we catch it explicitly upstream and emit a typed reason instead.
 //
 // Extractor priority:
-//   forget > update > correction > remember. The most action-bearing intent wins so a phrase
-//   like "forget about X" is never mis-extracted as a "remember" candidate by a permissive
-//   regex.
+//   forget > update > correction > remember > ambient identity. The most action-bearing intent
+//   wins, and imperative remember/correction paths stay ahead of the narrower ambient fallback.
 
 import { MEMORY_BODY_MAX_CHARS_DEFAULT } from "./_constants.js";
+import { tryExtractAmbientIdentity } from "./intent-ambient.js";
 import {
   tryExtractCorrection,
   tryExtractForget,
@@ -37,13 +37,14 @@ type Extractor = (
   policy: CapturePolicyOptions,
 ) => CaptureOutcome | null;
 
-// Priority order is intentional: forget > update > correction > remember. The most
-// action-bearing intent wins so "forget about X" is never mis-extracted as a remember.
+// Priority order is intentional: forget > update > correction > remember > ambient identity.
+// The most action-bearing intent wins so "forget about X" is never mis-extracted as a remember.
 const EXTRACTORS: readonly Extractor[] = [
   tryExtractForget,
   tryExtractUpdate,
   tryExtractCorrection,
   tryExtractRemember,
+  tryExtractAmbientIdentity,
 ];
 
 // Pre-flight guard: returns a rejection outcome when the input is empty or oversize, otherwise

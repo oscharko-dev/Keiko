@@ -45,6 +45,7 @@ import {
   type OrchestratorInput,
   type OrchestratorOutput,
 } from "./grounded-orchestrator.js";
+import type { GroundedAnswerResult } from "./grounded-answer.js";
 import { microIndexForGroundedScope } from "./grounded-context-index.js";
 import { handleLocalKnowledgeGroundedAsk } from "./local-knowledge-grounded-qa.js";
 import {
@@ -63,6 +64,7 @@ import {
   type HybridAnswerer,
 } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
+import { rememberGroundedTurn } from "./grounded-turn-registry.js";
 
 // ─── Body parsing (mirrors store-handlers' bounded reader) ────────────────────
 
@@ -415,7 +417,7 @@ function createGatewayAnswerer(
   signal: AbortSignal,
 ): GroundedAnswerer {
   return {
-    answer: async (question, pack): Promise<string> => {
+    answer: async (question, pack): Promise<GroundedAnswerResult> => {
       ensureNotCancelled(signal);
       const response = await model.call(
         {
@@ -426,7 +428,13 @@ function createGatewayAnswerer(
         signal,
       );
       const content = response.content.trim();
-      return content.length > 0 ? content : "The model returned an empty response.";
+      return {
+        content: content.length > 0 ? content : "The model returned an empty response.",
+        usage: {
+          promptTokens: response.usage.promptTokens,
+          completionTokens: response.usage.completionTokens,
+        },
+      };
     },
   };
 }
@@ -627,6 +635,13 @@ async function runAsk(workerCtx: AskWorkerCtx): Promise<RouteResult> {
     elapsedMs: output.elapsedMs,
     contextPack,
   };
+  rememberGroundedTurn({
+    assistantMessageId: assistantMessage.id,
+    chatId: chat.id,
+    workspaceRoot: output.pack.scope.workspaceRoot,
+    evidenceRunId,
+    packs: [output.pack],
+  });
   return { status: 200, body: answer };
 }
 

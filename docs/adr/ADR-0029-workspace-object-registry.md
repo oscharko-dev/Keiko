@@ -6,7 +6,7 @@ Accepted (Epic #518, 2026-06-06). Operationalizes the object registry contract r
 
 ## Context
 
-The existing `WindowsRegistry.ts` already lists 19 typed window types and exposes `registerWindowRender(type, render)` as the extension contract bound in `widgets/index.tsx`. The [product boundary issue](../workspace/518-product-boundaries.md) defined per-object lifecycle, trust boundary, authority requirement, and persistence expectation. This ADR formalizes those fields as a sidecar metadata table (`WIN_META`) and adds a metadata validator.
+The existing `WindowsRegistry.ts` already lists 20 typed window types and exposes `registerWindowRender(type, render)` as the extension contract bound in `widgets/index.tsx`. The [product boundary issue](../workspace/518-product-boundaries.md) defined per-object lifecycle, trust boundary, authority requirement, and persistence expectation. This ADR formalizes those fields as a sidecar metadata table (`WIN_META`) and adds a metadata validator.
 
 ## Decision
 

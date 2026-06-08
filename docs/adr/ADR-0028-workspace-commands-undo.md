@@ -82,17 +82,19 @@ The `useKeyboardShortcuts` hook wires the minimum shortcut set declared in the [
 The undo stack stores typed `Action` records declared in `keiko-contracts`:
 
 ```
+// Rect = WorkspaceUiRect; View = WorkspaceUiView;
+// SelectionState = WorkspaceUiSelectionState; WindowSnapshot = WorkspaceUiWindowSnapshot
 type Action =
-  | { kind: "ui.window.move"; windowId: string; before: Rect; after: Rect }
-  | { kind: "ui.window.resize"; windowId: string; before: Rect; after: Rect }
+  | { kind: "ui.window.move"; windowId: string; before: WorkspaceUiRect; after: WorkspaceUiRect }
+  | { kind: "ui.window.resize"; windowId: string; before: WorkspaceUiRect; after: WorkspaceUiRect }
   | { kind: "ui.window.zorder"; windowId: string; before: number; after: number }
-  | { kind: "ui.window.close"; windowId: string; windowSnapshot: WindowSnapshot }
-  | { kind: "ui.window.open"; windowId: string; windowSnapshot: WindowSnapshot }
-  | { kind: "ui.workspace.pan"; before: View; after: View }
-  | { kind: "ui.workspace.zoom"; before: View; after: View }
-  | { kind: "ui.workspace.fit"; before: View; after: View }
+  | { kind: "ui.window.close"; windowId: string; windowSnapshot: WorkspaceUiWindowSnapshot }
+  | { kind: "ui.window.open"; windowId: string; windowSnapshot: WorkspaceUiWindowSnapshot }
+  | { kind: "ui.workspace.pan"; before: WorkspaceUiView; after: WorkspaceUiView }
+  | { kind: "ui.workspace.zoom"; before: WorkspaceUiView; after: WorkspaceUiView }
+  | { kind: "ui.workspace.fit"; before: WorkspaceUiView; after: WorkspaceUiView }
   | { kind: "ui.panel.toggle"; panel: string; before: boolean; after: boolean }
-  | { kind: "ui.selection.change"; before: SelectionState; after: SelectionState }
+  | { kind: "ui.selection.change"; before: WorkspaceUiSelectionState; after: WorkspaceUiSelectionState }
   | { kind: "ui.tab.switch"; before: string; after: string };
 ```
 

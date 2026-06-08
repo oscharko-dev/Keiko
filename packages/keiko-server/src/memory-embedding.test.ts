@@ -1,6 +1,6 @@
 // #204 — memory embedding boundary tests.
 //
-// Covers: model selection (the /embed/i re-check that rejects a chat-model fallback), embed-on-
+// Covers: capability-aware model selection, embed-on-
 // capture storage, the graceful no-model path, the swallow-on-failure contract, and the pure
 // cosine helper. The gateway is driven through an injected fake adapter (no network).
 
@@ -148,10 +148,36 @@ describe("selectMemoryEmbeddingModelId (#204)", () => {
     expect(selectMemoryEmbeddingModelId(gatewayConfig(EMBEDDING_MODEL))).toBe(EMBEDDING_MODEL);
   });
 
-  it("returns undefined when the only model is a chat model (no /embed/ fallback)", () => {
-    // selectEmbeddingModelId would fall back to providers[0] (the chat model). The memory
-    // re-check MUST reject it so a chat model is never used to embed.
+  it("returns undefined when the only model is a chat model", () => {
     expect(selectMemoryEmbeddingModelId(gatewayConfig(CHAT_MODEL))).toBeUndefined();
+  });
+
+  it("accepts an explicit embedding capability even when the model id is not embed-shaped", () => {
+    const modelId = "gateway-vector-01";
+    expect(
+      selectMemoryEmbeddingModelId({
+        ...gatewayConfig(modelId),
+        capabilities: [
+          {
+            id: modelId,
+            kind: "embedding",
+            contextWindow: 0,
+            maxOutputTokens: 0,
+            toolCalling: false,
+            structuredOutput: false,
+            streaming: false,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "runtime-configured",
+            preferredUseCases: ["Tests"],
+            knownLimitations: ["None"],
+          },
+        ],
+      }),
+    ).toBe(modelId);
   });
 
   it("returns undefined when no gateway config is present", () => {

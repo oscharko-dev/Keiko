@@ -1,0 +1,106 @@
+// Epic #270 — QiRunCard tests. The card fetches a run's detail by id, renders the summary + the
+// generated test cases, and routes per-candidate review decisions through the review seam.
+
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { QiRunCard } from "./QiRunCard";
+import type {
+  QualityIntelligenceUiRunDetail,
+  QualityIntelligenceUiCandidate,
+} from "@oscharko-dev/keiko-contracts";
+
+function makeCandidate(id: string, title: string): QualityIntelligenceUiCandidate {
+  return {
+    id,
+    title,
+    preconditions: ["User is logged in"],
+    steps: ["Do the thing"],
+    expectedResults: ["It worked"],
+    priority: "P2",
+    riskClass: "regression",
+    tags: ["smoke"],
+    status: "proposed",
+    reviewState: "open",
+    derivedFromAtomIds: [],
+  };
+}
+
+function makeDetail(
+  runId: string,
+  candidates: readonly QualityIntelligenceUiCandidate[],
+): QualityIntelligenceUiRunDetail {
+  return {
+    id: runId,
+    status: "succeeded",
+    requestedAt: "2026-06-01T10:00:00.000Z",
+    completedAt: "2026-06-01T10:01:00.000Z",
+    totals: { candidates: candidates.length, findings: 0, exports: 0 },
+    findingRefs: [],
+    candidateIds: candidates.map((c) => c.id),
+    candidates,
+    evidenceRefs: [],
+    reviewState: "open",
+    manifestSchemaVersion: 1,
+  };
+}
+
+const fetchOk = (
+  detail: QualityIntelligenceUiRunDetail,
+): typeof import("@/lib/quality-intelligence-api").fetchQiRunDetail =>
+  vi
+    .fn()
+    .mockResolvedValue(
+      detail,
+    ) as unknown as typeof import("@/lib/quality-intelligence-api").fetchQiRunDetail;
+
+describe("QiRunCard", () => {
+  it("fetches and renders the run summary + test cases for the given runId", async () => {
+    const detail = makeDetail("qi-run-aaaa1111", [
+      makeCandidate("tc-1", "Successful login"),
+      makeCandidate("tc-2", "Rejected login"),
+    ]);
+    render(<QiRunCard runId="qi-run-aaaa1111" fetchDetailImpl={fetchOk(detail)} />);
+    expect(await screen.findByText("Successful login")).toBeInTheDocument();
+    expect(screen.getByText("Rejected login")).toBeInTheDocument();
+  });
+
+  it("requests detail for the runId passed in", async () => {
+    const impl = fetchOk(makeDetail("qi-run-zzzz9999", []));
+    render(<QiRunCard runId="qi-run-zzzz9999" fetchDetailImpl={impl} />);
+    await waitFor(() => {
+      expect(impl).toHaveBeenCalledWith("qi-run-zzzz9999");
+    });
+  });
+
+  it("routes an Approve decision through the review seam and reloads", async () => {
+    const user = userEvent.setup();
+    const detail = makeDetail("qi-run-aaaa1111", [makeCandidate("tc-1", "Successful login")]);
+    const fetchImpl = fetchOk(detail);
+    const reviewImpl = vi.fn().mockResolvedValue({
+      runState: "open",
+      candidateStates: { "tc-1": "approved" },
+      auditCount: 1,
+    }) as unknown as typeof import("@/lib/quality-intelligence-api").reviewQiRun;
+
+    render(
+      <QiRunCard runId="qi-run-aaaa1111" fetchDetailImpl={fetchImpl} reviewImpl={reviewImpl} />,
+    );
+    await user.click(await screen.findByRole("button", { name: /approve/i }));
+    await waitFor(() => {
+      expect(reviewImpl).toHaveBeenCalledWith("qi-run-aaaa1111", "approve", "tc-1");
+    });
+    // Detail is reloaded after the decision (initial load + post-review reload).
+    expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("surfaces a retryable error when the detail fetch fails", async () => {
+    const failing = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("nope"),
+      ) as unknown as typeof import("@/lib/quality-intelligence-api").fetchQiRunDetail;
+    render(<QiRunCard runId="qi-run-aaaa1111" fetchDetailImpl={failing} />);
+    expect(await screen.findByTestId("qi-error-state")).toBeInTheDocument();
+  });
+});

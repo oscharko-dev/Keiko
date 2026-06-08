@@ -95,6 +95,7 @@ export function buildWorkflowManifest(
   events: readonly WorkflowEventLike[],
   report: unknown,
   costClassResolver?: (modelId: string) => CostClass | "unknown",
+  options: { readonly governedHandoff?: EvidenceManifest["governedHandoff"] } = {},
 ): EvidenceManifest {
   return {
     evidenceSchemaVersion: EVIDENCE_SCHEMA_VERSION,
@@ -122,6 +123,9 @@ export function buildWorkflowManifest(
     verification: verificationOf(report),
     patch: patchOf(report),
     failure: undefined,
+    ...(options.governedHandoff === undefined
+      ? {}
+      : { governedHandoff: options.governedHandoff }),
   };
 }
 
@@ -147,8 +151,15 @@ export function persistWorkflowEvidence(
   report: unknown,
   events: readonly WorkflowEventLike[],
   ctx: EvidencePersistContext,
+  options: { readonly governedHandoff?: EvidenceManifest["governedHandoff"] } = {},
 ): EvidenceReport {
-  const manifest = buildWorkflowManifest(identity, events, report, ctx.costClassResolver);
+  const manifest = buildWorkflowManifest(
+    identity,
+    events,
+    report,
+    ctx.costClassResolver,
+    options,
+  );
   const redactor = createAuditRedactor({ additionalSecrets: ctx.additionalSecrets ?? [] }, ctx.env);
   const redacted = deepRedactStrings(manifest, redactor) as EvidenceManifest;
   const location = ctx.store.put(redacted.run.runId, JSON.stringify(redacted));

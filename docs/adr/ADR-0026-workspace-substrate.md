@@ -11,7 +11,7 @@ Epic #518 asked for a "governed workspace foundation" and named optional **indep
 - A workspace editor (`useWorkspace` hook owning windows, focus, z-ordering, pan, zoom, connections, and the `WorkspaceApi` surface).
 - A DOM-based workspace renderer (`Workspace.tsx`, `WindowFrame.tsx`, `WorkspaceShader.tsx`).
 - A typed world-coordinate camera record (`View { zoom, x, y }`).
-- A windows registry with 19 first-class object types and an extension contract (`WindowsRegistry.ts`, `registerWindowRender`).
+- A windows registry with 20 first-class object types and an extension contract (`WindowsRegistry.ts`, `registerWindowRender`). (20 since Epic #189 added the `connector` type; the substrate decision is unaffected.)
 - A graph rendering surface for capsules (`app/local-knowledge/connector-graph.tsx`) and a workspace-level connections surface (`windows/ConnectionsLayer.tsx`).
 
 The [reference analysis](../workspace/518-reference-analysis.md) confirmed that these surfaces already satisfy the architectural concepts that tldraw, Excalidraw, AFFiNE, and React Flow expose. Building a parallel canvas or graph substrate would create a duplicate subsystem and violate the epic's reuse gate.

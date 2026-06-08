@@ -10,9 +10,12 @@ import {
   CommandCancelledError,
   renderDryRun,
   type PatchApplyResult,
+  type WorkspaceWriter,
 } from "@oscharko-dev/keiko-tools";
+import { nodeWorkspaceWriter } from "@oscharko-dev/keiko-tools/internal/writer";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { createScopedWriter } from "../governed-handoff.js";
 import { assembleReport } from "./report.js";
 import { runWorkflowVerification } from "./verify-stage.js";
 import {
@@ -113,6 +116,45 @@ export function failedReport(state: RunState, error: unknown): UnitTestWorkflowR
   });
 }
 
+function resolveApplyWriter(
+  state: RunState,
+  workspace: WorkspaceInfo,
+): WorkspaceWriter | undefined {
+  if (state.deps.workflowHandoff === undefined) {
+    return state.deps.writer;
+  }
+  return createScopedWriter(
+    state.deps.writer ?? nodeWorkspaceWriter,
+    workspace.root,
+    state.deps.workflowHandoff.patchScope.editablePaths,
+  );
+}
+
+function completedReport(
+  state: RunState,
+  loop: ModelLoopResult,
+  accepted: AcceptedPatch,
+  applyResult: PatchApplyResult,
+  verification: Awaited<ReturnType<typeof runWorkflowVerification>>,
+): UnitTestWorkflowReport {
+  return assembleReport({
+    status: "completed",
+    modelId: state.input.modelId,
+    durationMs: state.now() - state.startedAt,
+    patchFiles: accepted.validation.files,
+    dryRunPreview: renderDryRun(accepted.validation),
+    proposedDiff: accepted.diff,
+    coveredBehavior: accepted.coveredBehavior,
+    knownGaps: accepted.knownGaps,
+    nextActions: nextActionsFor(true, applyResult.changedFiles),
+    failureReason: undefined,
+    verificationSummary: verification.summary,
+    verificationSkipReason: verification.skipReason,
+    modelCallCount: loop.modelCallCount,
+    patchRetryCount: loop.patchRetryCount,
+  });
+}
+
 async function applyAndVerify(
   state: RunState,
   workspace: WorkspaceInfo,
@@ -120,13 +162,14 @@ async function applyAndVerify(
   accepted: AcceptedPatch,
 ): Promise<UnitTestWorkflowReport> {
   const fs = state.deps.fs ?? nodeWorkspaceFs;
+  const writer = resolveApplyWriter(state, workspace);
   let applyResult: PatchApplyResult;
   try {
     applyResult = applyPatch(workspace, accepted.diff, {
       applyEnabled: true,
       signal: state.signal,
       fs,
-      ...(state.deps.writer === undefined ? {} : { writer: state.deps.writer }),
+      ...(writer === undefined ? {} : { writer }),
     });
   } catch (error) {
     if (error instanceof CommandCancelledError) {
@@ -144,22 +187,7 @@ async function applyAndVerify(
     return cancelledReport(state, loop, accepted);
   }
   const verification = await runWorkflowVerification(state, workspace, fs);
-  return assembleReport({
-    status: "completed",
-    modelId: state.input.modelId,
-    durationMs: state.now() - state.startedAt,
-    patchFiles: accepted.validation.files,
-    dryRunPreview: renderDryRun(accepted.validation),
-    proposedDiff: accepted.diff,
-    coveredBehavior: accepted.coveredBehavior,
-    knownGaps: accepted.knownGaps,
-    nextActions: nextActionsFor(true, applyResult.changedFiles),
-    failureReason: undefined,
-    verificationSummary: verification.summary,
-    verificationSkipReason: verification.skipReason,
-    modelCallCount: loop.modelCallCount,
-    patchRetryCount: loop.patchRetryCount,
-  });
+  return completedReport(state, loop, accepted, applyResult, verification);
 }
 
 export function emitCompleted(

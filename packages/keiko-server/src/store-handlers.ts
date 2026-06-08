@@ -31,6 +31,10 @@ import {
   clearGroundedContextIndexesForConversation,
   clearGroundedContextIndexesForWorkspace,
 } from "./grounded-context-index.js";
+import {
+  clearGroundedTurnsForConversation,
+  clearGroundedTurnsForWorkspace,
+} from "./grounded-turn-registry.js";
 // Issue #184 — workspace-relative path gate. isValidScopePath is the canonical validator from
 // @oscharko-dev/keiko-contracts/connected-context (issue #178). Reusing it here keeps the BFF
 // boundary aligned with the rest of the connected-repo surface and avoids regex drift.
@@ -385,6 +389,7 @@ export function handleDeleteProject(ctx: RouteContext, deps: UiHandlerDeps): Rou
     const normalizedPath = validateProjectPath(targetPath, { mustExist: false });
     deps.store.deleteProject(normalizedPath);
     clearGroundedContextIndexesForWorkspace(normalizedPath);
+    clearGroundedTurnsForWorkspace(normalizedPath);
     return { status: 204, body: null };
   });
 }
@@ -833,6 +838,7 @@ export async function handleUpdateChat(
     const chat = deps.store.updateChat(id, patch);
     if (patchTouchesGroundingScope(patch) || patch.status === "closed") {
       clearGroundedContextIndexesForConversation(id);
+      clearGroundedTurnsForConversation(id);
     }
     return { status: 200, body: { chat } };
   });
@@ -847,6 +853,7 @@ export function handleDeleteChat(ctx: RouteContext, deps: UiHandlerDeps): RouteR
     const id = requireQuery(ctx, "id");
     deps.store.deleteChat(id);
     clearGroundedContextIndexesForConversation(id);
+    clearGroundedTurnsForConversation(id);
     return { status: 204, body: null };
   });
 }

@@ -13,7 +13,11 @@ const QI_SRC_DIR = new URL("..", import.meta.url).pathname;
 // Files that are *expected* to import node:fs/* primitives — the store seam, the retention
 // orchestrator (which removes side-file dirs + quarantines corrupt manifests). Every other file
 // under `qualityIntelligence/` is pure.
-const IO_ALLOWED_FILES: ReadonlySet<string> = new Set<string>(["store.ts", "retention.ts"]);
+const IO_ALLOWED_FILES: ReadonlySet<string> = new Set<string>([
+  "store.ts",
+  "retention.ts",
+  "companionStore.ts",
+]);
 
 // Provider SDKs we never want pulled into the QI sub-module (defence against accidental
 // dependency-graph bloat under the QI namespace).
@@ -62,6 +66,8 @@ describe("purity guard for packages/keiko-evidence/src/qualityIntelligence/", ()
     expect(dirStat.isDirectory()).toBe(true);
     const files = await listProductionSources(QI_SRC_DIR);
     expect(files).toEqual([
+      "candidatesArtifact.ts",
+      "companionStore.ts",
       "index.ts",
       "manifestSchema.ts",
       "redaction.ts",

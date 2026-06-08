@@ -390,6 +390,8 @@ function AppShellInner(): ReactNode {
     <ChatSessionProvider value={session}>
       <WsContext.Provider value={wsContextValue}>
         <div className="app">
+          {/* WCAG 2.4.6 — visually-hidden page heading for screen readers */}
+          <h1 className="visually-hidden">Keiko workspace</h1>
           <Header
             mode={twin.mode}
             projectName={projectName}

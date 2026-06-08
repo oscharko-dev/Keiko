@@ -163,14 +163,22 @@ function LocalKnowledgeCitationList({
   readonly citations: readonly LocalKnowledgeEvidenceCitation[];
 }): ReactNode {
   if (citations.length === 0) return null;
+  function labelForCitation(citation: LocalKnowledgeEvidenceCitation): string {
+    return citation.source === undefined
+      ? `${citation.marker} ${citation.label}`
+      : `${citation.marker} ${citation.source} · ${citation.label}`;
+  }
   return (
     <div className="grounded-citations-wrap">
       <span className="grounded-citations-label">Knowledge citations</span>
       <ul className="grounded-citations" aria-label="Knowledge citations">
         {citations.map((citation) => (
           <li key={citation.stableId} className="grounded-citations-item">
-            <span className="grounded-citation" title={citation.label}>
-              <span>{`${citation.marker} ${citation.label}`}</span>
+            <span
+              className="grounded-citation"
+              title={citation.source === undefined ? citation.label : `${citation.source} · ${citation.label}`}
+            >
+              <span>{labelForCitation(citation)}</span>
               <span className="grounded-citation-score">{citation.score.toFixed(2)}</span>
             </span>
           </li>
