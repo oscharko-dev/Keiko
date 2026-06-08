@@ -7850,6 +7850,18 @@ select.dlg-input {
   align-items: center;
   gap: 8px;
 }
+.qi-launcher-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.qi-launcher-row > .qi-field:first-child {
+  flex: 1;
+  min-width: 220px;
+}
+.qi-field-kind {
+  min-width: 160px;
+}
 .qi-field-label {
   font-size: 11px;
   font-weight: 600;
@@ -8075,25 +8087,32 @@ select.dlg-input {
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
+/* Review badges: opaque tinted backgrounds + primary --fg text so contrast holds in BOTH themes
+   (the tint differentiates state; --fg on a mostly-card background is high-contrast either way). */
 .qi-review-open {
-  background: color-mix(in oklch, var(--fg-muted) 22%, transparent);
+  background: color-mix(in oklch, var(--fg-muted) 26%, var(--card));
   color: var(--fg);
 }
 .qi-review-approved {
-  background: color-mix(in oklch, var(--accent) 28%, transparent);
-  color: var(--accent-bright);
+  background: color-mix(in oklch, var(--accent) 32%, var(--card));
+  color: var(--fg);
 }
 .qi-review-changes {
-  background: color-mix(in oklch, #d8a657 30%, transparent);
-  color: #e7c184;
+  background: color-mix(in oklch, #d8a657 38%, var(--card));
+  color: var(--fg);
 }
 .qi-review-rejected {
-  background: color-mix(in oklch, #d9534f 30%, transparent);
-  color: #f2a4a0;
+  background: color-mix(in oklch, #d9534f 38%, var(--card));
+  color: var(--fg);
 }
 .qi-review-withdrawn {
   background: var(--card-2);
-  color: var(--fg-muted);
+  color: var(--fg);
+}
+/* Light theme: the small priority/risk pills use the strong text colour for 4.5:1 (a11y M2). */
+[data-theme="light"] .qi-cand-pri,
+[data-theme="light"] .qi-cand-risk {
+  color: var(--fg);
 }
 /* Export control */
 .qi-detail-export {

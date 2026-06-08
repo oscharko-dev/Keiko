@@ -12,6 +12,14 @@ import {
   QualityIntelligenceGeneration,
   QualityIntelligenceHardening,
 } from "@oscharko-dev/keiko-quality-intelligence";
+import {
+  detectWorkspaceAt,
+  discoverWithStats,
+  buildContextPackFromFiles,
+  DEFAULT_CONTEXT_REQUEST,
+  WorkspaceError,
+} from "@oscharko-dev/keiko-workspace";
+import type { ContextEntry } from "@oscharko-dev/keiko-contracts";
 import type { QualityIntelligenceIngestedAtom } from "@oscharko-dev/keiko-workflows";
 import type {
   QualityIntelligenceInlineSource,
@@ -107,6 +115,88 @@ function ingestRequirements(
   return { envelope, atoms };
 }
 
+const WORKSPACE_BUDGET_BYTES = 196_608;
+const WORKSPACE_MAX_BYTES_PER_FILE = 16_384;
+const CODE_EXTENSION =
+  /\.(?:ts|tsx|js|jsx|mjs|cjs|py|java|go|rb|rs|cs|cpp|cc|c|h|hpp|kt|swift|php|scala|sql)$/iu;
+
+const atomKindForPath = (path: string): "code-fragment" | "document-excerpt" =>
+  CODE_EXTENSION.test(path) ? "code-fragment" : "document-excerpt";
+
+const workspaceAtom = (
+  entry: ContextEntry,
+  envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
+  index: number,
+): QualityIntelligenceIngestedAtom => {
+  // entry.excerpt is already redacted by keiko-workspace; prefix the path so the model can
+  // attribute generated cases to a file.
+  const canonicalText = `${entry.path}\n${entry.excerpt}`;
+  const digest = sha256Hex(
+    `qi-atom-ws-v1|${String(envelopeId)}|${String(index)}|${entry.path}`,
+  ).slice(0, 32);
+  const atom: QI.QualityIntelligenceEvidenceAtom = {
+    kind: atomKindForPath(entry.path),
+    id: QualityIntelligence.asQualityIntelligenceEvidenceAtomId(`qi-atom-${digest}`),
+    sourceEnvelopeId: envelopeId,
+    canonicalHashSha256Hex: sha256Hex(canonicalText),
+    redactionStatus: "redacted",
+    lifecycleStatus: "draft",
+  };
+  return { atom, canonicalText };
+};
+
+// Ingest a local folder by REUSING keiko-workspace traversal + redaction (no independent
+// repository traversal — Issue #278 stop condition). Each selected, already-redacted context
+// entry becomes one content-bearing atom under a single repository-context envelope.
+function ingestWorkspace(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "workspace" }>,
+  index: number,
+  registeredAt: string,
+): OneSource {
+  const label = sanitiseLabel(source.label);
+  let workspace: ReturnType<typeof detectWorkspaceAt>;
+  try {
+    workspace = detectWorkspaceAt(source.path);
+  } catch (error) {
+    if (error instanceof WorkspaceError) {
+      throw new QiIngestionError(
+        "QI_WORKSPACE_NOT_FOUND",
+        "The selected folder could not be opened as a workspace.",
+      );
+    }
+    throw error;
+  }
+  const { files } = discoverWithStats(workspace, DEFAULT_CONTEXT_REQUEST.discovery);
+  const pack = buildContextPackFromFiles(
+    workspace,
+    {
+      ...DEFAULT_CONTEXT_REQUEST,
+      budgetBytes: WORKSPACE_BUDGET_BYTES,
+      maxBytesPerFile: WORKSPACE_MAX_BYTES_PER_FILE,
+    },
+    files,
+  );
+  if (pack.selected.length === 0) {
+    throw new QiIngestionError("QI_SOURCE_EMPTY", `No readable files were found in "${label}".`);
+  }
+  const envelopeId = envelopeIdFor(index, label, pack.workspaceRoot);
+  const envelope: QI.QualityIntelligenceSourceEnvelope = {
+    id: envelopeId,
+    kind: "repository-context",
+    displayLabel: label,
+    provenance: {
+      origin: "workspace",
+      registeredAt,
+      integrityHashSha256Hex: sha256Hex(
+        `${pack.workspaceRoot}|${pack.selected.map((e) => e.path).join(",")}`,
+      ),
+    },
+    localRef: String(envelopeId),
+  };
+  const atoms = pack.selected.map((entry, i) => workspaceAtom(entry, envelopeId, i));
+  return { envelope, atoms };
+}
+
 function ingestOne(
   source: QualityIntelligenceInlineSource,
   index: number,
@@ -116,10 +206,7 @@ function ingestOne(
     case "requirements":
       return ingestRequirements(source, index, registeredAt);
     case "workspace":
-      throw new QiIngestionError(
-        "QI_SOURCE_UNSUPPORTED",
-        "Workspace folder ingestion is handled by the workspace ingestor.",
-      );
+      return ingestWorkspace(source, index, registeredAt);
   }
 }
 
@@ -130,10 +217,10 @@ export interface IngestInlineSourcesInput {
 }
 
 /**
- * Ingest the requirement-text sources of a start-run request. Workspace sources are ingested by
- * `ingestWorkspaceSource` (separate module owning filesystem access) and folded in by the caller.
- * Throws `QiIngestionError` with a safe, user-actionable code on empty / oversized / unsupported
- * input.
+ * Ingest the inline sources of a start-run request into content-bearing atoms + browser-safe
+ * envelopes. Requirements text is split by the pure domain; workspace folders are read through
+ * keiko-workspace traversal + redaction (no independent repository traversal). Throws
+ * `QiIngestionError` with a safe, user-actionable code on empty / oversized / unreadable input.
  */
 export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestionResult {
   // Read through the typed property in the loop: `Array.isArray` would widen a local binding of the

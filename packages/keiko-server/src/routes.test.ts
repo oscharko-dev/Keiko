@@ -26,8 +26,8 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 94 route contract including local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, the QI Conversation Center handoff route, the relationship engine routes (Epic #532), the memory maintenance route (#204), and the desktop chat SSE streaming route (#152)", () => {
-    expect(API_ROUTES).toHaveLength(94);
+  it("declares the 98 route contract including local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, the QI run execution + review + export routes, the QI Conversation Center handoff route, the relationship engine routes (Epic #532), the memory maintenance route (#204), and the desktop chat SSE streaming route (#152)", () => {
+    expect(API_ROUTES).toHaveLength(98);
   });
 
   it("includes the Quality Intelligence UI read routes (#280)", () => {
@@ -39,6 +39,21 @@ describe("API route contract", () => {
     );
     expect(list).toBeDefined();
     expect(detail).toBeDefined();
+  });
+
+  it("includes the Quality Intelligence run execution, review, and export routes (#273/#280/#282/#283)", () => {
+    const patterns = [
+      { method: "POST", pattern: "/api/quality-intelligence/runs" },
+      { method: "POST", pattern: "/api/quality-intelligence/runs/:id/cancel" },
+      { method: "POST", pattern: "/api/quality-intelligence/runs/:id/review" },
+      { method: "POST", pattern: "/api/quality-intelligence/runs/:id/export" },
+    ];
+    for (const { method, pattern } of patterns) {
+      expect(
+        API_ROUTES.find((r) => r.method === method && r.pattern === pattern),
+        `${method} ${pattern} must be registered`,
+      ).toBeDefined();
+    }
   });
 
   it("includes the Quality Intelligence Conversation Center handoff route (#281)", () => {

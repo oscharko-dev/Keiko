@@ -55,7 +55,7 @@ function StringList({
   return (
     <div className="qi-cand-block">
       <p className="qi-cand-block-label">{label}</p>
-      <ol className="qi-cand-list">
+      <ol className="qi-cand-list" aria-label={label}>
         {items.map((item, i) => (
           <li key={`${label}-${String(i)}`}>{item}</li>
         ))}

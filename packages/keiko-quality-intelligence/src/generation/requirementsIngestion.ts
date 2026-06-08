@@ -42,13 +42,13 @@ const isMeaningful = (text: string): boolean =>
 // Primary split: by line. Fallback split: when the blob is a single line, break on sentence
 // boundaries so a pasted paragraph still yields multiple atoms.
 const splitIntoStatements = (raw: string): readonly string[] => {
-  const byLine = raw
-    .split(/\r?\n/u)
-    .map((line) => normaliseText(stripMarker(line)))
-    .filter(isMeaningful);
-  if (byLine.length > 1) return byLine;
+  const lines = raw.split(/\r?\n/u);
+  const byLine = lines.map((line) => normaliseText(stripMarker(line))).filter(isMeaningful);
+  // Multiple physical lines → trust the (filtered) line split: short / letter-free lines are
+  // dropped and never folded back in. A single-line paragraph falls through to sentence splitting.
+  if (lines.length > 1) return byLine;
   const single = normaliseText(stripMarker(raw));
-  if (single.length === 0) return [];
+  if (!isMeaningful(single)) return [];
   const sentences = single
     .split(/(?<=[.!?])\s+(?=\p{Lu})/u)
     .map((s) => normaliseText(s))

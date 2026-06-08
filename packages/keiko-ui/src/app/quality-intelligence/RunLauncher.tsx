@@ -65,13 +65,17 @@ export function RunLauncher({
   startImpl = startQiRun,
 }: RunLauncherProps): ReactNode {
   const [label, setLabel] = useState("");
+  const [sourceKind, setSourceKind] = useState<"requirements" | "workspace">("requirements");
   const [text, setText] = useState("");
+  const [path, setPath] = useState("");
   const [profileId, setProfileId] = useState("regression-default");
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<Progress>(INITIAL_PROGRESS);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const completedRunIdRef = useRef<string | null>(null);
+
+  const ready = sourceKind === "requirements" ? text.trim().length > 0 : path.trim().length > 0;
 
   const onMessage = useCallback((msg: QualityIntelligenceRunStreamMessage): void => {
     if (msg.type === "accepted") completedRunIdRef.current = msg.runId;
@@ -80,17 +84,18 @@ export function RunLauncher({
   }, []);
 
   const handleStart = useCallback(async (): Promise<void> => {
-    if (text.trim().length === 0 || running) return;
+    if (!ready || running) return;
     setRunning(true);
     setError(null);
     setProgress(INITIAL_PROGRESS);
     completedRunIdRef.current = null;
     const controller = new AbortController();
     abortRef.current = controller;
-    const request: QualityIntelligenceStartRunRequest = {
-      sources: [{ kind: "requirements", label: label.trim() || "Requirements", text }],
-      profileId,
-    };
+    const source =
+      sourceKind === "requirements"
+        ? ({ kind: "requirements", label: label.trim() || "Requirements", text } as const)
+        : ({ kind: "workspace", label: label.trim() || "Folder", path: path.trim() } as const);
+    const request: QualityIntelligenceStartRunRequest = { sources: [source], profileId };
     try {
       await startImpl(request, controller.signal, onMessage);
       const runId = completedRunIdRef.current;
@@ -101,7 +106,18 @@ export function RunLauncher({
       setRunning(false);
       abortRef.current = null;
     }
-  }, [text, label, profileId, running, onMessage, onRunCompleted, startImpl]);
+  }, [
+    ready,
+    sourceKind,
+    text,
+    path,
+    label,
+    profileId,
+    running,
+    onMessage,
+    onRunCompleted,
+    startImpl,
+  ]);
 
   const handleCancel = useCallback((): void => {
     abortRef.current?.abort();
@@ -113,32 +129,65 @@ export function RunLauncher({
         <h2 className="qi-col-title">New run</h2>
       </header>
       <div className="qi-launcher-body">
-        <label className="qi-field">
-          <span className="qi-field-label">Source label</span>
-          <input
-            type="text"
-            className="qi-input"
-            value={label}
-            placeholder="e.g. Funds Transfer — acceptance criteria"
-            disabled={running}
-            onChange={(e) => {
-              setLabel(e.target.value);
-            }}
-          />
-        </label>
-        <label className="qi-field">
-          <span className="qi-field-label">Requirements</span>
-          <textarea
-            className="qi-textarea"
-            value={text}
-            rows={6}
-            placeholder="Paste requirements or acceptance criteria, one statement per line."
-            disabled={running}
-            onChange={(e) => {
-              setText(e.target.value);
-            }}
-          />
-        </label>
+        <div className="qi-launcher-row">
+          <label className="qi-field">
+            <span className="qi-field-label">Source label</span>
+            <input
+              type="text"
+              className="qi-input"
+              value={label}
+              placeholder="e.g. Funds Transfer — acceptance criteria"
+              disabled={running}
+              onChange={(e) => {
+                setLabel(e.target.value);
+              }}
+            />
+          </label>
+          <label className="qi-field qi-field-kind">
+            <span className="qi-field-label">Source type</span>
+            <select
+              className="qi-select"
+              value={sourceKind}
+              disabled={running}
+              onChange={(e) => {
+                setSourceKind(e.target.value === "workspace" ? "workspace" : "requirements");
+                setError(null);
+              }}
+            >
+              <option value="requirements">Requirements text</option>
+              <option value="workspace">Local folder</option>
+            </select>
+          </label>
+        </div>
+        {sourceKind === "requirements" ? (
+          <label className="qi-field">
+            <span className="qi-field-label">Requirements</span>
+            <textarea
+              className="qi-textarea"
+              value={text}
+              rows={6}
+              placeholder="Paste requirements or acceptance criteria, one statement per line."
+              disabled={running}
+              onChange={(e) => {
+                setText(e.target.value);
+              }}
+            />
+          </label>
+        ) : (
+          <label className="qi-field">
+            <span className="qi-field-label">Folder path</span>
+            <input
+              type="text"
+              className="qi-input"
+              value={path}
+              placeholder="/absolute/path/to/requirements-folder"
+              disabled={running}
+              onChange={(e) => {
+                setPath(e.target.value);
+              }}
+            />
+          </label>
+        )}
         <div className="qi-launcher-controls">
           <label className="qi-field qi-field-inline">
             <span className="qi-field-label">Policy profile</span>
@@ -165,7 +214,7 @@ export function RunLauncher({
             <button
               type="button"
               className="qi-btn qi-btn-primary"
-              disabled={text.trim().length === 0}
+              disabled={!ready}
               onClick={() => {
                 void handleStart();
               }}
@@ -179,6 +228,7 @@ export function RunLauncher({
             className="qi-progress"
             role="status"
             aria-live="polite"
+            aria-label="Run progress"
             data-testid="qi-launch-progress"
           >
             <span className="qi-progress-spinner" aria-hidden="true" />
