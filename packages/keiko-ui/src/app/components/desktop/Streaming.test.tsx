@@ -737,36 +737,6 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
     return view;
   }
 
-  // Builds a fake sendDesktopChatStream that lets the test drive events
-  // synchronously via the returned controller.
-  function mockStreamSpy(): {
-    spy: ReturnType<typeof vi.spyOn>;
-    fire: (handlers: StreamHandlers) => void;
-  } {
-    let capturedHandlers: StreamHandlers | undefined;
-    const spy = vi
-      .spyOn(api, "sendDesktopChatStream")
-      .mockImplementation(
-        (
-          _input: api.SendDesktopChatInput,
-          _signal: AbortSignal,
-          handlers: StreamHandlers,
-        ): Promise<void> => {
-          capturedHandlers = handlers;
-          // Return a never-resolving promise — we resolve via handlers instead.
-          return new Promise<void>(() => undefined);
-        },
-      );
-    return {
-      spy,
-      fire: (handlers: StreamHandlers): void => {
-        if (capturedHandlers === undefined) throw new Error("sendDesktopChatStream not called yet");
-        Object.assign(capturedHandlers, handlers);
-        // Re-invoke the actually-captured handlers with the test-supplied ones.
-      },
-    };
-  }
-
   beforeEach(() => {
     vi.restoreAllMocks();
     api.clearModelCacheForTests();
