@@ -69,7 +69,7 @@ function resolveConnections(
 // heavy. A single very large file also counts as heavy via the excerpt-byte fallback. Connector
 // (local-knowledge) and the connector side of a hybrid answer use referencesUsed instead of files.
 // Thresholds are deliberately low — a handful of real files/sources reads as "heavy" to the eye.
-// Defaults to light before the first answer.
+// (The pre-first-answer "light" default lives in useChannelFlow, not here.)
 const HEAVY_FILES_READ = 4;
 const HEAVY_REFERENCES = 4;
 const HEAVY_EXCERPT_BYTES = 8_192;
@@ -78,8 +78,7 @@ function isHeavyFolder(filesRead: number, excerptBytes: number): boolean {
   return filesRead >= HEAVY_FILES_READ || excerptBytes >= HEAVY_EXCERPT_BYTES;
 }
 
-function groundingIntensity(latest: GroundedAnswerWire | undefined): FlowIntensity {
-  if (latest === undefined) return "light";
+function groundingIntensity(latest: GroundedAnswerWire): FlowIntensity {
   switch (latest.groundingKind) {
     case "connected-context":
       return isHeavyFolder(
