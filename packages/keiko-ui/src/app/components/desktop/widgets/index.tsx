@@ -103,10 +103,15 @@ registerWindowRender("files", (cfg, ctx) => {
       resolvedRoot: resolvedRoot ?? undefined,
     });
   };
+  // Persist the new root into cfg so opening a different machine path survives reload, and so a
+  // connected Chat re-binds to the new folder on the next scope update.
+  const onRootChange = (nextRoot: string): void => {
+    ctx.updateCfg({ root: nextRoot, activeFilePath: undefined, resolvedRoot: undefined });
+  };
   return root !== undefined ? (
-    <FilesWidget root={root} onActiveFileChange={onActiveFileChange} />
+    <FilesWidget root={root} onActiveFileChange={onActiveFileChange} onRootChange={onRootChange} />
   ) : (
-    <FilesWidget onActiveFileChange={onActiveFileChange} />
+    <FilesWidget onActiveFileChange={onActiveFileChange} onRootChange={onRootChange} />
   );
 });
 registerWindowRender("editor", (cfg) => {
