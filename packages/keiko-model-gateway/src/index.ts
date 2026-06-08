@@ -40,9 +40,12 @@ export type {
 export {
   CAPABILITY_REGISTRY,
   createDefaultChatCapability,
+  createDefaultEmbeddingCapability,
+  EMBEDDING_ID_PATTERN,
   explainConversationIneligibility,
   findCapability,
   isConversationEligibleModel,
+  isLikelyEmbeddingModelId,
   listCapabilities,
   resolveCostClass,
   selectCheapest,

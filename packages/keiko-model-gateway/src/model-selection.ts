@@ -1,4 +1,9 @@
-import { createDefaultChatCapability, listCapabilities } from "./capabilities.js";
+import {
+  createDefaultChatCapability,
+  createDefaultEmbeddingCapability,
+  isLikelyEmbeddingModelId,
+  listCapabilities,
+} from "./capabilities.js";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { GatewayConfig, ModelCapability, ModelKind } from "./types.js";
 
@@ -41,7 +46,9 @@ export function findConfiguredCapability(
     config.capabilities?.find((capability) => capability.id === modelId) ??
     listCapabilities().find((capability) => capability.id === modelId) ??
     (config.providers.some((provider) => provider.modelId === modelId)
-      ? createDefaultChatCapability(modelId)
+      ? isLikelyEmbeddingModelId(modelId)
+        ? createDefaultEmbeddingCapability(modelId)
+        : createDefaultChatCapability(modelId)
       : undefined)
   );
 }
