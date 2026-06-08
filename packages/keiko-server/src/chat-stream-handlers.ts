@@ -11,7 +11,7 @@
 import { SSE_HEADERS } from "./sse.js";
 import { STREAMING, errorBody, type HandlerOutcome, type RouteContext } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import type { Chat } from "./store/index.js";
+import type { Chat, ChatMessage } from "./store/index.js";
 import type { ConversationMemoryRuntimeContext } from "./memory-conversation-context.js";
 import type {
   ConversationMemoryActionWire,
@@ -72,8 +72,10 @@ async function streamConversation(
   return undefined;
 }
 
-// Persists the streamed turn EXACTLY like persistModelChatTurn: redact content, create user +
-// assistant messages, collect memory actions, patch the chat. Returns the `done` event payload.
+// Persists the streamed turn EXACTLY like persistModelChatTurn: redact content, create the
+// assistant message, collect memory actions, patch the chat. Returns the `done` event payload.
+// The user message is created BEFORE the prompt is built (mirroring the buffered path), so it is
+// threaded in here rather than created again — creating it twice would duplicate the turn.
 async function persistStreamedTurn(
   deps: UiHandlerDeps,
   request: SendDesktopChatRequest,
@@ -82,8 +84,8 @@ async function persistStreamedTurn(
   memory: ConversationMemoryResultWire,
   memoryContext: ConversationMemoryRuntimeContext | undefined,
   turn: StreamedTurn,
+  userMessage: ChatMessage,
 ): Promise<Record<string, unknown>> {
-  const userMessage = createUserMessage(deps, request);
   const redactedContent = deps.redactor(turn.response.content) as string;
   const assistantMessage = createAssistantMessage(deps, request, redactedContent);
   const actions: readonly ConversationMemoryActionWire[] = await collectMemoryActions(
@@ -131,14 +133,54 @@ function errorEvent(error: unknown, deps: UiHandlerDeps): { code: string; messag
   };
 }
 
+// Streams the gateway response and writes the terminal SSE event. Persists the user turn BEFORE
+// building the prompt so buildGatewayMessages (which reads store.listMessages) includes the current
+// message — otherwise a fresh chat sends `[system]` only (model hallucinates) and a history chat
+// ends on an `assistant` turn (some providers reject it 400). Mirrors the buffered
+// persistModelChatTurn ordering exactly (#152). On cancel the user turn stays persisted (saved for
+// retry) with no assistant message — identical to the buffered path's no-rollback-on-error contract.
+async function streamAndPersist(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  prepared: {
+    request: SendDesktopChatRequest;
+    chat: Chat;
+    modelId: string;
+    memoryContext: ConversationMemoryRuntimeContext | undefined;
+  },
+  callStream: NonNullable<import("@oscharko-dev/keiko-harness").ModelPort["callStream"]>,
+  controller: AbortController,
+): Promise<void> {
+  const { request, chat, modelId, memoryContext } = prepared;
+  const memory = await resolveMemory(deps, request, memoryContext);
+  const userMessage = createUserMessage(deps, request);
+  const messages = buildGatewayMessages(deps, request, memory.context.text);
+  const stream = callStream({ modelId, messages }, controller.signal);
+  const turn = await streamConversation(ctx, deps, stream, controller.signal);
+  if (turn === undefined || controller.signal.aborted) {
+    ctx.res.write(sseMessage("cancelled", {}));
+    return;
+  }
+  const payload = await persistStreamedTurn(
+    deps,
+    request,
+    chat,
+    modelId,
+    memory,
+    memoryContext,
+    turn,
+    userMessage,
+  );
+  ctx.res.write(sseMessage("done", payload));
+}
+
 export async function handleSendDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<HandlerOutcome> {
   const prepared = await prepareDesktopChatSend(ctx, deps);
   if ("status" in prepared) return prepared;
-  const { request, chat, modelId, memoryContext } = prepared;
-  const model = deps.modelPortFactory(modelId);
+  const model = deps.modelPortFactory(prepared.modelId);
   if (model?.callStream === undefined) {
     return {
       status: 400,
@@ -149,20 +191,7 @@ export async function handleSendDesktopChatStream(
   const controller = abortOnDisconnect(ctx);
   ctx.res.writeHead(200, SSE_HEADERS);
   try {
-    const memory = await resolveMemory(deps, request, memoryContext);
-    const messages = buildGatewayMessages(deps, request, memory.context.text);
-    const stream = callStream({ modelId, messages }, controller.signal);
-    const turn = await streamConversation(ctx, deps, stream, controller.signal);
-    if (turn === undefined || controller.signal.aborted) {
-      ctx.res.write(sseMessage("cancelled", {}));
-    } else {
-      ctx.res.write(
-        sseMessage(
-          "done",
-          await persistStreamedTurn(deps, request, chat, modelId, memory, memoryContext, turn),
-        ),
-      );
-    }
+    await streamAndPersist(ctx, deps, prepared, callStream, controller);
   } catch (error) {
     if (controller.signal.aborted) {
       ctx.res.write(sseMessage("cancelled", {}));
