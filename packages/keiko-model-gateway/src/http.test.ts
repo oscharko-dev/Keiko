@@ -7,6 +7,7 @@ import {
   isRecoverableTlsTrustError,
   MAX_RESPONSE_BYTES,
   readJsonCapped,
+  readSseStream,
 } from "./http.js";
 
 // ---------------------------------------------------------------------------
@@ -170,5 +171,74 @@ describe("readJsonCapped", () => {
     }) as Response;
     const result = await readJsonCapped(nullBody);
     expect(result).toEqual({ fallback: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// readSseStream — line-buffered SSE parsing with cross-read reassembly
+// ---------------------------------------------------------------------------
+
+async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
+  const out: T[] = [];
+  for await (const item of iterable) out.push(item);
+  return out;
+}
+
+describe("readSseStream", () => {
+  it("parses multiple data lines and terminates on [DONE]", async () => {
+    const response = streamingResponse([
+      'data: {"a":1}\n',
+      'data: {"b":2}\n',
+      "data: [DONE]\n",
+      'data: {"c":3}\n',
+    ]);
+    const chunks = await collect(readSseStream(response));
+    expect(chunks).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  it("reassembles a data line split across two reader chunks", async () => {
+    const response = streamingResponse(['data: {"a":1}\ndata: {"b', '":2}\ndata: [DONE]\n']);
+    const chunks = await collect(readSseStream(response));
+    expect(chunks).toEqual([{ a: 1 }, { b: 2 }]);
+  });
+
+  it("ignores blank lines and non-data lines", async () => {
+    const response = streamingResponse([
+      "\n",
+      ": keep-alive comment\n",
+      "event: message\n",
+      'data: {"a":1}\n',
+      "\n",
+      "data: [DONE]\n",
+    ]);
+    const chunks = await collect(readSseStream(response));
+    expect(chunks).toEqual([{ a: 1 }]);
+  });
+
+  it("trims a trailing carriage return before parsing CRLF lines", async () => {
+    const response = streamingResponse(['data: {"a":1}\r\n', "data: [DONE]\r\n"]);
+    const chunks = await collect(readSseStream(response));
+    expect(chunks).toEqual([{ a: 1 }]);
+  });
+
+  it("yields a final data line that has no trailing newline", async () => {
+    const response = streamingResponse(['data: {"a":1}']);
+    const chunks = await collect(readSseStream(response));
+    expect(chunks).toEqual([{ a: 1 }]);
+  });
+
+  it("throws when the cumulative stream exceeds maxBytes", async () => {
+    const big = `data: {"x":"${"y".repeat(200)}"}\n`;
+    const response = streamingResponse([big]);
+    await expect(collect(readSseStream(response, 100))).rejects.toThrow(/size limit/);
+  });
+
+  it("yields nothing when the response body is null", async () => {
+    const inner = new Response('data: {"a":1}\n', { status: 200 });
+    const nullBody = Object.create(inner, {
+      body: { get: (): null => null },
+    }) as Response;
+    const chunks = await collect(readSseStream(nullBody));
+    expect(chunks).toEqual([]);
   });
 });

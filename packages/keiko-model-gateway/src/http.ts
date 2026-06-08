@@ -200,3 +200,69 @@ export async function readJsonCapped(
   parts.push(decoder.decode());
   return JSON.parse(parts.join("")) as unknown;
 }
+
+// Splits an SSE buffer on newlines, keeping the trailing partial line (no newline yet)
+// for the next read. Returns the complete lines and the leftover remainder so a
+// `data: {...}` payload split across two reads is never parsed half-formed.
+function splitSseBuffer(buffer: string): {
+  readonly lines: readonly string[];
+  readonly rest: string;
+} {
+  const segments = buffer.split("\n");
+  const rest = segments.pop() ?? "";
+  return { lines: segments, rest };
+}
+
+// Yields the parsed JSON payload of a single complete SSE line, or a sentinel.
+// "done" → the stream's `data: [DONE]` terminator; "skip" → blank or non-data line.
+type SseLineResult =
+  | { readonly kind: "value"; readonly value: unknown }
+  | { readonly kind: "done" }
+  | { readonly kind: "skip" };
+
+function parseSseLine(rawLine: string): SseLineResult {
+  const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+  if (line.length === 0 || !line.startsWith("data:")) {
+    return { kind: "skip" };
+  }
+  const payload = line.slice("data:".length).trimStart();
+  if (payload === "[DONE]") {
+    return { kind: "done" };
+  }
+  return { kind: "value", value: JSON.parse(payload) as unknown };
+}
+
+// Reads a Server-Sent-Events response as a stream of parsed JSON `data:` payloads.
+// Incomplete lines are buffered across reads; `data: [DONE]` terminates; cumulative
+// bytes are capped exactly like readJsonCapped. A null body yields nothing.
+export async function* readSseStream(
+  response: Response,
+  maxBytes: number = MAX_RESPONSE_BYTES,
+): AsyncGenerator {
+  if (response.body === null) {
+    return;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error("response body exceeded the size limit");
+    }
+    buffer += decoder.decode(value, { stream: true });
+    const { lines, rest } = splitSseBuffer(buffer);
+    buffer = rest;
+    for (const line of lines) {
+      const result = parseSseLine(line);
+      if (result.kind === "done") return;
+      if (result.kind === "value") yield result.value;
+    }
+  }
+  const tail = parseSseLine(buffer + decoder.decode());
+  if (tail.kind === "value") yield tail.value;
+}
