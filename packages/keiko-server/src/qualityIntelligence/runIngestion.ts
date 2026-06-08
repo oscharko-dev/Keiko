@@ -35,6 +35,19 @@ import type {
 
 const MAX_TOTAL_ATOMS = 120;
 const MAX_LABEL_CHARS = 120;
+// Mirrors the Chat multi-source cap (MAX_CONNECTED_SOURCES / MAX_SCOPES = 16). Sources beyond this
+// are dropped before ingestion with a user-actionable coverage notice (Epic #729, Issue #730).
+const MAX_QI_SOURCES = 16;
+
+/**
+ * Fair per-source atom budget — mirrors Chat's splitExplorationBudget floor-division semantics
+ * (grounded-qa-multi-source.ts): the global budget is shared evenly so no single source starves the
+ * others. A single source keeps the whole budget.
+ */
+function perSourceAtomBudget(total: number, sourceCount: number): number {
+  if (sourceCount <= 1) return total;
+  return Math.max(1, Math.floor(total / sourceCount));
+}
 
 export class QiIngestionError extends Error {
   public readonly code: string;
@@ -59,6 +72,8 @@ export interface QiIngestionResult {
     readonly auditSummaryId: QI.QualityIntelligenceAuditSummaryId;
   };
   readonly sourceSummaries: readonly QiSourceSummary[];
+  /** Number of sources dropped because the request exceeded MAX_QI_SOURCES (Epic #729). */
+  readonly droppedSourceCount: number;
 }
 
 const sanitiseLabel = (label: string): string => {
@@ -359,10 +374,15 @@ export interface IngestInlineSourcesInput {
 export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestionResult {
   // Read through the typed property in the loop: `Array.isArray` would widen a local binding of the
   // readonly union array to `any[]`, so the guard checks length on the typed property directly.
-  const sources: readonly QualityIntelligenceInlineSource[] = input.request.sources;
-  if (sources.length === 0) {
+  const allSources: readonly QualityIntelligenceInlineSource[] = input.request.sources;
+  if (allSources.length === 0) {
     throw new QiIngestionError("QI_NO_SOURCES", "At least one source is required to start a run.");
   }
+  // Cap the source count BEFORE ingestion (no partial work for dropped sources), then split the
+  // global atom budget fairly so no single source starves the others (Chat N+1 parity, #730).
+  const sources = allSources.slice(0, MAX_QI_SOURCES);
+  const droppedSourceCount = allSources.length - sources.length;
+  const perSourceBudget = perSourceAtomBudget(MAX_TOTAL_ATOMS, sources.length);
   const envelopes: QI.QualityIntelligenceSourceEnvelope[] = [];
   const ingestedAtoms: QualityIntelligenceIngestedAtom[] = [];
   const sourceSummaries: QiSourceSummary[] = [];
@@ -370,8 +390,9 @@ export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestio
     const source = sources[i];
     if (source === undefined) continue;
     const { envelope, atoms } = ingestOne(source, i, input.registeredAt);
-    const remaining = MAX_TOTAL_ATOMS - ingestedAtoms.length;
-    const taken = remaining <= 0 ? [] : atoms.slice(0, remaining);
+    // Each source gets its fair share, bounded by the global cap so the total never exceeds it.
+    const take = Math.min(perSourceBudget, MAX_TOTAL_ATOMS - ingestedAtoms.length);
+    const taken = take <= 0 ? [] : atoms.slice(0, take);
     envelopes.push(envelope);
     ingestedAtoms.push(...taken);
     sourceSummaries.push({
@@ -394,5 +415,6 @@ export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestio
       auditSummaryId: auditSummaryIdFor(input.runId),
     },
     sourceSummaries,
+    droppedSourceCount,
   };
 }

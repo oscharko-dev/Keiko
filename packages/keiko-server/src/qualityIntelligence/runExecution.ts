@@ -47,6 +47,8 @@ export interface QiRunAccepted {
   readonly sourceCount: number;
   readonly atomCount: number;
   readonly modelId: string;
+  /** Sources dropped because the request exceeded the 16-source cap (Epic #729). */
+  readonly droppedSourceCount: number;
 }
 
 export interface ExecuteQiRunInput {
@@ -84,6 +86,7 @@ export async function executeQiRun(
     sourceCount: ingestion.sourceSummaries.length,
     atomCount: ingestion.ingestedAtoms.length,
     modelId,
+    droppedSourceCount: ingestion.droppedSourceCount,
   });
 
   const plan: QI.QualityIntelligenceRunPlan = {

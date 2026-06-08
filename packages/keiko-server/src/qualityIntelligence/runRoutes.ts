@@ -187,6 +187,9 @@ async function streamRunExecution(
           requestedAt: accepted.requestedAt,
           sourceCount: accepted.sourceCount,
           atomCount: accepted.atomCount,
+          ...(accepted.droppedSourceCount > 0
+            ? { droppedSourceCount: accepted.droppedSourceCount }
+            : {}),
         });
       },
       onEvent: (event) => {

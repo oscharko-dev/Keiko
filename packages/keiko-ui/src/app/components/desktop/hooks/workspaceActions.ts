@@ -321,6 +321,7 @@ type ConnectApi = Pick<
   | "connect"
   | "linkedFilesRoot"
   | "linkedFilesContext"
+  | "linkedAllFilesRoots"
   | "currentFilesContext"
 >;
 
@@ -472,6 +473,23 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const linkedFilesRoot: WorkspaceApi["linkedFilesRoot"] = (id) =>
     linkedFilesContext(id)?.root ?? null;
 
+  const linkedAllFilesRoots: WorkspaceApi["linkedAllFilesRoots"] = (id) => {
+    const seen = new Set<string>();
+    const roots: string[] = [];
+    for (const c of connsRef.current) {
+      if (roots.length >= MAX_SCOPES) break;
+      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
+      if (otherId === null) continue;
+      const w = winsRef.current.find((x) => x.id === otherId);
+      if (w === undefined) continue;
+      const root = resolvedFilesRoot(w);
+      if (root === null || seen.has(root)) continue;
+      seen.add(root);
+      roots.push(root);
+    }
+    return roots;
+  };
+
   const currentFilesContext: WorkspaceApi["currentFilesContext"] = () => {
     const files = winsRef.current
       .map((w) => filesContextFor(w))
@@ -492,6 +510,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     connect,
     linkedFilesRoot,
     linkedFilesContext,
+    linkedAllFilesRoots,
     currentFilesContext,
   };
 }

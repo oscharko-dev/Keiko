@@ -44,6 +44,7 @@ function api(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
     removeConn: vi.fn(),
     connect: vi.fn(),
     linkedFilesRoot: vi.fn(() => null),
+    linkedAllFilesRoots: vi.fn(() => []),
     linkedFilesContext: vi.fn(() => null),
     currentFilesContext: vi.fn(() => null),
     zoomTo: vi.fn(),

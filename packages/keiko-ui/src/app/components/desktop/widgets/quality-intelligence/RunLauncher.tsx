@@ -10,9 +10,11 @@ import type { ReactNode } from "react";
 import type {
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceStartRunRequest,
+  QualityIntelligenceWorkspaceSource,
 } from "@oscharko-dev/keiko-contracts";
 import { startQiRun } from "@/lib/quality-intelligence-api";
 import { ApiError } from "@/lib/api";
+import { MAX_SCOPES } from "../../hooks/workspaceActions";
 
 const PROFILES: ReadonlyArray<{ id: string; label: string }> = [
   { id: "regression-default", label: "Regression (default)" },
@@ -70,6 +72,12 @@ export interface RunLauncherProps {
    * exactly that one Fachkonzept document. Manual input still overrides it.
    */
   readonly connectedFilePath?: string | null;
+  /**
+   * All connected Files window roots (Epic #729 N+1). When non-empty, Generate sends one workspace
+   * source per root (deduped, capped at 16). Falls back to `connectedRoot` when empty/undefined.
+   * Manual input and `connectedFilePath` both still take precedence.
+   */
+  readonly connectedRoots?: readonly string[] | undefined;
 }
 
 function baseName(p: string): string {
@@ -111,11 +119,37 @@ function resolveConnectedFilePath(
   return `${joinedRoot}/${relativePath}`;
 }
 
+/**
+ * Builds workspace sources from connected roots. Dedupes and caps at MAX_SCOPES.
+ * Falls back to `fallbackRoot` when `roots` is empty/undefined (back-compat with single root).
+ */
+function buildConnectedSources(
+  roots: readonly string[] | null | undefined,
+  fallbackRoot: string | null,
+): QualityIntelligenceWorkspaceSource[] {
+  const effective =
+    roots !== undefined && roots !== null && roots.length > 0
+      ? roots
+      : fallbackRoot !== null
+        ? [fallbackRoot]
+        : [];
+  const seen = new Set<string>();
+  const result: QualityIntelligenceWorkspaceSource[] = [];
+  for (const root of effective) {
+    if (result.length >= MAX_SCOPES) break;
+    if (seen.has(root)) continue;
+    seen.add(root);
+    result.push({ kind: "workspace", label: baseName(root), path: root });
+  }
+  return result;
+}
+
 export function RunLauncher({
   onRunCompleted,
   startImpl = startQiRun,
   connectedRoot = null,
   connectedFilePath = null,
+  connectedRoots,
 }: RunLauncherProps): ReactNode {
   const [label, setLabel] = useState("");
   const [sourceKind, setSourceKind] = useState<"requirements" | "workspace">("requirements");
@@ -132,7 +166,8 @@ export function RunLauncher({
   // over the folder root, so connecting a single Fachkonzept document generates from that one file.
   const connectedFile = resolveConnectedFilePath(connectedRoot, connectedFilePath);
   const connectedFolder = connectedRoot ?? null;
-  const hasConnected = connectedFile !== null || connectedFolder !== null;
+  const workspaceSources = buildConnectedSources(connectedRoots, connectedFolder);
+  const hasConnected = connectedFile !== null || workspaceSources.length > 0;
   const manualReady =
     sourceKind === "requirements" ? text.trim().length > 0 : path.trim().length > 0;
   const ready = manualReady || hasConnected;
@@ -151,27 +186,22 @@ export function RunLauncher({
     completedRunIdRef.current = null;
     const controller = new AbortController();
     abortRef.current = controller;
-    // Precedence: explicit manual input wins; otherwise the connected Files source is the default,
-    // and a connected single file takes precedence over the connected folder root.
-    const connectedSource =
-      connectedFile !== null
-        ? ({
-            kind: "file",
-            label: label.trim() || baseName(connectedFile),
-            path: connectedFile,
-          } as const)
-        : ({
-            kind: "workspace",
-            label: label.trim() || baseName(connectedFolder ?? ""),
-            path: connectedFolder ?? "",
-          } as const);
-    const source =
+    // Precedence: manual input wins; then connected file (single); then connected workspace roots.
+    const sources: QualityIntelligenceStartRunRequest["sources"] =
       sourceKind === "requirements" && text.trim().length > 0
-        ? ({ kind: "requirements", label: label.trim() || "Requirements", text } as const)
+        ? [{ kind: "requirements", label: label.trim() || "Requirements", text }]
         : sourceKind === "workspace" && path.trim().length > 0
-          ? ({ kind: "workspace", label: label.trim() || "Folder", path: path.trim() } as const)
-          : connectedSource;
-    const request: QualityIntelligenceStartRunRequest = { sources: [source], profileId };
+          ? [{ kind: "workspace", label: label.trim() || "Folder", path: path.trim() }]
+          : connectedFile !== null
+            ? [
+                {
+                  kind: "file",
+                  label: label.trim() || baseName(connectedFile),
+                  path: connectedFile,
+                },
+              ]
+            : workspaceSources;
+    const request: QualityIntelligenceStartRunRequest = { sources, profileId };
     try {
       await startImpl(request, controller.signal, onMessage);
       const runId = completedRunIdRef.current;
@@ -191,7 +221,7 @@ export function RunLauncher({
     profileId,
     running,
     connectedFile,
-    connectedFolder,
+    workspaceSources,
     onMessage,
     onRunCompleted,
     startImpl,
@@ -215,11 +245,31 @@ export function RunLauncher({
             </span>
             <span className="qi-connected-hint">Generate uses the connected file.</span>
           </div>
-        ) : connectedFolder !== null ? (
+        ) : workspaceSources.length > 1 ? (
+          <div className="qi-connected-source" data-testid="qi-connected-source">
+            <span className="qi-connected-kind">
+              Connected sources ({workspaceSources.length.toString()})
+            </span>
+            <ul className="qi-connected-roots" aria-label="Connected sources">
+              {workspaceSources.map((s) => (
+                <li key={s.path} className="qi-connected-root-item">
+                  <span className="qi-connected-root-name">{s.label}</span>
+                  <span className="qi-connected-path qi-monospace" title={s.path}>
+                    {s.path}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <span className="qi-connected-hint">Generate uses all connected sources.</span>
+          </div>
+        ) : workspaceSources.length === 1 ? (
           <div className="qi-connected-source" data-testid="qi-connected-source">
             <span className="qi-connected-kind">Connected folder</span>
-            <span className="qi-connected-path qi-monospace" title={connectedFolder}>
-              {connectedFolder}
+            <span
+              className="qi-connected-path qi-monospace"
+              title={workspaceSources[0]?.path ?? ""}
+            >
+              {workspaceSources[0]?.path ?? ""}
             </span>
             <span className="qi-connected-hint">Generate uses the connected source.</span>
           </div>

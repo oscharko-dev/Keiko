@@ -255,6 +255,11 @@ export interface QualityIntelligenceRunStreamAccepted {
   readonly requestedAt: string;
   readonly sourceCount: number;
   readonly atomCount: number;
+  /**
+   * Sources dropped because the request exceeded the 16-source cap (Epic #729). Present and > 0 only
+   * when sources were dropped; the UI surfaces a coverage notice. Additive on the wire.
+   */
+  readonly droppedSourceCount?: number;
 }
 
 export interface QualityIntelligenceRunStreamEvent {

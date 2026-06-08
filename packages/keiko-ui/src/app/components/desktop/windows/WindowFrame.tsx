@@ -85,6 +85,7 @@ function selectBody(
   cfg: Record<string, unknown>,
   linkedRoot: string | null,
   linkedFilePath: string | undefined,
+  linkedRoots: readonly string[],
   updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void,
   openWindow: (type: WindowType, cfg?: Record<string, string | number | boolean>) => string | null,
 ): BodySelection {
@@ -101,7 +102,7 @@ function selectBody(
   }
   return {
     mode: "full",
-    node: def.render(cfg, { linkedRoot, linkedFilePath, updateCfg, openWindow }),
+    node: def.render(cfg, { linkedRoot, linkedFilePath, linkedRoots, updateCfg, openWindow }),
   };
 }
 
@@ -244,6 +245,12 @@ export function WindowFrame({
     win.type === "agents" || win.type === "quality"
       ? api.linkedFilesContext(win.id)?.activeFilePath
       : undefined;
+  const linkedRoots =
+    win.type === "quality"
+      ? api.linkedAllFilesRoots(win.id)
+      : linkedRoot !== null
+        ? [linkedRoot]
+        : [];
   const ew = win.w / zoom;
   const eh = win.h / zoom;
   const updateCfg = useCallback(
@@ -264,6 +271,7 @@ export function WindowFrame({
     win.cfg,
     linkedRoot,
     linkedFilePath,
+    linkedRoots,
     updateCfg,
     openWindow,
   );

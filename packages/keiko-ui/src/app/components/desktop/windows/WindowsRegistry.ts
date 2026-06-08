@@ -52,6 +52,7 @@ export interface ConfigField {
 export interface WindowRenderContext {
   readonly linkedRoot: string | null;
   readonly linkedFilePath: string | undefined;
+  readonly linkedRoots: readonly string[];
   readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
   /**
    * Open another Workspace window from inside this one (e.g. the QI hub opening a per-run result

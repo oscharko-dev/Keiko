@@ -507,3 +507,66 @@ describe("ingestInlineSources — multiple sources", () => {
     }
   });
 });
+
+// ─── Multi-source fair budget + cap (Epic #729, Issue #730) ──────────────────────
+
+// Build a requirements source that yields at least `n` atoms (one per sentence line).
+function manyReqs(label: string, n: number): { kind: "requirements"; label: string; text: string } {
+  const text = Array.from(
+    { length: n },
+    (_, i) => `The system shall satisfy requirement number ${String(i)} for ${label} precisely.`,
+  ).join("\n");
+  return { kind: "requirements", label, text };
+}
+
+const MAX_TOTAL_ATOMS = 120;
+
+describe("ingestInlineSources — fair per-source budget (Issue #730)", () => {
+  it("splits the global atom budget evenly across sources (3 large sources → 40 each)", () => {
+    const result = ingest(input([manyReqs("A", 100), manyReqs("B", 100), manyReqs("C", 100)]));
+    // floor(120/3) = 40 per source.
+    expect(result.ingestedAtoms.length).toBe(MAX_TOTAL_ATOMS);
+    expect(result.sourceSummaries.map((s) => s.atomCount)).toEqual([40, 40, 40]);
+  });
+
+  it("does not let one large source starve the others", () => {
+    const result = ingest(
+      input([manyReqs("Big", 100), manyReqs("S1", 10), manyReqs("S2", 10), manyReqs("S3", 10)]),
+    );
+    // floor(120/4) = 30 per source; the big source is bounded to 30 while small sources keep theirs.
+    const counts = result.sourceSummaries.map((s) => s.atomCount);
+    expect(counts[0]).toBe(30);
+    expect(counts[1]).toBe(10);
+    expect(counts[2]).toBe(10);
+    expect(counts[3]).toBe(10);
+    expect(result.droppedSourceCount).toBe(0);
+  });
+
+  it("keeps the whole budget for a single source", () => {
+    const result = ingest(input([manyReqs("Solo", 200)]));
+    expect(result.ingestedAtoms.length).toBe(MAX_TOTAL_ATOMS);
+    expect(result.droppedSourceCount).toBe(0);
+  });
+
+  it("caps the source count at 16 and reports the dropped overflow", () => {
+    const sources = Array.from({ length: 17 }, (_, i) => manyReqs(`S${String(i)}`, 5));
+    const result = ingest(input(sources));
+    expect(result.sourceSummaries.length).toBe(16);
+    expect(result.droppedSourceCount).toBe(1);
+    // Every ingested atom stays source-tagged via its envelope.
+    expect(result.envelopes.length).toBe(16);
+  });
+
+  it("reports droppedSourceCount = 0 when at the cap exactly", () => {
+    const sources = Array.from({ length: 16 }, (_, i) => manyReqs(`S${String(i)}`, 3));
+    const result = ingest(input(sources));
+    expect(result.sourceSummaries.length).toBe(16);
+    expect(result.droppedSourceCount).toBe(0);
+  });
+
+  it("ingests a mix of requirements and single-file sources fairly", () => {
+    const result = ingest(input([manyReqs("Reqs", 100), manyReqs("MoreReqs", 100)]));
+    // floor(120/2) = 60 each.
+    expect(result.sourceSummaries.map((s) => s.atomCount)).toEqual([60, 60]);
+  });
+});

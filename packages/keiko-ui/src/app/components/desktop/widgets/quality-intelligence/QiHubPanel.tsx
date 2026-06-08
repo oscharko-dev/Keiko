@@ -19,6 +19,8 @@ export interface QiHubPanelProps {
   readonly connectedRoot?: string | null;
   /** Focused single file in the connected Files window (Epic #709) — preferred over the folder. */
   readonly connectedFilePath?: string | null;
+  /** All connected Files window roots (Epic #729 N+1). Empty when no Files windows are connected. */
+  readonly connectedRoots?: readonly string[] | undefined;
   /** Seam for tests. */
   readonly fetchRunsImpl?: typeof fetchQiRuns;
 }
@@ -56,6 +58,7 @@ export function QiHubPanel({
   openRun,
   connectedRoot = null,
   connectedFilePath = null,
+  connectedRoots,
   fetchRunsImpl = fetchQiRuns,
 }: QiHubPanelProps): ReactNode {
   const [runs, setRuns] = useState<readonly QualityIntelligenceUiRunSummary[]>([]);
@@ -92,6 +95,7 @@ export function QiHubPanel({
         onRunCompleted={handleRunCompleted}
         connectedRoot={connectedRoot}
         connectedFilePath={connectedFilePath}
+        connectedRoots={connectedRoots}
       />
       <section className="qi-hub-runs" aria-label="Quality Intelligence runs">
         <header className="qi-col-header">
