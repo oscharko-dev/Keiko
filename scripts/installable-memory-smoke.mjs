@@ -16,6 +16,11 @@ const HEALTH_POLL_INTERVAL_MS = 250;
 const UI_START_TIMEOUT_MS = 30_000;
 const USER_ID = "memory-smoke-user";
 const MODEL_ID = "example-chat-model";
+// Salience capture (Epic #204) appends a SECOND model call per turn whose system prompt contains
+// this marker; the chat completion never does. Skip salience calls when inspecting model prompts.
+const SALIENCE_PROMPT_MARKER = "extract durable memories from a chat turn";
+const latestChatRequestOf = (entries) =>
+  [...entries].reverse().find((entry) => !JSON.stringify(entry).includes(SALIENCE_PROMPT_MARKER));
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -176,7 +181,9 @@ async function startFakeProvider() {
         server.close((error) => (error ? reject(error) : resolvePromise())),
       );
     },
-    latestRequest: () => requests.at(-1),
+    // Salience capture (Epic #204) issues a SECOND model call AFTER the chat completion, so the
+    // chat request — the one carrying the memory block — is no longer the latest recorded request.
+    latestChatRequest: () => latestChatRequestOf(requests),
   };
 }
 
@@ -433,7 +440,9 @@ async function main() {
         retrieval.memory.context.memories.length > 0,
       "retrieval response did not surface included memories",
     );
-    const retrievalPrompt = JSON.stringify(provider.latestRequest());
+    // The chat completion carries the memory block; the trailing salience-capture call does not,
+    // so inspect the latest CHAT request (salience calls are skipped) rather than the latest call.
+    const retrievalPrompt = JSON.stringify(provider.latestChatRequest());
     assert(
       retrievalPrompt.includes("Included memory context:"),
       "model prompt did not include the memory block",
@@ -466,7 +475,7 @@ async function main() {
       "Which package manager should I use for installs?",
       false,
     );
-    const noMemoryPrompt = JSON.stringify(provider.latestRequest());
+    const noMemoryPrompt = JSON.stringify(provider.latestChatRequest());
     assert(
       noMemory.memory?.context?.enabled === false,
       "memory-off response did not mark context.enabled=false",
@@ -500,7 +509,7 @@ async function main() {
       correctedChatId,
       "Which package manager should I use for installs now?",
     );
-    const correctedPrompt = JSON.stringify(provider.latestRequest());
+    const correctedPrompt = JSON.stringify(provider.latestChatRequest());
     assert(
       correctedPrompt.includes("yarn") &&
         correctedRetrieval.memory?.context?.memories?.some((memory) =>
@@ -516,7 +525,7 @@ async function main() {
       isolatedChatId,
       "Which package manager should I use for installs now?",
     );
-    const isolatedPrompt = JSON.stringify(provider.latestRequest());
+    const isolatedPrompt = JSON.stringify(provider.latestChatRequest());
     assert(
       Array.isArray(isolated.memory?.context?.memories) &&
         isolated.memory.context.memories.length === 0,
