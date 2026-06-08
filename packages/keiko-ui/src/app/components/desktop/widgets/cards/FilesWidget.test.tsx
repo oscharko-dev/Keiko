@@ -7,7 +7,7 @@ import {
   fetchFilesPreview,
   fetchFilesTree,
   fetchProjects,
-  updateChatConnectedScope,
+  updateChatConnectedScopes,
 } from "../../../../../lib/api";
 import type { Chat } from "../../../../../lib/types";
 import { ChatSessionProvider } from "../../context/ChatSessionContext";
@@ -23,7 +23,7 @@ vi.mock("../../../../../lib/api", async () => {
     fetchFilesPreview: vi.fn(),
     fetchProjects: vi.fn(),
     fetchFilesTree: vi.fn(),
-    updateChatConnectedScope: vi.fn(),
+    updateChatConnectedScopes: vi.fn(),
   };
 });
 
@@ -168,18 +168,16 @@ describe("FilesWidget", () => {
     const updated = makeChat({
       connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 100 },
     });
-    vi.mocked(updateChatConnectedScope).mockResolvedValueOnce({ chat: updated });
+    vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: updated });
     const session = renderWithSession(<FilesWidget root="/repo" />);
 
     await screen.findByText("Empty folder.");
     await userEvent.click(screen.getByRole("button", { name: "Connect repository" }));
 
     await waitFor(() => {
-      expect(updateChatConnectedScope).toHaveBeenCalledWith("chat-1", {
-        kind: "workspace-root",
-        relativePaths: [],
-        connectedAtMs: expect.any(Number),
-      });
+      expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
+        { kind: "workspace-root", relativePaths: [], connectedAtMs: expect.any(Number) },
+      ]);
     });
     expect(session.replaceChat).toHaveBeenCalledWith(updated);
   });
@@ -194,18 +192,16 @@ describe("FilesWidget", () => {
     const updated = makeChat({
       connectedScope: { kind: "directory", relativePaths: ["src"], connectedAtMs: 101 },
     });
-    vi.mocked(updateChatConnectedScope).mockResolvedValueOnce({ chat: updated });
+    vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: updated });
     const session = renderWithSession(<FilesWidget root="/repo" />);
 
     await screen.findByRole("button", { name: /src/i });
     await userEvent.click(screen.getByRole("button", { name: "Connect folder" }));
 
     await waitFor(() => {
-      expect(updateChatConnectedScope).toHaveBeenCalledWith("chat-1", {
-        kind: "directory",
-        relativePaths: ["src"],
-        connectedAtMs: expect.any(Number),
-      });
+      expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
+        { kind: "directory", relativePaths: ["src"], connectedAtMs: expect.any(Number) },
+      ]);
     });
     expect(session.replaceChat).toHaveBeenCalledWith(updated);
   });

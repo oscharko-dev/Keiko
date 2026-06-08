@@ -385,22 +385,6 @@ export async function updateChat(id: string, patch: UpdateChatInput): Promise<Ch
   });
 }
 
-// Issue #184 — binds a Files-window scope to a chat. `null` clears the binding; a
-// ChatConnectedScope object sets/replaces it. All path validation runs at the BFF boundary;
-// invalid input surfaces as ApiError with HTTP 400 invalid_request.
-export async function updateChatConnectedScope(
-  chatId: string,
-  scope: ChatConnectedScope | null,
-): Promise<ChatResponse> {
-  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
-    method: "PATCH",
-    body: JSON.stringify({
-      connectedScope: scope,
-      ...(scope !== null ? { localKnowledgeScope: null } : {}),
-    }),
-  });
-}
-
 // Epic #532 — M3: bind a list of sources (1+N) to a chat. `null` clears ALL
 // connected scopes. Kept separate from the single-source helper so callers
 // that still use singular binding are not affected. Always patches the plural

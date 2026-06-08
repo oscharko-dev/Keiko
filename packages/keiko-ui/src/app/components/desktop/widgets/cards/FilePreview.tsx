@@ -159,6 +159,7 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
             scopeKind="files"
             currentScopeKind={activeChat.connectedScope?.kind}
             candidateRelativePaths={candidatePaths}
+            chat={activeChat}
             onConnected={session.replaceChat}
           />
         ) : null}

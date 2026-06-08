@@ -205,6 +205,7 @@ export function FilesWidget({
         scopeKind={scopeKind}
         currentScopeKind={activeChat.connectedScope?.kind}
         candidateRelativePaths={scopeKind === "workspace-root" ? [] : [relativePath]}
+        chat={activeChat}
         onConnected={session.replaceChat}
       />
     );
