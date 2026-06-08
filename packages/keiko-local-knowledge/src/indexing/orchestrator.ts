@@ -37,19 +37,21 @@ import type {
 import { verifyEmbeddingCapability } from "@oscharko-dev/keiko-model-gateway";
 
 import { chunkDocument } from "../chunking/chunker-runner.js";
-import { hasStaleChunksForDocument } from "../chunking/chunker-persist.js";
+import { deleteChunksForDocument, hasStaleChunksForDocument } from "../chunking/chunker-persist.js";
 import { getCapsule, updateCapsuleState } from "../capsule-lifecycle.js";
 import { discoverAndExtract } from "../discovery/discovery-runner.js";
 import {
   deleteDocumentRow,
   listPersistedDocumentsForSource,
   readDocumentTextRow,
+  updateDocumentStatusRow,
 } from "../discovery/persist.js";
 import type { ExtractionEvent, ExtractionResult } from "../discovery/types.js";
 import { listCapsuleSources } from "../source-lifecycle.js";
 
 import {
   finalizeJobRow,
+  isJobCancellationRequested,
   insertJobRow,
   updateJobCounters,
   type JobCounters,
@@ -77,6 +79,13 @@ import {
 // `discovery/discovery-runner.ts` and `discovery/walk.ts`.
 function aborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
+}
+
+function cancellationRequested(state: RunState): boolean {
+  return (
+    aborted(state.options.signal) ||
+    isJobCancellationRequested(state.options.store._internal.db, state.jobId)
+  );
 }
 
 // ─── Bounded options ──────────────────────────────────────────────────────────
@@ -131,6 +140,10 @@ function buildCounters(state: RunState): JobCounters {
   };
 }
 
+function persistJobProgress(state: RunState): void {
+  updateJobCounters(state.options.store._internal.db, state.jobId, buildCounters(state));
+}
+
 function emitProgress(options: IndexingOptions, event: IndexingEvent): void {
   if (options.progress === undefined) return;
   // Caller-provided callback; isolate so a throwing consumer cannot crash the orchestrator
@@ -142,6 +155,21 @@ function emitProgress(options: IndexingOptions, event: IndexingEvent): void {
   } catch {
     // intentionally swallowed — progress sinks must not affect run correctness
   }
+}
+
+function clearDocumentArtifacts(
+  state: RunState,
+  documentId: DocumentId,
+  options: { readonly deleteChunks: boolean },
+): void {
+  deleteVectorsForDocument(state.options.store._internal.db, state.capsule.id, documentId);
+  if (options.deleteChunks) {
+    deleteChunksForDocument(state.options.store._internal.db, state.capsule.id, documentId);
+  }
+}
+
+function markDocumentFailed(state: RunState, documentId: DocumentId): void {
+  updateDocumentStatusRow(state.options.store._internal.db, state.capsule.id, documentId, "failed");
 }
 
 // ─── Per-chunk text projection ────────────────────────────────────────────────
@@ -306,6 +334,7 @@ async function embedDocumentChunks(
   let vectorCount = 0;
   let lastChunkId: ChunkId | null = null;
   for (const batch of batches) {
+    if (cancellationRequested(state)) break;
     const result = await embedChunkBatch(batch, {
       adapter: state.options.embeddingAdapter,
       store: state.options.store,
@@ -326,7 +355,7 @@ async function embedDocumentChunks(
     if (result.errors.some((e) => e.code === "INCOMPATIBLE_EMBEDDING_IDENTITY")) {
       break;
     }
-    if (aborted(state.options.signal)) break;
+    if (cancellationRequested(state)) break;
   }
   return { vectorCount, errors, lastChunkId };
 }
@@ -347,6 +376,10 @@ function handleExtractionFailed(state: RunState, result: ExtractionResult): Inde
   const errMessage =
     result.outcome.kind === "failed" ? result.outcome.error.message : "extraction failed";
   const errCode = result.outcome.kind === "failed" ? result.outcome.error.code : "READ_FAILED";
+  if (result.outcome.kind === "failed") {
+    clearDocumentArtifacts(state, result.outcome.document.id, { deleteChunks: true });
+    markDocumentFailed(state, result.outcome.document.id);
+  }
   const error: IndexingJobError = { code: `DISCOVERY_FAILED:${errCode}`, message: errMessage };
   state.lastError = error;
   return {
@@ -497,7 +530,13 @@ function tryChunkDocument(
   try {
     return { chunked: chunkPersistedDocument(state, result) };
   } catch (cause) {
+    if (cancellationRequested(state)) {
+      clearDocumentArtifacts(state, documentId, { deleteChunks: true });
+      return { events: [] };
+    }
     state.failedDocuments += 1;
+    clearDocumentArtifacts(state, documentId, { deleteChunks: true });
+    markDocumentFailed(state, documentId);
     const error: IndexingJobError = {
       code: "CHUNKING_FAILED",
       message: cause instanceof Error ? cause.message : String(cause),
@@ -517,44 +556,34 @@ function tryChunkDocument(
   }
 }
 
-// Maps an EmbedDocumentResult into PersistedHandling events, mutating run-state counters.
-function applyEmbedResult(
+function appendDocumentFailure(
   state: RunState,
+  events: IndexingEvent[],
   documentId: DocumentId,
   relativePath: string,
-  priorEvents: readonly IndexingEvent[],
+  error: IndexingJobError,
+  options: { readonly deleteChunks: boolean },
+): PersistedHandling {
+  state.failedDocuments += 1;
+  clearDocumentArtifacts(state, documentId, options);
+  markDocumentFailed(state, documentId);
+  state.lastError = error;
+  events.push({
+    kind: "document-failed",
+    jobId: state.jobId,
+    documentId,
+    relativePath,
+    error,
+  });
+  return { events };
+}
+
+function completeEmbeddedDocument(
+  state: RunState,
+  events: IndexingEvent[],
+  documentId: DocumentId,
   embedResult: EmbedDocumentResult,
 ): PersistedHandling {
-  const events: IndexingEvent[] = [...priorEvents];
-  const identityErr = embedResult.errors.find((e) => e.code === "INCOMPATIBLE_EMBEDDING_IDENTITY");
-  if (identityErr !== undefined) {
-    state.failedDocuments += 1;
-    state.lastError = identityErr;
-    events.push({
-      kind: "document-failed",
-      jobId: state.jobId,
-      documentId,
-      relativePath,
-      error: identityErr,
-    });
-    return { events, identityFailure: identityErr };
-  }
-  if (embedResult.errors.length > 0) {
-    state.failedDocuments += 1;
-    const firstErr = embedResult.errors[0] ?? {
-      code: "EMBEDDING_ADAPTER_FAILED",
-      message: "embedding adapter failed",
-    };
-    state.lastError = firstErr;
-    events.push({
-      kind: "document-failed",
-      jobId: state.jobId,
-      documentId,
-      relativePath,
-      error: firstErr,
-    });
-    return { events };
-  }
   state.processedDocuments += 1;
   state.vectorsPersisted += embedResult.vectorCount;
   if (embedResult.lastChunkId !== null) state.lastResumeToken = embedResult.lastChunkId;
@@ -568,6 +597,51 @@ function applyEmbedResult(
   return { events };
 }
 
+function isCancellationOnlyEmbedResult(
+  state: RunState,
+  embedResult: EmbedDocumentResult,
+): boolean {
+  return (
+    cancellationRequested(state) &&
+    embedResult.errors.length > 0 &&
+    embedResult.errors.every((error) => error.code === "CANCELLED")
+  );
+}
+
+// Maps an EmbedDocumentResult into PersistedHandling events, mutating run-state counters.
+function applyEmbedResult(
+  state: RunState,
+  documentId: DocumentId,
+  relativePath: string,
+  priorEvents: readonly IndexingEvent[],
+  embedResult: EmbedDocumentResult,
+): PersistedHandling {
+  const events: IndexingEvent[] = [...priorEvents];
+  if (isCancellationOnlyEmbedResult(state, embedResult)) {
+    clearDocumentArtifacts(state, documentId, { deleteChunks: false });
+    return { events };
+  }
+  const identityErr = embedResult.errors.find((e) => e.code === "INCOMPATIBLE_EMBEDDING_IDENTITY");
+  if (identityErr !== undefined) {
+    return {
+      ...appendDocumentFailure(state, events, documentId, relativePath, identityErr, {
+        deleteChunks: false,
+      }),
+      identityFailure: identityErr,
+    };
+  }
+  if (embedResult.errors.length > 0) {
+    const firstErr = embedResult.errors[0] ?? {
+      code: "EMBEDDING_ADAPTER_FAILED",
+      message: "embedding adapter failed",
+    };
+    return appendDocumentFailure(state, events, documentId, relativePath, firstErr, {
+      deleteChunks: false,
+    });
+  }
+  return completeEmbeddedDocument(state, events, documentId, embedResult);
+}
+
 // Wraps the chunk-then-embed pipeline for a single persisted document.
 async function handlePersistedDocument(
   state: RunState,
@@ -575,6 +649,21 @@ async function handlePersistedDocument(
 ): Promise<PersistedHandling> {
   const documentId = result.outcome.kind === "persisted" ? result.outcome.document.id : null;
   if (documentId === null) return { events: [] };
+  if (result.outcome.document.status === "unsupported") {
+    clearDocumentArtifacts(state, documentId, { deleteChunks: true });
+    state.skippedDocuments += 1;
+    return {
+      events: [
+        {
+          kind: "document-extracted",
+          jobId: state.jobId,
+          documentId,
+          relativePath: result.relativePath,
+        },
+        { kind: "document-skipped", jobId: state.jobId, documentId, reason: "unsupported" },
+      ],
+    };
+  }
 
   const fastPath = applyIncrementalFastPath(state, documentId);
   if (fastPath !== undefined) return fastPath;
@@ -619,11 +708,14 @@ async function* runOneSource(
   };
   for await (const evt of stream) {
     observeSourceEvent(progress, evt);
-    if (aborted(state.options.signal)) {
+    if (cancellationRequested(state)) {
       progress.cancelled = true;
       break;
     }
     const events = await handleDiscoveryEvent(state, evt);
+    if (events.length > 0) {
+      persistJobProgress(state);
+    }
     for (const e of events) {
       yield e;
       if (e.kind === "document-failed" && e.error.code === "INCOMPATIBLE_EMBEDDING_IDENTITY") {
@@ -632,7 +724,7 @@ async function* runOneSource(
     }
     // After yielding a batch we re-check the signal — the consumer's awaiting iterator
     // may have aborted between events.
-    if (aborted(state.options.signal)) {
+    if (cancellationRequested(state)) {
       progress.cancelled = true;
       break;
     }
@@ -839,21 +931,78 @@ function buildResult(
 }
 
 async function verifyEmbeddingPreflight(state: RunState): Promise<IndexingJobError | undefined> {
-  const result = await verifyEmbeddingCapability(state.options.embeddingAdapter, {
-    modelId: state.capsule.embeddingModelIdentity.modelId,
-    provider: state.capsule.embeddingModelIdentity.provider,
-    vectorMetric: state.capsule.embeddingModelIdentity.vectorMetric,
-    expectedDimensions: state.capsule.embeddingModelIdentity.vectorDimensions,
-    ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
+  try {
+    const result = await verifyEmbeddingCapability(state.options.embeddingAdapter, {
+      modelId: state.capsule.embeddingModelIdentity.modelId,
+      provider: state.capsule.embeddingModelIdentity.provider,
+      vectorMetric: state.capsule.embeddingModelIdentity.vectorMetric,
+      expectedDimensions: state.capsule.embeddingModelIdentity.vectorDimensions,
+      ...(state.options.signal !== undefined ? { signal: state.options.signal } : {}),
+    });
+    if (result.ok) return undefined;
+    return {
+      code:
+        result.reason === "dimension-mismatch"
+          ? "INCOMPATIBLE_EMBEDDING_IDENTITY"
+          : "EMBEDDING_ADAPTER_FAILED",
+      message: result.safeMessage,
+    };
+  } catch (cause) {
+    if (cancellationRequested(state) || (cause instanceof DOMException && cause.name === "AbortError")) {
+      return { code: "CANCELLED", message: "indexing aborted via AbortSignal" };
+    }
+    return {
+      code: "EMBEDDING_ADAPTER_FAILED",
+      message: cause instanceof Error ? cause.message : String(cause),
+    };
+  }
+}
+
+function persistStartedJob(state: RunState, sources: readonly KnowledgeSource[]): void {
+  insertJobRow(state.options.store._internal.db, {
+    id: state.jobId,
+    capsuleId: state.capsule.id,
+    sourceIds: sources.map((source) => source.id),
+    startedAt: state.startedAt,
   });
-  if (result.ok) return undefined;
-  return {
-    code:
-      result.reason === "dimension-mismatch"
-        ? "INCOMPATIBLE_EMBEDDING_IDENTITY"
-        : "EMBEDDING_ADAPTER_FAILED",
-    message: result.safeMessage,
+  try {
+    updateCapsuleState(state.options.store, state.capsule.id, "indexing");
+  } catch {
+    // The capsule state column is informational — failing to flip it must not abort the
+    // run. The events stream remains the source of truth.
+  }
+}
+
+function emitJobStarted(state: RunState, sources: readonly KnowledgeSource[]): IndexingEvent {
+  const event: IndexingEvent = {
+    kind: "job-started",
+    jobId: state.jobId,
+    capsuleId: state.capsule.id,
+    sourceIds: sources.map((source) => source.id),
+    startedAt: state.startedAt,
   };
+  state.options.auditSink?.emit({
+    kind: "indexing-job-started",
+    capsuleId: state.capsule.id,
+    jobId: state.jobId,
+    occurredAt: state.startedAt,
+  });
+  return emit(state, event);
+}
+
+async function* runSourcesWithProgress(
+  state: RunState,
+  sources: readonly KnowledgeSource[],
+): AsyncGenerator<IndexingEvent, IndexingJobError | undefined> {
+  let identityFailure: IndexingJobError | undefined;
+  for (const source of sources) {
+    if (cancellationRequested(state) || identityFailure !== undefined) {
+      break;
+    }
+    identityFailure = yield* iterateSourceEvents(state, source);
+    persistJobProgress(state);
+  }
+  return identityFailure;
 }
 
 // ─── Public entrypoint ────────────────────────────────────────────────────────
@@ -864,40 +1013,18 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
   const idSource = options.idSource ?? ((): string => randomUUID());
   const jobId = idSource();
   const state = buildInitialState(options, capsule, sources, jobId, startedAt);
+  persistStartedJob(state, sources);
+  yield emitJobStarted(state, sources);
 
-  // Persist the started row up front. The `idSource` is reused for vector storage refs;
-  // the jobId itself is minted from the same source so test fixtures can pin both.
-  insertJobRow(state.options.store._internal.db, {
-    id: jobId,
-    capsuleId: capsule.id,
-    sourceIds: sources.map((s) => s.id),
-    startedAt,
-  });
-
-  // Lifecycle: mark the capsule as `indexing` so concurrent UI surfaces see the
-  // in-progress state. Restored to `ready`/`error` at finalization.
-  try {
-    updateCapsuleState(state.options.store, capsule.id, "indexing");
-  } catch {
-    // The capsule state column is informational — failing to flip it must not abort the
-    // run. The events stream remains the source of truth.
+  if (cancellationRequested(state)) {
+    yield* finalize(state, undefined);
+    return;
   }
-
-  yield emit(state, {
-    kind: "job-started",
-    jobId,
-    capsuleId: capsule.id,
-    sourceIds: sources.map((s) => s.id),
-    startedAt,
-  });
-  options.auditSink?.emit({
-    kind: "indexing-job-started",
-    capsuleId: capsule.id,
-    jobId,
-    occurredAt: startedAt,
-  });
-
   const preflightFailure = await verifyEmbeddingPreflight(state);
+  if (cancellationRequested(state)) {
+    yield* finalize(state, undefined);
+    return;
+  }
   if (preflightFailure !== undefined) {
     state.lastError = preflightFailure;
     yield* finalize(state, preflightFailure);
@@ -909,15 +1036,7 @@ export async function* runIndexingJob(options: IndexingOptions): AsyncIterable<I
   if (options.force === true) {
     deleteVectorsForCapsule(state.options.store._internal.db, capsule.id);
   }
-
-  let identityFailure: IndexingJobError | undefined;
-  for (const source of sources) {
-    if (aborted(options.signal)) break;
-    if (identityFailure !== undefined) break;
-    identityFailure = yield* iterateSourceEvents(state, source);
-    updateJobCounters(state.options.store._internal.db, jobId, buildCounters(state));
-  }
-
+  const identityFailure = yield* runSourcesWithProgress(state, sources);
   yield* finalize(state, identityFailure);
 }
 
@@ -949,7 +1068,7 @@ function resolveJobStatus(
     state.lastError = fatalFailure;
     return "failed";
   }
-  if (aborted(state.options.signal)) return "cancelled";
+  if (cancellationRequested(state)) return "cancelled";
   if (state.failedDocuments > 0 && state.processedDocuments === 0) return "failed";
   return "succeeded";
 }

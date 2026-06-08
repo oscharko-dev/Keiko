@@ -52,6 +52,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
+import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
 
 const MAX_BODY_BYTES = 32_000;
 // F4 (Epic #189): cap unbounded BFF response collections so a worst-case capsule with
@@ -180,6 +181,63 @@ function runtimeStateDir(deps: UiHandlerDeps): string | undefined {
   return dirname(deps.uiDbPath);
 }
 
+interface RecoverableRunningJobRow {
+  readonly id: string;
+  readonly capsule_id: string;
+  readonly cancellation_requested: number;
+}
+
+function recoverAbandonedIndexingJobs(store: ReturnType<typeof openKnowledgeStore>): void {
+  const rows = store._internal.db
+    .prepare(
+      [
+        "SELECT id, capsule_id, cancellation_requested",
+        "FROM indexing_jobs",
+        "WHERE status = 'running'",
+        "ORDER BY started_at ASC, id ASC",
+      ].join(" "),
+    )
+    .all() as unknown as readonly RecoverableRunningJobRow[];
+  if (rows.length === 0) {
+    return;
+  }
+  const finishedAt = store._internal.now();
+  for (const row of rows) {
+    if (
+      localKnowledgeIndexingRegistry.isActiveCapsule(row.capsule_id) ||
+      localKnowledgeIndexingRegistry.isActiveJob(row.id)
+    ) {
+      continue;
+    }
+    const cancelled = row.cancellation_requested === 1;
+    store._internal.db
+      .prepare(
+        [
+          "UPDATE indexing_jobs SET",
+          "  status = :status,",
+          "  finished_at = :finished_at,",
+          "  last_error_code = :error_code,",
+          "  last_error_message = :error_message",
+          "WHERE id = :id AND status = 'running'",
+        ].join(" "),
+      )
+      .run({
+        status: cancelled ? "cancelled" : "failed",
+        finished_at: finishedAt,
+        error_code: cancelled ? "CANCELLED" : "INDEXING_INTERRUPTED",
+        error_message: cancelled
+          ? "Indexing was cancelled before the run could be finalized."
+          : "Indexing stopped unexpectedly before completion. Restart the run to finish indexing.",
+        id: row.id,
+      });
+    try {
+      updateCapsuleState(store, row.capsule_id as KnowledgeCapsuleId, "error");
+    } catch {
+      // informational only — the recovered job row is the durable source of truth
+    }
+  }
+}
+
 function openStoreForDeps(deps: UiHandlerDeps): {
   readonly store: ReturnType<typeof openKnowledgeStore>;
   readonly dbPath: string;
@@ -191,6 +249,7 @@ function openStoreForDeps(deps: UiHandlerDeps): {
   }
   const dbPath = resolveKnowledgeStorePath({ runtimeStateDir: root });
   const store = openKnowledgeStore({ dbPath });
+  recoverAbandonedIndexingJobs(store);
   return {
     store,
     dbPath,
@@ -813,6 +872,7 @@ function requestRunningJobCancellation(
       "UPDATE indexing_jobs SET cancellation_requested = 1 WHERE id = :id AND capsule_id = :c",
     )
     .run({ id: jobId, c: capsuleId });
+  localKnowledgeIndexingRegistry.cancel(String(capsuleId));
   return true;
 }
 
@@ -891,24 +951,33 @@ async function runCapsuleIndexingJob(
   const adapter = createEmbeddingAdapter(provider, requestEmbeddingImpl(deps));
   const sourceIds =
     options.mode === "repair-failed" ? failedSourceIds(store, capsule.id) : undefined;
+  const controller = localKnowledgeIndexingRegistry.start(String(capsule.id));
   let terminal: IndexingTerminal | undefined;
-  for await (const event of runIndexingJob({
-    capsuleId: capsule.id,
-    ...(sourceIds !== undefined ? { sourceIds } : {}),
-    parserRegistry: createDefaultParserRegistry(),
-    workspaceFs: nodeWorkspaceFs,
-    embeddingAdapter: adapter,
-    auditSink: createSqliteAuditSink(store),
-    store,
-    force: options.force,
-  })) {
-    if (
-      event.kind === "job-completed" ||
-      event.kind === "job-failed" ||
-      event.kind === "job-cancelled"
-    ) {
-      terminal = event;
+  try {
+    for await (const event of runIndexingJob({
+      capsuleId: capsule.id,
+      ...(sourceIds !== undefined ? { sourceIds } : {}),
+      parserRegistry: createDefaultParserRegistry(),
+      workspaceFs: nodeWorkspaceFs,
+      embeddingAdapter: adapter,
+      auditSink: createSqliteAuditSink(store),
+      store,
+      force: options.force,
+      signal: controller.signal,
+    })) {
+      if (event.kind === "job-started") {
+        localKnowledgeIndexingRegistry.attachJobId(String(capsule.id), event.jobId);
+      }
+      if (
+        event.kind === "job-completed" ||
+        event.kind === "job-failed" ||
+        event.kind === "job-cancelled"
+      ) {
+        terminal = event;
+      }
     }
+  } finally {
+    localKnowledgeIndexingRegistry.complete(String(capsule.id));
   }
   return terminal;
 }
@@ -1248,7 +1317,7 @@ export async function handleCancelLocalKnowledgeCapsuleIndexing(
       }
       if (!requestRunningJobCancellation(env.store, capsule.id)) {
         return conflict(
-          "No running indexing job was found for this capsule. External cancellation is limited to marking persisted running jobs for cancellation.",
+          "No running indexing job was found for this capsule.",
         );
       }
       return actionResponse(capsule.id);

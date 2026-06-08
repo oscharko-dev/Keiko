@@ -34,6 +34,7 @@ import {
   selectEmbeddingModelId,
 } from "./local-knowledge-handlers.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
+import { localKnowledgeIndexingRegistry } from "./local-knowledge-indexing-registry.js";
 import { createInMemoryUiStore } from "./store/index.js";
 
 function jsonRequest(body: Record<string, unknown> | undefined, method: string): IncomingMessage {
@@ -167,7 +168,37 @@ interface IndexingJobSummaryRow {
   readonly skipped_documents: number;
 }
 
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(reason?: unknown): void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitUntil(
+  predicate: () => boolean,
+  timeoutMs = 2_000,
+  stepMs = 10,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, stepMs));
+  }
+  throw new Error("waitUntil timed out");
+}
+
 afterEach(() => {
+  localKnowledgeIndexingRegistry.reset();
   while (tempDirs.length > 0) {
     const tempDir = tempDirs.pop();
     if (tempDir !== undefined) {
@@ -689,6 +720,132 @@ describe("local-knowledge handlers", () => {
     expect(jobs.n).toBe(1);
   });
 
+  it("projects embedding-failed runs into capsule health instead of indexed source counts", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "alpha.md"), "# Alpha\n\nA.\n", "utf8");
+    writeFileSync(join(docsRoot, "beta.md"), "# Beta\n\nB.\n", "utf8");
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: {
+        kind: "files",
+        rootPath: docsRoot,
+        files: ["alpha.md", "beta.md"],
+      },
+    });
+    store.close();
+
+    let calls = 0;
+    const deps: UiHandlerDeps = {
+      ...depsFor(tmp),
+      localKnowledgeEmbeddingRequest: vi.fn(
+        (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+          calls += 1;
+          if (calls === 1) {
+            return Promise.resolve({
+              ok: true,
+              value: {
+                vector: Float32Array.from({ length: 1536 }, (_, index) => index / 1000),
+                modelId: request.modelId,
+              },
+            });
+          }
+          return Promise.resolve({ ok: false, kind: "rate-limited" });
+        },
+      ),
+    };
+
+    const start = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+    expect(start.status).toBe(409);
+
+    const detail = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+    expect(detail.status).toBe(200);
+    expect(detail.body).toMatchObject({
+      health: {
+        lifecycleState: "error",
+        failedDocuments: 2,
+      },
+      sources: [
+        {
+          sourceId: "src-1",
+          indexedCount: 0,
+          failedCount: 2,
+          skippedCount: 0,
+        },
+      ],
+      indexingJobs: [
+        {
+          status: "failed",
+          processedDocuments: 0,
+          failedDocuments: 2,
+        },
+      ],
+    });
+  });
+
+  it("records unsupported documents as skipped rather than processed in job history", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(
+      join(docsRoot, "keiko-logo.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>',
+      "utf8",
+    );
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Unsupported",
+      tags: [],
+      scope: {
+        kind: "files",
+        rootPath: docsRoot,
+        files: ["keiko-logo.svg"],
+      },
+    });
+    store.close();
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+    expect(result.status).toBe(200);
+
+    const detail = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
+      depsFor(tmp),
+    );
+    expect(detail.status).toBe(200);
+    expect(detail.body).toMatchObject({
+      health: {
+        skippedDocuments: 1,
+        unsupportedDocuments: 1,
+      },
+      sources: [{ sourceId: "src-1", indexedCount: 0, skippedCount: 1 }],
+      indexingJobs: [
+        {
+          status: "succeeded",
+          processedDocuments: 0,
+          skippedDocuments: 1,
+        },
+      ],
+    });
+  });
+
   it("limits repair-failed reindex jobs to sources with failed documents", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
@@ -763,32 +920,132 @@ describe("local-knowledge handlers", () => {
     });
   });
 
-  it("marks the latest persisted running job as cancellation-requested", async () => {
+  it("recovers an orphaned running job to a terminal state after restart", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
     tempDirs.push(tmp);
     const { store, capId } = seedStore(tmp);
     store._internal.db
+      .prepare("UPDATE capsules SET lifecycle_state = 'indexing' WHERE id = :c")
+      .run({ c: capId });
+    store._internal.db
       .prepare(
-        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-running', :c, '[]', 10, NULL, 'running', 0, 0, 0, 0, NULL, NULL, NULL, 0)",
+        "INSERT INTO indexing_jobs (id, capsule_id, source_ids_json, started_at, finished_at, status, total_documents, processed_documents, failed_documents, skipped_documents, last_error_code, last_error_message, resume_token, cancellation_requested) VALUES ('job-running', :c, '[]', 10, NULL, 'running', 3, 1, 0, 1, NULL, NULL, 'doc-1#u0#c3', 0)",
       )
       .run({ c: capId });
     store.close();
 
-    const result = await handleCancelLocalKnowledgeCapsuleIndexing(
-      { ...baseCtx(tmp, "DELETE", { confirm: true }), params: { capsuleId: "cap-1" } },
+    const result = await handleGetLocalKnowledgeCapsule(
+      { ...baseCtx(tmp, "GET"), params: { capsuleId: "cap-1" } },
       depsFor(tmp),
     );
 
     expect(result.status).toBe(200);
-    expect(result.body).toMatchObject({ ok: true, capsuleId: "cap-1" });
+    expect(result.body).toMatchObject({
+      health: { lifecycleState: "error" },
+      indexingJobs: [
+        {
+          id: "job-running",
+          status: "failed",
+          totalDocuments: 3,
+          processedDocuments: 1,
+          skippedDocuments: 1,
+          lastError: {
+            code: "INDEXING_INTERRUPTED",
+          },
+        },
+      ],
+    });
+  });
+
+  it("cancels an active indexing job instead of leaving it running", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+    const docsRoot = join(tmp, "docs");
+    mkdirSync(docsRoot, { recursive: true });
+    writeFileSync(join(docsRoot, "policy.md"), "# Policy\n\nCancelable run.\n", "utf8");
+
+    const { store, capId } = seedStore(tmp);
+    addSourceToCapsule(store, capId, {
+      id: "src-1" as never,
+      displayName: "Policies",
+      tags: [],
+      scope: { kind: "folder", rootPath: docsRoot, recursive: true },
+    });
+    store.close();
+
+    const started = deferred<undefined>();
+    const deps: UiHandlerDeps = {
+      ...depsFor(tmp),
+      localKnowledgeEmbeddingRequest: vi.fn(
+        async (request: OpenAIEmbeddingRequest): Promise<OpenAIEmbeddingOutcome> => {
+          started.resolve(undefined);
+          await new Promise<void>((resolve) => {
+            if (request.signal?.aborted === true) {
+              resolve();
+              return;
+            }
+            request.signal?.addEventListener(
+              "abort",
+              () => {
+                resolve();
+              },
+              { once: true },
+            );
+          });
+          throw new DOMException("aborted", "AbortError");
+        },
+      ),
+    };
+
+    const startPromise = handleStartLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "POST", { confirm: true }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+    await started.promise;
+    await waitUntil(() => {
+      const inspect = openKnowledgeStore({
+        dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+      });
+      try {
+        const row = inspect._internal.db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM indexing_jobs WHERE capsule_id = :c AND status = 'running'",
+          )
+          .get({ c: capId }) as { readonly n: number };
+        return row.n === 1;
+      } finally {
+        inspect.close();
+      }
+    });
+
+    const cancelResult = await handleCancelLocalKnowledgeCapsuleIndexing(
+      { ...baseCtx(tmp, "DELETE", { confirm: true }), params: { capsuleId: "cap-1" } },
+      deps,
+    );
+    const startResult = await startPromise;
 
     const verify = openKnowledgeStore({
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
     });
     const row = verify._internal.db
-      .prepare("SELECT cancellation_requested FROM indexing_jobs WHERE id = 'job-running'")
-      .get() as { readonly cancellation_requested: number };
+      .prepare(
+        "SELECT status, finished_at, cancellation_requested FROM indexing_jobs WHERE capsule_id = :c ORDER BY started_at DESC, id DESC LIMIT 1",
+      )
+      .get({ c: capId }) as {
+      readonly status: string;
+      readonly finished_at: number | null;
+      readonly cancellation_requested: number;
+    };
     verify.close();
+    expect(cancelResult.status).toBe(200);
+    expect(cancelResult.body).toMatchObject({ ok: true, capsuleId: "cap-1" });
+    expect(startResult.status).toBe(409);
+    expect(startResult.body).toMatchObject({
+      error: { code: "indexing-cancelled" },
+      capsuleId: "cap-1",
+    });
+    expect(row.status).toBe("cancelled");
+    expect(row.finished_at).not.toBeNull();
     expect(row.cancellation_requested).toBe(1);
   });
 

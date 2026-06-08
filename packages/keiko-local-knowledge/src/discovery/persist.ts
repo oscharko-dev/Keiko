@@ -90,6 +90,8 @@ const SELECT_DOCUMENTS_FOR_SOURCE_SQL = [
   "ORDER BY document_path ASC",
 ].join(" ");
 const DELETE_DOCUMENT_SQL = "DELETE FROM documents WHERE capsule_id = :c AND id = :d";
+const UPDATE_DOCUMENT_STATUS_SQL =
+  "UPDATE documents SET status = :status WHERE capsule_id = :c AND id = :d";
 
 type SqlValue = string | number | null | Uint8Array;
 type SqlParams = Record<string, SqlValue>;
@@ -247,6 +249,19 @@ export function deleteDocumentRow(
   documentId: DocumentId,
 ): void {
   statements(db).deleteDocument.run({ c: capsuleId, d: documentId });
+}
+
+export function updateDocumentStatusRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+  status: DocumentInsertRow["status"],
+): void {
+  db.prepare(UPDATE_DOCUMENT_STATUS_SQL).run({
+    status,
+    c: capsuleId,
+    d: documentId,
+  });
 }
 
 export function insertPageRow(

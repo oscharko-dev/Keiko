@@ -165,6 +165,75 @@ describe("runIndexingJob — happy path", () => {
     expect(events.some((event) => event.kind === "document-embedded")).toBe(true);
     expect(inputs.join("\n")).toContain("Lorem ipsum");
   });
+
+  it("persists live job counters while discovery and embedding are still in progress", async () => {
+    const single = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(8),
+    });
+    const snapshots: {
+      readonly kind: string;
+      readonly total: number;
+      readonly processed: number;
+      readonly skipped: number;
+      readonly failed: number;
+    }[] = [];
+    let jobId: string | undefined;
+
+    try {
+      await drain(
+        runIndexingJob(
+          buildOptions(single, {
+            progress: (event) => {
+              if (event.kind === "job-started") {
+                jobId = event.jobId;
+                return;
+              }
+              if (
+                jobId === undefined ||
+                (event.kind !== "document-discovered" && event.kind !== "document-embedded")
+              ) {
+                return;
+              }
+              const row = selectJobById(single.store._internal.db, jobId);
+              if (row === undefined) {
+                throw new Error("missing indexing job row");
+              }
+              snapshots.push({
+                kind: event.kind,
+                total: row.total_documents,
+                processed: row.processed_documents,
+                skipped: row.skipped_documents,
+                failed: row.failed_documents,
+              });
+            },
+          }),
+        ),
+      );
+    } finally {
+      single.cleanup();
+    }
+
+    expect(
+      snapshots.some(
+        (snapshot) =>
+          snapshot.kind === "document-discovered" &&
+          snapshot.total === 1 &&
+          snapshot.processed === 0 &&
+          snapshot.failed === 0 &&
+          snapshot.skipped === 0,
+      ),
+    ).toBe(true);
+    expect(
+      snapshots.some(
+        (snapshot) =>
+          snapshot.kind === "document-embedded" &&
+          snapshot.total === 1 &&
+          snapshot.processed === 1 &&
+          snapshot.failed === 0 &&
+          snapshot.skipped === 0,
+      ),
+    ).toBe(true);
+  });
 });
 
 // ─── Test 2: cancellation mid-pipeline ───────────────────────────────────────
@@ -322,6 +391,44 @@ describe("runIndexingJob — force", () => {
     // Force should NOT leave stale rows from the first pass.
     const secondVectorCount = countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId);
     expect(secondVectorCount).toBe(firstVectorCount);
+  });
+});
+
+describe("runIndexingJob — unsupported documents", () => {
+  let fixture: Fixture;
+
+  beforeEach(() => {
+    fixture = buildFixture({
+      "keiko-logo.svg":
+        '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>',
+    });
+  });
+
+  afterEach(() => {
+    fixture.cleanup();
+  });
+
+  it("counts unsupported documents as skipped instead of processed", async () => {
+    const events = await drain(runIndexingJob(buildOptions(fixture)));
+    const terminal = events.at(-1);
+
+    expect(
+      events.some((event) => event.kind === "document-skipped" && event.reason === "unsupported"),
+    ).toBe(true);
+    expect(events.some((event) => event.kind === "document-embedded")).toBe(false);
+    expect(terminal?.kind).toBe("job-completed");
+    if (terminal?.kind === "job-completed") {
+      expect(terminal.result.processedDocuments).toBe(0);
+      expect(terminal.result.skippedDocuments).toBe(1);
+    }
+
+    const started = events.find((event) => event.kind === "job-started");
+    if (started?.kind !== "job-started") {
+      throw new Error("missing job-started");
+    }
+    const row = selectJobById(fixture.store._internal.db, started.jobId);
+    expect(row?.processed_documents).toBe(0);
+    expect(row?.skipped_documents).toBe(1);
   });
 });
 
