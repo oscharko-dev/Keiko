@@ -1757,6 +1757,54 @@ button {
   background: color-mix(in oklch, var(--danger) 14%, var(--card));
 }
 
+/* Epic #532 — data-flow visualization on a chat↔source connector edge. While the connected chat is
+   exchanging data with its source (a grounded answer reading the connected files), the edge carries
+   a flowing dash plus a particle swarm; a heavy exchange (more file content read) is denser/faster
+   than a light one. State is conveyed by the dash/particles AND the flow tag — never colour alone.
+   All motion is gated behind prefers-reduced-motion; reduced-motion users get a static dashed
+   "active" edge with no movement. */
+.conn-path[data-active="true"] {
+  opacity: 1;
+  stroke-width: 2.75;
+  filter: drop-shadow(0 0 5px var(--accent));
+}
+.conn-path[data-active="true"][data-intensity="heavy"] {
+  stroke-width: 3.4;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .conn-path[data-active="true"] {
+    stroke-dasharray: 10 8;
+    animation: conn-flow 0.9s linear infinite;
+  }
+  .conn-path[data-active="true"][data-intensity="heavy"] {
+    animation-duration: 0.45s;
+  }
+}
+@keyframes conn-flow {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+/* Reduced-motion: a clearly-different static dashed stroke instead of any movement. */
+.conn-path[data-reduced-motion="true"] {
+  stroke-dasharray: 3 6;
+  animation: none !important;
+}
+.conn-particle {
+  fill: var(--accent);
+  opacity: 0.95;
+  filter: drop-shadow(0 0 4px var(--accent));
+}
+.conn-badge[data-active="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 16%, var(--card));
+}
+.conn-flow-tag {
+  margin-left: 1px;
+  font-weight: 700;
+}
+
 /* Click-to-Connect cursor signals */
 .workspace[data-connecting="true"] {
   cursor: crosshair;
