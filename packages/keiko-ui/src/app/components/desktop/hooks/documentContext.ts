@@ -85,7 +85,11 @@ interface ExtractionState {
   remainingAggregate: number;
 }
 
-function buildEntry(doc: PendingDocument, text: string, perEntryBudget: number): {
+function buildEntry(
+  doc: PendingDocument,
+  text: string,
+  perEntryBudget: number,
+): {
   readonly entry: ConversationDocumentContextWire;
   readonly consumed: number;
 } {
@@ -106,7 +110,10 @@ function buildEntry(doc: PendingDocument, text: string, perEntryBudget: number):
   return { entry, consumed: extractedBytes + markerBytes };
 }
 
-async function readDocumentInto(state: ExtractionState, doc: PendingDocument): Promise<string | undefined> {
+async function readDocumentInto(
+  state: ExtractionState,
+  doc: PendingDocument,
+): Promise<string | undefined> {
   if (state.remainingAggregate <= 0) return undefined;
   let raw: string;
   try {
