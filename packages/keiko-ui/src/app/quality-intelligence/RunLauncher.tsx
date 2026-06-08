@@ -56,7 +56,7 @@ function reduceProgress(prev: Progress, msg: QualityIntelligenceRunStreamMessage
 }
 
 export interface RunLauncherProps {
-  readonly onRunCompleted: (runId: string) => void;
+  readonly onRunCompleted?: ((runId: string) => void) | undefined;
   readonly startImpl?: typeof startQiRun;
 }
 
@@ -99,7 +99,7 @@ export function RunLauncher({
     try {
       await startImpl(request, controller.signal, onMessage);
       const runId = completedRunIdRef.current;
-      if (runId !== null) onRunCompleted(runId);
+      if (runId !== null) onRunCompleted?.(runId);
     } catch (err) {
       if (!controller.signal.aborted) setError(formatError(err));
     } finally {

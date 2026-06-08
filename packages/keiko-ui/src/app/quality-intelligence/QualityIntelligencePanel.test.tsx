@@ -34,7 +34,9 @@ function detail(id: string, findingSummary: string): QualityIntelligenceUiRunDet
       { id: `f-${id}`, kind: "logic-defect", severity: "medium", summaryRedacted: findingSummary },
     ],
     candidateIds: [],
+    candidates: [],
     evidenceRefs: [],
+    reviewState: "open",
     manifestSchemaVersion: 1,
   };
 }

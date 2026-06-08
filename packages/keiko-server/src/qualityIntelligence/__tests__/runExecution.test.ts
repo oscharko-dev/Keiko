@@ -25,7 +25,6 @@ import { createInMemoryUiStore } from "../../store/index.js";
 import { executeQiRun, QiGenerationError, QiIngestionError } from "../runExecution.js";
 import type { ExecuteQiRunInput, QiRunAccepted } from "../runExecution.js";
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
-import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
 
@@ -36,27 +35,43 @@ function emptyStore(): EvidenceStore {
 /** A canned response that the model-routed workflow can parse as zero candidates (empty array). */
 const EMPTY_CANDIDATES_JSON = JSON.stringify({ testCases: [] });
 
+function usageMeta(promptTokens: number, completionTokens: number): NormalizedResponse["usage"] {
+  return {
+    requestId: "req-test",
+    promptTokens,
+    completionTokens,
+    latencyMs: 1,
+    costClass: "medium",
+  };
+}
+
 /** Build a fake ModelPort that returns canned JSON content. */
 function fakeChatPort(content: string): ModelPort {
   return {
-    call: async (_req: GatewayRequest, _signal: AbortSignal): Promise<NormalizedResponse> => ({
-      content,
-      modelId: _req.modelId,
-      finishReason: "stop",
-      usage: { promptTokens: 100, completionTokens: 50, totalTokens: 150 },
-    }),
+    call: (_req: GatewayRequest, _signal: AbortSignal): Promise<NormalizedResponse> =>
+      Promise.resolve({
+        content,
+        modelId: _req.modelId,
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: usageMeta(100, 50),
+      }),
   };
 }
 
 /** Build a fake ModelPort that returns unparseable text. */
 function fakeUnparseablePort(): ModelPort {
   return {
-    call: async (_req: GatewayRequest, _signal: AbortSignal): Promise<NormalizedResponse> => ({
-      content: "NOT VALID JSON AT ALL @@##",
-      modelId: _req.modelId,
-      finishReason: "stop",
-      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
-    }),
+    call: (_req: GatewayRequest, _signal: AbortSignal): Promise<NormalizedResponse> =>
+      Promise.resolve({
+        content: "NOT VALID JSON AT ALL @@##",
+        modelId: _req.modelId,
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: usageMeta(10, 5),
+      }),
   };
 }
 
@@ -82,7 +97,7 @@ function chatCapability(modelId: string): ModelCapability {
 
 const MODEL_ID = "test-chat-model";
 
-function buildConfig(modelId: string) {
+function buildConfig(modelId: string): ReturnType<typeof parseGatewayConfig> {
   return parseGatewayConfig(
     {
       providers: [
@@ -138,6 +153,15 @@ function makeRequest(
   };
 }
 
+/**
+ * A start-run request with NO explicit `modelId`, to exercise the model-resolution fallback
+ * (`resolveChatModelId`): with a configured provider it falls back to the first chat model; with no
+ * configured provider it raises QI_NO_MODEL.
+ */
+function requestWithoutModel(): QualityIntelligenceStartRunRequest {
+  return { sources: [VALID_SOURCE] };
+}
+
 function makeInput(
   evidenceDir: string,
   overrides: Partial<ExecuteQiRunInput> = {},
@@ -191,12 +215,11 @@ describe("executeQiRun — happy path", () => {
   });
 
   it("persists a manifest in the evidenceDir qi/ subdirectory", async () => {
-    await executeQiRun(makeInput(evidenceDir));
-    // loadQualityIntelligenceRun would succeed if the manifest is on disk.
+    const summary = await executeQiRun(makeInput(evidenceDir));
+    // A terminal run persists its manifest; it must be loadable from the evidence dir afterwards.
     const loaded = loadQualityIntelligenceRun("run-exec-001", { evidenceDir });
-    // Manifest may be present regardless of run status.
-    expect(loaded !== undefined || loaded === undefined).toBe(true);
-    // The run completes (success or failure) — either way, verify no throw.
+    expect(loaded).toBeDefined();
+    expect(summary.runId).toBe("run-exec-001");
   });
 
   it("returns a run summary with a runId field", async () => {
@@ -221,7 +244,7 @@ describe("executeQiRun — model selection", () => {
     const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
     const input = makeInput(evidenceDir, {
       onAccepted,
-      request: makeRequest({ modelId: undefined }),
+      request: requestWithoutModel(),
     });
     await executeQiRun(input);
     // The only configured model is MODEL_ID, so it must be the fallback.
@@ -243,7 +266,7 @@ describe("executeQiRun — model selection", () => {
     const controller = new AbortController();
     try {
       await executeQiRun({
-        request: makeRequest({ modelId: undefined }),
+        request: requestWithoutModel(),
         runId: "run-no-model",
         deps,
         registeredAt: "2026-06-01T10:00:00.000Z",

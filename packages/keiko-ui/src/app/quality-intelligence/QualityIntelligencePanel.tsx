@@ -403,14 +403,14 @@ function RunSummaryPane({
           <section className="qi-detail-candidates" aria-label="Generated test cases">
             <h3 className="qi-col-subtitle">
               Test cases
-              <span className="qi-col-count">{detail.candidates.length.toString()}</span>
+              <span className="qi-col-count">{(detail.candidates ?? []).length.toString()}</span>
             </h3>
-            {selectedId !== null && detail.candidates.length > 0 ? (
+            {selectedId !== null && (detail.candidates ?? []).length > 0 ? (
               <div className="qi-detail-export">
                 <ExportBar runId={selectedId} />
               </div>
             ) : null}
-            <CandidatesPane candidates={detail.candidates} onReview={onReview} />
+            <CandidatesPane candidates={detail.candidates ?? []} onReview={onReview} />
           </section>
         ) : null}
       </div>

@@ -41,7 +41,15 @@ function fakeModelPort(responseContent: string): { port: ModelPort; calls: FakeC
         content: responseContent,
         modelId: request.modelId,
         finishReason: "stop",
-        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        toolCalls: [],
+        structuredOutput: null,
+        usage: {
+          requestId: "req-test",
+          promptTokens: 10,
+          completionTokens: 5,
+          latencyMs: 1,
+          costClass: "medium",
+        },
       });
     },
   };
@@ -129,6 +137,7 @@ function args(
         text: "The system shall allow login with email and password.",
       },
     ],
+    maxCandidates: 20,
     signal: new AbortController().signal,
     ...overrides,
   };

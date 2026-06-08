@@ -104,7 +104,9 @@ describe("QiRunRegistry.updateTotals", () => {
 
   it("ignores updates for an unknown run id without throwing", () => {
     const r = registry();
-    expect(() => r.updateTotals("ghost-run", { candidates: 99 })).not.toThrow();
+    expect(() => {
+      r.updateTotals("ghost-run", { candidates: 99 });
+    }).not.toThrow();
   });
 
   it("starts with all totals at 0", () => {
@@ -141,7 +143,9 @@ describe("QiRunRegistry.complete", () => {
 
   it("is a no-op for an unknown run id without throwing", () => {
     const r = registry();
-    expect(() => r.complete("ghost-run", "succeeded")).not.toThrow();
+    expect(() => {
+      r.complete("ghost-run", "succeeded");
+    }).not.toThrow();
   });
 
   it("completed run no longer appears in listActiveSummaries", () => {
@@ -296,6 +300,8 @@ describe("QiRunRegistry.reset", () => {
 
   it("is a no-op on an already-empty registry without throwing", () => {
     const r = registry();
-    expect(() => r.reset()).not.toThrow();
+    expect(() => {
+      r.reset();
+    }).not.toThrow();
   });
 });

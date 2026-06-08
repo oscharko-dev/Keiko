@@ -83,7 +83,7 @@ describe("QI_TEST_DESIGN_RESPONSE_SCHEMA", () => {
       string,
       unknown
     >;
-    const testCases = props["testCases"] as Record<string, unknown>;
+    const testCases = props.testCases as Record<string, unknown>;
     expect(testCases.type).toBe("array");
   });
 
@@ -92,7 +92,7 @@ describe("QI_TEST_DESIGN_RESPONSE_SCHEMA", () => {
       string,
       unknown
     >;
-    const testCases = props["testCases"] as Record<string, unknown>;
+    const testCases = props.testCases as Record<string, unknown>;
     const items = testCases.items as Record<string, unknown>;
     const required = items.required as readonly string[];
     expect(required).toContain("title");
@@ -106,7 +106,7 @@ describe("QI_TEST_DESIGN_RESPONSE_SCHEMA", () => {
       string,
       unknown
     >;
-    const testCases = props["testCases"] as Record<string, unknown>;
+    const testCases = props.testCases as Record<string, unknown>;
     const items = testCases.items as Record<string, unknown>;
     expect(items.additionalProperties).toBe(false);
   });
@@ -116,11 +116,11 @@ describe("QI_TEST_DESIGN_RESPONSE_SCHEMA", () => {
       string,
       unknown
     >;
-    const testCases = props["testCases"] as Record<string, unknown>;
+    const testCases = props.testCases as Record<string, unknown>;
     const items = testCases.items as Record<string, unknown>;
     const itemProps = items.properties as Record<string, unknown>;
-    const priority = itemProps["priority"] as Record<string, unknown>;
-    const enumVals = priority["enum"] as readonly string[];
+    const priority = itemProps.priority as Record<string, unknown>;
+    const enumVals = priority.enum as readonly string[];
     expect(enumVals).toContain("P0");
     expect(enumVals).toContain("P1");
     expect(enumVals).toContain("P2");
@@ -133,11 +133,11 @@ describe("QI_TEST_DESIGN_RESPONSE_SCHEMA", () => {
       string,
       unknown
     >;
-    const testCases = props["testCases"] as Record<string, unknown>;
+    const testCases = props.testCases as Record<string, unknown>;
     const items = testCases.items as Record<string, unknown>;
     const itemProps = items.properties as Record<string, unknown>;
-    const riskClass = itemProps["riskClass"] as Record<string, unknown>;
-    const enumVals = riskClass["enum"] as readonly string[];
+    const riskClass = itemProps.riskClass as Record<string, unknown>;
+    const enumVals = riskClass.enum as readonly string[];
     expect(enumVals).toContain("safety");
     expect(enumVals).toContain("compliance");
     expect(enumVals).toContain("regression");

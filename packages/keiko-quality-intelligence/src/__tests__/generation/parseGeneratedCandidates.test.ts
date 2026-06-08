@@ -536,10 +536,12 @@ describe("parseGeneratedCandidates — determinism and caps", () => {
 
   it("uses regressionDefault profile when no profile is provided", () => {
     const raw = wrapInTestCases([validItem({ priority: "INVALID" })]);
-    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(
-      raw,
-      baseInput({ profile: undefined }),
-    );
+    // Omit `profile` entirely to exercise the `input.profile ?? regressionDefault` fallback branch.
+    const result = QualityIntelligenceGeneration.parseGeneratedCandidates(raw, {
+      runId: RUN_ID,
+      atomIds: THREE_ATOMS,
+      maxCandidates: 10,
+    });
     // regressionDefault.defaultPriority = "P2"
     expect(result.candidates[0]?.priority).toBe("P2");
   });

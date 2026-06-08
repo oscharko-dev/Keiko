@@ -109,9 +109,9 @@ function makeCandidate(title: string, id = "cand-001"): QI.QualityIntelligenceTe
     steps: ["Enter email", "Enter password", "Click Submit"],
     expectedResults: ["User is redirected to dashboard"],
     priority: "P1",
-    riskClass: "medium",
+    riskClass: "functional",
     tags: ["smoke"],
-    status: "candidate",
+    status: "proposed",
   };
 }
 
