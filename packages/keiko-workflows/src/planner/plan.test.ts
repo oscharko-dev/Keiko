@@ -100,6 +100,43 @@ describe("createExplorationPlan", () => {
     expect(p.clarification?.reason).toBe("scope-empty");
   });
 
+  it("explicitConnection: only-literal anchors → ready (no too-generic refusal)", () => {
+    // A user who explicitly connected a folder may ask plain natural-language questions; the
+    // too-generic gate must not refuse them. Same query that yields too-generic above.
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({ text: "explain the architecture" });
+    const p = plan({ scope, query: q });
+    expect(p.state).toBe("ready");
+    expect(p.clarification).toBeUndefined();
+    expect(p.rings.map((r) => r.kind)).toContain("lexical");
+  });
+
+  it("explicitConnection: empty relativePaths + one anchor → ready (no scope-empty refusal)", () => {
+    const scope = happyScope({
+      kind: "workspace-root",
+      relativePaths: [],
+      explicitConnection: true,
+    });
+    const q = happyQuery({ text: "`Solo`" });
+    const p = plan({ scope, query: q });
+    expect(p.state).toBe("ready");
+    expect(p.clarification).toBeUndefined();
+  });
+
+  it("explicitConnection still requires at least one anchor (no-anchors holds)", () => {
+    // The relaxation only waives the generic/scope gates; a pure stop-word query has nothing to
+    // search, so it must still ask for an anchor.
+    const scope = happyScope({ explicitConnection: true });
+    const q = happyQuery({ text: "the and for of" });
+    const p = plan({ scope, query: q });
+    expect(p.state).toBe("clarification-needed");
+    expect(p.clarification?.reason).toBe("no-anchors");
+  });
+
   it("workspace-root scope + 2+ anchors → lexical + git-history (no structural unless ident/path)", () => {
     const scope = happyScope({ kind: "workspace-root", relativePaths: [] });
     const q = happyQuery({ text: '"alpha bravo" "charlie delta"' });

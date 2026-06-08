@@ -249,6 +249,9 @@ export function buildSelectedScopeFrom(
     relativePaths: cs.relativePaths,
     conversationId: chat.id,
     connectedAtMs: cs.connectedAtMs,
+    // This scope was built from a user-connected folder/files (Files↔Chat edge or scope pill), so
+    // the planner may accept plain natural-language questions without a file/symbol anchor.
+    explicitConnection: true,
   };
 }
 

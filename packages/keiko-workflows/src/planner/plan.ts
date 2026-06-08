@@ -229,6 +229,15 @@ function decideClarification(
       clarification: buildClarification("no-anchors", NO_ANCHOR_QUESTIONS, 1),
     };
   }
+  // When the user EXPLICITLY connected a folder/files to the chat (a Files↔Chat edge or a scope
+  // pill), they have already narrowed the search to a folder of their choosing. The "too-generic"
+  // and "scope-empty" gates exist to stop vague questions burning budget over the broad implicit
+  // workspace; they must NOT refuse a plain natural-language question over a folder the user
+  // deliberately picked ("explain the architecture" of a connected folder is a legitimate request).
+  // Retrieval stays bounded by the planner's scan/time limits regardless, so accepting it is safe.
+  if (scope.explicitConnection === true) {
+    return { state: "ready", clarification: undefined };
+  }
   // Threshold is <= literal weight so a prompt yielding only `literal` anchors (weight 0.5,
   // i.e. no quoted/path/identifier signal) requests clarification before any retrieval runs.
   if (maxAnchorWeight(anchors) <= 0.5) {
