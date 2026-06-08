@@ -214,13 +214,18 @@ function lineLooksLikeImport(line: string): boolean {
   return /^\s*import\b/u.test(line) || /^\s*export\s*\{/u.test(line);
 }
 
-function lineLooksLikeSymbolDefinition(line: string, symbolToken: string): boolean {
+function lineLooksLikeSymbolDefinition(
+  line: string,
+  symbolToken: string,
+  caseSensitive: boolean,
+): boolean {
   const escaped = escapeRegExp(symbolToken);
+  const flags = caseSensitive ? "u" : "iu";
   const patterns = [
-    new RegExp(`\\b(?:export\\s+)?(?:async\\s+)?function\\s+${escaped}\\b`, "u"),
-    new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${escaped}\\b`, "u"),
-    new RegExp(`\\b(?:export\\s+)?(?:class|interface|type|enum)\\s+${escaped}\\b`, "u"),
-    new RegExp(`\\b${escaped}\\s*[:=]\\s*(?:async\\s*)?\\(`, "u"),
+    new RegExp(`\\b(?:export\\s+)?(?:async\\s+)?function\\s+${escaped}\\b`, flags),
+    new RegExp(`\\b(?:export\\s+)?(?:const|let|var)\\s+${escaped}\\b`, flags),
+    new RegExp(`\\b(?:export\\s+)?(?:class|interface|type|enum)\\s+${escaped}\\b`, flags),
+    new RegExp(`\\b${escaped}\\s*[:=]\\s*(?:async\\s*)?\\(`, flags),
   ];
   return patterns.some((pattern) => pattern.test(line));
 }
@@ -243,6 +248,7 @@ function adjustedDefinitionIntentScore(
   haystack: string,
   baseScore: number,
   intent: NaturalLanguageIntent,
+  caseSensitive: boolean,
 ): number {
   if (!intent.definitionIntent) {
     return baseScore;
@@ -253,7 +259,7 @@ function adjustedDefinitionIntentScore(
     if (!haystack.includes(symbolToken)) {
       continue;
     }
-    if (lineLooksLikeSymbolDefinition(line, symbolToken)) {
+    if (lineLooksLikeSymbolDefinition(line, symbolToken, caseSensitive)) {
       bonus = Math.max(bonus, 0.75);
     } else if (lineLooksLikeImport(line)) {
       penalty = Math.max(penalty, 0.2);
@@ -286,7 +292,13 @@ function buildNaturalLanguageMatcher(query: RetrievalQuery): LineMatcher {
       if (hits === 0) {
         return 0;
       }
-      return adjustedDefinitionIntentScore(line, haystack, hits / total, intent);
+      return adjustedDefinitionIntentScore(
+        line,
+        haystack,
+        hits / total,
+        intent,
+        query.caseSensitive,
+      );
     },
   };
 }

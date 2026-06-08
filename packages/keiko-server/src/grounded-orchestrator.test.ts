@@ -68,6 +68,31 @@ function seedRepo(): void {
   );
 }
 
+function seedIssue672Repo(): void {
+  mkdirSync(join(ROOT, "packages/keiko-server/src"), { recursive: true });
+  writeFileSync(
+    join(ROOT, "packages/keiko-server/src/deps.ts"),
+    "// handleGroundedAsk exact file reference only\n",
+  );
+  writeFileSync(
+    join(ROOT, "packages/keiko-server/src/files.ts"),
+    "// file implements route evidence for grounded chats\n",
+  );
+  writeFileSync(
+    join(ROOT, "packages/keiko-server/src/grounded-orchestrator.test.ts"),
+    "// POST grounded route evidence\n",
+  );
+  writeFileSync(
+    join(ROOT, "packages/keiko-server/src/grounded-qa.ts"),
+    "export async function handleGroundedAsk(): Promise<void> { return; }\n",
+  );
+  writeFileSync(
+    join(ROOT, "packages/keiko-server/src/routes.ts"),
+    "import { handleGroundedAsk } from './grounded-qa.js';\n" +
+      '{ method: "POST", pattern: "/api/chats/messages/grounded", handler: handleGroundedAsk },\n',
+  );
+}
+
 beforeEach(() => {
   ROOT = mkdtempSync(join(tmpdir(), "keiko-grounded-orch-"));
   seedRepo();
@@ -99,6 +124,28 @@ function happyQuery(overrides: Partial<RetrievalQuery> = {}): RetrievalQuery {
     emittedAtMs: NOW,
     ...overrides,
   };
+}
+
+function issue672Workspace(): WorkspaceInfo {
+  return {
+    ...fakeWorkspace(),
+    sourceDirs: ["packages/keiko-server/src"],
+    testDirs: ["packages/keiko-server/src"],
+  };
+}
+
+function issue672Scope(): SelectedScope {
+  return happyScope({
+    kind: "directory",
+    relativePaths: ["packages/keiko-server/src"],
+  });
+}
+
+function issue672Input(text: string): OrchestratorInput {
+  return input({
+    scope: issue672Scope(),
+    query: happyQuery({ text }),
+  });
 }
 
 function input(overrides: Partial<OrchestratorInput> = {}): OrchestratorInput {
@@ -211,6 +258,44 @@ describe("runGroundedExploration", () => {
     expect(observedQuestion).toBe("Investigate src/foo.ts behaviour of `MyClass`");
     expect(observedPack).toBe(out.pack);
     expect(out.assistantContent).toBe("recorded");
+  });
+
+  it("prefers grounded-qa.ts for exact symbol-definition questions from issue #672", async () => {
+    seedIssue672Repo();
+    const out = await retrieveConnectedContextPack(
+      issue672Input("Where is handleGroundedAsk defined? Cite the exact file."),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => issue672Workspace(),
+      },
+    );
+    expect(out.pack.files[0]?.scopePath).toBe("packages/keiko-server/src/grounded-qa.ts");
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) => excerpt.content.includes("handleGroundedAsk")),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("prefers routes.ts for exact route-implementation questions from issue #672", async () => {
+    seedIssue672Repo();
+    const out = await retrieveConnectedContextPack(
+      issue672Input(
+        "Which file implements the POST /api/chats/messages/grounded route? Answer briefly and cite evidence.",
+      ),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => issue672Workspace(),
+      },
+    );
+    expect(out.pack.files[0]?.scopePath).toBe("packages/keiko-server/src/routes.ts");
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) =>
+        excerpt.content.includes("/api/chats/messages/grounded"),
+      ),
+    ).toBe(true);
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
   it("adds a no-evidence uncertainty marker when retrieval finds no matching atoms", async () => {
