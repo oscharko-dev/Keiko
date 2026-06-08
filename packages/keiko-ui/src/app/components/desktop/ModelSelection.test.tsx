@@ -129,6 +129,12 @@ describe("pickChatModelId (AC #1, AC #4)", () => {
     expect(pickChatModelId([model])).toBe("real-model-1");
   });
 
+  it("skips embedding-only models when picking the default chat model", () => {
+    expect(pickChatModelId([embeddingModel("text-embedding-3-large"), chatModel("gpt-oss")])).toBe(
+      "gpt-oss",
+    );
+  });
+
   it("returns the first model id, never a hard-coded placeholder", () => {
     const models = [chatModel("provider-model-a"), chatModel("provider-model-b")];
     expect(pickChatModelId(models)).toBe("provider-model-a");
@@ -148,6 +154,15 @@ describe("resolveSelectedModelId", () => {
 
   it("returns undefined when no eligible models remain", () => {
     expect(resolveSelectedModelId("removed-model", [])).toBeUndefined();
+  });
+
+  it("drops a persisted embedding model and falls back to a chat-capable model", () => {
+    expect(
+      resolveSelectedModelId("text-embedding-3-large", [
+        embeddingModel("text-embedding-3-large"),
+        chatModel("gpt-oss"),
+      ]),
+    ).toBe("gpt-oss");
   });
 
   // N3 — bootstrap path: latestChat.selectedModel may be undefined in the DB.
@@ -221,6 +236,18 @@ describe("ChatWindow no-eligible-models error (AC #1)", () => {
     // The only role="alert" present should be for session errors, not the no-model
     // alert. Since error is undefined and noEligibleModels is false, no alert fires.
     expect(screen.queryByText(/No conversation-eligible model/i)).toBeNull();
+  });
+
+  it("does not render embedding-only models in the chat selector", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        selectedModel: "gpt-oss",
+        models: [embeddingModel("text-embedding-3-large"), chatModel("gpt-oss")],
+      }),
+    );
+    expect(screen.getByRole("option", { name: "gpt-oss" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "text-embedding-3-large" })).toBeNull();
   });
 });
 

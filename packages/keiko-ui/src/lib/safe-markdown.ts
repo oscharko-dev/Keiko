@@ -187,6 +187,10 @@ function tryBold(
   return closeIdx + 2;
 }
 
+function isWordChar(value: string | undefined): boolean {
+  return value !== undefined && /[A-Za-z0-9]/.test(value);
+}
+
 /** Find the closing index of a single italic marker (ch). Returns -1 if not found. */
 function findItalicClose(raw: string, ch: string, from: number): number {
   for (let k = from; k < raw.length; k++) {
@@ -207,10 +211,12 @@ function tryItalic(
 ): number {
   const ch = raw[pos];
   if (ch !== "*" && ch !== "_") return -1;
+  if (ch === "_" && isWordChar(raw[pos - 1]) && isWordChar(raw[pos + 1])) return -1;
   if (raw[pos + 1] === ch) return -1; // double-marker handled by tryBold
   if (pos > 0 && raw[pos - 1] === ch) return -1;
   const closeIdx = findItalicClose(raw, ch, pos + 1);
   if (closeIdx === -1) return -1;
+  if (ch === "_" && isWordChar(raw[closeIdx - 1]) && isWordChar(raw[closeIdx + 1])) return -1;
   flushText(nodes, raw, textStart, pos);
   nodes.push({ kind: "em", children: parseInline(raw.slice(pos + 1, closeIdx), depth + 1) });
   return closeIdx + 1;

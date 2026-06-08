@@ -93,7 +93,7 @@ function visibleOnly(messages: readonly ChatMessage[]): ChatMessage[] {
 // No fallback to a placeholder model id — when no eligible models are
 // configured the caller renders a noEligibleModels error instead (AC #4).
 function modelList(models: readonly ModelCapability[]): readonly ModelCapability[] {
-  return models;
+  return models.filter((model) => model.kind === "chat");
 }
 
 function onComposerKeyDown(

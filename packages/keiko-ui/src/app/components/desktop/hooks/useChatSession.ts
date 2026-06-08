@@ -182,7 +182,7 @@ function sortChats(chats: readonly Chat[]): Chat[] {
 // available. Callers must NOT fall back to a placeholder id — downstream
 // surfaces branch on undefined to show a clear "no model" error (AC #1 / #4).
 export function pickChatModelId(models: readonly ModelCapability[]): string | undefined {
-  return models[0]?.id;
+  return models.find(isConversationEligibleModel)?.id;
 }
 
 // Reopened chats can persist a model id that is no longer present in the
@@ -192,7 +192,10 @@ export function resolveSelectedModelId(
   current: string | undefined,
   models: readonly ModelCapability[],
 ): string | undefined {
-  if (current !== undefined && models.some((model) => model.id === current)) {
+  if (
+    current !== undefined &&
+    models.some((model) => model.id === current && isConversationEligibleModel(model))
+  ) {
     return current;
   }
   return pickChatModelId(models);
