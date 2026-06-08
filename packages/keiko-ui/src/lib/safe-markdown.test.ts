@@ -132,6 +132,14 @@ describe("parseSafeMarkdown — bold and italic", () => {
     const em = para?.children?.find((c) => c.kind === "em");
     expect(em).toBeDefined();
   });
+
+  it("does not treat underscores inside a plain token as emphasis", () => {
+    const nodes = parseSafeMarkdown("NIGHTLY_CHAT_OK");
+    const para = nodes[0];
+    expect(para?.kind).toBe("paragraph");
+    expect(para?.children?.some((c) => c.kind === "em")).toBe(false);
+    expect(para?.children?.map((c) => c.text ?? "").join("")).toBe("NIGHTLY_CHAT_OK");
+  });
 });
 
 // ---------------------------------------------------------------------------

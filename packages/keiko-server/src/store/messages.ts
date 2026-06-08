@@ -60,7 +60,8 @@ function rowToMessage(row: MessageRow): ChatMessage {
 const COLUMNS =
   "id, chat_id, role, content, timestamp, run_id, workflow_id, workflow_status, short_result, task_type";
 
-const SQL_LIST = `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER BY timestamp ASC, id ASC`;
+const SQL_LIST =
+  `SELECT ${COLUMNS} FROM chat_messages WHERE chat_id = ? ORDER BY timestamp ASC, rowid ASC`;
 const SQL_LIST_LIMITED = `${SQL_LIST} LIMIT ?`;
 const SQL_FIND_BY_ID = `SELECT ${COLUMNS} FROM chat_messages WHERE id = ? LIMIT 1`;
 const SQL_CHAT_EXISTS = "SELECT 1 FROM chats WHERE id = ?";
