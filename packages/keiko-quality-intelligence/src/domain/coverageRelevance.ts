@@ -14,6 +14,83 @@
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
+// ─── Coverage classification ────────────────────────────────────────────────────
+
+/** Thresholds for atom coverage classification. */
+export const COVERAGE_THRESHOLD_COVERED = 0.7 as const;
+export const COVERAGE_THRESHOLD_WEAKLY_COVERED = 0.3 as const;
+
+/**
+ * Classification of a single evidence atom: whether its confidence places it in a
+ * covered, weakly-covered, or uncovered state. "uncovered" means zero or insufficient
+ * structural evidence that a candidate tests this requirement atom.
+ */
+export type CoverageStatus = "covered" | "weakly-covered" | "uncovered";
+
+export interface AtomCoverageStatus {
+  readonly atomId: QualityIntelligence.QualityIntelligenceEvidenceAtomId;
+  readonly status: CoverageStatus;
+  readonly confidence: number;
+  readonly coveringCandidateIds: readonly QualityIntelligence.QualityIntelligenceTestCaseId[];
+}
+
+/**
+ * Classify a single atom given its coverage-map mapping (undefined when the atom has
+ * no mapping entry — i.e. no candidate cited it at all).
+ */
+export function classifyAtomCoverage(
+  atom: QualityIntelligence.QualityIntelligenceEvidenceAtom,
+  mapping: QualityIntelligence.QualityIntelligenceCoverageMapping | undefined,
+): AtomCoverageStatus {
+  if (mapping === undefined || mapping.confidence < COVERAGE_THRESHOLD_WEAKLY_COVERED) {
+    return {
+      atomId: atom.id,
+      status: "uncovered",
+      confidence: mapping?.confidence ?? 0,
+      coveringCandidateIds: Object.freeze([]),
+    };
+  }
+  const status: CoverageStatus =
+    mapping.confidence >= COVERAGE_THRESHOLD_COVERED ? "covered" : "weakly-covered";
+  return {
+    atomId: atom.id,
+    status,
+    confidence: mapping.confidence,
+    coveringCandidateIds: mapping.candidateIds,
+  };
+}
+
+/**
+ * Classify every atom in `atoms` against the supplied coverage map. Atoms with no
+ * mapping are classified as "uncovered". The result is sorted by atomId ascending.
+ */
+export function buildAtomCoverageStatuses(
+  atoms: readonly QualityIntelligence.QualityIntelligenceEvidenceAtom[],
+  coverageMap: QualityIntelligence.QualityIntelligenceCoverageMap,
+): readonly AtomCoverageStatus[] {
+  const byAtomId = new Map<string, QualityIntelligence.QualityIntelligenceCoverageMapping>();
+  for (const mapping of coverageMap.mappings) {
+    byAtomId.set(String(mapping.atomId), mapping);
+  }
+  const statuses: AtomCoverageStatus[] = atoms.map((atom) =>
+    classifyAtomCoverage(atom, byAtomId.get(String(atom.id))),
+  );
+  statuses.sort((a, b) =>
+    String(a.atomId) < String(b.atomId) ? -1 : String(a.atomId) > String(b.atomId) ? 1 : 0,
+  );
+  return Object.freeze(statuses);
+}
+
+/**
+ * Returns the percentage of atoms classified as "covered" out of all atoms. Returns
+ * 0 when the array is empty (deterministic, no division by zero).
+ */
+export function runCoveragePercentage(statuses: readonly AtomCoverageStatus[]): number {
+  if (statuses.length === 0) return 0;
+  const covered = statuses.filter((s) => s.status === "covered").length;
+  return (covered / statuses.length) * 100;
+}
+
 export interface BuildCoverageMapInput {
   readonly runId: QualityIntelligence.QualityIntelligenceRunId;
   readonly atoms: readonly QualityIntelligence.QualityIntelligenceEvidenceAtom[];

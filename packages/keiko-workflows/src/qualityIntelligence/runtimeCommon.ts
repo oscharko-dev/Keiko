@@ -227,6 +227,7 @@ export interface PersistArgs {
   readonly provenanceRefs: QualityIntelligenceProvenanceRefs;
   readonly completedAt: string | undefined;
   readonly evidenceStore: QualityIntelligenceLocalStore;
+  readonly coverageMatrix?: QualityIntelligenceRecordInput["coverageMatrix"];
 }
 
 function mapFindingsToRows(
@@ -264,6 +265,7 @@ export function persistRun(args: PersistArgs): QualityIntelligenceRecordResult {
     exports: Object.freeze([]),
     evidenceRefs,
     provenanceRefs: args.provenanceRefs,
+    coverageMatrix: args.coverageMatrix,
   };
   return recordQualityIntelligenceRun(input, { store: args.evidenceStore });
 }

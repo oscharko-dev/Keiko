@@ -8,13 +8,19 @@
 
 import { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import {
+  buildAtomCoverageStatuses,
   buildCoverageMap,
   deduplicateCandidates,
   validateCandidates,
   QualityIntelligenceGeneration,
+  type AtomCoverageStatus,
   type PolicyProfile,
 } from "@oscharko-dev/keiko-quality-intelligence";
-import type { QualityIntelligenceLocalStore } from "@oscharko-dev/keiko-evidence";
+import { sha256Hex } from "@oscharko-dev/keiko-security";
+import type {
+  QualityIntelligenceCoverageMatrixRow,
+  QualityIntelligenceLocalStore,
+} from "@oscharko-dev/keiko-evidence";
 import { QI_TEST_DESIGN_WORKFLOW_DESCRIPTOR } from "./descriptors.js";
 import {
   emit,
@@ -126,6 +132,40 @@ function evidenceRefsFor(
   );
 }
 
+function buildCoverageGapFinding(
+  runId: QI.QualityIntelligenceRunId,
+  atomStatus: AtomCoverageStatus,
+  ordinal: number,
+): QI.QualityIntelligenceCoverageGapFinding {
+  const payload = ["v1-cov-gap", String(runId), String(atomStatus.atomId), String(ordinal)].join(
+    "",
+  );
+  const idStr = `qi-finding-${sha256Hex(payload).slice(0, 32)}`;
+  return Object.freeze({
+    kind: "coverage-gap",
+    id: QI.asQualityIntelligenceValidationFindingId(idStr),
+    runId,
+    severity: "medium",
+    summary: `Atom ${String(atomStatus.atomId)} has no sufficient test coverage (status: ${atomStatus.status}).`,
+    evidenceAtomIds: Object.freeze([atomStatus.atomId]),
+  });
+}
+
+function toCoverageMatrixRows(
+  statuses: readonly AtomCoverageStatus[],
+): readonly QualityIntelligenceCoverageMatrixRow[] {
+  return Object.freeze(
+    statuses.map((s) =>
+      Object.freeze({
+        atomId: String(s.atomId),
+        status: s.status,
+        confidence: s.confidence,
+        coveringCandidateIds: Object.freeze(s.coveringCandidateIds.map(String)),
+      }),
+    ),
+  );
+}
+
 async function generateCandidates(
   ctx: RunContext,
   input: QualityIntelligenceModelRoutedTestDesignInput,
@@ -192,19 +232,27 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
       generateCandidates(ctx, input, deps),
     );
     emitCandidateProposed(ctx, candidates);
-    await withStage(ctx, "coverage", async () =>
-      Promise.resolve(
-        buildCoverageMap({
-          runId: input.plan.id,
-          atoms: input.ingestedAtoms.map((a) => a.atom),
-          candidates,
-        }),
-      ),
+    const atoms = input.ingestedAtoms.map((a) => a.atom);
+    const coverageMap = await withStage(ctx, "coverage", async () =>
+      Promise.resolve(buildCoverageMap({ runId: input.plan.id, atoms, candidates })),
     );
+    const atomStatuses = buildAtomCoverageStatuses(atoms, coverageMap);
+    const coverageMatrix = toCoverageMatrixRows(atomStatuses);
+    const gapFindings: QI.QualityIntelligenceCoverageGapFinding[] = [];
+    for (let i = 0; i < atomStatuses.length; i += 1) {
+      const s = atomStatuses[i];
+      if (s !== undefined && s.status !== "covered") {
+        gapFindings.push(buildCoverageGapFinding(input.plan.id, s, i));
+      }
+    }
     const rawFindings = await withStage(ctx, "validate", async () =>
       Promise.resolve(validateCandidates(input.plan.id, candidates)),
     );
-    const findings = truncateFindings(rawFindings, ctx.limits.maxFindingsPerRun);
+    const allFindings: readonly QI.QualityIntelligenceValidationFinding[] = [
+      ...gapFindings,
+      ...rawFindings,
+    ];
+    const findings = truncateFindings(allFindings, ctx.limits.maxFindingsPerRun);
     emitFindingsRecorded(ctx, findings);
     const evidence = await withStage(ctx, "finalize", async () => {
       const completedAt = ctx.clock.nowIso();
@@ -217,6 +265,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         provenanceRefs: input.provenanceRefs,
         completedAt,
         evidenceStore: deps.evidenceStore,
+        coverageMatrix,
       });
       deps.candidatesSink.record(candidates, completedAt);
       return Promise.resolve(result);

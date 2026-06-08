@@ -19,6 +19,7 @@ export type {
   QualityIntelligenceProvenanceRefs,
   QualityIntelligenceRedactionSummary,
   QualityIntelligenceSchemaValidationResult,
+  QualityIntelligenceCoverageMatrixRow,
 } from "./manifestSchema.js";
 
 // ─── Redaction (M1) ────────────────────────────────────────────────────────────────

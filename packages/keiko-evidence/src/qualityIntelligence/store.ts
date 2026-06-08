@@ -241,11 +241,7 @@ function assertManifestIntegrity(manifest: QualityIntelligenceEvidenceManifest):
       `QI manifest totals.exports (${String(manifest.totals.exports)}) does not match exports.length (${String(manifest.exports.length)})`,
     );
   }
-  const expected = buildIntegrityHashes(
-    manifest.findings,
-    manifest.exports,
-    manifest.evidenceRefs,
-  );
+  const expected = buildIntegrityHashes(manifest.findings, manifest.exports, manifest.evidenceRefs);
   if (expected.findings !== manifest.integrityHashes.findings) {
     throw new EvidenceReadError("QI manifest findings integrity hash mismatch");
   }
@@ -362,6 +358,8 @@ export interface QualityIntelligenceRecordInput {
   readonly exports: QualityIntelligenceEvidenceManifest["exports"];
   readonly evidenceRefs: QualityIntelligenceEvidenceManifest["evidenceRefs"];
   readonly provenanceRefs: QualityIntelligenceEvidenceManifest["provenanceRefs"];
+  /** Optional coverage matrix (per-atom status, refs only). Added in #738. */
+  readonly coverageMatrix?: QualityIntelligenceEvidenceManifest["coverageMatrix"];
 }
 
 export interface QualityIntelligenceRecordOptions {
@@ -472,9 +470,9 @@ export function recordQualityIntelligenceRun(
     provenanceRefs: redacted.provenanceRefs,
     redactionSummary: summary,
     integrityHashes,
+    ...(input.coverageMatrix !== undefined ? { coverageMatrix: input.coverageMatrix } : {}),
   };
-  const location = store.record(manifest);
-  return { manifest, location };
+  return { manifest, location: store.record(manifest) };
 }
 
 export interface QualityIntelligenceLoadOptions {

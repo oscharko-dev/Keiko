@@ -84,6 +84,13 @@ export interface QualityIntelligenceUiEvidenceRef {
   readonly atomId: string;
 }
 
+/** Per-atom coverage row for the UI (refs only — no raw atom text). */
+export interface QualityIntelligenceUiAtomCoverage {
+  readonly atomId: string;
+  readonly status: "covered" | "weakly-covered" | "uncovered";
+  readonly confidence: number;
+}
+
 /**
  * Single-run detail projection.
  * Adds full finding rows, candidate id refs, evidence refs, and the manifest schema
@@ -110,6 +117,10 @@ export interface QualityIntelligenceUiRunDetail {
   readonly reviewState: QualityIntelligenceReviewState;
   /** The `qiEvidenceSchemaVersion` literal from the persisted manifest. */
   readonly manifestSchemaVersion: number;
+  /** Coverage percentage: (covered atoms / total atoms) × 100. 0 when no matrix is available. */
+  readonly coveragePercentage: number;
+  /** Per-atom coverage classification (refs + status; empty when no matrix is available). */
+  readonly coverageByAtom: readonly QualityIntelligenceUiAtomCoverage[];
 }
 
 /**

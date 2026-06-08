@@ -17,3 +17,9 @@ export {
   startsWithFormulaLead,
 } from "./spreadsheetSafeCsv.js";
 export { adaptToXray, XRAY_CSV_HEADERS } from "./xray.js";
+export {
+  adaptToTraceabilityCsv,
+  adaptToTraceabilityMarkdown,
+  TRACEABILITY_HEADERS,
+  type QualityIntelligenceTraceabilityRow,
+} from "./traceability.js";

@@ -627,6 +627,7 @@ export type {
   QualityIntelligenceUiEvidenceRef,
   QualityIntelligenceUiFindingSummary,
   QualityIntelligenceUiRunDetail,
+  QualityIntelligenceUiAtomCoverage,
   QualityIntelligenceUiRunListResponse,
   QualityIntelligenceUiRunSummary,
   QualityIntelligenceUiRunTotals,

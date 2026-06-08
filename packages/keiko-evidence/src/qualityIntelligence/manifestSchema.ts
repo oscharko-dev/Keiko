@@ -45,6 +45,14 @@ export interface QualityIntelligenceManifestTotals {
   readonly exports: number;
 }
 
+/** Per-atom coverage status row persisted in the run manifest (refs only, no raw text). */
+export interface QualityIntelligenceCoverageMatrixRow {
+  readonly atomId: string;
+  readonly status: "covered" | "weakly-covered" | "uncovered";
+  readonly confidence: number;
+  readonly coveringCandidateIds: readonly string[];
+}
+
 export interface QualityIntelligenceFindingRow {
   readonly id: string;
   readonly kind: QualityIntelligenceValidationFindingKind;
@@ -94,6 +102,8 @@ export interface QualityIntelligenceEvidenceManifest {
   readonly provenanceRefs: QualityIntelligenceProvenanceRefs;
   readonly redactionSummary: QualityIntelligenceRedactionSummary;
   readonly integrityHashes: QualityIntelligenceIntegrityHashes;
+  /** Optional: per-atom coverage classification (refs + status, no raw text). Added in #738. */
+  readonly coverageMatrix?: readonly QualityIntelligenceCoverageMatrixRow[];
 }
 
 // ─── Validation ────────────────────────────────────────────────────────────────────
@@ -117,6 +127,7 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "provenanceRefs",
   "redactionSummary",
   "integrityHashes",
+  "coverageMatrix",
 ]);
 
 const ALLOWED_STATUSES: ReadonlySet<string> = new Set<string>([

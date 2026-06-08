@@ -60,3 +60,5 @@ export {
 export { QI_REVIEW_ROUTE_GROUP, handleQiReview } from "./reviewRoutes.js";
 // Issue #283 — export route group (local serialise + TMS dry-run preview).
 export { QI_EXPORT_ROUTE_GROUP, handleQiExport } from "./exportRoutes.js";
+// Issue #740 (Epic #734) — requirement↔test traceability matrix export route group.
+export { QI_TRACEABILITY_ROUTE_GROUP, handleQiTraceabilityExport } from "./traceabilityRoutes.js";

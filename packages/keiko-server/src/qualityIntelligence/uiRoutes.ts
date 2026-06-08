@@ -25,6 +25,7 @@ import type {
   QualityIntelligenceUiFindingSummary,
   QualityIntelligenceUiEvidenceRef,
   QualityIntelligenceUiCandidate,
+  QualityIntelligenceUiAtomCoverage,
 } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -92,30 +93,45 @@ function projectCandidate(
   };
 }
 
+function projectCoverageByAtom(
+  manifest: NonNullable<ReturnType<typeof loadQualityIntelligenceRun>>,
+): readonly QualityIntelligenceUiAtomCoverage[] {
+  if (manifest.coverageMatrix === undefined) return Object.freeze([]);
+  return Object.freeze(
+    manifest.coverageMatrix.map((row) => ({
+      atomId: row.atomId,
+      status: row.status,
+      confidence: row.confidence,
+    })),
+  );
+}
+
+function computeCoveragePercentage(
+  coverageByAtom: readonly QualityIntelligenceUiAtomCoverage[],
+): number {
+  if (coverageByAtom.length === 0) return 0;
+  const covered = coverageByAtom.filter((r) => r.status === "covered").length;
+  return (covered / coverageByAtom.length) * 100;
+}
+
 function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDetail {
   const { manifest, candidateRows, reviewArtifact } = inputs;
   const findingRefs: QualityIntelligenceUiFindingSummary[] = manifest.findings.map((f) => ({
     id: f.id,
     kind: f.kind,
     severity: f.severity,
-    // summaryRedacted has already been passed through the QI redaction pipeline
-    // by the manifest builder (keiko-evidence) before persist.
     summaryRedacted: f.summaryRedacted,
   }));
-
   const candidates: QualityIntelligenceUiCandidate[] = candidateRows.map((row) =>
     projectCandidate(row, reviewArtifact),
   );
-  // Real candidate ids now come from the persisted candidate artifact (#280); fall back to the
-  // manifest evidence-ref envelope ids only when no candidate body was recorded (legacy/failed run).
   const candidateIds: string[] =
     candidates.length > 0 ? candidates.map((c) => c.id) : [...manifest.provenanceRefs.envelopeIds];
-
   const evidenceRefs: QualityIntelligenceUiEvidenceRef[] = manifest.evidenceRefs.map((r) => ({
     envelopeId: r.envelopeId,
     atomId: r.atomId,
   }));
-
+  const coverageByAtom = projectCoverageByAtom(manifest);
   return {
     id: manifest.runId,
     status: manifest.status,
@@ -132,6 +148,8 @@ function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDeta
     evidenceRefs,
     reviewState: runReviewStateOf(reviewArtifact),
     manifestSchemaVersion: manifest.qiEvidenceSchemaVersion,
+    coveragePercentage: computeCoveragePercentage(coverageByAtom),
+    coverageByAtom,
   };
 }
 
