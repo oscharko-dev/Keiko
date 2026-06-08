@@ -300,4 +300,4 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
     h.add("qiRun", { runId: "qi-run-2" });
     expect(h.cards()).toHaveLength(2);
   });
-})
+});

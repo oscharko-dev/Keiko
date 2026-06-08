@@ -1,7 +1,7 @@
 // Epic #270 — QiHubPanel tests. The hub lists past runs and opens a run as a result card via the
 // injected `openRun` callback; finishing a run from the launcher also opens its card.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { QiHubPanel } from "./QiHubPanel";

@@ -446,7 +446,9 @@ describe("handleQiExport — formula-injection safety in CSV", () => {
           // The cell must NOT start directly with the formula char after a comma or at line start.
           // Acceptable: quoted cell "=SUM(...)", prefixed cell '=SUM(...), or any non-bare form.
           // We assert that the raw formula string does not appear unquoted after comma/newline.
-          const barePattern = new RegExp(`(?:,|\n|^)${char.replace(/[+\-=@]/g, "\\$&")}`, "m");
+          // Escape ALL regex metacharacters (incl. backslash) so the pattern is built safely.
+          const escaped = char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const barePattern = new RegExp(`(?:,|\n|^)${escaped}`, "m");
           expect(barePattern.test(csvBody)).toBe(false);
           break;
         }
