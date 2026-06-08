@@ -37,7 +37,7 @@ const descriptor = (
   Object.freeze({ format, adapterId: format, bytesPerRowHint, filenameExtension });
 
 /**
- * Frozen lookup table mapping format → adapter descriptor. Eight formats,
+ * Frozen lookup table mapping format → adapter descriptor. Eleven formats,
  * mirrors `QUALITY_INTELLIGENCE_EXPORT_ADAPTERS` exactly.
  */
 export const QUALITY_INTELLIGENCE_EXPORT_FORMAT_TABLE: Readonly<
@@ -51,6 +51,9 @@ export const QUALITY_INTELLIGENCE_EXPORT_FORMAT_TABLE: Readonly<
   csv: descriptor("csv", 256, "csv"),
   json: descriptor("json", 1024, "json"),
   "spreadsheet-safe-csv": descriptor("spreadsheet-safe-csv", 256, "csv"),
+  markdown: descriptor("markdown", 512, "md"),
+  "plain-text": descriptor("plain-text", 384, "txt"),
+  "quality-center": descriptor("quality-center", 384, "txt"),
 });
 
 /**

@@ -15,8 +15,11 @@ import { adaptToAlm } from "./adapters/alm.js";
 import { adaptToCsv } from "./adapters/csv.js";
 import { adaptToJiraIssues } from "./adapters/jira.js";
 import { adaptToJson } from "./adapters/json.js";
+import { adaptToMarkdown } from "./adapters/markdown.js";
+import { adaptToPlainText } from "./adapters/plaintext.js";
 import { adaptToPolarion } from "./adapters/polarion.js";
 import { adaptToQtest } from "./adapters/qtest.js";
+import { adaptToQualityCenter } from "./adapters/qualityCenter.js";
 import { adaptToSpreadsheetSafeCsv } from "./adapters/spreadsheetSafeCsv.js";
 import { adaptToXray } from "./adapters/xray.js";
 import { getExportFormatDescriptor } from "./formats.js";
@@ -42,6 +45,9 @@ const DISPATCH: Readonly<Record<QualityIntelligenceExportFormat, AdapterFn>> = O
   csv: adaptToCsv,
   json: adaptToJson,
   "spreadsheet-safe-csv": adaptToSpreadsheetSafeCsv,
+  markdown: adaptToMarkdown,
+  "plain-text": adaptToPlainText,
+  "quality-center": adaptToQualityCenter,
 });
 
 /**

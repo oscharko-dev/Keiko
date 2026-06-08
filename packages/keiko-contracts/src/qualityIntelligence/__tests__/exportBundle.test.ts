@@ -44,13 +44,21 @@ describe("QualityIntelligenceExportBundle", () => {
     expect(QUALITY_INTELLIGENCE_TMS_ADAPTERS.has("xray")).toBe(true);
     expect(QUALITY_INTELLIGENCE_TMS_ADAPTERS.has("polarion")).toBe(true);
     expect(QUALITY_INTELLIGENCE_TMS_ADAPTERS.has("alm")).toBe(true);
+    // Quality Center (Epic #711) is a disabled, dry-run-only external target → TMS-classified.
+    expect(QUALITY_INTELLIGENCE_TMS_ADAPTERS.has("quality-center")).toBe(true);
     expect(QUALITY_INTELLIGENCE_TMS_ADAPTERS.has("csv")).toBe(false);
     expect(QUALITY_INTELLIGENCE_TMS_ADAPTERS.has("json")).toBe(false);
     expect(QUALITY_INTELLIGENCE_TMS_ADAPTERS.has("spreadsheet-safe-csv")).toBe(false);
+    // Markdown / plain-text (Epic #711) are local, redaction-safe formats → not TMS.
+    expect(QUALITY_INTELLIGENCE_TMS_ADAPTERS.has("markdown")).toBe(false);
+    expect(QUALITY_INTELLIGENCE_TMS_ADAPTERS.has("plain-text")).toBe(false);
   });
 
-  it("enumerates eight adapters", () => {
-    expect(QUALITY_INTELLIGENCE_EXPORT_ADAPTERS).toHaveLength(8);
+  it("enumerates eleven adapters (Epic #711 adds markdown, plain-text, quality-center)", () => {
+    expect(QUALITY_INTELLIGENCE_EXPORT_ADAPTERS).toHaveLength(11);
+    expect(QUALITY_INTELLIGENCE_EXPORT_ADAPTERS).toContain("markdown");
+    expect(QUALITY_INTELLIGENCE_EXPORT_ADAPTERS).toContain("plain-text");
+    expect(QUALITY_INTELLIGENCE_EXPORT_ADAPTERS).toContain("quality-center");
   });
 });
 

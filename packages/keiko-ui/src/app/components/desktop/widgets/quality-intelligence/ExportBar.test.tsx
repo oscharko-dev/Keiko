@@ -487,3 +487,56 @@ describe("ExportBar — runId forwarding", () => {
     expect(calledRunId).toBe(specificRunId);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests — Epic #711 multi-format adapters (Markdown / plain-text / PDF / ZIP / Quality Center)
+// ---------------------------------------------------------------------------
+
+describe("ExportBar — Epic #711 multi-format adapters", () => {
+  it.each(["markdown", "plain-text", "pdf", "zip-bundle"])(
+    "includes the new local format option '%s'",
+    (adapter) => {
+      render(<ExportBar runId="run-001" />);
+      const select = screen.getByRole("combobox", { name: /adapter|format|export/i });
+      const options = Array.from(select.querySelectorAll("option")).map((o) => o.value);
+      expect(options).toContain(adapter);
+    },
+  );
+
+  it("offers Quality Center as a disabled, preview-only (TMS) adapter", async () => {
+    render(<ExportBar runId="run-001" />);
+    const select = screen.getByRole("combobox", { name: /adapter|format|export/i });
+    const options = Array.from(select.querySelectorAll("option")).map((o) => o.value);
+    expect(options).toContain("quality-center");
+    await userEvent.selectOptions(select, "quality-center");
+    expect(screen.getByRole("button", { name: /preview/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /download/i })).not.toBeInTheDocument();
+  });
+
+  it("downloads a PDF through the binary (base64) path without surfacing an error", async () => {
+    const user = userEvent.setup();
+    const exportImpl = vi.fn().mockResolvedValue({
+      dryRun: false,
+      adapter: "pdf",
+      filename: "run-001.pdf",
+      contentType: "application/pdf",
+      byteLen: 16,
+      encoding: "base64",
+      body: btoa("%PDF-1.4 minimal"),
+    }) as unknown as ExportQiRunFn;
+    render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /adapter|format|export/i }),
+      "pdf",
+    );
+    await user.click(screen.getByRole("button", { name: /download/i }));
+    await waitFor(() => {
+      expect(exportImpl).toHaveBeenCalledWith(
+        "run-001",
+        "pdf",
+        expect.objectContaining({ dryRun: false }),
+      );
+    });
+    expect(screen.queryByTestId("qi-export-error")).not.toBeInTheDocument();
+  });
+});
