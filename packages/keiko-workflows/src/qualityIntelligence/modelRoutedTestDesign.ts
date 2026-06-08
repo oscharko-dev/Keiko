@@ -1,0 +1,242 @@
+// Quality Intelligence model-routed test-design run entry (Epic #270, Issue #272/#273/#279).
+//
+// The live generation path: real source evidence → Keiko Model Gateway → generated test-case
+// candidates → pure-domain dedup / coverage / validation → evidence + candidate-artifact persist.
+// Shares the run-lifecycle runtime with the scripted entries via `runtimeCommon.ts`. The model call
+// is injected as an abstract `generate` port so this module stays free of provider SDKs and the
+// server tier owns the gateway wiring (ADR-0023 D5/D6).
+
+import { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import {
+  buildCoverageMap,
+  deduplicateCandidates,
+  validateCandidates,
+  QualityIntelligenceGeneration,
+  type PolicyProfile,
+} from "@oscharko-dev/keiko-quality-intelligence";
+import type { QualityIntelligenceLocalStore } from "@oscharko-dev/keiko-evidence";
+import { QI_TEST_DESIGN_WORKFLOW_DESCRIPTOR } from "./descriptors.js";
+import {
+  emit,
+  emitCandidateProposed,
+  emitFindingsRecorded,
+  emitQueuedAndStarted,
+  finaliseFailureOrCancellation,
+  makeContext,
+  persistRun,
+  truncateCandidates,
+  truncateFindings,
+  withStage,
+  type QualityIntelligenceClock,
+  type QualityIntelligenceProvenanceRefs,
+  type QualityIntelligenceRunEventSink,
+  type QualityIntelligenceRunSummary,
+  type RunContext,
+} from "./runtimeCommon.js";
+import type { QualityIntelligenceWorkflowLimits } from "./descriptors.js";
+
+type Candidate = QI.QualityIntelligenceTestCaseCandidate;
+type EvidenceAtom = QI.QualityIntelligenceEvidenceAtom;
+
+/** A content-bearing ingested atom: the wire-safe atom plus its server-side canonical text. */
+export interface QualityIntelligenceIngestedAtom {
+  readonly atom: EvidenceAtom;
+  readonly canonicalText: string;
+}
+
+export interface QualityIntelligenceGenerationPortArgs {
+  readonly systemPrompt: string;
+  readonly instruction: string;
+  readonly evidence: readonly {
+    readonly index: number;
+    readonly kind: string;
+    readonly text: string;
+  }[];
+  readonly maxCandidates: number;
+  readonly signal?: AbortSignal | undefined;
+}
+
+export interface QualityIntelligenceGenerationPortResult {
+  readonly rawText: string;
+  readonly modelCallCount: number;
+  readonly modelId: string;
+}
+
+/** Abstract model-generation seam. The server backs it with the real Keiko Model Gateway port. */
+export interface QualityIntelligenceGenerationPort {
+  readonly generate: (
+    args: QualityIntelligenceGenerationPortArgs,
+  ) => Promise<QualityIntelligenceGenerationPortResult>;
+}
+
+/** Persistence seam for the generated candidate bodies (companion artifact in #274). */
+export interface QualityIntelligenceCandidatesSink {
+  readonly record: (candidates: readonly Candidate[], generatedAt: string) => void;
+}
+
+export interface QualityIntelligenceModelRoutedTestDesignInput {
+  readonly plan: QI.QualityIntelligenceRunPlan;
+  readonly envelopes: readonly QI.QualityIntelligenceSourceEnvelope[];
+  readonly ingestedAtoms: readonly QualityIntelligenceIngestedAtom[];
+  readonly provenanceRefs: QualityIntelligenceProvenanceRefs;
+  readonly profile?: PolicyProfile | undefined;
+}
+
+export interface QualityIntelligenceModelRoutedTestDesignDeps {
+  readonly sink: QualityIntelligenceRunEventSink;
+  readonly evidenceStore: QualityIntelligenceLocalStore;
+  readonly candidatesSink: QualityIntelligenceCandidatesSink;
+  readonly generate: QualityIntelligenceGenerationPort;
+  readonly clock?: QualityIntelligenceClock | undefined;
+  readonly signal?: AbortSignal | undefined;
+  readonly limits?: QualityIntelligenceWorkflowLimits | undefined;
+}
+
+class EmptyEvidenceError extends Error {
+  constructor() {
+    super("No usable evidence atoms were ingested for the run");
+    this.name = "EmptyEvidenceError";
+  }
+}
+
+class UnparseableModelOutputError extends Error {
+  constructor() {
+    super("Model output could not be parsed into test cases");
+    this.name = "UnparseableModelOutputError";
+  }
+}
+
+interface QiEvidenceRefRow {
+  readonly envelopeId: string;
+  readonly atomId: string;
+  readonly lifecycleStatus: QI.QualityIntelligenceLifecycleStatus;
+}
+
+function evidenceRefsFor(
+  ingestedAtoms: readonly QualityIntelligenceIngestedAtom[],
+): readonly QiEvidenceRefRow[] {
+  return Object.freeze(
+    ingestedAtoms.map((a) =>
+      Object.freeze({
+        envelopeId: String(a.atom.sourceEnvelopeId),
+        atomId: String(a.atom.id),
+        lifecycleStatus: a.atom.lifecycleStatus,
+      }),
+    ),
+  );
+}
+
+async function generateCandidates(
+  ctx: RunContext,
+  input: QualityIntelligenceModelRoutedTestDesignInput,
+  deps: QualityIntelligenceModelRoutedTestDesignDeps,
+): Promise<readonly Candidate[]> {
+  if (input.ingestedAtoms.length === 0) {
+    throw new EmptyEvidenceError();
+  }
+  const evidence = input.ingestedAtoms.map((a, i) => ({
+    index: i + 1,
+    kind: a.atom.kind,
+    text: a.canonicalText,
+  }));
+  const maxCandidates = ctx.limits.maxCandidatesPerRun;
+  const instruction = QualityIntelligenceGeneration.buildTestDesignInstruction({
+    evidenceCount: evidence.length,
+    profile: ctx.profile,
+    maxTestCases: maxCandidates,
+  });
+  const result = await deps.generate.generate({
+    systemPrompt: QualityIntelligenceGeneration.QI_TEST_DESIGN_SYSTEM_PROMPT,
+    instruction,
+    evidence,
+    maxCandidates,
+    signal: ctx.signal,
+  });
+  ctx.modelGatewayCallCount += result.modelCallCount;
+  const parsed = QualityIntelligenceGeneration.parseGeneratedCandidates(result.rawText, {
+    runId: input.plan.id,
+    atomIds: input.ingestedAtoms.map((a) => a.atom.id),
+    profile: ctx.profile,
+    maxCandidates,
+  });
+  if (!parsed.recovered) {
+    throw new UnparseableModelOutputError();
+  }
+  return truncateCandidates(deduplicateCandidates(parsed.candidates), maxCandidates);
+}
+
+/**
+ * Execute a model-routed QI test-design run end to end. Emits the standard QI run-event envelope,
+ * fails the run with a safe reason when the model output is unusable (rather than silently emitting
+ * zero candidates), and persists both the run manifest and the generated candidate bodies.
+ */
+// eslint-disable-next-line max-lines-per-function -- strict QI lifecycle: linear stage audit trail.
+export async function runQualityIntelligenceModelRoutedTestDesign(
+  input: QualityIntelligenceModelRoutedTestDesignInput,
+  deps: QualityIntelligenceModelRoutedTestDesignDeps,
+): Promise<QualityIntelligenceRunSummary> {
+  const ctx = makeContext({
+    descriptor: QI_TEST_DESIGN_WORKFLOW_DESCRIPTOR,
+    plan: input.plan,
+    sink: deps.sink,
+    clock: deps.clock,
+    limits: deps.limits,
+    policyProfile: input.profile,
+    signal: deps.signal,
+  });
+  const evidenceRefs = evidenceRefsFor(input.ingestedAtoms);
+  emitQueuedAndStarted(ctx);
+  try {
+    await withStage(ctx, "plan", async () => Promise.resolve());
+    const candidates = await withStage(ctx, "candidates", async () =>
+      generateCandidates(ctx, input, deps),
+    );
+    emitCandidateProposed(ctx, candidates);
+    await withStage(ctx, "coverage", async () =>
+      Promise.resolve(
+        buildCoverageMap({
+          runId: input.plan.id,
+          atoms: input.ingestedAtoms.map((a) => a.atom),
+          candidates,
+        }),
+      ),
+    );
+    const rawFindings = await withStage(ctx, "validate", async () =>
+      Promise.resolve(validateCandidates(input.plan.id, candidates)),
+    );
+    const findings = truncateFindings(rawFindings, ctx.limits.maxFindingsPerRun);
+    emitFindingsRecorded(ctx, findings);
+    const evidence = await withStage(ctx, "finalize", async () => {
+      const completedAt = ctx.clock.nowIso();
+      const result = persistRun({
+        ctx,
+        status: "succeeded",
+        candidatesCount: candidates.length,
+        findings,
+        evidenceRefs,
+        provenanceRefs: input.provenanceRefs,
+        completedAt,
+        evidenceStore: deps.evidenceStore,
+      });
+      deps.candidatesSink.record(candidates, completedAt);
+      return Promise.resolve(result);
+    });
+    emit(ctx, { kind: "run:succeeded" });
+    return Object.freeze<QualityIntelligenceRunSummary>({
+      runId: input.plan.id,
+      workflowId: ctx.descriptor.workflowId,
+      status: "succeeded",
+      eventsEmitted: ctx.sequence,
+      modelGatewayCallCount: ctx.modelGatewayCallCount,
+      evidence,
+    });
+  } catch (caught: unknown) {
+    return finaliseFailureOrCancellation(ctx, caught, {
+      candidatesCount: 0,
+      findings: Object.freeze([]),
+      evidenceRefs,
+      provenanceRefs: input.provenanceRefs,
+      evidenceStore: deps.evidenceStore,
+    });
+  }
+}

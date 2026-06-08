@@ -21,3 +21,7 @@ export * from "./ranking/index.js";
 
 // ─── Context-pack assembler & micro-index (Issue #183 / Epic #177) ──────────
 export * from "./contextpack/index.js";
+
+// ─── Quality Intelligence workflow execution (Epic #270, Issue #273/#279) ────
+// Scripted + model-routed run entries, descriptors, cancellation, and the run-lifecycle types.
+export * from "./qualityIntelligence/index.js";

@@ -54,6 +54,25 @@ export type {
   QualityIntelligenceRecordResult,
 } from "./store.js";
 
+// ─── Generated-candidate companion artifact (Issue #280) ────────────────────────────
+export {
+  QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION,
+  recordQualityIntelligenceCandidates,
+  loadQualityIntelligenceCandidates,
+  deleteQualityIntelligenceCandidates,
+} from "./candidatesArtifact.js";
+export type {
+  QualityIntelligenceCandidateRow,
+  QualityIntelligenceCandidatesArtifact,
+  QualityIntelligenceCandidatesStoreOptions,
+  RecordQualityIntelligenceCandidatesInput,
+} from "./candidatesArtifact.js";
+export {
+  createNodeContainedJsonArtifactStore,
+  type ContainedJsonArtifactStore,
+  type ContainedJsonArtifactStoreOptions,
+} from "./companionStore.js";
+
 // ─── Retention, deletion, recovery (M3) ────────────────────────────────────────────
 export {
   applyQualityIntelligenceRetention,
