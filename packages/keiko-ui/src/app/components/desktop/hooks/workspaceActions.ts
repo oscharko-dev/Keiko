@@ -464,13 +464,30 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   };
 
   const linkedFilesContext: WorkspaceApi["linkedFilesContext"] = (id) => {
+    // Collect EVERY Files window connected to `id`. A hub can be connected to several Files windows
+    // plus connector/figma windows (CONNECTABLE.quality). Skip non-files connections instead of
+    // stopping at the first one — a connector/figma edge that happens to precede the files edge in
+    // connection order must NOT hide a Files window connected afterwards (Issue #714).
+    const filesWindows: AppWindow[] = [];
     for (const c of connsRef.current) {
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
       const w = winsRef.current.find((x) => x.id === otherId);
-      if (w !== undefined) return filesContextFor(w);
+      if (w === undefined || w.type !== "files") continue;
+      filesWindows.push(w);
     }
-    return null;
+    if (filesWindows.length === 0) return null;
+    // Prefer the most recently focused (highest-z) connected Files window that HAS a focused file, so
+    // a Fachkonzept focused in ANY connected Files window — not just the first-connected — becomes the
+    // single-file run source and switching focus live-updates the binding. Fall back to the highest-z
+    // connected Files window when none has a focused file (folder binding, unchanged behaviour).
+    const byZDesc = [...filesWindows].sort((a, b) => b.z - a.z);
+    const focused = byZDesc.find((w) => {
+      const active = w.cfg["activeFilePath"];
+      return typeof active === "string" && active.length > 0;
+    });
+    const chosen = focused ?? byZDesc[0];
+    return chosen === undefined ? null : filesContextFor(chosen);
   };
 
   const linkedFilesRoot: WorkspaceApi["linkedFilesRoot"] = (id) =>

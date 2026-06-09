@@ -90,6 +90,34 @@ describe("buildConnectedRunSources — N+1 additive assembly (#729)", () => {
     expect(sources.filter((s) => s.kind === "capsule")).toHaveLength(1);
   });
 
+  it("dedupes folder roots that differ only in a trailing separator (N+1 path-variant robustness)", () => {
+    // Two Files windows whose roots are typed inconsistently ("/work/spec" vs "/work/spec/") name the
+    // SAME folder; without canonicalisation the server would ingest it twice (token waste + duplicate
+    // citations). The combined list must collapse them to one workspace source.
+    const sources = buildConnectedRunSources({
+      connectedRoots: ["/work/spec", "/work/spec/", "/other"],
+    });
+    expect(sources.filter((s) => s.kind === "workspace").map((s) => s.path)).toEqual([
+      "/work/spec",
+      "/other",
+    ]);
+  });
+
+  it("a focused file supersedes its own folder even when the folder root carries a trailing slash", () => {
+    // The focused file's own window root arrives canonicalised ("/work/spec") while the same window's
+    // entry in connectedRoots carries a trailing slash ("/work/spec/"). The file must still supersede
+    // its own folder so the document is never ingested as a file AND as its parent folder.
+    const sources = buildConnectedRunSources({
+      connectedRoot: "/work/spec",
+      connectedFilePath: "/work/spec/funds-transfer.md",
+      connectedRoots: ["/work/spec/", "/other/folder"],
+    });
+    expect(sources).toEqual([
+      { kind: "file", label: "funds-transfer.md", path: "/work/spec/funds-transfer.md" },
+      { kind: "workspace", label: "folder", path: "/other/folder" },
+    ]);
+  });
+
   it("caps the COMBINED list at MAX_SCOPES across all kinds (single global cap, file-first)", () => {
     const folders = Array.from({ length: 20 }, (_, i) => `/folder-${i.toString()}`);
     const capsules = Array.from({ length: 20 }, (_, i) => `cap-${i.toString()}`);

@@ -527,3 +527,74 @@ describe("linkedAllFilesRoots (Epic #729 #731)", () => {
     expect(linkedAllFilesRoots("quality")).toHaveLength(MAX_SCOPES);
   });
 });
+
+// ─── Epic #709 #714 — linkedFilesContext (single-file binding window selection) ──
+
+describe("linkedFilesContext (Epic #709 #714)", () => {
+  it("returns null when the hub has no connected Files windows", () => {
+    const { linkedFilesContext } = makeConnectHarness([win("quality", {}, "quality")], []);
+    expect(linkedFilesContext("quality")).toBeNull();
+  });
+
+  it("reaches a Files window connected AFTER a connector edge — the connector must not hide it", () => {
+    // A connector edge preceding the files edge previously made linkedFilesContext return null on the
+    // first (non-files) connection and stop, dropping the focused file + folder root entirely.
+    const { linkedFilesContext, linkedFilesRoot } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-1" }, "conn-1"),
+        win("files", { resolvedRoot: "/work/spec", activeFilePath: "fk.md" }, "files-1"),
+      ],
+      [conn("quality", "conn-1"), conn("quality", "files-1")],
+    );
+    const ctx = linkedFilesContext("quality");
+    expect(ctx?.root).toBe("/work/spec");
+    expect(ctx?.activeFilePath).toBe("fk.md");
+    expect(linkedFilesRoot("quality")).toBe("/work/spec");
+  });
+
+  it("returns the FOCUSED Files window's context even when another was connected first", () => {
+    // files-1 (connected first) has no focused file; files-2 (higher z) does. The focused file must
+    // win so it becomes the single-file run source, not be silently dropped to a folder binding.
+    const { linkedFilesContext } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        { ...win("files", { resolvedRoot: "/work/a" }, "files-1"), z: 1 },
+        {
+          ...win("files", { resolvedRoot: "/work/b", activeFilePath: "spec.md" }, "files-2"),
+          z: 2,
+        },
+      ],
+      [conn("quality", "files-1"), conn("quality", "files-2")],
+    );
+    const ctx = linkedFilesContext("quality");
+    expect(ctx?.root).toBe("/work/b");
+    expect(ctx?.activeFilePath).toBe("spec.md");
+  });
+
+  it("prefers the highest-z (most recently focused) connected Files window that has a focused file", () => {
+    const { linkedFilesContext } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        { ...win("files", { resolvedRoot: "/work/a", activeFilePath: "a.md" }, "files-1"), z: 9 },
+        { ...win("files", { resolvedRoot: "/work/b", activeFilePath: "b.md" }, "files-2"), z: 3 },
+      ],
+      [conn("quality", "files-1"), conn("quality", "files-2")],
+    );
+    expect(linkedFilesContext("quality")?.activeFilePath).toBe("a.md");
+  });
+
+  it("falls back to the highest-z Files window when none has a focused file (folder binding)", () => {
+    const { linkedFilesContext } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        { ...win("files", { resolvedRoot: "/work/a" }, "files-1"), z: 2 },
+        { ...win("files", { resolvedRoot: "/work/b" }, "files-2"), z: 7 },
+      ],
+      [conn("quality", "files-1"), conn("quality", "files-2")],
+    );
+    const ctx = linkedFilesContext("quality");
+    expect(ctx?.root).toBe("/work/b");
+    expect(ctx?.activeFilePath).toBeUndefined();
+  });
+});

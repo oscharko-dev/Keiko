@@ -113,18 +113,27 @@ function sourceKey(source: ConnectedRunSource): string {
 export function buildConnectedRunSources(
   props: ConnectedSourceProps,
 ): readonly ConnectedRunSource[] {
-  const connectedRoot = props.connectedRoot ?? null;
-  const connectedFile = resolveConnectedFilePath(connectedRoot, props.connectedFilePath ?? null);
+  const connectedRootRaw = props.connectedRoot ?? null;
+  // resolveConnectedFilePath canonicalises the root internally, so it receives the RAW value.
+  const connectedFile = resolveConnectedFilePath(connectedRootRaw, props.connectedFilePath ?? null);
+  // Canonicalise every folder root (strip trailing separators, normalise slashes) BEFORE the
+  // file-supersedes-own-folder filter and the dedupe below. Two Files windows whose roots differ
+  // only by a trailing separator (".../spec" vs ".../spec/") would otherwise survive as two
+  // workspace sources and the same folder would be ingested twice; likewise a focused file whose own
+  // folder root carried a trailing slash would not be superseded. Canonicalising collapses both
+  // (Epic #729 N+1 dedup robustness; keeps the lone-file #709 path one element).
+  const connectedRoot = connectedRootRaw !== null ? trimTrailingSeparators(connectedRootRaw) : null;
 
-  const allRoots =
+  const rawRoots =
     props.connectedRoots !== undefined &&
     props.connectedRoots !== null &&
     props.connectedRoots.length > 0
       ? props.connectedRoots
-      : connectedRoot !== null
-        ? [connectedRoot]
+      : connectedRootRaw !== null
+        ? [connectedRootRaw]
         : [];
-  // The focused file supersedes its own folder root; other connected folders remain.
+  const allRoots = rawRoots.map(trimTrailingSeparators);
+  // The focused file supersedes its own (canonicalised) folder root; other connected folders remain.
   const folderRoots =
     connectedFile !== null ? allRoots.filter((r) => r !== connectedRoot) : allRoots;
 

@@ -273,6 +273,18 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     }
   });
 
+  it("ingests a single file exactly at the size limit (boundary is ≤, not <)", () => {
+    // 196_608 bytes is the single-file budget. A file of EXACTLY that size must still ingest — the
+    // keiko-workspace size guard is `size > maxBytes`, so the boundary value is accepted, never
+    // truncated (the evidence budget equals the read cap for a lone source). This pairs with the
+    // oversize case above to lock the boundary against a `>`→`>=` mutation.
+    const dir = makeDir();
+    const path = writeFile(dir, "at-limit.md", "a".repeat(196_608));
+    const result = ingest(input([fileSource("AtLimit", path)]));
+    expect(result.ingestedAtoms).toHaveLength(1);
+    expect(result.envelopes[0]?.provenance.origin).toBe("file");
+  });
+
   it("throws QI_SOURCE_EMPTY when the file contains only whitespace", () => {
     const dir = makeDir();
     const path = writeFile(dir, "blank.md", "   \n\n\t  ");
