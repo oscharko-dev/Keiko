@@ -7,6 +7,24 @@
 
 export { cleanScopedNodesToScreenIr } from "./cleanToScreenIr.js";
 
+// Structural test-baseline derivation + the defensive Screen-IR parser for the snapshot's opaque
+// `irJson` (Issue #754). Deterministic, model-free: same IR → byte-identical baseline.
+export {
+  parseScreenIr,
+  deriveScreenTestBaseline,
+  renderBaselineText,
+} from "./screenIrTestBaseline.js";
+
+export type {
+  ScreenTestBaseline,
+  StructuralTestCategory,
+  StructuralTestItem,
+} from "./screenIrTestBaseline.js";
+
+// Vision merge that structurally enforces "vision augments, never overrides the IR" (Issue #754).
+export { mergeVisionHints } from "./visionAugmentation.js";
+export type { VisionMergeResult } from "./visionAugmentation.js";
+
 export type { FigmaSourceNode } from "./sourceNode.js";
 
 export type {

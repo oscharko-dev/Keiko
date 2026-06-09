@@ -15,6 +15,7 @@ import type {
   QualityIntelligenceInlineSource,
   QualityIntelligenceCapsuleSource,
   QualityIntelligenceCapsuleSetSource,
+  QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
@@ -91,8 +92,22 @@ function validateCapsuleSetSource(
   return { kind: "capsule-set", label, capsuleSetId: raw.capsuleSetId };
 }
 
-// Local Knowledge connector sources (capsule / capsule-set). Split out so validateSource stays
-// under the complexity budget as the source-kind union grows (Epic #710, Issue #716).
+function validateFigmaSnapshotSource(
+  label: string,
+  raw: Record<string, unknown>,
+): QualityIntelligenceFigmaSnapshotSource | RouteResult {
+  if (typeof raw.snapshotRunId !== "string" || raw.snapshotRunId.trim().length === 0) {
+    return errorResult(
+      400,
+      "QI_BAD_REQUEST",
+      "A figma-snapshot source requires a non-empty snapshotRunId.",
+    );
+  }
+  return { kind: "figma-snapshot", label, snapshotRunId: raw.snapshotRunId };
+}
+
+// Connector sources (Local Knowledge capsule / capsule-set, Figma snapshot). Split out so
+// validateSource stays under the complexity budget as the source-kind union grows (Epic #710/#750).
 function validateConnectorSource(
   label: string,
   raw: Record<string, unknown>,
@@ -102,6 +117,9 @@ function validateConnectorSource(
   }
   if (raw.kind === "capsule-set") {
     return validateCapsuleSetSource(label, raw);
+  }
+  if (raw.kind === "figma-snapshot") {
+    return validateFigmaSnapshotSource(label, raw);
   }
   return undefined;
 }

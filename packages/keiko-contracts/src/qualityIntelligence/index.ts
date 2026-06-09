@@ -208,6 +208,7 @@ export type {
   QualityIntelligenceFileSource,
   QualityIntelligenceCapsuleSource,
   QualityIntelligenceCapsuleSetSource,
+  QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceInlineSource,
   QualityIntelligenceUiStalenessEntry,
   QualityIntelligenceUiStalenessReport,

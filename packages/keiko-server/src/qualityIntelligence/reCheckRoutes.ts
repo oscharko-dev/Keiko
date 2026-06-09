@@ -47,6 +47,7 @@ import type {
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { makeCapsuleResolver } from "./capsuleAdapter.js";
+import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort } from "./judgePort.js";
 import { resolveQiTestDesignSelection } from "./modelSelection.js";
@@ -246,7 +247,9 @@ function buildCoverageGapFindingRow(
   atomStatus: AtomCoverageStatus,
   ordinal: number,
 ): QualityIntelligenceFindingRow {
-  const payload = ["v1-cov-gap", String(runId), String(atomStatus.atomId), String(ordinal)].join("");
+  const payload = ["v1-cov-gap", String(runId), String(atomStatus.atomId), String(ordinal)].join(
+    "",
+  );
   return Object.freeze({
     id: `qi-finding-${sha256Hex(payload).slice(0, 32)}`,
     kind: "coverage-gap",
@@ -339,6 +342,8 @@ function ingestSourcesForDrift(
         runId: ingestRunId,
         registeredAt: new Date().toISOString(),
         capsuleResolver: makeCapsuleResolver(deps),
+        figmaSnapshotLoader: makeFigmaSnapshotLoader(deps),
+        figmaVision: makeFigmaVisionHintProvider(deps),
       }),
     };
   } catch (error) {
@@ -442,11 +447,10 @@ function collectStaleIds(staleness: DriftContext["staleness"]): ReadonlySet<stri
   ]);
 }
 
-function buildPreservedState(
-  drift: DriftContext,
-  staleIds: ReadonlySet<string>,
-): PreservedState {
-  const preservedCandidates = drift.oldCandidates.filter((candidate) => !staleIds.has(candidate.id));
+function buildPreservedState(drift: DriftContext, staleIds: ReadonlySet<string>): PreservedState {
+  const preservedCandidates = drift.oldCandidates.filter(
+    (candidate) => !staleIds.has(candidate.id),
+  );
   const preservedIds = new Set(preservedCandidates.map((candidate) => candidate.id));
   return {
     preservedCandidates,
@@ -461,7 +465,9 @@ function looksLikeLegacyRequirementsFallback(
   staleIds: ReadonlySet<string>,
 ): boolean {
   if (staleIds.size === 0 || drift.manifest.atomFingerprints !== undefined) return false;
-  if (!(drift.sources.length > 0 && drift.sources.every((source) => source.kind === "requirements"))) {
+  if (
+    !(drift.sources.length > 0 && drift.sources.every((source) => source.kind === "requirements"))
+  ) {
     return false;
   }
   const evidenceRefMap = new Map(
@@ -470,12 +476,16 @@ function looksLikeLegacyRequirementsFallback(
   return drift.oldCandidates.some(
     (candidate) =>
       staleIds.has(candidate.id) &&
-      candidate.derivedFromAtomIds.some((atomId) => evidenceRefMap.get(atomId)?.startsWith("qi-src-")),
+      candidate.derivedFromAtomIds.some((atomId) =>
+        evidenceRefMap.get(atomId)?.startsWith("qi-src-"),
+      ),
   );
 }
 
 function buildCurrentAtomIndexes(ingestion: QiIngestion): CurrentAtomIndexes {
-  const byId = new Map(ingestion.ingestedAtoms.map((entry) => [String(entry.atom.id), entry] as const));
+  const byId = new Map(
+    ingestion.ingestedAtoms.map((entry) => [String(entry.atom.id), entry] as const),
+  );
   const byEnvelope = new Map<string, QualityIntelligenceIngestedAtom[]>();
   for (const entry of ingestion.ingestedAtoms) {
     const envelopeId = String(entry.atom.sourceEnvelopeId);
@@ -495,10 +505,13 @@ function buildCurrentAtomIndexes(ingestion: QiIngestion): CurrentAtomIndexes {
 
 function buildOldAtomIndexes(atomFingerprints: readonly AtomFingerprintRow[]): OldAtomIndexes {
   const byId = new Map(
-    atomFingerprints.map((fp) => [
-      fp.atomId,
-      { envelopeId: fp.envelopeId, canonicalHashSha256Hex: fp.canonicalHashSha256Hex },
-    ] as const),
+    atomFingerprints.map(
+      (fp) =>
+        [
+          fp.atomId,
+          { envelopeId: fp.envelopeId, canonicalHashSha256Hex: fp.canonicalHashSha256Hex },
+        ] as const,
+    ),
   );
   const idsByEnvelope = new Map<string, Set<string>>();
   for (const fp of atomFingerprints) {
@@ -559,7 +572,9 @@ function collectAtomsToRegenerate(
     if (!staleIds.has(candidate.id)) continue;
     addRegenerationAtomsForCandidate(candidate, current, old, atomIdsToRegenerate);
   }
-  return drift.ingestion.ingestedAtoms.filter((entry) => atomIdsToRegenerate.has(String(entry.atom.id)));
+  return drift.ingestion.ingestedAtoms.filter((entry) =>
+    atomIdsToRegenerate.has(String(entry.atom.id)),
+  );
 }
 
 function narrowRegeneration(drift: DriftContext): NarrowedRegeneration {
@@ -596,9 +611,7 @@ type RegenOutcome =
 
 function regenWorkflowDeps(
   deps: UiHandlerDeps,
-  target:
-    | { readonly kind: "baseline" }
-    | { readonly kind: "model"; readonly modelId: string },
+  target: { readonly kind: "baseline" } | { readonly kind: "model"; readonly modelId: string },
   evidenceStore: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
   capture: (cands: readonly QiTestCaseCandidate[], generatedAt: string) => void,
 ): QualityIntelligenceModelRoutedTestDesignDeps {
@@ -636,7 +649,8 @@ async function executeScopedWorkflow(args: {
   readonly atomsToRegenerate: readonly QualityIntelligenceIngestedAtom[];
   readonly profile: PolicyProfile;
 }): Promise<RouteResult | null> {
-  const { deps, target, evidenceStore, capture, plan, ingestion, atomsToRegenerate, profile } = args;
+  const { deps, target, evidenceStore, capture, plan, ingestion, atomsToRegenerate, profile } =
+    args;
   try {
     const summary = await runQualityIntelligenceModelRoutedTestDesign(
       {
@@ -752,7 +766,9 @@ function buildMergedFindings(args: {
   readonly regeneratedManifest: QiManifest | undefined;
 }): readonly QualityIntelligenceFindingRow[] {
   const preservedIds = new Set(args.preservedCandidates.map((candidate) => candidate.id));
-  const regeneratedIds = new Set(args.regeneratedCandidates.map((candidate) => String(candidate.id)));
+  const regeneratedIds = new Set(
+    args.regeneratedCandidates.map((candidate) => String(candidate.id)),
+  );
   const preservedJudgeRows = filteredJudgeFindings(args.oldManifest.findings, preservedIds);
   const regeneratedJudgeRows =
     args.regeneratedManifest === undefined
@@ -788,7 +804,11 @@ function buildMergedRunRecord(args: {
     policyProfileIds: [profile.id],
     retentionPolicyId: oldManifest.retentionPolicyId,
     modelGatewayCallCount: args.regeneratedManifest?.modelGatewayCallCount ?? 0,
-    totals: { candidates: args.preservedCandidates.length + args.regeneratedCandidates.length, findings: args.findings.length, exports: 0 },
+    totals: {
+      candidates: args.preservedCandidates.length + args.regeneratedCandidates.length,
+      findings: args.findings.length,
+      exports: 0,
+    },
     findings: args.findings,
     exports: Object.freeze([]),
     evidenceRefs: toEvidenceRefs(ingestion.ingestedAtoms),
@@ -802,12 +822,28 @@ function buildMergedRunRecord(args: {
     }),
     sourceFingerprints: mapCurrentSourceFingerprints(ingestion),
     atomFingerprints: mapCurrentAtomFingerprints(ingestion.ingestedAtoms),
-    ...(args.regeneratedManifest?.modelId !== undefined ? { modelId: args.regeneratedManifest.modelId } : {}),
-    ...(args.regeneratedManifest?.modelParameters !== undefined
-      ? { modelParameters: args.regeneratedManifest.modelParameters }
+    ...optionalModelFields(args.regeneratedManifest),
+  };
+}
+
+// Carry forward the regenerated manifest's optional model provenance (modelId / modelParameters /
+// seedUsed) only when present, so the merged record omits — rather than nulls — an absent field.
+function optionalModelFields(
+  regeneratedManifest: QiManifest | undefined,
+): Partial<
+  Pick<
+    Parameters<typeof recordQualityIntelligenceRun>[0],
+    "modelId" | "modelParameters" | "seedUsed"
+  >
+> {
+  if (regeneratedManifest === undefined) return {};
+  return {
+    ...(regeneratedManifest.modelId !== undefined ? { modelId: regeneratedManifest.modelId } : {}),
+    ...(regeneratedManifest.modelParameters !== undefined
+      ? { modelParameters: regeneratedManifest.modelParameters }
       : {}),
-    ...(args.regeneratedManifest?.seedUsed !== undefined
-      ? { seedUsed: args.regeneratedManifest.seedUsed }
+    ...(regeneratedManifest.seedUsed !== undefined
+      ? { seedUsed: regeneratedManifest.seedUsed }
       : {}),
   };
 }

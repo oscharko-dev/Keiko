@@ -280,3 +280,50 @@ describe("handleStartQiRun — capsule-set source validation (Issue #716/#718)",
     }
   });
 });
+
+describe("handleStartQiRun — figma-snapshot source validation (Issue #754)", () => {
+  it("returns 400 QI_BAD_REQUEST when snapshotRunId is missing", async () => {
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({ sources: [{ kind: "figma-snapshot", label: "My snapshot" }] }),
+          new MockResponse(),
+        ),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+
+  it("returns 400 QI_BAD_REQUEST when snapshotRunId is whitespace-only", async () => {
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({
+            sources: [{ kind: "figma-snapshot", label: "My snapshot", snapshotRunId: "   " }],
+          }),
+          new MockResponse(),
+        ),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+
+  it("starts the SSE stream (not a 400) when a valid snapshotRunId is provided", async () => {
+    const outcome = await handleStartQiRun(
+      ctx(
+        makeReq({
+          sources: [{ kind: "figma-snapshot", label: "My snapshot", snapshotRunId: "snap-abc-1" }],
+        }),
+        new MockResponse(),
+      ),
+      deps(),
+    );
+    if (outcome !== STREAMING) {
+      expect(outcome.status).not.toBe(400);
+    }
+  });
+});

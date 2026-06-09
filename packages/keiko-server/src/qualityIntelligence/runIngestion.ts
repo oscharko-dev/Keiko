@@ -12,6 +12,7 @@ import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   QualityIntelligenceGeneration,
   QualityIntelligenceHardening,
+  QualityIntelligenceFigma,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import {
   detectWorkspaceAt,
@@ -33,6 +34,8 @@ import type {
   QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
 import type { CapsuleResolver } from "./capsuleAdapter.js";
+import type { FigmaSnapshotLoader, FigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
+import type { FigmaSnapshotRecord } from "@oscharko-dev/keiko-evidence";
 
 const MAX_TOTAL_ATOMS = 120;
 const MAX_LABEL_CHARS = 120;
@@ -557,11 +560,104 @@ function ingestCapsuleSet(
   });
 }
 
+// ─── Figma snapshot source (Epic #750, Issue #754) ───────────────────────────────
+//
+// A stored Figma Snapshot is ingested into one atom PER SCREEN: the deterministic, model-free
+// structural baseline derived from the screen's Screen-IR (#752), optionally enriched by additive
+// vision hints (capability-routed via #810; degrades to IR-only). Each atom carries screen
+// provenance so a generated test is attributable to its origin screen. The canonical text is
+// redacted before the atom is built (defense in depth — the snapshot is already redacted at persist)
+// and budget-capped exactly like the capsule path so a large board degrades gracefully.
+
+/** Vision-augment one screen's baseline text without ever overriding it (additive only). */
+function visionAugmentedScreenText(
+  baseline: QualityIntelligenceFigma.ScreenTestBaseline,
+  screen: FigmaSnapshotRecord["screens"][number],
+  vision: FigmaVisionHintProvider | undefined,
+): string {
+  const baselineText = QualityIntelligenceFigma.renderBaselineText(baseline);
+  if (vision === undefined) return baselineText;
+  const hints = vision({
+    screenId: screen.screenId,
+    imageRelativePath: screen.image.relativePath,
+    baselineText,
+  });
+  return QualityIntelligenceFigma.mergeVisionHints(baselineText, hints).text;
+}
+
+// Derive the redacted, budget-capped canonical text for every parseable screen. A screen whose
+// opaque irJson cannot be parsed is skipped (never crashes the run); the per-run byte budget bounds
+// the cumulative corpus so an oversized board never hard-fails on QI_PROMPT_TOO_LARGE.
+function figmaScreenDocs(
+  record: FigmaSnapshotRecord,
+  vision: FigmaVisionHintProvider | undefined,
+): readonly CorpusDoc[] {
+  const docs: CorpusDoc[] = [];
+  let totalBytes = 0;
+  for (const screen of record.screens) {
+    const ir = QualityIntelligenceFigma.parseScreenIr(screen.irJson);
+    if (ir === undefined) continue;
+    const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir);
+    const augmented = visionAugmentedScreenText(baseline, screen, vision);
+    const capped = truncateToUtf8Bytes(redact(augmented), CAPSULE_MAX_BYTES_PER_DOCUMENT);
+    if (capped.trim().length === 0) continue;
+    const bytes = utf8ByteLength(capped);
+    if (docs.length > 0 && totalBytes + bytes > CAPSULE_BUDGET_BYTES) break;
+    docs.push({ documentId: `${screen.screenId} (${ir.name})`, text: capped });
+    totalBytes += bytes;
+  }
+  return docs;
+}
+
+function ingestFigmaSnapshot(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "figma-snapshot" }>,
+  index: number,
+  registeredAt: string,
+  loader: FigmaSnapshotLoader,
+  vision: FigmaVisionHintProvider | undefined,
+): OneSource {
+  const label = sanitiseLabel(source.label);
+  const record = loader(source.snapshotRunId);
+  if (record === undefined) {
+    throw new QiIngestionError(
+      "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
+      `Figma snapshot "${label}" could not be found or read. Build the snapshot first.`,
+    );
+  }
+  if (record.screens.length === 0) {
+    throw new QiIngestionError("QI_SOURCE_EMPTY", `Figma snapshot "${label}" has no screens.`);
+  }
+  const docs = figmaScreenDocs(record, vision);
+  if (docs.length === 0) {
+    throw new QiIngestionError(
+      "QI_SOURCE_EMPTY",
+      `Figma snapshot "${label}" produced no usable screen baseline.`,
+    );
+  }
+  const joinedText = docs.map((d) => d.text).join("\n");
+  const envelopeId = envelopeIdFor(index, label, source.snapshotRunId);
+  const envelope: QI.QualityIntelligenceSourceEnvelope = {
+    id: envelopeId,
+    kind: "repository-context",
+    displayLabel: label,
+    provenance: {
+      origin: `figma-snapshot:${source.snapshotRunId}`,
+      registeredAt,
+      integrityHashSha256Hex: sha256Hex(joinedText),
+    },
+    localRef: stableLocalRef("figma-snapshot", source.snapshotRunId),
+  };
+  const atoms = docs.map((d, i) => capsuleDocAtom(d.documentId, d.text, envelopeId, i));
+  return { envelope, atoms };
+}
+
 function ingestOne(
   source: QualityIntelligenceInlineSource,
   index: number,
   registeredAt: string,
   capsuleResolver: CapsuleResolver | undefined,
+  figmaSnapshotLoader: FigmaSnapshotLoader | undefined,
+  figmaVision: FigmaVisionHintProvider | undefined,
 ): OneSource {
   switch (source.kind) {
     case "requirements":
@@ -586,6 +682,14 @@ function ingestOne(
         );
       }
       return ingestCapsuleSet(source, index, registeredAt, capsuleResolver);
+    case "figma-snapshot":
+      if (figmaSnapshotLoader === undefined) {
+        throw new QiIngestionError(
+          "QI_FIGMA_SNAPSHOT_UNAVAILABLE",
+          "Figma-snapshot sources are unavailable: the evidence directory is not configured.",
+        );
+      }
+      return ingestFigmaSnapshot(source, index, registeredAt, figmaSnapshotLoader, figmaVision);
   }
 }
 
@@ -595,6 +699,16 @@ export interface IngestInlineSourcesInput {
   readonly registeredAt: string;
   /** Optional capsule resolver (Epic #710, Issue #717). Absent → capsule sources throw QI_CAPSULE_UNAVAILABLE. */
   readonly capsuleResolver?: CapsuleResolver | undefined;
+  /**
+   * Optional Figma-snapshot loader (Epic #750, Issue #754). Absent → figma-snapshot sources throw
+   * QI_FIGMA_SNAPSHOT_UNAVAILABLE. Reads ONLY the stored snapshot; never contacts Figma.
+   */
+  readonly figmaSnapshotLoader?: FigmaSnapshotLoader | undefined;
+  /**
+   * Optional capability-routed vision hint provider (Issue #754/#810). Absent → IR-only baseline.
+   * Hints are additive and never override the deterministic structural baseline.
+   */
+  readonly figmaVision?: FigmaVisionHintProvider | undefined;
 }
 
 /**
@@ -621,7 +735,14 @@ export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestio
   for (let i = 0; i < sources.length; i += 1) {
     const source = sources[i];
     if (source === undefined) continue;
-    const { envelope, atoms } = ingestOne(source, i, input.registeredAt, input.capsuleResolver);
+    const { envelope, atoms } = ingestOne(
+      source,
+      i,
+      input.registeredAt,
+      input.capsuleResolver,
+      input.figmaSnapshotLoader,
+      input.figmaVision,
+    );
     // Each source gets its fair share, bounded by the global cap so the total never exceeds it.
     const take = Math.min(perSourceBudget, MAX_TOTAL_ATOMS - ingestedAtoms.length);
     const taken = take <= 0 ? [] : atoms.slice(0, take);

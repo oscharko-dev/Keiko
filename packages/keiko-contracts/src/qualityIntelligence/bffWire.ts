@@ -206,7 +206,8 @@ export type QualityIntelligenceInlineSourceKind =
   | "workspace"
   | "file"
   | "capsule"
-  | "capsule-set";
+  | "capsule-set"
+  | "figma-snapshot";
 
 /** A pasted free-text requirement blob the server splits into requirement atoms. */
 export interface QualityIntelligenceRequirementsSource {
@@ -260,12 +261,28 @@ export interface QualityIntelligenceCapsuleSetSource {
   readonly capsuleSetId: string;
 }
 
+/**
+ * A stored Figma Snapshot (Epic #750, Issue #753/#754) the server ingests by loading the immutable
+ * snapshot evidence record for `snapshotRunId` and deriving a deterministic, citation-ready
+ * structural test baseline per screen from its Screen-IR (fields/controls/screens/states), enriched
+ * by capability-routed vision only when a multimodal model is available. This source never contacts
+ * Figma — it reads ONLY the previously built snapshot. An unknown / unreadable snapshot is rejected
+ * with QI_FIGMA_SNAPSHOT_UNAVAILABLE. The contract mirrors the capsule source so the connector
+ * picker can bind a snapshot to the QI hub.
+ */
+export interface QualityIntelligenceFigmaSnapshotSource {
+  readonly kind: "figma-snapshot";
+  readonly label: string;
+  readonly snapshotRunId: string;
+}
+
 export type QualityIntelligenceInlineSource =
   | QualityIntelligenceRequirementsSource
   | QualityIntelligenceWorkspaceSource
   | QualityIntelligenceFileSource
   | QualityIntelligenceCapsuleSource
-  | QualityIntelligenceCapsuleSetSource;
+  | QualityIntelligenceCapsuleSetSource
+  | QualityIntelligenceFigmaSnapshotSource;
 
 /** Body of `POST /api/quality-intelligence/runs`. */
 export interface QualityIntelligenceStartRunRequest {

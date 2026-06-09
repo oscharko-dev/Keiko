@@ -26,6 +26,7 @@ import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-con
 import type { UiHandlerDeps } from "../deps.js";
 import { ingestInlineSources, QiIngestionError } from "./runIngestion.js";
 import { makeCapsuleResolver } from "./capsuleAdapter.js";
+import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort } from "./judgePort.js";
 import { resolveQiTestDesignSelection } from "./modelSelection.js";
@@ -131,6 +132,8 @@ export async function executeQiRun(
     runId,
     registeredAt: input.registeredAt,
     capsuleResolver: makeCapsuleResolver(deps),
+    figmaSnapshotLoader: makeFigmaSnapshotLoader(deps),
+    figmaVision: makeFigmaVisionHintProvider(deps),
   });
   const { modelId, generate } = resolveExecutionStrategy(deps, request);
   const profile = resolveProfile(request.profileId);
