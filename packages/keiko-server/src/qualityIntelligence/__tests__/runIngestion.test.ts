@@ -646,11 +646,28 @@ function capsuleSource(
   return { kind: "capsule", label, capsuleId };
 }
 
+type CorpusFn = (id: string) => readonly { documentId: string; text: string }[];
+
 function inputWithResolver(
   sources: QualityIntelligenceStartRunRequest["sources"],
-  capsuleResolver?: IngestInlineSourcesInput["capsuleResolver"],
+  capsule?: CorpusFn,
+  capsuleSet?: CorpusFn,
 ): IngestInlineSourcesInput {
+  const capsuleResolver: IngestInlineSourcesInput["capsuleResolver"] =
+    capsule === undefined && capsuleSet === undefined
+      ? undefined
+      : {
+          capsule: capsule ?? ((): readonly never[] => []),
+          capsuleSet: capsuleSet ?? ((): readonly never[] => []),
+        };
   return { request: reqWith(sources), runId: RUN_ID, registeredAt: TS, capsuleResolver };
+}
+
+function capsuleSetSource(
+  label: string,
+  capsuleSetId: string,
+): { kind: "capsule-set"; label: string; capsuleSetId: string } {
+  return { kind: "capsule-set", label, capsuleSetId };
 }
 
 describe("ingestInlineSources — capsule source (Issue #717)", () => {
@@ -725,5 +742,105 @@ describe("ingestInlineSources — capsule source (Issue #717)", () => {
     expect(result.ingestedAtoms.length).toBe(MAX_TOTAL_ATOMS);
     expect(result.sourceSummaries[0]?.atomCount).toBe(60);
     expect(result.sourceSummaries[1]?.atomCount).toBe(60);
+  });
+
+  // ── Redaction parity (Epic #710, Issue #717 — atoms must be genuinely redacted) ──
+  it("redacts secrets in capsule document text before they reach the atom / model", () => {
+    const docs = [
+      {
+        documentId: "integration-notes",
+        text:
+          "Adapter key:\n" +
+          "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n" +
+          "AKIAIOSFODNN7EXAMPLE is the access key id.\n" +
+          "Authorization: Bearer sk-live-9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a",
+      },
+    ];
+    const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => docs;
+    const result = ingest(inputWithResolver([capsuleSource("Notes", "cap-secret")], resolver));
+    const canonical = result.ingestedAtoms[0]?.canonicalText ?? "";
+    expect(canonical).not.toContain("AKIAIOSFODNN7EXAMPLE");
+    expect(canonical).not.toContain("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+    expect(canonical).not.toContain("sk-live-9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a");
+    expect(canonical).toContain("[REDACTED]");
+    // The redactionStatus flag must now be truthful.
+    expect(result.ingestedAtoms[0]?.atom.redactionStatus).toBe("redacted");
+  });
+
+  // ── Byte-budget parity with workspace/file sources (Epic #710, Issue #717) ──
+  it("caps an oversized capsule document to the per-document byte budget", () => {
+    const huge = "A".repeat(64_000); // 64 KB > 16 KB per-document cap
+    const docs = [{ documentId: "huge", text: huge }];
+    const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => docs;
+    const result = ingest(inputWithResolver([capsuleSource("Huge", "cap-huge")], resolver));
+    const canonical = result.ingestedAtoms[0]?.canonicalText ?? "";
+    // documentId prefix + "\n" + at most 16_384 bytes of body.
+    expect(canonical.length).toBeLessThanOrEqual("huge\n".length + 16_384);
+    expect(canonical.startsWith("huge\n")).toBe(true);
+  });
+
+  it("bounds the whole capsule corpus to the per-run byte budget", () => {
+    // 40 documents × 16 KB each = 640 KB raw, but the per-run budget is ~192 KB.
+    const docs = Array.from({ length: 40 }, (_, i) => ({
+      documentId: `doc-${String(i)}`,
+      text: "B".repeat(16_000),
+    }));
+    const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => docs;
+    const result = ingest(inputWithResolver([capsuleSource("Big", "cap-budget")], resolver));
+    const totalBytes = result.ingestedAtoms.reduce(
+      (sum, a) => sum + Buffer.byteLength(a.canonicalText, "utf8"),
+      0,
+    );
+    // Comfortably bounded — never the full 640 KB raw corpus.
+    expect(totalBytes).toBeLessThanOrEqual(196_608 + 40 * 64);
+    expect(result.ingestedAtoms.length).toBeLessThan(40);
+  });
+});
+
+// ─── Capsule-set source (Epic #710, Issue #716/#718) ──────────────────────────
+
+describe("ingestInlineSources — capsule-set source (Issue #716/#718)", () => {
+  it("throws QI_CAPSULE_UNAVAILABLE when no resolver is provided", () => {
+    try {
+      ingestInlineSources(inputWithResolver([capsuleSetSource("Set", "set-1")]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_CAPSULE_UNAVAILABLE");
+    }
+  });
+
+  it("throws QI_CAPSULE_UNAVAILABLE when the capsule-set resolves to no documents", () => {
+    const result = (): unknown =>
+      ingestInlineSources(
+        inputWithResolver([capsuleSetSource("Empty", "set-empty")], undefined, () => []),
+      );
+    expect(result).toThrow(/has no indexed content/u);
+  });
+
+  it("ingests the expanded member-capsule corpus via the capsuleSet resolver", () => {
+    const docs = [
+      { documentId: "m1", text: "Member one requirement." },
+      { documentId: "m2", text: "Member two requirement." },
+    ];
+    const result = ingest(
+      inputWithResolver([capsuleSetSource("Set", "set-x")], undefined, () => docs),
+    );
+    expect(result.ingestedAtoms.length).toBe(2);
+    expect(result.envelopes[0]?.kind).toBe("local-knowledge-capsule");
+    expect(result.envelopes[0]?.provenance.origin).toBe("local-knowledge-capsule-set:set-x");
+    expect(result.sourceSummaries[0]?.kind).toBe("capsule-set");
+  });
+
+  it("does not call the single-capsule resolver for a capsule-set source", () => {
+    let capsuleCalls = 0;
+    const capsule = (): readonly { documentId: string; text: string }[] => {
+      capsuleCalls += 1;
+      return [];
+    };
+    const capsuleSet = (): readonly { documentId: string; text: string }[] => [
+      { documentId: "m1", text: "Set member text." },
+    ];
+    ingest(inputWithResolver([capsuleSetSource("Set", "set-y")], capsule, capsuleSet));
+    expect(capsuleCalls).toBe(0);
   });
 });

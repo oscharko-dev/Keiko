@@ -23,6 +23,8 @@ export interface QiHubPanelProps {
   readonly connectedRoots?: readonly string[] | undefined;
   /** Capsule ids from connected Connector windows (Epic #710 #718). */
   readonly connectedCapsuleIds?: readonly string[] | undefined;
+  /** Capsule-set ids from connected Connector windows (Epic #710 #718). */
+  readonly connectedCapsuleSetIds?: readonly string[] | undefined;
   /** Seam for tests. */
   readonly fetchRunsImpl?: typeof fetchQiRuns;
 }
@@ -62,6 +64,7 @@ export function QiHubPanel({
   connectedFilePath = null,
   connectedRoots,
   connectedCapsuleIds,
+  connectedCapsuleSetIds,
   fetchRunsImpl = fetchQiRuns,
 }: QiHubPanelProps): ReactNode {
   const [runs, setRuns] = useState<readonly QualityIntelligenceUiRunSummary[]>([]);
@@ -100,6 +103,7 @@ export function QiHubPanel({
         connectedFilePath={connectedFilePath}
         connectedRoots={connectedRoots}
         connectedCapsuleIds={connectedCapsuleIds}
+        connectedCapsuleSetIds={connectedCapsuleSetIds}
       />
       <section className="qi-hub-runs" aria-label="Quality Intelligence runs">
         <header className="qi-col-header">

@@ -8,7 +8,7 @@
 
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
-import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   QualityIntelligenceGeneration,
   QualityIntelligenceHardening,
@@ -386,8 +386,60 @@ function ingestFile(
   return { envelope, atoms };
 }
 
-// Build one evidence atom per capsule document. Reuses the workspace atom shape so the model
-// sees structured text (documentId prefix + body), consistent with folder/file sources.
+// A single capsule document may use the per-document byte budget; the whole capsule corpus is
+// bounded by CAPSULE_BUDGET_BYTES. These mirror the folder path's per-file and per-run budgets so a
+// large capsule degrades gracefully (a bounded prompt) instead of failing the entire run with
+// QI_PROMPT_TOO_LARGE (Epic #710, Issue #717 — resilience parity with workspace/file sources).
+const CAPSULE_MAX_BYTES_PER_DOCUMENT = WORKSPACE_MAX_BYTES_PER_FILE;
+const CAPSULE_BUDGET_BYTES = WORKSPACE_BUDGET_BYTES;
+
+const utf8Encoder = new TextEncoder();
+const utf8ByteLength = (text: string): number => utf8Encoder.encode(text).length;
+
+// Truncate to at most maxBytes UTF-8 bytes without splitting a multi-byte code point.
+function truncateToUtf8Bytes(text: string, maxBytes: number): string {
+  if (utf8ByteLength(text) <= maxBytes) return text;
+  let out = "";
+  let bytes = 0;
+  for (const cp of text) {
+    const cpBytes = utf8ByteLength(cp);
+    if (bytes + cpBytes > maxBytes) break;
+    out += cp;
+    bytes += cpBytes;
+  }
+  return out;
+}
+
+interface CorpusDoc {
+  readonly documentId: string;
+  readonly text: string;
+}
+
+// Redact every member document and cap it. The LK corpus text is NOT redacted at index time — the
+// workspace/file paths redact at read time via keiko-workspace, so the capsule path MUST redact
+// here to honour the atom's redactionStatus:"redacted" and the epic's no-credential-leakage DoD
+// (Epic #710, Issue #717). Each document is capped to the per-document budget and ingestion stops
+// once the cumulative corpus reaches the per-run budget so an oversized capsule degrades gracefully.
+function processCapsuleDocs(docs: readonly CorpusDoc[]): readonly CorpusDoc[] {
+  const processed: CorpusDoc[] = [];
+  let totalBytes = 0;
+  for (const doc of docs) {
+    const capped = truncateToUtf8Bytes(redact(doc.text), CAPSULE_MAX_BYTES_PER_DOCUMENT);
+    if (capped.trim().length === 0) continue;
+    const bytes = utf8ByteLength(capped);
+    // Always include the first usable document (capped to ≤ the per-document budget); thereafter
+    // stop before a document would push the corpus past the per-run budget so the total stays
+    // bounded (never the raw corpus) and the run never hard-fails on QI_PROMPT_TOO_LARGE.
+    if (processed.length > 0 && totalBytes + bytes > CAPSULE_BUDGET_BYTES) break;
+    processed.push({ documentId: doc.documentId, text: capped });
+    totalBytes += bytes;
+  }
+  return processed;
+}
+
+// Build one evidence atom per capsule document. Reuses the workspace atom shape so the model sees
+// structured text (documentId prefix + body), consistent with folder/file sources. The text is
+// already redacted + capped by processCapsuleDocs, so redactionStatus:"redacted" is truthful.
 function capsuleDocAtom(
   docId: string,
   text: string,
@@ -409,6 +461,50 @@ function capsuleDocAtom(
   return { atom, canonicalText };
 }
 
+interface CapsuleSourceBuild {
+  readonly label: string;
+  readonly index: number;
+  readonly registeredAt: string;
+  /** Stable key folded into the envelope id (the capsule id or capsule-set id). */
+  readonly envelopeKey: string;
+  /** Provenance origin descriptor (no secrets — an id, never content). */
+  readonly origin: string;
+  readonly rawDocs: readonly CorpusDoc[];
+  /** User-actionable message when the connector resolves to no indexed content. */
+  readonly emptyError: string;
+}
+
+// Shared builder for capsule and capsule-set sources: both resolve to a flat list of corpus
+// documents that are redacted, budget-capped, and mapped to one local-knowledge-capsule envelope
+// plus per-document atoms (Epic #710, Issue #716/#717).
+function buildCapsuleSource(build: CapsuleSourceBuild): OneSource {
+  if (build.rawDocs.length === 0) {
+    throw new QiIngestionError("QI_CAPSULE_UNAVAILABLE", build.emptyError);
+  }
+  const docs = processCapsuleDocs(build.rawDocs);
+  if (docs.length === 0) {
+    throw new QiIngestionError(
+      "QI_SOURCE_EMPTY",
+      `Source "${build.label}" produced no usable content.`,
+    );
+  }
+  const joinedText = docs.map((d) => d.text).join("\n");
+  const envelopeId = envelopeIdFor(build.index, build.label, build.envelopeKey);
+  const envelope: QI.QualityIntelligenceSourceEnvelope = {
+    id: envelopeId,
+    kind: "local-knowledge-capsule",
+    displayLabel: build.label,
+    provenance: {
+      origin: build.origin,
+      registeredAt: build.registeredAt,
+      integrityHashSha256Hex: sha256Hex(joinedText),
+    },
+    localRef: String(envelopeId),
+  };
+  const atoms = docs.map((d, i) => capsuleDocAtom(d.documentId, d.text, envelopeId, i));
+  return { envelope, atoms };
+}
+
 function ingestCapsule(
   source: Extract<QualityIntelligenceInlineSource, { kind: "capsule" }>,
   index: number,
@@ -416,28 +512,33 @@ function ingestCapsule(
   resolver: CapsuleResolver,
 ): OneSource {
   const label = sanitiseLabel(source.label);
-  const docs = resolver(source.capsuleId);
-  if (docs.length === 0) {
-    throw new QiIngestionError(
-      "QI_CAPSULE_UNAVAILABLE",
-      `Capsule "${label}" has no indexed content or could not be opened.`,
-    );
-  }
-  const joinedText = docs.map((d) => d.text).join("\n");
-  const envelopeId = envelopeIdFor(index, label, source.capsuleId);
-  const envelope: QI.QualityIntelligenceSourceEnvelope = {
-    id: envelopeId,
-    kind: "local-knowledge-capsule",
-    displayLabel: label,
-    provenance: {
-      origin: `local-knowledge-capsule:${source.capsuleId}`,
-      registeredAt,
-      integrityHashSha256Hex: sha256Hex(joinedText),
-    },
-    localRef: String(envelopeId),
-  };
-  const atoms = docs.map((d, i) => capsuleDocAtom(d.documentId, d.text, envelopeId, i));
-  return { envelope, atoms };
+  return buildCapsuleSource({
+    label,
+    index,
+    registeredAt,
+    envelopeKey: source.capsuleId,
+    origin: `local-knowledge-capsule:${source.capsuleId}`,
+    rawDocs: resolver.capsule(source.capsuleId),
+    emptyError: `Capsule "${label}" has no indexed content or could not be opened.`,
+  });
+}
+
+function ingestCapsuleSet(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "capsule-set" }>,
+  index: number,
+  registeredAt: string,
+  resolver: CapsuleResolver,
+): OneSource {
+  const label = sanitiseLabel(source.label);
+  return buildCapsuleSource({
+    label,
+    index,
+    registeredAt,
+    envelopeKey: source.capsuleSetId,
+    origin: `local-knowledge-capsule-set:${source.capsuleSetId}`,
+    rawDocs: resolver.capsuleSet(source.capsuleSetId),
+    emptyError: `Capsule set "${label}" has no indexed content or could not be opened.`,
+  });
 }
 
 function ingestOne(
@@ -461,6 +562,14 @@ function ingestOne(
         );
       }
       return ingestCapsule(source, index, registeredAt, capsuleResolver);
+    case "capsule-set":
+      if (capsuleResolver === undefined) {
+        throw new QiIngestionError(
+          "QI_CAPSULE_UNAVAILABLE",
+          "Capsule-set sources are unavailable: the Local Knowledge store is not configured.",
+        );
+      }
+      return ingestCapsuleSet(source, index, registeredAt, capsuleResolver);
   }
 }
 

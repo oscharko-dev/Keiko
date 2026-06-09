@@ -201,7 +201,12 @@ export interface QualityIntelligenceUiRegenerateResult {
 
 // ─── Run start request (Issue #280/#281) ────────────────────────────────────────
 
-export type QualityIntelligenceInlineSourceKind = "requirements" | "workspace" | "file" | "capsule";
+export type QualityIntelligenceInlineSourceKind =
+  | "requirements"
+  | "workspace"
+  | "file"
+  | "capsule"
+  | "capsule-set";
 
 /** A pasted free-text requirement blob the server splits into requirement atoms. */
 export interface QualityIntelligenceRequirementsSource {
@@ -242,11 +247,25 @@ export interface QualityIntelligenceCapsuleSource {
   readonly capsuleId: string;
 }
 
+/**
+ * A Local Knowledge capsule-SET — a named composition of capsules the server expands into its
+ * member capsules and ingests as one combined corpus. The capsuleSetId must match an existing
+ * capsule-set; an unknown or empty set is rejected with QI_CAPSULE_UNAVAILABLE (Epic #710,
+ * Issue #716/#717). The contract mirrors the single-capsule source so the connector picker can bind
+ * either a capsule or a capsule-set to the QI hub (Issue #718).
+ */
+export interface QualityIntelligenceCapsuleSetSource {
+  readonly kind: "capsule-set";
+  readonly label: string;
+  readonly capsuleSetId: string;
+}
+
 export type QualityIntelligenceInlineSource =
   | QualityIntelligenceRequirementsSource
   | QualityIntelligenceWorkspaceSource
   | QualityIntelligenceFileSource
-  | QualityIntelligenceCapsuleSource;
+  | QualityIntelligenceCapsuleSource
+  | QualityIntelligenceCapsuleSetSource;
 
 /** Body of `POST /api/quality-intelligence/runs`. */
 export interface QualityIntelligenceStartRunRequest {

@@ -20,8 +20,7 @@ describe("canConnect — quality ↔ files (#270)", () => {
     expect(canConnect("quality", "terminal")).toBe(false);
     expect(canConnect("quality", "browser")).toBe(false);
     expect(canConnect("quality", "quality")).toBe(false);
-    // Connector/capsule binding is a later slice — not connectable yet.
-    expect(canConnect("quality", "connector")).toBe(false);
+    expect(canConnect("quality", "chat")).toBe(false);
   });
 
   it("does not regress the existing chat ↔ files / connector bindings", () => {
@@ -30,9 +29,35 @@ describe("canConnect — quality ↔ files (#270)", () => {
   });
 });
 
+// Epic #710, Issue #718 — a QI hub can bind to a Connector window so the connector's selected
+// capsule / capsule-set becomes the Generate source.
+describe("canConnect — quality ↔ connector (#710 #718)", () => {
+  it("allows quality to connect to a connector in both orders", () => {
+    expect(canConnect("quality", "connector")).toBe(true);
+    expect(canConnect("connector", "quality")).toBe(true);
+  });
+
+  it("keeps the existing connector ↔ chat binding", () => {
+    expect(canConnect("connector", "chat")).toBe(true);
+    expect(canConnect("chat", "connector")).toBe(true);
+  });
+
+  it("does not make connectors universally connectable", () => {
+    expect(canConnect("connector", "files")).toBe(false);
+    expect(canConnect("connector", "terminal")).toBe(false);
+  });
+});
+
 describe("relLabel — files ↔ quality (#270)", () => {
   it("labels a files↔quality edge with the connected folder", () => {
     const label = relLabel(snap("files", { root: "/work/spec" }), snap("quality"));
     expect(label).toBe("uses /work/spec/");
+  });
+});
+
+describe("relLabel — quality ↔ connector (#710 #718)", () => {
+  it("labels a quality↔connector edge as a knowledge binding", () => {
+    expect(relLabel(snap("quality"), snap("connector"))).toBe("uses knowledge");
+    expect(relLabel(snap("connector"), snap("quality"))).toBe("uses knowledge");
   });
 });

@@ -9,6 +9,7 @@ import { useCallback, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   QualityIntelligenceCapsuleSource,
+  QualityIntelligenceCapsuleSetSource,
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceWorkspaceSource,
@@ -84,6 +85,12 @@ export interface RunLauncherProps {
    * appended after workspace sources. Manual input and connectedFilePath take precedence.
    */
   readonly connectedCapsuleIds?: readonly string[] | undefined;
+  /**
+   * Capsule-set ids from connected Connector windows (Epic #710 #718). Each becomes one capsule-set
+   * source appended after the capsule sources; the server expands the set into its member capsules.
+   * Manual input and connectedFilePath take precedence.
+   */
+  readonly connectedCapsuleSetIds?: readonly string[] | undefined;
 }
 
 function baseName(p: string): string {
@@ -169,6 +176,26 @@ function buildCapsuleSources(
   return result;
 }
 
+/**
+ * Builds capsule-set sources from connected capsule-set ids. Dedupes and caps at MAX_SCOPES.
+ * Label is the capsule-set id itself (opaque string — no filesystem baseName).
+ */
+function buildCapsuleSetSources(
+  capsuleSetIds: readonly string[] | null | undefined,
+): QualityIntelligenceCapsuleSetSource[] {
+  if (capsuleSetIds === undefined || capsuleSetIds === null || capsuleSetIds.length === 0)
+    return [];
+  const seen = new Set<string>();
+  const result: QualityIntelligenceCapsuleSetSource[] = [];
+  for (const id of capsuleSetIds) {
+    if (result.length >= MAX_SCOPES) break;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result.push({ kind: "capsule-set", label: id, capsuleSetId: id });
+  }
+  return result;
+}
+
 export function RunLauncher({
   onRunCompleted,
   startImpl = startQiRun,
@@ -176,6 +203,7 @@ export function RunLauncher({
   connectedFilePath = null,
   connectedRoots,
   connectedCapsuleIds,
+  connectedCapsuleSetIds,
 }: RunLauncherProps): ReactNode {
   const [label, setLabel] = useState("");
   const [sourceKind, setSourceKind] = useState<"requirements" | "workspace">("requirements");
@@ -196,8 +224,10 @@ export function RunLauncher({
   const connectedFolder = connectedRoot ?? null;
   const workspaceSources = buildConnectedSources(connectedRoots, connectedFolder);
   const capsuleSources = buildCapsuleSources(connectedCapsuleIds);
-  const hasConnected =
-    connectedFile !== null || workspaceSources.length > 0 || capsuleSources.length > 0;
+  const capsuleSetSources = buildCapsuleSetSources(connectedCapsuleSetIds);
+  const connectedSourceCount =
+    workspaceSources.length + capsuleSources.length + capsuleSetSources.length;
+  const hasConnected = connectedFile !== null || connectedSourceCount > 0;
   const manualReady =
     sourceKind === "requirements" ? text.trim().length > 0 : path.trim().length > 0;
   const ready = manualReady || hasConnected;
@@ -246,6 +276,7 @@ export function RunLauncher({
             : ([
                 ...workspaceSources,
                 ...capsuleSources,
+                ...capsuleSetSources,
               ] as QualityIntelligenceStartRunRequest["sources"]);
     const request: QualityIntelligenceStartRunRequest = {
       sources,
@@ -273,6 +304,7 @@ export function RunLauncher({
     connectedFile,
     workspaceSources,
     capsuleSources,
+    capsuleSetSources,
     onMessage,
     onRunCompleted,
     parsedSeed,
@@ -298,10 +330,10 @@ export function RunLauncher({
             </span>
             <span className="qi-connected-hint">Generate uses the connected file.</span>
           </div>
-        ) : workspaceSources.length + capsuleSources.length > 1 ? (
+        ) : connectedSourceCount > 1 ? (
           <div className="qi-connected-source" data-testid="qi-connected-source">
             <span className="qi-connected-kind">
-              Connected sources ({(workspaceSources.length + capsuleSources.length).toString()})
+              Connected sources ({connectedSourceCount.toString()})
             </span>
             <ul className="qi-connected-roots" aria-label="Connected sources">
               {workspaceSources.map((s) => (
@@ -317,6 +349,14 @@ export function RunLauncher({
                   <span className="qi-connected-root-name">Capsule</span>
                   <span className="qi-connected-path qi-monospace" title={s.capsuleId}>
                     {s.capsuleId}
+                  </span>
+                </li>
+              ))}
+              {capsuleSetSources.map((s) => (
+                <li key={s.capsuleSetId} className="qi-connected-root-item">
+                  <span className="qi-connected-root-name">Capsule set</span>
+                  <span className="qi-connected-path qi-monospace" title={s.capsuleSetId}>
+                    {s.capsuleSetId}
                   </span>
                 </li>
               ))}
@@ -344,6 +384,17 @@ export function RunLauncher({
               {capsuleSources[0]?.capsuleId ?? ""}
             </span>
             <span className="qi-connected-hint">Generate uses the connected capsule.</span>
+          </div>
+        ) : capsuleSetSources.length === 1 ? (
+          <div className="qi-connected-source" data-testid="qi-connected-source">
+            <span className="qi-connected-kind">Connected capsule set</span>
+            <span
+              className="qi-connected-path qi-monospace"
+              title={capsuleSetSources[0]?.capsuleSetId ?? ""}
+            >
+              {capsuleSetSources[0]?.capsuleSetId ?? ""}
+            </span>
+            <span className="qi-connected-hint">Generate uses the connected capsule set.</span>
           </div>
         ) : null}
         <div className="qi-launcher-row">

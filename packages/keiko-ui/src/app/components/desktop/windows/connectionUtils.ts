@@ -20,11 +20,14 @@ export const CONNECTABLE: Readonly<Record<string, readonly string[]>> = {
   review: ["agents"],
   browser: ["agents", "chat"],
   keiko: ["agents", "chat"],
-  // A Connector window can bind to a Chat window (triggers localKnowledgeScopes binding).
-  connector: ["chat"],
+  // A Connector window can bind to a Chat window (triggers localKnowledgeScopes binding) or to a
+  // Quality Intelligence hub (the selected capsule / capsule-set becomes the Generate source — Epic
+  // #710, Issue #718).
+  connector: ["chat", "quality"],
   // Epic #270 — Quality Intelligence binds to a Files window: the connected folder (or the active
-  // file) becomes the source for "Generate test cases". (Connector/capsule binding lands next slice.)
-  quality: ["files"],
+  // file) becomes the source for "Generate test cases". Epic #710 — QI also binds to a Connector
+  // window, adopting its selected capsule / capsule-set as the Generate source.
+  quality: ["files", "connector"],
 };
 
 export function canConnect(a: string | undefined, b: string | undefined): boolean {
@@ -49,6 +52,9 @@ export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
     return `uses ${configRoot(filesSide.cfg)}/`;
   }
   const pair: readonly [string, string] = [a.type, b.type];
+  // A Connector edge (chat↔connector or quality↔connector) means the bound window draws on the
+  // connector's selected capsule / capsule-set as knowledge (Epic #189 / Epic #710, Issue #718).
+  if (pair.includes("connector")) return "uses knowledge";
   if (pair.includes("keiko")) return "governed by";
   if (pair[0] === "agents" && pair[1] === "agents") return "delegates";
   if (pair.includes("terminal")) return "runs in";
