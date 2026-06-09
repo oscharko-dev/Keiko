@@ -6,6 +6,9 @@
 // (a11y), #755 (codegen, from `tokens`).
 
 export { cleanScopedNodesToScreenIr } from "./cleanToScreenIr.js";
+// Tolerant re-hydration of the persisted, opaque design-tokens artifact (#752) for design-to-code
+// (#755), which reads the STORED snapshot. Total + defensive; same shape as `extractDesignTokens`.
+export { parseDesignTokens } from "./tokens.js";
 
 // Structural test-baseline derivation + the defensive Screen-IR parser for the snapshot's opaque
 // `irJson` (Issue #754). Deterministic, model-free: same IR → byte-identical baseline.

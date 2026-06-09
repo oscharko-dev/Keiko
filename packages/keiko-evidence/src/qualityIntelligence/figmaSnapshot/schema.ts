@@ -78,6 +78,16 @@ export interface FigmaSnapshotRecord {
   readonly skippedScreens: readonly FigmaSnapshotSkippedScreenRow[];
   /** Raw inter-screen transitions for the navigation/flow graph (#811). Optional + additive. */
   readonly links?: readonly FigmaSnapshotLinkRow[];
+  /**
+   * The deterministic design-tokens artifact (#752) — colours, typography, spacing, radius — kept as
+   * an opaque serialised value (like {@link FigmaSnapshotScreenRow.irJson}) so design-to-code (#755)
+   * can consume the tokens from the STORED snapshot without re-deriving them (the structural style
+   * fields they come from are pruned out of the lean per-screen IR). OPTIONAL + additive: a record
+   * without `tokens` (an older snapshot) is still valid and code-gen emits an empty token table. NOT
+   * part of any integrity hash — design tokens are non-identity design metadata, so adding them does
+   * not change the drift hash (#735). Design content (no token/secret/url ever reaches this shape).
+   */
+  readonly tokens?: unknown;
   readonly integrityHash: string;
   readonly redactionSummary: FigmaSnapshotRedactionSummary;
 }
@@ -89,6 +99,7 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "screens",
   "skippedScreens",
   "links",
+  "tokens",
   "integrityHash",
   "redactionSummary",
 ]);

@@ -8782,6 +8782,89 @@ select.dlg-input {
   cursor: default;
 }
 
+/* ── Read-only-scope consent (#760) ────────────────────────────────────────── */
+
+.figma-snapshot-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.figma-snapshot-consent-checkbox {
+  margin-top: 1px;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* ── Design-to-code (#755) ─────────────────────────────────────────────────── */
+
+.figma-snapshot-codegen {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.figma-snapshot-codegen-btn {
+  align-self: flex-start;
+  padding: 5px 14px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--accent);
+  color: var(--accent-fg, #fff);
+  border: 1px solid var(--accent);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.figma-snapshot-codegen-btn:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.figma-snapshot-codegen-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.figma-snapshot-code-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.figma-snapshot-code-summary {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+}
+.figma-snapshot-code-file-path {
+  cursor: pointer;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  color: var(--fg);
+  padding: 3px 0;
+  outline-offset: 2px;
+}
+.figma-snapshot-code-file-path:focus-visible {
+  outline: 2px solid var(--accent);
+  border-radius: 2px;
+}
+.figma-snapshot-code-file-contents {
+  margin: 4px 0 0;
+  padding: 8px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  white-space: pre;
+  color: var(--fg);
+}
+
 /* ── PAT scopes info (informational <details>) ────────────────────────────── */
 
 .figma-snapshot-scopes {

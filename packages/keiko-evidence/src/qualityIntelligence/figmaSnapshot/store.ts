@@ -69,6 +69,8 @@ export interface RecordFigmaSnapshotInput {
   readonly skippedScreens: readonly FigmaSnapshotSkippedScreenRow[];
   /** Raw inter-screen transitions for the navigation/flow graph (#811). Optional + additive. */
   readonly links?: readonly FigmaSnapshotLinkRow[];
+  /** Deterministic design-tokens artifact (#752), opaque, for design-to-code (#755). Optional. */
+  readonly tokens?: unknown;
 }
 
 export interface RecordFigmaSnapshotResult {
@@ -186,9 +188,10 @@ function assembleRecord(
     },
     screens: screenRows,
     skippedScreens: input.skippedScreens,
-    // Omit `links` entirely when absent so an older snapshot stays byte-minimal and the optional
-    // field never serialises as `undefined` (exactOptionalPropertyTypes-safe).
+    // Omit `links`/`tokens` entirely when absent so an older snapshot stays byte-minimal and the
+    // optional fields never serialise as `undefined` (exactOptionalPropertyTypes-safe).
     ...(input.links !== undefined ? { links: input.links } : {}),
+    ...(input.tokens !== undefined ? { tokens: input.tokens } : {}),
     integrityHash: input.integrityHash,
     redactionSummary: { totalStringsScanned: 0, stringsRedacted: 0, patternsMatched: {} },
   };

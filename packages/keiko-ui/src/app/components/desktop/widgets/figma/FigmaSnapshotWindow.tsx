@@ -23,8 +23,12 @@
 //   - All interactive targets are ≥ 24 × 24 px (WCAG 2.5.8).
 
 import { useCallback, useId, useState, type FormEvent, type ReactNode } from "react";
-import { triggerFigmaSnapshot, loadFigmaSnapshotSummary } from "@/lib/figma-snapshot-api";
-import type { FigmaSnapshotSummary } from "@/lib/figma-snapshot-api";
+import {
+  triggerFigmaSnapshot,
+  loadFigmaSnapshotSummary,
+  generateFigmaCode,
+} from "@/lib/figma-snapshot-api";
+import type { FigmaSnapshotSummary, FigmaCodegenResponse } from "@/lib/figma-snapshot-api";
 import { ApiError } from "@/lib/api";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -109,6 +113,8 @@ export interface FigmaSnapshotWindowProps {
   readonly triggerImpl?: typeof triggerFigmaSnapshot;
   /** Injectable for tests — defaults to the real BFF call. */
   readonly loadImpl?: typeof loadFigmaSnapshotSummary;
+  /** Injectable for tests — defaults to the real design-to-code BFF call (#755). */
+  readonly codegenImpl?: typeof generateFigmaCode;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -120,6 +126,7 @@ export function FigmaSnapshotWindow({
   updateCfg,
   triggerImpl = triggerFigmaSnapshot,
   loadImpl = loadFigmaSnapshotSummary,
+  codegenImpl = generateFigmaCode,
 }: FigmaSnapshotWindowProps): ReactNode {
   const inputId = useId();
   const statusId = useId();
@@ -128,16 +135,27 @@ export function FigmaSnapshotWindow({
   const [buildState, setBuildState] = useState<BuildState>("idle");
   const [summary, setSummary] = useState<FigmaSnapshotSummary | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Explicit read-only-scope acknowledgement (#760) — recorded server-side before the first build.
+  const [consentChecked, setConsentChecked] = useState(false);
+  // Design-to-code (#755) state — a reviewable artifact generated from the stored snapshot.
+  const [codeState, setCodeState] = useState<"idle" | "generating" | "done" | "error">("idle");
+  const [code, setCode] = useState<FigmaCodegenResponse | null>(null);
+  const [codeError, setCodeError] = useState<string | null>(null);
 
   const linkValid = isValidFigmaLink(boardLink);
   const isBuilding = buildState === "building";
 
   const runBuild = useCallback(
-    async (link: string): Promise<void> => {
+    async (link: string, isResnapshot: boolean): Promise<void> => {
       setBuildState("building");
       setErrorMsg(null);
+      setCodeState("idle");
+      setCode(null);
       try {
-        const result = await triggerImpl(link);
+        const result = await triggerImpl(link, {
+          acknowledgeReadOnly: consentChecked,
+          isResnapshot,
+        });
         setSummary(result);
         updateCfg({ snapshotRunId: result.runId });
         setBuildState("done");
@@ -146,14 +164,14 @@ export function FigmaSnapshotWindow({
         setBuildState("error");
       }
     },
-    [triggerImpl, updateCfg],
+    [triggerImpl, updateCfg, consentChecked],
   );
 
   const handleSubmit = useCallback(
     (e: FormEvent<HTMLFormElement>): void => {
       e.preventDefault();
       if (!linkValid || isBuilding) return;
-      void runBuild(boardLink);
+      void runBuild(boardLink, false);
     },
     [boardLink, isBuilding, linkValid, runBuild],
   );
@@ -167,8 +185,24 @@ export function FigmaSnapshotWindow({
           ? `https://www.figma.com/design/${summary.fileKey}/board?node-id=${summary.nodeId}`
           : "";
     if (link.length === 0) return;
-    void runBuild(link);
+    void runBuild(link, true);
   }, [boardLink, isBuilding, runBuild, summary]);
+
+  const handleGenerateCode = useCallback((): void => {
+    const runId = summary?.runId ?? snapshotRunId;
+    if (runId === undefined || runId.length === 0 || codeState === "generating") return;
+    setCodeState("generating");
+    setCodeError(null);
+    codegenImpl(runId)
+      .then((result) => {
+        setCode(result);
+        setCodeState("done");
+      })
+      .catch((err: unknown) => {
+        setCodeError(formatError(err));
+        setCodeState("error");
+      });
+  }, [codegenImpl, codeState, snapshotRunId, summary]);
 
   // Load a previously stored snapshot (e.g. after window re-open) when runId is in cfg but no
   // in-memory summary is present.
@@ -225,6 +259,23 @@ export function FigmaSnapshotWindow({
             {isBuilding ? "Building…" : "Snapshot"}
           </button>
         </div>
+        {/* Explicit read-only-scope acknowledgement (#760): recorded server-side before the first
+            fetch for a board. The connector reads files + renders images — it never writes. */}
+        <label className="figma-snapshot-consent">
+          <input
+            type="checkbox"
+            className="figma-snapshot-consent-checkbox"
+            checked={consentChecked}
+            onChange={(e) => {
+              setConsentChecked(e.target.checked);
+            }}
+            disabled={isBuilding}
+          />
+          <span>
+            I acknowledge the configured Figma PAT is read-only and least-privilege (
+            <code>files:read</code>).
+          </span>
+        </label>
         <p className="figma-snapshot-hint">
           Paste a Figma board link with a node-id param (section or frame anchor). The access token
           is resolved server-side — it never reaches this page.
@@ -285,6 +336,42 @@ export function FigmaSnapshotWindow({
           >
             Re-snapshot
           </button>
+
+          {/* Design-to-code (#755): generate reviewable HTML/CSS + design tokens from the stored
+              snapshot. Deterministic + model-free server-side; the result is a proposal for review. */}
+          <div className="figma-snapshot-codegen">
+            <button
+              type="button"
+              className="figma-snapshot-codegen-btn"
+              onClick={handleGenerateCode}
+              disabled={codeState === "generating"}
+              aria-busy={codeState === "generating"}
+            >
+              {codeState === "generating" ? "Generating code…" : "Generate code"}
+            </button>
+            {codeState === "error" && codeError !== null && (
+              <p className="figma-snapshot-error" role="alert">
+                {codeError}
+              </p>
+            )}
+            {codeState === "done" && code !== null && (
+              <div className="figma-snapshot-code-result">
+                <p className="figma-snapshot-code-summary">
+                  {String(code.fileCount)} reviewable file{code.fileCount !== 1 ? "s" : ""} (
+                  {String(code.screenCount)} screen{code.screenCount !== 1 ? "s" : ""},{" "}
+                  {code.adapterName}) — proposal only, never auto-applied.
+                </p>
+                {code.files.map((file) => (
+                  <details key={file.path} className="figma-snapshot-code-file">
+                    <summary className="figma-snapshot-code-file-path">{file.path}</summary>
+                    <pre className="figma-snapshot-code-file-contents">
+                      <code>{file.contents}</code>
+                    </pre>
+                  </details>
+                ))}
+              </div>
+            )}
+          </div>
 
           {/* PAT scopes info — informational only, operator-facing */}
           <details className="figma-snapshot-scopes">
