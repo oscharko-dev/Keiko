@@ -6,8 +6,8 @@
 // supplied). Large lists use progressive rendering (capped initial slice + "show more") to stay
 // responsive. Accessible: list semantics, focus-visible controls, labelled inputs, Escape cancels.
 
-import { useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import type { ReactNode, Ref } from "react";
 import type {
   QualityIntelligenceUiCandidate,
   QualityIntelligenceReviewState,
@@ -72,57 +72,87 @@ function StringList({
   );
 }
 
+// A governance-gated review/edit action. We use aria-disabled (NOT the native `disabled` attribute)
+// so the control stays in the focus order and a screen reader announces both the action and its
+// disabled reason via aria-describedby — native `disabled` removes the button from the a11y tree,
+// making the "set a reviewer label" reason unreachable (mirrors ScopeConnectButton, Copilot PR #254).
+function GovernedActionButton({
+  className,
+  label,
+  pressed,
+  disabled,
+  describedBy,
+  onActivate,
+}: {
+  readonly className: string;
+  readonly label: string;
+  readonly pressed?: boolean | undefined;
+  readonly disabled: boolean;
+  readonly describedBy?: string | undefined;
+  readonly onActivate: () => void;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      className={className}
+      {...(pressed !== undefined ? { "aria-pressed": pressed } : {})}
+      aria-disabled={disabled || undefined}
+      aria-describedby={disabled ? describedBy : undefined}
+      onClick={() => {
+        if (disabled) return;
+        onActivate();
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 function ReviewControls({
   candidateId,
   state,
   onReview,
   disabled = false,
-  disabledReason,
+  describedBy,
 }: {
   readonly candidateId: string;
   readonly state: QualityIntelligenceReviewState;
   readonly onReview: (candidateId: string, action: QiReviewAction) => void;
   readonly disabled?: boolean;
-  readonly disabledReason?: string | undefined;
+  readonly describedBy?: string | undefined;
 }): ReactNode {
   return (
     <div className="qi-cand-actions" role="group" aria-label="Review decision">
-      <button
-        type="button"
+      <GovernedActionButton
         className="qi-btn qi-btn-approve"
-        aria-pressed={state === "approved"}
+        label="Approve"
+        pressed={state === "approved"}
         disabled={disabled}
-        title={disabledReason}
-        onClick={() => {
+        describedBy={describedBy}
+        onActivate={() => {
           onReview(candidateId, "approve");
         }}
-      >
-        Approve
-      </button>
-      <button
-        type="button"
+      />
+      <GovernedActionButton
         className="qi-btn qi-btn-reject"
-        aria-pressed={state === "rejected"}
+        label="Reject"
+        pressed={state === "rejected"}
         disabled={disabled}
-        title={disabledReason}
-        onClick={() => {
+        describedBy={describedBy}
+        onActivate={() => {
           onReview(candidateId, "reject");
         }}
-      >
-        Reject
-      </button>
-      <button
-        type="button"
+      />
+      <GovernedActionButton
         className="qi-btn qi-btn-secondary"
-        aria-pressed={state === "changes-requested"}
+        label="Request changes"
+        pressed={state === "changes-requested"}
         disabled={disabled}
-        title={disabledReason}
-        onClick={() => {
+        describedBy={describedBy}
+        onActivate={() => {
           onReview(candidateId, "request-changes");
         }}
-      >
-        Request changes
-      </button>
+      />
     </div>
   );
 }
@@ -132,13 +162,15 @@ function CandidateView({
   onReview,
   onStartEdit,
   actionsDisabled = false,
-  actionsDisabledReason,
+  describedBy,
+  editButtonRef,
 }: {
   readonly candidate: QualityIntelligenceUiCandidate;
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onStartEdit?: (() => void) | undefined;
   readonly actionsDisabled?: boolean;
-  readonly actionsDisabledReason?: string | undefined;
+  readonly describedBy?: string | undefined;
+  readonly editButtonRef?: Ref<HTMLButtonElement> | undefined;
 }): ReactNode {
   return (
     <>
@@ -166,11 +198,15 @@ function CandidateView({
       <div className="qi-cand-actions-row">
         {onStartEdit !== undefined ? (
           <button
+            ref={editButtonRef}
             type="button"
             className="qi-btn qi-btn-secondary qi-cand-edit"
-            disabled={actionsDisabled}
-            title={actionsDisabledReason}
-            onClick={onStartEdit}
+            aria-disabled={actionsDisabled || undefined}
+            aria-describedby={actionsDisabled ? describedBy : undefined}
+            onClick={() => {
+              if (actionsDisabled) return;
+              onStartEdit();
+            }}
           >
             Edit
           </button>
@@ -181,7 +217,7 @@ function CandidateView({
             state={candidate.reviewState}
             onReview={onReview}
             disabled={actionsDisabled}
-            disabledReason={actionsDisabledReason}
+            describedBy={describedBy}
           />
         ) : null}
       </div>
@@ -194,15 +230,23 @@ function CandidateCard({
   onReview,
   onEdit,
   actionsDisabled = false,
-  actionsDisabledReason,
+  describedBy,
 }: {
   readonly candidate: QualityIntelligenceUiCandidate;
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onEdit?: QiCandidateEdit | undefined;
   readonly actionsDisabled?: boolean;
-  readonly actionsDisabledReason?: string | undefined;
+  readonly describedBy?: string | undefined;
 }): ReactNode {
   const [editing, setEditing] = useState(false);
+  const editButtonRef = useRef<HTMLButtonElement>(null);
+  const wasEditing = useRef(false);
+  // Return focus to the Edit trigger when the form closes (Save / Cancel / Escape) so a keyboard
+  // user is never dropped to <body>. Skip the initial mount, where editing was never true.
+  useEffect(() => {
+    if (wasEditing.current && !editing) editButtonRef.current?.focus();
+    wasEditing.current = editing;
+  }, [editing]);
   const handleSave = async (edited: QualityIntelligenceCandidateEditableFields): Promise<void> => {
     if (onEdit !== undefined) await onEdit(candidate.id, edited);
     setEditing(false);
@@ -222,7 +266,8 @@ function CandidateCard({
           candidate={candidate}
           onReview={onReview}
           actionsDisabled={actionsDisabled}
-          actionsDisabledReason={actionsDisabledReason}
+          describedBy={describedBy}
+          editButtonRef={editButtonRef}
           onStartEdit={
             onEdit !== undefined
               ? () => {
@@ -252,6 +297,8 @@ export function CandidatesPane({
   actionsDisabledReason,
 }: CandidatesPaneProps): ReactNode {
   const [visible, setVisible] = useState(INITIAL_VISIBLE);
+  const governanceNoteId = useId();
+  const showGovernanceNote = actionsDisabled && actionsDisabledReason !== undefined;
   if (candidates.length === 0) {
     return (
       <div className="lk-empty">
@@ -263,8 +310,8 @@ export function CandidatesPane({
   const shown = candidates.slice(0, visible);
   return (
     <div className="qi-cand-pane">
-      {actionsDisabled && actionsDisabledReason !== undefined ? (
-        <p className="qi-cand-governance-note" role="note">
+      {showGovernanceNote ? (
+        <p id={governanceNoteId} className="qi-cand-governance-note" role="note">
           {actionsDisabledReason}
         </p>
       ) : null}
@@ -276,7 +323,7 @@ export function CandidatesPane({
             onReview={onReview}
             onEdit={onEdit}
             actionsDisabled={actionsDisabled}
-            actionsDisabledReason={actionsDisabledReason}
+            describedBy={showGovernanceNote ? governanceNoteId : undefined}
           />
         ))}
       </ul>

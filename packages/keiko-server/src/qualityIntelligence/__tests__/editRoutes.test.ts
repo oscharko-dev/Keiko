@@ -28,7 +28,7 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
 import { handleQiEditCandidate } from "../editRoutes.js";
-import { loadRunReviewState } from "../reviewStore.js";
+import { applyReviewDecision, loadRunReviewState } from "../reviewStore.js";
 
 type Candidate = QualityIntelligence.QualityIntelligenceTestCaseCandidate;
 
@@ -399,5 +399,195 @@ describe("handleQiEditCandidate — valid edit", () => {
     const review = loadRunReviewState(RUN_ID, evidenceDir);
     const editEntries = (review?.auditLog ?? []).filter((entry) => entry.action === "edit");
     expect(editEntries).toHaveLength(1);
+  });
+});
+
+// ─── Boundaries + list semantics + observability (Epic #712 hardening) ──────────
+
+const errorOf = (result: RouteResult): { code: string; message: string } =>
+  (result.body as { error: { code: string; message: string } }).error;
+
+describe("handleQiEditCandidate — field boundaries", () => {
+  it("accepts a title at exactly 256 chars and rejects 257", async () => {
+    const ok = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: "x".repeat(256) },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(ok.status).toBe(200);
+    const tooLong = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: "x".repeat(257) },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(tooLong.status).toBe(400);
+    expect(errorOf(tooLong).code).toBe("QI_BAD_EDIT");
+    expect(errorOf(tooLong).message).toContain("title");
+  });
+
+  it("accepts a list at exactly 100 items and rejects 101", async () => {
+    const hundred = Array.from({ length: 100 }, (_, i) => `step-${String(i)}`);
+    const ok = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({ candidateId: "tc-1", edited: { steps: hundred }, editorLabel: "Alice" }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(ok.status).toBe(200);
+    const tooMany = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { steps: [...hundred, "step-100"] },
+            editorLabel: "Alice",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(tooMany.status).toBe(400);
+    expect(errorOf(tooMany).message).toContain("steps");
+  });
+});
+
+describe("handleQiEditCandidate — list-field clearing semantics", () => {
+  it("rejects clearing steps to an empty list with a field-named error", async () => {
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(RUN_ID, makeReq({ candidateId: "tc-1", edited: { steps: [] }, editorLabel: "Alice" })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect(errorOf(result).code).toBe("QI_BAD_EDIT");
+    expect(errorOf(result).message).toContain("steps");
+    // a rejected edit persists nothing
+    expect(
+      loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })?.editedRevisions ?? [],
+    ).toHaveLength(0);
+  });
+
+  it("rejects clearing expectedResults to an empty list", async () => {
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({ candidateId: "tc-1", edited: { expectedResults: [] }, editorLabel: "Alice" }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect(errorOf(result).message).toContain("expectedResults");
+  });
+
+  it("ACCEPTS clearing the optional preconditions list and persists the empty list", async () => {
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({ candidateId: "tc-1", edited: { preconditions: [] }, editorLabel: "Alice" }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    expect(reloaded?.candidates[0]?.preconditions).toEqual([]);
+    expect(reloaded?.editedRevisions?.[0]?.editedFields.preconditions).toEqual([]);
+  });
+
+  it("ACCEPTS clearing the optional tags list", async () => {
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(RUN_ID, makeReq({ candidateId: "tc-1", edited: { tags: [] }, editorLabel: "Alice" })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    expect(loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })?.candidates[0]?.tags).toEqual(
+      [],
+    );
+  });
+
+  it("names the offending field for an invalid enum (actionable error)", async () => {
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({ candidateId: "tc-1", edited: { priority: "P9" }, editorLabel: "Alice" }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect(errorOf(result).message).toContain("priority");
+  });
+});
+
+describe("handleQiEditCandidate — review-state preservation + observability", () => {
+  it("preserves an APPROVED candidate's review state across an edit", async () => {
+    applyReviewDecision({
+      runId: RUN_ID,
+      evidenceDir,
+      action: "approve",
+      scope: "candidate",
+      candidateId: "tc-1",
+      reviewerLabel: "Alice",
+      now: "2026-06-09T10:00:00.000Z",
+    });
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(
+          RUN_ID,
+          makeReq({
+            candidateId: "tc-1",
+            edited: { title: "Edited after approval" },
+            editorLabel: "Bob",
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const review = loadRunReviewState(RUN_ID, evidenceDir);
+    expect(review?.candidateStates["tc-1"]).toBe("approved");
+    const editEntry = (review?.auditLog ?? []).find((e) => e.action === "edit");
+    // the edit audit entry records the candidate's CURRENT (approved) state on both sides
+    expect(editEntry?.fromState).toBe("approved");
+    expect(editEntry?.toState).toBe("approved");
+  });
+
+  it("returns 404 QI_CANDIDATES_NOT_FOUND when the run exists but its candidates artifact is missing", async () => {
+    rmSync(join(evidenceDir, "qi", `${RUN_ID}.candidates.json`), { force: true });
+    const result = asResult(
+      await handleQiEditCandidate(
+        ctx(RUN_ID, makeReq({ candidateId: "tc-1", edited: { title: "x" }, editorLabel: "Alice" })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(404);
+    expect(errorOf(result).code).toBe("QI_CANDIDATES_NOT_FOUND");
   });
 });

@@ -5,7 +5,7 @@
 // grid with per-candidate review), enterprise export, and any validation findings. Reuses the QI BFF
 // routes; never embeds raw prompts or secrets (the wire projection is already redacted upstream).
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   QualityIntelligenceUiRunDetail,
@@ -194,6 +194,8 @@ export function QiRunCard({
   const [error, setError] = useState<string | null>(null);
   const [reviewerLabel, setReviewerLabel] = useState("");
   const [reviewerLabelLoaded, setReviewerLabelLoaded] = useState(false);
+  const reviewerHelpId = useId();
+  const reviewerWarningId = useId();
 
   // Drop stale responses when the same card re-fetches after a review (request-of-record guard).
   const seqRef = useRef(0);
@@ -289,16 +291,20 @@ export function QiRunCard({
                   className="qi-input qi-run-governance-input"
                   value={reviewerLabel}
                   placeholder="Required for review and edit actions"
+                  aria-invalid={!governanceEnabled}
+                  aria-describedby={
+                    governanceEnabled ? reviewerHelpId : `${reviewerHelpId} ${reviewerWarningId}`
+                  }
                   onChange={(event) => {
                     setReviewerLabel(event.target.value);
                   }}
                 />
               </label>
-              <p className="qi-run-governance-help">
+              <p id={reviewerHelpId} className="qi-run-governance-help">
                 Used for QI review and edit audit entries.
               </p>
               {!governanceEnabled ? (
-                <p className="qi-run-governance-warning" role="note">
+                <p id={reviewerWarningId} className="qi-run-governance-warning" role="note">
                   {GOVERNANCE_REQUIRED_MESSAGE}
                 </p>
               ) : null}

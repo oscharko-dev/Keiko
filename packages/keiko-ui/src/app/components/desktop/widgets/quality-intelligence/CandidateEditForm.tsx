@@ -5,7 +5,7 @@
 // `onSave` handler (which calls the BFF edit route + reloads the run detail). Escape cancels.
 // Keyboard-accessible: every control is labelled; Escape on any field cancels without persisting.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   QualityIntelligence,
@@ -211,22 +211,33 @@ export function CandidateEditForm({
   const [state, setState] = useState<FormState>(() => initialState(candidate));
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const formRef = useRef<HTMLFormElement>(null);
   const set = <K extends keyof FormState>(key: K, value: FormState[K]): void => {
     setSaveError(null);
     setState((prev) => ({ ...prev, [key]: value }));
   };
   // Escape cancels the edit. Handled as a document keydown listener scoped to the form's lifetime
   // rather than a JSX handler on the (non-interactive) <form>, so the keyboard affordance works for
-  // the whole open form without a noninteractive-element a11y violation.
+  // the whole open form without a noninteractive-element a11y violation. Scoped to THIS form: only
+  // cancel when focus is inside it, so with multiple cards open at once Escape closes just the
+  // focused one (not every open form).
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape" && !saving) onCancel();
+      if (event.key !== "Escape" || saving) return;
+      const form = formRef.current;
+      if (form !== null && form.contains(document.activeElement)) onCancel();
     };
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
     };
   }, [onCancel, saving]);
+  // Move focus into the form when it opens. The inline form replaces the (now-removed) Edit button,
+  // so without this a keyboard user would be dropped to <body>; CandidatesPane restores focus to the
+  // Edit trigger on close. Done via a ref (not the autoFocus prop) to satisfy jsx-a11y/no-autofocus.
+  useEffect(() => {
+    formRef.current?.querySelector<HTMLInputElement>("input.qi-edit-input")?.focus();
+  }, []);
   const id = `qi-edit-${candidate.id}`;
   const handleSubmit = async (): Promise<void> => {
     if (saving) return;
@@ -242,6 +253,7 @@ export function CandidateEditForm({
   };
   return (
     <form
+      ref={formRef}
       className="qi-edit-form"
       aria-label={`Edit ${candidate.title}`}
       aria-busy={saving}

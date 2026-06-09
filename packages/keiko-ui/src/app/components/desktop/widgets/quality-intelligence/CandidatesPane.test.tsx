@@ -498,6 +498,17 @@ describe("CandidatesPane — inline editing", () => {
     expect(onEdit).not.toHaveBeenCalled();
   });
 
+  it("returns focus to the Edit button when the form is cancelled (no keyboard dead-end)", async () => {
+    const user = userEvent.setup();
+    render(<CandidatesPane candidates={[makeCandidate()]} onEdit={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    // The title field receives focus when the form opens.
+    expect(screen.getByRole("textbox", { name: /^title$/i })).toHaveFocus();
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    // On close, focus returns to the Edit trigger rather than dropping to <body>.
+    expect(screen.getByRole("button", { name: /^edit$/i })).toHaveFocus();
+  });
+
   it("renders the governance note and disables actions when governance is blocked", () => {
     render(
       <CandidatesPane
@@ -508,9 +519,33 @@ describe("CandidatesPane — inline editing", () => {
         actionsDisabledReason="Set a reviewer label to review or edit candidates."
       />,
     );
-    expect(screen.getByText(/set a reviewer label to review or edit candidates/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^edit$/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /approve/i })).toBeDisabled();
+    const note = screen.getByText(/set a reviewer label to review or edit candidates/i);
+    expect(note).toBeInTheDocument();
+    // Governance-gated controls use aria-disabled (NOT native disabled) so they stay focusable and
+    // a screen reader announces the reason via aria-describedby pointing at the governance note.
+    const editButton = screen.getByRole("button", { name: /^edit$/i });
+    const approveButton = screen.getByRole("button", { name: /approve/i });
+    expect(editButton).toHaveAttribute("aria-disabled", "true");
+    expect(approveButton).toHaveAttribute("aria-disabled", "true");
+    expect(note.id).toBeTruthy();
+    expect(editButton).toHaveAttribute("aria-describedby", note.id);
+    expect(approveButton).toHaveAttribute("aria-describedby", note.id);
+  });
+
+  it("does not start editing when the Edit button is governance-disabled (aria-disabled guard)", async () => {
+    const user = userEvent.setup();
+    const onEdit = vi.fn();
+    render(
+      <CandidatesPane
+        candidates={[makeCandidate()]}
+        onEdit={onEdit}
+        actionsDisabled
+        actionsDisabledReason="Set a reviewer label to review or edit candidates."
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    expect(screen.queryByRole("textbox", { name: /^title$/i })).not.toBeInTheDocument();
+    expect(onEdit).not.toHaveBeenCalled();
   });
 
   it("renders save errors inline and keeps the form open", async () => {

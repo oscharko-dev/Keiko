@@ -90,14 +90,20 @@ const isEditedBy = (
 ): value is QualityIntelligence.QualityIntelligenceCandidateEditProvenance["editedBy"] =>
   value === "human" || value === "api";
 
+// An edited list field persists as an array of non-blank strings — the edit route rejects blank
+// ("") items before persist (editRoutes.ts isListField). Empty arrays are accepted on read so a
+// legitimately-cleared preconditions/tags list still loads: strict on write, fail-open on read.
+const isListOfNonBlankStrings = (value: unknown): value is readonly string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === "string" && item.length > 0);
+
 const EDITABLE_FIELD_VALIDATORS: Readonly<Record<string, (value: unknown) => boolean>> = {
   title: isNonEmptyString,
-  preconditions: isStringArray,
-  steps: isStringArray,
-  expectedResults: isStringArray,
+  preconditions: isListOfNonBlankStrings,
+  steps: isListOfNonBlankStrings,
+  expectedResults: isListOfNonBlankStrings,
   priority: isPriority,
   riskClass: isRiskClass,
-  tags: isStringArray,
+  tags: isListOfNonBlankStrings,
 };
 
 function isEditableFields(
@@ -245,7 +251,9 @@ export const recordQualityIntelligenceCandidates = (
   const redactedEditedRevisions =
     input.editedRevisions === undefined
       ? undefined
-      : (input.redact(input.editedRevisions) as readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[]);
+      : (input.redact(
+          input.editedRevisions,
+        ) as readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[]);
   const artifact: QualityIntelligenceCandidatesArtifact = {
     qiCandidatesSchemaVersion: QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION,
     runId: input.runId,

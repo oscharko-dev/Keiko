@@ -368,4 +368,59 @@ describe("loadQualityIntelligenceCandidates — fail closed companion parsing", 
       EvidenceReadError,
     );
   });
+
+  it("throws EvidenceReadError for an edited revision with a blank-string list item", () => {
+    const current = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    if (current === undefined) throw new Error("expected seeded artifact");
+    writeFileSync(
+      artifactPath(evidenceDir),
+      JSON.stringify({
+        ...current,
+        editedRevisions: [
+          {
+            candidateId: "tc-1",
+            provenance: {
+              editedAt: "2026-06-08T12:00:00.000Z",
+              editedBy: "human",
+              editorLabel: "Alice",
+            },
+            // A blank ("") item is never a valid step — the read validator rejects it, matching
+            // what the edit route enforces before persist (no write/read asymmetry).
+            editedFields: { steps: ["ok", ""] },
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    expect(() => loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
+  it("loads an edited revision whose optional list was legitimately cleared to []", () => {
+    const current = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    if (current === undefined) throw new Error("expected seeded artifact");
+    writeFileSync(
+      artifactPath(evidenceDir),
+      JSON.stringify({
+        ...current,
+        editedRevisions: [
+          {
+            candidateId: "tc-1",
+            provenance: {
+              editedAt: "2026-06-08T12:00:00.000Z",
+              editedBy: "human",
+              editorLabel: "Alice",
+            },
+            editedFields: { preconditions: [], tags: [] },
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    expect(reloaded?.editedRevisions?.[0]?.editedFields.preconditions).toEqual([]);
+  });
 });

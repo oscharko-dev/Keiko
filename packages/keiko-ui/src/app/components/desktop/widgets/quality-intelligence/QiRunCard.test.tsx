@@ -144,7 +144,12 @@ describe("QiRunCard", () => {
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() => {
-      expect(editImpl).toHaveBeenCalledWith("qi-run-aaaa1111", "tc-1", { title: "Edited login" }, "Alice");
+      expect(editImpl).toHaveBeenCalledWith(
+        "qi-run-aaaa1111",
+        "tc-1",
+        { title: "Edited login" },
+        "Alice",
+      );
     });
     // Detail is reloaded after the edit (initial load + post-edit reload).
     expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2);
@@ -155,11 +160,32 @@ describe("QiRunCard", () => {
     render(<QiRunCard runId="qi-run-blocked" fetchDetailImpl={fetchOk(detail)} />);
 
     await screen.findByText("Login");
-    expect(screen.getByRole("button", { name: /^edit$/i })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /approve/i })).toBeDisabled();
-    expect(
-      screen.getAllByText(/set a reviewer label to review or edit candidates/i),
-    ).toHaveLength(2);
+    // Governance-gated controls are aria-disabled (focusable + reason announced), not natively
+    // disabled. The reviewer-label input is flagged aria-invalid until a label is supplied.
+    expect(screen.getByRole("button", { name: /^edit$/i })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: /approve/i })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByLabelText(/reviewer label/i)).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getAllByText(/set a reviewer label to review or edit candidates/i)).toHaveLength(
+      2,
+    );
+  });
+
+  it("clears aria-invalid on the reviewer-label input once a label is entered", async () => {
+    const user = userEvent.setup();
+    const detail = makeDetail("qi-run-aria", [makeCandidate("tc-1", "Login")]);
+    render(<QiRunCard runId="qi-run-aria" fetchDetailImpl={fetchOk(detail)} />);
+    await screen.findByText("Login");
+    const labelInput = screen.getByLabelText(/reviewer label/i);
+    expect(labelInput).toHaveAttribute("aria-invalid", "true");
+    await user.type(labelInput, "Alice");
+    expect(labelInput).toHaveAttribute("aria-invalid", "false");
+    expect(screen.getByRole("button", { name: /^edit$/i })).not.toHaveAttribute("aria-disabled");
   });
 
   it("keeps the edit form open and surfaces the save error when the edit request fails", async () => {
@@ -173,9 +199,7 @@ describe("QiRunCard", () => {
         new Error("QI_BAD_EDIT: A valid candidate edit is required."),
       ) as unknown as typeof import("@/lib/quality-intelligence-api").editQiCandidate;
 
-    render(
-      <QiRunCard runId="qi-run-edit-fail" fetchDetailImpl={fetchImpl} editImpl={editImpl} />,
-    );
+    render(<QiRunCard runId="qi-run-edit-fail" fetchDetailImpl={fetchImpl} editImpl={editImpl} />);
     const editButton = await screen.findByRole("button", { name: /^edit$/i });
     await waitFor(() => {
       expect(editButton).toBeEnabled();

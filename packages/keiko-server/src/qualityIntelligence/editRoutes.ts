@@ -62,15 +62,16 @@ const errorResult = (status: number, code: string, message: string): RouteResult
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const isNonEmptyStringArray = (value: unknown): value is readonly string[] =>
+// A list field is an array (≤ MAX_LIST_ITEMS) of non-blank strings. `minItems` separates the two
+// domain shapes: steps and expected results are the load-bearing body of a test case and must carry
+// at least one entry (clearing them produces an empty, meaningless test case → reject); preconditions
+// and tags are legitimately optional and may be cleared. Blank ("") items are rejected for every list
+// field (a blank step / tag is never meaningful), keeping the persisted body clean.
+const isListField = (value: unknown, minItems: 0 | 1): value is readonly string[] =>
   Array.isArray(value) &&
+  value.length >= minItems &&
   value.length <= MAX_LIST_ITEMS &&
   value.every((item) => typeof item === "string" && item.length > 0);
-
-const isStringArray = (value: unknown): value is readonly string[] =>
-  Array.isArray(value) &&
-  value.length <= MAX_LIST_ITEMS &&
-  value.every((item) => typeof item === "string");
 
 const isValidTitle = (value: unknown): boolean =>
   typeof value === "string" && value.length >= 1 && value.length <= MAX_TITLE_LEN;
@@ -79,12 +80,12 @@ const isValidTitle = (value: unknown): boolean =>
 // holds the validator helper's cyclomatic complexity low while still rejecting any malformed value.
 const FIELD_VALIDATORS: Readonly<Record<string, (value: unknown) => boolean>> = {
   title: isValidTitle,
-  preconditions: isNonEmptyStringArray,
-  steps: isNonEmptyStringArray,
-  expectedResults: isNonEmptyStringArray,
+  preconditions: (value) => isListField(value, 0),
+  steps: (value) => isListField(value, 1),
+  expectedResults: (value) => isListField(value, 1),
   priority: (value) => typeof value === "string" && PRIORITIES.has(value),
   riskClass: (value) => typeof value === "string" && RISK_CLASSES.has(value),
-  tags: isStringArray,
+  tags: (value) => isListField(value, 0),
 };
 
 // Validate one editable field. Returns `false` for a malformed value so the caller rejects the whole
@@ -115,31 +116,57 @@ function parseEditorLabel(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed.slice(0, MAX_LABEL_LEN) : undefined;
 }
 
-function collectEditedFields(edited: Record<string, unknown>): EditableFields | undefined {
+type CollectOutcome =
+  | { readonly ok: true; readonly fields: EditableFields }
+  // `invalidField` names the field that failed validation; `undefined` means no field was supplied.
+  | { readonly ok: false; readonly invalidField: string | undefined };
+
+function collectEditedFields(edited: Record<string, unknown>): CollectOutcome {
   const collected: Partial<Record<(typeof EDITABLE_KEYS)[number], unknown>> = {};
   let fieldCount = 0;
   for (const key of EDITABLE_KEYS) {
     const value = edited[key];
     if (value === undefined) continue;
-    if (!isValidField(key, value)) return undefined;
+    if (!isValidField(key, value)) return { ok: false, invalidField: key };
     collected[key] = value;
     fieldCount += 1;
   }
-  return fieldCount > 0 ? (collected as EditableFields) : undefined;
+  return fieldCount > 0
+    ? { ok: true, fields: collected as EditableFields }
+    : { ok: false, invalidField: undefined };
 }
 
-// Returns the parsed edit, or undefined when the request is malformed (bad candidateId, no known
-// fields, or any field that fails its per-field validation → reject the whole edit, no partial work).
-function parseEdit(body: Record<string, unknown>): ParsedEdit | undefined {
+type ParseOutcome =
+  | { readonly ok: true; readonly edit: ParsedEdit }
+  | { readonly ok: false; readonly message: string };
+
+// Returns the parsed edit, or a field-specific rejection message so the reviewer learns WHICH field
+// is invalid (a generic "edit is invalid" is not actionable). Any failing field rejects the whole
+// edit (no partial persist).
+function parseEdit(body: Record<string, unknown>): ParseOutcome {
   const candidateId = body.candidateId;
-  if (typeof candidateId !== "string" || candidateId.trim().length === 0) return undefined;
+  if (typeof candidateId !== "string" || candidateId.trim().length === 0) {
+    return { ok: false, message: "A candidate id is required." };
+  }
   const editorLabel = parseEditorLabel(body.editorLabel);
-  if (editorLabel === undefined) return undefined;
+  if (editorLabel === undefined) {
+    return { ok: false, message: "A non-empty reviewer label is required." };
+  }
   const edited = body.edited;
-  if (!isObject(edited)) return undefined;
+  if (!isObject(edited)) {
+    return { ok: false, message: "An `edited` object with the changed fields is required." };
+  }
   const collected = collectEditedFields(edited);
-  if (collected === undefined) return undefined;
-  return { candidateId, edited: collected, editorLabel };
+  if (!collected.ok) {
+    return {
+      ok: false,
+      message:
+        collected.invalidField === undefined
+          ? "At least one editable field must be supplied."
+          : `The "${collected.invalidField}" field is empty or invalid.`,
+    };
+  }
+  return { ok: true, edit: { candidateId, edited: collected.fields, editorLabel } };
 }
 
 type ReadOutcome =
@@ -169,13 +196,10 @@ async function readEdit(req: IncomingMessage): Promise<ReadOutcome> {
     };
   }
   const edit = parseEdit(parsed);
-  if (edit === undefined) {
-    return {
-      ok: false,
-      result: errorResult(400, "QI_BAD_EDIT", "A valid candidate edit is required."),
-    };
+  if (!edit.ok) {
+    return { ok: false, result: errorResult(400, "QI_BAD_EDIT", edit.message) };
   }
-  return { ok: true, edit };
+  return { ok: true, edit: edit.edit };
 }
 
 function projectCandidate(
@@ -220,9 +244,19 @@ function recordEdit(
     redact: deps.redactor,
   });
   if (!result.ok) {
-    return result.reason === "no-edited-fields"
-      ? errorResult(400, "QI_BAD_EDIT", "A valid candidate edit is required.")
-      : errorResult(404, "QI_NOT_FOUND", "Candidate not found for this run.");
+    if (result.reason === "no-edited-fields") {
+      return errorResult(400, "QI_BAD_EDIT", "At least one editable field must be supplied.");
+    }
+    if (result.reason === "artifact-not-found") {
+      // The run manifest exists but its candidates companion is missing — a distinct, observable
+      // failure (corruption / partial state) rather than an unknown candidate id.
+      return errorResult(
+        404,
+        "QI_CANDIDATES_NOT_FOUND",
+        "No candidates artifact exists for this run.",
+      );
+    }
+    return errorResult(404, "QI_NOT_FOUND", "Candidate not found for this run.");
   }
   if (result.changed) {
     appendEditAudit({

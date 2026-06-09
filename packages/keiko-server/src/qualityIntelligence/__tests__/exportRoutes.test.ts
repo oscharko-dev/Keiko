@@ -13,6 +13,7 @@ import type { IncomingMessage } from "node:http";
 import {
   recordQualityIntelligenceRun,
   recordQualityIntelligenceCandidates,
+  applyQualityIntelligenceCandidateEdit,
 } from "@oscharko-dev/keiko-evidence";
 import type {
   EvidenceStore,
@@ -643,5 +644,32 @@ describe("handleQiExport — request body size cap", () => {
     const result = asResult(await handleQiExport(ctx(RUN_ID, makeRawReq(huge)), deps(evidenceDir)));
     expect(result.status).toBe(413);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BODY_TOO_LARGE");
+  });
+});
+
+// ─── Edit → export composition (Epic #712 AC3: export reflects the curated text) ─────────
+
+describe("handleQiExport — reflects an inline candidate edit", () => {
+  it("exports the human-edited title, not the originally-generated one (markdown)", async () => {
+    const edit = applyQualityIntelligenceCandidateEdit({
+      runId: RUN_ID,
+      candidateId: "cand-001",
+      editedFields: { title: "Curated login title", steps: ["Open app", "Authenticate"] },
+      provenance: { editedAt: "2026-06-09T11:00:00.000Z", editedBy: "human", editorLabel: "Alice" },
+      evidenceDir,
+      redact: (v: unknown): unknown => v,
+    });
+    expect(edit.ok).toBe(true);
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "markdown", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const body = (result.body as { body: string }).body;
+    expect(body).toContain("Curated login title");
+    expect(body).toContain("Authenticate");
+    expect(body).not.toContain("User can log in with valid credentials");
   });
 });
