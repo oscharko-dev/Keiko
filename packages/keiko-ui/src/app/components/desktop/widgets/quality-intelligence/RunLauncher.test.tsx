@@ -523,6 +523,56 @@ describe("RunLauncher — connected single file (Epic #709, Issue #714)", () => 
     expect(req.sources[0]).toMatchObject({ kind: "file", path: FILE });
   });
 
+  it("resolves a root-relative connected file to an absolute 'file' source path", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        onRunCompleted={vi.fn()}
+        connectedRoot={ROOT}
+        connectedFilePath="funds-transfer.md"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({
+      kind: "file",
+      path: "/work/fachkonzept/funds-transfer.md",
+    });
+  });
+
+  it("resolves a nested root-relative connected file to an absolute 'file' source path", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        onRunCompleted={vi.fn()}
+        connectedRoot={ROOT}
+        connectedFilePath="docs/spec.md"
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({
+      kind: "file",
+      path: "/work/fachkonzept/docs/spec.md",
+    });
+  });
+
   it("prefers the connected file over the connected folder when both are present", async () => {
     const user = userEvent.setup();
     const { startImpl } = makeStreamingFake([DONE_FRAME]);

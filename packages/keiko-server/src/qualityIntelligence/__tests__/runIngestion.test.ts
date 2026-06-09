@@ -212,15 +212,43 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     expect(result.ingestedAtoms[0]?.atom.kind).toBe("code-fragment");
   });
 
-  it("throws QI_SOURCE_UNSUPPORTED for a binary/unsupported extension (e.g. .pdf)", () => {
+  it("ingests a supported nested absolute file path", () => {
     const dir = makeDir();
-    const path = writeFile(dir, "spec.pdf", "%PDF-1.7 not really parsed");
+    const docsDir = join(dir, "docs");
+    mkdirSync(docsDir);
+    const path = writeFile(
+      docsDir,
+      "spec.md",
+      "# Nested Spec\nThe system shall validate the transfer amount before submission.\n",
+    );
+    const result = ingest(input([fileSource("NestedSpec", path)]));
+    expect(result.ingestedAtoms).toHaveLength(1);
+    expect(result.ingestedAtoms[0]?.canonicalText.includes("Nested Spec")).toBe(true);
+  });
+
+  it("throws QI_BAD_SOURCE for a relative single-file path", () => {
     try {
-      ingest(input([fileSource("PDF", path)]));
+      ingest(input([fileSource("Relative", "docs/spec.md")]));
       expect.fail("should have thrown");
     } catch (err) {
-      expect((err as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
+      expect((err as QiIngestionError).code).toBe("QI_BAD_SOURCE");
     }
+  });
+
+  it("ingests a supported PDF single-file source for folder-parity best-effort reads", () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "spec.pdf", "%PDF-1.7 fake fachkonzept");
+    const result = ingest(input([fileSource("PDF", path)]));
+    expect(result.ingestedAtoms).toHaveLength(1);
+    expect(result.ingestedAtoms[0]?.canonicalText.includes("fake fachkonzept")).toBe(true);
+  });
+
+  it("ingests a supported DOCX single-file source for folder-parity best-effort reads", () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "spec.docx", "PK fake docx fachkonzept");
+    const result = ingest(input([fileSource("DOCX", path)]));
+    expect(result.ingestedAtoms).toHaveLength(1);
+    expect(result.ingestedAtoms[0]?.canonicalText.includes("fake docx")).toBe(true);
   });
 
   it("throws QI_SOURCE_UNSUPPORTED for a text-extension file with binary (NUL) content", () => {

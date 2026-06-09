@@ -6,7 +6,7 @@
 // may touch the filesystem); the pure domain owns splitting + hashing. Oversize and unsupported
 // inputs fail with user-actionable errors (#278 AC) before any model prompt is built.
 
-import { dirname, relative, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
@@ -209,14 +209,22 @@ function ingestWorkspace(
 // dominating the prompt budget.
 const SINGLE_FILE_MAX_BYTES = WORKSPACE_BUDGET_BYTES;
 
-// Supported single-file document extensions: text-like documents + source files only. keiko-workspace
-// reads UTF-8 text and deliberately does not parse binary documents (PDF/Word/images/archives carry
-// a CVE-prone parser surface — Issue #148), so those are rejected with a coded error, never partially
-// ingested. Code files reuse the shared CODE_EXTENSION set above.
+// Text-like single-file documents share the strict NUL-byte check because they are expected to be
+// ordinary UTF-8-ish text. Code files reuse the shared CODE_EXTENSION set above.
 const DOC_TEXT_EXTENSION =
   /\.(?:md|markdown|txt|text|rst|adoc|asciidoc|json|ya?ml|xml|html?|csv|tsv|ini|toml|cfg|conf|properties|tex|org)$/iu;
 
+// PDF and DOCX are intentionally accepted in single-file mode for parity with folder-backed QI:
+// the read path stays keiko-workspace only, so these are best-effort UTF-8/redaction reads, not
+// dedicated document parsers.
+const BEST_EFFORT_DOCUMENT_EXTENSION = /\.(?:pdf|docx)$/iu;
+
 const isSupportedFilePath = (path: string): boolean =>
+  CODE_EXTENSION.test(path) ||
+  DOC_TEXT_EXTENSION.test(path) ||
+  BEST_EFFORT_DOCUMENT_EXTENSION.test(path);
+
+const requiresStrictTextGuard = (path: string): boolean =>
   CODE_EXTENSION.test(path) || DOC_TEXT_EXTENSION.test(path);
 
 // Resolve a single file's workspace root and read it through the keiko-workspace boundary-checked
@@ -270,11 +278,17 @@ function ingestFile(
   registeredAt: string,
 ): OneSource {
   const label = sanitiseLabel(source.label);
+  if (!isAbsolute(source.path)) {
+    throw new QiIngestionError(
+      "QI_BAD_SOURCE",
+      "File source paths must be absolute local paths.",
+    );
+  }
   const absFile = resolve(source.path);
   if (!isSupportedFilePath(absFile)) {
     throw new QiIngestionError(
       "QI_SOURCE_UNSUPPORTED",
-      `File "${label}" is not a supported text document (binary formats such as PDF or Word are not ingested).`,
+      `File "${label}" is not a supported single-file document.`,
     );
   }
   // Defense in depth: reject any path whose segments name a denied credential directory or file
@@ -286,8 +300,9 @@ function ingestFile(
   }
   const content = readSingleFileContent(absFile, label);
   // keiko-workspace decodes as UTF-8; a NUL byte is the canonical binary marker. A binary file that
-  // slipped past the extension gate (e.g. a mis-named ".txt") is rejected here, never partially ingested.
-  if (content.text.includes("\u0000")) {
+  // slipped past the strict text/code gate (e.g. a mis-named ".txt") is rejected here, never
+  // partially ingested. PDF/DOCX intentionally skip this check for folder-parity best-effort reads.
+  if (requiresStrictTextGuard(absFile) && content.text.includes("\u0000")) {
     throw new QiIngestionError(
       "QI_SOURCE_UNSUPPORTED",
       `File "${label}" appears to be binary, not text.`,

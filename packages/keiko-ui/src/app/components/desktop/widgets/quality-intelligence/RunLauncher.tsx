@@ -77,6 +77,40 @@ function baseName(p: string): string {
   return parts.length > 0 ? (parts[parts.length - 1] ?? p) : p;
 }
 
+function isAbsoluteBrowserPath(path: string): boolean {
+  return (
+    path.startsWith("/") ||
+    /^[A-Za-z]:[/\\]/u.test(path) ||
+    path.startsWith("\\\\") ||
+    path.startsWith("//")
+  );
+}
+
+function toPortablePath(path: string): string {
+  return path.replaceAll("\\", "/");
+}
+
+function trimTrailingSeparators(path: string): string {
+  if (/^[A-Za-z]:[/\\]?$/u.test(path)) return path.replaceAll("\\", "/");
+  if (/^\/\/[^/]+\/[^/]+$/u.test(toPortablePath(path))) return toPortablePath(path);
+  return toPortablePath(path).replace(/\/+$/u, "");
+}
+
+function resolveConnectedFilePath(
+  connectedRoot: string | null,
+  connectedFilePath: string | null,
+): string | null {
+  const candidate = connectedFilePath?.trim() ?? "";
+  if (candidate.length === 0) return null;
+  if (isAbsoluteBrowserPath(candidate)) return candidate;
+
+  const root = connectedRoot?.trim() ?? "";
+  if (root.length === 0) return null;
+  const joinedRoot = trimTrailingSeparators(root);
+  const relativePath = toPortablePath(candidate).replace(/^\/+/u, "");
+  return `${joinedRoot}/${relativePath}`;
+}
+
 export function RunLauncher({
   onRunCompleted,
   startImpl = startQiRun,
@@ -96,7 +130,7 @@ export function RunLauncher({
 
   // A connected Files window contributes a default Generate source. A focused file takes precedence
   // over the folder root, so connecting a single Fachkonzept document generates from that one file.
-  const connectedFile = connectedFilePath ?? null;
+  const connectedFile = resolveConnectedFilePath(connectedRoot, connectedFilePath);
   const connectedFolder = connectedRoot ?? null;
   const hasConnected = connectedFile !== null || connectedFolder !== null;
   const manualReady =

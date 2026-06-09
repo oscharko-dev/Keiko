@@ -10,6 +10,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { isAbsolute } from "node:path";
 import type {
   QualityIntelligenceInlineSource,
   QualityIntelligenceRunStreamMessage,
@@ -78,6 +79,17 @@ function validateSource(raw: unknown): QualityIntelligenceInlineSource | undefin
   return undefined;
 }
 
+function validateSourceEntry(raw: unknown): QualityIntelligenceInlineSource | RouteResult {
+  const source = validateSource(raw);
+  if (source === undefined) {
+    return errorResult(400, "QI_BAD_SOURCE", "A source entry is malformed.");
+  }
+  if (source.kind === "file" && !isAbsolute(source.path)) {
+    return errorResult(400, "QI_BAD_SOURCE", "File source paths must be absolute local paths.");
+  }
+  return source;
+}
+
 type ParseOutcome =
   | { readonly ok: true; readonly request: QualityIntelligenceStartRunRequest }
   | { readonly ok: false; readonly result: RouteResult };
@@ -91,11 +103,11 @@ function validateRequest(parsed: unknown): ParseOutcome {
   }
   const sources: QualityIntelligenceInlineSource[] = [];
   for (const raw of parsed.sources) {
-    const source = validateSource(raw);
-    if (source === undefined) {
+    const source = validateSourceEntry(raw);
+    if ("status" in source) {
       return {
         ok: false,
-        result: errorResult(400, "QI_BAD_SOURCE", "A source entry is malformed."),
+        result: source,
       };
     }
     sources.push(source);
