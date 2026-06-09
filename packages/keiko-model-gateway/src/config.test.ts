@@ -51,8 +51,80 @@ describe("parseGatewayConfig", () => {
     const config = parseGatewayConfig(validRaw());
     expect(config.providers).toHaveLength(1);
     expect(config.providers[0]?.modelId).toBe("example-chat-model");
+    expect(config.providers[0]?.providerType).toBe("gateway-openai-compatible");
+    expect(config.providers[0]?.providerId).toBe("example-chat-model");
+    expect(config.providers[0]?.validationState).toBe("configured");
     expect(config.providers[0]?.apiKeyHeaderName).toBe("authorization");
     expect(config.circuitBreaker.failureThreshold).toBe(5);
+  });
+
+  it("treats an omitted providerType as gateway-openai-compatible for migration safety", () => {
+    const config = parseGatewayConfig(validRaw());
+    expect(config.providers[0]?.providerType).toBe("gateway-openai-compatible");
+  });
+
+  it("accepts an explicit providerId distinct from the modelId", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      providerId: "gateway-primary",
+      providerType: "gateway-openai-compatible",
+    }));
+    const config = parseGatewayConfig(raw);
+    expect(config.providers[0]?.providerId).toBe("gateway-primary");
+    expect(config.providers[0]?.modelId).toBe("example-chat-model");
+  });
+
+  it("accepts an openai-codex-local-session provider without fake gateway fields", () => {
+    const config = parseGatewayConfig({
+      providers: [
+        {
+          providerType: "openai-codex-local-session",
+          providerId: "codex-local",
+          modelId: "codex-chat",
+          timeoutMs: 15_000,
+          maxRetries: 1,
+          retryBaseDelayMs: 50,
+        },
+      ],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+    });
+    expect(config.providers[0]).toMatchObject({
+      providerType: "openai-codex-local-session",
+      providerId: "codex-local",
+      modelId: "codex-chat",
+      validationState: "runtime-only",
+      runtimeHandle: { kind: "codex-local-session" },
+    });
+  });
+
+  it("rejects a local-session provider with a fake baseUrl field", () => {
+    expect(() =>
+      parseGatewayConfig({
+        providers: [
+          {
+            providerType: "openai-codex-local-session",
+            modelId: "codex-chat",
+            baseUrl: "https://should-not-exist.example/v1",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+    ).toThrow(/baseUrl is not allowed/);
+  });
+
+  it("rejects a local-session provider with a fake apiKey field", () => {
+    expect(() =>
+      parseGatewayConfig({
+        providers: [
+          {
+            providerType: "openai-codex-local-session",
+            modelId: "codex-chat",
+            apiKey: "fake-key",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+    ).toThrow(/apiKey is not allowed/);
   });
 
   it("accepts a safe custom API key header name", () => {
@@ -379,8 +451,38 @@ describe("toSafeObject", () => {
     const config = parseGatewayConfig(validRaw());
     const safe = toSafeObject(config);
     expect(safe.providers[0]?.modelId).toBe("example-chat-model");
+    expect(safe.providers[0]?.providerType).toBe("gateway-openai-compatible");
+    expect(safe.providers[0]?.providerId).toBe("example-chat-model");
+    expect(safe.providers[0]?.validationState).toBe("configured");
     expect(safe.providers[0]?.credentialHeaderName).toBe("authorization");
     expect(safe.providers[0]?.timeoutMs).toBe(30000);
+  });
+
+  it("projects a local-session provider as browser-safe runtime-only state", () => {
+    const safe = toSafeObject(
+      parseGatewayConfig({
+        providers: [
+          {
+            providerType: "openai-codex-local-session",
+            providerId: "codex-local",
+            modelId: "codex-chat",
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      }),
+    );
+    expect(safe.providers[0]).toEqual({
+      providerId: "codex-local",
+      providerType: "openai-codex-local-session",
+      modelId: "codex-chat",
+      validationState: "runtime-only",
+      timeoutMs: 30_000,
+      maxRetries: 3,
+      retryBaseDelayMs: 500,
+    });
+    expect(JSON.stringify(safe)).not.toContain("apiKey");
+    expect(JSON.stringify(safe)).not.toContain("baseUrl");
+    expect(JSON.stringify(safe)).not.toContain("runtimeHandle");
   });
 
   it("preserves declared capability metadata without provider secrets", () => {

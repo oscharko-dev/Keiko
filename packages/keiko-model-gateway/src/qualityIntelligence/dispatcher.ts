@@ -41,14 +41,14 @@ import {
   makeTimeoutError,
 } from "./safeError.js";
 import type { QualityIntelligenceTaskProfile } from "./taskProfiles.js";
-import type { ModelProviderConfig, ProviderAdapter } from "../types.js";
+import type { ProviderAdapter, RuntimeDispatchProviderConfig } from "../types.js";
 
 export interface QualityIntelligenceDispatcherArgs {
   readonly profile: QualityIntelligenceTaskProfile;
   readonly instruction: string;
   readonly evidence: readonly QualityIntelligenceUntrustedEvidenceInput[];
   readonly model: ModelCapability;
-  readonly providerConfig: ModelProviderConfig;
+  readonly providerConfig: RuntimeDispatchProviderConfig;
   readonly port: ProviderAdapter;
   readonly cache: QualityIntelligenceReplayCachePort<NormalizedResponse>;
   readonly budget: QualityIntelligenceBudgetState;
@@ -112,7 +112,7 @@ function classifyAndThrow(
 interface InvocationContext {
   readonly profile: QualityIntelligenceTaskProfile;
   readonly port: ProviderAdapter;
-  readonly providerConfig: ModelProviderConfig;
+  readonly providerConfig: RuntimeDispatchProviderConfig;
   readonly modelId: string;
   readonly segments: QualityIntelligencePromptSegments;
   readonly externalSignal: AbortSignal | undefined;

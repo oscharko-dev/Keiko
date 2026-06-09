@@ -30,6 +30,7 @@ import type {
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  isGatewayOpenAiCompatibleProvider,
   requestOpenAIEmbedding,
   type OpenAIEmbeddingAdapter,
   type OpenAIEmbeddingOutcome,
@@ -129,7 +130,7 @@ export function createEmbeddingAdapter(
   }
   for (const modelId of modelIds) {
     const provider = config.providers.find((entry) => entry.modelId === modelId);
-    if (provider === undefined) {
+    if (provider === undefined || !isGatewayOpenAiCompatibleProvider(provider)) {
       return conflict(`No configured embedding provider matches local knowledge model ${modelId}.`);
     }
   }
@@ -138,7 +139,7 @@ export function createEmbeddingAdapter(
     apiKey: "local-knowledge",
     request: async (request): Promise<OpenAIEmbeddingOutcome> => {
       const provider = config.providers.find((entry) => entry.modelId === request.modelId);
-      if (provider === undefined) {
+      if (provider === undefined || !isGatewayOpenAiCompatibleProvider(provider)) {
         return { ok: false, kind: "unsupported-model" };
       }
       return requestEmbeddingImpl(deps)({

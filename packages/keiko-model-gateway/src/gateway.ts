@@ -11,6 +11,7 @@ import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
 import type {
   Clock,
   CircuitBreakerStatus,
+  RuntimeDispatchProviderConfig,
   GatewayConfig,
   GatewayRequest,
   GatewayStreamChunk,
@@ -19,6 +20,7 @@ import type {
   NormalizedResponse,
   ProviderAdapter,
 } from "./types.js";
+import { isGatewayOpenAiCompatibleProvider, providerTypeOf } from "./types.js";
 
 export interface GatewayDeps {
   readonly adapter?: ProviderAdapter | undefined;
@@ -26,7 +28,7 @@ export interface GatewayDeps {
 }
 
 interface RoutedCall {
-  readonly provider: ModelProviderConfig;
+  readonly provider: RuntimeDispatchProviderConfig;
   readonly capability: ModelCapability;
 }
 
@@ -99,7 +101,7 @@ export class Gateway {
   private async *streamFrom(
     adapter: ProviderAdapter,
     request: GatewayRequest,
-    provider: ModelProviderConfig,
+    provider: RuntimeDispatchProviderConfig,
   ): AsyncGenerator<GatewayStreamChunk> {
     if (adapter.callStream !== undefined) {
       yield* adapter.callStream(request, provider);
@@ -143,7 +145,7 @@ export class Gateway {
     breaker: CircuitBreaker,
     adapter: ProviderAdapter,
     request: GatewayRequest,
-    provider: ModelProviderConfig,
+    provider: RuntimeDispatchProviderConfig,
   ): Promise<NormalizedResponse> {
     breaker.assertAllowed();
     try {
@@ -168,6 +170,11 @@ export class Gateway {
     if (capability.kind !== "chat") {
       throw new UnknownModelError(
         `model '${modelId}' has kind '${capability.kind}'; the chat path requires a chat model`,
+      );
+    }
+    if (!isGatewayOpenAiCompatibleProvider(provider)) {
+      throw new UnknownModelError(
+        `model '${modelId}' is configured for provider type '${providerTypeOf(provider)}'; runtime dispatch for that provider type is not wired yet`,
       );
     }
     return { provider, capability };

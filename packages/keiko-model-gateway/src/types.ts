@@ -8,6 +8,8 @@ import type {
   ModelCapability,
   NormalizedResponse,
   GatewayRequest,
+  ProviderType,
+  ProviderValidationState,
 } from "@oscharko-dev/keiko-contracts";
 import type { GroundingLimits } from "@oscharko-dev/keiko-contracts/bff-wire";
 
@@ -31,14 +33,64 @@ export { CONVERSATION_CAPABILITY_CONTRACT_VERSION } from "@oscharko-dev/keiko-co
 
 // ─── Provider configuration (credential-bearing — STAYS local) ────────────────
 
-export interface ModelProviderConfig {
+interface ProviderRetryConfig {
+  readonly modelId: string;
+  readonly providerId?: string | undefined;
+  readonly providerType?: ProviderType | undefined;
+  readonly validationState?: ProviderValidationState | undefined;
+  readonly timeoutMs: number;
+  readonly maxRetries: number;
+  readonly retryBaseDelayMs: number;
+}
+
+export interface GatewayOpenAiCompatibleProviderConfig extends ProviderRetryConfig {
+  readonly providerType?: "gateway-openai-compatible" | undefined;
+  readonly validationState?: "configured" | undefined;
   readonly modelId: string;
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string | undefined;
-  readonly timeoutMs: number;
-  readonly maxRetries: number;
-  readonly retryBaseDelayMs: number;
+}
+
+export interface OpenAiCodexLocalSessionProviderConfig extends ProviderRetryConfig {
+  readonly providerType: "openai-codex-local-session";
+  readonly validationState: "runtime-only";
+  readonly baseUrl?: undefined;
+  readonly apiKey?: undefined;
+  readonly apiKeyHeaderName?: undefined;
+  readonly runtimeHandle: {
+    readonly kind: "codex-local-session";
+  };
+}
+
+export type ModelProviderConfig =
+  | GatewayOpenAiCompatibleProviderConfig
+  | OpenAiCodexLocalSessionProviderConfig;
+
+export type RuntimeDispatchProviderConfig = GatewayOpenAiCompatibleProviderConfig;
+
+export function providerTypeOf(provider: ModelProviderConfig): ProviderType {
+  return provider.providerType ?? "gateway-openai-compatible";
+}
+
+export function providerIdOf(provider: ModelProviderConfig): string {
+  return provider.providerId ?? provider.modelId;
+}
+
+export function providerValidationStateOf(provider: ModelProviderConfig): ProviderValidationState {
+  return provider.validationState ?? "configured";
+}
+
+export function isGatewayOpenAiCompatibleProvider(
+  provider: ModelProviderConfig,
+): provider is GatewayOpenAiCompatibleProviderConfig {
+  return providerTypeOf(provider) === "gateway-openai-compatible";
+}
+
+export function isOpenAiCodexLocalSessionProvider(
+  provider: ModelProviderConfig,
+): provider is OpenAiCodexLocalSessionProviderConfig {
+  return providerTypeOf(provider) === "openai-codex-local-session";
 }
 
 export interface CircuitBreakerConfig {
@@ -67,13 +119,13 @@ export type GatewayStreamChunk =
 export interface ProviderAdapter {
   readonly call: (
     request: GatewayRequest,
-    config: ModelProviderConfig,
+    config: RuntimeDispatchProviderConfig,
   ) => Promise<NormalizedResponse>;
   // Optional streaming variant. Absent on adapters that only support buffered calls;
   // the Gateway synthesises a single delta+done from `call` in that case.
   readonly callStream?: (
     request: GatewayRequest,
-    config: ModelProviderConfig,
+    config: RuntimeDispatchProviderConfig,
   ) => AsyncIterable<GatewayStreamChunk>;
 }
 

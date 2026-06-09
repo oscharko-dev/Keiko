@@ -15,9 +15,10 @@
 // its pre-semantic behaviour byte-for-byte.
 
 import {
+  isGatewayOpenAiCompatibleProvider,
   requestOpenAIEmbedding,
   type GatewayConfig,
-  type ModelProviderConfig,
+  type GatewayOpenAiCompatibleProviderConfig,
   type OpenAIEmbeddingAdapter,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
@@ -37,8 +38,11 @@ export function selectMemoryEmbeddingModelId(
 function providerForModel(
   config: GatewayConfig | undefined,
   modelId: string,
-): ModelProviderConfig | undefined {
-  return config?.providers.find((provider) => provider.modelId === modelId);
+): GatewayOpenAiCompatibleProviderConfig | undefined {
+  const provider = config?.providers.find((entry) => entry.modelId === modelId);
+  return provider !== undefined && isGatewayOpenAiCompatibleProvider(provider)
+    ? provider
+    : undefined;
 }
 
 function requestEmbeddingImpl(
@@ -49,7 +53,7 @@ function requestEmbeddingImpl(
 }
 
 function buildAdapter(
-  provider: ModelProviderConfig,
+  provider: GatewayOpenAiCompatibleProviderConfig,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
 ): OpenAIEmbeddingAdapter {
   return {

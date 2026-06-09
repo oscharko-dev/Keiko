@@ -8,6 +8,7 @@
 
 import {
   createDefaultChatCapability,
+  isGatewayOpenAiCompatibleProvider,
   loadConfigFromFile,
   parseGatewayConfig,
   type EnvSource,
@@ -322,6 +323,7 @@ function configSecretValues(config: GatewayConfig | undefined): readonly string[
   if (config === undefined) return [];
   const out: string[] = [];
   for (const provider of config.providers) {
+    if (!isGatewayOpenAiCompatibleProvider(provider)) continue;
     out.push(provider.apiKey, provider.baseUrl);
   }
   return out;
