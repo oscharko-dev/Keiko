@@ -21,10 +21,25 @@
 //   * No `skipWaiting()` and no `clients.claim()` — a newly installed SW waits until all
 //     existing clients are gone before activating, preventing a stale shell from running
 //     against a new API contract.
+//   * The HTML app shell (a top-level navigation, or the `/` document) is served
+//     NETWORK-FIRST with a cache fallback; content-hashed static assets (`/_next/static/...`,
+//     icons, manifest) stay CACHE-FIRST. Rationale: the `/` document has a STABLE url but its
+//     body changes every deploy (it references a fresh content-hashed chunk graph). Cache-first
+//     on `/` pins an old shell that points at chunk filenames the rebuilt server no longer
+//     serves → `ChunkLoadError` / a blank "client-side exception" until a hard refresh. A
+//     content-hashed asset, by contrast, gets a NEW filename on every build, so cache-first can
+//     never serve it stale (a new build is always a cache miss → fresh fetch). Network-first on
+//     the shell therefore picks up a redeploy immediately while preserving offline support
+//     (the last-seen shell is still served when the network is unreachable). This `sw.js` is
+//     byte-identical across Next builds, so the browser never re-installs the SW on a normal
+//     deploy — which is exactly why the shell must self-heal at fetch time rather than relying
+//     on a cache-version bump.
 
 /* global self, caches, fetch */
 
-const CACHE_NAME = "keiko-shell-v1";
+// Bumped v1 -> v2 with the network-first shell policy below: when this SW finally activates it
+// deletes the stale v1 cache (which may hold an old `/` document) in the `activate` handler.
+const CACHE_NAME = "keiko-shell-v2";
 
 // Static shell pre-cache. These are pathnames that must be available offline for the app
 // shell to boot. Everything else (e.g. `/_next/static/...` chunks) is cached on first
@@ -79,6 +94,52 @@ function isCacheableResponse(response) {
   return response.ok && response.status === 200 && response.type === "basic";
 }
 
+function isHtmlShellRequest(request, url) {
+  // A top-level navigation (request.mode === "navigate") or the `/` document IS the HTML app
+  // shell. Its url is stable but its body changes every deploy (it references the new
+  // content-hashed chunk graph), so it must be revalidated against the network — see the
+  // network-first rationale in the header. `request.mode` is absent in some non-browser hosts
+  // (and the sandbox test harness), so fall back to the `/` pathname check.
+  return request.mode === "navigate" || url.pathname === "/";
+}
+
+async function putIfCacheable(request, response) {
+  if (!isCacheableResponse(response)) return;
+  // Clone before .put — the response body can only be consumed once, and the caller still
+  // returns the original to the page.
+  const copy = response.clone();
+  const cache = await caches.open(CACHE_NAME);
+  await cache.put(request, copy);
+}
+
+async function cacheFirst(request) {
+  // Content-hashed assets are immutable per url, so a cache hit is always correct and a new
+  // build is always a cache miss → fresh fetch. Fastest path with zero staleness risk.
+  if (typeof caches === "undefined") return fetch(request);
+  const cached = await caches.match(request);
+  if (cached !== undefined) return cached;
+  const response = await fetch(request);
+  await putIfCacheable(request, response);
+  return response;
+}
+
+async function networkFirst(request) {
+  // The HTML shell: prefer the freshest document so a redeploy's new chunk references are used
+  // immediately. Refresh the cached copy on every success, and fall back to it (offline support)
+  // only when the network is unreachable. A failed network with no cached fallback rethrows so
+  // the page sees the real error rather than a masked one.
+  if (typeof caches === "undefined") return fetch(request);
+  try {
+    const response = await fetch(request);
+    await putIfCacheable(request, response);
+    return response;
+  } catch (error) {
+    const cached = await caches.match(request);
+    if (cached !== undefined) return cached;
+    throw error;
+  }
+}
+
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
@@ -124,21 +185,7 @@ self.addEventListener("fetch", (event) => {
   // cache, never serve, never proxy.
   if (!isCacheableRequest(request, url)) return;
 
-  event.respondWith(
-    (async () => {
-      if (typeof caches === "undefined") return fetch(request);
-
-      const cached = await caches.match(request);
-      if (cached !== undefined) return cached;
-
-      const response = await fetch(request);
-      if (isCacheableResponse(response)) {
-        // Clone before .put — the response body can only be consumed once.
-        const copy = response.clone();
-        const cache = await caches.open(CACHE_NAME);
-        await cache.put(request, copy);
-      }
-      return response;
-    })(),
-  );
+  // HTML shell → network-first (pick up redeploys immediately, fall back to cache offline);
+  // content-hashed static assets → cache-first (fast, never stale per immutable url).
+  event.respondWith(isHtmlShellRequest(request, url) ? networkFirst(request) : cacheFirst(request));
 });

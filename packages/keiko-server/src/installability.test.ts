@@ -139,10 +139,13 @@ describe("Gate 2 — service worker reachable and conformant (ADR-0024 D6)", () 
     expect(ct.includes("text/javascript") || ct.includes("application/javascript")).toBe(true);
   });
 
-  it("body contains the versioned cache name constant keiko-shell-v1", async () => {
+  it("body declares a versioned cache name (keiko-shell-v<n>)", async () => {
     const res = await fetch(url("/sw.js"));
     const body = await res.text();
-    expect(body).toContain("keiko-shell-v1");
+    // Version-agnostic: the cache name is bumped whenever the cache policy changes (e.g. v1 -> v2
+    // for the network-first shell strategy), so pin the SHAPE, not a specific number — matching the
+    // sw-cache-policy.test.ts convention so a deliberate bump never breaks this gate.
+    expect(body).toMatch(/CACHE_NAME\s*=\s*"keiko-shell-v\d+"/);
   });
 });
 
