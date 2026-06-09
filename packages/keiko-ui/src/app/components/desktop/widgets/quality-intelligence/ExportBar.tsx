@@ -1,9 +1,11 @@
 "use client";
 
-// Quality Intelligence export control (Issue #283, Epic #270).
-// Local formats (CSV / JSON / spreadsheet-safe CSV) download a same-origin Blob — no credentials.
-// External TMS adapters run a dry-run preview ONLY (writes are disabled until a connector is
-// configured). Accessible: labelled select, focus-visible controls, aria-live preview/error.
+// Quality Intelligence export control (Issue #283, Epic #270 + #711).
+// Local formats (CSV / JSON / spreadsheet-safe CSV / Markdown / plain-text) download a same-origin
+// Blob — no credentials. Binary formats (PDF / ZIP bundle) are returned as base64 and decoded
+// client-side. External TMS adapters run a dry-run preview ONLY (writes are disabled until a
+// connector is configured). Accessible: labelled select, focus-visible controls, aria-live
+// preview/error.
 
 import { useCallback, useState } from "react";
 import type { ReactNode } from "react";
@@ -14,10 +16,15 @@ const ADAPTERS: ReadonlyArray<{ id: string; label: string; tms: boolean }> = [
   { id: "csv", label: "CSV", tms: false },
   { id: "json", label: "JSON", tms: false },
   { id: "spreadsheet-safe-csv", label: "Spreadsheet-safe CSV", tms: false },
+  { id: "markdown", label: "Markdown", tms: false },
+  { id: "plain-text", label: "Plain text", tms: false },
+  { id: "pdf", label: "PDF", tms: false },
+  { id: "zip-bundle", label: "ZIP bundle (all formats)", tms: false },
   { id: "jira-issues", label: "Jira (preview)", tms: true },
   { id: "qtest", label: "qTest (preview)", tms: true },
   { id: "xray", label: "Xray (preview)", tms: true },
   { id: "polarion", label: "Polarion (preview)", tms: true },
+  { id: "quality-center", label: "Quality Center (preview)", tms: true },
 ];
 
 function formatError(err: unknown): string {
@@ -26,8 +33,23 @@ function formatError(err: unknown): string {
   return "Export failed.";
 }
 
-function triggerDownload(filename: string, contentType: string, body: string): void {
-  const blob = new Blob([body], { type: contentType });
+function base64ToUint8Array(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    out[i] = binary.charCodeAt(i);
+  }
+  return out;
+}
+
+function triggerDownload(
+  filename: string,
+  contentType: string,
+  body: string,
+  encoding?: "base64",
+): void {
+  const data = encoding === "base64" ? base64ToUint8Array(body) : body;
+  const blob = new Blob([data], { type: contentType });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;

@@ -17,3 +17,6 @@ export {
   startsWithFormulaLead,
 } from "./spreadsheetSafeCsv.js";
 export { adaptToXray, XRAY_CSV_HEADERS } from "./xray.js";
+export { adaptToMarkdown } from "./markdown.js";
+export { adaptToPlainText } from "./plaintext.js";
+export { adaptToQualityCenter } from "./qualityCenter.js";

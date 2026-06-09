@@ -220,6 +220,7 @@ export interface QiExportLocalResult {
   readonly contentType: string;
   readonly byteLen: number;
   readonly body: string;
+  readonly encoding?: "base64";
 }
 
 export interface QiExportDryRunResult {

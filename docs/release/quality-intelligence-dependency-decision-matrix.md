@@ -92,3 +92,20 @@ exposure: native addons, install hooks, network reach, governance scrutiny.
 - Source-import isolation: enforced once the dependency-direction rule
   `adr-0019-direction-10a-quality-intelligence-only-contracts-security` (ADR-0023 §D14)
   lands in `.dependency-cruiser.cjs` under issue #272.
+
+## 5. Multi-format export — binary formats (Epic #711)
+
+Epic #711 adds PDF and ZIP-bundle export. Both binary formats are **hand-rolled with
+zero new runtime dependencies** rather than pulling in a PDF/ZIP library, keeping this
+matrix unchanged and the supply-chain gate green.
+
+| Format | Candidate library   | Decision                                                        | Rationale                                                                                                                                                                                                                                    |
+| ------ | ------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| PDF    | `pdf-lib`, `pdfkit` | Hand-rolled (`keiko-server/.../exportAssembly.ts::assemblePdf`) | A minimal text-only PDF 1.4 (Catalog/Pages/Page/Contents/Courier + xref + trailer) is ~60 lines, fully owned, and emits no non-deterministic `/CreationDate` or `/ID`. Libraries add parser/render CVE surface and break byte-stable output. |
+| ZIP    | `jszip`, `yazl`     | Hand-rolled (`...exportAssembly.ts::assembleZipBundle`)         | A STORE (no-compression) ZIP with a standard CRC-32 is ~80 lines. `yauzl` is a reader only; a writer would be a new dependency. Hand-rolling lets us zero the DOS date/time fields for deterministic output.                                 |
+
+Determinism is load-bearing: the export integrity hash feeds the Living-Tests drift epic
+(#735), so binary assembly emits no timestamps/UUIDs/random. JSON is excluded from the ZIP
+bundle (its body embeds the export `createdAt`); the bundle carries the timestamp-free
+CSV + Markdown + plain-text serializers. The Quality Center adapter performs no outbound
+call — disabled, dry-run-only, returns `QI_EXTERNAL_EXPORT_DISABLED` (403) on a live write.

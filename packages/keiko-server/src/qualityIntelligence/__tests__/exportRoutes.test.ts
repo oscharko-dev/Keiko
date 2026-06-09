@@ -485,3 +485,92 @@ describe("handleQiExport — all TMS adapters reject live export", () => {
     },
   );
 });
+
+// ─── Epic #711 — multi-format export (Markdown / plain-text / PDF / ZIP / Quality Center) ────────
+
+describe("handleQiExport — Epic #711 multi-format export", () => {
+  const exportWith = async (
+    adapter: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<RouteResult> =>
+    asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter, dryRun: false, ...extra })),
+        deps(evidenceDir),
+      ),
+    );
+
+  const approveSeeded = (): void => {
+    applyReviewDecision({
+      runId: RUN_ID,
+      evidenceDir,
+      action: "approve",
+      scope: "candidate",
+      candidateId: "cand-001",
+      reviewerLabel: "tester",
+      now: "2026-06-01T12:00:00.000Z",
+    });
+  };
+
+  it("exports Markdown with a candidate section", async () => {
+    const result = await exportWith("markdown");
+    expect(result.status).toBe(200);
+    expect((result.body as { body: string }).body).toContain("## ");
+  });
+
+  it("exports plain text with non-empty body", async () => {
+    const result = await exportWith("plain-text");
+    expect(result.status).toBe(200);
+    expect((result.body as { body: string }).body.length).toBeGreaterThan(0);
+  });
+
+  it("exports a deterministic PDF (base64, %PDF- header, byte-stable across runs)", async () => {
+    const a = await exportWith("pdf");
+    const b = await exportWith("pdf");
+    expect(a.status).toBe(200);
+    const ba = a.body as { encoding: string; body: string; contentType: string };
+    expect(ba.encoding).toBe("base64");
+    expect(ba.contentType).toBe("application/pdf");
+    expect(Buffer.from(ba.body, "base64").subarray(0, 5).toString("latin1")).toBe("%PDF-");
+    expect((b.body as { body: string }).body).toBe(ba.body);
+  });
+
+  it("exports a deterministic ZIP bundle (base64, PK header, byte-stable across runs)", async () => {
+    const a = await exportWith("zip-bundle");
+    const b = await exportWith("zip-bundle");
+    expect(a.status).toBe(200);
+    const ba = a.body as { encoding: string; body: string; contentType: string };
+    expect(ba.encoding).toBe("base64");
+    expect(ba.contentType).toBe("application/zip");
+    const bytes = Buffer.from(ba.body, "base64");
+    expect(bytes[0]).toBe(0x50); // 'P'
+    expect(bytes[1]).toBe(0x4b); // 'K'
+    expect((b.body as { body: string }).body).toBe(ba.body);
+  });
+
+  it("Quality Center dry-run returns a redaction-safe preview (after approval)", async () => {
+    approveSeeded();
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "quality-center", dryRun: true })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    expect((result.body as { dryRun: boolean }).dryRun).toBe(true);
+  });
+
+  it("Quality Center live write is disabled: 403 QI_EXTERNAL_EXPORT_DISABLED (after approval)", async () => {
+    approveSeeded();
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "quality-center", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(403);
+    expect((result.body as { error: { code: string } }).error.code).toBe(
+      "QI_EXTERNAL_EXPORT_DISABLED",
+    );
+  });
+});

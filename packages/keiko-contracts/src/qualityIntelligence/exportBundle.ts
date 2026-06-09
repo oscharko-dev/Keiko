@@ -26,7 +26,10 @@ export type QualityIntelligenceExportAdapter =
   | "alm"
   | "csv"
   | "json"
-  | "spreadsheet-safe-csv";
+  | "spreadsheet-safe-csv"
+  | "markdown"
+  | "plain-text"
+  | "quality-center";
 
 export const QUALITY_INTELLIGENCE_EXPORT_ADAPTERS: readonly QualityIntelligenceExportAdapter[] = [
   "jira-issues",
@@ -37,11 +40,21 @@ export const QUALITY_INTELLIGENCE_EXPORT_ADAPTERS: readonly QualityIntelligenceE
   "csv",
   "json",
   "spreadsheet-safe-csv",
+  "markdown",
+  "plain-text",
+  "quality-center",
 ] as const;
 
 /** Adapters whose target is an external TMS — they require a redaction attestation. */
 export const QUALITY_INTELLIGENCE_TMS_ADAPTERS: ReadonlySet<QualityIntelligenceExportAdapter> =
-  new Set<QualityIntelligenceExportAdapter>(["jira-issues", "qtest", "xray", "polarion", "alm"]);
+  new Set<QualityIntelligenceExportAdapter>([
+    "jira-issues",
+    "qtest",
+    "xray",
+    "polarion",
+    "alm",
+    "quality-center",
+  ]);
 
 export interface QualityIntelligenceExportBundleEntry {
   readonly candidateId: QualityIntelligenceTestCaseId;
