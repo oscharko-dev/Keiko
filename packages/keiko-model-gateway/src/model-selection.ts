@@ -14,6 +14,9 @@ export interface ModelSelectionQuery {
   readonly toolCalling?: boolean | undefined;
   readonly structuredOutput?: boolean | undefined;
   readonly minContextWindow?: number | undefined;
+  // Issue #810: require image-input (multimodal) capability. When true, only configured
+  // models that advertise supportsImageInput === true are eligible.
+  readonly supportsImageInput?: boolean | undefined;
 }
 
 function matches(capability: ModelCapability, query: ModelSelectionQuery): boolean {
@@ -24,6 +27,9 @@ function matches(capability: ModelCapability, query: ModelSelectionQuery): boole
     return false;
   }
   if (query.structuredOutput === true && !capability.structuredOutput) {
+    return false;
+  }
+  if (query.supportsImageInput === true && !capability.supportsImageInput) {
     return false;
   }
   if (query.minContextWindow !== undefined && capability.contextWindow < query.minContextWindow) {

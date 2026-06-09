@@ -119,6 +119,38 @@ export function resolveQiTestDesignSelection(
   return { kind: "baseline" };
 }
 
+export type QiMultimodalSelection =
+  | { readonly kind: "unavailable" }
+  | {
+      readonly kind: "model";
+      readonly modelId: string;
+      readonly capability: ModelCapability;
+    };
+
+/**
+ * Resolve the image-input (multimodal) model for a vision-augmented stage (Issue #810).
+ *
+ * Selection is capability-driven: the cheapest configured chat model that advertises
+ * supportsImageInput is chosen by `selectConfiguredModel`. When no configured model offers
+ * image input, this returns a TYPED "unavailable" so the caller degrades gracefully to the
+ * deterministic IR-only baseline — never a silent text-model substitution that would pretend
+ * to have seen the image. No model id is hard-coded.
+ */
+export function resolveQiMultimodalSelection(deps: UiHandlerDeps): QiMultimodalSelection {
+  if (deps.config === undefined) {
+    return { kind: "unavailable" };
+  }
+  const modelId = selectConfiguredModel(deps.config, { kind: "chat", supportsImageInput: true });
+  if (modelId === undefined) {
+    return { kind: "unavailable" };
+  }
+  const capability = findConfiguredCapability(deps.config, modelId);
+  if (capability === undefined) {
+    return { kind: "unavailable" };
+  }
+  return { kind: "model", modelId, capability };
+}
+
 /**
  * Resolve the model id to use for a given QI task profile. Never returns undefined; throws
  * QI_CAPABILITY_UNAVAILABLE when no configured model satisfies the profile requirements.

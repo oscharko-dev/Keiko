@@ -26,6 +26,9 @@ export interface CapabilityQuery {
   readonly toolCalling?: boolean | undefined;
   readonly structuredOutput?: boolean | undefined;
   readonly minContextWindow?: number | undefined;
+  // Issue #810: require image-input (multimodal) capability. When true, only models that
+  // advertise supportsImageInput === true match — the routing key for vision-augmented work.
+  readonly supportsImageInput?: boolean | undefined;
 }
 
 export function findCapability(modelId: string): ModelCapability | undefined {
@@ -103,14 +106,25 @@ export function createDefaultChatCapability(modelId: string): ModelCapability {
   };
 }
 
-function matches(cap: ModelCapability, query: CapabilityQuery): boolean {
-  if (query.kind !== undefined && cap.kind !== query.kind) {
-    return false;
-  }
+// Every requested boolean capability (when true) must be advertised by the model.
+function satisfiesBooleanRequirements(cap: ModelCapability, query: CapabilityQuery): boolean {
   if (query.toolCalling === true && !cap.toolCalling) {
     return false;
   }
   if (query.structuredOutput === true && !cap.structuredOutput) {
+    return false;
+  }
+  if (query.supportsImageInput === true && !cap.supportsImageInput) {
+    return false;
+  }
+  return true;
+}
+
+function matches(cap: ModelCapability, query: CapabilityQuery): boolean {
+  if (query.kind !== undefined && cap.kind !== query.kind) {
+    return false;
+  }
+  if (!satisfiesBooleanRequirements(cap, query)) {
     return false;
   }
   if (query.minContextWindow !== undefined && cap.contextWindow < query.minContextWindow) {

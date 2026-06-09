@@ -140,6 +140,15 @@ describe("selectCheapest", () => {
   it("returns undefined when no built-in capability satisfies the requirements", () => {
     expect(selectCheapest({ kind: "chat", toolCalling: true })).toBeUndefined();
   });
+
+  // Issue #810: image-input (multimodal) requirement on the built-in selector. The
+  // built-in registry ships empty, so a supportsImageInput query must return undefined
+  // here — the routable surface for deployment vision models is the config-aware
+  // selectConfiguredModel path, not the built-in CAPABILITY_DATA. Positive predicate
+  // coverage lives in model-selection.test.ts where caps come from an array.
+  it("returns undefined for a supportsImageInput query against the empty built-in registry", () => {
+    expect(selectCheapest({ kind: "chat", supportsImageInput: true })).toBeUndefined();
+  });
 });
 
 describe("resolveCostClass", () => {

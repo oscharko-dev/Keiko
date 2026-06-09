@@ -140,6 +140,58 @@ describe("selectConfiguredModel", () => {
   });
 });
 
+// Issue #810: multimodal (image-input) selection through the config-aware selector.
+describe("selectConfiguredModel — supportsImageInput (multimodal) routing", () => {
+  function chatCap(id: string, supportsImageInput: boolean): ModelCapability {
+    return {
+      id,
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: true,
+      structuredOutput: true,
+      streaming: true,
+      supportsImageInput,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["Test"],
+      knownLimitations: [],
+    };
+  }
+
+  it("selects the configured vision model by capability when supportsImageInput is requested", () => {
+    const selected = selectConfiguredModel(
+      config(
+        ["example-text-chat", "llama-4-maverick-vision"],
+        [chatCap("example-text-chat", false), chatCap("llama-4-maverick-vision", true)],
+      ),
+      { kind: "chat", supportsImageInput: true },
+    );
+    expect(selected).toBe("llama-4-maverick-vision");
+  });
+
+  it("returns undefined when no configured model advertises image input", () => {
+    const selected = selectConfiguredModel(
+      config(["example-text-chat"], [chatCap("example-text-chat", false)]),
+      { kind: "chat", supportsImageInput: true },
+    );
+    expect(selected).toBeUndefined();
+  });
+
+  // Mutation guard: a default-derived chat model (supportsImageInput === false) must NOT be
+  // selected for an image-input query — no silent text fallback masquerading as vision.
+  it("excludes a default-derived chat model (no explicit capability) from an image-input query", () => {
+    const selected = selectConfiguredModel(config(["gpt-oss-120b"]), {
+      kind: "chat",
+      supportsImageInput: true,
+    });
+    expect(selected).toBeUndefined();
+  });
+});
+
 describe("assertConfiguredModel", () => {
   it("rejects explicit model ids that are not configured as providers", () => {
     expect(() => {

@@ -135,6 +135,77 @@ describe("parseGatewayConfig", () => {
     });
   });
 
+  // Issue #810 (Epic #761 silent-drop gotcha): supportsImageInput must round-trip through
+  // parseGatewayConfig via the inline provider-capability path. Validated against the real
+  // deployment id llama-4-maverick-vision so a vision provider becomes capability-routable.
+  it("round-trips supportsImageInput: true through the inline provider capability path", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "llama-4-maverick-vision",
+      capability: {
+        kind: "chat",
+        contextWindow: 128_000,
+        maxOutputTokens: 4_096,
+        toolCalling: true,
+        structuredOutput: true,
+        streaming: true,
+        supportsImageInput: true,
+        costClass: "medium",
+        latencyClass: "standard",
+        throughputHint: "vision endpoint",
+        preferredUseCases: ["Vision"],
+        knownLimitations: ["Validate against the target endpoint"],
+      },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "llama-4-maverick-vision");
+    expect(cap?.supportsImageInput).toBe(true);
+  });
+
+  // Mutation guard: the inline path defaults supportsImageInput to false when omitted, so a
+  // text provider is never mistaken for a vision provider.
+  it("defaults supportsImageInput to false when the inline capability omits it", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-text-chat",
+      capability: { kind: "chat", contextWindow: 8_192 },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "example-text-chat");
+    expect(cap?.supportsImageInput).toBe(false);
+  });
+
+  // Issue #810: the strict top-level `capabilities` array (parseModelCapability) must also
+  // round-trip supportsImageInput: true — this is the wire-facing surface, not just inline.
+  it("round-trips supportsImageInput: true through the strict top-level capabilities array", () => {
+    const raw = {
+      providers: [{ ...validProvider(), modelId: "llama-4-maverick-vision" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+      capabilities: [
+        {
+          id: "llama-4-maverick-vision",
+          kind: "chat",
+          contextWindow: 128_000,
+          maxOutputTokens: 4_096,
+          toolCalling: true,
+          structuredOutput: true,
+          streaming: true,
+          supportsImageInput: true,
+          supportsDocumentInput: false,
+          workflowEligible: true,
+          costClass: "medium",
+          latencyClass: "standard",
+          throughputHint: "vision endpoint",
+          preferredUseCases: ["Vision"],
+          knownLimitations: ["Validate against the target endpoint"],
+        },
+      ],
+    };
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "llama-4-maverick-vision");
+    expect(cap?.supportsImageInput).toBe(true);
+  });
+
   it("rejects custom capability metadata whose id differs from the provider modelId", () => {
     const raw = rawWithProvider((p) => ({
       ...p,

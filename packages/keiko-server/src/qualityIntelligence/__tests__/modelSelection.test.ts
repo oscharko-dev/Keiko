@@ -10,7 +10,7 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
-import { resolveQiTestDesignSelection } from "../modelSelection.js";
+import { resolveQiMultimodalSelection, resolveQiTestDesignSelection } from "../modelSelection.js";
 
 function emptyStore(): EvidenceStore {
   return { put: () => "", list: () => [], get: () => undefined, delete: () => undefined };
@@ -136,5 +136,61 @@ describe("resolveQiTestDesignSelection", () => {
     if (selection.kind === "model") {
       expect(selection.modelId).toBe("chat-fallback");
     }
+  });
+});
+
+// Issue #810: multimodal selection routes a vision stage to a configured image-input model BY
+// CAPABILITY, and reports a typed "unavailable" (never a silent text fallback) when absent.
+describe("resolveQiMultimodalSelection", () => {
+  it("reports unavailable when no config is present (caller degrades to IR-only)", () => {
+    expect(resolveQiMultimodalSelection(depsWith(undefined))).toEqual({ kind: "unavailable" });
+  });
+
+  it("selects the configured image-input model by capability when present", () => {
+    const deps = depsWith(
+      configWith([
+        capability("text-chat", { supportsImageInput: false }),
+        capability("vision-chat", { supportsImageInput: true }),
+      ]),
+    );
+    const selection = resolveQiMultimodalSelection(deps);
+    expect(selection.kind).toBe("model");
+    if (selection.kind === "model") {
+      expect(selection.modelId).toBe("vision-chat");
+      expect(selection.capability.supportsImageInput).toBe(true);
+    }
+  });
+
+  it("reports unavailable when only text-only chat models are configured (no silent fallback)", () => {
+    const deps = depsWith(
+      configWith([
+        capability("text-chat-a", { supportsImageInput: false }),
+        capability("text-chat-b", { supportsImageInput: false, costClass: "low" }),
+      ]),
+    );
+    expect(resolveQiMultimodalSelection(deps)).toEqual({ kind: "unavailable" });
+  });
+
+  it("prefers the lowest-cost image-input model when several are configured", () => {
+    const deps = depsWith(
+      configWith([
+        capability("vision-high", { supportsImageInput: true, costClass: "high" }),
+        capability("vision-low", { supportsImageInput: true, costClass: "low" }),
+      ]),
+    );
+    const selection = resolveQiMultimodalSelection(deps);
+    expect(selection.kind).toBe("model");
+    if (selection.kind === "model") {
+      expect(selection.modelId).toBe("vision-low");
+    }
+  });
+
+  // Capability-driven, not id-driven: a model named "…vision…" with no image-input capability
+  // must NOT be selected — proves selection is by capability flag, never by id substring.
+  it("does NOT select a vision-NAMED model that lacks the image-input capability", () => {
+    const deps = depsWith(
+      configWith([capability("llama-4-maverick-vision", { supportsImageInput: false })]),
+    );
+    expect(resolveQiMultimodalSelection(deps)).toEqual({ kind: "unavailable" });
   });
 });
