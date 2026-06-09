@@ -148,6 +148,11 @@ describe("RunLauncher — initial render", () => {
     expect(screen.getByRole("combobox", { name: /policy profile/i })).toBeInTheDocument();
   });
 
+  it("renders an optional seed input", () => {
+    render(<RunLauncher />);
+    expect(screen.getByRole("spinbutton", { name: /seed \(optional\)/i })).toBeInTheDocument();
+  });
+
   it("renders a disabled 'Generate test cases' button when requirements are empty", () => {
     render(<RunLauncher />);
     const btn = screen.getByRole("button", { name: /generate test cases/i });
@@ -247,6 +252,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
       text: "Users can log in with email",
       label: "Sprint-42",
     });
+    expect(calledRequest.seed).toBeUndefined();
   });
 
   it("calls startImpl with a workspace source when the workspace source type is selected", async () => {
@@ -271,6 +277,7 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
       path: "/repos/my-app",
       label: "My project",
     });
+    expect(calledRequest.seed).toBeUndefined();
   });
 
   it("passes the selected profileId to startImpl", async () => {
@@ -303,6 +310,25 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
     expect(
       typeof calledRequest.profileId === "string" || calledRequest.profileId === undefined,
     ).toBe(true);
+  });
+
+  it("sends a numeric seed when one is entered", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Users can log in");
+    await user.type(screen.getByRole("spinbutton", { name: /seed \(optional\)/i }), "17");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+
+    const [calledRequest] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(calledRequest.seed).toBe(17);
   });
 });
 

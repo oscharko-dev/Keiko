@@ -182,6 +182,7 @@ export function RunLauncher({
   const [text, setText] = useState("");
   const [path, setPath] = useState("");
   const [profileId, setProfileId] = useState("regression-default");
+  const [seed, setSeed] = useState("");
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<Progress>(INITIAL_PROGRESS);
   const [error, setError] = useState<string | null>(null);
@@ -200,6 +201,15 @@ export function RunLauncher({
   const manualReady =
     sourceKind === "requirements" ? text.trim().length > 0 : path.trim().length > 0;
   const ready = manualReady || hasConnected;
+  const trimmedSeed = seed.trim();
+  const parsedSeed =
+    trimmedSeed.length === 0
+      ? undefined
+      : /^\d+$/u.test(trimmedSeed)
+        ? Number(trimmedSeed)
+        : Number.NaN;
+  const seedValid =
+    parsedSeed === undefined || (Number.isSafeInteger(parsedSeed) && Number.isFinite(parsedSeed));
 
   const onMessage = useCallback((msg: QualityIntelligenceRunStreamMessage): void => {
     if (msg.type === "accepted") completedRunIdRef.current = msg.runId;
@@ -209,6 +219,10 @@ export function RunLauncher({
 
   const handleStart = useCallback(async (): Promise<void> => {
     if (!ready || running) return;
+    if (!seedValid) {
+      setError("Seed must be a non-negative integer.");
+      return;
+    }
     setRunning(true);
     setError(null);
     setProgress(INITIAL_PROGRESS);
@@ -233,7 +247,11 @@ export function RunLauncher({
                 ...workspaceSources,
                 ...capsuleSources,
               ] as QualityIntelligenceStartRunRequest["sources"]);
-    const request: QualityIntelligenceStartRunRequest = { sources, profileId };
+    const request: QualityIntelligenceStartRunRequest = {
+      sources,
+      profileId,
+      ...(parsedSeed !== undefined ? { seed: parsedSeed } : {}),
+    };
     try {
       await startImpl(request, controller.signal, onMessage);
       const runId = completedRunIdRef.current;
@@ -257,6 +275,8 @@ export function RunLauncher({
     capsuleSources,
     onMessage,
     onRunCompleted,
+    parsedSeed,
+    seedValid,
     startImpl,
   ]);
 
@@ -403,6 +423,22 @@ export function RunLauncher({
               ))}
             </select>
           </label>
+          <label className="qi-field qi-field-inline">
+            <span className="qi-field-label">Seed (optional)</span>
+            <input
+              type="number"
+              min={0}
+              step={1}
+              className="qi-input"
+              value={seed}
+              placeholder="e.g. 42"
+              disabled={running}
+              onChange={(e) => {
+                setSeed(e.target.value);
+                setError(null);
+              }}
+            />
+          </label>
           {running ? (
             <button type="button" className="qi-btn qi-btn-secondary" onClick={handleCancel}>
               Cancel
@@ -411,7 +447,7 @@ export function RunLauncher({
             <button
               type="button"
               className="qi-btn qi-btn-primary"
-              disabled={!ready}
+              disabled={!ready || !seedValid}
               onClick={() => {
                 void handleStart();
               }}

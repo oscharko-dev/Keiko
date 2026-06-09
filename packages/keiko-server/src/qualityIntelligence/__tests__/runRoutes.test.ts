@@ -135,6 +135,52 @@ describe("handleStartQiRun — single-file absolute-path validation", () => {
   });
 });
 
+describe("handleStartQiRun — seed validation", () => {
+  it("returns 400 QI_BAD_REQUEST before streaming for a negative seed", async () => {
+    const res = new MockResponse();
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({
+            sources: [{ kind: "requirements", label: "Reqs", text: "REQ-1" }],
+            seed: -1,
+          }),
+          res,
+        ),
+        deps(),
+      ),
+    );
+
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string; message: string } }).error).toMatchObject({
+      code: "QI_BAD_REQUEST",
+    });
+    expect((result.body as { error: { code: string; message: string } }).error.message).toMatch(
+      /seed/i,
+    );
+    expect(res.statusCode).toBeUndefined();
+    expect(res.chunks).toHaveLength(0);
+  });
+
+  it("keeps a valid seed on the SSE path", async () => {
+    const res = new MockResponse();
+    const outcome = await handleStartQiRun(
+      ctx(
+        makeReq({
+          sources: [{ kind: "requirements", label: "Reqs", text: "REQ-1" }],
+          seed: 7,
+        }),
+        res,
+      ),
+      deps(),
+    );
+
+    expect(outcome).toBe(STREAMING);
+    expect(res.statusCode).toBe(200);
+    expect(res.headers?.["Content-Type"]).toContain("text/event-stream");
+  });
+});
+
 // ─── Capsule source parsing (Issue #716) ────────────────────────────────────────
 
 describe("handleStartQiRun — capsule source validation (Issue #716)", () => {

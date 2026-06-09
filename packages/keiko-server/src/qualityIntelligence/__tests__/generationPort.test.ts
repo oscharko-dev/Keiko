@@ -126,8 +126,11 @@ function depsFor(
   return { deps, calls: capturedCalls };
 }
 
-function createPort(deps: UiHandlerDeps, modelId: string): QualityIntelligenceGenerationPort {
-  return createQiGenerationPort(deps, modelId);
+function createPort(
+  deps: UiHandlerDeps,
+  target: Parameters<typeof createQiGenerationPort>[1],
+): QualityIntelligenceGenerationPort {
+  return createQiGenerationPort(deps, target);
 }
 
 /** Minimal GenerationPortArgs suitable for unit testing. */
@@ -213,7 +216,7 @@ describe("createQiGenerationPort — capability gate", () => {
     }
   });
 
-  it("throws QiGenerationError with code QI_MODEL_INCOMPATIBLE for a chat model without structuredOutput", () => {
+  it("accepts a chat model without structuredOutput and degrades to the tolerant parser", () => {
     const noStructuredCapability: ModelCapability = {
       id: "chat-no-struct",
       kind: "chat",
@@ -245,13 +248,9 @@ describe("createQiGenerationPort — capability gate", () => {
       {},
     );
     const { deps } = depsFor("chat-no-struct", "{}", { config });
-    try {
+    expect((): void => {
       createQiGenerationPort(deps, "chat-no-struct");
-      expect.fail("should have thrown");
-    } catch (err) {
-      expect(err).toBeInstanceOf(QiGenerationError);
-      expect((err as QiGenerationError).code).toBe("QI_MODEL_INCOMPATIBLE");
-    }
+    }).not.toThrow();
   });
 
   it("throws QiGenerationError QI_MODEL_UNAVAILABLE when the factory returns undefined", () => {
@@ -265,6 +264,16 @@ describe("createQiGenerationPort — capability gate", () => {
       expect(err).toBeInstanceOf(QiGenerationError);
       expect((err as QiGenerationError).code).toBe("QI_MODEL_UNAVAILABLE");
     }
+  });
+
+  it("builds a model-free baseline port that never calls the gateway", async () => {
+    const { deps, calls } = depsFor("chat-model-1");
+    const port = createPort(deps, { kind: "baseline" });
+    const result = await port.generate(args());
+    expect(result.rawText).toBe(JSON.stringify({ testCases: [] }));
+    expect(result.modelCallCount).toBe(0);
+    expect(result.modelId).toBeUndefined();
+    expect(calls).toHaveLength(0);
   });
 });
 
@@ -545,6 +554,35 @@ function configWithResponseFormat(modelId: string): ReturnType<typeof parseGatew
   );
 }
 
+function configWithSeeding(modelId: string): ReturnType<typeof parseGatewayConfig> {
+  const capability: ModelCapability = {
+    id: modelId,
+    kind: "chat",
+    contextWindow: 128_000,
+    maxOutputTokens: 4_096,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: true,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "test",
+    preferredUseCases: ["Chat"],
+    knownLimitations: [],
+    supportsSeeding: true,
+  };
+  return parseGatewayConfig(
+    {
+      providers: [
+        { modelId, baseUrl: "https://fake.example.com/v1", apiKey: "fake-key", capability },
+      ],
+    },
+    {},
+  );
+}
+
 describe("createQiGenerationPort.generate — determinism-first parameters", () => {
   it("sends a json_schema responseFormat when the model supports it", async () => {
     const { deps, calls } = depsFor("rf-model", "{}", {
@@ -556,12 +594,79 @@ describe("createQiGenerationPort.generate — determinism-first parameters", () 
     expect(result.modelParameters?.responseFormat).toBe("json_schema");
   });
 
+  it("runs chat-only models without responseFormat and still returns a model result", async () => {
+    const capability: ModelCapability = {
+      id: "chat-only-model",
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: true,
+      structuredOutput: false,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "medium",
+      latencyClass: "standard",
+      throughputHint: "test",
+      preferredUseCases: ["Chat"],
+      knownLimitations: [],
+    };
+    const config = parseGatewayConfig(
+      {
+        providers: [
+          {
+            modelId: "chat-only-model",
+            baseUrl: "https://fake.example.com/v1",
+            apiKey: "fake-key",
+            capability,
+          },
+        ],
+      },
+      {},
+    );
+    const { deps, calls } = depsFor("chat-only-model", "{}", { config });
+    const port = createPort(deps, "chat-only-model");
+    const result = await port.generate(args());
+    expect(calls[0]?.request.responseFormat).toBeUndefined();
+    expect(result.modelId).toBe("chat-only-model");
+    expect(result.seedUsed).toBeNull();
+  });
+
   it("omits responseFormat when the model does not advertise support", async () => {
     const { deps, calls } = depsFor("plain-model");
     const port = createPort(deps, "plain-model");
     const result = await port.generate(args());
     expect(calls[0]?.request.responseFormat).toBeUndefined();
     expect(result.modelParameters).toBeUndefined();
+  });
+
+  it("sends an explicit seed only when the model advertises seeding support", async () => {
+    const { deps, calls } = depsFor("seeded-model", "{}", {
+      config: configWithSeeding("seeded-model"),
+    });
+    const port = createPort(deps, {
+      kind: "model",
+      modelId: "seeded-model",
+      requestedSeed: 17,
+    });
+    const result = await port.generate(args());
+    expect(calls[0]?.request.seed).toBe(17);
+    expect(result.seedUsed).toBe(17);
+    expect(result.modelParameters?.seed).toBe(17);
+  });
+
+  it("does not send a seed when the model does not advertise seeding support", async () => {
+    const { deps, calls } = depsFor("unseeded-model");
+    const port = createPort(deps, {
+      kind: "model",
+      modelId: "unseeded-model",
+      requestedSeed: 17,
+    });
+    const result = await port.generate(args());
+    expect(calls[0]?.request.seed).toBeUndefined();
+    expect(result.seedUsed).toBeNull();
+    expect(result.modelParameters?.seed).toBeUndefined();
   });
 
   it("always reports the modelId that produced the candidates", async () => {

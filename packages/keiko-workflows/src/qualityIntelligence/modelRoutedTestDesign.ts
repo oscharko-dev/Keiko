@@ -67,7 +67,7 @@ export interface QualityIntelligenceGenerationPortArgs {
 export interface QualityIntelligenceGenerationPortResult {
   readonly rawText: string;
   readonly modelCallCount: number;
-  readonly modelId: string;
+  readonly modelId?: string | undefined;
   /** Seed used for this generation, or null when the model does not support seeding (Epic #761). */
   readonly seedUsed?: number | null;
   /** Redaction-safe scalars describing request parameters (e.g. responseFormat, seed) (Epic #761). */
@@ -195,8 +195,8 @@ function toCoverageMatrixRows(
 /** Candidates plus the attribution metadata of the model call that produced them (Epic #761). */
 interface GenerationOutput {
   readonly candidates: readonly Candidate[];
-  readonly modelId: string;
-  readonly seedUsed: number | null;
+  readonly modelId?: string | undefined;
+  readonly seedUsed?: number | null;
   readonly modelParameters: Record<string, unknown> | undefined;
 }
 
@@ -238,8 +238,8 @@ async function generateCandidates(
   }
   return {
     candidates: truncateCandidates(deduplicateCandidates(parsed.candidates), maxCandidates),
-    modelId: result.modelId,
-    seedUsed: result.seedUsed ?? null,
+    ...(result.modelId !== undefined ? { modelId: result.modelId } : {}),
+    ...(result.seedUsed !== undefined ? { seedUsed: result.seedUsed } : {}),
     modelParameters: result.modelParameters,
   };
 }
@@ -438,8 +438,8 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         coverageMatrix,
         qualityScore: judgeResult.qualityScore,
         ...(sourceFingerprints.length > 0 ? { sourceFingerprints } : {}),
-        modelId: generation.modelId,
-        seedUsed: generation.seedUsed,
+        ...(generation.modelId !== undefined ? { modelId: generation.modelId } : {}),
+        ...(generation.seedUsed !== undefined ? { seedUsed: generation.seedUsed } : {}),
         ...(generation.modelParameters !== undefined
           ? { modelParameters: generation.modelParameters }
           : {}),

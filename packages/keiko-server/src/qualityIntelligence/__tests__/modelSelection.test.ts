@@ -1,8 +1,7 @@
-// Tests for selectModelForQiCapability (Epic #761, Issue #762).
+// Tests for the QI test-design resolver (Epic #761, Issue #762/#763).
 //
-// QI selects models purely by capability — no hard-coded model id. qi:test-design requires a chat
-// model with structured-output; a config that cannot satisfy it yields a typed
-// QI_CAPABILITY_UNAVAILABLE error rather than a silent fallback.
+// Test-design prefers configured structured-output chat models, degrades to chat-only models when
+// needed, and finally falls back to a deterministic no-model baseline.
 
 import { describe, expect, it } from "vitest";
 import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
@@ -11,8 +10,7 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
-import { selectModelForQiCapability } from "../modelSelection.js";
-import { QiGenerationError } from "../generationPort.js";
+import { resolveQiTestDesignSelection } from "../modelSelection.js";
 
 function emptyStore(): EvidenceStore {
   return { put: () => "", list: () => [], get: () => undefined, delete: () => undefined };
@@ -56,7 +54,7 @@ function configWith(
 }
 
 function depsWith(config: ReturnType<typeof parseGatewayConfig> | undefined): UiHandlerDeps {
-  const deps: UiHandlerDeps = {
+  return {
     config,
     configPresent: config !== undefined,
     evidenceStore: emptyStore(),
@@ -66,68 +64,77 @@ function depsWith(config: ReturnType<typeof parseGatewayConfig> | undefined): Ui
     modelPortFactory: (_id: string): undefined => undefined,
     store: createInMemoryUiStore(),
   };
-  return deps;
 }
 
-describe("selectModelForQiCapability", () => {
-  it("throws QI_CAPABILITY_UNAVAILABLE when no config is present", () => {
-    try {
-      selectModelForQiCapability(depsWith(undefined), "qi:test-design");
-      expect.fail("should throw");
-    } catch (err) {
-      expect(err).toBeInstanceOf(QiGenerationError);
-      expect((err as QiGenerationError).code).toBe("QI_CAPABILITY_UNAVAILABLE");
+describe("resolveQiTestDesignSelection", () => {
+  it("returns a deterministic baseline when no config is present", () => {
+    expect(resolveQiTestDesignSelection(depsWith(undefined))).toEqual({ kind: "baseline" });
+  });
+
+  it("honours an explicitly requested configured chat model", () => {
+    const deps = depsWith(
+      configWith([
+        capability("cheap-structured", { structuredOutput: true, costClass: "low" }),
+        capability("requested-chat-only", { structuredOutput: false, costClass: "high" }),
+      ]),
+    );
+    const selection = resolveQiTestDesignSelection(deps, "requested-chat-only");
+    expect(selection.kind).toBe("model");
+    if (selection.kind === "model") {
+      expect(selection.modelId).toBe("requested-chat-only");
+      expect(selection.capability.structuredOutput).toBe(false);
     }
   });
 
-  it("selects a chat model with structured-output for qi:test-design", () => {
-    const deps = depsWith(configWith([capability("structured-1", { structuredOutput: true })]));
-    expect(selectModelForQiCapability(deps, "qi:test-design")).toBe("structured-1");
-  });
-
-  it("throws QI_CAPABILITY_UNAVAILABLE when only a non-structured-output model is configured", () => {
-    const deps = depsWith(configWith([capability("text-only", { structuredOutput: false })]));
-    try {
-      selectModelForQiCapability(deps, "qi:test-design");
-      expect.fail("should throw");
-    } catch (err) {
-      expect((err as QiGenerationError).code).toBe("QI_CAPABILITY_UNAVAILABLE");
+  it("prefers the lowest-cost structured-output chat model when none is requested", () => {
+    const deps = depsWith(
+      configWith([
+        capability("high-structured", { structuredOutput: true, costClass: "high" }),
+        capability("low-structured", { structuredOutput: true, costClass: "low" }),
+        capability("cheap-chat-only", { structuredOutput: false, costClass: "low" }),
+      ]),
+    );
+    const selection = resolveQiTestDesignSelection(deps);
+    expect(selection.kind).toBe("model");
+    if (selection.kind === "model") {
+      expect(selection.modelId).toBe("low-structured");
+      expect(selection.capability.structuredOutput).toBe(true);
     }
   });
 
-  it("honours a compatible requested model id", () => {
+  it("degrades to a chat-only model when no structured-output chat model exists", () => {
     const deps = depsWith(
       configWith([
-        capability("cheap", { structuredOutput: true, costClass: "low" }),
-        capability("requested", { structuredOutput: true }),
+        capability("high-chat-only", { structuredOutput: false, costClass: "high" }),
+        capability("low-chat-only", { structuredOutput: false, costClass: "low" }),
       ]),
     );
-    expect(selectModelForQiCapability(deps, "qi:test-design", "requested")).toBe("requested");
+    const selection = resolveQiTestDesignSelection(deps);
+    expect(selection.kind).toBe("model");
+    if (selection.kind === "model") {
+      expect(selection.modelId).toBe("low-chat-only");
+      expect(selection.capability.structuredOutput).toBe(false);
+    }
   });
 
-  it("ignores an incompatible requested model and selects a compatible one", () => {
+  it("ignores a requested non-chat model and falls back to the best chat strategy", () => {
     const deps = depsWith(
       configWith([
-        capability("bad-request", { structuredOutput: false }),
-        capability("good-fallback", { structuredOutput: true }),
+        capability("chat-fallback", { structuredOutput: true }),
+        capability("embed-request", {
+          kind: "embedding",
+          structuredOutput: false,
+          toolCalling: false,
+          streaming: false,
+          workflowEligible: false,
+          maxOutputTokens: 0,
+        }),
       ]),
     );
-    expect(selectModelForQiCapability(deps, "qi:test-design", "bad-request")).toBe("good-fallback");
-  });
-
-  it("prefers the lowest-cost matching model", () => {
-    const deps = depsWith(
-      configWith([
-        capability("high", { structuredOutput: true, costClass: "high" }),
-        capability("low", { structuredOutput: true, costClass: "low" }),
-        capability("medium", { structuredOutput: true, costClass: "medium" }),
-      ]),
-    );
-    expect(selectModelForQiCapability(deps, "qi:test-design")).toBe("low");
-  });
-
-  it("references no hard-coded model id (selection is config-driven)", () => {
-    const deps = depsWith(configWith([capability("any-named-model", { structuredOutput: true })]));
-    expect(selectModelForQiCapability(deps, "qi:test-design")).toBe("any-named-model");
+    const selection = resolveQiTestDesignSelection(deps, "embed-request");
+    expect(selection.kind).toBe("model");
+    if (selection.kind === "model") {
+      expect(selection.modelId).toBe("chat-fallback");
+    }
   });
 });

@@ -43,6 +43,7 @@ import { ingestInlineSources, QiIngestionError } from "./runIngestion.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort } from "./judgePort.js";
 import { makeCapsuleResolver } from "./capsuleAdapter.js";
+import { resolveQiTestDesignSelection } from "./modelSelection.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -140,16 +141,6 @@ async function parseSources(req: IncomingMessage): Promise<ParseSourcesOutcome> 
     sources.push(source);
   }
   return { ok: true, sources };
-}
-
-function firstChatModelId(deps: UiHandlerDeps): string | undefined {
-  const providers = deps.config?.providers ?? [];
-  return providers[0]?.modelId;
-}
-
-function resolveChatModelId(deps: UiHandlerDeps): string | null {
-  const id = firstChatModelId(deps);
-  return id ?? null;
 }
 
 function buildJudgePortIfAvailable(
@@ -266,7 +257,9 @@ type RegenOutcome =
 /** Build the workflow deps for a scoped regeneration; `capture` receives the generated candidates. */
 function regenWorkflowDeps(
   deps: UiHandlerDeps,
-  modelId: string,
+  target:
+    | { readonly kind: "baseline" }
+    | { readonly kind: "model"; readonly modelId: string },
   evidenceDir: string,
   newRunId: string,
   capture: (cands: readonly QiTestCaseCandidate[]) => void,
@@ -286,21 +279,23 @@ function regenWorkflowDeps(
         });
       },
     },
-    generate: createQiGenerationPort(deps, modelId),
-    judge: buildJudgePortIfAvailable(deps, modelId),
+    generate: createQiGenerationPort(deps, target),
+    ...(target.kind === "model" ? { judge: buildJudgePortIfAvailable(deps, target.modelId) } : {}),
   };
 }
 
 /** Run the model-routed workflow for the narrowed atoms and persist a NEW immutable run. */
 async function runScopedAndPersist(args: {
   readonly deps: UiHandlerDeps;
-  readonly modelId: string;
+  readonly target:
+    | { readonly kind: "baseline" }
+    | { readonly kind: "model"; readonly modelId: string };
   readonly evidenceDir: string;
   readonly newRunId: string;
   readonly ingestion: ReturnType<typeof ingestInlineSources>;
   readonly atomsToRegen: readonly QualityIntelligenceIngestedAtom[];
 }): Promise<RegenOutcome> {
-  const { deps, modelId, evidenceDir, newRunId, ingestion, atomsToRegen } = args;
+  const { deps, target, evidenceDir, newRunId, ingestion, atomsToRegen } = args;
   let regenerated: readonly QiTestCaseCandidate[] = [];
   const plan: QiRunPlan = {
     id: QualityIntelligence.asQualityIntelligenceRunId(newRunId),
@@ -316,7 +311,7 @@ async function runScopedAndPersist(args: {
         ingestedAtoms: atomsToRegen,
         provenanceRefs: ingestion.provenanceRefs,
       },
-      regenWorkflowDeps(deps, modelId, evidenceDir, newRunId, (cands) => {
+      regenWorkflowDeps(deps, target, evidenceDir, newRunId, (cands) => {
         regenerated = [...cands];
       }),
     );
@@ -353,14 +348,14 @@ async function regenerateFromDrift(args: {
     };
   }
 
-  const modelId = resolveChatModelId(deps);
-  if (modelId === null) {
-    return errorResult(400, "QI_NO_MODEL", "No chat model is configured.");
-  }
+  const selection = resolveQiTestDesignSelection(deps);
   const atomsToRegen = narrowedAtoms.length > 0 ? narrowedAtoms : ingestion.ingestedAtoms.slice(0, 1);
   const outcome = await runScopedAndPersist({
     deps,
-    modelId,
+    target:
+      selection.kind === "model"
+        ? { kind: "model", modelId: selection.modelId }
+        : { kind: "baseline" },
     evidenceDir,
     newRunId,
     ingestion,

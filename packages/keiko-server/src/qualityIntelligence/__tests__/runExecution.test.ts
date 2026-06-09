@@ -76,7 +76,7 @@ function fakeUnparseablePort(): ModelPort {
   };
 }
 
-function chatCapability(modelId: string): ModelCapability {
+function chatCapability(modelId: string, overrides: Partial<ModelCapability> = {}): ModelCapability {
   return {
     id: modelId,
     kind: "chat",
@@ -93,22 +93,27 @@ function chatCapability(modelId: string): ModelCapability {
     throughputHint: "test",
     preferredUseCases: ["Chat"],
     knownLimitations: [],
+    ...overrides,
   };
 }
 
 const MODEL_ID = "test-chat-model";
 
-function buildConfig(modelId: string): ReturnType<typeof parseGatewayConfig> {
+function buildConfig(
+  modelIdOrCapabilities: string | readonly ModelCapability[] = MODEL_ID,
+): ReturnType<typeof parseGatewayConfig> {
+  const capabilities =
+    typeof modelIdOrCapabilities === "string"
+      ? [chatCapability(modelIdOrCapabilities)]
+      : modelIdOrCapabilities;
   return parseGatewayConfig(
     {
-      providers: [
-        {
-          modelId,
-          baseUrl: "https://fake.example.com/v1",
-          apiKey: "fake-key",
-          capability: chatCapability(modelId),
-        },
-      ],
+      providers: capabilities.map((capability) => ({
+        modelId: capability.id,
+        baseUrl: "https://fake.example.com/v1",
+        apiKey: "fake-key",
+        capability,
+      })),
     },
     {},
   );
@@ -156,8 +161,8 @@ function makeRequest(
 
 /**
  * A start-run request with NO explicit `modelId`, to exercise the model-resolution fallback
- * (`resolveChatModelId`): with a configured provider it falls back to the first chat model; with no
- * configured provider it raises QI_CAPABILITY_UNAVAILABLE.
+ * (`resolveQiTestDesignSelection`): with a configured provider it resolves by capability; with no
+ * configured provider it falls back to the deterministic no-model baseline.
  */
 function requestWithoutModel(): QualityIntelligenceStartRunRequest {
   return { sources: [VALID_SOURCE] };
@@ -234,7 +239,7 @@ describe("executeQiRun — happy path", () => {
   });
 });
 
-// ─── Model selection: resolveChatModelId ────────────────────────────────────
+// ─── Model selection: resolveQiTestDesignSelection ──────────────────────────
 
 describe("executeQiRun — model selection", () => {
   it("uses the explicitly requested model when modelId is provided", async () => {
@@ -245,18 +250,42 @@ describe("executeQiRun — model selection", () => {
     expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBe(MODEL_ID);
   });
 
-  it("falls back to the first configured provider when modelId is omitted", async () => {
+  it("prefers a structured-output chat model when modelId is omitted", async () => {
     const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
     const input = makeInput(evidenceDir, {
       onAccepted,
       request: requestWithoutModel(),
+      deps: buildDeps({
+        evidenceDir,
+        config: buildConfig([
+          chatCapability("cheap-chat-only", { structuredOutput: false, costClass: "low" }),
+          chatCapability("preferred-structured", { structuredOutput: true, costClass: "medium" }),
+        ]),
+      }),
     });
     await executeQiRun(input);
-    // The only configured model is MODEL_ID, so it must be the fallback.
-    expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBe(MODEL_ID);
+    expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBe("preferred-structured");
   });
 
-  it("throws QiGenerationError QI_CAPABILITY_UNAVAILABLE when no model is configured and none is requested", async () => {
+  it("degrades successfully to a chat-only model when structured output is unavailable", async () => {
+    const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
+    const summary = await executeQiRun(
+      makeInput(evidenceDir, {
+        onAccepted,
+        request: requestWithoutModel(),
+        deps: buildDeps({
+          evidenceDir,
+          config: buildConfig([
+            chatCapability("chat-only", { structuredOutput: false, costClass: "low" }),
+          ]),
+        }),
+      }),
+    );
+    expect(summary.status).toBe("succeeded");
+    expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBe("chat-only");
+  });
+
+  it("starts a deterministic baseline when no model is configured", async () => {
     const deps: UiHandlerDeps = {
       config: undefined,
       configPresent: false,
@@ -269,21 +298,90 @@ describe("executeQiRun — model selection", () => {
       evidenceDir,
     };
     const controller = new AbortController();
-    try {
-      await executeQiRun({
-        request: requestWithoutModel(),
-        runId: "run-no-model",
-        deps,
-        registeredAt: "2026-06-01T10:00:00.000Z",
-        signal: controller.signal,
-        onEvent: vi.fn(),
-        onAccepted: vi.fn(),
-      });
-      expect.fail("should have thrown");
-    } catch (err) {
-      expect(err).toBeInstanceOf(QiGenerationError);
-      expect((err as QiGenerationError).code).toBe("QI_CAPABILITY_UNAVAILABLE");
-    }
+    const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
+    const summary = await executeQiRun({
+      request: requestWithoutModel(),
+      runId: "run-no-model",
+      deps,
+      registeredAt: "2026-06-01T10:00:00.000Z",
+      signal: controller.signal,
+      onEvent: vi.fn(),
+      onAccepted,
+    });
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBeNull();
+    expect(summary.modelGatewayCallCount).toBe(0);
+    expect(onAccepted.mock.calls[0]?.[0]?.modelId).toBeUndefined();
+    const manifest = loadQualityIntelligenceRun("run-no-model", { evidenceDir });
+    expect(manifest?.modelId).toBeUndefined();
+    expect(manifest?.seedUsed).toBeUndefined();
+    expect(manifest?.modelParameters).toBeUndefined();
+  });
+});
+
+describe("executeQiRun — seed persistence", () => {
+  it("persists the applied seed when the selected model advertises seeding support", async () => {
+    let seenSeed: number | undefined;
+    const port: ModelPort = {
+      call: (request: GatewayRequest): Promise<NormalizedResponse> => {
+        seenSeed = request.seed;
+        return Promise.resolve({
+          content: EMPTY_CANDIDATES_JSON,
+          modelId: request.modelId,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: usageMeta(100, 50),
+        });
+      },
+    };
+    const summary = await executeQiRun(
+      makeInput(evidenceDir, {
+        request: makeRequest({ seed: 23 }),
+        deps: buildDeps({
+          evidenceDir,
+          modelPort: port,
+          config: buildConfig([chatCapability(MODEL_ID, { supportsSeeding: true })]),
+        }),
+      }),
+    );
+    expect(summary.status).toBe("succeeded");
+    expect(seenSeed).toBe(23);
+    const manifest = loadQualityIntelligenceRun("run-exec-001", { evidenceDir });
+    expect(manifest?.seedUsed).toBe(23);
+    expect(manifest?.modelParameters?.seed).toBe(23);
+  });
+
+  it("persists seedUsed=null when a model run did not apply the requested seed", async () => {
+    let seenSeed: number | undefined;
+    const port: ModelPort = {
+      call: (request: GatewayRequest): Promise<NormalizedResponse> => {
+        seenSeed = request.seed;
+        return Promise.resolve({
+          content: EMPTY_CANDIDATES_JSON,
+          modelId: request.modelId,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: usageMeta(100, 50),
+        });
+      },
+    };
+    const summary = await executeQiRun(
+      makeInput(evidenceDir, {
+        request: makeRequest({ seed: 23 }),
+        deps: buildDeps({
+          evidenceDir,
+          modelPort: port,
+          config: buildConfig([chatCapability(MODEL_ID, { structuredOutput: false })]),
+        }),
+      }),
+    );
+    expect(summary.status).toBe("succeeded");
+    expect(seenSeed).toBeUndefined();
+    const manifest = loadQualityIntelligenceRun("run-exec-001", { evidenceDir });
+    expect(manifest?.seedUsed).toBeNull();
+    expect(manifest?.modelParameters?.seed).toBeUndefined();
   });
 });
 

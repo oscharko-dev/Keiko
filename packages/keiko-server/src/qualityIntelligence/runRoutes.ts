@@ -135,6 +135,25 @@ function collectSources(rawSources: readonly unknown[]): SourcesOutcome {
   return { ok: true, sources };
 }
 
+function parseOptionalSeed(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function buildStartRequest(
+  sources: QualityIntelligenceInlineSource[],
+  profileId: string | undefined,
+  modelId: string | undefined,
+  seed: number | undefined,
+): QualityIntelligenceStartRunRequest {
+  return {
+    sources,
+    ...(profileId ? { profileId } : {}),
+    ...(modelId ? { modelId } : {}),
+    ...(seed !== undefined ? { seed } : {}),
+  };
+}
+
 function validateRequest(parsed: unknown): ParseOutcome {
   if (!isObject(parsed) || !Array.isArray(parsed.sources) || parsed.sources.length === 0) {
     return {
@@ -146,13 +165,20 @@ function validateRequest(parsed: unknown): ParseOutcome {
   if (!collected.ok) return collected;
   const profileId = typeof parsed.profileId === "string" ? parsed.profileId : undefined;
   const modelId = typeof parsed.modelId === "string" ? parsed.modelId : undefined;
+  const seed = parseOptionalSeed(parsed.seed);
+  if (seed === null) {
+    return {
+      ok: false,
+      result: errorResult(
+        400,
+        "QI_BAD_REQUEST",
+        "Seed must be a non-negative safe integer when provided.",
+      ),
+    };
+  }
   return {
     ok: true,
-    request: {
-      sources: collected.sources,
-      ...(profileId ? { profileId } : {}),
-      ...(modelId ? { modelId } : {}),
-    },
+    request: buildStartRequest(collected.sources, profileId, modelId, seed),
   };
 }
 

@@ -44,7 +44,7 @@ function freezeProfile(profile: QualityIntelligenceTaskProfile): QualityIntellig
 const PROFILES: readonly QualityIntelligenceTaskProfile[] = Object.freeze([
   freezeProfile({
     id: "qi:test-design",
-    requiredCapabilities: ["text", "structured-output"],
+    requiredCapabilities: ["text"],
     tokenBudgetHint: 4096,
     timeoutMsHint: 45_000,
     retriesMax: 2,

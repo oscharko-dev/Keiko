@@ -253,8 +253,10 @@ export interface QualityIntelligenceStartRunRequest {
   readonly sources: readonly QualityIntelligenceInlineSource[];
   /** Policy profile id; defaults to the regression profile when omitted. */
   readonly profileId?: string;
-  /** Chat model id; defaults to the first configured chat model when omitted. */
+  /** Preferred chat model id; the server may degrade to another compatible chat model or baseline. */
   readonly modelId?: string;
+  /** Optional non-negative deterministic sampling seed for models that advertise seed support. */
+  readonly seed?: number;
 }
 
 // ─── Run progress stream (Issue #280) ────────────────────────────────────────────

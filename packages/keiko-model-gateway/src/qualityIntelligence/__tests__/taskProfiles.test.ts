@@ -69,4 +69,10 @@ describe("QualityIntelligence task profiles", () => {
     const b = getQualityIntelligenceTaskProfile("qi:test-design");
     expect(a).toBe(b);
   });
+
+  it("requires only text for qi:test-design so chat-only models can degrade gracefully", () => {
+    expect(getQualityIntelligenceTaskProfile("qi:test-design").requiredCapabilities).toEqual([
+      "text",
+    ]);
+  });
 });

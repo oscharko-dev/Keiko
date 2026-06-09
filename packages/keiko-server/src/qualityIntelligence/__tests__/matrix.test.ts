@@ -1,12 +1,11 @@
 // Model-independence & reproducibility matrix (Epic #761, Issue #764).
 //
-// A unit matrix (fake gateway — no network) proving the three #761 guarantees:
-//   1. Capability routing: QI picks a model purely by capability; an unsatisfiable capability set
-//      yields the typed QI_CAPABILITY_UNAVAILABLE error (graceful, 0 model calls).
+// A unit matrix (fake gateway — no network) proving the updated #761 guarantees:
+//   1. Capability routing prefers structured-output chat models, degrades to chat-only, then
+//      deterministic no-model baseline.
 //   2. Deterministic baseline: structural stages run model-free; candidate ids are content-hashed.
-//   3. Reproducibility: identical inputs → identical candidate ids, regardless of the model tier.
-//
-// See docs/epic-761-determinism-matrix.md for the capability × outcome table this pins.
+//   3. Reproducibility: identical inputs → identical candidate ids, and explicit seeds are persisted
+//      only when actually applied.
 
 import { describe, expect, it } from "vitest";
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
@@ -25,10 +24,7 @@ import {
   type QualityIntelligenceModelRoutedTestDesignInput,
 } from "@oscharko-dev/keiko-workflows";
 import type { UiHandlerDeps } from "../../deps.js";
-import { selectModelForQiCapability } from "../modelSelection.js";
-import { QiGenerationError } from "../generationPort.js";
-
-// ─── Capability matrix ─────────────────────────────────────────────────────────
+import { resolveQiTestDesignSelection } from "../modelSelection.js";
 
 function capability(id: string, overrides: Partial<ModelCapability>): ModelCapability {
   return {
@@ -85,55 +81,53 @@ function depsWith(config: ReturnType<typeof parseGatewayConfig> | undefined): Ui
 interface MatrixRow {
   readonly label: string;
   readonly caps: readonly ModelCapability[] | undefined;
-  readonly expectModel: string | null;
+  readonly expected:
+    | { readonly kind: "baseline" }
+    | { readonly kind: "model"; readonly modelId: string; readonly structuredOutput: boolean };
 }
 
 const MATRIX: readonly MatrixRow[] = [
   {
-    label: "chat + structured-output (high tier)",
+    label: "chat + structured-output (single tier)",
     caps: [capability("tier-high", { structuredOutput: true, costClass: "high" })],
-    expectModel: "tier-high",
+    expected: { kind: "model", modelId: "tier-high", structuredOutput: true },
   },
   {
-    label: "chat + structured-output (low tier preferred over high)",
+    label: "chat + structured-output (preferred over cheaper chat-only)",
     caps: [
-      capability("tier-high", { structuredOutput: true, costClass: "high" }),
-      capability("tier-low", { structuredOutput: true, costClass: "low" }),
+      capability("tier-chat-only", { structuredOutput: false, costClass: "low" }),
+      capability("tier-structured", { structuredOutput: true, costClass: "medium" }),
     ],
-    expectModel: "tier-low",
+    expected: { kind: "model", modelId: "tier-structured", structuredOutput: true },
   },
   {
-    label: "chat-only (no structured-output) → unavailable",
+    label: "chat-only (no structured-output) → tolerant parser path",
     caps: [capability("chat-only", { structuredOutput: false })],
-    expectModel: null,
+    expected: { kind: "model", modelId: "chat-only", structuredOutput: false },
   },
   {
-    label: "no model configured → unavailable",
+    label: "no model configured → baseline",
     caps: undefined,
-    expectModel: null,
+    expected: { kind: "baseline" },
   },
 ];
 
 describe("Epic #761 capability matrix", () => {
   for (const row of MATRIX) {
     it(`routes qi:test-design for: ${row.label}`, () => {
-      const deps = depsWith(row.caps === undefined ? undefined : configWith(row.caps));
-      if (row.expectModel === null) {
-        try {
-          selectModelForQiCapability(deps, "qi:test-design");
-          expect.fail("should have thrown QI_CAPABILITY_UNAVAILABLE");
-        } catch (err) {
-          expect(err).toBeInstanceOf(QiGenerationError);
-          expect((err as QiGenerationError).code).toBe("QI_CAPABILITY_UNAVAILABLE");
-        }
-      } else {
-        expect(selectModelForQiCapability(deps, "qi:test-design")).toBe(row.expectModel);
+      const selection = resolveQiTestDesignSelection(
+        depsWith(row.caps === undefined ? undefined : configWith(row.caps)),
+      );
+      expect(selection.kind).toBe(row.expected.kind);
+      if (row.expected.kind === "baseline") {
+        expect(selection).toEqual({ kind: "baseline" });
+      } else if (selection.kind === "model") {
+        expect(selection.modelId).toBe(row.expected.modelId);
+        expect(selection.capability.structuredOutput).toBe(row.expected.structuredOutput);
       }
     });
   }
 });
-
-// ─── Reproducibility (deterministic content-hashed ids) ──────────────────────────
 
 function makeAtom(id: string): QualityIntelligence.QualityIntelligenceEvidenceAtom {
   return {
@@ -163,7 +157,13 @@ const MODEL_OUTPUT = JSON.stringify([
 
 function fixedGenerateDeps(
   store: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
-  modelId: string,
+  result: {
+    readonly rawText: string;
+    readonly modelCallCount: number;
+    readonly modelId?: string | undefined;
+    readonly seedUsed?: number | null;
+    readonly modelParameters?: Record<string, unknown> | undefined;
+  },
   capturedIds?: string[],
 ): QualityIntelligenceModelRoutedTestDesignDeps {
   return {
@@ -175,7 +175,7 @@ function fixedGenerateDeps(
       },
     },
     generate: {
-      generate: () => Promise.resolve({ rawText: MODEL_OUTPUT, modelCallCount: 1, modelId }),
+      generate: () => Promise.resolve(result),
     },
     clock: { nowIso: () => "2026-06-09T00:00:00.000Z" },
   };
@@ -203,14 +203,21 @@ describe("Epic #761 reproducibility", () => {
   it("produces identical candidate ids for identical inputs across model tiers", async () => {
     const idsA: string[] = [];
     const idsB: string[] = [];
-    // Same run id + same inputs, two different "model tiers" — ids are content-hashed, not model-dependent.
     const a = await runQualityIntelligenceModelRoutedTestDesign(
       runInput("qi-run-repro-001"),
-      fixedGenerateDeps(createInMemoryQualityIntelligenceLocalStore(), "tier-high", idsA),
+      fixedGenerateDeps(
+        createInMemoryQualityIntelligenceLocalStore(),
+        { rawText: MODEL_OUTPUT, modelCallCount: 1, modelId: "tier-high", seedUsed: null },
+        idsA,
+      ),
     );
     const b = await runQualityIntelligenceModelRoutedTestDesign(
       runInput("qi-run-repro-001"),
-      fixedGenerateDeps(createInMemoryQualityIntelligenceLocalStore(), "tier-low", idsB),
+      fixedGenerateDeps(
+        createInMemoryQualityIntelligenceLocalStore(),
+        { rawText: MODEL_OUTPUT, modelCallCount: 1, modelId: "tier-low", seedUsed: null },
+        idsB,
+      ),
     );
     expect(a.status).toBe("succeeded");
     expect(b.status).toBe("succeeded");
@@ -218,11 +225,16 @@ describe("Epic #761 reproducibility", () => {
     expect(idsA).toEqual(idsB);
   });
 
-  it("records the generating model id and a null seed in evidence", async () => {
+  it("records the generating model id and a null seed for unseeded model runs", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const summary = await runQualityIntelligenceModelRoutedTestDesign(
       runInput("qi-run-repro-002"),
-      fixedGenerateDeps(store, "tier-high"),
+      fixedGenerateDeps(store, {
+        rawText: MODEL_OUTPUT,
+        modelCallCount: 1,
+        modelId: "tier-high",
+        seedUsed: null,
+      }),
     );
     expect(summary.status).toBe("succeeded");
     const manifest = store.load("qi-run-repro-002");
@@ -230,13 +242,38 @@ describe("Epic #761 reproducibility", () => {
     expect(manifest?.seedUsed).toBeNull();
   });
 
-  it("keeps a deterministic baseline (no judge → run still succeeds, qualityScore null)", async () => {
+  it("records an explicit seed only when the model path applied one", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const summary = await runQualityIntelligenceModelRoutedTestDesign(
       runInput("qi-run-repro-003"),
-      fixedGenerateDeps(store, "tier-high"),
+      fixedGenerateDeps(store, {
+        rawText: MODEL_OUTPUT,
+        modelCallCount: 1,
+        modelId: "seeded-tier",
+        seedUsed: 11,
+        modelParameters: { seed: 11 },
+      }),
     );
     expect(summary.status).toBe("succeeded");
+    const manifest = store.load("qi-run-repro-003");
+    expect(manifest?.seedUsed).toBe(11);
+    expect(manifest?.modelParameters?.seed).toBe(11);
+  });
+
+  it("keeps a deterministic baseline with no model attribution", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(
+      runInput("qi-run-repro-004"),
+      fixedGenerateDeps(store, {
+        rawText: JSON.stringify({ testCases: [] }),
+        modelCallCount: 0,
+      }),
+    );
+    expect(summary.status).toBe("succeeded");
+    expect(summary.modelGatewayCallCount).toBe(0);
     expect(summary.qualityScore).toBeNull();
+    const manifest = store.load("qi-run-repro-004");
+    expect(manifest?.modelId).toBeUndefined();
+    expect(manifest?.seedUsed).toBeUndefined();
   });
 });

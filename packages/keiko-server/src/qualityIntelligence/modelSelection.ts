@@ -1,26 +1,28 @@
-// Quality Intelligence capability-based model selector (Epic #761, Issue #762).
+// Quality Intelligence capability-based model selector (Epic #761, Issue #762/#763).
 //
-// Resolves the best configured model for a given QI task profile. Logic:
-// 1. If a `requested` model id is given, configured, and satisfies the profile → return it.
-// 2. Otherwise map the profile's requiredCapabilities to a ModelSelectionQuery and call
-//    selectConfiguredModel to pick the lowest-cost matching model.
-// 3. If no configured model satisfies the requirements → throw QI_CAPABILITY_UNAVAILABLE.
+// Two selection modes exist:
+//   1. A strict profile selector used for flows that must satisfy the task profile exactly.
+//   2. A test-design resolver that prefers structured-output chat models but degrades gracefully
+//      to chat-only models, and finally to a deterministic no-model baseline.
 //
-// Future profile capability extensions: "vision" → supportsImageInput query flag;
-// "function-calling" → toolCalling query flag. Extend buildSelectionQuery only.
+// The test-design resolver is intentionally separate from the strict selector so the #761 graceful
+// degradation semantics do not get lost in generic "required capabilities only" routing.
 
 import {
   QualityIntelligence as MgQI,
   findConfiguredCapability,
+  listConfiguredCapabilities,
   selectConfiguredModel,
   QualityIntelligenceSafeErrorException,
   type ModelSelectionQuery,
+  type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { UiHandlerDeps } from "../deps.js";
 import { QiGenerationError } from "./generationPort.js";
 
-// The task-profile id type lives under the model-gateway QualityIntelligence namespace.
 type QiProfileId = MgQI.QualityIntelligenceTaskProfileId;
+
+const COST_RANK = { low: 0, medium: 1, high: 2 } as const;
 
 function buildSelectionQuery(profileId: QiProfileId): ModelSelectionQuery {
   const profile = MgQI.getQualityIntelligenceTaskProfile(profileId);
@@ -45,6 +47,76 @@ function isRequestedModelCompatible(
     if (error instanceof QualityIntelligenceSafeErrorException) return false;
     throw error;
   }
+}
+
+function configuredChatCapability(
+  deps: UiHandlerDeps,
+  modelId: string,
+): ModelCapability | undefined {
+  if (deps.config === undefined) return undefined;
+  const capability = findConfiguredCapability(deps.config, modelId);
+  return capability?.kind === "chat" ? capability : undefined;
+}
+
+function pickLowestCostChat(
+  capabilities: readonly ModelCapability[],
+  predicate: (capability: ModelCapability) => boolean,
+): ModelCapability | undefined {
+  let best: ModelCapability | undefined;
+  for (const capability of capabilities) {
+    if (capability.kind !== "chat" || !predicate(capability)) continue;
+    if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
+      best = capability;
+    }
+  }
+  return best;
+}
+
+export type QiTestDesignSelection =
+  | { readonly kind: "baseline" }
+  | {
+      readonly kind: "model";
+      readonly modelId: string;
+      readonly capability: ModelCapability;
+    };
+
+/**
+ * Resolve the test-design generation strategy.
+ *
+ * Order:
+ * 1. Explicit configured chat model id, even when it lacks structured output.
+ * 2. Cheapest configured chat model that advertises structured output.
+ * 3. Cheapest configured chat model of any kind.
+ * 4. Deterministic no-model baseline.
+ */
+export function resolveQiTestDesignSelection(
+  deps: UiHandlerDeps,
+  requested?: string,
+): QiTestDesignSelection {
+  const trimmed = requested?.trim();
+  if (trimmed !== undefined && trimmed.length > 0) {
+    const requestedCapability = configuredChatCapability(deps, trimmed);
+    if (requestedCapability !== undefined) {
+      return { kind: "model", modelId: trimmed, capability: requestedCapability };
+    }
+  }
+
+  if (deps.config === undefined) {
+    return { kind: "baseline" };
+  }
+
+  const configured = listConfiguredCapabilities(deps.config);
+  const structured = pickLowestCostChat(configured, (capability) => capability.structuredOutput);
+  if (structured !== undefined) {
+    return { kind: "model", modelId: structured.id, capability: structured };
+  }
+
+  const anyChat = pickLowestCostChat(configured, () => true);
+  if (anyChat !== undefined) {
+    return { kind: "model", modelId: anyChat.id, capability: anyChat };
+  }
+
+  return { kind: "baseline" };
 }
 
 /**

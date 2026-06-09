@@ -27,6 +27,8 @@ import type {
 } from "@oscharko-dev/keiko-workflows";
 import type { UiHandlerDeps } from "../deps.js";
 
+const BASELINE_GENERATION_OUTPUT = JSON.stringify({ testCases: [] });
+
 export class QiGenerationError extends Error {
   public readonly code: string;
   constructor(code: string, message: string) {
@@ -86,17 +88,34 @@ function buildMessages(args: QualityIntelligenceGenerationPortArgs): readonly Ch
 }
 
 /**
- * Build a generation port bound to one model id. Fails fast (before any model call) when the model
- * is not configured or its capability record does not satisfy the qi:test-design profile, so an
- * incompatible model never receives a payload (#279 AC).
+ * Build a generation port bound either to one model id or to the deterministic no-model baseline.
+ * Model targets fail fast (before any model call) when the model is not configured or its
+ * capability record does not satisfy the qi:test-design profile, so an incompatible model never
+ * receives a payload (#279 AC).
  */
 interface ResolvedGenerationModel {
   readonly model: NonNullable<ReturnType<UiHandlerDeps["modelPortFactory"]>>;
+  readonly modelId: string;
   readonly useResponseFormat: boolean;
+  readonly useSeed: boolean;
+  readonly requestedSeed: number | undefined;
 }
 
+export type QiGenerationTarget =
+  | string
+  | { readonly kind: "baseline" }
+  | {
+      readonly kind: "model";
+      readonly modelId: string;
+      readonly requestedSeed?: number | undefined;
+    };
+
 /** Apply the qi:test-design capability gate and resolve the model port (Epic #761 / #279). */
-function resolveGenerationModel(deps: UiHandlerDeps, modelId: string): ResolvedGenerationModel {
+function resolveGenerationModel(
+  deps: UiHandlerDeps,
+  target: Extract<QiGenerationTarget, { readonly kind: "model" }>,
+): ResolvedGenerationModel {
+  const { modelId } = target;
   const capability = capabilityFor(deps, modelId);
   if (capability === undefined) {
     throw new QiGenerationError("QI_MODEL_NOT_CONFIGURED", "The selected model is not configured.");
@@ -108,7 +127,7 @@ function resolveGenerationModel(deps: UiHandlerDeps, modelId: string): ResolvedG
     if (error instanceof QualityIntelligenceSafeErrorException) {
       throw new QiGenerationError(
         "QI_MODEL_INCOMPATIBLE",
-        "The selected model cannot generate structured test cases (needs a chat model with structured output).",
+        "The selected model cannot generate test cases because it is not a compatible chat model.",
       );
     }
     throw error;
@@ -117,42 +136,103 @@ function resolveGenerationModel(deps: UiHandlerDeps, modelId: string): ResolvedG
   if (model === undefined) {
     throw new QiGenerationError("QI_MODEL_UNAVAILABLE", "The model gateway is not available.");
   }
-  return { model, useResponseFormat: capability.supportsResponseFormat === true };
+  return {
+    model,
+    modelId,
+    useResponseFormat: capability.supportsResponseFormat === true,
+    useSeed: capability.supportsSeeding === true && target.requestedSeed !== undefined,
+    requestedSeed: target.requestedSeed,
+  };
 }
 
-export function createQiGenerationPort(
-  deps: UiHandlerDeps,
+function normalizeTarget(target: QiGenerationTarget): Exclude<QiGenerationTarget, string> {
+  if (typeof target === "string") {
+    return { kind: "model", modelId: target };
+  }
+  return target;
+}
+
+function createBaselineGenerationPort(): QualityIntelligenceGenerationPort {
+  return {
+    generate: (): Promise<QualityIntelligenceGenerationPortResult> =>
+      Promise.resolve({
+        rawText: BASELINE_GENERATION_OUTPUT,
+        modelCallCount: 0,
+      }),
+  };
+}
+
+function buildGenerationRequest(
   modelId: string,
+  messages: readonly ChatMessage[],
+  useResponseFormat: boolean,
+  useSeed: boolean,
+  requestedSeed: number | undefined,
+): GatewayRequest {
+  return {
+    modelId,
+    messages,
+    stream: false,
+    ...(useSeed && requestedSeed !== undefined ? { seed: requestedSeed } : {}),
+    ...(useResponseFormat
+      ? {
+          responseFormat: {
+            type: "json_schema",
+            schema: { ...QualityIntelligenceGeneration.QI_TEST_DESIGN_RESPONSE_SCHEMA },
+          },
+        }
+      : {}),
+  };
+}
+
+function buildModelParameters(
+  useResponseFormat: boolean,
+  useSeed: boolean,
+  requestedSeed: number | undefined,
+): Record<string, unknown> | undefined {
+  const modelParameters: Record<string, unknown> = {};
+  if (useResponseFormat) modelParameters.responseFormat = "json_schema";
+  if (useSeed && requestedSeed !== undefined) modelParameters.seed = requestedSeed;
+  return Object.keys(modelParameters).length > 0 ? modelParameters : undefined;
+}
+
+function createModelGenerationPort(
+  resolved: ResolvedGenerationModel,
 ): QualityIntelligenceGenerationPort {
-  const { model, useResponseFormat } = resolveGenerationModel(deps, modelId);
+  const { model, modelId, useResponseFormat, useSeed, requestedSeed } = resolved;
   return {
     generate: async (
       args: QualityIntelligenceGenerationPortArgs,
     ): Promise<QualityIntelligenceGenerationPortResult> => {
       const messages = buildMessages(args);
       const signal = args.signal ?? new AbortController().signal;
-      const request: GatewayRequest = {
+      const request = buildGenerationRequest(
         modelId,
         messages,
-        stream: false,
-        ...(useResponseFormat
-          ? {
-              responseFormat: {
-                type: "json_schema",
-                schema: { ...QualityIntelligenceGeneration.QI_TEST_DESIGN_RESPONSE_SCHEMA },
-              },
-            }
-          : {}),
-      };
+        useResponseFormat,
+        useSeed,
+        requestedSeed,
+      );
       const response = await model.call(request, signal);
-      const modelParameters: Record<string, unknown> = {};
-      if (useResponseFormat) modelParameters.responseFormat = "json_schema";
+      const modelParameters = buildModelParameters(useResponseFormat, useSeed, requestedSeed);
       return {
         rawText: response.content,
         modelCallCount: 1,
         modelId,
-        ...(Object.keys(modelParameters).length > 0 ? { modelParameters } : {}),
+        seedUsed: useSeed && requestedSeed !== undefined ? requestedSeed : null,
+        ...(modelParameters !== undefined ? { modelParameters } : {}),
       };
     },
   };
+}
+
+export function createQiGenerationPort(
+  deps: UiHandlerDeps,
+  target: QiGenerationTarget,
+): QualityIntelligenceGenerationPort {
+  const normalized = normalizeTarget(target);
+  if (normalized.kind === "baseline") {
+    return createBaselineGenerationPort();
+  }
+  return createModelGenerationPort(resolveGenerationModel(deps, normalized));
 }

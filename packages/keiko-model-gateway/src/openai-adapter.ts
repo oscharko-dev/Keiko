@@ -52,6 +52,7 @@ interface ChatRequestBody {
   }[];
   readonly tools?: unknown;
   readonly response_format?: unknown;
+  readonly seed?: number;
   readonly stream?: boolean;
   readonly stream_options?: { readonly include_usage: boolean };
 }
@@ -95,6 +96,7 @@ function buildBody(request: GatewayRequest): ChatRequestBody {
     ...base,
     ...(tools ? { tools } : {}),
     ...(responseFormat ? { response_format: responseFormat } : {}),
+    ...(request.seed !== undefined ? { seed: request.seed } : {}),
   };
 }
 

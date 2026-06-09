@@ -306,6 +306,19 @@ describe("OpenAiAdapter.call", () => {
     expect(body.response_format.type).toBe("json_schema");
   });
 
+  it("serialises a seed when the gateway request provides one", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call({ ...REQUEST, seed: 13 }, CONFIG);
+    expect((sentBody as { seed?: number }).seed).toBe(13);
+  });
+
   it("serialises assistant tool_calls and tool response tool_call_id on continuation turns", async () => {
     let sentBody: unknown;
     const adapter = adapterWith((_url, init) => {

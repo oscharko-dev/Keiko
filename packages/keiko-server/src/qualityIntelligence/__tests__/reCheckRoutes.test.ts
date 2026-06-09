@@ -11,7 +11,7 @@
 //   - regenerate-stale returns 500 when evidenceDir is not configured
 //
 // NOTE: regenerate-stale exercises the full model-routed workflow. In the integration
-// test context the config has no providers → QI_NO_MODEL is expected.
+// test context the config has no providers, so #761 now expects a deterministic baseline run.
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -21,6 +21,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import {
+  loadQualityIntelligenceRun,
   recordQualityIntelligenceRun,
   recordQualityIntelligenceCandidates,
 } from "@oscharko-dev/keiko-evidence";
@@ -382,8 +383,7 @@ describe("handleQiRegenerateStale — run not found", () => {
 });
 
 describe("handleQiRegenerateStale — no model configured", () => {
-  it("returns 400 QI_NO_MODEL when no providers are configured", async () => {
-    // deps() sets config: undefined → firstChatModelId → null → QI_NO_MODEL
+  it("returns 200 and writes a deterministic baseline run when no providers are configured", async () => {
     const body = {
       sources: [{ kind: "requirements", label: "req-1", text: "REQ-1: User can log in" }],
     };
@@ -393,8 +393,18 @@ describe("handleQiRegenerateStale — no model configured", () => {
         deps(evidenceDir),
       ),
     );
-    expect(result.status).toBe(400);
-    expect((result.body as { error: { code: string } }).error.code).toBe("QI_NO_MODEL");
+    expect(result.status).toBe(200);
+    const response = result.body as {
+      runId: string;
+      regeneratedCount: number;
+      preservedCount: number;
+    };
+    expect(response.runId).not.toBe(RUN_ID);
+    expect(response.regeneratedCount).toBe(0);
+    const manifest = loadQualityIntelligenceRun(response.runId, { evidenceDir });
+    expect(manifest?.status).toBe("succeeded");
+    expect(manifest?.modelId).toBeUndefined();
+    expect(manifest?.seedUsed).toBeUndefined();
   });
 });
 
