@@ -83,3 +83,9 @@ export * as QualityIntelligenceExport from "./export/index.js";
 // ingestion into content-bearing atoms, and deterministic model-output → candidate parsing.
 // No IO, no model call; the server tier supplies the Keiko Model Gateway port.
 export * as QualityIntelligenceGeneration from "./generation/index.js";
+
+// ─── Figma Screen-IR sub-namespace (Epic #750, Issue #752) ─────────────────────
+// Pure-domain Figma cleaner: raw scoped node tree → lean per-screen IR + deduped design tokens +
+// raw inter-screen links + reduction report. No IO, no network, no model. Downstream stages
+// (#753 evidence, #754 QI source, #811 nav graph, #812 a11y, #755 codegen) import from here.
+export * as QualityIntelligenceFigma from "./domain/figma/index.js";
