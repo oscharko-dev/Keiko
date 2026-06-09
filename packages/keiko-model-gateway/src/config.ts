@@ -520,7 +520,43 @@ function resolveProviderConnection(
   return { baseUrl, apiKey };
 }
 
-function parseProviderConfig(
+function parseLocalSessionProviderConfig(
+  raw: Record<string, unknown>,
+  path: string,
+  providerId: string,
+  modelId: string,
+): ModelProviderConfig {
+  if (raw.baseUrl !== undefined) {
+    throw new ConfigInvalidError(
+      `${path}.baseUrl is not allowed for providerType "openai-codex-local-session"`,
+    );
+  }
+  if (raw.apiKey !== undefined) {
+    throw new ConfigInvalidError(
+      `${path}.apiKey is not allowed for providerType "openai-codex-local-session"`,
+    );
+  }
+  if (raw.apiKeyHeaderName !== undefined) {
+    throw new ConfigInvalidError(
+      `${path}.apiKeyHeaderName is not allowed for providerType "openai-codex-local-session"`,
+    );
+  }
+  return {
+    providerId,
+    providerType: "openai-codex-local-session",
+    modelId,
+    validationState: "runtime-only",
+    runtimeHandle: { kind: "codex-local-session" },
+    timeoutMs: requirePositiveInt(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
+    maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
+    retryBaseDelayMs: requirePositiveInt(
+      raw.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
+      `${path}.retryBaseDelayMs`,
+    ),
+  };
+}
+
+function parseGatewayOpenAiCompatibleProviderConfig(
   raw: Record<string, unknown>,
   path: string,
   providerType: ProviderType,
@@ -528,39 +564,6 @@ function parseProviderConfig(
   modelId: string,
   env: EnvSource,
 ): ModelProviderConfig {
-  if (providerType === "openai-codex-local-session") {
-    if (raw.baseUrl !== undefined) {
-      throw new ConfigInvalidError(
-        `${path}.baseUrl is not allowed for providerType "openai-codex-local-session"`,
-      );
-    }
-    if (raw.apiKey !== undefined) {
-      throw new ConfigInvalidError(
-        `${path}.apiKey is not allowed for providerType "openai-codex-local-session"`,
-      );
-    }
-    if (raw.apiKeyHeaderName !== undefined) {
-      throw new ConfigInvalidError(
-        `${path}.apiKeyHeaderName is not allowed for providerType "openai-codex-local-session"`,
-      );
-    }
-    return {
-      providerId,
-      providerType,
-      modelId,
-      validationState: "runtime-only",
-      runtimeHandle: { kind: "codex-local-session" },
-      timeoutMs: requirePositiveInt(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
-      maxRetries: requireNonNegativeInt(
-        raw.maxRetries ?? DEFAULT_MAX_RETRIES,
-        `${path}.maxRetries`,
-      ),
-      retryBaseDelayMs: requirePositiveInt(
-        raw.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
-        `${path}.retryBaseDelayMs`,
-      ),
-    };
-  }
   const { baseUrl, apiKey } = resolveProviderConnection(raw, path, modelId, env);
   return {
     providerId,
@@ -582,6 +585,26 @@ function parseProviderConfig(
       `${path}.retryBaseDelayMs`,
     ),
   };
+}
+
+function parseProviderConfig(
+  raw: Record<string, unknown>,
+  path: string,
+  providerType: ProviderType,
+  providerId: string,
+  modelId: string,
+  env: EnvSource,
+): ModelProviderConfig {
+  return providerType === "openai-codex-local-session"
+    ? parseLocalSessionProviderConfig(raw, path, providerId, modelId)
+    : parseGatewayOpenAiCompatibleProviderConfig(
+        raw,
+        path,
+        providerType,
+        providerId,
+        modelId,
+        env,
+      );
 }
 
 function parseProvider(raw: unknown, index: number, env: EnvSource): ParsedProvider {

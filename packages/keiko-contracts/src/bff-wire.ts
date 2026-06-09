@@ -6,15 +6,9 @@
 // Reused on RunReport.verificationSummary — verification-summary.ts is the canonical home for
 // the post-#7 audit projection used by both the audit ledger and this wire shape.
 import type { VerificationAuditSummary } from "./verification-summary.js";
-// ModelCapability is the credential-free capability registry shape; SafeGatewayConfig surfaces
-// the optional capabilities table to the UI without crossing into the credential-bearing
-// GatewayConfig in gateway.ts.
-import type { ModelCapability } from "./gateway.js";
-import type {
-  SafeCircuitBreakerConfig,
-  SafeGatewayConfig as ProviderSafeGatewayConfig,
-  SafeProviderConfig,
-} from "./provider-contract.js";
+// SafeGatewayConfig surfaces the optional capabilities table to the UI without crossing into the
+// credential-bearing GatewayConfig in gateway.ts.
+import type { SafeGatewayConfig as ProviderSafeGatewayConfig } from "./provider-contract.js";
 // GroundedAnswerContextPackSummary projects the connected-context pack into a counts-only,
 // browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
 // peer; importing it does not pull in any IO or redaction code.

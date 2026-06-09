@@ -6,12 +6,11 @@
 import { randomUUID } from "node:crypto";
 import { UnknownModelError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { findConfiguredCapability } from "./model-selection.js";
-import { OpenAiAdapter } from "./openai-adapter.js";
+import { createDefaultProviderRuntimeRegistry } from "./provider-runtime.js";
 import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
 import type {
   Clock,
   CircuitBreakerStatus,
-  RuntimeDispatchProviderConfig,
   GatewayConfig,
   GatewayRequest,
   GatewayStreamChunk,
@@ -20,7 +19,7 @@ import type {
   NormalizedResponse,
   ProviderAdapter,
 } from "./types.js";
-import { isGatewayOpenAiCompatibleProvider, providerTypeOf } from "./types.js";
+import type { ResolvedProviderRuntime } from "./provider-runtime.js";
 
 export interface GatewayDeps {
   readonly adapter?: ProviderAdapter | undefined;
@@ -28,13 +27,14 @@ export interface GatewayDeps {
 }
 
 interface RoutedCall {
-  readonly provider: RuntimeDispatchProviderConfig;
+  readonly provider: ModelProviderConfig;
   readonly capability: ModelCapability;
 }
 
 export class Gateway {
   private readonly clock: Clock;
   private readonly adapter: ProviderAdapter | undefined;
+  private readonly runtimeRegistry = createDefaultProviderRuntimeRegistry();
   private readonly providers: ReadonlyMap<string, ModelProviderConfig>;
   private readonly breakers = new Map<string, CircuitBreaker>();
 
@@ -52,14 +52,14 @@ export class Gateway {
     const breaker = this.breakerFor(route.provider);
     const requestId = randomUUID();
     const start = this.clock.now();
-    const adapter = this.adapterFor(requestId, route.capability);
+    const runtime = this.runtimeFor(requestId, route);
     const result = await executeWithRetry(
       (attemptTimeoutMs) =>
-        this.invoke(breaker, adapter, request, {
-          ...route.provider,
+        this.invoke(breaker, runtime.adapter, request, {
+          ...runtime.provider,
           ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
         }),
-      route.provider,
+      runtime.provider,
       this.clock,
       request.cancellationSignal,
     );
@@ -84,9 +84,9 @@ export class Gateway {
     breaker.assertAllowed();
     const requestId = randomUUID();
     const start = this.clock.now();
-    const adapter = this.adapterFor(requestId, route.capability);
+    const runtime = this.runtimeFor(requestId, route);
     try {
-      for await (const chunk of this.streamFrom(adapter, request, route.provider)) {
+      for await (const chunk of this.streamFrom(runtime.adapter, request, runtime.provider)) {
         yield chunk.type === "done"
           ? { type: "done", response: this.enrich(chunk.response, requestId, start, route) }
           : chunk;
@@ -101,7 +101,7 @@ export class Gateway {
   private async *streamFrom(
     adapter: ProviderAdapter,
     request: GatewayRequest,
-    provider: RuntimeDispatchProviderConfig,
+    provider: ResolvedProviderRuntime["provider"],
   ): AsyncGenerator<GatewayStreamChunk> {
     if (adapter.callStream !== undefined) {
       yield* adapter.callStream(request, provider);
@@ -145,7 +145,7 @@ export class Gateway {
     breaker: CircuitBreaker,
     adapter: ProviderAdapter,
     request: GatewayRequest,
-    provider: RuntimeDispatchProviderConfig,
+    provider: ResolvedProviderRuntime["provider"],
   ): Promise<NormalizedResponse> {
     breaker.assertAllowed();
     try {
@@ -172,11 +172,6 @@ export class Gateway {
         `model '${modelId}' has kind '${capability.kind}'; the chat path requires a chat model`,
       );
     }
-    if (!isGatewayOpenAiCompatibleProvider(provider)) {
-      throw new UnknownModelError(
-        `model '${modelId}' is configured for provider type '${providerTypeOf(provider)}'; runtime dispatch for that provider type is not wired yet`,
-      );
-    }
     return { provider, capability };
   }
 
@@ -190,14 +185,14 @@ export class Gateway {
     return breaker;
   }
 
-  private adapterFor(requestId: string, capability: ModelCapability): ProviderAdapter {
-    return (
-      this.adapter ??
-      new OpenAiAdapter({
-        requestId,
-        costClass: capability.costClass,
-        now: this.clock.now,
-      })
-    );
+  // Resolve providerType -> productive runtime config + adapter through the
+  // internal registry so Gateway orchestration stays provider-neutral.
+  private runtimeFor(requestId: string, route: RoutedCall): ResolvedProviderRuntime {
+    return this.runtimeRegistry.resolve(route.provider.modelId, route.provider, {
+      adapterOverride: this.adapter,
+      requestId,
+      costClass: route.capability.costClass,
+      now: this.clock.now,
+    });
   }
 }

@@ -87,6 +87,13 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
+function hasExpectedValidationState(
+  value: { readonly validationState: ProviderValidationState },
+  expected: ProviderValidationState,
+): boolean {
+  return value.validationState === expected;
+}
+
 export function validateProviderSelection(value: ProviderSelection): ProviderContractValidation {
   if (!isNonEmptyString(value.providerId)) {
     return fail("providerSelection.providerId must be a non-empty string");
@@ -114,7 +121,7 @@ export function validateSafeProviderConfig(value: SafeProviderConfig): ProviderC
     return fail("safeProviderConfig.retryBaseDelayMs must be a positive integer");
   }
   if (value.providerType === "gateway-openai-compatible") {
-    if (value.validationState !== "configured") {
+    if (!hasExpectedValidationState(value, "configured")) {
       return fail(
         "safeProviderConfig.validationState must be 'configured' for gateway-openai-compatible providers",
       );
@@ -126,7 +133,7 @@ export function validateSafeProviderConfig(value: SafeProviderConfig): ProviderC
     }
     return ok();
   }
-  if (value.validationState !== "runtime-only") {
+  if (!hasExpectedValidationState(value, "runtime-only")) {
     return fail(
       "safeProviderConfig.validationState must be 'runtime-only' for openai-codex-local-session providers",
     );

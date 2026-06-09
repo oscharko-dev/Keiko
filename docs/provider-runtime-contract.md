@@ -67,13 +67,13 @@ gateway-only fields.
 
 ## Current runtime boundary
 
-Issue #461 does not introduce provider registry wiring or a local-session adapter. Productive
-runtime dispatch therefore remains fail-closed:
+Issue #462 introduces the internal provider runtime registry and the route-time adapter-factory
+seam. Productive runtime dispatch now resolves provider implementations through that registry:
 
-- `gateway-openai-compatible` providers continue to route through the existing OpenAI-compatible
-  gateway path
-- `openai-codex-local-session` is parseable and safe-projectable, but productive dispatch rejects
-  it until #462 and #463 land
+- `gateway-openai-compatible` providers execute through the registry into the current
+  OpenAI-compatible productive adapter path
+- `openai-codex-local-session` remains parseable and safe-projectable, but the registry keeps
+  productive dispatch fail-closed until #463 lands
 
 This preserves ADR-0019 trust boundaries by keeping productive model traffic behind
 `@oscharko-dev/keiko-model-gateway` without inventing a partial local-session transport here.
@@ -82,7 +82,6 @@ This preserves ADR-0019 trust boundaries by keeping productive model traffic beh
 
 The following work is intentionally deferred to later child issues:
 
-- #462: provider registry, dispatch factory, and route-time selection by provider class
 - #463: local-session credential resolution and runtime bridge
 - #464: provider-aware setup payloads and onboarding UX
 - #465: provider-aware capability discovery and model eligibility
@@ -90,5 +89,5 @@ The following work is intentionally deferred to later child issues:
 
 The main coordination risk to carry back to the epic thread is that productive selection still
 uses `modelId` in current runtime code. `providerId` now exists as the stable contract identity, but
-dispatch and persistence do not use it yet. That migration must stay coordinated across #462, #464,
+dispatch and persistence do not use it yet. That migration must stay coordinated across #463, #464,
 and #465 so provider-aware selection remains deterministic.
