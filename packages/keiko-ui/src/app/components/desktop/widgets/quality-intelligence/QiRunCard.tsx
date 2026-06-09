@@ -139,6 +139,8 @@ const COVERAGE_STATUS_CLASS: Readonly<Record<"covered" | "weakly-covered" | "unc
 
 function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDetail }): ReactNode {
   if (detail.coverageByAtom.length === 0) return null;
+  const total = detail.coverageByAtom.length;
+  const coveredCount = detail.coverageByAtom.filter((r) => r.status === "covered").length;
   const gaps = detail.coverageByAtom.filter((r) => r.status !== "covered");
   return (
     <section className="qi-coverage-panel" aria-label="Coverage">
@@ -146,15 +148,18 @@ function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDe
         Coverage
         <span
           className="qi-badge qi-badge-default"
-          aria-label={`Coverage: ${detail.coveragePercentage.toFixed(0)}%`}
+          aria-label={`Coverage: ${detail.coveragePercentage.toFixed(0)} percent, ${coveredCount.toString()} of ${total.toString()} requirements covered`}
           data-testid="qi-coverage-pct"
         >
           {detail.coveragePercentage.toFixed(0)}%
         </span>
       </h3>
+      <p className="qi-coverage-summary" data-testid="qi-coverage-summary">
+        {`${coveredCount.toString()} of ${total.toString()} requirements covered · ${gaps.length.toString()} gap${gaps.length === 1 ? "" : "s"}`}
+      </p>
       {gaps.length > 0 ? (
         <section className="qi-coverage-gaps" aria-label="Gap radar">
-          <h4 className="qi-col-subtitle">Gap radar</h4>
+          <h4 className="qi-col-subtitle">{`Gap radar (${gaps.length.toString()})`}</h4>
           <ul className="qi-coverage-gap-list" aria-label="Uncovered and weakly covered atoms">
             {gaps.map((row) => {
               const label = COVERAGE_STATUS_LABEL[row.status];

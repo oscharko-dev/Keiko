@@ -250,11 +250,18 @@ function buildCoverageGapFindingRow(
   const payload = ["v1-cov-gap", String(runId), String(atomStatus.atomId), String(ordinal)].join(
     "",
   );
+  // Mirror the initial-run severity model (modelRoutedTestDesign): a zero-coverage requirement is
+  // the headline audit gap (high); a weakly-covered one is a softer "strengthen this" signal (low).
+  const severity = atomStatus.status === "uncovered" ? "high" : "low";
+  const summaryRedacted =
+    atomStatus.status === "uncovered"
+      ? `Atom ${String(atomStatus.atomId)} has no tracing test (uncovered).`
+      : `Atom ${String(atomStatus.atomId)} is only weakly covered (no dedicated test traces to it).`;
   return Object.freeze({
     id: `qi-finding-${sha256Hex(payload).slice(0, 32)}`,
     kind: "coverage-gap",
-    severity: "medium",
-    summaryRedacted: `Atom ${String(atomStatus.atomId)} has no sufficient test coverage (status: ${atomStatus.status}).`,
+    severity,
+    summaryRedacted,
   });
 }
 

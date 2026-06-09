@@ -289,3 +289,34 @@ export async function exportQiRun(
     },
   );
 }
+
+// ---------------------------------------------------------------------------
+// POST /api/quality-intelligence/runs/:id/traceability  (Epic #734, Issue #740)
+// ---------------------------------------------------------------------------
+
+export type QiTraceabilityFormat = "csv" | "markdown";
+
+export interface QiTraceabilityResult {
+  readonly format: QiTraceabilityFormat;
+  readonly filename: string;
+  readonly contentType: string;
+  readonly byteLen: number;
+  readonly body: string;
+}
+
+/**
+ * Export the persisted requirement<->test traceability matrix (CSV or Markdown). The body is plain
+ * text (no base64), suitable for a same-origin Blob download.
+ */
+export async function exportQiRunTraceability(
+  runId: string,
+  format: QiTraceabilityFormat,
+): Promise<QiTraceabilityResult> {
+  return fetchJson<QiTraceabilityResult>(
+    `/api/quality-intelligence/runs/${encodeURIComponent(runId)}/traceability`,
+    {
+      method: "POST",
+      body: JSON.stringify({ format }),
+    },
+  );
+}

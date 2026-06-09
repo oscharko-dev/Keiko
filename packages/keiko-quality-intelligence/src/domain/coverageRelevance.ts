@@ -100,38 +100,39 @@ export interface BuildCoverageMapInput {
 const compareString = (left: string, right: string): number =>
   left < right ? -1 : left > right ? 1 : 0;
 
-const scoreMapping = (
-  atom: QualityIntelligence.QualityIntelligenceEvidenceAtom,
-  candidates: readonly QualityIntelligence.QualityIntelligenceTestCaseCandidate[],
-): number => {
-  if (candidates.length === 0) {
-    return 0;
-  }
-  // Structural relevance: how many candidates explicitly cite this atom in
-  // their derivedFromAtomIds. A direct citation contributes 1.0, an
-  // implicit/proximal candidate (kind referenced in steps) contributes a
-  // fractional boost capped at 1.0.
-  let citedCount = 0;
-  let proximalCount = 0;
-  for (const candidate of candidates) {
-    if (candidate.derivedFromAtomIds.includes(atom.id)) {
-      citedCount += 1;
-      continue;
-    }
-    for (const step of candidate.steps) {
-      if (step.includes(atom.id)) {
-        proximalCount += 1;
-        break;
-      }
-    }
-  }
-  if (citedCount === 0 && proximalCount === 0) {
-    return 0;
-  }
-  const directShare = citedCount / candidates.length;
-  const proximalShare = proximalCount / candidates.length;
-  const raw = directShare + 0.25 * proximalShare;
-  return Math.max(0, Math.min(1, raw));
+/**
+ * A citing test counts as a *focused* cover of an atom when it derives from at most this many
+ * atoms — i.e. the test is reasonably specific to the requirement rather than a sprawling
+ * integration test that incidentally touches it. An atom whose only covering tests are all
+ * broader than this is classified "weakly-covered" (covered only incidentally).
+ *
+ * Conservative for regulated use: a dedicated test (focus 1) always yields "covered"; coverage
+ * is NEVER diluted by the total run size (see the regression test for the historical bug where
+ * `citedCount / candidates.length` reported a perfectly-covered run as 0%).
+ */
+export const FOCUS_COVERED_MAX = 3 as const;
+
+const clamp01 = (value: number, max: number): number => Math.max(0, Math.min(max, value));
+
+/**
+ * Deterministic, run-size-INDEPENDENT structural confidence in [0, 1] that an atom is covered.
+ *
+ * Inputs are atom-local: `citerCount` is the number of candidates that DIRECTLY derive from the
+ * atom, and `bestFocus` is the smallest `derivedFromAtomIds` length among those citers (1 = a test
+ * dedicated to this atom alone). Confidence is monotonic non-decreasing in `citerCount` so more
+ * tracing tests never lowers confidence.
+ *
+ *   - no citers              -> 0           (uncovered)
+ *   - >=1 focused citer      -> [0.7, 1.0]  (covered; threshold COVERAGE_THRESHOLD_COVERED)
+ *   - only broad citers      -> [0.3, 0.7)  (weakly-covered; incidental coverage only)
+ */
+export const coverageConfidence = (citerCount: number, bestFocus: number): number => {
+  if (citerCount <= 0) return 0;
+  const focused = Math.max(1, bestFocus) <= FOCUS_COVERED_MAX;
+  const saturation = 1 - 1 / (1 + citerCount); // 0.5, 0.667, 0.75, ... (in [0.5, 1))
+  return focused
+    ? clamp01(COVERAGE_THRESHOLD_COVERED + 0.3 * saturation, 1) // 0.85, 0.90, 0.925, ...
+    : clamp01(COVERAGE_THRESHOLD_WEAKLY_COVERED + 0.4 * saturation, 0.699); // 0.5, 0.567, ...
 };
 
 const deriveCoverageMapIdString = (
@@ -171,15 +172,20 @@ export const buildCoverageMap = (
   const mappings: QualityIntelligence.QualityIntelligenceCoverageMapping[] = [];
   for (const atom of sortedAtoms) {
     const candidateIds: QualityIntelligence.QualityIntelligenceTestCaseId[] = [];
+    // Track the most-focused citing test (smallest derivedFromAtomIds) so an atom covered only by
+    // sprawling tests is classified weakly-covered, while a dedicated test yields "covered". The
+    // confidence is atom-local — it does NOT depend on how many candidates the run produced.
+    let bestFocus = Number.POSITIVE_INFINITY;
     for (const candidate of candidates) {
       if (candidate.derivedFromAtomIds.includes(atom.id)) {
         candidateIds.push(candidate.id);
+        bestFocus = Math.min(bestFocus, candidate.derivedFromAtomIds.length);
       }
     }
     if (candidateIds.length === 0) {
       continue;
     }
-    const confidence = scoreMapping(atom, candidates);
+    const confidence = coverageConfidence(candidateIds.length, bestFocus);
     if (confidence <= 0) {
       continue;
     }

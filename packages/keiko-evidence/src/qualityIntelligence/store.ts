@@ -232,17 +232,7 @@ function parseAndValidateManifest(json: string): QualityIntelligenceEvidenceMani
   return manifest;
 }
 
-function assertManifestIntegrity(manifest: QualityIntelligenceEvidenceManifest): void {
-  if (manifest.totals.findings !== manifest.findings.length) {
-    throw new EvidenceReadError(
-      `QI manifest totals.findings (${String(manifest.totals.findings)}) does not match findings.length (${String(manifest.findings.length)})`,
-    );
-  }
-  if (manifest.totals.exports !== manifest.exports.length) {
-    throw new EvidenceReadError(
-      `QI manifest totals.exports (${String(manifest.totals.exports)}) does not match exports.length (${String(manifest.exports.length)})`,
-    );
-  }
+function assertIntegrityHashesMatch(manifest: QualityIntelligenceEvidenceManifest): void {
   const expected = buildIntegrityHashes(manifest.findings, manifest.exports, manifest.evidenceRefs);
   const expectedAtomFingerprints =
     manifest.atomFingerprints === undefined ? undefined : sha256OfJson(manifest.atomFingerprints);
@@ -258,6 +248,31 @@ function assertManifestIntegrity(manifest: QualityIntelligenceEvidenceManifest):
   if (expectedAtomFingerprints !== manifest.integrityHashes.atomFingerprints) {
     throw new EvidenceReadError("QI manifest atomFingerprints integrity hash mismatch");
   }
+  // Backward-compatible: the coverage matrix shipped (#738) before it was integrity-hashed (#734
+  // hardening), so legacy manifests carry the matrix without a hash. Enforce the check only once a
+  // stored hash exists; new manifests always carry it, so tampering with a current matrix is caught.
+  const expectedCoverageMatrix =
+    manifest.coverageMatrix === undefined ? undefined : sha256OfJson(manifest.coverageMatrix);
+  if (
+    manifest.integrityHashes.coverageMatrix !== undefined &&
+    expectedCoverageMatrix !== manifest.integrityHashes.coverageMatrix
+  ) {
+    throw new EvidenceReadError("QI manifest coverageMatrix integrity hash mismatch");
+  }
+}
+
+function assertManifestIntegrity(manifest: QualityIntelligenceEvidenceManifest): void {
+  if (manifest.totals.findings !== manifest.findings.length) {
+    throw new EvidenceReadError(
+      `QI manifest totals.findings (${String(manifest.totals.findings)}) does not match findings.length (${String(manifest.findings.length)})`,
+    );
+  }
+  if (manifest.totals.exports !== manifest.exports.length) {
+    throw new EvidenceReadError(
+      `QI manifest totals.exports (${String(manifest.totals.exports)}) does not match exports.length (${String(manifest.exports.length)})`,
+    );
+  }
+  assertIntegrityHashesMatch(manifest);
 }
 
 function loadQiManifest(
@@ -401,12 +416,14 @@ function buildIntegrityHashes(
   exports_: QualityIntelligenceEvidenceManifest["exports"],
   evidenceRefs: QualityIntelligenceEvidenceManifest["evidenceRefs"],
   atomFingerprints?: QualityIntelligenceEvidenceManifest["atomFingerprints"],
+  coverageMatrix?: QualityIntelligenceEvidenceManifest["coverageMatrix"],
 ): QualityIntelligenceIntegrityHashes {
   return {
     findings: sha256OfJson(findings),
     exports: sha256OfJson(exports_),
     evidenceRefs: sha256OfJson(evidenceRefs),
     ...(atomFingerprints !== undefined ? { atomFingerprints: sha256OfJson(atomFingerprints) } : {}),
+    ...(coverageMatrix !== undefined ? { coverageMatrix: sha256OfJson(coverageMatrix) } : {}),
   };
 }
 
@@ -538,6 +555,7 @@ export function recordQualityIntelligenceRun(
     redacted.exports,
     redacted.evidenceRefs,
     input.atomFingerprints,
+    input.coverageMatrix,
   );
   const manifest = buildRunManifest(input, redacted, summary, integrityHashes);
   return { manifest, location: store.record(manifest) };

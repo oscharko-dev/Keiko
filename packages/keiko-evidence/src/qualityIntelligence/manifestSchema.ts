@@ -29,6 +29,8 @@ export interface QualityIntelligenceIntegrityHashes {
   readonly exports: string;
   readonly evidenceRefs: string;
   readonly atomFingerprints?: string;
+  /** Hash of the persisted coverage matrix (Epic #734) so a tampered matrix is detectable. */
+  readonly coverageMatrix?: string;
 }
 
 // Counts-only summary of what redaction did during build. We deliberately do NOT carry the

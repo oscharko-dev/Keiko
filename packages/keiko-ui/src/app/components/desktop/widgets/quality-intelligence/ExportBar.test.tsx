@@ -640,3 +640,64 @@ describe("ExportBar — Epic #711 multi-format adapters", () => {
     expect(screen.queryByTestId("qi-export-connector-hint")).not.toBeInTheDocument();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Tests — Epic #734 requirement<->test traceability matrix export (Issue #740)
+// ---------------------------------------------------------------------------
+
+describe("ExportBar — traceability matrix export", () => {
+  function makeTraceabilityFake(): typeof import("@/lib/quality-intelligence-api").exportQiRunTraceability {
+    return vi.fn().mockResolvedValue({
+      format: "csv",
+      filename: "run-001-traceability.csv",
+      contentType: "text/csv",
+      byteLen: 42,
+      body: "Requirements to tests\r\nRequirement ID,Status,Confidence,Covering Tests,Test Count\r\n",
+    }) as unknown as typeof import("@/lib/quality-intelligence-api").exportQiRunTraceability;
+  }
+
+  it.each(["traceability-csv", "traceability-markdown"])(
+    "offers the '%s' traceability option",
+    (adapter) => {
+      render(<ExportBar runId="run-001" />);
+      const select = screen.getByRole("combobox", { name: /adapter|format|export/i });
+      const options = Array.from(select.querySelectorAll("option")).map((o) => o.value);
+      expect(options).toContain(adapter);
+    },
+  );
+
+  it("calls the traceability route (not the generic export) with the CSV format on Download", async () => {
+    const user = userEvent.setup();
+    const traceabilityImpl = makeTraceabilityFake();
+    const exportImpl = makeLocalExportFake();
+    render(
+      <ExportBar runId="run-trace" exportImpl={exportImpl} traceabilityImpl={traceabilityImpl} />,
+    );
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /adapter|format|export/i }),
+      "traceability-csv",
+    );
+    await user.click(screen.getByRole("button", { name: /download/i }));
+    await waitFor(() => {
+      expect(traceabilityImpl).toHaveBeenCalledWith("run-trace", "csv");
+    });
+    expect(exportImpl).not.toHaveBeenCalled();
+    expect(await screen.findByTestId("qi-export-success")).toHaveTextContent(
+      /run-001-traceability\.csv/,
+    );
+  });
+
+  it("requests the markdown format for the Markdown traceability option", async () => {
+    const user = userEvent.setup();
+    const traceabilityImpl = makeTraceabilityFake();
+    render(<ExportBar runId="run-trace" traceabilityImpl={traceabilityImpl} />);
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /adapter|format|export/i }),
+      "traceability-markdown",
+    );
+    await user.click(screen.getByRole("button", { name: /download/i }));
+    await waitFor(() => {
+      expect(traceabilityImpl).toHaveBeenCalledWith("run-trace", "markdown");
+    });
+  });
+});

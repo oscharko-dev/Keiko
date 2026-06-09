@@ -82,7 +82,14 @@ export async function handleQiTraceabilityExport(
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
   const format = await parseFormat(ctx.req);
-  const manifest = loadQualityIntelligenceRun(id, { evidenceDir });
+  let manifest: ReturnType<typeof loadQualityIntelligenceRun>;
+  try {
+    manifest = loadQualityIntelligenceRun(id, { evidenceDir });
+  } catch {
+    // CWE-209: never surface the underlying filesystem/parse error detail to the client; a
+    // corrupt or unreadable manifest is reported as an opaque 500 (mirrors uiRoutes.ts).
+    return errorResult(500, "QI_LOAD_FAILED", "Failed to load the Quality Intelligence run.");
+  }
   if (manifest === undefined) {
     return errorResult(404, "QI_NOT_FOUND", "Quality Intelligence run not found.");
   }

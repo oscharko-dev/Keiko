@@ -9,12 +9,19 @@
 import { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import {
   recordQualityIntelligenceRun,
+  type QualityIntelligenceCoverageMatrixRow,
   type QualityIntelligenceLocalStore,
   type QualityIntelligenceRecordInput,
   type QualityIntelligenceRecordResult,
 } from "@oscharko-dev/keiko-evidence";
 import { QualityIntelligenceSafeErrorException } from "@oscharko-dev/keiko-model-gateway";
-import { regressionDefault, type PolicyProfile } from "@oscharko-dev/keiko-quality-intelligence";
+import {
+  buildAtomCoverageStatuses,
+  buildCoverageMap,
+  regressionDefault,
+  type AtomCoverageStatus,
+  type PolicyProfile,
+} from "@oscharko-dev/keiko-quality-intelligence";
 import { QUALITY_INTELLIGENCE_DEFAULT_RETENTION_PROFILE_ID } from "@oscharko-dev/keiko-evidence";
 import type {
   QualityIntelligenceWorkflowDescriptor,
@@ -192,6 +199,35 @@ export function truncateFindings(
   limit: number,
 ): readonly QI.QualityIntelligenceValidationFinding[] {
   return findings.length <= limit ? findings : Object.freeze(findings.slice(0, limit));
+}
+
+/** Project per-atom coverage statuses into persistable, refs-only matrix rows (Epic #734). */
+export function toCoverageMatrixRows(
+  statuses: readonly AtomCoverageStatus[],
+): readonly QualityIntelligenceCoverageMatrixRow[] {
+  return Object.freeze(
+    statuses.map((s) =>
+      Object.freeze({
+        atomId: String(s.atomId),
+        status: s.status,
+        confidence: s.confidence,
+        coveringCandidateIds: Object.freeze(s.coveringCandidateIds.map(String)),
+      }),
+    ),
+  );
+}
+
+/**
+ * Build the persistable coverage matrix for a run from its atoms + candidates. Used by every run
+ * path so coverage is persisted consistently (the scripted paths previously discarded it).
+ */
+export function coverageMatrixFor(
+  runId: QI.QualityIntelligenceRunId,
+  atoms: readonly QI.QualityIntelligenceEvidenceAtom[],
+  candidates: readonly QI.QualityIntelligenceTestCaseCandidate[],
+): readonly QualityIntelligenceCoverageMatrixRow[] {
+  const coverageMap = buildCoverageMap({ runId, atoms, candidates });
+  return toCoverageMatrixRows(buildAtomCoverageStatuses(atoms, coverageMap));
 }
 
 export function emitCandidateProposed(

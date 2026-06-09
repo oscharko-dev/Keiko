@@ -237,6 +237,22 @@ describe("QiRunCard", () => {
     expect(await screen.findByLabelText(/Atom atom-b: Uncovered/i)).toBeInTheDocument();
   });
 
+  it("shows a covered/total summary and gap count alongside the percentage", async () => {
+    const atoms: QualityIntelligenceUiAtomCoverage[] = [
+      { atomId: "atom-a", status: "covered", confidence: 0.9 },
+      { atomId: "atom-b", status: "weakly-covered", confidence: 0.5 },
+      { atomId: "atom-c", status: "uncovered", confidence: 0 },
+    ];
+    const detail = makeDetail("qi-run-cov3", [], atoms, 33);
+    render(<QiRunCard runId="qi-run-cov3" fetchDetailImpl={fetchOk(detail)} />);
+    const summary = await screen.findByTestId("qi-coverage-summary");
+    expect(summary).toHaveTextContent("1 of 3 requirements covered");
+    expect(summary).toHaveTextContent("2 gaps");
+    // The weakly-covered badge carries the qi-cov-weak class (decorative colour) plus a text label.
+    const weak = screen.getByLabelText(/Atom atom-b: Weakly covered/i);
+    expect(weak.querySelector(".qi-cov-weak")).not.toBeNull();
+  });
+
   it("renders the quality score badge with the rounded score and tier class", async () => {
     const detail = makeDetail("qi-run-q1", [makeCandidate("tc-1", "A test")], [], 0, 84.6);
     render(<QiRunCard runId="qi-run-q1" fetchDetailImpl={fetchOk(detail)} />);

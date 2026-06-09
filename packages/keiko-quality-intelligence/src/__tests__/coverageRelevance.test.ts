@@ -8,6 +8,7 @@ import {
   classifyAtomCoverage,
   COVERAGE_THRESHOLD_COVERED,
   COVERAGE_THRESHOLD_WEAKLY_COVERED,
+  coverageConfidence,
   runCoveragePercentage,
 } from "../domain/coverageRelevance.js";
 import { deriveIntent } from "../domain/intentDerivation.js";
@@ -233,5 +234,126 @@ describe("runCoveragePercentage", () => {
     const statuses = buildAtomCoverageStatuses(atoms, map);
     // 1 covered out of 4 = 25%
     expect(runCoveragePercentage(statuses)).toBe(25);
+  });
+});
+
+// ─── Helper for synthetic candidates with controllable citation/focus ────────
+
+function makeCandidate(
+  id: string,
+  derivedFromAtomIds: readonly string[],
+): QualityIntelligence.QualityIntelligenceTestCaseCandidate {
+  return {
+    id: QualityIntelligence.asQualityIntelligenceTestCaseId(id),
+    runId: QualityIntelligence.asQualityIntelligenceRunId("run-1"),
+    derivedFromAtomIds: derivedFromAtomIds.map((a) =>
+      QualityIntelligence.asQualityIntelligenceEvidenceAtomId(a),
+    ),
+    title: `Test ${id}`,
+    preconditions: [],
+    steps: ["do the thing"],
+    expectedResults: ["the behaviour matches the cited evidence"],
+    priority: "P2",
+    riskClass: "functional",
+    tags: [],
+    status: "proposed",
+  };
+}
+
+describe("coverageConfidence (run-size independence)", () => {
+  it("is independent of the total number of candidates in the run", () => {
+    // Same atom-local inputs (1 focused citer) => same confidence regardless of run size.
+    expect(coverageConfidence(1, 1)).toBeCloseTo(coverageConfidence(1, 1));
+    expect(coverageConfidence(1, 1)).toBeGreaterThanOrEqual(COVERAGE_THRESHOLD_COVERED);
+  });
+
+  it("classifies a single dedicated (focused) test as covered, not weak", () => {
+    expect(coverageConfidence(1, 1)).toBeGreaterThanOrEqual(COVERAGE_THRESHOLD_COVERED);
+  });
+
+  it("is monotonic non-decreasing in the citer count", () => {
+    expect(coverageConfidence(2, 1)).toBeGreaterThanOrEqual(coverageConfidence(1, 1));
+    expect(coverageConfidence(3, 1)).toBeGreaterThanOrEqual(coverageConfidence(2, 1));
+  });
+
+  it("classifies broad-only coverage as weakly-covered (below the covered threshold)", () => {
+    const conf = coverageConfidence(1, 9);
+    expect(conf).toBeGreaterThanOrEqual(COVERAGE_THRESHOLD_WEAKLY_COVERED);
+    expect(conf).toBeLessThan(COVERAGE_THRESHOLD_COVERED);
+  });
+
+  it("returns 0 for an atom with no citers", () => {
+    expect(coverageConfidence(0, 1)).toBe(0);
+  });
+});
+
+describe("buildCoverageMap — coverage is not diluted by run size (regression for the 0% bug)", () => {
+  it("reports a perfectly-covered run as covered, NOT uncovered, regardless of run size", () => {
+    // 8 atoms, each covered by exactly 3 dedicated (focus-1) tests = 24 candidates total.
+    // The historical bug divided citedCount by candidates.length (24), yielding confidence 0.125
+    // for every atom => all "uncovered", coverage 0%. The fix makes confidence atom-local.
+    const atomCount = 8;
+    const atoms = Array.from({ length: atomCount }, (_, i) => makeAtom(`atom-${String(i)}`));
+    const candidates = atoms.flatMap((_atom, i) =>
+      [0, 1, 2].map((k) => makeCandidate(`tc-${String(i)}-${String(k)}`, [`atom-${String(i)}`])),
+    );
+    const map = buildCoverageMap({
+      runId: QualityIntelligence.asQualityIntelligenceRunId("run-1"),
+      atoms,
+      candidates,
+    });
+    const statuses = buildAtomCoverageStatuses(atoms, map);
+    expect(statuses.every((s) => s.status === "covered")).toBe(true);
+    expect(runCoveragePercentage(statuses)).toBe(100);
+  });
+
+  it("a run where each atom has exactly one dedicated test is 100% covered (no 1-test=0% surprise)", () => {
+    const atoms = Array.from({ length: 6 }, (_, i) => makeAtom(`atom-${String(i)}`));
+    const candidates = atoms.map((_atom, i) =>
+      makeCandidate(`tc-${String(i)}`, [`atom-${String(i)}`]),
+    );
+    const map = buildCoverageMap({
+      runId: QualityIntelligence.asQualityIntelligenceRunId("run-1"),
+      atoms,
+      candidates,
+    });
+    const statuses = buildAtomCoverageStatuses(atoms, map);
+    expect(runCoveragePercentage(statuses)).toBe(100);
+    statuses.forEach((s) => {
+      expect(s.coveringCandidateIds.length).toBe(1);
+    });
+  });
+
+  it("surfaces a genuinely uncovered atom while the rest are covered", () => {
+    const atoms = ["atom-0", "atom-1", "atom-2"].map(makeAtom);
+    // atom-2 has no citing candidate.
+    const candidates = [makeCandidate("tc-0", ["atom-0"]), makeCandidate("tc-1", ["atom-1"])];
+    const map = buildCoverageMap({
+      runId: QualityIntelligence.asQualityIntelligenceRunId("run-1"),
+      atoms,
+      candidates,
+    });
+    const statuses = buildAtomCoverageStatuses(atoms, map);
+    const uncovered = statuses.filter((s) => s.status === "uncovered");
+    expect(uncovered).toHaveLength(1);
+    expect(String(uncovered[0]?.atomId)).toBe("atom-2");
+    expect(runCoveragePercentage(statuses)).toBeCloseTo((2 / 3) * 100);
+  });
+
+  it("classifies an atom covered only by a sprawling test as weakly-covered", () => {
+    const atoms = Array.from({ length: 6 }, (_, i) => makeAtom(`atom-${String(i)}`));
+    // A single broad test that derives from all 6 atoms — incidental coverage only.
+    const broad = makeCandidate(
+      "tc-broad",
+      atoms.map((a) => String(a.id)),
+    );
+    const map = buildCoverageMap({
+      runId: QualityIntelligence.asQualityIntelligenceRunId("run-1"),
+      atoms,
+      candidates: [broad],
+    });
+    const statuses = buildAtomCoverageStatuses(atoms, map);
+    expect(statuses.every((s) => s.status === "weakly-covered")).toBe(true);
+    expect(runCoveragePercentage(statuses)).toBe(0);
   });
 });

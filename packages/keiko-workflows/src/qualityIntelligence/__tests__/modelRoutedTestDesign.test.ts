@@ -121,7 +121,8 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     // The finding summary must reference the uncovered atom id
     const uncoveredFinding = gapFindings.find((f) => f.summaryRedacted.includes("atom-3"));
     expect(uncoveredFinding).toBeDefined();
-    expect(uncoveredFinding?.severity).toBe("medium");
+    // A requirement with zero tracing tests is the headline audit gap -> high severity.
+    expect(uncoveredFinding?.severity).toBe("high");
   });
 
   it("persists the coverageMatrix with the uncovered atom recorded", async () => {
@@ -283,7 +284,11 @@ const DISTINCT_WEAK_RATIONALE_VERDICT = {
     { name: "verifiability" as const, score: 82, rationale: "Expected result is measurable." },
     { name: "atomicity" as const, score: 78, rationale: "The flow is narrow enough." },
     { name: "determinism" as const, score: 25, rationale: "Relies on timing-sensitive behavior." },
-    { name: "ac-fidelity" as const, score: 10, rationale: "Misses the stated acceptance criteria." },
+    {
+      name: "ac-fidelity" as const,
+      score: 10,
+      rationale: "Misses the stated acceptance criteria.",
+    },
   ],
   overallRationale: "weak because it misses the originating AC and remains timing-sensitive",
 };

@@ -71,6 +71,24 @@ describe("recordQualityIntelligenceRun + load + list", () => {
     expect(loaded?.atomFingerprints?.[0]?.atomId).toBe("atom-1");
   });
 
+  it("persists and reloads a coverageMatrix round-trip (Epic #734)", () => {
+    const result = recordQualityIntelligenceRun(
+      {
+        ...baseInput("run-crud-cov"),
+        coverageMatrix: [
+          { atomId: "atom-1", status: "covered", confidence: 0.9, coveringCandidateIds: ["tc-1"] },
+          { atomId: "atom-2", status: "uncovered", confidence: 0, coveringCandidateIds: [] },
+        ],
+      },
+      { evidenceDir },
+    );
+    expect(result.manifest.integrityHashes.coverageMatrix).toBeDefined();
+    const loaded = loadQualityIntelligenceRun("run-crud-cov", { evidenceDir });
+    expect(loaded?.coverageMatrix).toHaveLength(2);
+    expect(loaded?.coverageMatrix?.[0]?.status).toBe("covered");
+    expect(loaded?.coverageMatrix?.[1]?.atomId).toBe("atom-2");
+  });
+
   it("redaction happens BEFORE persist: on-disk file contains no caller secret", async () => {
     const input: QualityIntelligenceRecordInput = {
       ...baseInput("run-crud-2"),
@@ -281,6 +299,28 @@ describe("load-time integrity verification (issue #637)", () => {
     );
     expect(loadQualityIntelligenceRun("run-tamper-list-good", { evidenceDir })?.runId).toBe(
       "run-tamper-list-good",
+    );
+  });
+
+  it("rejects a load when the coverageMatrix is mutated without recomputing the integrity hash", async () => {
+    recordQualityIntelligenceRun(
+      {
+        ...baseInput("run-tamper-cov"),
+        coverageMatrix: [
+          { atomId: "atom-1", status: "covered", confidence: 0.9, coveringCandidateIds: ["tc-1"] },
+        ],
+      },
+      { evidenceDir },
+    );
+    const original = await readManifest("run-tamper-cov");
+    const matrix = original.coverageMatrix as readonly Record<string, unknown>[];
+    // Flip a covered atom to "uncovered" without recomputing the hash — must be rejected.
+    await writeManifest("run-tamper-cov", {
+      ...original,
+      coverageMatrix: matrix.map((row, i) => (i === 0 ? { ...row, status: "uncovered" } : row)),
+    });
+    expect(() => loadQualityIntelligenceRun("run-tamper-cov", { evidenceDir })).toThrow(
+      EvidenceReadError,
     );
   });
 

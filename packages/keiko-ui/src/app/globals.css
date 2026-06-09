@@ -7688,6 +7688,69 @@ select.dlg-input {
   color: var(--fg-muted);
 }
 
+/* Coverage / Gap-Radar panel (Epic #734 / Issue #739). The status is ALWAYS carried by a text
+   label + an .qi-sr-only span + an aria-label on each row, so colour is decorative only (WCAG 1.4.1
+   use-of-colour). Each status badge reuses a token pairing already proven >=4.5:1 against --card in
+   BOTH themes:
+   - covered:   --accent-text on --accent-dim   (same pairing as .qi-quality-high)
+   - weak:      --warn on a 20% warn tint        (same pairing as .qi-sev-high)
+   - uncovered: --fg on a 22% danger tint        (same pairing as .qi-quality-low / .qi-badge-failed) */
+.qi-coverage-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.qi-coverage-summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.qi-coverage-gaps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.qi-coverage-gap-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.qi-coverage-gap-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--card);
+}
+.qi-coverage-atom-id {
+  font-size: 12px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qi-cov-covered {
+  background: var(--accent-dim);
+  color: var(--accent-text);
+}
+.qi-cov-weak {
+  background: color-mix(in oklch, var(--warn) 20%, transparent);
+  color: var(--warn);
+}
+.qi-cov-uncovered {
+  background: color-mix(in oklch, var(--danger) 22%, transparent);
+  color: var(--fg);
+}
+
 /* Living Tests drift panel (Epic #735 / Issue #744). */
 .qi-drift-panel {
   display: flex;

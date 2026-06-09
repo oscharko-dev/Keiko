@@ -15,7 +15,6 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-contracts";
 import {
-  buildCoverageMap,
   deduplicateCandidates,
   deriveIntent,
   designTestCaseCandidates,
@@ -40,6 +39,7 @@ import {
   emitCandidateProposed,
   emitFindingsRecorded,
   emitQueuedAndStarted,
+  coverageMatrixFor,
   finaliseFailureOrCancellation,
   makeContext,
   persistRun,
@@ -166,8 +166,8 @@ export async function runQualityIntelligenceTestDesign(
     );
     const candidates = truncateCandidates(rawCandidates, ctx.limits.maxCandidatesPerRun);
     emitCandidateProposed(ctx, candidates);
-    await withStage(ctx, "coverage", async () =>
-      Promise.resolve(buildCoverageMap({ runId: input.plan.id, atoms: input.atoms, candidates })),
+    const coverageMatrix = await withStage(ctx, "coverage", async () =>
+      Promise.resolve(coverageMatrixFor(input.plan.id, input.atoms, candidates)),
     );
     const rawFindings = await withStage(ctx, "validate", async () =>
       Promise.resolve(validateCandidates(input.plan.id, candidates)),
@@ -184,6 +184,7 @@ export async function runQualityIntelligenceTestDesign(
           provenanceRefs: input.provenanceRefs,
           completedAt: ctx.clock.nowIso(),
           evidenceStore: deps.evidenceStore,
+          coverageMatrix,
         }),
       ),
     );
@@ -216,14 +217,8 @@ export async function runQualityIntelligenceCoverageReview(
   emitQueuedAndStarted(ctx);
   try {
     await withStage(ctx, "plan", async () => Promise.resolve());
-    await withStage(ctx, "analyse", async () =>
-      Promise.resolve(
-        buildCoverageMap({
-          runId: input.plan.id,
-          atoms: input.atoms,
-          candidates: input.candidates,
-        }),
-      ),
+    const coverageMatrix = await withStage(ctx, "analyse", async () =>
+      Promise.resolve(coverageMatrixFor(input.plan.id, input.atoms, input.candidates)),
     );
     const evidence = await withStage(ctx, "report", async () =>
       Promise.resolve(
@@ -235,6 +230,7 @@ export async function runQualityIntelligenceCoverageReview(
           provenanceRefs: input.provenanceRefs,
           completedAt: ctx.clock.nowIso(),
           evidenceStore: deps.evidenceStore,
+          coverageMatrix,
         }),
       ),
     );

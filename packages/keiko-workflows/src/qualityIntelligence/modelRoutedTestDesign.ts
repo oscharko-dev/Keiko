@@ -19,10 +19,7 @@ import {
   type PolicyProfile,
 } from "@oscharko-dev/keiko-quality-intelligence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
-import type {
-  QualityIntelligenceCoverageMatrixRow,
-  QualityIntelligenceLocalStore,
-} from "@oscharko-dev/keiko-evidence";
+import type { QualityIntelligenceLocalStore } from "@oscharko-dev/keiko-evidence";
 import { QI_TEST_DESIGN_WORKFLOW_DESCRIPTOR } from "./descriptors.js";
 import {
   emit,
@@ -32,6 +29,7 @@ import {
   finaliseFailureOrCancellation,
   makeContext,
   persistRun,
+  toCoverageMatrixRows,
   truncateCandidates,
   truncateFindings,
   withStage,
@@ -158,9 +156,7 @@ function evidenceRefsFor(
   );
 }
 
-function atomFingerprintsFor(
-  ingestedAtoms: readonly QualityIntelligenceIngestedAtom[],
-): readonly {
+function atomFingerprintsFor(ingestedAtoms: readonly QualityIntelligenceIngestedAtom[]): readonly {
   readonly atomId: string;
   readonly envelopeId: string;
   readonly canonicalHashSha256Hex: string;
@@ -185,29 +181,23 @@ function buildCoverageGapFinding(
     "",
   );
   const idStr = `qi-finding-${sha256Hex(payload).slice(0, 32)}`;
+  // An atom with zero tracing tests is the headline audit gap (high); an atom covered only weakly
+  // (incidentally, by broad tests) is a softer "strengthen this" signal (low). This keeps the gap
+  // list honest: a flood of low-severity weak findings never drowns out the genuine zero-coverage
+  // requirements, and severity-ordered truncation (below) protects the high ones.
+  const severity = atomStatus.status === "uncovered" ? "high" : "low";
+  const summary =
+    atomStatus.status === "uncovered"
+      ? `Atom ${String(atomStatus.atomId)} has no tracing test (uncovered).`
+      : `Atom ${String(atomStatus.atomId)} is only weakly covered (no dedicated test traces to it).`;
   return Object.freeze({
     kind: "coverage-gap",
     id: QI.asQualityIntelligenceValidationFindingId(idStr),
     runId,
-    severity: "medium",
-    summary: `Atom ${String(atomStatus.atomId)} has no sufficient test coverage (status: ${atomStatus.status}).`,
+    severity,
+    summary,
     evidenceAtomIds: Object.freeze([atomStatus.atomId]),
   });
-}
-
-function toCoverageMatrixRows(
-  statuses: readonly AtomCoverageStatus[],
-): readonly QualityIntelligenceCoverageMatrixRow[] {
-  return Object.freeze(
-    statuses.map((s) =>
-      Object.freeze({
-        atomId: String(s.atomId),
-        status: s.status,
-        confidence: s.confidence,
-        coveringCandidateIds: Object.freeze(s.coveringCandidateIds.map(String)),
-      }),
-    ),
-  );
 }
 
 /** Candidates plus the attribution metadata of the model call that produced them (Epic #761). */
@@ -316,7 +306,9 @@ function judgeRationaleSummary(verdict: QI.TestQualityJudgeVerdict): string {
     .filter((dimension) => dimension.score < TEST_QUALITY_WEAK_THRESHOLD)
     .sort((left, right) => left.score - right.score);
   const dimensionsToDescribe =
-    weakDimensions.length > 0 ? weakDimensions : [...verdict.dimensions].sort((a, b) => a.score - b.score);
+    weakDimensions.length > 0
+      ? weakDimensions
+      : [...verdict.dimensions].sort((a, b) => a.score - b.score);
   return dimensionsToDescribe
     .slice(0, JUDGE_SUMMARY_DIMENSION_LIMIT)
     .map((dimension) => `${JUDGE_DIMENSION_LABEL[dimension.name]}: ${dimension.rationale}`)
@@ -375,7 +367,9 @@ async function runJudgeStage(
       continue;
     }
     const mean = scoreFromDimensions(verdict.dimensions);
-    findings.push(buildTestQualityFinding(ctx.plan.id, candidate, mean, judgeRationaleSummary(verdict), i));
+    findings.push(
+      buildTestQualityFinding(ctx.plan.id, candidate, mean, judgeRationaleSummary(verdict), i),
+    );
   }
   // Per-run quality score = share of candidates the judge rated "strong", as a percentage (#747).
   const qualityScore = scored === 0 ? null : (strongCount / scored) * 100;
@@ -435,11 +429,21 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
     const rawFindings = await withStage(ctx, "validate", async () =>
       Promise.resolve(validateCandidates(input.plan.id, candidates)),
     );
+    // Order by severity (critical -> low) BEFORE truncation so that, if the run hits the
+    // per-run findings cap, the most severe findings — uncovered-requirement gaps included —
+    // always survive the cut rather than being dropped by array position (Array.sort is stable,
+    // so same-severity insertion order is preserved).
     const allFindings: readonly QI.QualityIntelligenceValidationFinding[] = [
       ...gapFindings,
       ...rawFindings,
       ...judgeResult.findings,
-    ];
+    ]
+      .slice()
+      .sort(
+        (a, b) =>
+          QI.QUALITY_INTELLIGENCE_SEVERITY_RANK[a.severity] -
+          QI.QUALITY_INTELLIGENCE_SEVERITY_RANK[b.severity],
+      );
     const findings = truncateFindings(allFindings, ctx.limits.maxFindingsPerRun);
     emitFindingsRecorded(ctx, findings);
     const evidence = await withStage(ctx, "finalize", async () => {

@@ -9,8 +9,19 @@
 
 import { useCallback, useState } from "react";
 import type { ReactNode } from "react";
-import { exportQiRun } from "@/lib/quality-intelligence-api";
+import {
+  exportQiRun,
+  exportQiRunTraceability,
+  type QiTraceabilityFormat,
+} from "@/lib/quality-intelligence-api";
 import { ApiError } from "@/lib/api";
+
+// Traceability adapters are served by a dedicated, matrix-driven route (Epic #734, Issue #740);
+// they are surfaced here so the audit-ready requirement<->test matrix is reachable for a real user.
+const TRACEABILITY_FORMATS: Readonly<Record<string, QiTraceabilityFormat>> = {
+  "traceability-csv": "csv",
+  "traceability-markdown": "markdown",
+};
 
 const ADAPTERS: ReadonlyArray<{ id: string; label: string; tms: boolean }> = [
   { id: "csv", label: "CSV", tms: false },
@@ -20,6 +31,8 @@ const ADAPTERS: ReadonlyArray<{ id: string; label: string; tms: boolean }> = [
   { id: "plain-text", label: "Plain text", tms: false },
   { id: "pdf", label: "PDF", tms: false },
   { id: "zip-bundle", label: "ZIP bundle (all formats)", tms: false },
+  { id: "traceability-csv", label: "Traceability matrix (CSV)", tms: false },
+  { id: "traceability-markdown", label: "Traceability matrix (Markdown)", tms: false },
   { id: "jira-issues", label: "Jira (preview)", tms: true },
   { id: "qtest", label: "qTest (preview)", tms: true },
   { id: "xray", label: "Xray (preview)", tms: true },
@@ -63,9 +76,14 @@ function triggerDownload(
 export interface ExportBarProps {
   readonly runId: string;
   readonly exportImpl?: typeof exportQiRun;
+  readonly traceabilityImpl?: typeof exportQiRunTraceability;
 }
 
-export function ExportBar({ runId, exportImpl = exportQiRun }: ExportBarProps): ReactNode {
+export function ExportBar({
+  runId,
+  exportImpl = exportQiRun,
+  traceabilityImpl = exportQiRunTraceability,
+}: ExportBarProps): ReactNode {
   const [adapter, setAdapter] = useState("csv");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -74,29 +92,41 @@ export function ExportBar({ runId, exportImpl = exportQiRun }: ExportBarProps): 
   const selected = ADAPTERS.find((a) => a.id === adapter);
   const isTms = selected?.tms ?? false;
 
+  const runExport = useCallback(async (): Promise<void> => {
+    const traceFormat = TRACEABILITY_FORMATS[adapter];
+    if (traceFormat !== undefined) {
+      // The matrix is plain text (no base64), served by the dedicated traceability route.
+      const res = await traceabilityImpl(runId, traceFormat);
+      triggerDownload(res.filename, res.contentType, res.body);
+      setDownloaded(res.filename);
+      return;
+    }
+    const res = await exportImpl(runId, adapter, { dryRun: isTms, approvedOnly: false });
+    if (res.dryRun) {
+      setPreview(
+        `${res.candidateCount.toString()} candidates · ${res.byteLen.toString()} bytes\n\n${res.preview}`,
+      );
+    } else {
+      // Binary formats (PDF / ZIP) arrive base64-encoded; forward the encoding so the Blob is built
+      // from the DECODED bytes, not the base64 text. Omitting it corrupts the downloaded file.
+      triggerDownload(res.filename, res.contentType, res.body, res.encoding);
+      setDownloaded(res.filename);
+    }
+  }, [runId, adapter, isTms, exportImpl, traceabilityImpl]);
+
   const handleExport = useCallback(async (): Promise<void> => {
     setBusy(true);
     setError(null);
     setPreview(null);
     setDownloaded(null);
     try {
-      const res = await exportImpl(runId, adapter, { dryRun: isTms, approvedOnly: false });
-      if (res.dryRun) {
-        setPreview(
-          `${res.candidateCount.toString()} candidates · ${res.byteLen.toString()} bytes\n\n${res.preview}`,
-        );
-      } else {
-        // Binary formats (PDF / ZIP) arrive base64-encoded; forward the encoding so the Blob is built
-        // from the DECODED bytes, not the base64 text. Omitting it corrupts the downloaded file.
-        triggerDownload(res.filename, res.contentType, res.body, res.encoding);
-        setDownloaded(res.filename);
-      }
+      await runExport();
     } catch (err) {
       setError(formatError(err));
     } finally {
       setBusy(false);
     }
-  }, [runId, adapter, isTms, exportImpl]);
+  }, [runExport]);
 
   return (
     <div className="qi-export" data-testid="qi-export-bar">
