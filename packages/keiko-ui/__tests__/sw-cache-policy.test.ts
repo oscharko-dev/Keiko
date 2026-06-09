@@ -74,6 +74,21 @@ describe("sw.js cache policy — static source analysis (issue #126, ADR-0024 D6
     const body = match === null ? "" : (match[1] ?? "");
     expect(body).not.toMatch(/\/api\b/);
   });
+
+  it("serves the HTML shell network-first (a navigation or the `/` document)", () => {
+    // The shell must be revalidated against the network so a redeploy's new chunk graph is
+    // picked up immediately; a cache-first `/` pins an old shell → ChunkLoadError. Guard the
+    // navigation predicate and the network-first helper against deletion.
+    expect(SW_SOURCE).toMatch(/function\s+isHtmlShellRequest\s*\(/);
+    expect(SW_SOURCE).toMatch(/request\.mode\s*===\s*"navigate"/);
+    expect(SW_SOURCE).toMatch(/function\s+networkFirst\s*\(/);
+    // The fetch handler must route the shell through networkFirst.
+    expect(SW_SOURCE).toMatch(/isHtmlShellRequest\([^)]*\)\s*\?\s*networkFirst/);
+  });
+
+  it("keeps content-hashed static assets cache-first", () => {
+    expect(SW_SOURCE).toMatch(/function\s+cacheFirst\s*\(/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -93,16 +108,25 @@ interface SwSandbox {
 
 interface SyntheticEvent {
   readonly type: string;
-  readonly request: { readonly method: string; readonly url: string };
+  readonly request: { readonly method: string; readonly url: string; readonly mode?: string };
   respondWith(value: Response | Promise<Response>): void;
   waitUntil(value: Promise<unknown>): void;
 }
 
-function makeSandbox(): { context: vm.Context; sandbox: SwSandbox } {
+function makeSandbox(seededCache: Record<string, unknown> = {}): {
+  context: vm.Context;
+  sandbox: SwSandbox;
+} {
   const handlers = new Map<string, (event: SyntheticEvent) => void>();
   const respondWithCalls: Array<Response | Promise<Response>> = [];
   const putCalls: Array<{ key: string; response: unknown }> = [];
   const fetchCalls: Array<string> = [];
+
+  // Resolve a seeded cache entry by the request's url (the SW matches on the Request object).
+  const matchSeeded = (req: { url: string } | string): unknown => {
+    const key = typeof req === "string" ? req : req.url;
+    return Object.prototype.hasOwnProperty.call(seededCache, key) ? seededCache[key] : undefined;
+  };
 
   const cacheStub = {
     addAll: async (_urls: readonly string[]): Promise<void> => undefined,
@@ -110,14 +134,14 @@ function makeSandbox(): { context: vm.Context; sandbox: SwSandbox } {
       const key = typeof req === "string" ? req : req.url;
       putCalls.push({ key, response });
     },
-    match: async (_req: unknown): Promise<undefined> => undefined,
+    match: async (req: { url: string } | string): Promise<unknown> => matchSeeded(req),
   };
 
   const cachesShim = {
     open: async (_name: string): Promise<typeof cacheStub> => cacheStub,
     keys: async (): Promise<readonly string[]> => [],
     delete: async (_name: string): Promise<boolean> => true,
-    match: async (_req: unknown): Promise<undefined> => undefined,
+    match: async (req: { url: string } | string): Promise<unknown> => matchSeeded(req),
   };
 
   const selfShim = {
@@ -157,10 +181,10 @@ function makeSandbox(): { context: vm.Context; sandbox: SwSandbox } {
   };
 }
 
-function makeEvent(type: string, url: string, sandbox: SwSandbox): SyntheticEvent {
+function makeEvent(type: string, url: string, sandbox: SwSandbox, mode?: string): SyntheticEvent {
   return {
     type,
-    request: { method: "GET", url },
+    request: { method: "GET", url, ...(mode !== undefined ? { mode } : {}) },
     respondWith(value: Response | Promise<Response>): void {
       sandbox.respondWithCalls.push(value);
     },
@@ -243,5 +267,51 @@ describe("sw.js cache policy — sandboxed fetch-handler evaluation", () => {
     await Promise.resolve();
 
     expect(sandbox.putCalls).toHaveLength(0);
+  });
+
+  it("serves the `/` shell NETWORK-FIRST: revalidates against the network even when cached", async () => {
+    // Seed a cached `/` (an OLD shell). Network-first must still go to the network so a redeploy's
+    // fresh chunk graph is used — the bug being fixed (#841 follow-up) was a cache-first `/`.
+    const cached = { ok: true, status: 200, type: "basic", clone: () => cached };
+    const { context, sandbox } = makeSandbox({ "http://localhost:3000/": cached });
+    vm.runInContext(SW_SOURCE, context);
+
+    const fetchHandler = sandbox.handlers.get("fetch");
+    const event = makeEvent("fetch", "http://localhost:3000/", sandbox);
+    fetchHandler?.(event);
+    await sandbox.respondWithCalls[0];
+
+    expect(sandbox.respondWithCalls).toHaveLength(1);
+    expect(sandbox.fetchCalls).toContain("http://localhost:3000/"); // network attempted despite cache
+    expect(sandbox.putCalls.map((c) => c.key)).toContain("http://localhost:3000/"); // cache refreshed
+  });
+
+  it("serves a top-level navigation (request.mode === 'navigate') network-first", async () => {
+    const { context, sandbox } = makeSandbox();
+    vm.runInContext(SW_SOURCE, context);
+
+    const fetchHandler = sandbox.handlers.get("fetch");
+    const event = makeEvent("fetch", "http://localhost:3000/", sandbox, "navigate");
+    fetchHandler?.(event);
+    await sandbox.respondWithCalls[0];
+
+    expect(sandbox.respondWithCalls).toHaveLength(1);
+    expect(sandbox.fetchCalls).toContain("http://localhost:3000/");
+  });
+
+  it("serves a cached content-hashed asset CACHE-FIRST without hitting the network", async () => {
+    // A hashed chunk is immutable per url, so a cache hit is authoritative — no network round-trip.
+    const url = "http://localhost:3000/_next/static/chunks/app-abc123.js";
+    const cached = { ok: true, status: 200, type: "basic", clone: () => cached };
+    const { context, sandbox } = makeSandbox({ [url]: cached });
+    vm.runInContext(SW_SOURCE, context);
+
+    const fetchHandler = sandbox.handlers.get("fetch");
+    const event = makeEvent("fetch", url, sandbox);
+    fetchHandler?.(event);
+    await sandbox.respondWithCalls[0];
+
+    expect(sandbox.respondWithCalls).toHaveLength(1);
+    expect(sandbox.fetchCalls).not.toContain(url); // served from cache, network not touched
   });
 });
