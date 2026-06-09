@@ -92,6 +92,18 @@ const envelopeIdFor = (
   return QualityIntelligence.asQualityIntelligenceSourceEnvelopeId(`qi-src-${digest}`);
 };
 
+const REQUIREMENTS_ENVELOPE_PREFIX = "qi-src-req-";
+
+const requirementsEnvelopeIdFor = (index: number): QI.QualityIntelligenceSourceEnvelopeId => {
+  const digest = sha256Hex(`qi-src-req-v1|${String(index)}`).slice(0, 24);
+  return QualityIntelligence.asQualityIntelligenceSourceEnvelopeId(
+    `${REQUIREMENTS_ENVELOPE_PREFIX}${digest}`,
+  );
+};
+
+const stableLocalRef = (prefix: string, value: string): string =>
+  `${prefix}:${sha256Hex(value).slice(0, 24)}`;
+
 const auditSummaryIdFor = (runId: string): QI.QualityIntelligenceAuditSummaryId =>
   QualityIntelligence.asQualityIntelligenceAuditSummaryId(
     `qi-audit-${sha256Hex(runId).slice(0, 24)}`,
@@ -116,7 +128,7 @@ function ingestRequirements(
     );
   }
   const label = sanitiseLabel(source.label);
-  const envelopeId = envelopeIdFor(index, label, text);
+  const envelopeId = requirementsEnvelopeIdFor(index);
   const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, { envelopeId });
   if (atoms.length === 0) {
     throw new QiIngestionError(
@@ -133,7 +145,7 @@ function ingestRequirements(
       registeredAt,
       integrityHashSha256Hex: sha256Hex(text),
     },
-    localRef: String(envelopeId),
+    localRef: `req:${String(index)}`,
   };
   return { envelope, atoms };
 }
@@ -214,7 +226,7 @@ function ingestWorkspace(
         `${pack.workspaceRoot}|${pack.selected.map((e) => e.path).join(",")}`,
       ),
     },
-    localRef: String(envelopeId),
+    localRef: stableLocalRef("workspace", pack.workspaceRoot),
   };
   const atoms = pack.selected.map((entry, i) => workspaceAtom(entry, envelopeId, i));
   return { envelope, atoms };
@@ -378,7 +390,7 @@ function ingestFile(
       registeredAt,
       integrityHashSha256Hex: sha256Hex(`${content.relativePath}|${content.text}`),
     },
-    localRef: String(envelopeId),
+    localRef: stableLocalRef("file", absFile),
   };
   const atoms = [
     workspaceAtom({ path: content.relativePath, excerpt: content.text }, envelopeId, 0),
@@ -434,7 +446,7 @@ function ingestCapsule(
       registeredAt,
       integrityHashSha256Hex: sha256Hex(joinedText),
     },
-    localRef: String(envelopeId),
+    localRef: stableLocalRef("capsule", source.capsuleId),
   };
   const atoms = docs.map((d, i) => capsuleDocAtom(d.documentId, d.text, envelopeId, i));
   return { envelope, atoms };

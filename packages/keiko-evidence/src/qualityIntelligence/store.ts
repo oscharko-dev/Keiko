@@ -46,6 +46,7 @@ import {
   QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION,
   validateQualityIntelligenceEvidenceManifest,
   type QualityIntelligenceEvidenceManifest,
+  type QualityIntelligenceAtomFingerprintRow,
   type QualityIntelligenceIntegrityHashes,
   type QualityIntelligenceSourceFingerprintRow,
 } from "./manifestSchema.js";
@@ -243,6 +244,8 @@ function assertManifestIntegrity(manifest: QualityIntelligenceEvidenceManifest):
     );
   }
   const expected = buildIntegrityHashes(manifest.findings, manifest.exports, manifest.evidenceRefs);
+  const expectedAtomFingerprints =
+    manifest.atomFingerprints === undefined ? undefined : sha256OfJson(manifest.atomFingerprints);
   if (expected.findings !== manifest.integrityHashes.findings) {
     throw new EvidenceReadError("QI manifest findings integrity hash mismatch");
   }
@@ -251,6 +254,9 @@ function assertManifestIntegrity(manifest: QualityIntelligenceEvidenceManifest):
   }
   if (expected.evidenceRefs !== manifest.integrityHashes.evidenceRefs) {
     throw new EvidenceReadError("QI manifest evidenceRefs integrity hash mismatch");
+  }
+  if (expectedAtomFingerprints !== manifest.integrityHashes.atomFingerprints) {
+    throw new EvidenceReadError("QI manifest atomFingerprints integrity hash mismatch");
   }
 }
 
@@ -365,6 +371,8 @@ export interface QualityIntelligenceRecordInput {
   readonly qualityScore?: QualityIntelligenceEvidenceManifest["qualityScore"];
   /** Optional per-envelope content fingerprints for drift detection (Epic #735). */
   readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];
+  /** Optional per-atom content fingerprints for atom-aware drift detection (#798/#799). */
+  readonly atomFingerprints?: readonly QualityIntelligenceAtomFingerprintRow[];
   /** Optional model id that generated the candidates (Epic #761). */
   readonly modelId?: string;
   /** Optional redaction-safe request parameter scalars (Epic #761). */
@@ -392,11 +400,13 @@ function buildIntegrityHashes(
   findings: QualityIntelligenceEvidenceManifest["findings"],
   exports_: QualityIntelligenceEvidenceManifest["exports"],
   evidenceRefs: QualityIntelligenceEvidenceManifest["evidenceRefs"],
+  atomFingerprints?: QualityIntelligenceEvidenceManifest["atomFingerprints"],
 ): QualityIntelligenceIntegrityHashes {
   return {
     findings: sha256OfJson(findings),
     exports: sha256OfJson(exports_),
     evidenceRefs: sha256OfJson(evidenceRefs),
+    ...(atomFingerprints !== undefined ? { atomFingerprints: sha256OfJson(atomFingerprints) } : {}),
   };
 }
 
@@ -442,6 +452,7 @@ function optionalManifestFields(
     | "coverageMatrix"
     | "qualityScore"
     | "sourceFingerprints"
+    | "atomFingerprints"
     | "modelId"
     | "modelParameters"
     | "seedUsed"
@@ -453,9 +464,45 @@ function optionalManifestFields(
     ...(input.sourceFingerprints !== undefined
       ? { sourceFingerprints: input.sourceFingerprints }
       : {}),
+    ...(input.atomFingerprints !== undefined ? { atomFingerprints: input.atomFingerprints } : {}),
     ...(input.modelId !== undefined ? { modelId: input.modelId } : {}),
     ...(input.modelParameters !== undefined ? { modelParameters: input.modelParameters } : {}),
     ...(input.seedUsed !== undefined ? { seedUsed: input.seedUsed } : {}),
+  };
+}
+
+function buildRunManifest(
+  input: QualityIntelligenceRecordInput,
+  redacted: {
+    readonly planAt: QualityIntelligenceEvidenceManifest["planAt"];
+    readonly completedAt: QualityIntelligenceEvidenceManifest["completedAt"];
+    readonly policyProfileIds: QualityIntelligenceEvidenceManifest["policyProfileIds"];
+    readonly retentionPolicyId: QualityIntelligenceEvidenceManifest["retentionPolicyId"];
+    readonly findings: QualityIntelligenceEvidenceManifest["findings"];
+    readonly exports: QualityIntelligenceEvidenceManifest["exports"];
+    readonly evidenceRefs: QualityIntelligenceEvidenceManifest["evidenceRefs"];
+    readonly provenanceRefs: QualityIntelligenceEvidenceManifest["provenanceRefs"];
+  },
+  summary: QualityIntelligenceEvidenceManifest["redactionSummary"],
+  integrityHashes: QualityIntelligenceEvidenceManifest["integrityHashes"],
+): QualityIntelligenceEvidenceManifest {
+  return {
+    qiEvidenceSchemaVersion: QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION,
+    runId: input.runId as QualityIntelligenceEvidenceManifest["runId"],
+    planAt: redacted.planAt,
+    completedAt: redacted.completedAt,
+    status: input.status,
+    policyProfileIds: redacted.policyProfileIds,
+    retentionPolicyId: redacted.retentionPolicyId,
+    modelGatewayCallCount: input.modelGatewayCallCount,
+    totals: input.totals,
+    findings: redacted.findings,
+    exports: redacted.exports,
+    evidenceRefs: redacted.evidenceRefs,
+    provenanceRefs: redacted.provenanceRefs,
+    redactionSummary: summary,
+    integrityHashes,
+    ...optionalManifestFields(input),
   };
 }
 
@@ -490,25 +537,9 @@ export function recordQualityIntelligenceRun(
     redacted.findings,
     redacted.exports,
     redacted.evidenceRefs,
+    input.atomFingerprints,
   );
-  const manifest: QualityIntelligenceEvidenceManifest = {
-    qiEvidenceSchemaVersion: QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION,
-    runId: input.runId as QualityIntelligenceEvidenceManifest["runId"],
-    planAt: redacted.planAt,
-    completedAt: redacted.completedAt,
-    status: input.status,
-    policyProfileIds: redacted.policyProfileIds,
-    retentionPolicyId: redacted.retentionPolicyId,
-    modelGatewayCallCount: input.modelGatewayCallCount,
-    totals: input.totals,
-    findings: redacted.findings,
-    exports: redacted.exports,
-    evidenceRefs: redacted.evidenceRefs,
-    provenanceRefs: redacted.provenanceRefs,
-    redactionSummary: summary,
-    integrityHashes,
-    ...optionalManifestFields(input),
-  };
+  const manifest = buildRunManifest(input, redacted, summary, integrityHashes);
   return { manifest, location: store.record(manifest) };
 }
 

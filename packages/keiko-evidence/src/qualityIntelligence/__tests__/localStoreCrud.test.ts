@@ -50,12 +50,25 @@ function baseInput(runId: string): QualityIntelligenceRecordInput {
 
 describe("recordQualityIntelligenceRun + load + list", () => {
   it("persists a redacted manifest, list+load round-trip", () => {
-    const result = recordQualityIntelligenceRun(baseInput("run-crud-1"), { evidenceDir });
+    const result = recordQualityIntelligenceRun(
+      {
+        ...baseInput("run-crud-1"),
+        atomFingerprints: [
+          {
+            atomId: "atom-1",
+            envelopeId: "env-1",
+            canonicalHashSha256Hex: "a".repeat(64),
+          },
+        ],
+      },
+      { evidenceDir },
+    );
     expect(result.manifest.qiEvidenceSchemaVersion).toBe(1);
     expect(listQualityIntelligenceRuns({ evidenceDir })).toEqual(["run-crud-1"]);
     const loaded = loadQualityIntelligenceRun("run-crud-1", { evidenceDir });
     expect(loaded?.runId).toBe("run-crud-1");
     expect(loaded?.status).toBe("succeeded");
+    expect(loaded?.atomFingerprints?.[0]?.atomId).toBe("atom-1");
   });
 
   it("redaction happens BEFORE persist: on-disk file contains no caller secret", async () => {
@@ -212,6 +225,38 @@ describe("load-time integrity verification (issue #637)", () => {
     };
     await writeManifest("run-tamper-evidence", tampered);
     expect(() => loadQualityIntelligenceRun("run-tamper-evidence", { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
+  it("rejects a load when an atomFingerprints entry is added without recomputing the integrity hash", async () => {
+    recordQualityIntelligenceRun(
+      {
+        ...baseInput("run-tamper-atoms"),
+        atomFingerprints: [
+          {
+            atomId: "atom-1",
+            envelopeId: "env-1",
+            canonicalHashSha256Hex: "a".repeat(64),
+          },
+        ],
+      },
+      { evidenceDir },
+    );
+    const original = await readManifest("run-tamper-atoms");
+    const atomFingerprints = original.atomFingerprints as readonly Record<string, unknown>[];
+    await writeManifest("run-tamper-atoms", {
+      ...original,
+      atomFingerprints: [
+        ...atomFingerprints,
+        {
+          atomId: "atom-2",
+          envelopeId: "env-2",
+          canonicalHashSha256Hex: "b".repeat(64),
+        },
+      ],
+    });
+    expect(() => loadQualityIntelligenceRun("run-tamper-atoms", { evidenceDir })).toThrow(
       EvidenceReadError,
     );
   });

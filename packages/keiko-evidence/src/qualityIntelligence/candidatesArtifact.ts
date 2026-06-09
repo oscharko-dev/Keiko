@@ -221,6 +221,9 @@ export interface RecordQualityIntelligenceCandidatesInput {
   readonly runId: string;
   readonly generatedAt: string;
   readonly candidates: readonly QualityIntelligence.QualityIntelligenceTestCaseCandidate[];
+  readonly editedRevisions?:
+    | readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[]
+    | undefined;
   readonly evidenceDir: string;
   /**
    * Required defence-in-depth redactor applied to every string leaf before persist. The server
@@ -239,11 +242,16 @@ export const recordQualityIntelligenceCandidates = (
 ): string => {
   const rows = input.candidates.map(toRow);
   const redactedRows = input.redact(rows) as readonly QualityIntelligenceCandidateRow[];
+  const redactedEditedRevisions =
+    input.editedRevisions === undefined
+      ? undefined
+      : (input.redact(input.editedRevisions) as readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[]);
   const artifact: QualityIntelligenceCandidatesArtifact = {
     qiCandidatesSchemaVersion: QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION,
     runId: input.runId,
     generatedAt: input.generatedAt,
     candidates: redactedRows,
+    ...(redactedEditedRevisions !== undefined ? { editedRevisions: redactedEditedRevisions } : {}),
   };
   return storeFor(input.evidenceDir).record(input.runId, artifact);
 };

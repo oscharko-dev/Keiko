@@ -21,6 +21,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import {
+  listQualityIntelligenceRuns,
+  loadQualityIntelligenceCandidates,
   loadQualityIntelligenceRun,
   recordQualityIntelligenceRun,
   recordQualityIntelligenceCandidates,
@@ -34,6 +36,7 @@ import { STREAMING } from "../../routes.js";
 import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createRunRegistry } from "../../index.js";
 import { createInMemoryUiStore } from "../../store/index.js";
+import { ingestInlineSources } from "../runIngestion.js";
 import { handleQiReCheck, handleQiRegenerateStale } from "../reCheckRoutes.js";
 
 // ─── Fixture helpers ──────────────────────────────────────────────────────────
@@ -131,6 +134,96 @@ function makeCandidateRow(): Parameters<
     tags: [],
     status: "proposed",
   };
+}
+
+function qiCandidate(
+  runId: string,
+  id: string,
+  title: string,
+  derivedFromAtomIds: readonly string[],
+): Parameters<typeof recordQualityIntelligenceCandidates>[0]["candidates"][number] {
+  return {
+    id: QualityIntelligence.asQualityIntelligenceTestCaseId(id),
+    runId: QualityIntelligence.asQualityIntelligenceRunId(runId),
+    derivedFromAtomIds: derivedFromAtomIds.map((atomId) =>
+      QualityIntelligence.asQualityIntelligenceEvidenceAtomId(atomId),
+    ),
+    title,
+    preconditions: [],
+    steps: ["Step 1"],
+    expectedResults: ["Expected 1"],
+    priority: "P2",
+    riskClass: "regression",
+    tags: [],
+    status: "proposed",
+  };
+}
+
+function seedRunFromSources(args: {
+  readonly runId: string;
+  readonly sources: readonly {
+    readonly kind: "requirements" | "workspace";
+    readonly label: string;
+    readonly text?: string;
+    readonly path?: string;
+  }[];
+  readonly candidates: Parameters<typeof recordQualityIntelligenceCandidates>[0]["candidates"];
+  readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
+  readonly findings?: Parameters<typeof recordQualityIntelligenceRun>[0]["findings"];
+}): ReturnType<typeof ingestInlineSources> {
+  const requestSources: QualityIntelligence.QualityIntelligenceInlineSource[] = args.sources.map((source) =>
+    source.kind === "requirements"
+      ? { kind: "requirements", label: source.label, text: source.text ?? "" }
+      : { kind: "workspace", label: source.label, path: source.path ?? "" },
+  );
+  const ingestion = ingestInlineSources({
+    request: { sources: requestSources },
+    runId: args.runId,
+    registeredAt: "2026-06-09T10:00:00.000Z",
+  });
+  recordQualityIntelligenceRun(
+    {
+      runId: args.runId,
+      planAt: "2026-06-09T10:00:00.000Z",
+      completedAt: "2026-06-09T10:01:00.000Z",
+      status: "succeeded",
+      policyProfileIds: ["qi:regression-default"],
+      retentionPolicyId: "default",
+      modelGatewayCallCount: 0,
+      totals: {
+        candidates: args.candidates.length,
+        findings: args.findings?.length ?? 0,
+        exports: 0,
+      },
+      findings: args.findings ?? [],
+      exports: [],
+      evidenceRefs: ingestion.ingestedAtoms.map((entry) => ({
+        envelopeId: String(entry.atom.sourceEnvelopeId),
+        atomId: String(entry.atom.id),
+        lifecycleStatus: entry.atom.lifecycleStatus,
+      })),
+      provenanceRefs: ingestion.provenanceRefs,
+      sourceFingerprints: ingestion.envelopes.map((envelope) => ({
+        envelopeId: String(envelope.id),
+        integrityHashSha256Hex: envelope.provenance.integrityHashSha256Hex,
+      })),
+      atomFingerprints: ingestion.ingestedAtoms.map((entry) => ({
+        atomId: String(entry.atom.id),
+        envelopeId: String(entry.atom.sourceEnvelopeId),
+        canonicalHashSha256Hex: entry.atom.canonicalHashSha256Hex,
+      })),
+    },
+    { evidenceDir },
+  );
+  recordQualityIntelligenceCandidates({
+    runId: args.runId,
+    generatedAt: "2026-06-09T10:01:00.000Z",
+    candidates: args.candidates,
+    editedRevisions: args.editedRevisions,
+    evidenceDir,
+    redact: (value: unknown): unknown => value,
+  });
+  return ingestion;
 }
 
 // ─── Test lifecycle ───────────────────────────────────────────────────────────
@@ -459,5 +552,255 @@ describe("handleQiRegenerateStale — missing id param", () => {
     const result = asResult(await handleQiRegenerateStale(c, deps(evidenceDir)));
     expect(result.status).toBe(400);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+});
+
+describe("handleQiReCheck — requirement drift is atom-aware (#798)", () => {
+  it("marks only the candidate derived from the edited requirement line as stale", async () => {
+    const runId = "run-req-atom-aware";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: {
+        sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-req-1", "Login test", [String(seeded.ingestedAtoms[0]?.atom.id)]),
+        qiCandidate(runId, "cand-req-2", "MFA test", [String(seeded.ingestedAtoms[1]?.atom.id)]),
+      ],
+    });
+
+    const result = asResult(
+      await handleQiReCheck(
+        ctx(
+          "re-check",
+          runId,
+          makeReq({
+            sources: [
+              {
+                kind: "requirements",
+                label: "Spec",
+                text: "Login must work reliably\nMFA must also write an audit entry",
+              },
+            ],
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      staleCount: number;
+      fresh: readonly string[];
+      changedStale: readonly { candidateId: string; reason: string; envelopeId: string }[];
+    };
+    expect(body.staleCount).toBe(1);
+    expect(body.fresh).toEqual(["cand-req-1"]);
+    expect(body.changedStale).toHaveLength(1);
+    expect(body.changedStale[0]).toMatchObject({
+      candidateId: "cand-req-2",
+      reason: "source-changed",
+    });
+    expect(typeof body.changedStale[0]?.envelopeId).toBe("string");
+  });
+});
+
+describe("handleQiReCheck — workspace content drift is atom-aware (#799)", () => {
+  it("detects an in-place file content edit even when the workspace root and file path stay the same", async () => {
+    const runId = "run-workspace-atom-aware";
+    const dir = mkdtempSync(join(tmpdir(), "qi-recheck-ws-"));
+    try {
+      const path = join(dir, "spec.md");
+      writeFileSync(path, "Version one requirement.\n", "utf8");
+      const seeded = ingestInlineSources({
+        request: {
+          sources: [{ kind: "workspace", label: "Repo", path: dir }],
+        },
+        runId,
+        registeredAt: "2026-06-09T10:00:00.000Z",
+      });
+      seedRunFromSources({
+        runId,
+        sources: [{ kind: "workspace", label: "Repo", path: dir }],
+        candidates: [
+          qiCandidate(runId, "cand-ws-1", "Workspace test", [String(seeded.ingestedAtoms[0]?.atom.id)]),
+        ],
+      });
+
+      writeFileSync(path, "Version two requirement.\n", "utf8");
+      const result = asResult(
+        await handleQiReCheck(
+          ctx(
+            "re-check",
+            runId,
+            makeReq({ sources: [{ kind: "workspace", label: "Repo", path: dir }] }),
+          ),
+          deps(evidenceDir),
+        ),
+      );
+
+      expect(result.status).toBe(200);
+      const body = result.body as {
+        staleCount: number;
+        changedStale: readonly { candidateId: string; reason: string; envelopeId: string }[];
+      };
+      expect(body.staleCount).toBe(1);
+      expect(body.changedStale).toHaveLength(1);
+      expect(body.changedStale[0]).toMatchObject({
+        candidateId: "cand-ws-1",
+        reason: "source-changed",
+      });
+      expect(typeof body.changedStale[0]?.envelopeId).toBe("string");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("handleQiRegenerateStale — preserved candidates are materialised in the new run (#800)", () => {
+  it("keeps preserved fresh candidates and their edit history in the new run artifact", async () => {
+    const runId = "run-regen-preserve";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: {
+        sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-preserved", "Login test", [String(seeded.ingestedAtoms[0]?.atom.id)]),
+        qiCandidate(runId, "cand-stale", "MFA test", [String(seeded.ingestedAtoms[1]?.atom.id)]),
+      ],
+      editedRevisions: [
+        {
+          candidateId: "cand-preserved",
+          provenance: {
+            editedAt: "2026-06-09T10:02:00.000Z",
+            editedBy: "human",
+            editorLabel: "Reviewer A",
+          },
+          editedFields: {
+            title: "Login test (edited)",
+          },
+        },
+      ],
+    });
+
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          makeReq({
+            sources: [
+              {
+                kind: "requirements",
+                label: "Spec",
+                text: "Login must work reliably\nMFA must also write an audit entry",
+              },
+            ],
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      runId: string;
+      regeneratedCount: number;
+      preservedCount: number;
+    };
+    expect(body.regeneratedCount).toBe(0);
+    expect(body.preservedCount).toBe(1);
+    const artifact = loadQualityIntelligenceCandidates(body.runId, { evidenceDir });
+    expect(artifact?.candidates.map((candidate) => candidate.id)).toEqual(["cand-preserved"]);
+    expect(artifact?.editedRevisions?.map((revision) => revision.candidateId)).toEqual([
+      "cand-preserved",
+    ]);
+  });
+});
+
+describe("handleQiRegenerateStale — legacy requirements runs fail closed without writing a failed empty run (#801)", () => {
+  it("returns a controlled legacy error and leaves no extra run in the list", async () => {
+    const runId = "run-legacy-requirements";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: {
+        sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    recordQualityIntelligenceRun(
+      {
+        runId,
+        planAt: "2026-06-09T10:00:00.000Z",
+        completedAt: "2026-06-09T10:01:00.000Z",
+        status: "succeeded",
+        policyProfileIds: ["qi:regression-default"],
+        retentionPolicyId: "default",
+        modelGatewayCallCount: 0,
+        totals: { candidates: 1, findings: 0, exports: 0 },
+        findings: [],
+        exports: [],
+        evidenceRefs: seeded.ingestedAtoms.map((entry) => ({
+          envelopeId: String(entry.atom.sourceEnvelopeId),
+          atomId: String(entry.atom.id),
+          lifecycleStatus: entry.atom.lifecycleStatus,
+        })),
+        provenanceRefs: seeded.provenanceRefs,
+        sourceFingerprints: seeded.envelopes.map((envelope) => ({
+          envelopeId: String(envelope.id),
+          integrityHashSha256Hex: envelope.provenance.integrityHashSha256Hex,
+        })),
+      },
+      { evidenceDir },
+    );
+    recordQualityIntelligenceCandidates({
+      runId,
+      generatedAt: "2026-06-09T10:01:00.000Z",
+      candidates: [
+        qiCandidate(runId, "cand-legacy", "Legacy MFA test", [String(seeded.ingestedAtoms[1]?.atom.id)]),
+      ],
+      evidenceDir,
+      redact: (value: unknown): unknown => value,
+    });
+
+    const beforeRunIds = listQualityIntelligenceRuns({ evidenceDir });
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          makeReq({
+            sources: [
+              {
+                kind: "requirements",
+                label: "Spec",
+                text: "Login must work reliably\nMFA must also write an audit entry",
+              },
+            ],
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(409);
+    expect((result.body as { error: { code: string } }).error.code).toBe(
+      "QI_REGEN_LEGACY_REQUIREMENTS_UNSUPPORTED",
+    );
+    expect(listQualityIntelligenceRuns({ evidenceDir })).toEqual(beforeRunIds);
   });
 });

@@ -331,13 +331,30 @@ describe("splitRequirementsIntoAtoms — determinism", () => {
     expect(atoms[0]?.atom.canonicalHashSha256Hex).not.toBe(atoms[1]?.atom.canonicalHashSha256Hex);
   });
 
-  it("index in atom id changes with position (same text at different positions has different id)", () => {
-    // atom id derivation includes the index, so two identical statements can't both appear
-    // (they are deduplicated). But two *different* statements at indices 0 and 1 get different ids
-    // even if we swap their positions.
-    const text = "First requirement statement must work\nSecond requirement statement must work";
-    const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, opts());
-    expect(atoms[0]?.atom.id).not.toBe(atoms[1]?.atom.id);
+  it("keeps the same atom id for an unchanged statement even when another line is inserted before it", () => {
+    const original = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(
+      "First requirement statement must work\nSecond requirement statement must work",
+      opts(),
+    );
+    const edited = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(
+      "Inserted unrelated requirement statement\nFirst requirement statement must work\nSecond requirement statement must work",
+      opts(),
+    );
+    expect(original[0]?.atom.id).toBe(edited[1]?.atom.id);
+    expect(original[1]?.atom.id).toBe(edited[2]?.atom.id);
+  });
+
+  it("keeps the same atom id for an unchanged statement when neighbouring text changes", () => {
+    const original = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(
+      "First requirement statement must work\nSecond requirement statement must work",
+      opts(),
+    );
+    const edited = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(
+      "First requirement statement must work\nSecond requirement statement was refined",
+      opts(),
+    );
+    expect(original[0]?.atom.id).toBe(edited[0]?.atom.id);
+    expect(original[1]?.atom.id).not.toBe(edited[1]?.atom.id);
   });
 
   it("returned array is frozen", () => {

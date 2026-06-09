@@ -158,6 +158,24 @@ function evidenceRefsFor(
   );
 }
 
+function atomFingerprintsFor(
+  ingestedAtoms: readonly QualityIntelligenceIngestedAtom[],
+): readonly {
+  readonly atomId: string;
+  readonly envelopeId: string;
+  readonly canonicalHashSha256Hex: string;
+}[] {
+  return Object.freeze(
+    ingestedAtoms.map((entry) =>
+      Object.freeze({
+        atomId: String(entry.atom.id),
+        envelopeId: String(entry.atom.sourceEnvelopeId),
+        canonicalHashSha256Hex: entry.atom.canonicalHashSha256Hex,
+      }),
+    ),
+  );
+}
+
 function buildCoverageGapFinding(
   runId: QI.QualityIntelligenceRunId,
   atomStatus: AtomCoverageStatus,
@@ -430,6 +448,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         envelopeId: String(e.id),
         integrityHashSha256Hex: e.provenance.integrityHashSha256Hex,
       }));
+      const atomFingerprints = atomFingerprintsFor(input.ingestedAtoms);
       const result = persistRun({
         ctx,
         status: "succeeded",
@@ -442,6 +461,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
         coverageMatrix,
         qualityScore: judgeResult.qualityScore,
         ...(sourceFingerprints.length > 0 ? { sourceFingerprints } : {}),
+        ...(atomFingerprints.length > 0 ? { atomFingerprints } : {}),
         ...(generation.modelId !== undefined ? { modelId: generation.modelId } : {}),
         ...(generation.seedUsed !== undefined ? { seedUsed: generation.seedUsed } : {}),
         ...(generation.modelParameters !== undefined
