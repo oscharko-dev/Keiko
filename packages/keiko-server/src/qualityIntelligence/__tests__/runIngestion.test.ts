@@ -306,6 +306,72 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
       expect((err as QiIngestionError).code).toBe("QI_SOURCE_DENIED");
     }
   });
+
+  it("throws QI_SOURCE_UNSUPPORTED for a file with an unsupported extension", () => {
+    // Plain-text content (no NUL) so the failure can ONLY originate at the extension gate
+    // (isSupportedFilePath), not the binary guard — this locks that branch against mutation.
+    const dir = makeDir();
+    const path = writeFile(dir, "installer.exe", "plain readable text, definitely not binary");
+    try {
+      ingest(input([fileSource("Installer", path)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
+    }
+  });
+
+  it("normalises a '..' traversal in an absolute path and still enforces the deny-list", () => {
+    // An absolute path with '..' segments that resolves into a denied credential directory must
+    // still be denied — resolve() normalises the path before the deny check, so traversal cannot
+    // smuggle a protected file past isDenied (the traversal half of #713's traversal/deny edge).
+    const dir = makeDir();
+    const sshDir = join(dir, ".ssh");
+    mkdirSync(sshDir);
+    writeFile(sshDir, "id.md", "credential-adjacent notes");
+    const traversal = join(dir, "sub", "..", ".ssh", "id.md");
+    try {
+      ingest(input([fileSource("Traversal", traversal)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_DENIED");
+    }
+  });
+
+  it("rejects a best-effort PDF whose decoded text is binary noise (NUL byte)", () => {
+    // A real PDF's prose lives in compressed streams; decoded as UTF-8 it is binary noise carrying
+    // a NUL byte. Reject with a coded error rather than ingest garbage (#713: never partial ingest).
+    const dir = makeDir();
+    const path = writeFile(dir, "scan.pdf", `%PDF-1.7${String.fromCharCode(0)} compressed stream`);
+    try {
+      ingest(input([fileSource("ScanPdf", path)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
+    }
+  });
+
+  it("rejects a best-effort DOCX dominated by control characters (binary ZIP, no NUL)", () => {
+    // A DOCX is a ZIP; even without a NUL its decoded bytes are dominated by control characters.
+    // The control-character density guard catches it where the NUL check alone would not.
+    const dir = makeDir();
+    const controls = [1, 2, 3, 4, 5, 6, 7, 8].map((c) => String.fromCharCode(c)).join("");
+    const path = writeFile(dir, "report.docx", `PK${controls.repeat(8)}docx`);
+    try {
+      ingest(input([fileSource("NoisyDocx", path)]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
+    }
+  });
+
+  it("still ingests a genuinely text-based PDF (German prose is not flagged as binary)", () => {
+    // The binary guard must not over-reject real prose: a text PDF with umlauts/ß ingests normally.
+    const dir = makeDir();
+    const path = writeFile(dir, "spec.pdf", "Fachkonzept: Überweisung mit Prüfziffer und Deckung.");
+    const result = ingest(input([fileSource("TextPdf", path)]));
+    expect(result.ingestedAtoms).toHaveLength(1);
+    expect(result.ingestedAtoms[0]?.canonicalText.includes("Prüfziffer")).toBe(true);
+  });
 });
 
 // ─── Happy path: envelopes and atoms ─────────────────────────────────────────
