@@ -8511,3 +8511,286 @@ select.dlg-input {
   border-radius: var(--radius-sm, 6px);
   background: var(--card);
 }
+
+/* ── Figma Snapshot window (Epic #750, Issue #756) ─────────────────────────────
+   Mirror the qi-launcher / connector-picker design language.
+   Token contract: --bg, --card, --card-2, --fg, --fg-muted, --fg-dim,
+                   --accent, --accent-text, --border, --radius-sm, --radius-md
+   ─────────────────────────────────────────────────────────────────────────── */
+
+.figma-snapshot-window {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  height: 100%;
+  overflow-y: auto;
+  color: var(--fg);
+}
+
+/* ── Input form ───────────────────────────────────────────────────────────── */
+
+.figma-snapshot-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.figma-snapshot-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--fg-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.figma-snapshot-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.figma-snapshot-input {
+  flex: 1;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--fg);
+  font-size: 0.8125rem;
+  outline-offset: 2px;
+  min-width: 0;
+}
+.figma-snapshot-input:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.figma-snapshot-input[aria-invalid="true"] {
+  border-color: hsl(6 80% 52%);
+}
+.figma-snapshot-input:disabled {
+  opacity: 0.6;
+}
+
+.figma-snapshot-trigger-btn {
+  padding: 7px 14px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  border: none;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.figma-snapshot-trigger-btn:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.figma-snapshot-trigger-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.figma-snapshot-hint {
+  font-size: 0.75rem;
+  color: var(--fg-dim);
+  margin: 0;
+}
+
+/* ── Status / progress ────────────────────────────────────────────────────── */
+
+.figma-snapshot-status {
+  min-height: 20px;
+}
+
+.figma-snapshot-progress {
+  font-size: 0.8125rem;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+.figma-snapshot-error {
+  font-size: 0.8125rem;
+  color: hsl(6 80% 52%);
+  margin: 0;
+}
+
+/* ── Stored-snapshot notice ───────────────────────────────────────────────── */
+
+.figma-snapshot-stored-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card-2);
+  border: 1px solid var(--border);
+}
+
+.figma-snapshot-stored-text {
+  flex: 1;
+  font-size: 0.8125rem;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+.figma-snapshot-load-btn {
+  padding: 5px 12px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.figma-snapshot-load-btn:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+/* ── Snapshot result ──────────────────────────────────────────────────────── */
+
+.figma-snapshot-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.figma-snapshot-reduction {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+
+.figma-snapshot-reduction-hint {
+  font-size: 0.8125rem;
+  color: var(--fg);
+  font-weight: 600;
+  margin: 0;
+}
+
+.figma-snapshot-skipped-notice {
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  margin: 4px 0 0;
+}
+
+.figma-snapshot-resnapshot-btn {
+  align-self: flex-start;
+  padding: 5px 14px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.figma-snapshot-resnapshot-btn:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.figma-snapshot-resnapshot-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── PAT scopes info (informational <details>) ────────────────────────────── */
+
+.figma-snapshot-scopes {
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  border-radius: var(--radius-sm, 6px);
+  padding: 4px 0;
+}
+
+.figma-snapshot-scopes-summary {
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  padding: 4px 0;
+  outline-offset: 2px;
+}
+.figma-snapshot-scopes-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  border-radius: 2px;
+}
+
+.figma-snapshot-scopes-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.figma-snapshot-scopes-note {
+  margin: 6px 0 0;
+  color: var(--fg-dim);
+}
+
+/* ── Screen gallery ───────────────────────────────────────────────────────── */
+
+.figma-snapshot-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.figma-snapshot-screen-card {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card);
+  border: 1px solid var(--border);
+  align-items: flex-start;
+}
+
+.figma-snapshot-screen-placeholder {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.figma-snapshot-screen-index {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--fg-muted);
+}
+
+.figma-snapshot-screen-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.figma-snapshot-screen-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.figma-snapshot-screen-summary {
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+.figma-snapshot-screen-size,
+.figma-snapshot-screen-id {
+  font-size: 0.6875rem;
+  color: var(--fg-dim);
+  margin: 0;
+}

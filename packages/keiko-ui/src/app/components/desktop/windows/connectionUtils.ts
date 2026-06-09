@@ -27,7 +27,13 @@ export const CONNECTABLE: Readonly<Record<string, readonly string[]>> = {
   // Epic #270 — Quality Intelligence binds to a Files window: the connected folder (or the active
   // file) becomes the source for "Generate test cases". Epic #710 — QI also binds to a Connector
   // window, adopting its selected capsule / capsule-set as the Generate source.
-  quality: ["files", "connector"],
+  // Epic #750 #756 — QI also binds to a Figma Snapshot window: the stored snapshot run becomes the
+  // figma-snapshot source for the next Generate run.
+  quality: ["files", "connector", "figma"],
+  // Epic #750 #756 — a Figma Snapshot window can only bind to the QI hub. The window itself holds
+  // no PAT; it stores the snapshotRunId in cfg after a successful server-side build, and the QI hub
+  // reads that id via the relationship edge.
+  figma: ["quality"],
 };
 
 export function canConnect(a: string | undefined, b: string | undefined): boolean {
@@ -55,6 +61,8 @@ export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
   // A Connector edge (chat↔connector or quality↔connector) means the bound window draws on the
   // connector's selected capsule / capsule-set as knowledge (Epic #189 / Epic #710, Issue #718).
   if (pair.includes("connector")) return "uses knowledge";
+  // Epic #750 #756 — a Figma edge means the QI hub will generate from the captured snapshot.
+  if (pair.includes("figma")) return "uses snapshot";
   if (pair.includes("keiko")) return "governed by";
   if (pair[0] === "agents" && pair[1] === "agents") return "delegates";
   if (pair.includes("terminal")) return "runs in";

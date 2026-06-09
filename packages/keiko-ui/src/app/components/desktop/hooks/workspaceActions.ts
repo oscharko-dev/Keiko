@@ -324,6 +324,7 @@ type ConnectApi = Pick<
   | "linkedAllFilesRoots"
   | "linkedConnectorCapsuleIds"
   | "linkedConnectorCapsuleSetIds"
+  | "linkedFigmaSnapshotRunIds"
   | "currentFilesContext"
 >;
 
@@ -532,6 +533,26 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const linkedConnectorCapsuleSetIds: WorkspaceApi["linkedConnectorCapsuleSetIds"] = (id) =>
     linkedConnectorSelectionIds(id, "capsule-set");
 
+  // Epic #750 #756 — read the snapshotRunId stored in cfg of each connected Figma Snapshot window.
+  // Deduped and capped at MAX_SCOPES, matching the connector capsule reader above.
+  const linkedFigmaSnapshotRunIds: WorkspaceApi["linkedFigmaSnapshotRunIds"] = (id) => {
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const c of connsRef.current) {
+      if (ids.length >= MAX_SCOPES) break;
+      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
+      if (otherId === null) continue;
+      const w = winsRef.current.find((x) => x.id === otherId);
+      if (w === undefined || w.type !== "figma") continue;
+      const runId = w.cfg["snapshotRunId"];
+      if (typeof runId !== "string" || runId.length === 0) continue;
+      if (seen.has(runId)) continue;
+      seen.add(runId);
+      ids.push(runId);
+    }
+    return ids;
+  };
+
   return {
     startConnect,
     confirmConnect,
@@ -543,6 +564,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     linkedAllFilesRoots,
     linkedConnectorCapsuleIds,
     linkedConnectorCapsuleSetIds,
+    linkedFigmaSnapshotRunIds,
     currentFilesContext,
   };
 }

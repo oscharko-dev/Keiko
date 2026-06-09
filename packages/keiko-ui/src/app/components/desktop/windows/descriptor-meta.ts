@@ -162,6 +162,15 @@ export const WIN_META: Readonly<Record<WindowType, WorkspaceDescriptorMeta>> = {
     authority: "user-confirm",
     persistence: "durable.ui",
   },
+  // Epic #750, Issue #756 — Figma Snapshot window: triggers a server-side snapshot-build from a
+  // board link and displays the captured screens. The PAT never reaches the UI; the window stores
+  // only the resulting snapshotRunId in cfg so the connected QI hub can read it as a source.
+  figma: {
+    lifecycle: ["idle", "running", "results", "error"],
+    trustBoundary: ["ui", "evidence", "network"],
+    authority: "user-confirm",
+    persistence: "evidence-reference",
+  },
 };
 
 // ─── Module-evaluation validation ─────────────────────────────────────────

@@ -38,6 +38,8 @@ export interface WorkspaceApi {
   readonly linkedAllFilesRoots: (id: string) => readonly string[];
   readonly linkedConnectorCapsuleIds: (id: string) => readonly string[];
   readonly linkedConnectorCapsuleSetIds: (id: string) => readonly string[];
+  /** Epic #750 #756 — snapshot run ids from connected Figma Snapshot windows. */
+  readonly linkedFigmaSnapshotRunIds: (id: string) => readonly string[];
   readonly currentFilesContext: () => FilesWindowContext | null;
   readonly zoomTo: (z: number) => void;
   readonly resetView: () => void;

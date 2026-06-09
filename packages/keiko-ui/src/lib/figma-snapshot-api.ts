@@ -1,0 +1,104 @@
+/**
+ * Typed fetch helpers for the Figma Snapshot BFF routes (Epic #750, Issue #756).
+ * Same-origin relative paths (/api/figma/...).
+ *
+ * Security posture: the PAT is resolved server-side only. The UI passes the plain
+ * board link; the server resolves the token from env/vault, builds the snapshot,
+ * and returns a token-free summary. No secret ever reaches this module.
+ */
+
+import { ApiError } from "./api";
+
+// ─── Shared internal helpers ───────────────────────────────────────────────────
+
+async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(method === "GET" || method === "HEAD" ? {} : { "X-Keiko-CSRF": "1" }),
+      ...(init?.headers ?? {}),
+    },
+  });
+
+  if (!res.ok) {
+    let code = "INTERNAL";
+    let message = `HTTP ${res.status.toString()}`;
+    try {
+      const envelope = (await res.json()) as { error: { code: string; message: string } };
+      code = envelope.error.code;
+      message = envelope.error.message;
+    } catch {
+      // parse failure — keep generic message
+    }
+    throw new ApiError(code, message, res.status);
+  }
+
+  return res.json() as Promise<T>;
+}
+
+// ─── Response types (mirror BFF FigmaSnapshotSummary / FigmaScreenSummary) ──────
+
+export interface FigmaScreenSummary {
+  readonly screenId: string;
+  /** Display name derived from the IR. */
+  readonly name: string;
+  /** Brief structural description, e.g. "3 fields, 2 controls". */
+  readonly irSummary: string;
+  /** Relative path of the rendered PNG side-file. */
+  readonly imageRelativePath: string;
+  /** sha256 of the rendered PNG (tamper-evidence). */
+  readonly imageSha256: string;
+  /** Byte size of the rendered PNG. */
+  readonly imageByteLength: number;
+}
+
+export interface FigmaSnapshotSummary {
+  readonly runId: string;
+  readonly fileKey: string;
+  readonly nodeId: string;
+  readonly version: string | undefined;
+  readonly fetchedAt: string;
+  /** Number of screens successfully rendered. */
+  readonly screenCount: number;
+  /** Number of screens that could not be rendered (partial build). */
+  readonly skippedCount: number;
+  /**
+   * Human-readable reduction hint, e.g. "3 screens from 5 detected (2 renders skipped)".
+   * Shown in the window header to surface the "huge board → N screens" story.
+   */
+  readonly reductionHint: string;
+  /** Integrity hash for drift detection. */
+  readonly integrityHash: string;
+  readonly screens: readonly FigmaScreenSummary[];
+}
+
+// ─── POST /api/figma/snapshots ─────────────────────────────────────────────────
+
+/**
+ * Triggers a server-side snapshot-build from a Figma board link.
+ *
+ * The token is resolved server-side (vault > config > FIGMA_ACCESS_TOKEN env).
+ * The browser NEVER holds or transmits the PAT.
+ *
+ * @param boardLink Full Figma board URL including a `node-id` param, e.g.
+ *   https://www.figma.com/design/{key}/{name}?node-id=123:456
+ */
+export async function triggerFigmaSnapshot(boardLink: string): Promise<FigmaSnapshotSummary> {
+  return fetchJson<FigmaSnapshotSummary>("/api/figma/snapshots", {
+    method: "POST",
+    body: JSON.stringify({ boardLink }),
+  });
+}
+
+// ─── GET /api/figma/snapshots/:runId ──────────────────────────────────────────
+
+/**
+ * Loads a stored snapshot summary by run id. No contact with Figma; reads the
+ * immutable evidence record written by the snapshot-build.
+ */
+export async function loadFigmaSnapshotSummary(runId: string): Promise<FigmaSnapshotSummary> {
+  return fetchJson<FigmaSnapshotSummary>(`/api/figma/snapshots/${encodeURIComponent(runId)}`);
+}

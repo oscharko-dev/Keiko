@@ -18,6 +18,7 @@ import { IntegrationsWidget } from "./cards/IntegrationsWidget";
 import { KeikoTwinPanel } from "./panels/KeikoTwinPanel";
 import { SettingsPanel } from "./panels/SettingsPanel";
 import { ConnectorPickerWidget } from "./cards/ConnectorPickerWidget";
+import { FigmaSnapshotWindow } from "./figma/FigmaSnapshotWindow";
 import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
 import { QiRunCard } from "./quality-intelligence/QiRunCard";
 import { RelationshipsView } from "../../../relationships/RelationshipsView";
@@ -110,6 +111,7 @@ registerWindowRender("quality", (_cfg, ctx) => (
     connectedRoots={ctx.linkedRoots}
     connectedCapsuleIds={ctx.linkedCapsuleIds}
     connectedCapsuleSetIds={ctx.linkedCapsuleSetIds}
+    connectedFigmaSnapshotRunIds={ctx.linkedFigmaSnapshotRunIds}
   />
 ));
 registerWindowRender("qiRun", (cfg) => {
@@ -182,6 +184,20 @@ registerWindowRender("integ", (cfg) => {
     <IntegrationsWidget />
   );
 });
+// Epic #750 #756 — Figma Snapshot Workspace window. snapshotRunId is persisted into cfg by the
+// component after a successful build so the connected QI hub can read it via linkedFigmaSnapshotRunIds.
+registerWindowRender("figma", (cfg, ctx) => {
+  const snapshotRunId = str(cfg, "snapshotRunId");
+  return (
+    <FigmaSnapshotWindow
+      snapshotRunId={snapshotRunId}
+      updateCfg={(patch) => {
+        ctx.updateCfg(patch);
+      }}
+    />
+  );
+});
+
 // Epic #189 Slice 3 M2 — connector picker window. updateCfg persists selectedKind/selectedId into
 // the window's cfg so the relationship-edge binding (M3) can read the selection.
 registerWindowRender("connector", (cfg, ctx) => {

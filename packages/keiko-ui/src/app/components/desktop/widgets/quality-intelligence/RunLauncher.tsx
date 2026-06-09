@@ -10,6 +10,7 @@ import type { ReactNode } from "react";
 import type {
   QualityIntelligenceCapsuleSource,
   QualityIntelligenceCapsuleSetSource,
+  QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceWorkspaceSource,
@@ -91,6 +92,12 @@ export interface RunLauncherProps {
    * Manual input and connectedFilePath take precedence.
    */
   readonly connectedCapsuleSetIds?: readonly string[] | undefined;
+  /**
+   * Figma Snapshot run ids from connected Figma Snapshot windows (Epic #750 #756). Each becomes one
+   * figma-snapshot source appended after capsule-set sources. The server loads the stored snapshot
+   * and injects the IR into the QI generation context.
+   */
+  readonly connectedFigmaSnapshotRunIds?: readonly string[] | undefined;
 }
 
 function baseName(p: string): string {
@@ -196,6 +203,25 @@ function buildCapsuleSetSources(
   return result;
 }
 
+/**
+ * Builds figma-snapshot sources from connected snapshot run ids (Epic #750 #756).
+ * Dedupes and caps at MAX_SCOPES. Label is the run id itself (opaque string).
+ */
+function buildFigmaSnapshotSources(
+  runIds: readonly string[] | null | undefined,
+): QualityIntelligenceFigmaSnapshotSource[] {
+  if (runIds === undefined || runIds === null || runIds.length === 0) return [];
+  const seen = new Set<string>();
+  const result: QualityIntelligenceFigmaSnapshotSource[] = [];
+  for (const id of runIds) {
+    if (result.length >= MAX_SCOPES) break;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    result.push({ kind: "figma-snapshot", label: id, snapshotRunId: id });
+  }
+  return result;
+}
+
 export function RunLauncher({
   onRunCompleted,
   startImpl = startQiRun,
@@ -204,6 +230,7 @@ export function RunLauncher({
   connectedRoots,
   connectedCapsuleIds,
   connectedCapsuleSetIds,
+  connectedFigmaSnapshotRunIds,
 }: RunLauncherProps): ReactNode {
   const [label, setLabel] = useState("");
   const [sourceKind, setSourceKind] = useState<"requirements" | "workspace">("requirements");
@@ -225,8 +252,12 @@ export function RunLauncher({
   const workspaceSources = buildConnectedSources(connectedRoots, connectedFolder);
   const capsuleSources = buildCapsuleSources(connectedCapsuleIds);
   const capsuleSetSources = buildCapsuleSetSources(connectedCapsuleSetIds);
+  const figmaSnapshotSources = buildFigmaSnapshotSources(connectedFigmaSnapshotRunIds);
   const connectedSourceCount =
-    workspaceSources.length + capsuleSources.length + capsuleSetSources.length;
+    workspaceSources.length +
+    capsuleSources.length +
+    capsuleSetSources.length +
+    figmaSnapshotSources.length;
   const hasConnected = connectedFile !== null || connectedSourceCount > 0;
   const manualReady =
     sourceKind === "requirements" ? text.trim().length > 0 : path.trim().length > 0;
@@ -277,6 +308,7 @@ export function RunLauncher({
                 ...workspaceSources,
                 ...capsuleSources,
                 ...capsuleSetSources,
+                ...figmaSnapshotSources,
               ] as QualityIntelligenceStartRunRequest["sources"]);
     const request: QualityIntelligenceStartRunRequest = {
       sources,
@@ -305,6 +337,7 @@ export function RunLauncher({
     workspaceSources,
     capsuleSources,
     capsuleSetSources,
+    figmaSnapshotSources,
     onMessage,
     onRunCompleted,
     parsedSeed,

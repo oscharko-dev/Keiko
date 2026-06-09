@@ -29,7 +29,10 @@ export type WindowType =
   | "qiRun"
   // Epic #532 — Relationship engine: a singleton tool window (graph list + inspector + impact +
   // health). Like QI, it lives inside the Workspace, not as a full-page route.
-  | "relationships";
+  | "relationships"
+  // Epic #750, Issue #756 — Figma/Snapshot surface. Paste a board link, trigger a snapshot-build,
+  // view captured screens + IR summaries. Connects to the QI hub as a figma-snapshot source.
+  | "figma";
 
 export interface WindowSize {
   readonly w: number;
@@ -57,6 +60,8 @@ export interface WindowRenderContext {
   readonly linkedCapsuleIds: readonly string[];
   /** Epic #710 #718 — capsule-set ids from connected Connector windows (capsule-set kind only). */
   readonly linkedCapsuleSetIds: readonly string[];
+  /** Epic #750 #756 — snapshot run ids from connected Figma Snapshot windows. */
+  readonly linkedFigmaSnapshotRunIds: readonly string[];
   readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
   /**
    * Open another Workspace window from inside this one (e.g. the QI hub opening a per-run result
@@ -375,6 +380,19 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tool: true,
     singleton: true,
   },
+  // Epic #750, Issue #756 — Figma/Snapshot surface. Paste a board link, trigger a snapshot-build,
+  // view captured screens + IR summaries, connect to the QI hub as a figma-snapshot source.
+  // PAT stays server-side; the window only stores the resulting snapshotRunId in cfg.
+  figma: {
+    title: "Figma Snapshot",
+    icon: "layers",
+    accent: true,
+    desc: "Capture a Figma board snapshot",
+    w: 420,
+    h: 540,
+    min: { w: 320, h: 360 },
+    tiny: { w: 280, h: 240 },
+  },
 };
 
 const RENDER_REGISTRY = new Map<
@@ -434,6 +452,7 @@ export const WIN_TYPES: Readonly<Record<WindowType, WindowTypeDef>> = buildAll()
 export const TYPE_ORDER: readonly WindowType[] = [
   "chat",
   "connector",
+  "figma",
   "files",
   "editor",
   "browser",

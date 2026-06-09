@@ -127,6 +127,10 @@ import {
   QI_TRACEABILITY_ROUTE_GROUP,
   QI_RECHECK_ROUTE_GROUP,
 } from "./qualityIntelligence/index.js";
+import {
+  handleFigmaTriggerSnapshot,
+  handleFigmaLoadSnapshot,
+} from "./qualityIntelligence/figmaSnapshotRoutes.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -434,6 +438,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     handler: handleRelationshipDependencies,
   },
   { method: "GET", pattern: "/api/relationships/:id/explain", handler: handleRelationshipExplain },
+  // Epic #750, Issue #756 — Figma Snapshot UI routes. PAT stays server-side; UI-safe projection only.
+  // POST triggers a bounded snapshot-build from a board link; GET loads the stored summary.
+  // Token: resolved server-side from FIGMA_ACCESS_TOKEN env or vault; never in request or response.
+  { method: "POST", pattern: "/api/figma/snapshots", handler: handleFigmaTriggerSnapshot },
+  { method: "GET", pattern: "/api/figma/snapshots/:runId", handler: handleFigmaLoadSnapshot },
   // Issue #281 (Epic #270) — Conversation Center → QI workflow handoff route group.
   // Single POST seam; the body is a typed `QualityIntelligenceConversationCenterHandoff`
   // envelope (refs only, no chat content). Registered as a sibling group so concurrent
