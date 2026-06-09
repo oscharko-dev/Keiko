@@ -238,3 +238,45 @@ describe("handleStartQiRun — capsule source validation (Issue #716)", () => {
     }
   });
 });
+
+describe("handleStartQiRun — capsule-set source validation (Issue #716/#718)", () => {
+  it("returns 400 QI_BAD_REQUEST when capsuleSetId is missing", async () => {
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(makeReq({ sources: [{ kind: "capsule-set", label: "My Set" }] }), new MockResponse()),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+
+  it("returns 400 QI_BAD_REQUEST when capsuleSetId is whitespace-only", async () => {
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({ sources: [{ kind: "capsule-set", label: "My Set", capsuleSetId: "   " }] }),
+          new MockResponse(),
+        ),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+
+  it("starts the SSE stream (not a 400) when a valid capsuleSetId is provided", async () => {
+    const outcome = await handleStartQiRun(
+      ctx(
+        makeReq({
+          sources: [{ kind: "capsule-set", label: "My Set", capsuleSetId: "set-abc-123" }],
+        }),
+        new MockResponse(),
+      ),
+      deps(),
+    );
+    if (outcome !== STREAMING) {
+      expect(outcome.status).not.toBe(400);
+    }
+  });
+});

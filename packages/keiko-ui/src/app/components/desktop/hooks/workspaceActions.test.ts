@@ -340,7 +340,7 @@ describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
     expect(ids).toContain("cap-2");
   });
 
-  it("excludes capsule-set kind connectors (only capsule kind is a QI inline source)", () => {
+  it("excludes capsule-set kind connectors (those flow through linkedConnectorCapsuleSetIds)", () => {
     const { linkedConnectorCapsuleIds } = makeConnectHarness(
       [
         win("quality", {}, "quality"),
@@ -380,6 +380,43 @@ describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
       [conn("quality", "files-1")],
     );
     expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
+  });
+});
+
+describe("linkedConnectorCapsuleSetIds (Epic #710 #718)", () => {
+  it("returns the capsuleSetId from a connected Connector window (capsule-set kind)", () => {
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule-set", selectedId: "set-abc" }, "conn-1"),
+      ],
+      [conn("quality", "conn-1")],
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toEqual(["set-abc"]);
+  });
+
+  it("excludes capsule kind connectors (those flow through linkedConnectorCapsuleIds)", () => {
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-1" }, "conn-1"),
+      ],
+      [conn("quality", "conn-1")],
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toEqual([]);
+  });
+
+  it("deduplicates and returns multiple capsule-set ids", () => {
+    const { linkedConnectorCapsuleSetIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule-set", selectedId: "set-1" }, "conn-1"),
+        win("connector", { selectedKind: "capsule-set", selectedId: "set-1" }, "conn-2"),
+        win("connector", { selectedKind: "capsule-set", selectedId: "set-2" }, "conn-3"),
+      ],
+      [conn("quality", "conn-1"), conn("quality", "conn-2"), conn("quality", "conn-3")],
+    );
+    expect(linkedConnectorCapsuleSetIds("quality")).toEqual(["set-1", "set-2"]);
   });
 });
 

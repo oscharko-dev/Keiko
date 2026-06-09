@@ -323,6 +323,7 @@ type ConnectApi = Pick<
   | "linkedFilesContext"
   | "linkedAllFilesRoots"
   | "linkedConnectorCapsuleIds"
+  | "linkedConnectorCapsuleSetIds"
   | "currentFilesContext"
 >;
 
@@ -503,9 +504,10 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     return active === undefined ? null : filesContextFor(active);
   };
 
-  // Epic #710 #718 — read the capsuleId from each connected Connector window. Only "capsule"
-  // kind selections are surfaced (capsule-sets are not yet a QI inline source).
-  const linkedConnectorCapsuleIds: WorkspaceApi["linkedConnectorCapsuleIds"] = (id) => {
+  // Epic #710 #718 — read the selected id of the given kind ("capsule" or "capsule-set") from
+  // every connected Connector window, deduped and capped at MAX_SCOPES. Both QI capsule and
+  // capsule-set sources flow through this one reader so the hub can bind either (Issue #716/#718).
+  const linkedConnectorSelectionIds = (id: string, selectedKind: string): readonly string[] => {
     const seen = new Set<string>();
     const ids: string[] = [];
     for (const c of connsRef.current) {
@@ -514,15 +516,21 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       if (otherId === null) continue;
       const w = winsRef.current.find((x) => x.id === otherId);
       if (w === undefined || w.type !== "connector") continue;
-      if (w.cfg["selectedKind"] !== "capsule") continue;
-      const capsuleId = w.cfg["selectedId"];
-      if (typeof capsuleId !== "string" || capsuleId.length === 0) continue;
-      if (seen.has(capsuleId)) continue;
-      seen.add(capsuleId);
-      ids.push(capsuleId);
+      if (w.cfg["selectedKind"] !== selectedKind) continue;
+      const selectedId = w.cfg["selectedId"];
+      if (typeof selectedId !== "string" || selectedId.length === 0) continue;
+      if (seen.has(selectedId)) continue;
+      seen.add(selectedId);
+      ids.push(selectedId);
     }
     return ids;
   };
+
+  const linkedConnectorCapsuleIds: WorkspaceApi["linkedConnectorCapsuleIds"] = (id) =>
+    linkedConnectorSelectionIds(id, "capsule");
+
+  const linkedConnectorCapsuleSetIds: WorkspaceApi["linkedConnectorCapsuleSetIds"] = (id) =>
+    linkedConnectorSelectionIds(id, "capsule-set");
 
   return {
     startConnect,
@@ -534,6 +542,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     linkedFilesContext,
     linkedAllFilesRoots,
     linkedConnectorCapsuleIds,
+    linkedConnectorCapsuleSetIds,
     currentFilesContext,
   };
 }

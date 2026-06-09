@@ -4,9 +4,10 @@
 // returns documents in document_id order and skips empty-text entries.
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { createCapsule } from "../../capsule-lifecycle.js";
-import { listCapsuleDocumentTexts } from "../capsuleCorpus.js";
+import { createCapsuleSet } from "../../capsule-set-lifecycle.js";
+import { listCapsuleDocumentTexts, listCapsuleSetDocumentTexts } from "../capsuleCorpus.js";
 import { freshStore, sampleCapsuleInput } from "../../_support.js";
 import type { KnowledgeStore } from "../../store.js";
 
@@ -32,11 +33,12 @@ function seedDocumentText(capsuleId: string, documentId: string, text: string): 
   // Seed documents first (requires capsule_sources row first for FK constraint).
   const db = store._internal.db;
   const now = store._internal.now();
+  const sourceId = `src-${capsuleId}`;
 
-  // Insert a minimal capsule_sources row (source 'src-1' for capsule).
+  // Insert a minimal capsule_sources row (one source per capsule).
   db.prepare(
     "INSERT OR IGNORE INTO capsule_sources (id, capsule_id, display_name, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-  ).run("src-1", capsuleId, "Source 1", "[]", "folder", "{}", now, now);
+  ).run(sourceId, capsuleId, "Source 1", "[]", "folder", "{}", now, now);
 
   // Insert a minimal documents row.
   db.prepare(
@@ -44,7 +46,7 @@ function seedDocumentText(capsuleId: string, documentId: string, text: string): 
   ).run(
     documentId,
     capsuleId,
-    "src-1",
+    sourceId,
     `/docs/${documentId}`,
     text.length,
     "text/plain",
@@ -106,5 +108,43 @@ describe("listCapsuleDocumentTexts", () => {
 
     const [entry] = listCapsuleDocumentTexts(store, CAP_ID);
     expect(entry).toMatchObject({ documentId: "doc-1", text: "Hello world" });
+  });
+});
+
+describe("listCapsuleSetDocumentTexts (Epic #710, Issue #716)", () => {
+  const CAP_A = "cap-set-a" as KnowledgeCapsuleId;
+  const CAP_B = "cap-set-b" as KnowledgeCapsuleId;
+  const SET_ID = "set-corpus-1" as CapsuleSetId;
+
+  it("returns an empty array for an unknown capsule-set", () => {
+    expect(listCapsuleSetDocumentTexts(store, "no-such-set")).toHaveLength(0);
+  });
+
+  it("concatenates the corpus of every member capsule in membership order", () => {
+    createCapsule(store, sampleCapsuleInput({ id: CAP_A }));
+    createCapsule(store, sampleCapsuleInput({ id: CAP_B }));
+    seedDocumentText(CAP_A, "a-doc", "Capsule A content.");
+    seedDocumentText(CAP_B, "b-doc", "Capsule B content.");
+    createCapsuleSet(store, {
+      id: SET_ID,
+      displayName: "Composed set",
+      tags: [],
+      capsuleIds: [CAP_A, CAP_B],
+    });
+
+    const result = listCapsuleSetDocumentTexts(store, SET_ID);
+    expect(result.map((d) => d.documentId)).toEqual(["a-doc", "b-doc"]);
+    expect(result.map((d) => d.text)).toEqual(["Capsule A content.", "Capsule B content."]);
+  });
+
+  it("returns an empty array when the set's members have no indexed content", () => {
+    createCapsule(store, sampleCapsuleInput({ id: CAP_A }));
+    createCapsuleSet(store, {
+      id: SET_ID,
+      displayName: "Empty set",
+      tags: [],
+      capsuleIds: [CAP_A],
+    });
+    expect(listCapsuleSetDocumentTexts(store, SET_ID)).toHaveLength(0);
   });
 });

@@ -642,6 +642,7 @@ export type {
   QualityIntelligenceWorkspaceSource,
   QualityIntelligenceFileSource,
   QualityIntelligenceCapsuleSource,
+  QualityIntelligenceCapsuleSetSource,
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceRunStreamAccepted,
   QualityIntelligenceRunStreamEvent,

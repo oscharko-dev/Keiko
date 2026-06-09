@@ -9,4 +9,8 @@ export {
   type QiHandoffErrorCode,
 } from "./qiHandoff.js";
 
-export { listCapsuleDocumentTexts, type CapsuleDocumentText } from "./capsuleCorpus.js";
+export {
+  listCapsuleDocumentTexts,
+  listCapsuleSetDocumentTexts,
+  type CapsuleDocumentText,
+} from "./capsuleCorpus.js";

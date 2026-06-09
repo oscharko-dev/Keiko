@@ -14,6 +14,7 @@ import { isAbsolute } from "node:path";
 import type {
   QualityIntelligenceInlineSource,
   QualityIntelligenceCapsuleSource,
+  QualityIntelligenceCapsuleSetSource,
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
@@ -76,6 +77,35 @@ function validateCapsuleSource(
   return { kind: "capsule", label, capsuleId: raw.capsuleId };
 }
 
+function validateCapsuleSetSource(
+  label: string,
+  raw: Record<string, unknown>,
+): QualityIntelligenceCapsuleSetSource | RouteResult {
+  if (typeof raw.capsuleSetId !== "string" || raw.capsuleSetId.trim().length === 0) {
+    return errorResult(
+      400,
+      "QI_BAD_REQUEST",
+      "A capsule-set source requires a non-empty capsuleSetId.",
+    );
+  }
+  return { kind: "capsule-set", label, capsuleSetId: raw.capsuleSetId };
+}
+
+// Local Knowledge connector sources (capsule / capsule-set). Split out so validateSource stays
+// under the complexity budget as the source-kind union grows (Epic #710, Issue #716).
+function validateConnectorSource(
+  label: string,
+  raw: Record<string, unknown>,
+): QualityIntelligenceInlineSource | RouteResult | undefined {
+  if (raw.kind === "capsule") {
+    return validateCapsuleSource(label, raw);
+  }
+  if (raw.kind === "capsule-set") {
+    return validateCapsuleSetSource(label, raw);
+  }
+  return undefined;
+}
+
 function validateSource(raw: unknown): QualityIntelligenceInlineSource | RouteResult | undefined {
   if (!isObject(raw) || typeof raw.label !== "string") return undefined;
   const label = raw.label;
@@ -88,10 +118,7 @@ function validateSource(raw: unknown): QualityIntelligenceInlineSource | RouteRe
   if (raw.kind === "file" && typeof raw.path === "string") {
     return { kind: "file", label, path: raw.path };
   }
-  if (raw.kind === "capsule") {
-    return validateCapsuleSource(label, raw);
-  }
-  return undefined;
+  return validateConnectorSource(label, raw);
 }
 
 function isRouteResult(v: unknown): v is RouteResult {

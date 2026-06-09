@@ -775,3 +775,55 @@ describe("RunLauncher — connected capsule source (Epic #710 #718)", () => {
     expect(screen.queryByTestId("qi-connected-source")).not.toBeInTheDocument();
   });
 });
+
+describe("RunLauncher — connected capsule-set source (Epic #710 #718)", () => {
+  const SET_ID = "set-test-xyz";
+
+  it("renders the connected-source banner with 'Connected capsule set' and the set id", () => {
+    render(<RunLauncher connectedCapsuleSetIds={[SET_ID]} />);
+    const banner = screen.getByTestId("qi-connected-source");
+    expect(banner).toHaveTextContent("Connected capsule set");
+    expect(banner).toHaveTextContent(SET_ID);
+  });
+
+  it("calls startImpl with a capsule-set source when a capsule-set is connected", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} connectedCapsuleSetIds={[SET_ID]} />);
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({ kind: "capsule-set", capsuleSetId: SET_ID });
+  });
+
+  it("combines folders, capsules, and capsule-sets in order with a combined count", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        connectedRoots={["/work/docs"]}
+        connectedCapsuleIds={["cap-1"]}
+        connectedCapsuleSetIds={[SET_ID]}
+      />,
+    );
+
+    expect(screen.getByTestId("qi-connected-source")).toHaveTextContent("Connected sources (3)");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources).toHaveLength(3);
+    expect(req.sources[0]).toMatchObject({ kind: "workspace", path: "/work/docs" });
+    expect(req.sources[1]).toMatchObject({ kind: "capsule", capsuleId: "cap-1" });
+    expect(req.sources[2]).toMatchObject({ kind: "capsule-set", capsuleSetId: SET_ID });
+  });
+});
