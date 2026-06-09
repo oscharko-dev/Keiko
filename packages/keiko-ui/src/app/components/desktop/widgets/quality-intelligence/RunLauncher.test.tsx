@@ -612,3 +612,101 @@ describe("RunLauncher — connected single file (Epic #709, Issue #714)", () => 
     expect(req.sources[0]).toMatchObject({ kind: "requirements", text: "Login must work" });
   });
 });
+
+describe("RunLauncher — connected capsule source (Epic #710 #718)", () => {
+  const CAPSULE_ID = "cap-test-abc";
+
+  it("enables Generate when a capsule is connected and no manual input is present", () => {
+    render(<RunLauncher connectedCapsuleIds={[CAPSULE_ID]} />);
+    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toBeDisabled();
+  });
+
+  it("renders the connected-source banner with 'Connected capsule' and the capsule id", () => {
+    render(<RunLauncher connectedCapsuleIds={[CAPSULE_ID]} />);
+    const banner = screen.getByTestId("qi-connected-source");
+    expect(banner).toHaveTextContent("Connected capsule");
+    expect(banner).toHaveTextContent(CAPSULE_ID);
+  });
+
+  it("calls startImpl with a capsule source when a capsule is connected", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} connectedCapsuleIds={[CAPSULE_ID]} />);
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({ kind: "capsule", capsuleId: CAPSULE_ID });
+  });
+
+  it("sends multiple capsule sources when multiple capsule ids are connected", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    const ids = ["cap-1", "cap-2"];
+    render(<RunLauncher startImpl={startImpl} connectedCapsuleIds={ids} />);
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources).toHaveLength(2);
+    expect(req.sources[0]).toMatchObject({ kind: "capsule", capsuleId: "cap-1" });
+    expect(req.sources[1]).toMatchObject({ kind: "capsule", capsuleId: "cap-2" });
+  });
+
+  it("shows combined count when both folder roots and capsules are connected", () => {
+    render(<RunLauncher connectedRoots={["/work/docs"]} connectedCapsuleIds={[CAPSULE_ID]} />);
+    const banner = screen.getByTestId("qi-connected-source");
+    expect(banner).toHaveTextContent("Connected sources (2)");
+  });
+
+  it("sends workspace sources then capsule sources in combined mode", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        connectedRoots={["/work/docs"]}
+        connectedCapsuleIds={[CAPSULE_ID]}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({ kind: "workspace", path: "/work/docs" });
+    expect(req.sources[1]).toMatchObject({ kind: "capsule", capsuleId: CAPSULE_ID });
+  });
+
+  it("manual requirements text overrides the connected capsule", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} connectedCapsuleIds={[CAPSULE_ID]} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Login must work");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(req.sources[0]).toMatchObject({ kind: "requirements", text: "Login must work" });
+  });
+
+  it("shows no connected-source banner when connectedCapsuleIds is empty", () => {
+    render(<RunLauncher connectedCapsuleIds={[]} />);
+    expect(screen.queryByTestId("qi-connected-source")).not.toBeInTheDocument();
+  });
+});

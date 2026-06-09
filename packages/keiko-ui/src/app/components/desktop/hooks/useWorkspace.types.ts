@@ -36,6 +36,7 @@ export interface WorkspaceApi {
   readonly linkedFilesRoot: (id: string) => string | null;
   readonly linkedFilesContext: (id: string) => FilesWindowContext | null;
   readonly linkedAllFilesRoots: (id: string) => readonly string[];
+  readonly linkedConnectorCapsuleIds: (id: string) => readonly string[];
   readonly currentFilesContext: () => FilesWindowContext | null;
   readonly zoomTo: (z: number) => void;
   readonly resetView: () => void;

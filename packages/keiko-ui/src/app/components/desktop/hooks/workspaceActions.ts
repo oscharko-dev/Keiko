@@ -322,6 +322,7 @@ type ConnectApi = Pick<
   | "linkedFilesRoot"
   | "linkedFilesContext"
   | "linkedAllFilesRoots"
+  | "linkedConnectorCapsuleIds"
   | "currentFilesContext"
 >;
 
@@ -502,6 +503,27 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     return active === undefined ? null : filesContextFor(active);
   };
 
+  // Epic #710 #718 — read the capsuleId from each connected Connector window. Only "capsule"
+  // kind selections are surfaced (capsule-sets are not yet a QI inline source).
+  const linkedConnectorCapsuleIds: WorkspaceApi["linkedConnectorCapsuleIds"] = (id) => {
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const c of connsRef.current) {
+      if (ids.length >= MAX_SCOPES) break;
+      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
+      if (otherId === null) continue;
+      const w = winsRef.current.find((x) => x.id === otherId);
+      if (w === undefined || w.type !== "connector") continue;
+      if (w.cfg["selectedKind"] !== "capsule") continue;
+      const capsuleId = w.cfg["selectedId"];
+      if (typeof capsuleId !== "string" || capsuleId.length === 0) continue;
+      if (seen.has(capsuleId)) continue;
+      seen.add(capsuleId);
+      ids.push(capsuleId);
+    }
+    return ids;
+  };
+
   return {
     startConnect,
     confirmConnect,
@@ -511,6 +533,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     linkedFilesRoot,
     linkedFilesContext,
     linkedAllFilesRoots,
+    linkedConnectorCapsuleIds,
     currentFilesContext,
   };
 }

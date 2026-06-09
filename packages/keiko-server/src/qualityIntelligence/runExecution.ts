@@ -24,6 +24,7 @@ import {
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
 import { ingestInlineSources, QiIngestionError } from "./runIngestion.js";
+import { makeCapsuleResolver } from "./capsuleAdapter.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort } from "./judgePort.js";
 import { selectModelForQiCapability } from "./modelSelection.js";
@@ -75,7 +76,12 @@ export async function executeQiRun(
     throw new QiGenerationError("QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
 
-  const ingestion = ingestInlineSources({ request, runId, registeredAt: input.registeredAt });
+  const ingestion = ingestInlineSources({
+    request,
+    runId,
+    registeredAt: input.registeredAt,
+    capsuleResolver: makeCapsuleResolver(deps),
+  });
   const modelId = selectModelForQiCapability(deps, "qi:test-design", request.modelId);
   const generate = createQiGenerationPort(deps, modelId);
   const profile = resolveProfile(request.profileId);

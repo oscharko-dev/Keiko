@@ -440,6 +440,7 @@ export function useWorkspace(
     linkedFilesRoot,
     linkedFilesContext,
     linkedAllFilesRoots,
+    linkedConnectorCapsuleIds,
     currentFilesContext,
   } = makeConnectActions({
     wsRef,
@@ -489,6 +490,7 @@ export function useWorkspace(
     linkedFilesRoot,
     linkedFilesContext,
     linkedAllFilesRoots,
+    linkedConnectorCapsuleIds,
     currentFilesContext,
     zoomTo,
     resetView,

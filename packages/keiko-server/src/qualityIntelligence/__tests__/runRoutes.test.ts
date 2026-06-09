@@ -1,3 +1,9 @@
+// Unit tests for handleStartQiRun source validation.
+//
+// Covers the single-file absolute-path guard (Epic #709/#791) and the capsule source parsing path
+// (Epic #710, Issue #716): a valid capsuleId parses cleanly; a missing/empty/whitespace capsuleId
+// returns 400. The SSE execution contracts live in runExecution.test.ts.
+
 import { EventEmitter } from "node:events";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -10,6 +16,8 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { buildRedactor, createInMemoryUiStore, createRunRegistry, STREAMING } from "../../index.js";
 import type { RouteContext, RouteResult } from "../../routes.js";
 import { handleStartQiRun } from "../runRoutes.js";
+
+// ─── Fixture helpers ───────────────────────────────────────────────────────────
 
 function emptyStore(): EvidenceStore {
   return { put: () => "", list: () => [], get: () => undefined, delete: () => undefined };
@@ -25,6 +33,7 @@ function deps(): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store: createInMemoryUiStore(),
+    evidenceDir: undefined,
   };
 }
 
@@ -94,9 +103,9 @@ describe("handleStartQiRun — single-file absolute-path validation", () => {
     expect((result.body as { error: { code: string; message: string } }).error).toMatchObject({
       code: "QI_BAD_SOURCE",
     });
-    expect(
-      (result.body as { error: { code: string; message: string } }).error.message,
-    ).toMatch(/absolute local paths/i);
+    expect((result.body as { error: { code: string; message: string } }).error.message).toMatch(
+      /absolute local paths/i,
+    );
     expect(res.statusCode).toBeUndefined();
     expect(res.chunks).toHaveLength(0);
   });
@@ -123,5 +132,63 @@ describe("handleStartQiRun — single-file absolute-path validation", () => {
     expect(res.headers?.["Content-Type"]).toContain("text/event-stream");
     expect(res.ended).toBe(true);
     expect(res.chunks.join("")).toContain('"type":"error"');
+  });
+});
+
+// ─── Capsule source parsing (Issue #716) ────────────────────────────────────────
+
+describe("handleStartQiRun — capsule source validation (Issue #716)", () => {
+  it("returns 400 QI_BAD_REQUEST when capsuleId is missing", async () => {
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(makeReq({ sources: [{ kind: "capsule", label: "My Capsule" }] }), new MockResponse()),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+
+  it("returns 400 QI_BAD_REQUEST when capsuleId is an empty string", async () => {
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({ sources: [{ kind: "capsule", label: "My Capsule", capsuleId: "" }] }),
+          new MockResponse(),
+        ),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+
+  it("returns 400 QI_BAD_REQUEST when capsuleId is whitespace-only", async () => {
+    const result = asResult(
+      await handleStartQiRun(
+        ctx(
+          makeReq({ sources: [{ kind: "capsule", label: "My Capsule", capsuleId: "   " }] }),
+          new MockResponse(),
+        ),
+        deps(),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+
+  it("starts the SSE stream (not a 400) when a valid capsuleId is provided", async () => {
+    // With no evidenceDir the run will fail with QI_NO_EVIDENCE_DIR, but the key assertion is that
+    // parsing succeeds (no 400) — the stream has started (STREAMING) or a non-400 result is returned.
+    const outcome = await handleStartQiRun(
+      ctx(
+        makeReq({ sources: [{ kind: "capsule", label: "My Capsule", capsuleId: "cap-abc-123" }] }),
+        new MockResponse(),
+      ),
+      deps(),
+    );
+    if (outcome !== STREAMING) {
+      expect(outcome.status).not.toBe(400);
+    }
   });
 });

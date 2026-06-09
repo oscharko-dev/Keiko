@@ -53,6 +53,8 @@ export interface WindowRenderContext {
   readonly linkedRoot: string | null;
   readonly linkedFilePath: string | undefined;
   readonly linkedRoots: readonly string[];
+  /** Epic #710 #718 — capsule ids from connected Connector windows (capsule kind only). */
+  readonly linkedCapsuleIds: readonly string[];
   readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
   /**
    * Open another Workspace window from inside this one (e.g. the QI hub opening a per-run result

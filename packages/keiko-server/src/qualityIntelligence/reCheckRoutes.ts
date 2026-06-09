@@ -18,7 +18,10 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
-import type { QualityIntelligenceInlineSource } from "@oscharko-dev/keiko-contracts";
+import type {
+  QualityIntelligenceCapsuleSource,
+  QualityIntelligenceInlineSource,
+} from "@oscharko-dev/keiko-contracts";
 
 type QiTestCaseCandidate = QualityIntelligence.QualityIntelligenceTestCaseCandidate;
 type QiRunPlan = QualityIntelligence.QualityIntelligenceRunPlan;
@@ -39,6 +42,7 @@ import type { UiHandlerDeps } from "../deps.js";
 import { ingestInlineSources, QiIngestionError } from "./runIngestion.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort } from "./judgePort.js";
+import { makeCapsuleResolver } from "./capsuleAdapter.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 
@@ -69,16 +73,28 @@ const readBody = (req: IncomingMessage): Promise<string> =>
     req.on("error", reject);
   });
 
+function validateCapsuleSource(
+  label: string,
+  raw: Record<string, unknown>,
+): QualityIntelligenceCapsuleSource | undefined {
+  if (typeof raw.capsuleId !== "string" || raw.capsuleId.trim().length === 0) return undefined;
+  return { kind: "capsule", label, capsuleId: raw.capsuleId };
+}
+
 function validateSource(raw: unknown): QualityIntelligenceInlineSource | undefined {
   if (!isObject(raw) || typeof raw.label !== "string") return undefined;
+  const label = raw.label;
   if (raw.kind === "requirements" && typeof raw.text === "string") {
-    return { kind: "requirements", label: raw.label, text: raw.text };
+    return { kind: "requirements", label, text: raw.text };
   }
   if (raw.kind === "workspace" && typeof raw.path === "string") {
-    return { kind: "workspace", label: raw.label, path: raw.path };
+    return { kind: "workspace", label, path: raw.path };
   }
   if (raw.kind === "file" && typeof raw.path === "string") {
-    return { kind: "file", label: raw.label, path: raw.path };
+    return { kind: "file", label, path: raw.path };
+  }
+  if (raw.kind === "capsule") {
+    return validateCapsuleSource(label, raw);
   }
   return undefined;
 }
@@ -171,6 +187,7 @@ async function computeDrift(
   evidenceDir: string,
   id: string,
   ingestRunId: string,
+  deps: UiHandlerDeps,
 ): Promise<DriftOutcome> {
   const parsed = await parseSources(req);
   if (!parsed.ok) return { ok: false, result: parsed.result };
@@ -187,6 +204,7 @@ async function computeDrift(
       request: { sources: parsed.sources },
       runId: ingestRunId,
       registeredAt: new Date().toISOString(),
+      capsuleResolver: makeCapsuleResolver(deps),
     });
   } catch (error) {
     const code = error instanceof QiIngestionError ? error.code : "QI_INGESTION_FAILED";
@@ -336,7 +354,7 @@ export async function handleQiReCheck(
   if (evidenceDir === undefined) {
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
-  const drift = await computeDrift(ctx.req, evidenceDir, id, `qi-recheck-${id}`);
+  const drift = await computeDrift(ctx.req, evidenceDir, id, `qi-recheck-${id}`, deps);
   if (!drift.ok) return drift.result;
   const { staleness } = drift.value;
   return {
@@ -374,7 +392,7 @@ export async function handleQiRegenerateStale(
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
   const newRunId = `qi-run-${randomUUID()}`;
-  const drift = await computeDrift(ctx.req, evidenceDir, id, newRunId);
+  const drift = await computeDrift(ctx.req, evidenceDir, id, newRunId, deps);
   if (!drift.ok) return drift.result;
   const { ingestion, allOldCandidates } = drift.value;
   const { staleIds, narrowedAtoms } = narrowStaleAtoms(drift.value);

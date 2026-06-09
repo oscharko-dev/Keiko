@@ -570,3 +570,94 @@ describe("ingestInlineSources — fair per-source budget (Issue #730)", () => {
     expect(result.sourceSummaries.map((s) => s.atomCount)).toEqual([60, 60]);
   });
 });
+
+// ─── Capsule source (Epic #710, Issue #717) ───────────────────────────────────
+
+function capsuleSource(
+  label: string,
+  capsuleId: string,
+): { kind: "capsule"; label: string; capsuleId: string } {
+  return { kind: "capsule", label, capsuleId };
+}
+
+function inputWithResolver(
+  sources: QualityIntelligenceStartRunRequest["sources"],
+  capsuleResolver?: IngestInlineSourcesInput["capsuleResolver"],
+): IngestInlineSourcesInput {
+  return { request: reqWith(sources), runId: RUN_ID, registeredAt: TS, capsuleResolver };
+}
+
+describe("ingestInlineSources — capsule source (Issue #717)", () => {
+  it("throws QI_CAPSULE_UNAVAILABLE when no capsuleResolver is provided", () => {
+    try {
+      ingestInlineSources(inputWithResolver([capsuleSource("Docs", "cap-1")]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(QiIngestionError);
+      expect((err as QiIngestionError).code).toBe("QI_CAPSULE_UNAVAILABLE");
+    }
+  });
+
+  it("throws QI_CAPSULE_UNAVAILABLE when the resolver returns no documents", () => {
+    const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => [];
+    try {
+      ingestInlineSources(inputWithResolver([capsuleSource("Empty", "cap-empty")], resolver));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect((err as QiIngestionError).code).toBe("QI_CAPSULE_UNAVAILABLE");
+    }
+  });
+
+  it("produces one document-excerpt atom per document returned by the resolver", () => {
+    const docs = [
+      { documentId: "doc-a", text: "The system shall validate input before processing." },
+      { documentId: "doc-b", text: "The system shall log all failures to the audit trail." },
+    ];
+    const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => docs;
+    const result = ingest(inputWithResolver([capsuleSource("Spec Capsule", "cap-spec")], resolver));
+    expect(result.ingestedAtoms.length).toBe(2);
+    expect(result.ingestedAtoms[0]?.atom.kind).toBe("document-excerpt");
+    expect(result.ingestedAtoms[1]?.atom.kind).toBe("document-excerpt");
+  });
+
+  it("canonical text includes the documentId prefix", () => {
+    const docs = [{ documentId: "req-doc", text: "The system shall support SSO login." }];
+    const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => docs;
+    const result = ingest(inputWithResolver([capsuleSource("SSO", "cap-sso")], resolver));
+    const canonical = result.ingestedAtoms[0]?.canonicalText ?? "";
+    expect(canonical.startsWith("req-doc\n")).toBe(true);
+  });
+
+  it("envelope kind is 'local-knowledge-capsule'", () => {
+    const docs = [{ documentId: "d1", text: "Requirement text here." }];
+    const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => docs;
+    const result = ingest(inputWithResolver([capsuleSource("Capsule", "cap-x")], resolver));
+    expect(result.envelopes[0]?.kind).toBe("local-knowledge-capsule");
+  });
+
+  it("sourceSummary kind is 'capsule'", () => {
+    const docs = [{ documentId: "d1", text: "Requirement text here." }];
+    const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => docs;
+    const result = ingest(inputWithResolver([capsuleSource("Capsule", "cap-x")], resolver));
+    expect(result.sourceSummaries[0]?.kind).toBe("capsule");
+  });
+
+  it("capsule atoms participate in the same fair per-source budget as other sources", () => {
+    const manyDocs = Array.from({ length: 100 }, (_, i) => ({
+      documentId: `doc-${String(i)}`,
+      text: `Requirement number ${String(i)} to satisfy.`,
+    }));
+    const capsuleResolver = (_capsuleId: string): readonly { documentId: string; text: string }[] =>
+      manyDocs;
+    const result = ingest(
+      inputWithResolver(
+        [capsuleSource("Big Capsule", "cap-big"), manyReqs("Reqs", 100)],
+        capsuleResolver,
+      ),
+    );
+    // floor(120/2) = 60 each — capsule must not dominate.
+    expect(result.ingestedAtoms.length).toBe(MAX_TOTAL_ATOMS);
+    expect(result.sourceSummaries[0]?.atomCount).toBe(60);
+    expect(result.sourceSummaries[1]?.atomCount).toBe(60);
+  });
+});

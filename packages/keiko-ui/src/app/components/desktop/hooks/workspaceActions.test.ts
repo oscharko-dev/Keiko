@@ -1,8 +1,9 @@
 // Epic #532 — pure scope-list + Files↔Chat binding helpers used by the relationship-edge wiring.
 // Epic #189 Slice 3 M1 — plural connector-scope helpers + Connector↔Chat binding.
+// Epic #710 #718 — linkedConnectorCapsuleIds reader.
 
 import { describe, expect, it } from "vitest";
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, MutableRefObject, RefObject, SetStateAction } from "react";
 import {
   MAX_SCOPES,
   appendConnectorScope,
@@ -11,12 +12,13 @@ import {
   effectiveLocalKnowledgeScopes,
   effectiveScopes,
   filesChatBindRoot,
+  makeConnectActions,
   makeMutations,
   removeConnectorScope,
   removeScope,
   resolvedFilesRoot,
 } from "./workspaceActions";
-import type { AppWindow } from "../windows/types";
+import type { AppWindow, Connection, ConnectingState, View } from "../windows/types";
 import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
 
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
@@ -263,6 +265,121 @@ describe("connectorChatBind", () => {
   it("returns null when the connector cfg is missing selectedKind", () => {
     const connector = win("connector", { selectedId: "cap-abc" });
     expect(connectorChatBind(connector, win("chat"))).toBeNull();
+  });
+});
+
+// ─── Epic #710 #718 — linkedConnectorCapsuleIds ──────────────────────────────
+
+function ref<T>(value: T): MutableRefObject<T> {
+  return { current: value };
+}
+
+function makeConnectHarness(
+  wins: AppWindow[],
+  conns: Connection[],
+): ReturnType<typeof makeConnectActions> {
+  const winsRef = ref(wins);
+  const connsRef = ref(conns);
+  return makeConnectActions({
+    wsRef: { current: null } as RefObject<HTMLElement | null>,
+    viewRef: ref<View>({ zoom: 1, x: 0, y: 0 }),
+    winsRef,
+    connsRef,
+    connectingRef: ref<ConnectingState | null>(null),
+    connectCleanupRef: ref<(() => void) | null>(null),
+    focus: () => undefined,
+    setConns: (() => undefined) as Dispatch<SetStateAction<Connection[]>>,
+    setConnecting: (() => undefined) as Dispatch<SetStateAction<ConnectingState | null>>,
+  });
+}
+
+function conn(a: string, b: string): Connection {
+  return { id: `${a}~${b}`, a, b };
+}
+
+describe("linkedConnectorCapsuleIds (Epic #710 #718)", () => {
+  it("returns empty when the quality window has no connections", () => {
+    const { linkedConnectorCapsuleIds } = makeConnectHarness([win("quality", {}, "quality")], []);
+    expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
+  });
+
+  it("returns the capsuleId from a connected Connector window (capsule kind)", () => {
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-abc" }, "conn-1"),
+      ],
+      [conn("quality", "conn-1")],
+    );
+    expect(linkedConnectorCapsuleIds("quality")).toEqual(["cap-abc"]);
+  });
+
+  it("works when the quality window is on the b-side of the connection", () => {
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-xyz" }, "conn-1"),
+      ],
+      [conn("conn-1", "quality")],
+    );
+    expect(linkedConnectorCapsuleIds("quality")).toEqual(["cap-xyz"]);
+  });
+
+  it("returns multiple capsule ids for multiple connected Connector windows", () => {
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-1" }, "conn-1"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-2" }, "conn-2"),
+      ],
+      [conn("quality", "conn-1"), conn("quality", "conn-2")],
+    );
+    const ids = linkedConnectorCapsuleIds("quality");
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain("cap-1");
+    expect(ids).toContain("cap-2");
+  });
+
+  it("excludes capsule-set kind connectors (only capsule kind is a QI inline source)", () => {
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule-set", selectedId: "set-1" }, "conn-1"),
+      ],
+      [conn("quality", "conn-1")],
+    );
+    expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
+  });
+
+  it("excludes a connector with an empty selectedId", () => {
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "" }, "conn-1"),
+      ],
+      [conn("quality", "conn-1")],
+    );
+    expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
+  });
+
+  it("deduplicates the same capsuleId from two connectors", () => {
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-dup" }, "conn-1"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-dup" }, "conn-2"),
+      ],
+      [conn("quality", "conn-1"), conn("quality", "conn-2")],
+    );
+    expect(linkedConnectorCapsuleIds("quality")).toEqual(["cap-dup"]);
+  });
+
+  it("ignores connections to non-connector windows", () => {
+    const { linkedConnectorCapsuleIds } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("files", { resolvedRoot: "/data" }, "files-1")],
+      [conn("quality", "files-1")],
+    );
+    expect(linkedConnectorCapsuleIds("quality")).toEqual([]);
   });
 });
 

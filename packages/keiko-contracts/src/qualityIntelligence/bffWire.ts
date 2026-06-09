@@ -201,7 +201,7 @@ export interface QualityIntelligenceUiRegenerateResult {
 
 // ─── Run start request (Issue #280/#281) ────────────────────────────────────────
 
-export type QualityIntelligenceInlineSourceKind = "requirements" | "workspace" | "file";
+export type QualityIntelligenceInlineSourceKind = "requirements" | "workspace" | "file" | "capsule";
 
 /** A pasted free-text requirement blob the server splits into requirement atoms. */
 export interface QualityIntelligenceRequirementsSource {
@@ -230,10 +230,23 @@ export interface QualityIntelligenceFileSource {
   readonly path: string;
 }
 
+/**
+ * A Local Knowledge capsule — an indexed knowledge capsule the server ingests by reading its full
+ * document corpus through keiko-local-knowledge. The capsuleId must match an existing indexed
+ * capsule; if the capsule is unavailable the server responds with QI_CAPSULE_UNAVAILABLE (Epic
+ * #710, Issue #717).
+ */
+export interface QualityIntelligenceCapsuleSource {
+  readonly kind: "capsule";
+  readonly label: string;
+  readonly capsuleId: string;
+}
+
 export type QualityIntelligenceInlineSource =
   | QualityIntelligenceRequirementsSource
   | QualityIntelligenceWorkspaceSource
-  | QualityIntelligenceFileSource;
+  | QualityIntelligenceFileSource
+  | QualityIntelligenceCapsuleSource;
 
 /** Body of `POST /api/quality-intelligence/runs`. */
 export interface QualityIntelligenceStartRunRequest {

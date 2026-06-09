@@ -86,6 +86,7 @@ function selectBody(
   linkedRoot: string | null,
   linkedFilePath: string | undefined,
   linkedRoots: readonly string[],
+  linkedCapsuleIds: readonly string[],
   updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void,
   openWindow: (type: WindowType, cfg?: Record<string, string | number | boolean>) => string | null,
 ): BodySelection {
@@ -102,7 +103,14 @@ function selectBody(
   }
   return {
     mode: "full",
-    node: def.render(cfg, { linkedRoot, linkedFilePath, linkedRoots, updateCfg, openWindow }),
+    node: def.render(cfg, {
+      linkedRoot,
+      linkedFilePath,
+      linkedRoots,
+      linkedCapsuleIds,
+      updateCfg,
+      openWindow,
+    }),
   };
 }
 
@@ -251,6 +259,7 @@ export function WindowFrame({
       : linkedRoot !== null
         ? [linkedRoot]
         : [];
+  const linkedCapsuleIds = win.type === "quality" ? api.linkedConnectorCapsuleIds(win.id) : [];
   const ew = win.w / zoom;
   const eh = win.h / zoom;
   const updateCfg = useCallback(
@@ -272,6 +281,7 @@ export function WindowFrame({
     linkedRoot,
     linkedFilePath,
     linkedRoots,
+    linkedCapsuleIds,
     updateCfg,
     openWindow,
   );

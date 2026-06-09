@@ -32,6 +32,7 @@ import type {
   QualityIntelligenceInlineSource,
   QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
+import type { CapsuleResolver } from "./capsuleAdapter.js";
 
 const MAX_TOTAL_ATOMS = 120;
 const MAX_LABEL_CHARS = 120;
@@ -344,10 +345,65 @@ function ingestFile(
   return { envelope, atoms };
 }
 
+// Build one evidence atom per capsule document. Reuses the workspace atom shape so the model
+// sees structured text (documentId prefix + body), consistent with folder/file sources.
+function capsuleDocAtom(
+  docId: string,
+  text: string,
+  envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
+  atomIndex: number,
+): QualityIntelligenceIngestedAtom {
+  const canonicalText = `${docId}\n${text}`;
+  const digest = sha256Hex(
+    `qi-atom-cap-v1|${String(envelopeId)}|${String(atomIndex)}|${docId}`,
+  ).slice(0, 32);
+  const atom: QI.QualityIntelligenceEvidenceAtom = {
+    kind: "document-excerpt",
+    id: QualityIntelligence.asQualityIntelligenceEvidenceAtomId(`qi-atom-${digest}`),
+    sourceEnvelopeId: envelopeId,
+    canonicalHashSha256Hex: sha256Hex(canonicalText),
+    redactionStatus: "redacted",
+    lifecycleStatus: "draft",
+  };
+  return { atom, canonicalText };
+}
+
+function ingestCapsule(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "capsule" }>,
+  index: number,
+  registeredAt: string,
+  resolver: CapsuleResolver,
+): OneSource {
+  const label = sanitiseLabel(source.label);
+  const docs = resolver(source.capsuleId);
+  if (docs.length === 0) {
+    throw new QiIngestionError(
+      "QI_CAPSULE_UNAVAILABLE",
+      `Capsule "${label}" has no indexed content or could not be opened.`,
+    );
+  }
+  const joinedText = docs.map((d) => d.text).join("\n");
+  const envelopeId = envelopeIdFor(index, label, source.capsuleId);
+  const envelope: QI.QualityIntelligenceSourceEnvelope = {
+    id: envelopeId,
+    kind: "local-knowledge-capsule",
+    displayLabel: label,
+    provenance: {
+      origin: `local-knowledge-capsule:${source.capsuleId}`,
+      registeredAt,
+      integrityHashSha256Hex: sha256Hex(joinedText),
+    },
+    localRef: String(envelopeId),
+  };
+  const atoms = docs.map((d, i) => capsuleDocAtom(d.documentId, d.text, envelopeId, i));
+  return { envelope, atoms };
+}
+
 function ingestOne(
   source: QualityIntelligenceInlineSource,
   index: number,
   registeredAt: string,
+  capsuleResolver: CapsuleResolver | undefined,
 ): OneSource {
   switch (source.kind) {
     case "requirements":
@@ -356,6 +412,14 @@ function ingestOne(
       return ingestWorkspace(source, index, registeredAt);
     case "file":
       return ingestFile(source, index, registeredAt);
+    case "capsule":
+      if (capsuleResolver === undefined) {
+        throw new QiIngestionError(
+          "QI_CAPSULE_UNAVAILABLE",
+          "Capsule sources are unavailable: the Local Knowledge store is not configured.",
+        );
+      }
+      return ingestCapsule(source, index, registeredAt, capsuleResolver);
   }
 }
 
@@ -363,6 +427,8 @@ export interface IngestInlineSourcesInput {
   readonly request: QualityIntelligenceStartRunRequest;
   readonly runId: string;
   readonly registeredAt: string;
+  /** Optional capsule resolver (Epic #710, Issue #717). Absent → capsule sources throw QI_CAPSULE_UNAVAILABLE. */
+  readonly capsuleResolver?: CapsuleResolver | undefined;
 }
 
 /**
@@ -389,7 +455,7 @@ export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestio
   for (let i = 0; i < sources.length; i += 1) {
     const source = sources[i];
     if (source === undefined) continue;
-    const { envelope, atoms } = ingestOne(source, i, input.registeredAt);
+    const { envelope, atoms } = ingestOne(source, i, input.registeredAt, input.capsuleResolver);
     // Each source gets its fair share, bounded by the global cap so the total never exceeds it.
     const take = Math.min(perSourceBudget, MAX_TOTAL_ATOMS - ingestedAtoms.length);
     const taken = take <= 0 ? [] : atoms.slice(0, take);

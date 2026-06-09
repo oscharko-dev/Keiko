@@ -206,6 +206,7 @@ export type {
   QualityIntelligenceRequirementsSource,
   QualityIntelligenceWorkspaceSource,
   QualityIntelligenceFileSource,
+  QualityIntelligenceCapsuleSource,
   QualityIntelligenceInlineSource,
   QualityIntelligenceUiStalenessEntry,
   QualityIntelligenceUiStalenessReport,

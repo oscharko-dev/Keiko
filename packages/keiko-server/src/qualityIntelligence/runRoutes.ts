@@ -13,6 +13,7 @@ import type { IncomingMessage } from "node:http";
 import { isAbsolute } from "node:path";
 import type {
   QualityIntelligenceInlineSource,
+  QualityIntelligenceCapsuleSource,
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
@@ -65,24 +66,46 @@ const errorResult = (status: number, code: string, message: string): RouteResult
   body: { error: { code, message } },
 });
 
-function validateSource(raw: unknown): QualityIntelligenceInlineSource | undefined {
+function validateCapsuleSource(
+  label: string,
+  raw: Record<string, unknown>,
+): QualityIntelligenceCapsuleSource | RouteResult {
+  if (typeof raw.capsuleId !== "string" || raw.capsuleId.trim().length === 0) {
+    return errorResult(400, "QI_BAD_REQUEST", "A capsule source requires a non-empty capsuleId.");
+  }
+  return { kind: "capsule", label, capsuleId: raw.capsuleId };
+}
+
+function validateSource(raw: unknown): QualityIntelligenceInlineSource | RouteResult | undefined {
   if (!isObject(raw) || typeof raw.label !== "string") return undefined;
+  const label = raw.label;
   if (raw.kind === "requirements" && typeof raw.text === "string") {
-    return { kind: "requirements", label: raw.label, text: raw.text };
+    return { kind: "requirements", label, text: raw.text };
   }
   if (raw.kind === "workspace" && typeof raw.path === "string") {
-    return { kind: "workspace", label: raw.label, path: raw.path };
+    return { kind: "workspace", label, path: raw.path };
   }
   if (raw.kind === "file" && typeof raw.path === "string") {
-    return { kind: "file", label: raw.label, path: raw.path };
+    return { kind: "file", label, path: raw.path };
+  }
+  if (raw.kind === "capsule") {
+    return validateCapsuleSource(label, raw);
   }
   return undefined;
+}
+
+function isRouteResult(v: unknown): v is RouteResult {
+  return isObject(v) && typeof v.status === "number";
 }
 
 function validateSourceEntry(raw: unknown): QualityIntelligenceInlineSource | RouteResult {
   const source = validateSource(raw);
   if (source === undefined) {
     return errorResult(400, "QI_BAD_SOURCE", "A source entry is malformed.");
+  }
+  // A capsule (or other) field-level validation failure surfaces as a RouteResult — propagate it.
+  if (isRouteResult(source)) {
+    return source;
   }
   if (source.kind === "file" && !isAbsolute(source.path)) {
     return errorResult(400, "QI_BAD_SOURCE", "File source paths must be absolute local paths.");
@@ -94,6 +117,24 @@ type ParseOutcome =
   | { readonly ok: true; readonly request: QualityIntelligenceStartRunRequest }
   | { readonly ok: false; readonly result: RouteResult };
 
+type SourcesOutcome =
+  | { readonly ok: true; readonly sources: QualityIntelligenceInlineSource[] }
+  | { readonly ok: false; readonly result: RouteResult };
+
+function collectSources(rawSources: readonly unknown[]): SourcesOutcome {
+  const sources: QualityIntelligenceInlineSource[] = [];
+  for (const raw of rawSources) {
+    // validateSourceEntry adds the absolute-path guard for file sources (#791) on top of the
+    // shape + capsule validation, surfacing any failure as a RouteResult.
+    const source = validateSourceEntry(raw);
+    if (isRouteResult(source)) {
+      return { ok: false, result: source };
+    }
+    sources.push(source);
+  }
+  return { ok: true, sources };
+}
+
 function validateRequest(parsed: unknown): ParseOutcome {
   if (!isObject(parsed) || !Array.isArray(parsed.sources) || parsed.sources.length === 0) {
     return {
@@ -101,22 +142,17 @@ function validateRequest(parsed: unknown): ParseOutcome {
       result: errorResult(400, "QI_BAD_REQUEST", "At least one source is required."),
     };
   }
-  const sources: QualityIntelligenceInlineSource[] = [];
-  for (const raw of parsed.sources) {
-    const source = validateSourceEntry(raw);
-    if ("status" in source) {
-      return {
-        ok: false,
-        result: source,
-      };
-    }
-    sources.push(source);
-  }
+  const collected = collectSources(parsed.sources);
+  if (!collected.ok) return collected;
   const profileId = typeof parsed.profileId === "string" ? parsed.profileId : undefined;
   const modelId = typeof parsed.modelId === "string" ? parsed.modelId : undefined;
   return {
     ok: true,
-    request: { sources, ...(profileId ? { profileId } : {}), ...(modelId ? { modelId } : {}) },
+    request: {
+      sources: collected.sources,
+      ...(profileId ? { profileId } : {}),
+      ...(modelId ? { modelId } : {}),
+    },
   };
 }
 
