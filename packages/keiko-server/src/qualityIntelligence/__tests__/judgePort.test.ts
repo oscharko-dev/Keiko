@@ -16,6 +16,7 @@ import { createInMemoryUiStore } from "../../store/index.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createRunRegistry } from "../../index.js";
 import {
+  buildJudgePrompt,
   createQiJudgePort,
   QiJudgeError,
   scrubCandidateText,
@@ -188,12 +189,32 @@ describe("scrubCandidateText", () => {
   it("neutralises <qi-candidate opening tag", () => {
     const result = scrubCandidateText('<qi-candidate index="1">inject');
     expect(result).not.toContain("<qi-candidate");
-    expect(result).toContain("[candidate]");
+    expect(result).toContain("[qi-data]");
   });
 
   it("neutralises </qi-candidate closing tag", () => {
     const result = scrubCandidateText("inject</qi-candidate>attack");
-    expect(result).toContain("[candidate]>attack");
+    expect(result).toContain("[qi-data]>attack");
+  });
+
+  it("neutralises <qi-source-context> delimiters in source text too", () => {
+    const result = scrubCandidateText("before <qi-source-context> after");
+    expect(result).toContain("[qi-data]>");
+  });
+});
+
+// ─── buildJudgePrompt ────────────────────────────────────────────────────────
+
+describe("buildJudgePrompt", () => {
+  it("includes source requirement context so ac-fidelity is judgeable", () => {
+    const prompt = buildJudgePrompt("Title: Help center opens", [
+      { atomId: "atom-1", text: "AC-1: Clicking Help opens the help center." },
+    ]);
+    const userMessage = prompt[1];
+    expect(userMessage?.content).toContain("<qi-source-context>");
+    expect(userMessage?.content).toContain("AC-1: Clicking Help opens the help center.");
+    expect(userMessage?.content).toContain("<qi-candidate>");
+    expect(userMessage?.content).toContain("Title: Help center opens");
   });
 });
 
@@ -233,7 +254,12 @@ describe("parseJudgeVerdict", () => {
 
   it("clamps score to [0, 100]", () => {
     const json = JSON.stringify({
-      dimensions: [{ name: "verifiability", score: 150, rationale: "r" }],
+      dimensions: [
+        { name: "verifiability", score: 150, rationale: "r" },
+        { name: "atomicity", score: 75, rationale: "a" },
+        { name: "determinism", score: 80, rationale: "d" },
+        { name: "ac-fidelity", score: 90, rationale: "f" },
+      ],
       overallRationale: "test",
     });
     const verdict = parseJudgeVerdict(json);
@@ -245,6 +271,45 @@ describe("parseJudgeVerdict", () => {
     const verdict = parseJudgeVerdict(json);
     expect(verdict.verdict).toBe("weak");
   });
+
+  it("returns safe default when the verdict omits required rubric dimensions", () => {
+    const json = JSON.stringify({
+      dimensions: [{ name: "verifiability", score: 100, rationale: "only one dimension" }],
+      overallRationale: "partial",
+    });
+    const verdict = parseJudgeVerdict(json);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.overallRationale).toContain("could not be parsed");
+  });
+
+  it("returns safe default when a rubric dimension is duplicated", () => {
+    const json = JSON.stringify({
+      dimensions: [
+        { name: "verifiability", score: 80, rationale: "v1" },
+        { name: "verifiability", score: 80, rationale: "v2" },
+        { name: "determinism", score: 80, rationale: "d" },
+        { name: "ac-fidelity", score: 80, rationale: "a" },
+      ],
+      overallRationale: "duplicate dimension",
+    });
+    const verdict = parseJudgeVerdict(json);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.overallRationale).toContain("could not be parsed");
+  });
+
+  it("returns safe default when overallRationale is missing", () => {
+    const json = JSON.stringify({
+      dimensions: [
+        { name: "verifiability", score: 80, rationale: "clear expected outcome" },
+        { name: "atomicity", score: 70, rationale: "single action" },
+        { name: "determinism", score: 90, rationale: "no randomness" },
+        { name: "ac-fidelity", score: 75, rationale: "matches AC" },
+      ],
+    });
+    const verdict = parseJudgeVerdict(json);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.overallRationale).toContain("could not be parsed");
+  });
 });
 
 // ─── judge() — gateway call ───────────────────────────────────────────────────
@@ -253,7 +318,10 @@ describe("createQiJudgePort.judge — gateway call", () => {
   it("calls the model gateway and returns a parsed verdict", async () => {
     const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
     const port = createQiJudgePort(deps, "chat-model-1");
-    const verdict = await port.judge("Test title\nSteps: do something");
+    const verdict = await port.judge({
+      candidateText: "Test title\nSteps: do something",
+      sourceContext: [{ atomId: "atom-1", text: "REQ-1: The user can do something." }],
+    });
     expect(calls).toHaveLength(1);
     expect(verdict.verdict).toBe("strong");
   });
@@ -261,7 +329,10 @@ describe("createQiJudgePort.judge — gateway call", () => {
   it("uses stream: false in the gateway request", async () => {
     const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
     const port = createQiJudgePort(deps, "chat-model-1");
-    await port.judge("candidate text");
+    await port.judge({
+      candidateText: "candidate text",
+      sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+    });
     expect(calls[0]?.request.stream).toBe(false);
   });
 
@@ -269,14 +340,35 @@ describe("createQiJudgePort.judge — gateway call", () => {
     const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
     const port = createQiJudgePort(deps, "chat-model-1");
     const controller = new AbortController();
-    await port.judge("candidate text", controller.signal);
+    await port.judge(
+      {
+        candidateText: "candidate text",
+        sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+      },
+      controller.signal,
+    );
     expect(calls[0]?.signal).toBe(controller.signal);
+  });
+
+  it("passes source requirement context into the gateway prompt", async () => {
+    const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
+    const port = createQiJudgePort(deps, "chat-model-1");
+    await port.judge({
+      candidateText: "Title: Help center opens",
+      sourceContext: [{ atomId: "atom-1", text: "AC-1: Clicking Help opens the help center." }],
+    });
+    const userMessage = calls[0]?.request.messages[1];
+    expect(userMessage?.content).toContain("AC-1: Clicking Help opens the help center.");
+    expect(userMessage?.content).toContain("Title: Help center opens");
   });
 
   it("returns safe default verdict when model returns unparseable output", async () => {
     const { deps } = depsFor("chat-model-1", "not json");
     const port = createQiJudgePort(deps, "chat-model-1");
-    const verdict = await port.judge("candidate text");
+    const verdict = await port.judge({
+      candidateText: "candidate text",
+      sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+    });
     expect(verdict.verdict).toBe("weak");
     expect(verdict.overallRationale).toContain("could not be parsed");
   });
@@ -297,6 +389,14 @@ describe("createQiJudgePort.judge — gateway call", () => {
       },
     });
     const judgePort = createQiJudgePort(deps, "chat-model-1");
-    await expect(judgePort.judge("text", controller.signal)).rejects.toThrow();
+    await expect(
+      judgePort.judge(
+        {
+          candidateText: "text",
+          sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+        },
+        controller.signal,
+      ),
+    ).rejects.toThrow();
   });
 });

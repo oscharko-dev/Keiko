@@ -12,6 +12,7 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import { runQualityIntelligenceModelRoutedTestDesign } from "../modelRoutedTestDesign.js";
 import type {
+  QualityIntelligenceJudgeInput,
   QualityIntelligenceModelRoutedTestDesignInput,
   QualityIntelligenceModelRoutedTestDesignDeps,
   QualityIntelligenceJudgePort,
@@ -276,6 +277,17 @@ const STRONG_VERDICT = {
   overallRationale: "strong test",
 };
 
+const DISTINCT_WEAK_RATIONALE_VERDICT = {
+  verdict: "weak" as const,
+  dimensions: [
+    { name: "verifiability" as const, score: 82, rationale: "Expected result is measurable." },
+    { name: "atomicity" as const, score: 78, rationale: "The flow is narrow enough." },
+    { name: "determinism" as const, score: 25, rationale: "Relies on timing-sensitive behavior." },
+    { name: "ac-fidelity" as const, score: 10, rationale: "Misses the stated acceptance criteria." },
+  ],
+  overallRationale: "weak because it misses the originating AC and remains timing-sensitive",
+};
+
 function makeDepsWithJudge(
   evidenceStore: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
   judgeImpl: QualityIntelligenceJudgePort["judge"],
@@ -323,7 +335,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
       ingestedAtoms,
       provenanceRefs: JUDGE_PROVENANCE,
     };
-    const deps = makeDepsWithJudge(store, () => Promise.resolve(WEAK_VERDICT));
+    const deps = makeDepsWithJudge(store, (_input) => Promise.resolve(WEAK_VERDICT));
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
     expect(summary.status).toBe("succeeded");
 
@@ -353,7 +365,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
       ingestedAtoms,
       provenanceRefs: JUDGE_PROVENANCE,
     };
-    const deps = makeDepsWithJudge(store, () => Promise.resolve(WEAK_VERDICT));
+    const deps = makeDepsWithJudge(store, (_input) => Promise.resolve(WEAK_VERDICT));
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
     expect(summary.status).toBe("succeeded");
     expect(summary.qualityScore).toBeDefined();
@@ -378,7 +390,7 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
       provenanceRefs: JUDGE_PROVENANCE,
     };
     let call = 0;
-    const deps = makeDepsWithJudge(store, () => {
+    const deps = makeDepsWithJudge(store, (_input) => {
       call += 1;
       return Promise.resolve(call === 1 ? STRONG_VERDICT : WEAK_VERDICT);
     });
@@ -407,13 +419,81 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
       ingestedAtoms,
       provenanceRefs: JUDGE_PROVENANCE,
     };
-    const deps = makeDepsWithJudge(store, () => Promise.resolve(STRONG_VERDICT));
+    const deps = makeDepsWithJudge(store, (_input) => Promise.resolve(STRONG_VERDICT));
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
     expect(summary.status).toBe("succeeded");
 
     const manifest = store.load(String(input.plan.id));
     const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
     expect(qualityFindings.length).toBe(0);
+  });
+
+  it("passes the originating requirement context into the judge for ac-fidelity scoring", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "AC-1: Clicking Help opens the help center."),
+      makeIngestedAtom("atom-2", "AC-2: The Help center focuses the search field."),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-006"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const judgeCalls: QualityIntelligenceJudgeInput[] = [];
+    const deps = makeDepsWithJudge(store, (judgeInput) => {
+      judgeCalls.push(judgeInput);
+      return Promise.resolve(STRONG_VERDICT);
+    });
+
+    await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+
+    expect(judgeCalls).toHaveLength(2);
+    const firstJudgeCall = judgeCalls[0];
+    const secondJudgeCall = judgeCalls[1];
+    expect(firstJudgeCall?.candidateText).toContain("Title: Test atom 1 behavior");
+    expect(firstJudgeCall?.sourceContext).toEqual([
+      { atomId: "atom-1", text: "AC-1: Clicking Help opens the help center." },
+    ]);
+    expect(secondJudgeCall?.candidateText).toContain("Title: Test atom 2 behavior");
+    expect(secondJudgeCall?.sourceContext).toEqual([
+      { atomId: "atom-2", text: "AC-2: The Help center focuses the search field." },
+    ]);
+  });
+
+  it("persists judge rationale instead of a generic score sentence for weak-test findings", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-007"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps = makeDepsWithJudge(store, (_input) =>
+      Promise.resolve(DISTINCT_WEAK_RATIONALE_VERDICT),
+    );
+
+    await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+
+    const manifest = store.load(String(input.plan.id));
+    const qualityFinding = manifest?.findings.find((finding) => finding.kind === "test-quality");
+    expect(qualityFinding?.summaryRedacted).toContain(
+      "AC fidelity: Misses the stated acceptance criteria.",
+    );
+    expect(qualityFinding?.summaryRedacted).toContain(
+      "Determinism: Relies on timing-sensitive behavior.",
+    );
+    expect(qualityFinding?.summaryRedacted).not.toContain("Test quality score");
   });
 
   it("returns qualityScore: null when no judge is configured", async () => {
