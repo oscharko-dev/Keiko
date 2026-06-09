@@ -19,6 +19,9 @@ export interface FigmaRenderRequest {
 export interface FigmaRenderResponse {
   readonly status: number;
   readonly bytes: Uint8Array;
+  // Lower-cased response header names → values, so the resilience layer (#759) can honour a
+  // `retry-after` on a 429 from the ephemeral render host. Never contains any auth token.
+  readonly headers: Readonly<Record<string, string>>;
 }
 
 export type FigmaRenderPort = (request: FigmaRenderRequest) => Promise<FigmaRenderResponse>;
@@ -32,7 +35,11 @@ export type FigmaRenderPort = (request: FigmaRenderRequest) => Promise<FigmaRend
 export const createDefaultFigmaRenderPort = (): FigmaRenderPort => {
   return async (request: FigmaRenderRequest): Promise<FigmaRenderResponse> => {
     const response = await fetch(request.url, { method: "GET", headers: { ...request.headers } });
+    const headers: Record<string, string> = {};
+    response.headers.forEach((value, name) => {
+      headers[name] = value;
+    });
     const buffer = await response.arrayBuffer();
-    return { status: response.status, bytes: new Uint8Array(buffer) };
+    return { status: response.status, bytes: new Uint8Array(buffer), headers };
   };
 };

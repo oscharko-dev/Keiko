@@ -30,6 +30,20 @@ export {
   type FigmaRenderResponse,
 } from "./figmaRenderPort.js";
 export { buildFigmaSnapshot, type BuildFigmaSnapshotInput } from "./figmaSnapshotBuilder.js";
+export {
+  resnapshotFigma,
+  type FigmaCleanToIr,
+  type ResnapshotFigmaDeps,
+} from "./figmaResnapshot.js";
+export {
+  fetchWithBackoff,
+  realFigmaRetrySleep,
+  DEFAULT_FIGMA_RETRY_POLICY,
+  type FigmaBackoffResponse,
+  type FigmaRetryPolicy,
+  type FigmaRetrySleep,
+} from "./figmaRetry.js";
+export { mapWithConcurrency } from "./figmaConcurrency.js";
 export type {
   FigmaRenderedImage,
   FigmaSkippedScreen,

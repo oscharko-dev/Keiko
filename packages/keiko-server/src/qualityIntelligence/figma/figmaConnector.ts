@@ -14,6 +14,13 @@
 
 import { FigmaConnectorError } from "./figmaConnectorErrors.js";
 import type { FigmaHttpPort } from "./figmaHttpPort.js";
+import {
+  DEFAULT_FIGMA_RETRY_POLICY,
+  fetchWithBackoff,
+  realFigmaRetrySleep,
+  type FigmaRetryPolicy,
+  type FigmaRetrySleep,
+} from "./figmaRetry.js";
 import { parseFigmaTarget, type FigmaTarget } from "./figmaUrl.js";
 import { resolveReadiness, type FigmaNode, type ReadinessSignal } from "./figmaReadiness.js";
 import { classifyTokenFailure, resolveFigmaToken } from "./figmaTokenSource.js";
@@ -42,6 +49,10 @@ export interface FigmaConnectorDeps {
   // absent the connector falls back to config then the FIGMA_ACCESS_TOKEN env var (the dev
   // default from #751), so the env-auth path keeps working unchanged with no vault entry.
   readonly vaultToken?: string;
+  // Deterministic 429 backoff for the scoped fetch (#759); defaults to the bounded policy.
+  readonly retryPolicy?: FigmaRetryPolicy;
+  // Injectable wait seam so tests assert the backoff schedule without real delays.
+  readonly sleep?: FigmaRetrySleep;
 }
 
 export interface FigmaFetchOptions {
@@ -125,6 +136,8 @@ export const createFigmaConnector = (deps: FigmaConnectorDeps): FigmaConnector =
   const depth = deps.config?.depth ?? DEFAULT_DEPTH;
   const releaseMarker = deps.config?.releaseMarker;
   const maxNodeCount = deps.config?.maxNodeCount ?? DEFAULT_MAX_NODE_COUNT;
+  const retryPolicy = deps.retryPolicy ?? DEFAULT_FIGMA_RETRY_POLICY;
+  const sleep = deps.sleep ?? realFigmaRetrySleep;
 
   const fetchScopedNodes = async (
     url: string,
@@ -135,7 +148,11 @@ export const createFigmaConnector = (deps: FigmaConnectorDeps): FigmaConnector =
     if (target === null) throw new FigmaConnectorError("FIGMA_MALFORMED_URL");
 
     const requestUrl = buildScopedUrl(target, depth, options.version);
-    const response = await deps.http({ url: requestUrl, headers: { "X-Figma-Token": token } });
+    const response = await fetchWithBackoff(
+      () => deps.http({ url: requestUrl, headers: { "X-Figma-Token": token } }),
+      retryPolicy,
+      sleep,
+    );
     if (response.status < 200 || response.status >= 300) {
       throw statusToError(response.status, response.json);
     }

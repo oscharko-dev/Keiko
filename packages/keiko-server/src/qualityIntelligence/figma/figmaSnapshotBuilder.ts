@@ -14,9 +14,17 @@
 // the render-url download, an error, or a log.
 
 import { FigmaConnectorError } from "./figmaConnectorErrors.js";
+import { mapWithConcurrency } from "./figmaConcurrency.js";
 import type { FigmaHttpPort } from "./figmaHttpPort.js";
 import type { FigmaRenderPort } from "./figmaRenderPort.js";
 import type { FigmaProvenance } from "./figmaConnector.js";
+import {
+  DEFAULT_FIGMA_RETRY_POLICY,
+  fetchWithBackoff,
+  realFigmaRetrySleep,
+  type FigmaRetryPolicy,
+  type FigmaRetrySleep,
+} from "./figmaRetry.js";
 import { hashBytes, hashScreen, hashSnapshot } from "./figmaSnapshotHash.js";
 import type {
   FigmaSkippedScreen,
@@ -31,6 +39,7 @@ const SNAPSHOT_SCHEMA_VERSION = 1 as const;
 const DEFAULT_RENDER_BATCH_SIZE = 20;
 const DEFAULT_MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const DEFAULT_RENDER_SCALE = 1;
+const DEFAULT_DOWNLOAD_CONCURRENCY = 4;
 
 type ScreenIr = QualityIntelligenceFigma.ScreenIr;
 
@@ -40,8 +49,15 @@ export interface BuildFigmaSnapshotInput {
   readonly token: string;
   readonly imagesPort: FigmaHttpPort;
   readonly renderPort: FigmaRenderPort;
+  /** `/v1/images` ids-per-call cap — bounds each render batch. */
   readonly batchSize?: number;
   readonly maxImageBytes?: number;
+  /** Max simultaneous byte-downloads — bounds burst on huge boards. */
+  readonly downloadConcurrency?: number;
+  /** Deterministic 429 backoff policy; defaults to {@link DEFAULT_FIGMA_RETRY_POLICY}. */
+  readonly retryPolicy?: FigmaRetryPolicy;
+  /** Injectable wait seam so tests assert the backoff schedule without real delays. */
+  readonly sleep?: FigmaRetrySleep;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -84,19 +100,23 @@ const extractImageUrls = (json: unknown): Readonly<Record<string, string | null>
 };
 
 // Calls `/v1/images` in bounded batches and merges the ephemeral-url map. The token authenticates
-// each batch via the header only.
+// each batch via the header only. Each batch call is wrapped in deterministic 429 backoff so a
+// rate-limited huge-board render retries within Figma's limits instead of failing.
 const requestRenderUrls = async (
   input: BuildFigmaSnapshotInput,
   screenIds: readonly string[],
 ): Promise<Map<string, string | null>> => {
   const batchSize = input.batchSize ?? DEFAULT_RENDER_BATCH_SIZE;
+  const policy = input.retryPolicy ?? DEFAULT_FIGMA_RETRY_POLICY;
+  const sleep = input.sleep ?? realFigmaRetrySleep;
   const urls = new Map<string, string | null>();
   for (const batch of chunk(screenIds, batchSize)) {
     const requestUrl = buildImagesUrl(input.provenance.fileKey, batch, input.provenance.version);
-    const response = await input.imagesPort({
-      url: requestUrl,
-      headers: { "X-Figma-Token": input.token },
-    });
+    const response = await fetchWithBackoff(
+      () => input.imagesPort({ url: requestUrl, headers: { "X-Figma-Token": input.token } }),
+      policy,
+      sleep,
+    );
     if (response.status < 200 || response.status >= 300) throw statusToError(response.status);
     const map = extractImageUrls(response.json);
     for (const id of batch) urls.set(id, map[id] ?? null);
@@ -113,7 +133,9 @@ const skip = (screenId: string, reason: FigmaSkippedScreenReason): ScreenOutcome
   skipped: { screenId, reason },
 });
 
-// Downloads one screen's render bytes and classifies the result into a kept screen or a skip.
+// Downloads one screen's render bytes and classifies the result into a kept screen or a skip. The
+// pre-signed byte download is wrapped in the same deterministic 429 backoff; a single screen still
+// failing after retries degrades to a skip (partial render), never aborting the whole build.
 const resolveScreen = async (
   input: BuildFigmaSnapshotInput,
   ir: ScreenIr,
@@ -121,7 +143,14 @@ const resolveScreen = async (
 ): Promise<ScreenOutcome> => {
   if (renderUrl === null) return skip(ir.id, "render-url-missing");
   const maxBytes = input.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES;
-  const response = await input.renderPort({ url: renderUrl, headers: {} });
+  const policy = input.retryPolicy ?? DEFAULT_FIGMA_RETRY_POLICY;
+  const sleep = input.sleep ?? realFigmaRetrySleep;
+  const response = await fetchWithBackoff(
+    () => input.renderPort({ url: renderUrl, headers: {} }),
+    policy,
+    sleep,
+  ).catch(() => null);
+  if (response === null) return skip(ir.id, "render-fetch-failed");
   if (response.status < 200 || response.status >= 300) return skip(ir.id, "render-fetch-failed");
   if (response.bytes.length === 0) return skip(ir.id, "render-empty");
   if (response.bytes.length > maxBytes) return skip(ir.id, "render-oversized");
@@ -153,10 +182,14 @@ export const buildFigmaSnapshot = async (
       ? new Map<string, string | null>()
       : await requestRenderUrls(input, screenIds);
 
+  const concurrency = input.downloadConcurrency ?? DEFAULT_DOWNLOAD_CONCURRENCY;
+  const outcomes = await mapWithConcurrency(input.ir.screens, concurrency, (ir) =>
+    resolveScreen(input, ir, renderUrls.get(ir.id) ?? null),
+  );
+
   const screens: FigmaSnapshotScreen[] = [];
   const skippedScreens: FigmaSkippedScreen[] = [];
-  for (const ir of input.ir.screens) {
-    const outcome = await resolveScreen(input, ir, renderUrls.get(ir.id) ?? null);
+  for (const outcome of outcomes) {
     if (outcome.screen !== undefined) screens.push(outcome.screen);
     if (outcome.skipped !== undefined) skippedScreens.push(outcome.skipped);
   }

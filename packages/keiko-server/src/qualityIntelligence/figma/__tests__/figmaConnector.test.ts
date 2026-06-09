@@ -38,7 +38,7 @@ const staticPort =
 
 const okResponse = (
   document: unknown = { id: "12:34", name: "Release", type: "FRAME" },
-): FigmaHttpResponse => ({ status: 200, json: nodesResponse("12:34", document) });
+): FigmaHttpResponse => ({ status: 200, json: nodesResponse("12:34", document), headers: {} });
 
 describe("createFigmaConnector — scoped fetch", () => {
   it("calls GET /v1/files/:key/nodes with ids + depth, NEVER the whole-file endpoint", async () => {
@@ -199,7 +199,7 @@ describe("createFigmaConnector — token never leaks", () => {
   };
 
   it("never includes the token in a thrown error (message or any enumerable field)", async () => {
-    const port = staticPort({ status: 403, json: { err: "no" } });
+    const port = staticPort({ status: 403, json: { err: "no" }, headers: {} });
     const connector = createFigmaConnector({ http: port, env: { FIGMA_ACCESS_TOKEN: TOKEN } });
 
     const error = await captureThrown(() => connector.fetchScopedNodes(URL_OK));
@@ -237,8 +237,13 @@ describe("createFigmaConnector — token never leaks", () => {
 });
 
 describe("createFigmaConnector — coded errors", () => {
-  const connectorWith = (response: FigmaHttpResponse): ReturnType<typeof createFigmaConnector> =>
-    createFigmaConnector({ http: staticPort(response), env: { FIGMA_ACCESS_TOKEN: TOKEN } });
+  const connectorWith = (
+    response: Omit<FigmaHttpResponse, "headers">,
+  ): ReturnType<typeof createFigmaConnector> =>
+    createFigmaConnector({
+      http: staticPort({ ...response, headers: {} }),
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
 
   it("maps a malformed / whole-file URL to FIGMA_MALFORMED_URL", async () => {
     const connector = connectorWith(okResponse());
@@ -336,5 +341,82 @@ describe("createFigmaConnector — depth cap", () => {
     });
     await connector.fetchScopedNodes(URL_OK);
     expect(firstRequest(recorder).url).toContain("depth=5");
+  });
+});
+
+describe("createFigmaConnector — resilience (#759)", () => {
+  const TEST_POLICY = { maxRetries: 3, baseDelayMs: 100, maxDelayMs: 5000 } as const;
+
+  const recordingSleep = (): {
+    readonly sleep: (ms: number) => Promise<void>;
+    readonly delays: number[];
+  } => {
+    const delays: number[] = [];
+    return { sleep: (ms) => (delays.push(ms), Promise.resolve()), delays };
+  };
+
+  // A scripted port that returns each response once, then sticks on the last entry.
+  const scriptedPort = (
+    script: readonly FigmaHttpResponse[],
+  ): { readonly port: FigmaHttpPort; readonly calls: () => number } => {
+    let index = 0;
+    const port: FigmaHttpPort = () => {
+      const response = script[Math.min(index, script.length - 1)];
+      index += 1;
+      if (response === undefined) throw new Error("empty script");
+      return Promise.resolve(response);
+    };
+    return { port, calls: () => index };
+  };
+
+  it("retries a 429 scoped fetch then succeeds, sleeping the deterministic schedule", async () => {
+    const scripted = scriptedPort([{ status: 429, json: {}, headers: {} }, okResponse()]);
+    const { sleep, delays } = recordingSleep();
+    const connector = createFigmaConnector({
+      http: scripted.port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      retryPolicy: TEST_POLICY,
+      sleep,
+    });
+
+    const result = await connector.fetchScopedNodes(URL_OK);
+
+    expect(scripted.calls()).toBe(2);
+    expect(delays).toEqual([100]);
+    expect(result.provenance.fileKey).toBe("KEY123");
+  });
+
+  it("honours a Retry-After header on the scoped fetch 429", async () => {
+    const scripted = scriptedPort([
+      { status: 429, json: {}, headers: { "retry-after": "4" } },
+      okResponse(),
+    ]);
+    const { sleep, delays } = recordingSleep();
+    const connector = createFigmaConnector({
+      http: scripted.port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      retryPolicy: TEST_POLICY,
+      sleep,
+    });
+
+    await connector.fetchScopedNodes(URL_OK);
+
+    expect(delays).toEqual([4000]);
+  });
+
+  it("raises FIGMA_RATE_LIMITED when scoped-fetch 429s exhaust the bounded retries", async () => {
+    const scripted = scriptedPort([{ status: 429, json: {}, headers: {} }]);
+    const { sleep } = recordingSleep();
+    const connector = createFigmaConnector({
+      http: scripted.port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      retryPolicy: TEST_POLICY,
+      sleep,
+    });
+
+    await expect(connector.fetchScopedNodes(URL_OK)).rejects.toMatchObject({
+      code: "FIGMA_RATE_LIMITED",
+    });
+    expect(scripted.calls()).toBe(TEST_POLICY.maxRetries + 1);
   });
 });

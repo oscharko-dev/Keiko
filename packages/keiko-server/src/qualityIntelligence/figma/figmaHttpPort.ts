@@ -17,9 +17,22 @@ export interface FigmaHttpRequest {
 export interface FigmaHttpResponse {
   readonly status: number;
   readonly json: unknown;
+  // Lower-cased response header names → values. Carried so the resilience layer (#759) can read
+  // `retry-after` on a 429 without re-issuing the request. Never contains the outbound token.
+  readonly headers: Readonly<Record<string, string>>;
 }
 
 export type FigmaHttpPort = (request: FigmaHttpRequest) => Promise<FigmaHttpResponse>;
+
+// Collects the response headers into a plain lower-cased map. `Headers` already lower-cases
+// names, so this is a faithful, allocation-bounded copy with no token (request-only header).
+const collectHeaders = (response: Response): Readonly<Record<string, string>> => {
+  const out: Record<string, string> = {};
+  response.headers.forEach((value, name) => {
+    out[name] = value;
+  });
+  return out;
+};
 
 const parseJsonBody = async (response: Response): Promise<unknown> => {
   const text = await response.text();
@@ -40,7 +53,8 @@ const parseJsonBody = async (response: Response): Promise<unknown> => {
 export const createDefaultFigmaHttpPort = (): FigmaHttpPort => {
   return async (request: FigmaHttpRequest): Promise<FigmaHttpResponse> => {
     const response = await fetch(request.url, { method: "GET", headers: { ...request.headers } });
+    const headers = collectHeaders(response);
     const json = await parseJsonBody(response);
-    return { status: response.status, json };
+    return { status: response.status, json, headers };
   };
 };

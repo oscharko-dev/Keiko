@@ -4,6 +4,7 @@ import type { FigmaProvenance } from "../figmaConnector.js";
 import type { FigmaHttpPort, FigmaHttpRequest } from "../figmaHttpPort.js";
 import type { FigmaRenderPort, FigmaRenderRequest } from "../figmaRenderPort.js";
 import { FigmaConnectorError } from "../figmaConnectorErrors.js";
+import type { FigmaRetrySleep } from "../figmaRetry.js";
 import { buildFigmaSnapshot, type BuildFigmaSnapshotInput } from "../figmaSnapshotBuilder.js";
 
 const TOKEN = "figd_unit-test-secret-pat-value-1234567890";
@@ -60,7 +61,7 @@ const imagesPort = (missing: ReadonlySet<string> = new Set()): ImagesPortStub =>
     const ids = (url.searchParams.get("ids") ?? "").split(",").filter((id) => id.length > 0);
     const images: Record<string, string | null> = {};
     for (const id of ids) images[id] = missing.has(id) ? null : `https://ephemeral/${id}.png`;
-    return Promise.resolve({ status: 200, json: { err: null, images } });
+    return Promise.resolve({ status: 200, json: { err: null, images }, headers: {} });
   };
   return { port, requests };
 };
@@ -80,10 +81,16 @@ const renderPort = (
     requests.push(request);
     const override = overrides[request.url];
     if (override?.status !== undefined && override.status >= 300) {
-      return Promise.resolve({ status: override.status, bytes: new Uint8Array(0) });
+      return Promise.resolve({ status: override.status, bytes: new Uint8Array(0), headers: {} });
     }
-    if (override?.empty === true) return Promise.resolve({ status: 200, bytes: new Uint8Array(0) });
-    return Promise.resolve({ status: 200, bytes: bytesByUrl[request.url] ?? new Uint8Array(0) });
+    if (override?.empty === true) {
+      return Promise.resolve({ status: 200, bytes: new Uint8Array(0), headers: {} });
+    }
+    return Promise.resolve({
+      status: 200,
+      bytes: bytesByUrl[request.url] ?? new Uint8Array(0),
+      headers: {},
+    });
   };
   return { port, requests };
 };
@@ -205,7 +212,7 @@ describe("buildFigmaSnapshot", () => {
 
   it("maps a non-2xx /v1/images response to a coded connector error", async () => {
     const screens = [screen("1:1", "Home")];
-    const images: FigmaHttpPort = () => Promise.resolve({ status: 500, json: {} });
+    const images: FigmaHttpPort = () => Promise.resolve({ status: 500, json: {}, headers: {} });
     const renders = renderPort({});
 
     await expect(
@@ -259,5 +266,177 @@ describe("buildFigmaSnapshot", () => {
     });
 
     expect(second.integrityHash).not.toBe(first.integrityHash);
+  });
+});
+
+// A synchronous sleep recorder so backoff is asserted with zero real waiting.
+const recordingSleep = (): { readonly sleep: FigmaRetrySleep; readonly delays: number[] } => {
+  const delays: number[] = [];
+  const sleep: FigmaRetrySleep = (ms) => {
+    delays.push(ms);
+    return Promise.resolve();
+  };
+  return { sleep, delays };
+};
+
+const TEST_POLICY = { maxRetries: 3, baseDelayMs: 100, maxDelayMs: 5000 } as const;
+
+describe("buildFigmaSnapshot — resilience (#759)", () => {
+  it("retries a 429 on /v1/images then succeeds, sleeping the deterministic schedule", async () => {
+    const screens = [screen("1:1", "Home")];
+    let imagesCalls = 0;
+    const images: FigmaHttpPort = (request) => {
+      imagesCalls += 1;
+      if (imagesCalls === 1) return Promise.resolve({ status: 429, json: {}, headers: {} });
+      const url = new URL(request.url);
+      const ids = (url.searchParams.get("ids") ?? "").split(",");
+      const map: Record<string, string> = {};
+      for (const id of ids) map[id] = `https://ephemeral/${id}.png`;
+      return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
+    };
+    const renders = renderPort({ "https://ephemeral/1:1.png": png(10) });
+    const { sleep, delays } = recordingSleep();
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images, renders.port),
+      retryPolicy: TEST_POLICY,
+      sleep,
+    });
+
+    expect(imagesCalls).toBe(2);
+    expect(delays).toEqual([100]);
+    expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1"]);
+  });
+
+  it("honours a Retry-After header on a 429 images response", async () => {
+    const screens = [screen("1:1", "Home")];
+    let imagesCalls = 0;
+    const images: FigmaHttpPort = (request) => {
+      imagesCalls += 1;
+      if (imagesCalls === 1) {
+        return Promise.resolve({ status: 429, json: {}, headers: { "retry-after": "3" } });
+      }
+      const ids = (new URL(request.url).searchParams.get("ids") ?? "").split(",");
+      const map: Record<string, string> = {};
+      for (const id of ids) map[id] = `https://ephemeral/${id}.png`;
+      return Promise.resolve({ status: 200, json: { images: map }, headers: {} });
+    };
+    const renders = renderPort({ "https://ephemeral/1:1.png": png(10) });
+    const { sleep, delays } = recordingSleep();
+
+    await buildFigmaSnapshot({
+      ...baseInput(screens, images, renders.port),
+      retryPolicy: TEST_POLICY,
+      sleep,
+    });
+
+    expect(delays).toEqual([3000]);
+  });
+
+  it("raises FIGMA_RATE_LIMITED when /v1/images 429s exhaust the bounded retries", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images: FigmaHttpPort = () => Promise.resolve({ status: 429, json: {}, headers: {} });
+    const renders = renderPort({});
+    const { sleep } = recordingSleep();
+
+    await expect(
+      buildFigmaSnapshot({
+        ...baseInput(screens, images, renders.port),
+        retryPolicy: TEST_POLICY,
+        sleep,
+      }),
+    ).rejects.toMatchObject({ code: "FIGMA_RATE_LIMITED" });
+  });
+
+  it("retries a 429 on a byte download then keeps the screen", async () => {
+    const screens = [screen("1:1", "Home")];
+    const images = imagesPort();
+    let renderCalls = 0;
+    const renders: FigmaRenderPort = () => {
+      renderCalls += 1;
+      if (renderCalls === 1) {
+        return Promise.resolve({ status: 429, bytes: new Uint8Array(0), headers: {} });
+      }
+      return Promise.resolve({ status: 200, bytes: png(10), headers: {} });
+    };
+    const { sleep, delays } = recordingSleep();
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images.port, renders),
+      retryPolicy: TEST_POLICY,
+      sleep,
+    });
+
+    expect(renderCalls).toBe(2);
+    expect(delays).toEqual([100]);
+    expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1"]);
+  });
+
+  it("skips a screen whose byte download 429s past exhaustion (partial), keeping the rest", async () => {
+    const screens = [screen("1:1", "Home"), screen("1:2", "Detail")];
+    const images = imagesPort();
+    const renders: FigmaRenderPort = (request) => {
+      if (request.url === "https://ephemeral/1:2.png") {
+        return Promise.resolve({ status: 429, bytes: new Uint8Array(0), headers: {} });
+      }
+      return Promise.resolve({ status: 200, bytes: png(10), headers: {} });
+    };
+    const { sleep } = recordingSleep();
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images.port, renders),
+      retryPolicy: { maxRetries: 1, baseDelayMs: 1, maxDelayMs: 10 },
+      sleep,
+    });
+
+    expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1"]);
+    expect(snapshot.skippedScreens).toEqual([{ screenId: "1:2", reason: "render-fetch-failed" }]);
+  });
+
+  it("never runs more than `downloadConcurrency` byte downloads at once", async () => {
+    const screens = Array.from({ length: 6 }, (_unused, i) =>
+      screen(`1:${String(i)}`, `S${String(i)}`),
+    );
+    const images = imagesPort();
+    let active = 0;
+    let peak = 0;
+    const renders: FigmaRenderPort = async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await Promise.resolve();
+      await Promise.resolve();
+      active -= 1;
+      return { status: 200, bytes: png(1), headers: {} };
+    };
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images.port, renders),
+      downloadConcurrency: 2,
+    });
+
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(snapshot.screens).toHaveLength(6);
+  });
+
+  it("preserves screen order even when downloads complete out of order", async () => {
+    const screens = [screen("1:1", "Home"), screen("1:2", "Detail"), screen("1:3", "Settings")];
+    const images = imagesPort();
+    const delayByUrl: Record<string, number> = {
+      "https://ephemeral/1:1.png": 3,
+      "https://ephemeral/1:2.png": 1,
+      "https://ephemeral/1:3.png": 2,
+    };
+    const renders: FigmaRenderPort = async (request) => {
+      const ticks = delayByUrl[request.url] ?? 0;
+      for (let i = 0; i < ticks; i += 1) await Promise.resolve();
+      return { status: 200, bytes: png(1), headers: {} };
+    };
+
+    const snapshot = await buildFigmaSnapshot({
+      ...baseInput(screens, images.port, renders),
+      downloadConcurrency: 3,
+    });
+
+    expect(snapshot.screens.map((s) => s.screenId)).toEqual(["1:1", "1:2", "1:3"]);
   });
 });

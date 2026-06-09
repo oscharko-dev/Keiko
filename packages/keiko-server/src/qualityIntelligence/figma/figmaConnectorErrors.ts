@@ -15,6 +15,7 @@ export type FigmaConnectorErrorCode =
   | "FIGMA_INSUFFICIENT_SCOPE"
   | "FIGMA_PROXY_EGRESS_FAILED"
   | "FIGMA_OVERSIZED_SCOPE"
+  | "FIGMA_RATE_LIMITED"
   | "FIGMA_UPSTREAM_UNAVAILABLE"
   | "FIGMA_INTERNAL";
 
@@ -36,6 +37,8 @@ const SAFE_MESSAGES: Readonly<Record<FigmaConnectorErrorCode, string>> = {
     "The Figma request could not be routed through the platform egress proxy. Check proxy connectivity and try again.",
   FIGMA_OVERSIZED_SCOPE:
     "The requested Figma node subtree is too large for a single scoped fetch. Connect a narrower section.",
+  FIGMA_RATE_LIMITED:
+    "Figma rate-limited the snapshot-build after repeated retries. Wait a moment and re-run the snapshot.",
   FIGMA_UPSTREAM_UNAVAILABLE:
     "The Figma service is currently unavailable. Try the scoped fetch again later.",
   FIGMA_INTERNAL: "The Figma connector could not service the request.",
