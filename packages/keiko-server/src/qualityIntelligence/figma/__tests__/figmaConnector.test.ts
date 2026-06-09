@@ -1,0 +1,298 @@
+import { describe, expect, it, vi } from "vitest";
+import { createFigmaConnector } from "../figmaConnector.js";
+import { FigmaConnectorError } from "../figmaConnectorErrors.js";
+import type { FigmaHttpPort, FigmaHttpRequest, FigmaHttpResponse } from "../figmaHttpPort.js";
+
+const TOKEN = "figd_unit-test-secret-pat-value";
+const URL_OK = "https://www.figma.com/design/KEY123/Board?node-id=12-34&t=abc";
+
+const nodesResponse = (nodeId: string, document: unknown): unknown => ({
+  name: "File",
+  nodes: { [nodeId]: { document } },
+});
+
+interface Recorder {
+  readonly requests: FigmaHttpRequest[];
+  readonly port: FigmaHttpPort;
+}
+
+const recordingPort = (response: FigmaHttpResponse): Recorder => {
+  const requests: FigmaHttpRequest[] = [];
+  const port: FigmaHttpPort = (request) => {
+    requests.push(request);
+    return Promise.resolve(response);
+  };
+  return { requests, port };
+};
+
+const firstRequest = (recorder: Recorder): FigmaHttpRequest => {
+  const request = recorder.requests[0];
+  if (request === undefined) throw new Error("expected at least one recorded request");
+  return request;
+};
+
+const staticPort =
+  (response: FigmaHttpResponse): FigmaHttpPort =>
+  () =>
+    Promise.resolve(response);
+
+const okResponse = (
+  document: unknown = { id: "12:34", name: "Release", type: "FRAME" },
+): FigmaHttpResponse => ({ status: 200, json: nodesResponse("12:34", document) });
+
+describe("createFigmaConnector — scoped fetch", () => {
+  it("calls GET /v1/files/:key/nodes with ids + depth, NEVER the whole-file endpoint", async () => {
+    const recorder = recordingPort(okResponse());
+    const connector = createFigmaConnector({
+      http: recorder.port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+
+    await connector.fetchScopedNodes(URL_OK);
+
+    expect(recorder.requests).toHaveLength(1);
+    const url = firstRequest(recorder).url;
+    expect(url).toContain("/v1/files/KEY123/nodes");
+    expect(url).toContain("ids=12%3A34");
+    expect(url).toMatch(/[?&]depth=\d+/);
+    expect(url).not.toMatch(/\/v1\/files\/KEY123(\?|$)/);
+  });
+
+  it("pins the version query param when supplied", async () => {
+    const recorder = recordingPort(okResponse());
+    const connector = createFigmaConnector({
+      http: recorder.port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+
+    const result = await connector.fetchScopedNodes(URL_OK, { version: "ver-999" });
+
+    expect(firstRequest(recorder).url).toContain("version=ver-999");
+    expect(result.provenance.version).toBe("ver-999");
+    expect(result.readiness).toEqual({ source: "version", ready: true, version: "ver-999" });
+  });
+
+  it("returns the raw scoped node subtree plus provenance (no token)", async () => {
+    const document = { id: "12:34", name: "Release", type: "FRAME" };
+    const connector = createFigmaConnector({
+      http: recordingPort(okResponse(document)).port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+
+    const result = await connector.fetchScopedNodes(URL_OK, { fetchedAt: "2026-01-01T00:00:00Z" });
+
+    expect(result.nodes).toEqual(document);
+    expect(result.provenance).toEqual({
+      fileKey: "KEY123",
+      nodeId: "12:34",
+      version: undefined,
+      fetchedAt: "2026-01-01T00:00:00Z",
+    });
+  });
+
+  it("resolves readiness from the fetched subtree when no version is pinned", async () => {
+    const document = {
+      id: "12:34",
+      name: "Work In Progress",
+      type: "FRAME",
+      children: [{ id: "1", name: "Login", type: "FRAME", devStatus: { type: "READY_FOR_DEV" } }],
+    };
+    const connector = createFigmaConnector({
+      http: recordingPort(okResponse(document)).port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+
+    const result = await connector.fetchScopedNodes(URL_OK);
+    expect(result.readiness).toEqual({ source: "devStatus", ready: true, readyNodeCount: 1 });
+  });
+
+  it("degrades readiness to none when devStatus is absent and nothing else matches", async () => {
+    const document = { id: "12:34", name: "Drafts", type: "FRAME", children: [] };
+    const connector = createFigmaConnector({
+      http: recordingPort(okResponse(document)).port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+
+    const result = await connector.fetchScopedNodes(URL_OK);
+    expect(result.readiness).toEqual({ source: "none", ready: false });
+  });
+});
+
+describe("createFigmaConnector — token contract", () => {
+  it("reads the PAT from FIGMA_ACCESS_TOKEN and sets it ONLY as the X-Figma-Token header", async () => {
+    const recorder = recordingPort(okResponse());
+    const connector = createFigmaConnector({
+      http: recorder.port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+
+    await connector.fetchScopedNodes(URL_OK);
+
+    expect(firstRequest(recorder).headers["X-Figma-Token"]).toBe(TOKEN);
+  });
+
+  it("prefers the injected config token over the env var", async () => {
+    const recorder = recordingPort(okResponse());
+    const connector = createFigmaConnector({
+      http: recorder.port,
+      env: { FIGMA_ACCESS_TOKEN: "env-token" },
+      config: { accessToken: "config-token" },
+    });
+
+    await connector.fetchScopedNodes(URL_OK);
+    expect(firstRequest(recorder).headers["X-Figma-Token"]).toBe("config-token");
+  });
+
+  it("refuses with FIGMA_TOKEN_MISSING when no token is configured", async () => {
+    const recorder = recordingPort(okResponse());
+    const connector = createFigmaConnector({ http: recorder.port, env: {} });
+
+    await expect(connector.fetchScopedNodes(URL_OK)).rejects.toMatchObject({
+      code: "FIGMA_TOKEN_MISSING",
+    });
+    expect(recorder.requests).toHaveLength(0);
+  });
+
+  it("treats a blank token as missing", async () => {
+    const connector = createFigmaConnector({
+      http: recordingPort(okResponse()).port,
+      env: { FIGMA_ACCESS_TOKEN: "   " },
+    });
+    await expect(connector.fetchScopedNodes(URL_OK)).rejects.toMatchObject({
+      code: "FIGMA_TOKEN_MISSING",
+    });
+  });
+});
+
+describe("createFigmaConnector — token never leaks", () => {
+  const captureThrown = async (fn: () => Promise<unknown>): Promise<unknown> => {
+    try {
+      await fn();
+    } catch (e) {
+      return e;
+    }
+    throw new Error("expected throw");
+  };
+
+  it("never includes the token in a thrown error (message or any enumerable field)", async () => {
+    const port = staticPort({ status: 403, json: { err: "no" } });
+    const connector = createFigmaConnector({ http: port, env: { FIGMA_ACCESS_TOKEN: TOKEN } });
+
+    const error = await captureThrown(() => connector.fetchScopedNodes(URL_OK));
+    const serialised = `${String(error)} ${JSON.stringify(error)} ${JSON.stringify(
+      Object.getOwnPropertyNames(error).map((k) => (error as Record<string, unknown>)[k]),
+    )}`;
+    expect(serialised).not.toContain(TOKEN);
+    expect(serialised).not.toContain("figd_");
+  });
+
+  it("never includes the token in the returned provenance or nodes", async () => {
+    const connector = createFigmaConnector({
+      http: recordingPort(okResponse()).port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+    const result = await connector.fetchScopedNodes(URL_OK);
+    expect(JSON.stringify(result)).not.toContain(TOKEN);
+    expect(JSON.stringify(result)).not.toContain("figd_");
+  });
+
+  it("does not emit the token to console", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const connector = createFigmaConnector({
+      http: recordingPort(okResponse()).port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+    await connector.fetchScopedNodes(URL_OK);
+    for (const call of [...spy.mock.calls, ...errSpy.mock.calls].flat()) {
+      expect(String(call)).not.toContain(TOKEN);
+    }
+    spy.mockRestore();
+    errSpy.mockRestore();
+  });
+});
+
+describe("createFigmaConnector — coded errors", () => {
+  const connectorWith = (response: FigmaHttpResponse): ReturnType<typeof createFigmaConnector> =>
+    createFigmaConnector({ http: staticPort(response), env: { FIGMA_ACCESS_TOKEN: TOKEN } });
+
+  it("maps a malformed / whole-file URL to FIGMA_MALFORMED_URL", async () => {
+    const connector = connectorWith(okResponse());
+    await expect(
+      connector.fetchScopedNodes("https://www.figma.com/design/KEY/Board"),
+    ).rejects.toMatchObject({ code: "FIGMA_MALFORMED_URL" });
+  });
+
+  it("maps 404 to FIGMA_NOT_FOUND", async () => {
+    await expect(
+      connectorWith({ status: 404, json: {} }).fetchScopedNodes(URL_OK),
+    ).rejects.toMatchObject({ code: "FIGMA_NOT_FOUND" });
+  });
+
+  it("maps 403 to FIGMA_INSUFFICIENT_SCOPE", async () => {
+    await expect(
+      connectorWith({ status: 403, json: {} }).fetchScopedNodes(URL_OK),
+    ).rejects.toMatchObject({ code: "FIGMA_INSUFFICIENT_SCOPE" });
+  });
+
+  it("maps 401 to FIGMA_INSUFFICIENT_SCOPE (bad/invalid token)", async () => {
+    await expect(
+      connectorWith({ status: 401, json: {} }).fetchScopedNodes(URL_OK),
+    ).rejects.toMatchObject({ code: "FIGMA_INSUFFICIENT_SCOPE" });
+  });
+
+  it("maps 5xx to FIGMA_UPSTREAM_UNAVAILABLE", async () => {
+    await expect(
+      connectorWith({ status: 503, json: {} }).fetchScopedNodes(URL_OK),
+    ).rejects.toMatchObject({ code: "FIGMA_UPSTREAM_UNAVAILABLE" });
+  });
+
+  it("maps an empty / missing node entry to FIGMA_NOT_FOUND", async () => {
+    await expect(
+      connectorWith({ status: 200, json: { nodes: {} } }).fetchScopedNodes(URL_OK),
+    ).rejects.toMatchObject({ code: "FIGMA_NOT_FOUND" });
+  });
+
+  it("maps an unparseable 200 body to FIGMA_INTERNAL", async () => {
+    await expect(
+      connectorWith({ status: 200, json: "not-an-object" }).fetchScopedNodes(URL_OK),
+    ).rejects.toMatchObject({ code: "FIGMA_INTERNAL" });
+  });
+
+  it("enforces a deterministic oversized-scope guard on node count", async () => {
+    const children = Array.from({ length: 5 }, (_, i) => ({
+      id: `c${String(i)}`,
+      name: `n${String(i)}`,
+      type: "FRAME",
+    }));
+    const document = { id: "12:34", name: "Big", type: "FRAME", children };
+    const connector = createFigmaConnector({
+      http: staticPort(okResponse(document)),
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      config: { maxNodeCount: 3 },
+    });
+    await expect(connector.fetchScopedNodes(URL_OK)).rejects.toMatchObject({
+      code: "FIGMA_OVERSIZED_SCOPE",
+    });
+  });
+
+  it("throws a FigmaConnectorError instance (typed, not a bare Error)", async () => {
+    const error = await connectorWith({ status: 404, json: {} })
+      .fetchScopedNodes(URL_OK)
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(FigmaConnectorError);
+  });
+});
+
+describe("createFigmaConnector — depth cap", () => {
+  it("uses a configurable depth and never an unbounded fetch", async () => {
+    const recorder = recordingPort(okResponse());
+    const connector = createFigmaConnector({
+      http: recorder.port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      config: { depth: 5 },
+    });
+    await connector.fetchScopedNodes(URL_OK);
+    expect(firstRequest(recorder).url).toContain("depth=5");
+  });
+});
