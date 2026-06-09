@@ -5,11 +5,14 @@
 
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
+import { PROVIDER_TYPES, type ProviderType } from "@oscharko-dev/keiko-contracts";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   DEFAULT_GROUNDING_LIMITS,
   resolveGroundingLimits,
   type GroundingLimits,
+  type SafeGatewayConfig,
+  type SafeProviderConfig,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   CircuitBreakerConfig,
@@ -19,6 +22,12 @@ import type {
   ModelCapability,
   ModelKind,
   ModelProviderConfig,
+} from "./types.js";
+import {
+  isGatewayOpenAiCompatibleProvider,
+  providerIdOf,
+  providerTypeOf,
+  providerValidationStateOf,
 } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -43,21 +52,6 @@ const BEARER_API_KEY_HEADER_NAME_SET = new Set<string>([
 ]);
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
-
-export interface SafeProviderConfig {
-  readonly modelId: string;
-  readonly credentialHeaderName: string;
-  readonly timeoutMs: number;
-  readonly maxRetries: number;
-  readonly retryBaseDelayMs: number;
-}
-
-export interface SafeGatewayConfig {
-  readonly providers: readonly SafeProviderConfig[];
-  readonly circuitBreaker: CircuitBreakerConfig;
-  readonly capabilities?: readonly ModelCapability[] | undefined;
-  readonly grounding?: Partial<GroundingLimits> | undefined;
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -249,6 +243,20 @@ interface ParsedProvider {
 interface ProviderConnection {
   readonly baseUrl: string;
   readonly apiKey: string;
+}
+
+function parseProviderType(value: unknown, path: string): ProviderType {
+  if (value === undefined) {
+    return "gateway-openai-compatible";
+  }
+  return requireEnum<ProviderType>(value, path, PROVIDER_TYPES);
+}
+
+function parseProviderId(value: unknown, path: string, modelId: string): string {
+  if (value === undefined) {
+    return modelId;
+  }
+  return requireNonEmptyString(value, path);
 }
 
 // Modality + determinism capability flags, defaulted to false (lenient provider-inline form).
@@ -515,12 +523,50 @@ function resolveProviderConnection(
 function parseProviderConfig(
   raw: Record<string, unknown>,
   path: string,
+  providerType: ProviderType,
+  providerId: string,
   modelId: string,
   env: EnvSource,
 ): ModelProviderConfig {
+  if (providerType === "openai-codex-local-session") {
+    if (raw.baseUrl !== undefined) {
+      throw new ConfigInvalidError(
+        `${path}.baseUrl is not allowed for providerType "openai-codex-local-session"`,
+      );
+    }
+    if (raw.apiKey !== undefined) {
+      throw new ConfigInvalidError(
+        `${path}.apiKey is not allowed for providerType "openai-codex-local-session"`,
+      );
+    }
+    if (raw.apiKeyHeaderName !== undefined) {
+      throw new ConfigInvalidError(
+        `${path}.apiKeyHeaderName is not allowed for providerType "openai-codex-local-session"`,
+      );
+    }
+    return {
+      providerId,
+      providerType,
+      modelId,
+      validationState: "runtime-only",
+      runtimeHandle: { kind: "codex-local-session" },
+      timeoutMs: requirePositiveInt(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
+      maxRetries: requireNonNegativeInt(
+        raw.maxRetries ?? DEFAULT_MAX_RETRIES,
+        `${path}.maxRetries`,
+      ),
+      retryBaseDelayMs: requirePositiveInt(
+        raw.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
+        `${path}.retryBaseDelayMs`,
+      ),
+    };
+  }
   const { baseUrl, apiKey } = resolveProviderConnection(raw, path, modelId, env);
   return {
+    providerId,
+    providerType,
     modelId,
+    validationState: "configured",
     baseUrl,
     apiKey,
     apiKeyHeaderName: resolveApiKeyHeaderName(
@@ -544,9 +590,11 @@ function parseProvider(raw: unknown, index: number, env: EnvSource): ParsedProvi
     throw new ConfigInvalidError(`${path} must be an object`);
   }
   const modelId = requireNonEmptyString(raw.modelId, `${path}.modelId`);
+  const providerType = parseProviderType(raw.providerType, `${path}.providerType`);
+  const providerId = parseProviderId(raw.providerId, `${path}.providerId`, modelId);
   const capability = parseProviderCapability(raw.capability, `${path}.capability`, modelId);
   return {
-    provider: parseProviderConfig(raw, path, modelId, env),
+    provider: parseProviderConfig(raw, path, providerType, providerId, modelId, env),
     ...(capability === undefined ? {} : { capability }),
   };
 }
@@ -659,14 +707,19 @@ export function loadConfigFromFile(path: string, env: EnvSource = {}): GatewayCo
 export function toSafeObject(config: GatewayConfig): SafeGatewayConfig {
   return {
     providers: config.providers.map((provider) => ({
+      providerId: providerIdOf(provider),
+      providerType: providerTypeOf(provider),
       modelId: provider.modelId,
-      credentialHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME,
+      validationState: providerValidationStateOf(provider),
+      ...(isGatewayOpenAiCompatibleProvider(provider)
+        ? { credentialHeaderName: provider.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME }
+        : {}),
       timeoutMs: provider.timeoutMs,
       maxRetries: provider.maxRetries,
       retryBaseDelayMs: provider.retryBaseDelayMs,
-    })),
+    }) as SafeProviderConfig),
     circuitBreaker: config.circuitBreaker,
     ...(config.capabilities === undefined ? {} : { capabilities: config.capabilities }),
-    ...(config.grounding !== undefined ? { grounding: config.grounding } : {}),
+    ...(config.grounding !== undefined ? { grounding: resolveGroundingLimits(config.grounding) } : {}),
   };
 }

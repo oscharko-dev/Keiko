@@ -22,10 +22,10 @@ import type {
   FinishReason,
   GatewayRequest,
   GatewayStreamChunk,
-  ModelProviderConfig,
   NormalizedResponse,
   NormalizedToolCall,
   ProviderAdapter,
+  RuntimeDispatchProviderConfig,
   UsageMetadata,
 } from "./types.js";
 
@@ -262,7 +262,7 @@ function mapHttpError(
   );
 }
 
-function apiKeyHeaders(config: ModelProviderConfig): Record<string, string> {
+function apiKeyHeaders(config: RuntimeDispatchProviderConfig): Record<string, string> {
   const headerName = config.apiKeyHeaderName ?? DEFAULT_API_KEY_HEADER_NAME;
   return { [headerName]: apiKeyHeaderValue(headerName, config.apiKey) };
 }
@@ -276,7 +276,7 @@ export class OpenAiAdapter implements ProviderAdapter {
 
   call = async (
     request: GatewayRequest,
-    config: ModelProviderConfig,
+    config: RuntimeDispatchProviderConfig,
   ): Promise<NormalizedResponse> => {
     const secrets = [config.apiKey, config.baseUrl];
     if (request.cancellationSignal?.aborted === true) {
@@ -313,7 +313,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   callStream = async function* (
     this: OpenAiAdapter,
     request: GatewayRequest,
-    config: ModelProviderConfig,
+    config: RuntimeDispatchProviderConfig,
   ): AsyncGenerator<GatewayStreamChunk> {
     const secrets = [config.apiKey, config.baseUrl];
     if (request.cancellationSignal?.aborted === true) {
@@ -340,7 +340,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   // `acc` with the raw accumulated content, finish reason, and final usage counts.
   private async *streamDeltas(
     response: Response,
-    config: ModelProviderConfig,
+    config: RuntimeDispatchProviderConfig,
     secrets: readonly string[],
     acc: { content: string; finishReason: FinishReason; prompt: number; completion: number },
   ): AsyncGenerator<string> {
@@ -365,7 +365,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   }
 
   private assembleResponse(
-    config: ModelProviderConfig,
+    config: RuntimeDispatchProviderConfig,
     start: number,
     acc: { content: string; finishReason: FinishReason; prompt: number; completion: number },
   ): NormalizedResponse {
@@ -390,7 +390,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   // cancellation/timeout (e.g. raised by the underlying reader) passes through.
   private mapStreamError(
     error: unknown,
-    config: ModelProviderConfig,
+    config: RuntimeDispatchProviderConfig,
     secrets: readonly string[],
   ): Error {
     if (error instanceof CancelledError || error instanceof TimeoutError) {
@@ -401,7 +401,7 @@ export class OpenAiAdapter implements ProviderAdapter {
 
   private async dispatch(
     request: GatewayRequest,
-    config: ModelProviderConfig,
+    config: RuntimeDispatchProviderConfig,
     secrets: readonly string[],
     stream = false,
   ): Promise<Response> {
@@ -429,7 +429,7 @@ export class OpenAiAdapter implements ProviderAdapter {
 
   private mapDispatchError(
     error: unknown,
-    config: ModelProviderConfig,
+    config: RuntimeDispatchProviderConfig,
     cancel: AbortSignal | undefined,
     timeout: AbortSignal,
     secrets: readonly string[],
@@ -448,7 +448,7 @@ export class OpenAiAdapter implements ProviderAdapter {
 
   private async readBody(
     response: Response,
-    config: ModelProviderConfig,
+    config: RuntimeDispatchProviderConfig,
     secrets: readonly string[],
   ): Promise<unknown> {
     try {

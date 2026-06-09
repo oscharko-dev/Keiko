@@ -8,6 +8,7 @@ import {
 import type {
   Clock,
   GatewayConfig,
+  GatewayOpenAiCompatibleProviderConfig,
   GatewayRequest,
   GatewayStreamChunk,
   ModelProviderConfig,
@@ -17,7 +18,9 @@ import type {
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
+function provider(
+  overrides: Partial<GatewayOpenAiCompatibleProviderConfig> = {},
+): GatewayOpenAiCompatibleProviderConfig {
   return {
     modelId: "example-chat-model",
     baseUrl: "https://provider.example/v1",
@@ -133,6 +136,30 @@ describe("Gateway.chat", () => {
     });
     await expect(gateway.chat({ modelId: "not-configured", messages: [] })).rejects.toBeInstanceOf(
       UnknownModelError,
+    );
+  });
+
+  it("throws UnknownModelError when a local-session provider reaches the chat path before adapter wiring exists", async () => {
+    const gateway = new Gateway(
+      config([
+        {
+          modelId: "codex-chat",
+          providerId: "codex-local",
+          providerType: "openai-codex-local-session",
+          validationState: "runtime-only",
+          runtimeHandle: { kind: "codex-local-session" },
+          timeoutMs: 30_000,
+          maxRetries: 2,
+          retryBaseDelayMs: 1,
+        },
+      ]),
+      {
+        adapter: fakeAdapter(() => Promise.resolve(okResponse("codex-chat"))),
+        clock: stubClock(),
+      },
+    );
+    await expect(gateway.chat({ modelId: "codex-chat", messages: [] })).rejects.toThrow(
+      /provider type 'openai-codex-local-session'/,
     );
   });
 

@@ -28,9 +28,12 @@ export type {
   ModelCapability,
   ModelKind,
   ModelProviderConfig,
+  GatewayOpenAiCompatibleProviderConfig,
+  OpenAiCodexLocalSessionProviderConfig,
   NormalizedResponse,
   NormalizedToolCall,
   ProviderAdapter,
+  RuntimeDispatchProviderConfig,
   ResponseFormat,
   StreamDelta,
   StreamEvent,
@@ -62,9 +65,15 @@ export {
   toSafeObject,
   validateBaseUrl,
   type EnvSource,
-  type SafeGatewayConfig,
-  type SafeProviderConfig,
 } from "./config.js";
+export type { SafeGatewayConfig, SafeProviderConfig } from "@oscharko-dev/keiko-contracts/bff-wire";
+export {
+  isGatewayOpenAiCompatibleProvider,
+  isOpenAiCodexLocalSessionProvider,
+  providerIdOf,
+  providerTypeOf,
+  providerValidationStateOf,
+} from "./types.js";
 
 export { Gateway, type GatewayDeps } from "./gateway.js";
 

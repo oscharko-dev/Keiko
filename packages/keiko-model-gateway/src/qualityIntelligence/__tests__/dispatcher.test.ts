@@ -9,7 +9,10 @@ import { dispatchQualityIntelligenceRequest } from "../dispatcher.js";
 import { createInMemoryReplayCache } from "../replayCache.js";
 import { QualityIntelligenceSafeErrorException } from "../safeError.js";
 import { getQualityIntelligenceTaskProfile } from "../taskProfiles.js";
-import type { ModelProviderConfig, ProviderAdapter } from "../../types.js";
+import type {
+  GatewayOpenAiCompatibleProviderConfig,
+  ProviderAdapter,
+} from "../../types.js";
 
 function chatCapability(overrides: Partial<ModelCapability> = {}): ModelCapability {
   return {
@@ -32,7 +35,9 @@ function chatCapability(overrides: Partial<ModelCapability> = {}): ModelCapabili
   };
 }
 
-function providerConfig(overrides: Partial<ModelProviderConfig> = {}): ModelProviderConfig {
+function providerConfig(
+  overrides: Partial<GatewayOpenAiCompatibleProviderConfig> = {},
+): GatewayOpenAiCompatibleProviderConfig {
   return {
     modelId: "fake-chat",
     baseUrl: "https://example.test/v1",
@@ -63,7 +68,7 @@ function normalisedResponse(content: string): NormalizedResponse {
 
 interface MockCall {
   readonly request: GatewayRequest;
-  readonly config: ModelProviderConfig;
+  readonly config: GatewayOpenAiCompatibleProviderConfig;
 }
 
 interface MockModelPort extends ProviderAdapter {

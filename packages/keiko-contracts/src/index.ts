@@ -124,6 +124,26 @@ export { CONVERSATION_CAPABILITY_CONTRACT_VERSION } from "./gateway.js";
 export type { ConversationIneligibilityReason } from "./gateway.js";
 export { isConversationEligibleModel, explainConversationIneligibility } from "./gateway.js";
 
+// ─── Provider contracts (issue #461; safe vs runtime-only provider seams) ───────────────────────
+export type {
+  ProviderType,
+  ProviderValidationState,
+  ProviderSelection,
+  SafeGatewayOpenAiCompatibleProviderConfig,
+  SafeOpenAiCodexLocalSessionProviderConfig,
+  SafeProviderConfig,
+  ProviderContractValidationOk,
+  ProviderContractValidationFail,
+  ProviderContractValidation,
+} from "./provider-contract.js";
+export {
+  PROVIDER_TYPES,
+  PROVIDER_VALIDATION_STATES,
+  validateProviderSelection,
+  validateSafeProviderConfig,
+  validateSafeGatewayConfig,
+} from "./provider-contract.js";
+
 // ─── Tools ──────────────────────────────────────────────────────────────────────
 export type {
   NetworkPolicy,
@@ -285,6 +305,8 @@ export type {
   DesktopChatSendRequestWire,
   BffErrorCode,
   BffError,
+  SafeCircuitBreakerConfig,
+  SafeGatewayConfig,
   GroundingLimits,
 } from "./bff-wire.js";
 export {

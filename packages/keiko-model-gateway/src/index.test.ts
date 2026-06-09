@@ -25,7 +25,12 @@ import {
   Gateway,
   assertConfiguredModel,
   findConfiguredCapability,
+  isGatewayOpenAiCompatibleProvider,
+  isOpenAiCodexLocalSessionProvider,
   listConfiguredCapabilities,
+  providerIdOf,
+  providerTypeOf,
+  providerValidationStateOf,
   selectConfiguredModel,
   redact,
   AuthenticationError,
@@ -64,9 +69,12 @@ import type {
   ModelCapability,
   ModelKind,
   ModelProviderConfig,
+  GatewayOpenAiCompatibleProviderConfig,
+  OpenAiCodexLocalSessionProviderConfig,
   NormalizedResponse,
   NormalizedToolCall,
   ProviderAdapter,
+  RuntimeDispatchProviderConfig,
   ResponseFormat,
   StreamDelta,
   StreamEvent,
@@ -124,7 +132,12 @@ describe("keiko-model-gateway package surface", () => {
   it("exposes the model-selection helpers as callable functions", () => {
     expect(typeof assertConfiguredModel).toBe("function");
     expect(typeof findConfiguredCapability).toBe("function");
+    expect(typeof isGatewayOpenAiCompatibleProvider).toBe("function");
+    expect(typeof isOpenAiCodexLocalSessionProvider).toBe("function");
     expect(typeof listConfiguredCapabilities).toBe("function");
+    expect(typeof providerIdOf).toBe("function");
+    expect(typeof providerTypeOf).toBe("function");
+    expect(typeof providerValidationStateOf).toBe("function");
     expect(typeof selectConfiguredModel).toBe("function");
   });
 
@@ -184,9 +197,12 @@ describe("keiko-model-gateway package surface", () => {
     pin<ModelCapability>();
     pin<ModelKind>();
     pin<ModelProviderConfig>();
+    pin<GatewayOpenAiCompatibleProviderConfig>();
+    pin<OpenAiCodexLocalSessionProviderConfig>();
     pin<NormalizedResponse>();
     pin<NormalizedToolCall>();
     pin<ProviderAdapter>();
+    pin<RuntimeDispatchProviderConfig>();
     pin<ResponseFormat>();
     pin<StreamDelta>();
     pin<StreamEvent>();

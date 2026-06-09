@@ -43,9 +43,10 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import {
   findConfiguredCapability,
+  isGatewayOpenAiCompatibleProvider,
   requestOpenAIEmbedding,
   type GatewayConfig,
-  type ModelProviderConfig,
+  type GatewayOpenAiCompatibleProviderConfig,
   type OpenAIEmbeddingAdapter,
   type OpenAIEmbeddingOutcome,
   type OpenAIEmbeddingRequest,
@@ -293,17 +294,18 @@ function isConfiguredEmbeddingModel(
 function configuredEmbeddingProvider(
   config: GatewayConfig | undefined,
   modelId: string,
-): ModelProviderConfig | undefined {
+): GatewayOpenAiCompatibleProviderConfig | undefined {
   if (config === undefined) return undefined;
   const provider = config.providers.find((entry) => entry.modelId === modelId);
   if (provider === undefined) return undefined;
+  if (!isGatewayOpenAiCompatibleProvider(provider)) return undefined;
   return isConfiguredEmbeddingModel(config, provider.modelId) ? provider : undefined;
 }
 
 function configuredProviderForCapsule(
   deps: UiHandlerDeps,
   capsule: KnowledgeCapsule,
-): ModelProviderConfig | undefined {
+): GatewayOpenAiCompatibleProviderConfig | undefined {
   return configuredEmbeddingProvider(
     currentGatewayConfig(deps),
     capsule.embeddingModelIdentity.modelId,
@@ -650,7 +652,7 @@ function buildCapsuleHealth(
 }
 
 function createEmbeddingAdapter(
-  provider: ModelProviderConfig,
+  provider: GatewayOpenAiCompatibleProviderConfig,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
 ): OpenAIEmbeddingAdapter {
   return {

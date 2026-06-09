@@ -10,6 +10,11 @@ import type { VerificationAuditSummary } from "./verification-summary.js";
 // the optional capabilities table to the UI without crossing into the credential-bearing
 // GatewayConfig in gateway.ts.
 import type { ModelCapability } from "./gateway.js";
+import type {
+  SafeCircuitBreakerConfig,
+  SafeGatewayConfig as ProviderSafeGatewayConfig,
+  SafeProviderConfig,
+} from "./provider-contract.js";
 // GroundedAnswerContextPackSummary projects the connected-context pack into a counts-only,
 // browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
 // peer; importing it does not pull in any IO or redaction code.
@@ -25,6 +30,8 @@ import {
 } from "./connected-context.js";
 import type { CapsuleSetId, KnowledgeCapsuleId } from "./local-knowledge.js";
 import type { ExpectedCheck, WorkflowKind } from "./workflow-handoff.js";
+
+export type { SafeCircuitBreakerConfig, SafeProviderConfig } from "./provider-contract.js";
 
 export interface Project {
   readonly path: string;
@@ -425,28 +432,11 @@ export interface DesktopChatSendRequestWire {
 }
 
 // ─── Gateway safe-config projection (BFF /api/gateway/config) ─────────────────────
-// Sanitised mirror of GatewayConfig with NO apiKey / NO baseUrl / NO additionalHeaders.
-// Authored here (not in gateway.ts) because the credential-bearing GatewayConfig in
-// gateway.ts is server-only; this wire projection is what the UI receives.
+// Sanitised mirror of GatewayConfig with NO apiKey / NO baseUrl / NO session artifacts.
+// Authored in provider-contract.ts because the discriminated provider model is shared by the
+// safe-config route, future setup payloads, and provider-runtime follow-up work.
 
-export interface SafeProviderConfig {
-  readonly modelId: string;
-  readonly credentialHeaderName: string;
-  readonly timeoutMs: number;
-  readonly maxRetries: number;
-  readonly retryBaseDelayMs: number;
-}
-
-export interface SafeCircuitBreakerConfig {
-  readonly failureThreshold: number;
-  readonly cooldownMs: number;
-  readonly halfOpenProbes: number;
-}
-
-export interface SafeGatewayConfig {
-  readonly providers: readonly SafeProviderConfig[];
-  readonly circuitBreaker: SafeCircuitBreakerConfig;
-  readonly capabilities?: readonly ModelCapability[];
+export interface SafeGatewayConfig extends ProviderSafeGatewayConfig {
   readonly grounding?: GroundingLimits;
 }
 
