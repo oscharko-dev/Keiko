@@ -40,7 +40,8 @@ import { ApiError } from "@/lib/api";
 function isValidFigmaLink(raw: string): boolean {
   try {
     const url = new URL(raw.trim());
-    if (!url.hostname.endsWith("figma.com")) return false;
+    const host = url.hostname.toLowerCase();
+    if (host !== "figma.com" && !host.endsWith(".figma.com")) return false;
     if (!/^\/(design|file)\//u.test(url.pathname)) return false;
     const nodeId = url.searchParams.get("node-id");
     return nodeId !== null && nodeId.length > 0;
