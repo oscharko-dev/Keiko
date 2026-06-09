@@ -32,9 +32,13 @@ import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort } from "./judgePort.js";
 import { resolveQiTestDesignSelection } from "./modelSelection.js";
 
+// Mirrors the stages the model-routed workflow actually emits (descriptors.ts stageNames), so the
+// run plan the UI renders matches the live stage:started/completed events — including the
+// adversarial test-quality judge (Epic #736).
 const PLAN_STAGES: readonly QI.QualityIntelligenceRunStage[] = Object.freeze([
   { name: "plan", descriptor: "qi:plan" },
   { name: "candidates", descriptor: "qi:model-generate" },
+  { name: "judge", descriptor: "qi:judge" },
   { name: "coverage", descriptor: "qi:coverage" },
   { name: "validate", descriptor: "qi:validate" },
   { name: "finalize", descriptor: "qi:finalize" },

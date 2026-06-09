@@ -75,6 +75,31 @@ const RUBRIC_DIMENSIONS: readonly TestQualityDimensionName[] = [
   "ac-fidelity",
 ];
 
+// JSON schema for the judge verdict, used as the gateway responseFormat when the model supports
+// structured output. Mirrors the parse contract in parseJudgeVerdict (four named dimensions, integer
+// scores 0-100, an overall rationale).
+const QI_JUDGE_RESPONSE_SCHEMA: Record<string, unknown> = Object.freeze({
+  type: "object",
+  additionalProperties: false,
+  required: ["dimensions", "overallRationale"],
+  properties: {
+    dimensions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "score", "rationale"],
+        properties: {
+          name: { type: "string", enum: [...RUBRIC_DIMENSIONS] },
+          score: { type: "integer", minimum: 0, maximum: 100 },
+          rationale: { type: "string" },
+        },
+      },
+    },
+    overallRationale: { type: "string" },
+  },
+});
+
 function formatSourceContext(sourceContext: readonly JudgeSourceContext[]): string {
   if (sourceContext.length === 0) {
     return "No originating requirement or acceptance-criteria context was available.";
@@ -152,19 +177,73 @@ function parseDimension(raw: unknown): TestQualityRubricDimension | null {
   });
 }
 
-/** Extract the first balanced JSON object from raw model text, or null when none parses. */
-function extractJsonObject(rawText: string): Record<string, unknown> | null {
+// Scan `text` for every balanced top-level JSON object ({ ... }), string/escape aware so a brace
+// inside a rationale string never unbalances the scan. Linear and ReDoS-free (single pass, no
+// backtracking). Reasoning models routinely emit thinking prose, fenced ```json blocks, and
+// brace-y tokens (e.g. "{click}") around the real verdict object; collecting every balanced object
+// lets the caller pick the one that actually parses into the judge shape instead of relying on the
+// brittle first-"{"-to-last-"}" slice, which fails the moment any stray brace appears in the preamble.
+// In-string transition: an unescaped quote ends the string; a backslash escapes the next char.
+function advanceStringState(ch: string, escaped: boolean): { inString: boolean; escaped: boolean } {
+  if (escaped) return { inString: true, escaped: false };
+  if (ch === "\\") return { inString: true, escaped: true };
+  if (ch === '"') return { inString: false, escaped: false };
+  return { inString: true, escaped: false };
+}
+
+function balancedJsonObjectCandidates(text: string): readonly string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text.charAt(i);
+    if (inString) {
+      ({ inString, escaped } = advanceStringState(ch, escaped));
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === "}" && depth > 0) {
+      depth -= 1;
+      // depth returns to 0 only at the brace matching the one that set `start`, so `start` is set.
+      if (depth === 0) {
+        out.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return out;
+}
+
+function tryParseJsonObject(candidate: string): Record<string, unknown> | null {
   try {
-    const trimmed = rawText.trim();
-    const jsonStart = trimmed.indexOf("{");
-    const jsonEnd = trimmed.lastIndexOf("}");
-    if (jsonStart === -1 || jsonEnd === -1) return null;
-    const parsed: unknown = JSON.parse(trimmed.slice(jsonStart, jsonEnd + 1));
-    if (typeof parsed !== "object" || parsed === null) return null;
+    const parsed: unknown = JSON.parse(candidate);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
     return parsed as Record<string, unknown>;
   } catch {
     return null;
   }
+}
+
+/**
+ * Extract the judge verdict object from raw model text. Prefers a parsed object that carries the
+ * judge shape (a `dimensions` field); falls back to the first object that parses at all. Returns
+ * null when nothing parses, so the caller can emit the safe-default ("weak") verdict.
+ */
+function extractJsonObject(rawText: string): Record<string, unknown> | null {
+  let firstParsed: Record<string, unknown> | null = null;
+  for (const candidate of balancedJsonObjectCandidates(rawText)) {
+    const parsed = tryParseJsonObject(candidate);
+    if (parsed === null) continue;
+    firstParsed ??= parsed;
+    if (Array.isArray(parsed.dimensions)) return parsed;
+  }
+  return firstParsed;
 }
 
 function parseDimensions(raw: unknown): readonly TestQualityRubricDimension[] | null {
@@ -231,11 +310,26 @@ export function createQiJudgePort(deps: UiHandlerDeps, modelId: string): QiJudge
   if (model === undefined) {
     throw new QiJudgeError("QI_JUDGE_MODEL_UNAVAILABLE", "The model gateway is not available.");
   }
+  // When the model advertises structured-output support, pin the verdict to the judge JSON schema so
+  // the gateway forces well-formed JSON (more deterministic + parseable, mirroring generationPort).
+  // Models without it (the runtime-discovered default chat capability) fall back to prompt-instructed
+  // JSON + the robust extractor above — the same posture generation uses for those models.
+  const useResponseFormat = capability.supportsResponseFormat === true;
   return {
-    judge: async (input: JudgePromptInput, signal?: AbortSignal): Promise<TestQualityJudgeVerdict> => {
+    judge: async (
+      input: JudgePromptInput,
+      signal?: AbortSignal,
+    ): Promise<TestQualityJudgeVerdict> => {
       const messages = buildJudgePrompt(input.candidateText, input.sourceContext);
       const effectiveSignal = signal ?? new AbortController().signal;
-      const request: GatewayRequest = { modelId, messages, stream: false };
+      const request: GatewayRequest = {
+        modelId,
+        messages,
+        stream: false,
+        ...(useResponseFormat
+          ? { responseFormat: { type: "json_schema", schema: { ...QI_JUDGE_RESPONSE_SCHEMA } } }
+          : {}),
+      };
       const response = await model.call(request, effectiveSignal);
       return parseJudgeVerdict(response.content);
     },

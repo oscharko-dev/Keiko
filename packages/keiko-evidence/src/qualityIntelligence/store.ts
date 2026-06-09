@@ -404,7 +404,7 @@ export interface QualityIntelligenceRecordInput {
   readonly provenanceRefs: QualityIntelligenceEvidenceManifest["provenanceRefs"];
   /** Optional coverage matrix (per-atom status, refs only). Added in #738. */
   readonly coverageMatrix?: QualityIntelligenceEvidenceManifest["coverageMatrix"];
-  /** Optional mean test-quality judge score [0-100]; null when judge was skipped. Added in #736. */
+  /** Optional run quality score — percent of judged candidates rated "strong" [0-100]; null when judge was skipped. Added in #736. */
   readonly qualityScore?: QualityIntelligenceEvidenceManifest["qualityScore"];
   /** Optional per-envelope content fingerprints for drift detection (Epic #735). */
   readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];

@@ -57,7 +57,11 @@ export interface QualityIntelligenceRunSummary {
   readonly modelGatewayCallCount: number;
   readonly evidence?: QualityIntelligenceRecordResult | undefined;
   readonly reasonSummary?: string | undefined;
-  /** Mean test-quality judge score [0-100]; null when the judge stage was skipped or unavailable. */
+  /**
+   * Run quality score: the percentage of judged candidates the adversarial judge rated "strong"
+   * [0-100] (Epic #736). Null when the judge stage was skipped, unavailable, or no candidate was
+   * judged.
+   */
   readonly qualityScore?: number | null;
 }
 

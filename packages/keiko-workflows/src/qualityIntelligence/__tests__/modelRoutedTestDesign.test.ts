@@ -11,6 +11,7 @@ import {
   type QualityIntelligenceEvidenceManifest,
 } from "@oscharko-dev/keiko-evidence";
 import { runQualityIntelligenceModelRoutedTestDesign } from "../modelRoutedTestDesign.js";
+import { QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS } from "../descriptors.js";
 import type {
   QualityIntelligenceJudgeInput,
   QualityIntelligenceModelRoutedTestDesignInput,
@@ -520,5 +521,162 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     const summary = await runQualityIntelligenceModelRoutedTestDesign(input, makeDeps(store));
     expect(summary.status).toBe("succeeded");
     expect(summary.qualityScore).toBeNull();
+  });
+
+  it("counts every judge gateway dispatch in modelGatewayCallCount (audit integrity)", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-count"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps = makeDepsWithJudge(store, (_input) => Promise.resolve(WEAK_VERDICT));
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    // 1 generation call + 2 judge calls (one per candidate) = 3 gateway dispatches.
+    expect(summary.modelGatewayCallCount).toBe(3);
+    const manifest = store.load(String(input.plan.id));
+    expect(manifest?.modelGatewayCallCount).toBe(3);
+  });
+
+  it("is fail-soft: a transient judge error leaves the run succeeded with candidates intact", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-failsoft"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    // The judge errors on candidate 1 (transient gateway failure) but scores candidate 2 strong.
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (judgeInput) => {
+        if (judgeInput.candidateText.includes("Test atom 1 behavior")) {
+          return Promise.reject(new Error("HTTP 429 rate limited"));
+        }
+        return Promise.resolve(STRONG_VERDICT);
+      }),
+      candidatesSink: {
+        record: (candidates) => {
+          recorded.push(...candidates);
+        },
+      },
+    };
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    // The run survives the judge error and persists both candidates.
+    expect(summary.status).toBe("succeeded");
+    expect(recorded).toHaveLength(2);
+    const manifest = store.load(String(input.plan.id));
+    expect(manifest?.totals.candidates).toBe(2);
+    // Only the successfully judged candidate counts toward the score (1 strong of 1 judged = 100);
+    // the unjudged candidate is excluded rather than counted as weak, and yields no finding.
+    expect(summary.qualityScore).toBe(100);
+    const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
+    expect(qualityFindings).toHaveLength(0);
+    // Both dispatches are still counted for an honest audit trail.
+    expect(summary.modelGatewayCallCount).toBe(3);
+  });
+
+  it("is fail-soft when EVERY judge call errors: run succeeds, score null, candidates intact", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-allfail"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps = makeDepsWithJudge(store, (_input) =>
+      Promise.reject(new Error("gateway 503 unavailable")),
+    );
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+    expect(summary.qualityScore).toBeNull();
+    const manifest = store.load(String(input.plan.id));
+    expect(manifest?.totals.candidates).toBe(2);
+    const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
+    expect(qualityFindings).toHaveLength(0);
+  });
+
+  it("bounds the judge by maxJudgeCallsPerRun (judges a prefix, scores only the judged)", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-budget"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    let judgeCallCount = 0;
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (_input) => {
+        judgeCallCount += 1;
+        return Promise.resolve(WEAK_VERDICT);
+      }),
+      limits: { ...QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS, maxJudgeCallsPerRun: 1 },
+    };
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    expect(summary.status).toBe("succeeded");
+    // Only one of the two candidates is judged under the budget of 1.
+    expect(judgeCallCount).toBe(1);
+    // 1 generation + 1 judge call.
+    expect(summary.modelGatewayCallCount).toBe(2);
+    const manifest = store.load(String(input.plan.id));
+    const qualityFindings = (manifest?.findings ?? []).filter((f) => f.kind === "test-quality");
+    expect(qualityFindings).toHaveLength(1);
+  });
+
+  it("classifies a run cancelled when the judge is aborted mid-stage (not failed)", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const controller = new AbortController();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement 1"),
+      makeIngestedAtom("atom-2", "Requirement 2"),
+    ];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: {
+        ...JUDGE_PLAN,
+        id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-judge-test-cancel"),
+      },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: JUDGE_PROVENANCE,
+    };
+    const deps: QualityIntelligenceModelRoutedTestDesignDeps = {
+      ...makeDepsWithJudge(store, (_input) => {
+        controller.abort();
+        return Promise.reject(new Error("aborted"));
+      }),
+      signal: controller.signal,
+    };
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, deps);
+    // Cancellation must NOT be fail-soft-swallowed into "succeeded"; it is a genuine cancel.
+    expect(summary.status).toBe("cancelled");
   });
 });

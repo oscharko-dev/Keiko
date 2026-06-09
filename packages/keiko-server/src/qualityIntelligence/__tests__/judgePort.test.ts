@@ -58,7 +58,10 @@ function fakeModelPort(responseContent: string): { port: ModelPort; calls: FakeC
   return { port, calls };
 }
 
-function configWithChatModel(modelId: string): ReturnType<typeof parseGatewayConfig> {
+function configWithChatModel(
+  modelId: string,
+  capabilityOverrides: Partial<ModelCapability> = {},
+): ReturnType<typeof parseGatewayConfig> {
   const capability: ModelCapability = {
     id: modelId,
     kind: "chat",
@@ -75,6 +78,7 @@ function configWithChatModel(modelId: string): ReturnType<typeof parseGatewayCon
     throughputHint: "test",
     preferredUseCases: ["Chat"],
     knownLimitations: [],
+    ...capabilityOverrides,
   };
   return parseGatewayConfig(
     {
@@ -310,6 +314,49 @@ describe("parseJudgeVerdict", () => {
     expect(verdict.verdict).toBe("weak");
     expect(verdict.overallRationale).toContain("could not be parsed");
   });
+
+  // Reasoning-model robustness (Epic #736): a reasoning model emits thinking prose, fenced blocks,
+  // and brace-y tokens around the verdict. The extractor must recover the real verdict object rather
+  // than safe-defaulting every candidate to "weak" (which would make the judge a false-negative
+  // machine and break the discrimination DoD).
+  it("recovers the verdict from a reasoning preamble containing stray braces", () => {
+    const noisy =
+      "Let me reason about the steps {click}, {verify}, and the AC {reference}.\n" +
+      "Final verdict:\n" +
+      VALID_VERDICT_JSON;
+    const verdict = parseJudgeVerdict(noisy);
+    expect(verdict.verdict).toBe("strong");
+    expect(verdict.dimensions).toHaveLength(4);
+  });
+
+  it("recovers the verdict from a fenced ```json block with trailing prose", () => {
+    const fenced = "```json\n" + WEAK_VERDICT_JSON + "\n```\nThat is my assessment.";
+    const verdict = parseJudgeVerdict(fenced);
+    expect(verdict.verdict).toBe("weak");
+    expect(verdict.dimensions).toHaveLength(4);
+  });
+
+  it("prefers the judge-shaped object when a non-judge JSON object precedes it", () => {
+    const noisy = '{"scratchpad":"thinking out loud"}\nHere is the verdict:\n' + VALID_VERDICT_JSON;
+    const verdict = parseJudgeVerdict(noisy);
+    expect(verdict.verdict).toBe("strong");
+    expect(verdict.dimensions).toHaveLength(4);
+  });
+
+  it("does not mis-slice when rationale strings contain braces", () => {
+    const json = JSON.stringify({
+      dimensions: [
+        { name: "verifiability", score: 80, rationale: "outcome is {observable}" },
+        { name: "atomicity", score: 70, rationale: "single action" },
+        { name: "determinism", score: 90, rationale: "no randomness" },
+        { name: "ac-fidelity", score: 75, rationale: "matches AC" },
+      ],
+      overallRationale: "good test with a {brace} inside the string",
+    });
+    const verdict = parseJudgeVerdict("Reasoning… " + json + " …done");
+    expect(verdict.verdict).toBe("strong");
+    expect(verdict.dimensions).toHaveLength(4);
+  });
 });
 
 // ─── judge() — gateway call ───────────────────────────────────────────────────
@@ -398,5 +445,34 @@ describe("createQiJudgePort.judge — gateway call", () => {
         controller.signal,
       ),
     ).rejects.toThrow();
+  });
+
+  it("omits responseFormat when the model does not advertise structured-output response format", async () => {
+    const { deps, calls } = depsFor("chat-model-1", VALID_VERDICT_JSON);
+    const port = createQiJudgePort(deps, "chat-model-1");
+    await port.judge({
+      candidateText: "candidate text",
+      sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+    });
+    // The runtime-discovered default chat capability has supportsResponseFormat unset → prompt-only.
+    expect(calls[0]?.request.responseFormat).toBeUndefined();
+  });
+
+  it("pins responseFormat to the judge json_schema when the model supports it", async () => {
+    const config = configWithChatModel("rf-model", { supportsResponseFormat: true });
+    const { deps, calls } = depsFor("rf-model", VALID_VERDICT_JSON, { config });
+    const port = createQiJudgePort(deps, "rf-model");
+    await port.judge({
+      candidateText: "candidate text",
+      sourceContext: [{ atomId: "atom-1", text: "REQ-1" }],
+    });
+    const responseFormat = calls[0]?.request.responseFormat;
+    expect(responseFormat?.type).toBe("json_schema");
+    if (responseFormat?.type === "json_schema") {
+      expect(responseFormat.schema).toMatchObject({ type: "object" });
+      const props = responseFormat.schema.properties as Record<string, unknown>;
+      expect(props).toHaveProperty("dimensions");
+      expect(props).toHaveProperty("overallRationale");
+    }
   });
 });

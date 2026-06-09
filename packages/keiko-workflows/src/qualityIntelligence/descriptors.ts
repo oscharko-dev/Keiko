@@ -31,8 +31,20 @@ export interface QualityIntelligenceWorkflowLimits {
   readonly maxCandidatesPerRun: number;
   /** Total findings a single validation run may emit (truncated past). */
   readonly maxFindingsPerRun: number;
-  /** Maximum total model gateway dispatches per run (across all stages). */
+  /**
+   * Maximum model gateway dispatches the GENERATION stage(s) may make per run. The adversarial
+   * test-quality judge (Epic #736) is governed by its own `maxJudgeCallsPerRun` budget instead,
+   * because it makes one dispatch per candidate and must score every candidate (Issue #747).
+   */
   readonly maxModelCallsPerRun: number;
+  /**
+   * Maximum model gateway dispatches the adversarial test-quality judge may make per run
+   * (Epic #736, Issue #747). One dispatch per candidate; defaults to the candidate cap so a
+   * realistic run is judged in full while a pathological run can never dispatch an unbounded
+   * number of judge calls. Candidates beyond this ceiling are left unjudged (excluded from the
+   * run quality score rather than counted as weak).
+   */
+  readonly maxJudgeCallsPerRun: number;
 }
 
 export const QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS: QualityIntelligenceWorkflowLimits =
@@ -41,6 +53,7 @@ export const QUALITY_INTELLIGENCE_DEFAULT_WORKFLOW_LIMITS: QualityIntelligenceWo
     maxCandidatesPerRun: 256,
     maxFindingsPerRun: 512,
     maxModelCallsPerRun: 32,
+    maxJudgeCallsPerRun: 256,
   });
 
 export interface QualityIntelligenceWorkflowDescriptor {
@@ -94,9 +107,9 @@ export const QI_TEST_DESIGN_WORKFLOW_DESCRIPTOR: QualityIntelligenceWorkflowDesc
     workflowId: "qi:test-design",
     displayName: "Quality Intelligence — Test Design",
     description:
-      "Derive intent, draft test-case candidates, build coverage map, validate, persist evidence. " +
-      "Stages: plan, intent, candidates, coverage, validate, finalize.",
-    stageNames: ["plan", "intent", "candidates", "judge", "coverage", "validate", "finalize"],
+      "Draft test-case candidates, adversarially judge their quality, build coverage map, validate, " +
+      "persist evidence. Stages: plan, candidates, judge, coverage, validate, finalize.",
+    stageNames: ["plan", "candidates", "judge", "coverage", "validate", "finalize"],
     emittedEventKinds: [...LIFECYCLE_EVENT_KINDS, "candidate:proposed", "finding:recorded"],
     defaultLimits: FROZEN_DEFAULT_LIMITS,
     preferredCostClass: "medium",

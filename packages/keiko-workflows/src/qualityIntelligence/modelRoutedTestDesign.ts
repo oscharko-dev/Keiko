@@ -29,6 +29,7 @@ import {
   finaliseFailureOrCancellation,
   makeContext,
   persistRun,
+  StageCancelledError,
   toCoverageMatrixRows,
   truncateCandidates,
   truncateFindings,
@@ -40,6 +41,7 @@ import {
   type RunContext,
 } from "./runtimeCommon.js";
 import type { QualityIntelligenceWorkflowLimits } from "./descriptors.js";
+import { isCancelled } from "./cancellation.js";
 
 type Candidate = QI.QualityIntelligenceTestCaseCandidate;
 type EvidenceAtom = QI.QualityIntelligenceEvidenceAtom;
@@ -341,37 +343,126 @@ interface JudgeStageResult {
   readonly qualityScore: number | null;
 }
 
-async function runJudgeStage(
+const EMPTY_JUDGE_RESULT: JudgeStageResult = Object.freeze({
+  findings: Object.freeze([]),
+  qualityScore: null,
+});
+
+// Bounded concurrency for the per-candidate judge calls: cuts the wall-clock of judging a large run
+// (one gateway call per candidate) without flooding the gateway, which applies its own per-call
+// retry/timeout. Findings are written into a candidate-indexed slot array so the persisted finding
+// order stays deterministic regardless of which judge call completes first.
+const JUDGE_CONCURRENCY = 4;
+
+function isCancellationError(ctx: RunContext, error: unknown): boolean {
+  return error instanceof StageCancelledError || isCancelled(ctx.signal);
+}
+
+type JudgeOutcome =
+  | {
+      readonly judged: true;
+      readonly strong: boolean;
+      readonly finding: QI.QualityIntelligenceTestQualityFinding | null;
+    }
+  | { readonly judged: false };
+
+const JUDGE_SKIPPED: JudgeOutcome = Object.freeze({ judged: false });
+
+/**
+ * Judge one candidate. Counts the gateway dispatch, then returns its outcome. A transient judge
+ * error (rate-limit / 5xx / timeout / network) degrades to "unjudged" (fail-soft); cancellation is
+ * re-raised as `StageCancelledError` so the whole stage aborts. The dispatch is counted BEFORE the
+ * await so the audit trail reflects every gateway call attempt, even one that then throws.
+ */
+async function judgeOneCandidate(
   ctx: RunContext,
-  candidates: readonly Candidate[],
+  candidate: Candidate,
+  ordinal: number,
   ingestedAtoms: readonly QualityIntelligenceIngestedAtom[],
   judge: QualityIntelligenceJudgePort,
-): Promise<JudgeStageResult> {
-  if (candidates.length === 0) return { findings: Object.freeze([]), qualityScore: null };
-  const findings: QI.QualityIntelligenceTestQualityFinding[] = [];
-  let strongCount = 0;
-  let scored = 0;
-  for (let i = 0; i < candidates.length; i += 1) {
-    const candidate = candidates[i];
-    if (candidate === undefined) continue;
-    scored += 1;
-    const verdict = await judge.judge(
+): Promise<JudgeOutcome> {
+  ctx.modelGatewayCallCount += 1;
+  let verdict: QI.TestQualityJudgeVerdict;
+  try {
+    verdict = await judge.judge(
       {
         candidateText: candidateSummaryText(candidate),
         sourceContext: sourceContextForCandidate(candidate, ingestedAtoms),
       },
       ctx.signal,
     );
-    if (verdict.verdict === "strong") {
-      strongCount += 1;
-      continue;
-    }
-    const mean = scoreFromDimensions(verdict.dimensions);
-    findings.push(
-      buildTestQualityFinding(ctx.plan.id, candidate, mean, judgeRationaleSummary(verdict), i),
-    );
+  } catch (error) {
+    if (isCancellationError(ctx, error)) throw new StageCancelledError();
+    return JUDGE_SKIPPED;
   }
-  // Per-run quality score = share of candidates the judge rated "strong", as a percentage (#747).
+  if (verdict.verdict === "strong") return { judged: true, strong: true, finding: null };
+  return {
+    judged: true,
+    strong: false,
+    finding: buildTestQualityFinding(
+      ctx.plan.id,
+      candidate,
+      scoreFromDimensions(verdict.dimensions),
+      judgeRationaleSummary(verdict),
+      ordinal,
+    ),
+  };
+}
+
+/**
+ * Adversarially judge every candidate via the model-judge port (Epic #736, Issue #747).
+ *
+ * Resilience contract: the judge AUGMENTS generation and must never harm a successful run — a
+ * transient per-candidate error is fail-soft (that candidate is excluded from the score, no
+ * finding) and only cancellation aborts the stage. Audit contract: every dispatch is counted into
+ * `ctx.modelGatewayCallCount`. Budget contract: at most `ctx.limits.maxJudgeCallsPerRun` candidates
+ * are judged. Bounded-concurrency workers share a cursor; findings land in candidate-indexed slots
+ * so the persisted order stays deterministic regardless of completion order.
+ */
+async function runJudgeStage(
+  ctx: RunContext,
+  candidates: readonly Candidate[],
+  ingestedAtoms: readonly QualityIntelligenceIngestedAtom[],
+  judge: QualityIntelligenceJudgePort,
+): Promise<JudgeStageResult> {
+  if (candidates.length === 0) return EMPTY_JUDGE_RESULT;
+  const budget = Math.max(0, ctx.limits.maxJudgeCallsPerRun);
+  const judgeable = budget >= candidates.length ? candidates : candidates.slice(0, budget);
+  if (judgeable.length === 0) return EMPTY_JUDGE_RESULT;
+
+  const findingSlots: (QI.QualityIntelligenceTestQualityFinding | undefined)[] = Array.from(
+    { length: judgeable.length },
+    () => undefined,
+  );
+  let strongCount = 0;
+  let scored = 0;
+  let cursor = 0;
+
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = cursor;
+      cursor += 1;
+      if (i >= judgeable.length) return;
+      const candidate = judgeable[i];
+      if (candidate === undefined) continue;
+      const outcome = await judgeOneCandidate(ctx, candidate, i, ingestedAtoms, judge);
+      if (!outcome.judged) continue;
+      scored += 1;
+      if (outcome.strong) strongCount += 1;
+      else if (outcome.finding !== null) findingSlots[i] = outcome.finding;
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(JUDGE_CONCURRENCY, judgeable.length) }, () => worker()),
+  );
+
+  const findings = findingSlots.filter(
+    (f): f is QI.QualityIntelligenceTestQualityFinding => f !== undefined,
+  );
+  // Per-run quality score = share of SUCCESSFULLY JUDGED candidates the judge rated "strong", as a
+  // percentage (#747). Candidates the judge could not evaluate are excluded from the denominator
+  // rather than counted as weak, so the score honestly reflects what was actually judged.
   const qualityScore = scored === 0 ? null : (strongCount / scored) * 100;
   return { findings: Object.freeze(findings), qualityScore };
 }
@@ -404,14 +495,17 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
     );
     const candidates = generation.candidates;
     emitCandidateProposed(ctx, candidates);
+    const judge = deps.judge;
     const judgeResult = await withStage(ctx, "judge", async () => {
-      if (deps.judge === undefined) {
-        return Promise.resolve<JudgeStageResult>({
-          findings: Object.freeze([]),
-          qualityScore: null,
-        });
+      if (judge === undefined) return EMPTY_JUDGE_RESULT;
+      try {
+        return await runJudgeStage(ctx, candidates, input.ingestedAtoms, judge);
+      } catch (error) {
+        // Cancellation must still abort the run; anything else is fail-soft so an optional judge
+        // can never turn a successful generation into a failed run (Epic #736 augments-not-harms).
+        if (isCancellationError(ctx, error)) throw error;
+        return EMPTY_JUDGE_RESULT;
       }
-      return runJudgeStage(ctx, candidates, input.ingestedAtoms, deps.judge);
     });
     const atoms = input.ingestedAtoms.map((a) => a.atom);
     const coverageMap = await withStage(ctx, "coverage", async () =>

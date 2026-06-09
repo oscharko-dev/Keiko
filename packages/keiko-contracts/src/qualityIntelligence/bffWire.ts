@@ -133,8 +133,9 @@ export interface QualityIntelligenceUiRunDetail {
   /** Per-atom coverage classification (refs + status; empty when no matrix is available). */
   readonly coverageByAtom: readonly QualityIntelligenceUiAtomCoverage[];
   /**
-   * Mean test-quality judge score [0-100] (Epic #736); null when the judge stage was skipped,
-   * unavailable, or the run produced no candidates to score.
+   * Run quality score: the percentage of judged candidates the adversarial judge rated "strong"
+   * [0-100] (Epic #736) — 100 = every judged test is strong, 0 = every judged test is weak. Null
+   * when the judge stage was skipped, unavailable, or no candidate was judged.
    */
   readonly qualityScore: number | null;
 }

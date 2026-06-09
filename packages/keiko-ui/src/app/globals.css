@@ -193,10 +193,14 @@ button {
   /* WCAG 1.4.3 text-tone overrides — all ≥4.5:1 on white (--card: oklch(1 0 0)).
      --accent #4eba87 = 2.41:1 FAIL; oklch(0.5 0.13 160) ≈ 5.51:1 PASS.
      --danger oklch(0.68 0.16 25) = 3.11:1 FAIL; oklch(0.50 0.18 25) ≈ 5.46:1 PASS.
-     --warn oklch(0.78 0.13 75) = 2.04:1 FAIL; oklch(0.43 0.14 75) ≈ 5.82:1 PASS. */
+     --warn oklch(0.78 0.13 75) = 2.04:1 FAIL; oklch(0.43 0.14 75) ≈ 5.82:1 PASS.
+     --info oklch(0.74 0.1 240) = 1.96:1 FAIL; oklch(0.45 0.15 240) ≈ 5.08:1 PASS on the 20%
+     info tint (info-blue severity/badge text — .qi-sev-medium, .qi-badge-running, .arun-gate,
+     lkd diag info). Measured from rendered pixels over the badge's own info-tint background. */
   --accent-text: oklch(0.5 0.13 160);
   --danger: oklch(0.5 0.18 25);
   --warn: oklch(0.43 0.14 75);
+  --info: oklch(0.45 0.15 240);
 
   --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.7) inset, 0 6px 18px -12px rgba(20, 30, 25, 0.22);
   --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.26), 0 0 0 1px var(--line);

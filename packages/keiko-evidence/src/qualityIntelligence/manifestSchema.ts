@@ -133,7 +133,7 @@ export interface QualityIntelligenceEvidenceManifest {
   readonly integrityHashes: QualityIntelligenceIntegrityHashes;
   /** Optional: per-atom coverage classification (refs + status, no raw text). Added in #738. */
   readonly coverageMatrix?: readonly QualityIntelligenceCoverageMatrixRow[];
-  /** Optional: mean test-quality judge score [0-100]; null when judge stage was skipped. Added in #736. */
+  /** Optional: run quality score — percent of judged candidates rated "strong" [0-100]; null when the judge stage was skipped. Added in #736. */
   readonly qualityScore?: number | null;
   /** Optional: per-envelope content fingerprints for drift detection (Epic #735, Issue #742). */
   readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];
