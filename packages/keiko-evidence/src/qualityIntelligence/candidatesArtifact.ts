@@ -6,11 +6,12 @@
 // that echoed a secret-shaped source string cannot reach disk, preview, or export unredacted
 // (Issue #284). Stored as plain rows (branded IDs collapse to strings on the wire).
 
-import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import {
   createNodeContainedJsonArtifactStore,
   type ContainedJsonArtifactStore,
 } from "./companionStore.js";
+import { EvidenceReadError } from "../errors.js";
 
 export const QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION = 1 as const;
 
@@ -54,16 +55,157 @@ const toRow = (
   derivedFromAtomIds: candidate.derivedFromAtomIds.map(String),
 });
 
+const PRIORITIES: ReadonlySet<string> = new Set(
+  QualityIntelligence.QUALITY_INTELLIGENCE_PRIORITIES,
+);
+const RISK_CLASSES: ReadonlySet<string> = new Set(
+  QualityIntelligence.QUALITY_INTELLIGENCE_RISK_CLASSES,
+);
+const TEST_CASE_STATUSES: ReadonlySet<string> = new Set(
+  QualityIntelligence.QUALITY_INTELLIGENCE_TEST_CASE_STATUSES,
+);
+
+const isObjectRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isNonEmptyString = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0;
+
+const isStringArray = (value: unknown): value is readonly string[] =>
+  Array.isArray(value) && value.every((item) => typeof item === "string");
+
+const isPriority = (value: unknown): value is QualityIntelligence.QualityIntelligencePriority =>
+  typeof value === "string" && PRIORITIES.has(value);
+
+const isRiskClass = (value: unknown): value is QualityIntelligence.QualityIntelligenceRiskClass =>
+  typeof value === "string" && RISK_CLASSES.has(value);
+
+const isTestCaseStatus = (
+  value: unknown,
+): value is QualityIntelligence.QualityIntelligenceTestCaseStatus =>
+  typeof value === "string" && TEST_CASE_STATUSES.has(value);
+
+const isEditedBy = (
+  value: unknown,
+): value is QualityIntelligence.QualityIntelligenceCandidateEditProvenance["editedBy"] =>
+  value === "human" || value === "api";
+
+const EDITABLE_FIELD_VALIDATORS: Readonly<Record<string, (value: unknown) => boolean>> = {
+  title: isNonEmptyString,
+  preconditions: isStringArray,
+  steps: isStringArray,
+  expectedResults: isStringArray,
+  priority: isPriority,
+  riskClass: isRiskClass,
+  tags: isStringArray,
+};
+
+function isEditableFields(
+  value: unknown,
+): value is QualityIntelligence.QualityIntelligenceCandidateEditableFields {
+  if (!isObjectRecord(value)) return false;
+  const keys = Object.keys(value);
+  return keys.every((key) => EDITABLE_FIELD_VALIDATORS[key]?.(value[key]) ?? false);
+}
+
+const CANDIDATE_ROW_VALIDATORS: readonly ((row: Record<string, unknown>) => boolean)[] = [
+  (row): boolean => isNonEmptyString(row.id),
+  (row): boolean => isNonEmptyString(row.title),
+  (row): boolean => isStringArray(row.preconditions),
+  (row): boolean => isStringArray(row.steps),
+  (row): boolean => isStringArray(row.expectedResults),
+  (row): boolean => isPriority(row.priority),
+  (row): boolean => isRiskClass(row.riskClass),
+  (row): boolean => isStringArray(row.tags),
+  (row): boolean => isTestCaseStatus(row.status),
+  (row): boolean => isStringArray(row.derivedFromAtomIds),
+];
+
+function isCandidateRow(value: unknown): value is QualityIntelligenceCandidateRow {
+  return isObjectRecord(value) && CANDIDATE_ROW_VALIDATORS.every((validate) => validate(value));
+}
+
+function isEditedRevision(
+  value: unknown,
+): value is QualityIntelligence.QualityIntelligenceCandidateEditedRevision {
+  if (!isObjectRecord(value)) return false;
+  const provenance = value.provenance;
+  return (
+    isNonEmptyString(value.candidateId) &&
+    isObjectRecord(provenance) &&
+    isNonEmptyString(provenance.editedAt) &&
+    isEditedBy(provenance.editedBy) &&
+    isNonEmptyString(provenance.editorLabel) &&
+    isEditableFields(value.editedFields)
+  );
+}
+
+function invalidArtifact(message: string): never {
+  throw new EvidenceReadError(message);
+}
+
+function readArtifactStringField(
+  record: Record<string, unknown>,
+  key: "runId" | "generatedAt",
+  message: string,
+): string {
+  const value = record[key];
+  if (!isNonEmptyString(value)) invalidArtifact(message);
+  return value;
+}
+
+function readArtifactCandidates(
+  record: Record<string, unknown>,
+): readonly QualityIntelligenceCandidateRow[] {
+  const { candidates } = record;
+  if (!Array.isArray(candidates) || !candidates.every(isCandidateRow)) {
+    invalidArtifact("QI candidates companion schema invalid: candidates[] has an invalid row");
+  }
+  return candidates;
+}
+
+function readArtifactEditedRevisions(
+  record: Record<string, unknown>,
+): readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[] | undefined {
+  const { editedRevisions } = record;
+  if (editedRevisions === undefined) return undefined;
+  if (!Array.isArray(editedRevisions) || !editedRevisions.every(isEditedRevision)) {
+    invalidArtifact(
+      "QI candidates companion schema invalid: editedRevisions[] has an invalid revision",
+    );
+  }
+  return editedRevisions;
+}
+
 // Strict-schema gate on read: reject any artifact whose version literal drifts so a stale or
 // tampered file fails closed instead of surfacing a wrong shape to the BFF.
 const parseArtifact = (value: unknown): QualityIntelligenceCandidatesArtifact | undefined => {
-  if (typeof value !== "object" || value === null) return undefined;
-  const record = value as Record<string, unknown>;
-  if (record.qiCandidatesSchemaVersion !== QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION) {
-    return undefined;
+  if (!isObjectRecord(value)) {
+    invalidArtifact("QI candidates companion schema invalid: expected an object");
   }
-  if (typeof record.runId !== "string" || !Array.isArray(record.candidates)) return undefined;
-  return value as QualityIntelligenceCandidatesArtifact;
+  const record = value;
+  if (record.qiCandidatesSchemaVersion !== QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION) {
+    invalidArtifact("QI candidates companion schema invalid: unsupported schema version");
+  }
+  const runId = readArtifactStringField(
+    record,
+    "runId",
+    "QI candidates companion schema invalid: runId must be a string",
+  );
+  const generatedAt = readArtifactStringField(
+    record,
+    "generatedAt",
+    "QI candidates companion schema invalid: generatedAt must be a string",
+  );
+  const candidates = readArtifactCandidates(record);
+  const editedRevisions = readArtifactEditedRevisions(record);
+  return {
+    qiCandidatesSchemaVersion: QUALITY_INTELLIGENCE_CANDIDATES_SCHEMA_VERSION,
+    runId,
+    generatedAt,
+    candidates,
+    ...(editedRevisions !== undefined ? { editedRevisions } : {}),
+  };
 };
 
 export interface QualityIntelligenceCandidatesStoreOptions {
@@ -132,7 +274,11 @@ export type QualityIntelligenceCandidateEditErrorReason =
   | "no-edited-fields";
 
 export type ApplyQualityIntelligenceCandidateEditResult =
-  | { readonly ok: true; readonly candidate: QualityIntelligenceCandidateRow }
+  | {
+      readonly ok: true;
+      readonly candidate: QualityIntelligenceCandidateRow;
+      readonly changed: boolean;
+    }
   | { readonly ok: false; readonly reason: QualityIntelligenceCandidateEditErrorReason };
 
 export interface ApplyQualityIntelligenceCandidateEditInput {
@@ -171,6 +317,24 @@ const mergeRow = (
   ...(fields.tags !== undefined ? { tags: [...fields.tags] } : {}),
 });
 
+const sameStringArray = (left: readonly string[], right: readonly string[]): boolean =>
+  left.length === right.length && left.every((item, index) => item === right[index]);
+
+const sameRow = (
+  left: QualityIntelligenceCandidateRow,
+  right: QualityIntelligenceCandidateRow,
+): boolean =>
+  left.id === right.id &&
+  left.title === right.title &&
+  sameStringArray(left.preconditions, right.preconditions) &&
+  sameStringArray(left.steps, right.steps) &&
+  sameStringArray(left.expectedResults, right.expectedResults) &&
+  left.priority === right.priority &&
+  left.riskClass === right.riskClass &&
+  sameStringArray(left.tags, right.tags) &&
+  left.status === right.status &&
+  sameStringArray(left.derivedFromAtomIds, right.derivedFromAtomIds);
+
 export const applyQualityIntelligenceCandidateEdit = (
   input: ApplyQualityIntelligenceCandidateEditInput,
 ): ApplyQualityIntelligenceCandidateEditResult => {
@@ -182,6 +346,9 @@ export const applyQualityIntelligenceCandidateEdit = (
   if (existing === undefined) return { ok: false, reason: "candidate-not-found" };
   const redactedFields = input.redact(input.editedFields) as EditableFields;
   const updatedRow = mergeRow(existing, redactedFields);
+  if (sameRow(existing, updatedRow)) {
+    return { ok: true, candidate: existing, changed: false };
+  }
   const candidates = artifact.candidates.map((row) =>
     row.id === input.candidateId ? updatedRow : row,
   );
@@ -195,5 +362,5 @@ export const applyQualityIntelligenceCandidateEdit = (
     candidates,
     editedRevisions: [...(artifact.editedRevisions ?? []), revision],
   });
-  return { ok: true, candidate: updatedRow };
+  return { ok: true, candidate: updatedRow, changed: true };
 };

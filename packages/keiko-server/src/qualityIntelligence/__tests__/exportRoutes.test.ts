@@ -4,7 +4,7 @@
 // the handler directly. Verifies local adapters, unknown adapter, TMS dry-run/live,
 // no-candidates, and formula-injection safety. Pure function + real fs.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -252,6 +252,43 @@ describe("handleQiExport — no candidates", () => {
     } finally {
       rmSync(emptyDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("handleQiExport — malformed candidates companion", () => {
+  it("returns 500 QI_EXPORT_FAILED when the candidates companion is corrupted", async () => {
+    writeFileSync(
+      join(evidenceDir, "qi", `${RUN_ID}.candidates.json`),
+      JSON.stringify({
+        qiCandidatesSchemaVersion: 1,
+        runId: RUN_ID,
+        generatedAt: "2026-06-01T10:01:00.000Z",
+        candidates: [
+          {
+            id: "cand-001",
+            title: "Corrupt me",
+            preconditions: ["ready"],
+            steps: "not-an-array",
+            expectedResults: ["done"],
+            priority: "P1",
+            riskClass: "functional",
+            tags: [],
+            status: "proposed",
+            derivedFromAtomIds: ["atom-1"],
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const result = asResult(
+      await handleQiExport(
+        ctx(RUN_ID, makeReq({ adapter: "csv", dryRun: false })),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(500);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_EXPORT_FAILED");
   });
 });
 

@@ -32,6 +32,18 @@ import {
   formatDate,
 } from "./qiShared";
 
+const REVIEWER_LABEL_STORAGE_KEY = "keiko.qi.reviewerLabel";
+const GOVERNANCE_REQUIRED_MESSAGE = "Set a reviewer label to review or edit candidates.";
+
+function readStoredReviewerLabel(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(REVIEWER_LABEL_STORAGE_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
 export interface QiRunCardProps {
   readonly runId: string;
   /**
@@ -180,6 +192,8 @@ export function QiRunCard({
   const [detail, setDetail] = useState<QualityIntelligenceUiRunDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reviewerLabel, setReviewerLabel] = useState("");
+  const [reviewerLabelLoaded, setReviewerLabelLoaded] = useState(false);
 
   // Drop stale responses when the same card re-fetches after a review (request-of-record guard).
   const seqRef = useRef(0);
@@ -203,17 +217,36 @@ export function QiRunCard({
     void loadDetail();
   }, [loadDetail]);
 
+  useEffect(() => {
+    setReviewerLabel(readStoredReviewerLabel());
+    setReviewerLabelLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!reviewerLabelLoaded || typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(REVIEWER_LABEL_STORAGE_KEY, reviewerLabel);
+    } catch {
+      // localStorage may be unavailable in hardened browser contexts.
+    }
+  }, [reviewerLabel, reviewerLabelLoaded]);
+
+  const trimmedReviewerLabel = reviewerLabel.trim();
+  const governanceEnabled = trimmedReviewerLabel.length > 0;
+
   const handleReview = useCallback(
     (candidateId: string, action: QiReviewAction): void => {
+      if (!governanceEnabled) return;
       void (async (): Promise<void> => {
         try {
-          await reviewImpl(runId, action, candidateId);
-        } finally {
+          await reviewImpl(runId, action, candidateId, trimmedReviewerLabel);
           await loadDetail();
+        } catch (err) {
+          setError(formatError(err));
         }
       })();
     },
-    [reviewImpl, runId, loadDetail],
+    [governanceEnabled, reviewImpl, runId, trimmedReviewerLabel, loadDetail],
   );
 
   const handleEdit = useCallback(
@@ -221,13 +254,13 @@ export function QiRunCard({
       candidateId: string,
       edited: QualityIntelligenceCandidateEditableFields,
     ): Promise<void> => {
-      try {
-        await editImpl(runId, candidateId, edited);
-      } finally {
-        await loadDetail();
+      if (!governanceEnabled) {
+        throw new Error(GOVERNANCE_REQUIRED_MESSAGE);
       }
+      await editImpl(runId, candidateId, edited, trimmedReviewerLabel);
+      await loadDetail();
     },
-    [editImpl, runId, loadDetail],
+    [editImpl, governanceEnabled, runId, trimmedReviewerLabel, loadDetail],
   );
 
   return (
@@ -248,6 +281,28 @@ export function QiRunCard({
           </div>
         ) : (
           <>
+            <section className="qi-run-governance" aria-label="Review governance">
+              <label className="qi-field" htmlFor={`qi-reviewer-label-${runId}`}>
+                <span className="qi-field-label">Reviewer label</span>
+                <input
+                  id={`qi-reviewer-label-${runId}`}
+                  className="qi-input qi-run-governance-input"
+                  value={reviewerLabel}
+                  placeholder="Required for review and edit actions"
+                  onChange={(event) => {
+                    setReviewerLabel(event.target.value);
+                  }}
+                />
+              </label>
+              <p className="qi-run-governance-help">
+                Used for QI review and edit audit entries.
+              </p>
+              {!governanceEnabled ? (
+                <p className="qi-run-governance-warning" role="note">
+                  {GOVERNANCE_REQUIRED_MESSAGE}
+                </p>
+              ) : null}
+            </section>
             <SummaryStrip detail={detail} />
             <FindingsList detail={detail} />
             <CoveragePanel detail={detail} />
@@ -272,6 +327,8 @@ export function QiRunCard({
                 candidates={detail.candidates}
                 onReview={handleReview}
                 onEdit={handleEdit}
+                actionsDisabled={!governanceEnabled}
+                actionsDisabledReason={GOVERNANCE_REQUIRED_MESSAGE}
               />
             </section>
           </>

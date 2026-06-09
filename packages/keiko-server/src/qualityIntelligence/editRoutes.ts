@@ -109,25 +109,36 @@ interface ParsedEdit {
   readonly editorLabel: string;
 }
 
-// Returns the parsed edit, or undefined when the request is malformed (bad candidateId, no known
-// fields, or any field that fails its per-field validation → reject the whole edit, no partial work).
-function parseEdit(body: Record<string, unknown>): ParsedEdit | undefined {
-  const candidateId = body.candidateId;
-  if (typeof candidateId !== "string" || candidateId.trim().length === 0) return undefined;
-  const edited = body.edited;
-  if (!isObject(edited)) return undefined;
-  const collected: Record<string, unknown> = {};
+function parseEditorLabel(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, MAX_LABEL_LEN) : undefined;
+}
+
+function collectEditedFields(edited: Record<string, unknown>): EditableFields | undefined {
+  const collected: Partial<Record<(typeof EDITABLE_KEYS)[number], unknown>> = {};
+  let fieldCount = 0;
   for (const key of EDITABLE_KEYS) {
     const value = edited[key];
     if (value === undefined) continue;
     if (!isValidField(key, value)) return undefined;
     collected[key] = value;
+    fieldCount += 1;
   }
-  if (Object.keys(collected).length === 0) return undefined;
-  const editorLabel =
-    typeof body.editorLabel === "string" && body.editorLabel.trim().length > 0
-      ? body.editorLabel.trim().slice(0, MAX_LABEL_LEN)
-      : "editor";
+  return fieldCount > 0 ? (collected as EditableFields) : undefined;
+}
+
+// Returns the parsed edit, or undefined when the request is malformed (bad candidateId, no known
+// fields, or any field that fails its per-field validation → reject the whole edit, no partial work).
+function parseEdit(body: Record<string, unknown>): ParsedEdit | undefined {
+  const candidateId = body.candidateId;
+  if (typeof candidateId !== "string" || candidateId.trim().length === 0) return undefined;
+  const editorLabel = parseEditorLabel(body.editorLabel);
+  if (editorLabel === undefined) return undefined;
+  const edited = body.edited;
+  if (!isObject(edited)) return undefined;
+  const collected = collectEditedFields(edited);
+  if (collected === undefined) return undefined;
   return { candidateId, edited: collected, editorLabel };
 }
 
@@ -213,13 +224,15 @@ function recordEdit(
       ? errorResult(400, "QI_BAD_EDIT", "A valid candidate edit is required.")
       : errorResult(404, "QI_NOT_FOUND", "Candidate not found for this run.");
   }
-  appendEditAudit({
-    runId,
-    evidenceDir,
-    candidateId: edit.candidateId,
-    reviewerLabel: edit.editorLabel,
-    now: new Date().toISOString(),
-  });
+  if (result.changed) {
+    appendEditAudit({
+      runId,
+      evidenceDir,
+      candidateId: edit.candidateId,
+      reviewerLabel: edit.editorLabel,
+      now: new Date().toISOString(),
+    });
+  }
   return {
     status: 200,
     body: { candidate: projectCandidate(result.candidate, evidenceDir, runId) },

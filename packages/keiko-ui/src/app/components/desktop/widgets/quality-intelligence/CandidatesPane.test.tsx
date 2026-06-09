@@ -13,7 +13,7 @@
 //   - Show more: clicking "Show more" reveals additional cards.
 //   - aria-pressed on review buttons reflects candidate.reviewState.
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { CandidatesPane } from "./CandidatesPane";
@@ -496,5 +496,89 @@ describe("CandidatesPane — inline editing", () => {
     await user.type(screen.getByLabelText("Title"), "{Escape}");
     expect(screen.queryByRole("form")).not.toBeInTheDocument();
     expect(onEdit).not.toHaveBeenCalled();
+  });
+
+  it("renders the governance note and disables actions when governance is blocked", () => {
+    render(
+      <CandidatesPane
+        candidates={[makeCandidate()]}
+        onEdit={vi.fn()}
+        onReview={vi.fn()}
+        actionsDisabled
+        actionsDisabledReason="Set a reviewer label to review or edit candidates."
+      />,
+    );
+    expect(screen.getByText(/set a reviewer label to review or edit candidates/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^edit$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /approve/i })).toBeDisabled();
+  });
+
+  it("renders save errors inline and keeps the form open", async () => {
+    const user = userEvent.setup();
+    const onEdit = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("QI_BAD_EDIT: A valid candidate edit is required."));
+    render(<CandidatesPane candidates={[makeCandidate({ title: "Editable" })]} onEdit={onEdit} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    const titleInput = screen.getByLabelText("Title");
+    await user.clear(titleInput);
+    await user.type(titleInput, "Still invalid");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(
+      await screen.findByText("QI_BAD_EDIT: A valid candidate edit is required."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: /edit editable/i })).toBeInTheDocument();
+  });
+
+  it("clears the save error when the reviewer edits the form again", async () => {
+    const user = userEvent.setup();
+    const onEdit = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("QI_BAD_EDIT: A valid candidate edit is required."));
+    render(<CandidatesPane candidates={[makeCandidate({ title: "Editable" })]} onEdit={onEdit} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    const titleInput = screen.getByLabelText("Title");
+    await user.clear(titleInput);
+    await user.type(titleInput, "Still invalid");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+    await screen.findByText("QI_BAD_EDIT: A valid candidate edit is required.");
+
+    await user.type(titleInput, " updated");
+    expect(
+      screen.queryByText("QI_BAD_EDIT: A valid candidate edit is required."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("disables Save/Cancel and blocks duplicate submits while a save is pending", async () => {
+    const user = userEvent.setup();
+    let resolveSave: (() => void) | undefined;
+    const onEdit = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSave = resolve;
+        }),
+    );
+    render(<CandidatesPane candidates={[makeCandidate({ title: "Editable" })]} onEdit={onEdit} />);
+    await user.click(screen.getByRole("button", { name: /^edit$/i }));
+    const titleInput = screen.getByLabelText("Title");
+    await user.clear(titleInput);
+    await user.type(titleInput, "Updated title");
+
+    const saveButton = screen.getByRole("button", { name: /^save$/i });
+    const cancelButton = screen.getByRole("button", { name: /^cancel$/i });
+    await user.click(saveButton);
+
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(saveButton).toBeDisabled();
+    expect(cancelButton).toBeDisabled();
+
+    await user.click(saveButton);
+    expect(onEdit).toHaveBeenCalledTimes(1);
+
+    resolveSave?.();
+    await waitFor(() => {
+      expect(screen.queryByRole("form", { name: /edit editable/i })).not.toBeInTheDocument();
+    });
   });
 });

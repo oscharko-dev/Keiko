@@ -335,6 +335,46 @@ async function runScopedAndPersist(args: {
   return { ok: true, candidates: regenerated };
 }
 
+async function regenerateFromDrift(args: {
+  readonly deps: UiHandlerDeps;
+  readonly id: string;
+  readonly evidenceDir: string;
+  readonly newRunId: string;
+  readonly drift: DriftContext;
+}): Promise<RouteResult> {
+  const { deps, id, evidenceDir, newRunId, drift } = args;
+  const { ingestion, allOldCandidates } = drift;
+  const { staleIds, narrowedAtoms } = narrowStaleAtoms(drift);
+
+  if (narrowedAtoms.length === 0 && staleIds.size === 0) {
+    return {
+      status: 200,
+      body: { runId: id, regeneratedCount: 0, preservedCount: allOldCandidates.length },
+    };
+  }
+
+  const modelId = resolveChatModelId(deps);
+  if (modelId === null) {
+    return errorResult(400, "QI_NO_MODEL", "No chat model is configured.");
+  }
+  const atomsToRegen = narrowedAtoms.length > 0 ? narrowedAtoms : ingestion.ingestedAtoms.slice(0, 1);
+  const outcome = await runScopedAndPersist({
+    deps,
+    modelId,
+    evidenceDir,
+    newRunId,
+    ingestion,
+    atomsToRegen,
+  });
+  if (!outcome.ok) return outcome.result;
+
+  const preservedCount = allOldCandidates.filter((candidate) => !staleIds.has(candidate.id)).length;
+  return {
+    status: 200,
+    body: { runId: newRunId, regeneratedCount: outcome.candidates.length, preservedCount },
+  };
+}
+
 /**
  * POST /api/quality-intelligence/runs/:id/re-check
  * Body: { sources: QualityIntelligenceInlineSource[] }
@@ -354,19 +394,27 @@ export async function handleQiReCheck(
   if (evidenceDir === undefined) {
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
-  const drift = await computeDrift(ctx.req, evidenceDir, id, `qi-recheck-${id}`, deps);
-  if (!drift.ok) return drift.result;
-  const { staleness } = drift.value;
-  return {
-    status: 200,
-    body: {
-      runId: id,
-      staleCount: staleness.changedStale.length + staleness.orphanedStale.length,
-      fresh: staleness.fresh,
-      changedStale: staleness.changedStale,
-      orphanedStale: staleness.orphanedStale,
-    },
-  };
+  try {
+    const drift = await computeDrift(ctx.req, evidenceDir, id, `qi-recheck-${id}`, deps);
+    if (!drift.ok) return drift.result;
+    const { staleness } = drift.value;
+    return {
+      status: 200,
+      body: {
+        runId: id,
+        staleCount: staleness.changedStale.length + staleness.orphanedStale.length,
+        fresh: staleness.fresh,
+        changedStale: staleness.changedStale,
+        orphanedStale: staleness.orphanedStale,
+      },
+    };
+  } catch {
+    return errorResult(
+      500,
+      "QI_RECHECK_FAILED",
+      "Failed to inspect the current sources for drift.",
+    );
+  }
 }
 
 /**
@@ -392,40 +440,13 @@ export async function handleQiRegenerateStale(
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
   const newRunId = `qi-run-${randomUUID()}`;
-  const drift = await computeDrift(ctx.req, evidenceDir, id, newRunId, deps);
-  if (!drift.ok) return drift.result;
-  const { ingestion, allOldCandidates } = drift.value;
-  const { staleIds, narrowedAtoms } = narrowStaleAtoms(drift.value);
-
-  // Nothing drifted → no new run; report everything preserved (the original run is untouched).
-  if (narrowedAtoms.length === 0 && staleIds.size === 0) {
-    return {
-      status: 200,
-      body: { runId: id, regeneratedCount: 0, preservedCount: allOldCandidates.length },
-    };
+  try {
+    const drift = await computeDrift(ctx.req, evidenceDir, id, newRunId, deps);
+    if (!drift.ok) return drift.result;
+    return await regenerateFromDrift({ deps, id, evidenceDir, newRunId, drift: drift.value });
+  } catch {
+    return errorResult(500, "QI_REGEN_FAILED", "Failed to regenerate stale candidates.");
   }
-
-  const modelId = resolveChatModelId(deps);
-  if (modelId === null) {
-    return errorResult(400, "QI_NO_MODEL", "No chat model is configured.");
-  }
-  const atomsToRegen =
-    narrowedAtoms.length > 0 ? narrowedAtoms : ingestion.ingestedAtoms.slice(0, 1);
-  const outcome = await runScopedAndPersist({
-    deps,
-    modelId,
-    evidenceDir,
-    newRunId,
-    ingestion,
-    atomsToRegen,
-  });
-  if (!outcome.ok) return outcome.result;
-
-  const preservedCount = allOldCandidates.filter((c) => !staleIds.has(c.id)).length;
-  return {
-    status: 200,
-    body: { runId: newRunId, regeneratedCount: outcome.candidates.length, preservedCount },
-  };
 }
 
 export const QI_RECHECK_ROUTE_GROUP: readonly RouteDefinition[] = [

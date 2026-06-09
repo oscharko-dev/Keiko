@@ -6,7 +6,7 @@
 // are rejected with typed reasons; multiple edits accumulate revisions; the row reflects the latest
 // edit. No mocks — pure function + real fs.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -16,6 +16,8 @@ import {
   loadQualityIntelligenceCandidates,
   recordQualityIntelligenceCandidates,
 } from "../candidatesArtifact.js";
+import { QI_SUBDIR } from "../store.js";
+import { EvidenceReadError } from "../../errors.js";
 
 type Candidate = QualityIntelligence.QualityIntelligenceTestCaseCandidate;
 type EditProvenance = QualityIntelligence.QualityIntelligenceCandidateEditProvenance;
@@ -55,6 +57,10 @@ function seedCandidate(id: string): Candidate {
 
 function provenance(): EditProvenance {
   return { editedAt: "2026-06-08T12:00:00.000Z", editedBy: "human", editorLabel: "Alice" };
+}
+
+function artifactPath(dir: string): string {
+  return join(dir, QI_SUBDIR, `${RUN_ID}.candidates.json`);
 }
 
 let evidenceDir: string;
@@ -201,6 +207,64 @@ describe("applyQualityIntelligenceCandidateEdit — revisions accumulate", () =>
   });
 });
 
+describe("applyQualityIntelligenceCandidateEdit — no-op deduplication", () => {
+  it("does not append a duplicate revision when identical content is submitted twice", () => {
+    const first = applyQualityIntelligenceCandidateEdit({
+      runId: RUN_ID,
+      candidateId: "tc-1",
+      editedFields: { title: "Edited title" },
+      provenance: provenance(),
+      evidenceDir,
+      redact: identityRedact,
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) throw new Error("expected ok");
+    expect(first.changed).toBe(true);
+
+    const second = applyQualityIntelligenceCandidateEdit({
+      runId: RUN_ID,
+      candidateId: "tc-1",
+      editedFields: { title: "Edited title" },
+      provenance: provenance(),
+      evidenceDir,
+      redact: identityRedact,
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) throw new Error("expected ok");
+    expect(second.changed).toBe(false);
+
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    expect(reloaded?.editedRevisions).toHaveLength(1);
+  });
+
+  it("treats a redacted-to-the-same-value edit as a no-op", () => {
+    applyQualityIntelligenceCandidateEdit({
+      runId: RUN_ID,
+      candidateId: "tc-1",
+      editedFields: { title: "secret-token" },
+      provenance: provenance(),
+      evidenceDir,
+      redact: upcaseRedact,
+    });
+
+    const repeated = applyQualityIntelligenceCandidateEdit({
+      runId: RUN_ID,
+      candidateId: "tc-1",
+      editedFields: { title: "secret-token" },
+      provenance: { ...provenance(), editorLabel: "Bob" },
+      evidenceDir,
+      redact: upcaseRedact,
+    });
+    expect(repeated.ok).toBe(true);
+    if (!repeated.ok) throw new Error("expected ok");
+    expect(repeated.changed).toBe(false);
+
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    expect(reloaded?.candidates.find((c) => c.id === "tc-1")?.title).toBe("SECRET-TOKEN");
+    expect(reloaded?.editedRevisions).toHaveLength(1);
+  });
+});
+
 describe("applyQualityIntelligenceCandidateEdit — rejections", () => {
   it("rejects when no editable field is supplied", () => {
     const result = applyQualityIntelligenceCandidateEdit({
@@ -255,5 +319,53 @@ describe("applyQualityIntelligenceCandidateEdit — rejections", () => {
     });
     const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
     expect(reloaded?.editedRevisions ?? []).toHaveLength(0);
+  });
+});
+
+describe("loadQualityIntelligenceCandidates — fail closed companion parsing", () => {
+  it("throws EvidenceReadError for a malformed nested candidate row", () => {
+    const current = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    if (current === undefined) throw new Error("expected seeded artifact");
+    writeFileSync(
+      artifactPath(evidenceDir),
+      JSON.stringify({
+        ...current,
+        candidates: current.candidates.map((candidate) =>
+          candidate.id === "tc-1" ? { ...candidate, steps: "not-an-array" } : candidate,
+        ),
+      }),
+      "utf8",
+    );
+
+    expect(() => loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
+  it("throws EvidenceReadError for malformed edited revisions", () => {
+    const current = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    if (current === undefined) throw new Error("expected seeded artifact");
+    writeFileSync(
+      artifactPath(evidenceDir),
+      JSON.stringify({
+        ...current,
+        editedRevisions: [
+          {
+            candidateId: "tc-1",
+            provenance: {
+              editedAt: "2026-06-08T12:00:00.000Z",
+              editedBy: "human",
+              editorLabel: "Alice",
+            },
+            editedFields: { steps: "not-an-array" },
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    expect(() => loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
   });
 });

@@ -14,6 +14,7 @@ import {
   type QualityIntelligencePriority,
   type QualityIntelligenceRiskClass,
 } from "@oscharko-dev/keiko-contracts";
+import { formatError } from "./qiShared";
 
 const QUALITY_INTELLIGENCE_PRIORITIES = QualityIntelligence.QUALITY_INTELLIGENCE_PRIORITIES;
 const QUALITY_INTELLIGENCE_RISK_CLASSES = QualityIntelligence.QUALITY_INTELLIGENCE_RISK_CLASSES;
@@ -80,11 +81,13 @@ function TextAreaField({
   id,
   label,
   value,
+  disabled = false,
   onChange,
 }: {
   readonly id: string;
   readonly label: string;
   readonly value: string;
+  readonly disabled?: boolean;
   readonly onChange: (next: string) => void;
 }): ReactNode {
   return (
@@ -95,6 +98,7 @@ function TextAreaField({
         className="qi-edit-textarea"
         value={value}
         rows={3}
+        disabled={disabled}
         onChange={(e) => {
           onChange(e.target.value);
         }}
@@ -107,11 +111,13 @@ function InputField({
   id,
   label,
   value,
+  disabled = false,
   onChange,
 }: {
   readonly id: string;
   readonly label: string;
   readonly value: string;
+  readonly disabled?: boolean;
   readonly onChange: (next: string) => void;
 }): ReactNode {
   return (
@@ -121,6 +127,7 @@ function InputField({
         id={id}
         className="qi-edit-input"
         value={value}
+        disabled={disabled}
         onChange={(e) => {
           onChange(e.target.value);
         }}
@@ -134,12 +141,14 @@ function SelectField<T extends string>({
   label,
   value,
   options,
+  disabled = false,
   onChange,
 }: {
   readonly id: string;
   readonly label: string;
   readonly value: T;
   readonly options: readonly T[];
+  readonly disabled?: boolean;
   readonly onChange: (next: T) => void;
 }): ReactNode {
   return (
@@ -149,6 +158,7 @@ function SelectField<T extends string>({
         id={id}
         className="qi-edit-select"
         value={value}
+        disabled={disabled}
         onChange={(e) => {
           onChange(e.target.value as T);
         }}
@@ -163,13 +173,24 @@ function SelectField<T extends string>({
   );
 }
 
-function EditActions({ onCancel }: { readonly onCancel: () => void }): ReactNode {
+function EditActions({
+  onCancel,
+  saving,
+}: {
+  readonly onCancel: () => void;
+  readonly saving: boolean;
+}): ReactNode {
   return (
     <div className="qi-edit-actions">
-      <button type="submit" className="qi-btn qi-btn-approve qi-edit-save">
+      <button type="submit" className="qi-btn qi-btn-approve qi-edit-save" disabled={saving}>
         Save
       </button>
-      <button type="button" className="qi-btn qi-btn-secondary qi-edit-cancel" onClick={onCancel}>
+      <button
+        type="button"
+        className="qi-btn qi-btn-secondary qi-edit-cancel"
+        onClick={onCancel}
+        disabled={saving}
+      >
         Cancel
       </button>
     </div>
@@ -188,7 +209,10 @@ export function CandidateEditForm({
   onCancel,
 }: CandidateEditFormProps): ReactNode {
   const [state, setState] = useState<FormState>(() => initialState(candidate));
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const set = <K extends keyof FormState>(key: K, value: FormState[K]): void => {
+    setSaveError(null);
     setState((prev) => ({ ...prev, [key]: value }));
   };
   // Escape cancels the edit. Handled as a document keydown listener scoped to the form's lifetime
@@ -196,27 +220,41 @@ export function CandidateEditForm({
   // the whole open form without a noninteractive-element a11y violation.
   useEffect(() => {
     const onKey = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") onCancel();
+      if (event.key === "Escape" && !saving) onCancel();
     };
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
     };
-  }, [onCancel]);
+  }, [onCancel, saving]);
   const id = `qi-edit-${candidate.id}`;
+  const handleSubmit = async (): Promise<void> => {
+    if (saving) return;
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(diffEdited(candidate, state));
+    } catch (error) {
+      setSaveError(formatError(error));
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
     <form
       className="qi-edit-form"
       aria-label={`Edit ${candidate.title}`}
+      aria-busy={saving}
       onSubmit={(e) => {
         e.preventDefault();
-        void onSave(diffEdited(candidate, state));
+        void handleSubmit();
       }}
     >
       <InputField
         id={`${id}-title`}
         label="Title"
         value={state.title}
+        disabled={saving}
         onChange={(v) => {
           set("title", v);
         }}
@@ -225,6 +263,7 @@ export function CandidateEditForm({
         id={`${id}-preconditions`}
         label="Preconditions (one per line)"
         value={state.preconditions}
+        disabled={saving}
         onChange={(v) => {
           set("preconditions", v);
         }}
@@ -233,6 +272,7 @@ export function CandidateEditForm({
         id={`${id}-steps`}
         label="Steps (one per line)"
         value={state.steps}
+        disabled={saving}
         onChange={(v) => {
           set("steps", v);
         }}
@@ -241,6 +281,7 @@ export function CandidateEditForm({
         id={`${id}-expected`}
         label="Expected results (one per line)"
         value={state.expectedResults}
+        disabled={saving}
         onChange={(v) => {
           set("expectedResults", v);
         }}
@@ -250,6 +291,7 @@ export function CandidateEditForm({
         label="Priority"
         value={state.priority}
         options={QUALITY_INTELLIGENCE_PRIORITIES}
+        disabled={saving}
         onChange={(v) => {
           set("priority", v);
         }}
@@ -259,6 +301,7 @@ export function CandidateEditForm({
         label="Risk class"
         value={state.riskClass}
         options={QUALITY_INTELLIGENCE_RISK_CLASSES}
+        disabled={saving}
         onChange={(v) => {
           set("riskClass", v);
         }}
@@ -267,11 +310,17 @@ export function CandidateEditForm({
         id={`${id}-tags`}
         label="Tags (comma-separated)"
         value={state.tags}
+        disabled={saving}
         onChange={(v) => {
           set("tags", v);
         }}
       />
-      <EditActions onCancel={onCancel} />
+      {saveError !== null ? (
+        <p className="qi-edit-error" role="alert" aria-live="assertive">
+          {saveError}
+        </p>
+      ) : null}
+      <EditActions onCancel={onCancel} saving={saving} />
     </form>
   );
 }

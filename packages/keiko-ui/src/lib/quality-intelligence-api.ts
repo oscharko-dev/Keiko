@@ -172,12 +172,17 @@ export async function reviewQiRun(
   runId: string,
   action: QiReviewAction,
   candidateId?: string,
+  reviewerLabel?: string,
 ): Promise<QiReviewResult> {
   return fetchJson<QiReviewResult>(
     `/api/quality-intelligence/runs/${encodeURIComponent(runId)}/review`,
     {
       method: "POST",
-      body: JSON.stringify({ action, ...(candidateId !== undefined ? { candidateId } : {}) }),
+      body: JSON.stringify({
+        action,
+        ...(candidateId !== undefined ? { candidateId } : {}),
+        ...(reviewerLabel !== undefined ? { reviewerLabel } : {}),
+      }),
     },
   );
 }

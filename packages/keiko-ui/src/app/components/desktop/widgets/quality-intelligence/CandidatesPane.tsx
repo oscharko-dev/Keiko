@@ -76,10 +76,14 @@ function ReviewControls({
   candidateId,
   state,
   onReview,
+  disabled = false,
+  disabledReason,
 }: {
   readonly candidateId: string;
   readonly state: QualityIntelligenceReviewState;
   readonly onReview: (candidateId: string, action: QiReviewAction) => void;
+  readonly disabled?: boolean;
+  readonly disabledReason?: string;
 }): ReactNode {
   return (
     <div className="qi-cand-actions" role="group" aria-label="Review decision">
@@ -87,6 +91,8 @@ function ReviewControls({
         type="button"
         className="qi-btn qi-btn-approve"
         aria-pressed={state === "approved"}
+        disabled={disabled}
+        title={disabledReason}
         onClick={() => {
           onReview(candidateId, "approve");
         }}
@@ -97,6 +103,8 @@ function ReviewControls({
         type="button"
         className="qi-btn qi-btn-reject"
         aria-pressed={state === "rejected"}
+        disabled={disabled}
+        title={disabledReason}
         onClick={() => {
           onReview(candidateId, "reject");
         }}
@@ -107,6 +115,8 @@ function ReviewControls({
         type="button"
         className="qi-btn qi-btn-secondary"
         aria-pressed={state === "changes-requested"}
+        disabled={disabled}
+        title={disabledReason}
         onClick={() => {
           onReview(candidateId, "request-changes");
         }}
@@ -121,10 +131,14 @@ function CandidateView({
   candidate,
   onReview,
   onStartEdit,
+  actionsDisabled = false,
+  actionsDisabledReason,
 }: {
   readonly candidate: QualityIntelligenceUiCandidate;
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onStartEdit?: (() => void) | undefined;
+  readonly actionsDisabled?: boolean;
+  readonly actionsDisabledReason?: string;
 }): ReactNode {
   return (
     <>
@@ -154,6 +168,8 @@ function CandidateView({
           <button
             type="button"
             className="qi-btn qi-btn-secondary qi-cand-edit"
+            disabled={actionsDisabled}
+            title={actionsDisabledReason}
             onClick={onStartEdit}
           >
             Edit
@@ -164,6 +180,8 @@ function CandidateView({
             candidateId={candidate.id}
             state={candidate.reviewState}
             onReview={onReview}
+            disabled={actionsDisabled}
+            disabledReason={actionsDisabledReason}
           />
         ) : null}
       </div>
@@ -175,10 +193,14 @@ function CandidateCard({
   candidate,
   onReview,
   onEdit,
+  actionsDisabled = false,
+  actionsDisabledReason,
 }: {
   readonly candidate: QualityIntelligenceUiCandidate;
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onEdit?: QiCandidateEdit | undefined;
+  readonly actionsDisabled?: boolean;
+  readonly actionsDisabledReason?: string;
 }): ReactNode {
   const [editing, setEditing] = useState(false);
   const handleSave = async (edited: QualityIntelligenceCandidateEditableFields): Promise<void> => {
@@ -199,6 +221,8 @@ function CandidateCard({
         <CandidateView
           candidate={candidate}
           onReview={onReview}
+          actionsDisabled={actionsDisabled}
+          actionsDisabledReason={actionsDisabledReason}
           onStartEdit={
             onEdit !== undefined
               ? () => {
@@ -216,9 +240,17 @@ export interface CandidatesPaneProps {
   readonly candidates: readonly QualityIntelligenceUiCandidate[];
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onEdit?: QiCandidateEdit | undefined;
+  readonly actionsDisabled?: boolean;
+  readonly actionsDisabledReason?: string;
 }
 
-export function CandidatesPane({ candidates, onReview, onEdit }: CandidatesPaneProps): ReactNode {
+export function CandidatesPane({
+  candidates,
+  onReview,
+  onEdit,
+  actionsDisabled = false,
+  actionsDisabledReason,
+}: CandidatesPaneProps): ReactNode {
   const [visible, setVisible] = useState(INITIAL_VISIBLE);
   if (candidates.length === 0) {
     return (
@@ -231,9 +263,21 @@ export function CandidatesPane({ candidates, onReview, onEdit }: CandidatesPaneP
   const shown = candidates.slice(0, visible);
   return (
     <div className="qi-cand-pane">
+      {actionsDisabled && actionsDisabledReason !== undefined ? (
+        <p className="qi-cand-governance-note" role="note">
+          {actionsDisabledReason}
+        </p>
+      ) : null}
       <ul className="qi-cand-cards" aria-label="Generated test cases">
         {shown.map((c) => (
-          <CandidateCard key={c.id} candidate={c} onReview={onReview} onEdit={onEdit} />
+          <CandidateCard
+            key={c.id}
+            candidate={c}
+            onReview={onReview}
+            onEdit={onEdit}
+            actionsDisabled={actionsDisabled}
+            actionsDisabledReason={actionsDisabledReason}
+          />
         ))}
       </ul>
       {visible < candidates.length ? (

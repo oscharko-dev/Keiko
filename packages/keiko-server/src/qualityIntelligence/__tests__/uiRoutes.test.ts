@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult } from "../../routes.js";
 import { STREAMING } from "../../routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../../index.js";
@@ -331,6 +332,8 @@ describe("evidenceDir wiring (issue #620)", () => {
   // through to the actual implementations here.
   let actualList: (opts: { evidenceDir?: string }) => readonly string[];
   let actualLoad: (id: string, opts: { evidenceDir?: string }) => unknown;
+  let actualRecord: typeof import("@oscharko-dev/keiko-evidence").recordQualityIntelligenceRun;
+  let actualRecordCandidates: typeof import("@oscharko-dev/keiko-evidence").recordQualityIntelligenceCandidates;
   let evidenceDir: string;
 
   beforeEach(async () => {
@@ -339,6 +342,8 @@ describe("evidenceDir wiring (issue #620)", () => {
     );
     actualList = actual.listQualityIntelligenceRuns;
     actualLoad = actual.loadQualityIntelligenceRun;
+    actualRecord = actual.recordQualityIntelligenceRun;
+    actualRecordCandidates = actual.recordQualityIntelligenceCandidates;
 
     listMock.mockImplementation((opts: { evidenceDir?: string }): readonly string[] =>
       actualList(opts),
@@ -382,6 +387,88 @@ describe("evidenceDir wiring (issue #620)", () => {
     expect(result.status).toBe(404);
     expect(result.body).toEqual({
       error: { code: "NOT_FOUND", message: "Quality Intelligence run not found" },
+    });
+  });
+
+  it("handleGetQiRun fails closed when the candidates companion is malformed", () => {
+    const runId = "run-corrupt-candidates";
+    actualRecord(
+      {
+        runId,
+        planAt: "2026-06-09T10:00:00.000Z",
+        completedAt: "2026-06-09T10:01:00.000Z",
+        status: "succeeded",
+        policyProfileIds: [],
+        retentionPolicyId: "default",
+        modelGatewayCallCount: 1,
+        totals: { candidates: 1, findings: 0, exports: 0 },
+        findings: [],
+        exports: [],
+        evidenceRefs: [],
+        provenanceRefs: {
+          envelopeIds: [],
+          auditSummaryId:
+            "qi-audit-ui-routes" as import("@oscharko-dev/keiko-evidence").QualityIntelligenceEvidenceManifest["provenanceRefs"]["auditSummaryId"],
+        },
+      },
+      { evidenceDir },
+    );
+    actualRecordCandidates({
+      runId,
+      generatedAt: "2026-06-09T10:01:00.000Z",
+      candidates: [
+        {
+          id: QualityIntelligence.asQualityIntelligenceTestCaseId("cand-corrupt-001"),
+          runId: QualityIntelligence.asQualityIntelligenceRunId(runId),
+          derivedFromAtomIds: [],
+          title: "Corrupt me",
+          preconditions: ["ready"],
+          steps: ["one"],
+          expectedResults: ["done"],
+          priority: "P1",
+          riskClass: "functional",
+          tags: [],
+          status: "proposed",
+        },
+      ],
+      evidenceDir,
+      redact: (value: unknown): unknown => value,
+    });
+    writeFileSync(
+      join(evidenceDir, "qi", `${runId}.candidates.json`),
+      JSON.stringify({
+        qiCandidatesSchemaVersion: 1,
+        runId,
+        generatedAt: "2026-06-09T10:01:00.000Z",
+        candidates: [
+          {
+            id: "cand-corrupt-001",
+            title: "Corrupt me",
+            preconditions: ["ready"],
+            steps: "not-an-array",
+            expectedResults: ["done"],
+            priority: "P1",
+            riskClass: "functional",
+            tags: [],
+            status: "proposed",
+            derivedFromAtomIds: [],
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
+    const result = asResult(
+      handleGetQiRun(
+        ctx(`/api/quality-intelligence/runs/${runId}`, { id: runId }),
+        depsWithDir,
+      ),
+    );
+
+    expect(result.status).toBe(500);
+    expect(result.body).toEqual({
+      error: { code: "INTERNAL", message: "Failed to load Quality Intelligence run" },
     });
   });
 });

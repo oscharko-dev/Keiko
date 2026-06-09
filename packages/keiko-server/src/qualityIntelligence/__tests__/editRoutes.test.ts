@@ -203,7 +203,7 @@ describe("handleQiEditCandidate — malformed requests", () => {
   });
 
   it("returns 400 QI_BAD_EDIT when no editable field is supplied", async () => {
-    const req = makeReq({ candidateId: "tc-1", edited: {} });
+    const req = makeReq({ candidateId: "tc-1", edited: {}, editorLabel: "Alice" });
     const result = asResult(await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir)));
     expect(result.status).toBe(400);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_EDIT");
@@ -217,35 +217,65 @@ describe("handleQiEditCandidate — malformed requests", () => {
   });
 
   it("returns 400 QI_BAD_EDIT for an invalid priority enum", async () => {
-    const req = makeReq({ candidateId: "tc-1", edited: { priority: "P9" } });
+    const req = makeReq({
+      candidateId: "tc-1",
+      edited: { priority: "P9" },
+      editorLabel: "Alice",
+    });
     const result = asResult(await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir)));
     expect(result.status).toBe(400);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_EDIT");
   });
 
   it("returns 400 QI_BAD_EDIT for an invalid riskClass enum", async () => {
-    const req = makeReq({ candidateId: "tc-1", edited: { riskClass: "explosive" } });
+    const req = makeReq({
+      candidateId: "tc-1",
+      edited: { riskClass: "explosive" },
+      editorLabel: "Alice",
+    });
     const result = asResult(await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir)));
     expect(result.status).toBe(400);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_EDIT");
   });
 
   it("returns 400 QI_BAD_EDIT for an empty title", async () => {
-    const req = makeReq({ candidateId: "tc-1", edited: { title: "" } });
+    const req = makeReq({ candidateId: "tc-1", edited: { title: "" }, editorLabel: "Alice" });
     const result = asResult(await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir)));
     expect(result.status).toBe(400);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_EDIT");
   });
 
   it("returns 400 QI_BAD_EDIT for a steps array with an empty string", async () => {
-    const req = makeReq({ candidateId: "tc-1", edited: { steps: ["ok", ""] } });
+    const req = makeReq({
+      candidateId: "tc-1",
+      edited: { steps: ["ok", ""] },
+      editorLabel: "Alice",
+    });
+    const result = asResult(await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir)));
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_EDIT");
+  });
+
+  it("returns 400 QI_BAD_EDIT when editorLabel is missing", async () => {
+    const req = makeReq({ candidateId: "tc-1", edited: { title: "x" } });
+    const result = asResult(await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir)));
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_EDIT");
+  });
+
+  it("returns 400 QI_BAD_EDIT when editorLabel is blank", async () => {
+    const req = makeReq({ candidateId: "tc-1", edited: { title: "x" }, editorLabel: "   " });
     const result = asResult(await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir)));
     expect(result.status).toBe(400);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_EDIT");
   });
 
   it("does not persist when an edit is rejected as malformed", async () => {
-    const req = makeReq({ candidateId: "tc-1", edited: { priority: "P9" } });
+    const req = makeReq({
+      candidateId: "tc-1",
+      edited: { priority: "P9" },
+      editorLabel: "Alice",
+    });
     await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir));
     const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
     expect(reloaded?.editedRevisions ?? []).toHaveLength(0);
@@ -257,7 +287,7 @@ describe("handleQiEditCandidate — malformed requests", () => {
 
 describe("handleQiEditCandidate — not found", () => {
   it("returns 404 QI_RUN_NOT_FOUND for a run id that was never recorded", async () => {
-    const req = makeReq({ candidateId: "tc-1", edited: { title: "x" } });
+    const req = makeReq({ candidateId: "tc-1", edited: { title: "x" }, editorLabel: "Alice" });
     const result = asResult(
       await handleQiEditCandidate(ctx("run-missing", req), deps(evidenceDir)),
     );
@@ -266,7 +296,11 @@ describe("handleQiEditCandidate — not found", () => {
   });
 
   it("returns 404 QI_NOT_FOUND for a candidate id not present in the run", async () => {
-    const req = makeReq({ candidateId: "tc-missing", edited: { title: "x" } });
+    const req = makeReq({
+      candidateId: "tc-missing",
+      edited: { title: "x" },
+      editorLabel: "Alice",
+    });
     const result = asResult(await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir)));
     expect(result.status).toBe(404);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_NOT_FOUND");
@@ -277,7 +311,11 @@ describe("handleQiEditCandidate — not found", () => {
 
 describe("handleQiEditCandidate — valid edit", () => {
   it("returns 200 with the updated candidate reflecting the edit", async () => {
-    const req = makeReq({ candidateId: "tc-1", edited: { title: "New title", priority: "P0" } });
+    const req = makeReq({
+      candidateId: "tc-1",
+      edited: { title: "New title", priority: "P0" },
+      editorLabel: "Alice",
+    });
     const result = asResult(await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir)));
     expect(result.status).toBe(200);
     const body = result.body as { candidate: { title: string; priority: string } };
@@ -286,14 +324,22 @@ describe("handleQiEditCandidate — valid edit", () => {
   });
 
   it("persists the edit so a reload reflects the new text", async () => {
-    const req = makeReq({ candidateId: "tc-1", edited: { title: "Persisted title" } });
+    const req = makeReq({
+      candidateId: "tc-1",
+      edited: { title: "Persisted title" },
+      editorLabel: "Alice",
+    });
     await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir));
     const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
     expect(reloaded?.candidates[0]?.title).toBe("Persisted title");
   });
 
   it("applies the mandatory redactor to edited fields before persist", async () => {
-    const req = makeReq({ candidateId: "tc-1", edited: { title: "secret-token" } });
+    const req = makeReq({
+      candidateId: "tc-1",
+      edited: { title: "secret-token" },
+      editorLabel: "Alice",
+    });
     const result = asResult(
       await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir, upcaseRedact)),
     );
@@ -316,7 +362,11 @@ describe("handleQiEditCandidate — valid edit", () => {
   });
 
   it("does NOT transition the candidate's review state on edit", async () => {
-    const req = makeReq({ candidateId: "tc-1", edited: { title: "Still open" } });
+    const req = makeReq({
+      candidateId: "tc-1",
+      edited: { title: "Still open" },
+      editorLabel: "Alice",
+    });
     await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir));
     const review = loadRunReviewState(RUN_ID, evidenceDir);
     expect(review?.candidateStates["tc-1"]).toBeUndefined();
@@ -324,9 +374,30 @@ describe("handleQiEditCandidate — valid edit", () => {
 
   it("leaves the IMMUTABLE run manifest file byte-identical after the edit", async () => {
     const before = readFileSync(MANIFEST_PATH(evidenceDir));
-    const req = makeReq({ candidateId: "tc-1", edited: { title: "Manifest untouched" } });
+    const req = makeReq({
+      candidateId: "tc-1",
+      edited: { title: "Manifest untouched" },
+      editorLabel: "Alice",
+    });
     await handleQiEditCandidate(ctx(RUN_ID, req), deps(evidenceDir));
     const after = readFileSync(MANIFEST_PATH(evidenceDir));
     expect(after.equals(before)).toBe(true);
+  });
+
+  it("does not append a revision or audit entry for an identical repeat edit", async () => {
+    const body = {
+      candidateId: "tc-1",
+      edited: { title: "Idempotent title" },
+      editorLabel: "Alice",
+    };
+    await handleQiEditCandidate(ctx(RUN_ID, makeReq(body)), deps(evidenceDir));
+    await handleQiEditCandidate(ctx(RUN_ID, makeReq(body)), deps(evidenceDir));
+
+    const reloaded = loadQualityIntelligenceCandidates(RUN_ID, { evidenceDir });
+    expect(reloaded?.editedRevisions).toHaveLength(1);
+
+    const review = loadRunReviewState(RUN_ID, evidenceDir);
+    const editEntries = (review?.auditLog ?? []).filter((entry) => entry.action === "edit");
+    expect(editEntries).toHaveLength(1);
   });
 });

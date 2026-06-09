@@ -8248,6 +8248,63 @@ select.dlg-input {
   margin-top: 12px;
   flex-wrap: wrap;
 }
+.qi-cand-governance-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.qi-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.qi-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.qi-edit-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+.qi-edit-input,
+.qi-edit-textarea,
+.qi-edit-select {
+  width: 100%;
+  background: var(--card-2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.qi-edit-textarea {
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.45;
+}
+.qi-edit-input:focus-visible,
+.qi-edit-textarea:focus-visible,
+.qi-edit-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+.qi-edit-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.qi-edit-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
 .qi-cand-more {
   margin: 12px 0 0;
   justify-self: start;
@@ -8360,6 +8417,29 @@ select.dlg-input {
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+.qi-run-governance {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+}
+.qi-run-governance-input {
+  max-width: 320px;
+}
+.qi-run-governance-help,
+.qi-run-governance-warning {
+  margin: 0;
+  font-size: 12px;
+}
+.qi-run-governance-help {
+  color: var(--fg-muted);
+}
+.qi-run-governance-warning {
+  color: var(--danger);
 }
 
 /* Run summary strip: clean horizontal wrap, no cramped vertical stack. */

@@ -4,7 +4,7 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QiRunCard } from "./QiRunCard";
 import type {
   QualityIntelligenceUiRunDetail,
@@ -62,6 +62,10 @@ const fetchOk = (
       detail,
     ) as unknown as typeof import("@/lib/quality-intelligence-api").fetchQiRunDetail;
 
+beforeEach(() => {
+  window.localStorage.clear();
+});
+
 describe("QiRunCard", () => {
   it("fetches and renders the run summary + test cases for the given runId", async () => {
     const detail = makeDetail("qi-run-aaaa1111", [
@@ -83,6 +87,7 @@ describe("QiRunCard", () => {
 
   it("routes an Approve decision through the review seam and reloads", async () => {
     const user = userEvent.setup();
+    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
     const detail = makeDetail("qi-run-aaaa1111", [makeCandidate("tc-1", "Successful login")]);
     const fetchImpl = fetchOk(detail);
     const reviewImpl = vi.fn().mockResolvedValue({
@@ -94,9 +99,13 @@ describe("QiRunCard", () => {
     render(
       <QiRunCard runId="qi-run-aaaa1111" fetchDetailImpl={fetchImpl} reviewImpl={reviewImpl} />,
     );
-    await user.click(await screen.findByRole("button", { name: /approve/i }));
+    const approveButton = await screen.findByRole("button", { name: /approve/i });
     await waitFor(() => {
-      expect(reviewImpl).toHaveBeenCalledWith("qi-run-aaaa1111", "approve", "tc-1");
+      expect(approveButton).toBeEnabled();
+    });
+    await user.click(approveButton);
+    await waitFor(() => {
+      expect(reviewImpl).toHaveBeenCalledWith("qi-run-aaaa1111", "approve", "tc-1", "Alice");
     });
     // Detail is reloaded after the decision (initial load + post-review reload).
     expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2);
@@ -114,6 +123,7 @@ describe("QiRunCard", () => {
 
   it("routes an inline edit through the edit seam and reloads the detail (Epic #712)", async () => {
     const user = userEvent.setup();
+    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
     const detail = makeDetail("qi-run-aaaa1111", [makeCandidate("tc-1", "Login")]);
     const fetchImpl = fetchOk(detail);
     const editImpl = vi
@@ -123,17 +133,64 @@ describe("QiRunCard", () => {
       ) as unknown as typeof import("@/lib/quality-intelligence-api").editQiCandidate;
 
     render(<QiRunCard runId="qi-run-aaaa1111" fetchDetailImpl={fetchImpl} editImpl={editImpl} />);
-    await user.click(await screen.findByRole("button", { name: /^edit$/i }));
+    const editButton = await screen.findByRole("button", { name: /^edit$/i });
+    await waitFor(() => {
+      expect(editButton).toBeEnabled();
+    });
+    await user.click(editButton);
     const titleInput = screen.getByLabelText("Title");
     await user.clear(titleInput);
     await user.type(titleInput, "Edited login");
     await user.click(screen.getByRole("button", { name: /^save$/i }));
 
     await waitFor(() => {
-      expect(editImpl).toHaveBeenCalledWith("qi-run-aaaa1111", "tc-1", { title: "Edited login" });
+      expect(editImpl).toHaveBeenCalledWith("qi-run-aaaa1111", "tc-1", { title: "Edited login" }, "Alice");
     });
     // Detail is reloaded after the edit (initial load + post-edit reload).
     expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("blocks review and edit actions until a reviewer label is set", async () => {
+    const detail = makeDetail("qi-run-blocked", [makeCandidate("tc-1", "Login")]);
+    render(<QiRunCard runId="qi-run-blocked" fetchDetailImpl={fetchOk(detail)} />);
+
+    await screen.findByText("Login");
+    expect(screen.getByRole("button", { name: /^edit$/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /approve/i })).toBeDisabled();
+    expect(
+      screen.getAllByText(/set a reviewer label to review or edit candidates/i),
+    ).toHaveLength(2);
+  });
+
+  it("keeps the edit form open and surfaces the save error when the edit request fails", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    const detail = makeDetail("qi-run-edit-fail", [makeCandidate("tc-1", "Login")]);
+    const fetchImpl = fetchOk(detail);
+    const editImpl = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("QI_BAD_EDIT: A valid candidate edit is required."),
+      ) as unknown as typeof import("@/lib/quality-intelligence-api").editQiCandidate;
+
+    render(
+      <QiRunCard runId="qi-run-edit-fail" fetchDetailImpl={fetchImpl} editImpl={editImpl} />,
+    );
+    const editButton = await screen.findByRole("button", { name: /^edit$/i });
+    await waitFor(() => {
+      expect(editButton).toBeEnabled();
+    });
+    await user.click(editButton);
+    const titleInput = screen.getByLabelText("Title");
+    await user.clear(titleInput);
+    await user.type(titleInput, "Edited login");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    expect(
+      await screen.findByText("QI_BAD_EDIT: A valid candidate edit is required."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("form", { name: /edit login/i })).toBeInTheDocument();
+    expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
   });
 
   it("renders the coverage percentage badge when coverageByAtom is non-empty", async () => {

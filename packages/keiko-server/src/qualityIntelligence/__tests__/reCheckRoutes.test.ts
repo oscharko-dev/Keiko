@@ -13,7 +13,7 @@
 // NOTE: regenerate-stale exercises the full model-routed workflow. In the integration
 // test context the config has no providers → QI_NO_MODEL is expected.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -222,6 +222,43 @@ describe("handleQiReCheck — malformed body", () => {
   });
 });
 
+describe("handleQiReCheck — malformed candidates companion", () => {
+  it("returns 500 QI_RECHECK_FAILED when the candidates companion is corrupted", async () => {
+    writeFileSync(
+      join(evidenceDir, "qi", `${RUN_ID}.candidates.json`),
+      JSON.stringify({
+        qiCandidatesSchemaVersion: 1,
+        runId: RUN_ID,
+        generatedAt: "2026-06-09T10:01:00.000Z",
+        candidates: [
+          {
+            id: "cand-recheck-001",
+            title: "Corrupt me",
+            preconditions: ["ready"],
+            steps: "not-an-array",
+            expectedResults: ["done"],
+            priority: "P1",
+            riskClass: "functional",
+            tags: [],
+            status: "proposed",
+            derivedFromAtomIds: ["atom-1"],
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const body = {
+      sources: [{ kind: "requirements", label: "req-1", text: "REQ-1: User can log in" }],
+    };
+    const result = asResult(
+      await handleQiReCheck(ctx("re-check", RUN_ID, makeReq(body)), deps(evidenceDir)),
+    );
+    expect(result.status).toBe(500);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_RECHECK_FAILED");
+  });
+});
+
 // ─── re-check: happy path — unchanged sources ─────────────────────────────────
 
 describe("handleQiReCheck — unchanged source (same hash)", () => {
@@ -358,6 +395,46 @@ describe("handleQiRegenerateStale — no model configured", () => {
     );
     expect(result.status).toBe(400);
     expect((result.body as { error: { code: string } }).error.code).toBe("QI_NO_MODEL");
+  });
+});
+
+describe("handleQiRegenerateStale — malformed candidates companion", () => {
+  it("returns 500 QI_REGEN_FAILED when the candidates companion is corrupted", async () => {
+    writeFileSync(
+      join(evidenceDir, "qi", `${RUN_ID}.candidates.json`),
+      JSON.stringify({
+        qiCandidatesSchemaVersion: 1,
+        runId: RUN_ID,
+        generatedAt: "2026-06-09T10:01:00.000Z",
+        candidates: [
+          {
+            id: "cand-recheck-001",
+            title: "Corrupt me",
+            preconditions: ["ready"],
+            steps: "not-an-array",
+            expectedResults: ["done"],
+            priority: "P1",
+            riskClass: "functional",
+            tags: [],
+            status: "proposed",
+            derivedFromAtomIds: ["atom-1"],
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const body = {
+      sources: [{ kind: "requirements", label: "req-1", text: "REQ-1: User can log in" }],
+    };
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx("regenerate-stale", RUN_ID, makeReq(body)),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(500);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_REGEN_FAILED");
   });
 });
 
