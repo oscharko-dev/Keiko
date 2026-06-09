@@ -231,6 +231,13 @@ export interface PersistArgs {
   readonly evidenceStore: QualityIntelligenceLocalStore;
   readonly coverageMatrix?: QualityIntelligenceRecordInput["coverageMatrix"];
   readonly qualityScore?: number | null;
+  readonly sourceFingerprints?: QualityIntelligenceRecordInput["sourceFingerprints"];
+  /** Model id that generated the candidates (Epic #761). */
+  readonly modelId?: string;
+  /** Redaction-safe request parameter scalars (Epic #761). */
+  readonly modelParameters?: Record<string, unknown>;
+  /** Seed used for deterministic sampling (Epic #761). */
+  readonly seedUsed?: number | null;
 }
 
 function mapFindingsToRows(
@@ -271,6 +278,12 @@ export function persistRun(args: PersistArgs): QualityIntelligenceRecordResult {
     provenanceRefs: args.provenanceRefs,
     coverageMatrix: args.coverageMatrix,
     ...(args.qualityScore !== undefined ? { qualityScore: args.qualityScore } : {}),
+    ...(args.sourceFingerprints !== undefined
+      ? { sourceFingerprints: args.sourceFingerprints }
+      : {}),
+    ...(args.modelId !== undefined ? { modelId: args.modelId } : {}),
+    ...(args.modelParameters !== undefined ? { modelParameters: args.modelParameters } : {}),
+    ...(args.seedUsed !== undefined ? { seedUsed: args.seedUsed } : {}),
   };
   return recordQualityIntelligenceRun(input, { store: args.evidenceStore });
 }

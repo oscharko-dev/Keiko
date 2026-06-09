@@ -11,6 +11,8 @@ import type {
   QualityIntelligenceCandidateEditableFields,
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceRunStreamMessage,
+  QualityIntelligenceUiStalenessReport,
+  QualityIntelligenceUiRegenerateResult,
 } from "@oscharko-dev/keiko-contracts";
 
 // ---------------------------------------------------------------------------
@@ -207,6 +209,38 @@ export async function editQiCandidate(
     },
   );
   return res.candidate;
+}
+
+// ---------------------------------------------------------------------------
+// POST /api/quality-intelligence/runs/:id/re-check + /regenerate-stale  (Epic #735)
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-check a run for source drift. Re-ingests the supplied sources server-side, compares their
+ * fingerprints to the recorded run, and reports which generated tests are stale.
+ */
+export async function reCheckQiRun(
+  runId: string,
+  sources: QualityIntelligenceStartRunRequest["sources"],
+): Promise<QualityIntelligenceUiStalenessReport> {
+  return fetchJson<QualityIntelligenceUiStalenessReport>(
+    `/api/quality-intelligence/runs/${encodeURIComponent(runId)}/re-check`,
+    { method: "POST", body: JSON.stringify({ sources }) },
+  );
+}
+
+/**
+ * Regenerate only the stale tests of a run, preserving fresh candidates and human edits. Writes a
+ * NEW immutable run and returns its id.
+ */
+export async function regenerateStaleQiRun(
+  runId: string,
+  sources: QualityIntelligenceStartRunRequest["sources"],
+): Promise<QualityIntelligenceUiRegenerateResult> {
+  return fetchJson<QualityIntelligenceUiRegenerateResult>(
+    `/api/quality-intelligence/runs/${encodeURIComponent(runId)}/regenerate-stale`,
+    { method: "POST", body: JSON.stringify({ sources }) },
+  );
 }
 
 // ---------------------------------------------------------------------------

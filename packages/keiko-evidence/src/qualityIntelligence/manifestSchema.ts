@@ -79,6 +79,12 @@ export interface QualityIntelligenceEvidenceRefRow {
   readonly lifecycleStatus: QualityIntelligenceLifecycleStatus;
 }
 
+/** Per-envelope content fingerprint row persisted in the manifest (Epic #735, Issue #742). */
+export interface QualityIntelligenceSourceFingerprintRow {
+  readonly envelopeId: string;
+  readonly integrityHashSha256Hex: string;
+}
+
 export interface QualityIntelligenceProvenanceRefs {
   readonly envelopeIds: readonly string[];
   readonly auditSummaryId: QualityIntelligenceAuditSummaryId;
@@ -112,6 +118,14 @@ export interface QualityIntelligenceEvidenceManifest {
   readonly coverageMatrix?: readonly QualityIntelligenceCoverageMatrixRow[];
   /** Optional: mean test-quality judge score [0-100]; null when judge stage was skipped. Added in #736. */
   readonly qualityScore?: number | null;
+  /** Optional: per-envelope content fingerprints for drift detection (Epic #735, Issue #742). */
+  readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];
+  /** Optional: model id that generated the candidates (Epic #761, Issue #763). */
+  readonly modelId?: string;
+  /** Optional: redaction-safe request parameter scalars (e.g. responseFormat, seed) (Epic #761). */
+  readonly modelParameters?: Record<string, unknown>;
+  /** Optional: seed used for deterministic sampling; null when model does not support seeding. */
+  readonly seedUsed?: number | null;
 }
 
 // ─── Validation ────────────────────────────────────────────────────────────────────
@@ -137,6 +151,10 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "integrityHashes",
   "coverageMatrix",
   "qualityScore",
+  "sourceFingerprints",
+  "modelId",
+  "modelParameters",
+  "seedUsed",
 ]);
 
 const ALLOWED_STATUSES: ReadonlySet<string> = new Set<string>([

@@ -148,6 +148,80 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     expect(uncoveredRow?.status).toBe("uncovered");
   });
 
+  it("records the generating modelId and seed in evidence (Epic #761)", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [makeIngestedAtom("atom-1", "Requirement atom 1")];
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: PLAN,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    await runQualityIntelligenceModelRoutedTestDesign(input, makeDeps(store));
+
+    const manifest = store.load(String(PLAN.id));
+    // The fake generation port reports modelId "test-model"; no seed is plumbed → seedUsed null.
+    expect(manifest?.modelId).toBe("test-model");
+    expect(manifest?.seedUsed).toBeNull();
+  });
+
+  it("persists sourceFingerprints for each supplied envelope", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [
+      makeIngestedAtom("atom-1", "Requirement atom 1"),
+      makeIngestedAtom("atom-2", "Requirement atom 2"),
+    ];
+    const envelopes: QualityIntelligence.QualityIntelligenceSourceEnvelope[] = [
+      {
+        id: QualityIntelligence.asQualityIntelligenceSourceEnvelopeId("env-fp-1"),
+        kind: "human-context",
+        displayLabel: "Spec v1",
+        localRef: "env-fp-1",
+        provenance: {
+          origin: "requirements",
+          registeredAt: "2026-06-08T00:00:00.000Z",
+          integrityHashSha256Hex: "b".repeat(64),
+        },
+      },
+    ];
+    const plan: QualityIntelligence.QualityIntelligenceRunPlan = {
+      ...PLAN,
+      id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-fp-test-001"),
+    };
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan,
+      envelopes,
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    await runQualityIntelligenceModelRoutedTestDesign(input, makeDeps(store));
+
+    const manifest = store.load(String(plan.id));
+    expect(manifest?.sourceFingerprints).toBeDefined();
+    expect(manifest?.sourceFingerprints?.length).toBe(1);
+    expect(manifest?.sourceFingerprints?.[0]?.envelopeId).toBe("env-fp-1");
+    expect(manifest?.sourceFingerprints?.[0]?.integrityHashSha256Hex).toBe("b".repeat(64));
+  });
+
+  it("does not set sourceFingerprints when no envelopes are supplied", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const ingestedAtoms = [makeIngestedAtom("atom-1", "Requirement atom 1")];
+    const plan: QualityIntelligence.QualityIntelligenceRunPlan = {
+      ...PLAN,
+      id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-fp-test-002"),
+    };
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan,
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    await runQualityIntelligenceModelRoutedTestDesign(input, makeDeps(store));
+    const manifest = store.load(String(plan.id));
+    // No envelopes supplied → sourceFingerprints absent (not set to empty array)
+    expect(manifest?.sourceFingerprints).toBeUndefined();
+  });
+
   it("does not emit coverage-gap findings when all atoms are covered", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     // Only 2 atoms, model covers both

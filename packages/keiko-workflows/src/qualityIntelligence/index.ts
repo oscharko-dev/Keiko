@@ -44,6 +44,9 @@ export type {
 
 // Model-routed (live LLM) test-design entry (Issue #272/#273/#279).
 export { runQualityIntelligenceModelRoutedTestDesign } from "./modelRoutedTestDesign.js";
+// Scoped regeneration entry (Epic #735, Issue #743).
+export { runScopedRegeneration } from "./scopedRegeneration.js";
+export type { ScopedRegenerationInput, ScopedRegenerationResult } from "./scopedRegeneration.js";
 export type {
   QualityIntelligenceCandidatesSink,
   QualityIntelligenceGenerationPort,

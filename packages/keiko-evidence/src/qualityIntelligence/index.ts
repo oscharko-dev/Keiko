@@ -20,6 +20,7 @@ export type {
   QualityIntelligenceRedactionSummary,
   QualityIntelligenceSchemaValidationResult,
   QualityIntelligenceCoverageMatrixRow,
+  QualityIntelligenceSourceFingerprintRow,
 } from "./manifestSchema.js";
 
 // ─── Redaction (M1) ────────────────────────────────────────────────────────────────

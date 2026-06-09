@@ -40,6 +40,10 @@ export interface ModelCapability {
   readonly throughputHint: string;
   readonly preferredUseCases: readonly string[];
   readonly knownLimitations: readonly string[];
+  /** Whether the model supports a `seed` parameter for deterministic sampling (Epic #761). */
+  readonly supportsSeeding?: boolean | undefined;
+  /** Whether the model supports a `responseFormat` parameter for JSON output (Epic #761). */
+  readonly supportsResponseFormat?: boolean | undefined;
 }
 
 // ─── Request / response ───────────────────────────────────────────────────────
@@ -68,6 +72,8 @@ export interface GatewayRequest {
   readonly responseFormat?: ResponseFormat | undefined;
   readonly stream?: boolean | undefined;
   readonly cancellationSignal?: AbortSignal | undefined;
+  /** Optional seed for deterministic sampling when the model supports it (Epic #761). */
+  readonly seed?: number | undefined;
 }
 
 // ─── Tool-call normalisation ──────────────────────────────────────────────────

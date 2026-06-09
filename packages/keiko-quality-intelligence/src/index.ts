@@ -4,6 +4,10 @@
 // no direct model calls. Consumes contracts via the @oscharko-dev/keiko-contracts barrel
 // and redaction/hashing primitives via @oscharko-dev/keiko-security only.
 
+// ─── Staleness / drift detection (Epic #735, Issue #742) ──────────────────────
+export { compareStaleness } from "./domain/staleness.js";
+export type { StalenessReason, StalenessResult } from "./domain/staleness.js";
+
 export { deriveIntent } from "./domain/intentDerivation.js";
 export type { IntentSummary } from "./domain/intentDerivation.js";
 

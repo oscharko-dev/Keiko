@@ -16,7 +16,10 @@ import {
   type GatewayRequest,
   type ModelCapability,
 } from "@oscharko-dev/keiko-model-gateway";
-import { QualityIntelligenceHardening } from "@oscharko-dev/keiko-quality-intelligence";
+import {
+  QualityIntelligenceHardening,
+  QualityIntelligenceGeneration,
+} from "@oscharko-dev/keiko-quality-intelligence";
 import type {
   QualityIntelligenceGenerationPort,
   QualityIntelligenceGenerationPortArgs,
@@ -87,10 +90,13 @@ function buildMessages(args: QualityIntelligenceGenerationPortArgs): readonly Ch
  * is not configured or its capability record does not satisfy the qi:test-design profile, so an
  * incompatible model never receives a payload (#279 AC).
  */
-export function createQiGenerationPort(
-  deps: UiHandlerDeps,
-  modelId: string,
-): QualityIntelligenceGenerationPort {
+interface ResolvedGenerationModel {
+  readonly model: NonNullable<ReturnType<UiHandlerDeps["modelPortFactory"]>>;
+  readonly useResponseFormat: boolean;
+}
+
+/** Apply the qi:test-design capability gate and resolve the model port (Epic #761 / #279). */
+function resolveGenerationModel(deps: UiHandlerDeps, modelId: string): ResolvedGenerationModel {
   const capability = capabilityFor(deps, modelId);
   if (capability === undefined) {
     throw new QiGenerationError("QI_MODEL_NOT_CONFIGURED", "The selected model is not configured.");
@@ -111,15 +117,42 @@ export function createQiGenerationPort(
   if (model === undefined) {
     throw new QiGenerationError("QI_MODEL_UNAVAILABLE", "The model gateway is not available.");
   }
+  return { model, useResponseFormat: capability.supportsResponseFormat === true };
+}
+
+export function createQiGenerationPort(
+  deps: UiHandlerDeps,
+  modelId: string,
+): QualityIntelligenceGenerationPort {
+  const { model, useResponseFormat } = resolveGenerationModel(deps, modelId);
   return {
     generate: async (
       args: QualityIntelligenceGenerationPortArgs,
     ): Promise<QualityIntelligenceGenerationPortResult> => {
       const messages = buildMessages(args);
       const signal = args.signal ?? new AbortController().signal;
-      const request: GatewayRequest = { modelId, messages, stream: false };
+      const request: GatewayRequest = {
+        modelId,
+        messages,
+        stream: false,
+        ...(useResponseFormat
+          ? {
+              responseFormat: {
+                type: "json_schema",
+                schema: { ...QualityIntelligenceGeneration.QI_TEST_DESIGN_RESPONSE_SCHEMA },
+              },
+            }
+          : {}),
+      };
       const response = await model.call(request, signal);
-      return { rawText: response.content, modelCallCount: 1, modelId };
+      const modelParameters: Record<string, unknown> = {};
+      if (useResponseFormat) modelParameters.responseFormat = "json_schema";
+      return {
+        rawText: response.content,
+        modelCallCount: 1,
+        modelId,
+        ...(Object.keys(modelParameters).length > 0 ? { modelParameters } : {}),
+      };
     },
   };
 }

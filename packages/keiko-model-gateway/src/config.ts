@@ -251,18 +251,21 @@ interface ProviderConnection {
   readonly apiKey: string;
 }
 
-function buildProviderCapabilityBody(
+// Modality + determinism capability flags, defaulted to false (lenient provider-inline form).
+function providerCapabilityFlags(
   raw: Record<string, unknown>,
   path: string,
-  id: string,
-  kind: ModelKind,
-  workflowEligible: boolean,
-): ModelCapability {
+): Pick<
+  ModelCapability,
+  | "toolCalling"
+  | "structuredOutput"
+  | "streaming"
+  | "supportsImageInput"
+  | "supportsDocumentInput"
+  | "supportsSeeding"
+  | "supportsResponseFormat"
+> {
   return {
-    id,
-    kind,
-    contextWindow: optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0),
-    maxOutputTokens: optionalNonNegativeInt(raw.maxOutputTokens, `${path}.maxOutputTokens`, 0),
     toolCalling: optionalBoolean(raw.toolCalling, `${path}.toolCalling`, false),
     structuredOutput: optionalBoolean(raw.structuredOutput, `${path}.structuredOutput`, false),
     streaming: optionalBoolean(raw.streaming, `${path}.streaming`, false),
@@ -276,6 +279,28 @@ function buildProviderCapabilityBody(
       `${path}.supportsDocumentInput`,
       false,
     ),
+    supportsSeeding: optionalBoolean(raw.supportsSeeding, `${path}.supportsSeeding`, false),
+    supportsResponseFormat: optionalBoolean(
+      raw.supportsResponseFormat,
+      `${path}.supportsResponseFormat`,
+      false,
+    ),
+  };
+}
+
+function buildProviderCapabilityBody(
+  raw: Record<string, unknown>,
+  path: string,
+  id: string,
+  kind: ModelKind,
+  workflowEligible: boolean,
+): ModelCapability {
+  return {
+    id,
+    kind,
+    contextWindow: optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0),
+    maxOutputTokens: optionalNonNegativeInt(raw.maxOutputTokens, `${path}.maxOutputTokens`, 0),
+    ...providerCapabilityFlags(raw, path),
     workflowEligible,
     costClass: requireEnum<CostClass>(raw.costClass ?? "medium", `${path}.costClass`, [
       "low",
@@ -350,6 +375,8 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "streaming",
   "supportsImageInput",
   "supportsDocumentInput",
+  "supportsSeeding",
+  "supportsResponseFormat",
   "workflowEligible",
   "costClass",
   "latencyClass",
@@ -379,18 +406,42 @@ function requireStringArray(value: unknown, path: string): readonly string[] {
   return value as readonly string[];
 }
 
-export function parseModelCapability(value: unknown, path: string): ModelCapability {
-  if (!isRecord(value)) {
-    throw new ConfigInvalidError(`${path} must be an object`);
-  }
-  // Reject unknown top-level keys so an adversarial config cannot smuggle
-  // future-named fields past the parser. The first offending key is reported
-  // by name; values are NEVER echoed.
+// Optional determinism flags for the strict list parser — preserved only when declared so a
+// capability record round-trips exactly (Epic #761).
+function optionalDeterminismFlags(
+  value: Record<string, unknown>,
+  path: string,
+): Partial<Pick<ModelCapability, "supportsSeeding" | "supportsResponseFormat">> {
+  return {
+    ...(value.supportsSeeding !== undefined
+      ? { supportsSeeding: requireBoolean(value.supportsSeeding, `${path}.supportsSeeding`) }
+      : {}),
+    ...(value.supportsResponseFormat !== undefined
+      ? {
+          supportsResponseFormat: requireBoolean(
+            value.supportsResponseFormat,
+            `${path}.supportsResponseFormat`,
+          ),
+        }
+      : {}),
+  };
+}
+
+// Reject unknown top-level keys so an adversarial config cannot smuggle future-named fields past
+// the parser. The first offending key is reported by name; values are NEVER echoed.
+function assertKnownCapabilityKeys(value: Record<string, unknown>, path: string): void {
   for (const key of Object.keys(value)) {
     if (!MODEL_CAPABILITY_KNOWN_KEYS.has(key)) {
       throw new ConfigInvalidError(`${path}.${key} is not a recognised capability field`);
     }
   }
+}
+
+export function parseModelCapability(value: unknown, path: string): ModelCapability {
+  if (!isRecord(value)) {
+    throw new ConfigInvalidError(`${path} must be an object`);
+  }
+  assertKnownCapabilityKeys(value, path);
   const id = requireNonEmptyString(value.id, `${path}.id`);
   const kind = requireEnum<ModelKind>(value.kind, `${path}.kind`, [
     "chat",
@@ -416,6 +467,7 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
       value.supportsDocumentInput,
       `${path}.supportsDocumentInput`,
     ),
+    ...optionalDeterminismFlags(value, path),
     workflowEligible,
     costClass: requireEnum<CostClass>(value.costClass, `${path}.costClass`, [
       "low",

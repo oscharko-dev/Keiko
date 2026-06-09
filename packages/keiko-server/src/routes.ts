@@ -125,6 +125,7 @@ import {
   QI_EXPORT_ROUTE_GROUP,
   QI_EDIT_ROUTE_GROUP,
   QI_TRACEABILITY_ROUTE_GROUP,
+  QI_RECHECK_ROUTE_GROUP,
 } from "./qualityIntelligence/index.js";
 
 export interface ApiError {
@@ -410,6 +411,9 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   ...QI_EDIT_ROUTE_GROUP,
   // Issue #740 (Epic #734) — requirement↔test traceability matrix export.
   ...QI_TRACEABILITY_ROUTE_GROUP,
+  // Issue #743 (Epic #735) — drift re-check + targeted regeneration. Literal-suffix POST routes
+  // (:id/re-check, :id/regenerate-stale) must be registered before any parameterised sibling.
+  ...QI_RECHECK_ROUTE_GROUP,
   // Issue #539 (Epic #532) — relationship engine routes. The api-contract.md §2 ordering
   // is preserved; literal-suffix paths (validate, impact, health, events) come BEFORE the
   // `:id`-templated routes so matchRoute returns the literal handler instead of binding

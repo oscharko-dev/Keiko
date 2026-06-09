@@ -8,11 +8,6 @@
 
 import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import {
-  findCapability,
-  findConfiguredCapability,
-  type ModelCapability,
-} from "@oscharko-dev/keiko-model-gateway";
-import {
   ALL_POLICY_PROFILES,
   regressionDefault,
   type PolicyProfile,
@@ -31,6 +26,7 @@ import type { UiHandlerDeps } from "../deps.js";
 import { ingestInlineSources, QiIngestionError } from "./runIngestion.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
 import { createQiJudgePort } from "./judgePort.js";
+import { selectModelForQiCapability } from "./modelSelection.js";
 
 const PLAN_STAGES: readonly QI.QualityIntelligenceRunStage[] = Object.freeze([
   { name: "plan", descriptor: "qi:plan" },
@@ -43,29 +39,6 @@ const PLAN_STAGES: readonly QI.QualityIntelligenceRunStage[] = Object.freeze([
 function resolveProfile(profileId: string | undefined): PolicyProfile {
   if (profileId === undefined || profileId.trim().length === 0) return regressionDefault;
   return ALL_POLICY_PROFILES.find((p) => p.id === profileId) ?? regressionDefault;
-}
-
-function capabilityOf(deps: UiHandlerDeps, modelId: string): ModelCapability | undefined {
-  return deps.config === undefined
-    ? findCapability(modelId)
-    : findConfiguredCapability(deps.config, modelId);
-}
-
-function firstChatModelId(deps: UiHandlerDeps): string | undefined {
-  const providers = deps.config?.providers ?? [];
-  for (const provider of providers) {
-    if (capabilityOf(deps, provider.modelId)?.kind === "chat") return provider.modelId;
-  }
-  return providers[0]?.modelId;
-}
-
-function resolveChatModelId(deps: UiHandlerDeps, requested: string | undefined): string {
-  if (requested !== undefined && requested.trim().length > 0) return requested.trim();
-  const fallback = firstChatModelId(deps);
-  if (fallback === undefined) {
-    throw new QiGenerationError("QI_NO_MODEL", "No chat model is configured.");
-  }
-  return fallback;
 }
 
 export interface QiRunAccepted {
@@ -101,7 +74,7 @@ export async function executeQiRun(
   }
 
   const ingestion = ingestInlineSources({ request, runId, registeredAt: input.registeredAt });
-  const modelId = resolveChatModelId(deps, request.modelId);
+  const modelId = selectModelForQiCapability(deps, "qi:test-design", request.modelId);
   const generate = createQiGenerationPort(deps, modelId);
   const profile = resolveProfile(request.profileId);
 
