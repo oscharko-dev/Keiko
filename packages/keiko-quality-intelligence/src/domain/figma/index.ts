@@ -65,6 +65,16 @@ export type { SemanticNamingProvider, SemanticNamingRequest } from "./semanticNa
 
 export { htmlCssAdapter } from "./htmlCssAdapter.js";
 
+// Deterministic accessibility baseline + WCAG contrast math (Issue #812). Pure, model-free: derived
+// from the Screen-IR's colour/box fields; composes into the QI run additively through
+// `deriveScreenTestBaseline`'s `extraItems` seam, ALONGSIDE the navigation items above.
+export {
+  deriveA11yTestItemsByScreen,
+  relativeLuminance,
+  contrastRatio,
+  meetsContrastAa,
+} from "./a11yBaseline.js";
+
 export type { FigmaSourceNode } from "./sourceNode.js";
 
 export type {

@@ -29,6 +29,18 @@ export interface IrNode {
   readonly interactionHint: InteractionHint;
   readonly text?: string;
   readonly boundingBox?: BoundingBox;
+  /**
+   * The node's solid text-fill colour as normalized `#RRGGBB[AA]`, for a TEXT node (Issue #812).
+   * Optional and additive: absent when the node carries no solid text fill. NEVER folded into the
+   * snapshot integrity hash (#753/#735) — it is a11y-derivation metadata, not structural identity.
+   */
+  readonly textColor?: string;
+  /**
+   * The node's solid background-fill colour as normalized `#RRGGBB[AA]` (Issue #812). Used as the
+   * nearest-ancestor background when computing deterministic text-vs-background contrast. Optional,
+   * additive, and hash-neutral like {@link IrNode.textColor}.
+   */
+  readonly backgroundColor?: string;
   readonly imageFills: readonly ImageFillRef[];
   readonly children: readonly IrNode[];
 }

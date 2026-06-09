@@ -18,6 +18,7 @@ import {
   readString,
   type FigmaSourceNode,
 } from "./sourceNode.js";
+import { paintColorToHex } from "./color.js";
 import type {
   ColorToken,
   DesignTokens,
@@ -27,28 +28,11 @@ import type {
 } from "./irTypes.js";
 import type { PrunedNode } from "./prune.js";
 
-const channel = (value: number): string =>
-  Math.round(Math.min(1, Math.max(0, value)) * 255)
-    .toString(16)
-    .padStart(2, "0");
-
-const colorToHex = (paint: Record<string, unknown>): string | undefined => {
-  const color = asNode(paint.color);
-  if (color === undefined) return undefined;
-  const r = readNumber(color.r);
-  const g = readNumber(color.g);
-  const b = readNumber(color.b);
-  if (r === undefined || g === undefined || b === undefined) return undefined;
-  const a = readNumber(color.a) ?? 1;
-  const base = `#${channel(r)}${channel(g)}${channel(b)}`;
-  return a < 1 ? `${base}${channel(a)}` : base;
-};
-
 const collectPaintColors = (node: FigmaSourceNode, key: string, out: Set<string>): void => {
   for (const paint of readArray(node[key])) {
     const record = asNode(paint);
     if (record === undefined || readString(record.type) !== "SOLID") continue;
-    const hex = colorToHex(record);
+    const hex = paintColorToHex(record);
     if (hex !== undefined) out.add(hex);
   }
 };

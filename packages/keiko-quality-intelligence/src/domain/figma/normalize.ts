@@ -22,6 +22,7 @@ import {
   readString,
   type FigmaSourceNode,
 } from "./sourceNode.js";
+import { firstSolidPaintHex } from "./color.js";
 import type { BoundingBox, ImageFillRef, InteractionHint, IrNode } from "./irTypes.js";
 import type { PrunedNode } from "./prune.js";
 
@@ -68,11 +69,22 @@ const classify = (node: FigmaSourceNode, imageFills: readonly ImageFillRef[]): I
   return "container";
 };
 
+// A TEXT node's solid fill is its foreground (text) colour; any other node's solid fill is a
+// background. We project at most one of each so the a11y contrast pass (#812) has a deterministic
+// text-vs-background pairing without re-deriving paints. Both are absent when there is no solid fill.
+const readTextColor = (node: FigmaSourceNode): string | undefined =>
+  nodeType(node) === "TEXT" ? firstSolidPaintHex(node, "fills") : undefined;
+
+const readBackgroundColor = (node: FigmaSourceNode): string | undefined =>
+  nodeType(node) === "TEXT" ? undefined : firstSolidPaintHex(node, "fills");
+
 const buildNode = (pruned: PrunedNode): IrNode => {
   const node = pruned.source;
   const imageFills = readImageFills(node);
   const text = readString(node.characters);
   const boundingBox = readBoundingBox(node);
+  const textColor = readTextColor(node);
+  const backgroundColor = readBackgroundColor(node);
   return {
     id: nodeId(node),
     name: nodeName(node),
@@ -80,6 +92,8 @@ const buildNode = (pruned: PrunedNode): IrNode => {
     interactionHint: classify(node, imageFills),
     ...(text !== undefined ? { text } : {}),
     ...(boundingBox !== undefined ? { boundingBox } : {}),
+    ...(textColor !== undefined ? { textColor } : {}),
+    ...(backgroundColor !== undefined ? { backgroundColor } : {}),
     imageFills,
     children: pruned.children.map(buildNode),
   };

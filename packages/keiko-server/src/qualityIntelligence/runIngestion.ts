@@ -619,20 +619,32 @@ function navItemsByScreen(
   );
 }
 
+// Derive the deterministic accessibility test items per screen from the parsed screens (#812).
+// Composes into the baseline below through #754's `extraItems` seam, ALONGSIDE the navigation items
+// (concatenated, never replacing them). Model-free: a screen with no colour/box/interactive nodes of
+// interest maps to no a11y items, so the baseline is identical to the IR-only path — purely additive.
+function a11yItemsByScreen(
+  parsed: readonly ParsedScreen[],
+): ReadonlyMap<string, readonly QualityIntelligenceFigma.StructuralTestItem[]> {
+  return QualityIntelligenceFigma.deriveA11yTestItemsByScreen(parsed.map((p) => p.ir));
+}
+
 // Derive the redacted, budget-capped canonical text for every parseable screen. Each screen's
 // deterministic structural baseline (#754) is augmented additively with its navigation/flow test
-// items (#811) through the `extraItems` seam, then optionally with vision hints. The per-run byte
-// budget bounds the cumulative corpus so an oversized board never hard-fails on QI_PROMPT_TOO_LARGE.
+// items (#811) AND its accessibility test items (#812) — concatenated, neither replacing the other —
+// through the `extraItems` seam, then optionally with vision hints. The per-run byte budget bounds
+// the cumulative corpus so an oversized board never hard-fails on QI_PROMPT_TOO_LARGE.
 function figmaScreenDocs(
   record: FigmaSnapshotRecord,
   vision: FigmaVisionHintProvider | undefined,
 ): readonly CorpusDoc[] {
   const parsed = parseScreens(record);
   const navItems = navItemsByScreen(parsed, record.links ?? []);
+  const a11yItems = a11yItemsByScreen(parsed);
   const docs: CorpusDoc[] = [];
   let totalBytes = 0;
   for (const { row, ir } of parsed) {
-    const extraItems = navItems.get(ir.id) ?? [];
+    const extraItems = [...(navItems.get(ir.id) ?? []), ...(a11yItems.get(ir.id) ?? [])];
     const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
     const augmented = visionAugmentedScreenText(baseline, row, vision);
     const capped = truncateToUtf8Bytes(redact(augmented), CAPSULE_MAX_BYTES_PER_DOCUMENT);

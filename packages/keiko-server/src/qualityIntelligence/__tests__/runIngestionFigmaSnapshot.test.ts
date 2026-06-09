@@ -28,6 +28,9 @@ const irNode = (
   type: over.type ?? "FRAME",
   interactionHint,
   ...(over.text !== undefined ? { text: over.text } : {}),
+  ...(over.boundingBox !== undefined ? { boundingBox: over.boundingBox } : {}),
+  ...(over.textColor !== undefined ? { textColor: over.textColor } : {}),
+  ...(over.backgroundColor !== undefined ? { backgroundColor: over.backgroundColor } : {}),
   imageFills: over.imageFills ?? [],
   children: over.children ?? [],
 });
@@ -374,5 +377,84 @@ describe("figma-snapshot ingestion — navigation/flow composition (#811)", () =
     expect(text).toContain("(screen-render)");
     expect(text).not.toContain("(navigation)");
     expect(text).not.toContain("(flow)");
+  });
+});
+
+// ─── Accessibility composition through the extraItems seam (#812) ─────────────────
+//
+// The a11y-derived test items are composed into each screen's structural baseline additively, in the
+// SAME `extraItems` seam as the navigation items (#811) — concatenated, never replacing them. A
+// snapshot WITHOUT links still yields a11y items; a snapshot WITH links yields BOTH the navigation
+// items AND the a11y items on the source screen's atom.
+
+describe("figma-snapshot ingestion — accessibility composition (#812)", () => {
+  // A screen whose only interactive control is an un-named button below the 24×24 minimum, plus a
+  // low-contrast text node (#777 on #fff), so the a11y pass deterministically yields several items.
+  const a11yScreen = (): unknown =>
+    screenIr(
+      "s-a11y",
+      "Settings",
+      irNode("root", "container", {
+        backgroundColor: "#ffffff",
+        children: [
+          irNode("faint", "text", { text: "Hint", textColor: "#777777" }),
+          irNode("icon", "button", {
+            name: "123:45",
+            boundingBox: { x: 0, y: 0, width: 20, height: 20 },
+          }),
+        ],
+      }),
+    );
+
+  it("adds a11y test items to a screen's atom text (model-free)", () => {
+    const result = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(record([screenRow("s-a11y", a11yScreen())])),
+      }),
+    );
+    const text = result.ingestedAtoms[0]?.canonicalText ?? "";
+
+    expect(text).toContain("(a11y)");
+    expect(text.toLowerCase()).toContain("contrast");
+    expect(text.toLowerCase()).toContain("accessible name");
+    expect(text.toLowerCase()).toContain("target size");
+    // The deterministic structural baseline is still present (composition is additive).
+    expect(text).toContain("(screen-render)");
+  });
+
+  it("emits a11y items ALONGSIDE navigation items on the same screen (neither replaces the other)", () => {
+    // Login screen has a button that navigates to Home AND a low-contrast text node, so BOTH the
+    // navigation item (#811) and the a11y contrast item (#812) must appear on the same atom.
+    const rec = record(
+      [
+        screenRow(
+          "s-login",
+          screenIr(
+            "s-login",
+            "Login",
+            irNode("login-root", "container", {
+              backgroundColor: "#ffffff",
+              children: [
+                irNode("login-btn", "button", { text: "Continue" }),
+                irNode("faint", "text", { text: "Faint", textColor: "#777777" }),
+              ],
+            }),
+          ),
+        ),
+        screenRow("s-home", screenIr("s-home", "Home", irNode("home-root", "container"))),
+      ],
+      [{ sourceNodeId: "login-btn", trigger: "ON_CLICK", targetNodeId: "home-root" }],
+    );
+
+    const result = ingestInlineSources(
+      input([figmaSource()], { figmaSnapshotLoader: loaderFor(rec) }),
+    );
+    const loginText =
+      result.ingestedAtoms.find((a) => a.canonicalText.includes("[s-login]"))?.canonicalText ?? "";
+
+    // BOTH categories present on the SAME screen's atom — the seam concatenates, never replaces.
+    expect(loginText).toContain("(navigation)");
+    expect(loginText).toContain("(a11y)");
+    expect(loginText).toContain("(screen-render)");
   });
 });

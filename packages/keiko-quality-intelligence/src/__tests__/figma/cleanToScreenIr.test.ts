@@ -568,3 +568,53 @@ describe("cleanScopedNodesToScreenIr — determinism", () => {
     expect(result.tokens.colors.map((c) => c.value)).toEqual(["#336699"]);
   });
 });
+
+// ─── A11y colour fields on the IR node (Issue #812) ──────────────────────────────
+
+describe("cleanScopedNodesToScreenIr — a11y colour extraction", () => {
+  const findById = (node: IrNode | undefined, id: string): IrNode | undefined => {
+    if (node === undefined) return undefined;
+    if (node.id === id) return node;
+    for (const child of node.children) {
+      const hit = findById(child, id);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  };
+
+  it("projects a TEXT node's solid fill to textColor (never backgroundColor)", () => {
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [
+        screenFrame("1:1", "Card", [
+          { ...text("1:2", "Hello"), fills: [solidFill(0, 0, 0)] },
+        ]),
+      ]),
+    );
+    const t = findById(result.screens[0]?.root, "1:2");
+
+    expect(t?.textColor).toBe("#000000");
+    expect(t?.backgroundColor).toBeUndefined();
+  });
+
+  it("projects a non-TEXT node's solid fill to backgroundColor (never textColor)", () => {
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [
+        screenFrame("1:1", "Card", [text("1:2", "x")], { fills: [solidFill(1, 1, 1)] }),
+      ]),
+    );
+    const frameNode = findById(result.screens[0]?.root, "1:1");
+
+    expect(frameNode?.backgroundColor).toBe("#ffffff");
+    expect(frameNode?.textColor).toBeUndefined();
+  });
+
+  it("leaves both colour fields absent when a node has no solid fill", () => {
+    const result = cleanScopedNodesToScreenIr(
+      canvas("0:1", [screenFrame("1:1", "Card", [text("1:2", "x")])]),
+    );
+    const frameNode = findById(result.screens[0]?.root, "1:1");
+
+    expect(frameNode?.textColor).toBeUndefined();
+    expect(frameNode?.backgroundColor).toBeUndefined();
+  });
+});

@@ -15,7 +15,7 @@
 // baseline shape. Vision-derived semantics are layered separately (see visionAugmentation.ts) and
 // never replace these structural items.
 
-import type { IrNode, ScreenIr } from "./irTypes.js";
+import type { BoundingBox, IrNode, ScreenIr } from "./irTypes.js";
 
 export type StructuralTestCategory =
   | "field-presence"
@@ -27,6 +27,9 @@ export type StructuralTestCategory =
   // seam by the deterministic navigation-graph derivation (navGraph.ts); never produced here.
   | "navigation"
   | "flow"
+  // Accessibility category (Issue #812). Contributed through the same `extraItems` seam by the
+  // deterministic a11y-baseline derivation (a11yBaseline.ts); never produced here.
+  | "a11y"
   | "coverage-notice";
 
 /** One deterministic, per-screen-attributable test item derived from the Screen-IR. */
@@ -65,6 +68,26 @@ function isString(value: unknown): value is string {
   return typeof value === "string";
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+// Parse the optional bounding box from the serialised `irJson` (used by the a11y focus-order and
+// target-size derivation, #812). A malformed or partial box is dropped rather than crashing.
+function parseBoundingBox(value: unknown): BoundingBox | undefined {
+  if (!isObject(value)) return undefined;
+  const { x, y, width, height } = value;
+  if (
+    !isFiniteNumber(x) ||
+    !isFiniteNumber(y) ||
+    !isFiniteNumber(width) ||
+    !isFiniteNumber(height)
+  ) {
+    return undefined;
+  }
+  return { x, y, width, height };
+}
+
 function parseImageFills(value: unknown): IrNode["imageFills"] {
   if (!Array.isArray(value)) return [];
   const refs: { readonly imageRef: string }[] = [];
@@ -85,6 +108,18 @@ function parseIrChildren(value: unknown): IrNode[] {
   return children;
 }
 
+// The optional, additive node fields (text, bounding box, a11y colours #812). Each is present only
+// when well-typed; a malformed value is dropped so a corrupt node degrades rather than crashing.
+function parseOptionalNodeFields(value: Record<string, unknown>): Partial<IrNode> {
+  const boundingBox = parseBoundingBox(value.boundingBox);
+  return {
+    ...(isString(value.text) ? { text: value.text } : {}),
+    ...(boundingBox !== undefined ? { boundingBox } : {}),
+    ...(isString(value.textColor) ? { textColor: value.textColor } : {}),
+    ...(isString(value.backgroundColor) ? { backgroundColor: value.backgroundColor } : {}),
+  };
+}
+
 // Total, defensive IR-node parser: an opaque serialised node (from the snapshot's `irJson`) is
 // accepted only when its required structural fields are present and well-typed; anything malformed
 // yields `undefined` so a corrupt screen degrades to "no items" rather than crashing the run.
@@ -98,7 +133,7 @@ function parseIrNode(value: unknown): IrNode | undefined {
     name,
     type,
     interactionHint: interactionHint as IrNode["interactionHint"],
-    ...(isString(value.text) ? { text: value.text } : {}),
+    ...parseOptionalNodeFields(value),
     imageFills: parseImageFills(value.imageFills),
     children: parseIrChildren(value.children),
   };

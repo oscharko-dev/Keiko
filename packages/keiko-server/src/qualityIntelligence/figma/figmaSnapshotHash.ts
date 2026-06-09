@@ -28,9 +28,32 @@ const canonical = (value: unknown): string => {
   return `{${entries.join(",")}}`;
 };
 
+// Hash-neutral IR projection (Issue #812): the a11y-derivation colour fields `textColor` /
+// `backgroundColor` are additive metadata on every IrNode, NOT structural identity — folding them
+// into the integrity hash would change the drift identity (#735) of an unchanged design the first
+// time a snapshot is rebuilt with the colour-aware normalizer. We therefore strip them recursively
+// before canonicalising, mirroring how `links` is excluded from the snapshot hash. Every other IR
+// field still participates, so a genuine structural change still surfaces as drift.
+type IrNode = ScreenIr["root"];
+
+const stripA11yColors = (node: IrNode): Record<string, unknown> => {
+  const projected: Record<string, unknown> = {
+    ...node,
+    children: node.children.map(stripA11yColors),
+  };
+  delete projected.textColor;
+  delete projected.backgroundColor;
+  return projected;
+};
+
+const hashStableIr = (ir: ScreenIr): Record<string, unknown> => ({
+  ...ir,
+  root: stripA11yColors(ir.root),
+});
+
 /** sha256 over the canonical per-screen identity: {screenId, ir, imageSha256}. */
 export const hashScreen = (screenId: string, ir: ScreenIr, imageSha256: string): string =>
-  sha256Hex(canonical({ imageSha256, ir, screenId }));
+  sha256Hex(canonical({ imageSha256, ir: hashStableIr(ir), screenId }));
 
 /**
  * sha256 over the canonical snapshot identity: schema version + pinned Figma version + the

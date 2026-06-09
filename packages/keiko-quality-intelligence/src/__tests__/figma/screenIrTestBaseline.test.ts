@@ -256,6 +256,58 @@ describe("parseScreenIr", () => {
     expect(parsed?.root.children).toHaveLength(1);
     expect(parsed?.root.children[0]?.id).toBe("ok");
   });
+
+  it("round-trips the additive a11y colour + boundingBox fields (#812)", () => {
+    const json: unknown = {
+      id: "s",
+      name: "S",
+      root: {
+        id: "r",
+        name: "r",
+        type: "FRAME",
+        interactionHint: "container",
+        backgroundColor: "#ffffff",
+        boundingBox: { x: 1, y: 2, width: 3, height: 4 },
+        imageFills: [],
+        children: [
+          {
+            id: "t",
+            name: "t",
+            type: "TEXT",
+            interactionHint: "text",
+            text: "Hi",
+            textColor: "#000000",
+            imageFills: [],
+            children: [],
+          },
+        ],
+      },
+    };
+
+    const parsed = parseScreenIr(json);
+
+    expect(parsed?.root.backgroundColor).toBe("#ffffff");
+    expect(parsed?.root.boundingBox).toEqual({ x: 1, y: 2, width: 3, height: 4 });
+    expect(parsed?.root.children[0]?.textColor).toBe("#000000");
+  });
+
+  it("drops a malformed boundingBox without failing the parse (#812)", () => {
+    const json: unknown = {
+      id: "s",
+      name: "S",
+      root: {
+        id: "r",
+        name: "r",
+        type: "FRAME",
+        interactionHint: "container",
+        boundingBox: { x: "nope", y: 0, width: 1, height: 1 },
+        imageFills: [],
+        children: [],
+      },
+    };
+
+    expect(parseScreenIr(json)?.root.boundingBox).toBeUndefined();
+  });
 });
 
 // ─── Citation-ready rendering ────────────────────────────────────────────────────
