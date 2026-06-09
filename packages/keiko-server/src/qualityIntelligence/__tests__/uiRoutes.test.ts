@@ -471,4 +471,94 @@ describe("evidenceDir wiring (issue #620)", () => {
       error: { code: "INTERNAL", message: "Failed to load Quality Intelligence run" },
     });
   });
+
+  it("projects persisted weak-test rationale onto the candidate weakTestFlag", () => {
+    const runId = "run-weak-flag";
+    const candidateId = "cand-weak-001";
+    actualRecord(
+      {
+        runId,
+        planAt: "2026-06-09T10:00:00.000Z",
+        completedAt: "2026-06-09T10:01:00.000Z",
+        status: "succeeded",
+        policyProfileIds: [],
+        retentionPolicyId: "default",
+        modelGatewayCallCount: 1,
+        totals: { candidates: 1, findings: 1, exports: 0 },
+        findings: [
+          {
+            id: "finding-weak-001",
+            kind: "test-quality",
+            severity: "high",
+            summaryRedacted:
+              "AC fidelity: Misses the stated acceptance criteria.; Determinism: Relies on timing-sensitive behavior.",
+            candidateId,
+          },
+        ],
+        exports: [],
+        evidenceRefs: [],
+        provenanceRefs: {
+          envelopeIds: [],
+          auditSummaryId:
+            "qi-audit-ui-routes-weak" as import("@oscharko-dev/keiko-evidence").QualityIntelligenceEvidenceManifest["provenanceRefs"]["auditSummaryId"],
+        },
+      },
+      { evidenceDir },
+    );
+    actualRecordCandidates({
+      runId,
+      generatedAt: "2026-06-09T10:01:00.000Z",
+      candidates: [
+        {
+          id: QualityIntelligence.asQualityIntelligenceTestCaseId(candidateId),
+          runId: QualityIntelligence.asQualityIntelligenceRunId(runId),
+          derivedFromAtomIds: [],
+          title: "Weak candidate",
+          preconditions: ["ready"],
+          steps: ["open help"],
+          expectedResults: ["help center opens"],
+          priority: "P1",
+          riskClass: "functional",
+          tags: [],
+          status: "proposed",
+        },
+      ],
+      evidenceDir,
+      redact: (value: unknown): unknown => value,
+    });
+
+    const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
+    const result = asResult(
+      handleGetQiRun(
+        ctx(`/api/quality-intelligence/runs/${runId}`, { id: runId }),
+        depsWithDir,
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      findingRefs: readonly { id: string; summaryRedacted: string }[];
+      candidates: readonly {
+        id: string;
+        weakTestFlag?: { severity: string; rationale: string };
+      }[];
+    };
+    expect(body.findingRefs).toEqual([
+      expect.objectContaining({
+        id: "finding-weak-001",
+        summaryRedacted:
+          "AC fidelity: Misses the stated acceptance criteria.; Determinism: Relies on timing-sensitive behavior.",
+      }),
+    ]);
+    expect(body.candidates).toEqual([
+      expect.objectContaining({
+        id: candidateId,
+        weakTestFlag: {
+          severity: "high",
+          rationale:
+            "AC fidelity: Misses the stated acceptance criteria.; Determinism: Relies on timing-sensitive behavior.",
+        },
+      }),
+    ]);
+  });
 });

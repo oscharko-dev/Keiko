@@ -50,6 +50,12 @@ export {
   normaliseText,
 } from "./domain/assertions.js";
 
+export {
+  TEST_QUALITY_WEAK_THRESHOLD,
+  scoreFromDimensions,
+  verdictFromScore,
+} from "./domain/testQualityRubric.js";
+
 // ─── Ingestion sub-namespace (Issue #278) ──────────────────────────────────────
 // Pure-domain ingestion modelling: ADF parsing, untrusted-content normalisation,
 // source-mix planning, source reconciliation. No IO; consumes contract types only.

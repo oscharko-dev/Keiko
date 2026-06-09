@@ -11,6 +11,8 @@ import {
   buildAtomCoverageStatuses,
   buildCoverageMap,
   deduplicateCandidates,
+  scoreFromDimensions,
+  TEST_QUALITY_WEAK_THRESHOLD,
   validateCandidates,
   QualityIntelligenceGeneration,
   type AtomCoverageStatus,
@@ -84,10 +86,20 @@ export interface QualityIntelligenceCandidatesSink {
   readonly record: (candidates: readonly Candidate[], generatedAt: string) => void;
 }
 
+export interface QualityIntelligenceJudgeSourceContext {
+  readonly atomId: string;
+  readonly text: string;
+}
+
+export interface QualityIntelligenceJudgeInput {
+  readonly candidateText: string;
+  readonly sourceContext: readonly QualityIntelligenceJudgeSourceContext[];
+}
+
 /** Abstract model-judge seam (Epic #736, Issue #747). The server backs it with the gateway judge port. */
 export interface QualityIntelligenceJudgePort {
   readonly judge: (
-    candidateText: string,
+    input: QualityIntelligenceJudgeInput,
     signal?: AbortSignal,
   ) => Promise<QI.TestQualityJudgeVerdict>;
 }
@@ -241,10 +253,59 @@ function candidateSummaryText(candidate: Candidate): string {
   return parts.join("\n");
 }
 
+const JUDGE_SUMMARY_DIMENSION_LIMIT = 2;
+
+const JUDGE_DIMENSION_LABEL: Readonly<Record<QI.TestQualityDimensionName, string>> = {
+  verifiability: "Verifiability",
+  atomicity: "Atomicity",
+  determinism: "Determinism",
+  "ac-fidelity": "AC fidelity",
+};
+
+function sourceContextForCandidate(
+  candidate: Candidate,
+  ingestedAtoms: readonly QualityIntelligenceIngestedAtom[],
+): readonly QualityIntelligenceJudgeSourceContext[] {
+  const byAtomId = new Map(
+    ingestedAtoms.map((entry) => [
+      String(entry.atom.id),
+      Object.freeze({
+        atomId: String(entry.atom.id),
+        text: entry.canonicalText,
+      }),
+    ]),
+  );
+  const matched = candidate.derivedFromAtomIds
+    .map((atomId) => byAtomId.get(String(atomId)))
+    .filter((entry): entry is QualityIntelligenceJudgeSourceContext => entry !== undefined);
+  if (matched.length > 0) return Object.freeze(matched);
+  return Object.freeze(
+    ingestedAtoms.map((entry) =>
+      Object.freeze({
+        atomId: String(entry.atom.id),
+        text: entry.canonicalText,
+      }),
+    ),
+  );
+}
+
+function judgeRationaleSummary(verdict: QI.TestQualityJudgeVerdict): string {
+  const weakDimensions = verdict.dimensions
+    .filter((dimension) => dimension.score < TEST_QUALITY_WEAK_THRESHOLD)
+    .sort((left, right) => left.score - right.score);
+  const dimensionsToDescribe =
+    weakDimensions.length > 0 ? weakDimensions : [...verdict.dimensions].sort((a, b) => a.score - b.score);
+  return dimensionsToDescribe
+    .slice(0, JUDGE_SUMMARY_DIMENSION_LIMIT)
+    .map((dimension) => `${JUDGE_DIMENSION_LABEL[dimension.name]}: ${dimension.rationale}`)
+    .join("; ");
+}
+
 function buildTestQualityFinding(
   runId: QI.QualityIntelligenceRunId,
   candidate: Candidate,
   score: number,
+  rationale: string,
   ordinal: number,
 ): QI.QualityIntelligenceTestQualityFinding {
   const payload = ["v1-tq", String(runId), String(candidate.id), String(ordinal)].join("");
@@ -256,7 +317,7 @@ function buildTestQualityFinding(
     runId,
     candidateId: candidate.id,
     severity,
-    summary: `Test quality score ${String(Math.round(score))}/100 — candidate judged weak.`,
+    summary: rationale,
     evidenceAtomIds: Object.freeze([...candidate.derivedFromAtomIds]),
   });
 }
@@ -269,6 +330,7 @@ interface JudgeStageResult {
 async function runJudgeStage(
   ctx: RunContext,
   candidates: readonly Candidate[],
+  ingestedAtoms: readonly QualityIntelligenceIngestedAtom[],
   judge: QualityIntelligenceJudgePort,
 ): Promise<JudgeStageResult> {
   if (candidates.length === 0) return { findings: Object.freeze([]), qualityScore: null };
@@ -279,15 +341,19 @@ async function runJudgeStage(
     const candidate = candidates[i];
     if (candidate === undefined) continue;
     scored += 1;
-    const text = candidateSummaryText(candidate);
-    const verdict = await judge.judge(text, ctx.signal);
+    const verdict = await judge.judge(
+      {
+        candidateText: candidateSummaryText(candidate),
+        sourceContext: sourceContextForCandidate(candidate, ingestedAtoms),
+      },
+      ctx.signal,
+    );
     if (verdict.verdict === "strong") {
       strongCount += 1;
       continue;
     }
-    const scores = verdict.dimensions.map((d) => d.score);
-    const mean = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0;
-    findings.push(buildTestQualityFinding(ctx.plan.id, candidate, mean, i));
+    const mean = scoreFromDimensions(verdict.dimensions);
+    findings.push(buildTestQualityFinding(ctx.plan.id, candidate, mean, judgeRationaleSummary(verdict), i));
   }
   // Per-run quality score = share of candidates the judge rated "strong", as a percentage (#747).
   const qualityScore = scored === 0 ? null : (strongCount / scored) * 100;
@@ -329,7 +395,7 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
           qualityScore: null,
         });
       }
-      return runJudgeStage(ctx, candidates, deps.judge);
+      return runJudgeStage(ctx, candidates, input.ingestedAtoms, deps.judge);
     });
     const atoms = input.ingestedAtoms.map((a) => a.atom);
     const coverageMap = await withStage(ctx, "coverage", async () =>
