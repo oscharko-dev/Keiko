@@ -63,11 +63,22 @@ export interface OpenAiCodexLocalSessionProviderConfig extends ProviderRetryConf
   };
 }
 
+export interface OpenAiCodexLocalSessionRuntimeProviderConfig extends ProviderRetryConfig {
+  readonly providerType: "openai-codex-local-session";
+  readonly validationState: "runtime-only";
+  readonly modelId: string;
+  readonly baseUrl: string;
+  readonly apiKey: string;
+  readonly apiKeyHeaderName: string;
+}
+
 export type ModelProviderConfig =
   | GatewayOpenAiCompatibleProviderConfig
   | OpenAiCodexLocalSessionProviderConfig;
 
-export type RuntimeDispatchProviderConfig = GatewayOpenAiCompatibleProviderConfig;
+export type RuntimeDispatchProviderConfig =
+  | GatewayOpenAiCompatibleProviderConfig
+  | OpenAiCodexLocalSessionRuntimeProviderConfig;
 
 export function providerTypeOf(provider: ModelProviderConfig): ProviderType {
   return provider.providerType ?? "gateway-openai-compatible";

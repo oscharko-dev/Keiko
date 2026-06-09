@@ -4,9 +4,14 @@
 
 import type { ProviderType } from "@oscharko-dev/keiko-contracts";
 import { UnknownModelError } from "@oscharko-dev/keiko-security/errors/gateway";
+import {
+  createCodexLocalSessionRuntimeResolver,
+  type CodexLocalSessionRuntimeResolver,
+} from "./codex-local-session.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import {
   isGatewayOpenAiCompatibleProvider,
+  isOpenAiCodexLocalSessionProvider,
   providerTypeOf,
   type CostClass,
   type ModelProviderConfig,
@@ -43,6 +48,10 @@ export interface ProviderRuntimeRegistry {
   ) => ResolvedProviderRuntime;
 }
 
+export interface ProviderRuntimeRegistryDeps {
+  readonly localSessionResolver?: CodexLocalSessionRuntimeResolver | undefined;
+}
+
 function notYetWired(modelId: string, providerType: ProviderType): never {
   throw new UnknownModelError(
     `model '${modelId}' is configured for provider type '${providerType}'; runtime dispatch for that provider type is not wired yet`,
@@ -64,17 +73,30 @@ function gatewayOpenAiCompatibleRegistration(): ProviderRuntimeRegistration {
   };
 }
 
-function localSessionRegistration(): ProviderRuntimeRegistration {
+function localSessionRegistrationWithDeps(
+  deps: ProviderRuntimeRegistryDeps,
+): ProviderRuntimeRegistration {
+  const resolveLocalSession = deps.localSessionResolver ?? createCodexLocalSessionRuntimeResolver();
   return {
     providerType: "openai-codex-local-session",
-    selectRuntimeProvider: () => undefined,
+    selectRuntimeProvider: (provider) =>
+      isOpenAiCodexLocalSessionProvider(provider) ? resolveLocalSession(provider) : undefined,
+    createAdapter: (factoryDeps) =>
+      factoryDeps.adapterOverride ??
+      new OpenAiAdapter({
+        requestId: factoryDeps.requestId,
+        costClass: factoryDeps.costClass,
+        now: factoryDeps.now,
+      }),
   };
 }
 
-export function createDefaultProviderRuntimeRegistry(): ProviderRuntimeRegistry {
+export function createDefaultProviderRuntimeRegistry(
+  deps: ProviderRuntimeRegistryDeps = {},
+): ProviderRuntimeRegistry {
   const registrations = Object.freeze([
     gatewayOpenAiCompatibleRegistration(),
-    localSessionRegistration(),
+    localSessionRegistrationWithDeps(deps),
   ]);
   const byType = new Map(registrations.map((registration) => [registration.providerType, registration]));
   return Object.freeze({

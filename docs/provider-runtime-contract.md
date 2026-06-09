@@ -76,7 +76,39 @@ seam. Productive runtime dispatch now resolves provider implementations through 
   productive dispatch fail-closed until #463 lands
 
 This preserves ADR-0019 trust boundaries by keeping productive model traffic behind
-`@oscharko-dev/keiko-model-gateway` without inventing a partial local-session transport here.
+`@oscharko-dev/keiko-model-gateway`.
+
+## Local-session bridge
+
+Issue #463 wires `openai-codex-local-session` through a bounded local resolver before productive
+chat traffic reaches the existing OpenAI-compatible adapter path.
+
+The approved local runtime seam is intentionally narrow:
+
+- `codex --version`
+- `codex auth status --json`
+
+No browser payload, safe-config projection, or audit-facing object may carry:
+
+- the resolved runtime `apiKey`
+- the resolved runtime `baseUrl`
+- raw `codex` command output
+- session expiry metadata beyond fail-closed diagnostics
+
+The resolver accepts only a documented JSON health shape from `codex auth status --json`:
+
+- authenticated session state
+- non-expired session metadata
+- runtime `baseUrl`
+- runtime credential material
+- explicit `chatCompletions: true`
+- explicit `workflow: true`
+
+Anything outside that contract fails closed with a stable gateway-safe error:
+
+- missing CLI or unsupported CLI version -> `ConfigInvalidError`
+- missing or expired login/session -> `AuthenticationError`
+- malformed response or unsupported capability shape -> `ConfigInvalidError`
 
 ## Follow-up seams for Epic #460
 

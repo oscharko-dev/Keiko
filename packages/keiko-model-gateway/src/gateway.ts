@@ -11,6 +11,7 @@ import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
 import type {
   Clock,
   CircuitBreakerStatus,
+  CostClass,
   GatewayConfig,
   GatewayRequest,
   GatewayStreamChunk,
@@ -18,12 +19,30 @@ import type {
   ModelProviderConfig,
   NormalizedResponse,
   ProviderAdapter,
+  RuntimeDispatchProviderConfig,
 } from "./types.js";
 import type { ResolvedProviderRuntime } from "./provider-runtime.js";
+
+export interface GatewayRuntimeRegistry {
+  readonly resolve: (
+    modelId: string,
+    provider: ModelProviderConfig,
+    deps: {
+      readonly adapterOverride?: ProviderAdapter | undefined;
+      readonly requestId: string;
+      readonly costClass: CostClass;
+      readonly now: () => number;
+    },
+  ) => {
+    readonly provider: RuntimeDispatchProviderConfig;
+    readonly adapter: ProviderAdapter;
+  };
+}
 
 export interface GatewayDeps {
   readonly adapter?: ProviderAdapter | undefined;
   readonly clock?: Clock | undefined;
+  readonly runtimeRegistry?: GatewayRuntimeRegistry | undefined;
 }
 
 interface RoutedCall {
@@ -34,7 +53,7 @@ interface RoutedCall {
 export class Gateway {
   private readonly clock: Clock;
   private readonly adapter: ProviderAdapter | undefined;
-  private readonly runtimeRegistry = createDefaultProviderRuntimeRegistry();
+  private readonly runtimeRegistry: GatewayRuntimeRegistry;
   private readonly providers: ReadonlyMap<string, ModelProviderConfig>;
   private readonly breakers = new Map<string, CircuitBreaker>();
 
@@ -44,6 +63,7 @@ export class Gateway {
   ) {
     this.clock = deps.clock ?? systemClock;
     this.adapter = deps.adapter;
+    this.runtimeRegistry = deps.runtimeRegistry ?? createDefaultProviderRuntimeRegistry();
     this.providers = new Map(config.providers.map((p) => [p.modelId, p]));
   }
 

@@ -559,7 +559,7 @@ function parseLocalSessionProviderConfig(
 function parseGatewayOpenAiCompatibleProviderConfig(
   raw: Record<string, unknown>,
   path: string,
-  providerType: ProviderType,
+  providerType: "gateway-openai-compatible",
   providerId: string,
   modelId: string,
   env: EnvSource,
@@ -600,7 +600,7 @@ function parseProviderConfig(
     : parseGatewayOpenAiCompatibleProviderConfig(
         raw,
         path,
-        providerType,
+        "gateway-openai-compatible",
         providerId,
         modelId,
         env,

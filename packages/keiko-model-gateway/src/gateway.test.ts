@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Gateway } from "./gateway.js";
+import { createDefaultProviderRuntimeRegistry } from "./provider-runtime.js";
 import {
   CircuitOpenError,
   TransportError,
@@ -139,7 +140,7 @@ describe("Gateway.chat", () => {
     );
   });
 
-  it("throws UnknownModelError when a local-session provider reaches the chat path before adapter wiring exists", async () => {
+  it("routes a local-session provider through the runtime registry bridge", async () => {
     const gateway = new Gateway(
       config([
         {
@@ -156,11 +157,25 @@ describe("Gateway.chat", () => {
       {
         adapter: fakeAdapter(() => Promise.resolve(okResponse("codex-chat"))),
         clock: stubClock(),
+        runtimeRegistry: createDefaultProviderRuntimeRegistry({
+          localSessionResolver: (provider) => ({
+            providerId: provider.providerId,
+            providerType: provider.providerType,
+            validationState: provider.validationState,
+            modelId: provider.modelId,
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: "sk-local-session-secret-1234567890",
+            apiKeyHeaderName: "authorization",
+            timeoutMs: provider.timeoutMs,
+            maxRetries: provider.maxRetries,
+            retryBaseDelayMs: provider.retryBaseDelayMs,
+          }),
+        }),
       },
     );
-    await expect(gateway.chat({ modelId: "codex-chat", messages: [] })).rejects.toThrow(
-      /provider type 'openai-codex-local-session'/,
-    );
+    const result = await gateway.chat({ modelId: "codex-chat", messages: [] });
+    expect(result.modelId).toBe("codex-chat");
+    expect(result.usage.costClass).toBe("medium");
   });
 
   it("throws UnknownModelError with a kind hint for an embedding model on the chat path", async () => {

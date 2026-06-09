@@ -12,6 +12,7 @@ import { getQualityIntelligenceTaskProfile } from "../taskProfiles.js";
 import type {
   GatewayOpenAiCompatibleProviderConfig,
   ProviderAdapter,
+  RuntimeDispatchProviderConfig,
 } from "../../types.js";
 
 function chatCapability(overrides: Partial<ModelCapability> = {}): ModelCapability {
@@ -68,7 +69,7 @@ function normalisedResponse(content: string): NormalizedResponse {
 
 interface MockCall {
   readonly request: GatewayRequest;
-  readonly config: GatewayOpenAiCompatibleProviderConfig;
+  readonly config: RuntimeDispatchProviderConfig;
 }
 
 interface MockModelPort extends ProviderAdapter {

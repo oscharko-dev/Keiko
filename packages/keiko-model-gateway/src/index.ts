@@ -75,7 +75,7 @@ export {
   providerValidationStateOf,
 } from "./types.js";
 
-export { Gateway, type GatewayDeps } from "./gateway.js";
+export { Gateway, type GatewayDeps, type GatewayRuntimeRegistry } from "./gateway.js";
 
 export {
   assertConfiguredModel,

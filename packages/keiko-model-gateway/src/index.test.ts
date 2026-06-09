@@ -54,6 +54,7 @@ import type {
   SafeGatewayConfig,
   SafeProviderConfig,
   GatewayDeps,
+  GatewayRuntimeRegistry,
   ModelSelectionQuery,
   ErrorCode,
   CircuitBreakerConfig,
@@ -182,6 +183,7 @@ describe("keiko-model-gateway package surface", () => {
     pin<SafeGatewayConfig>();
     pin<SafeProviderConfig>();
     pin<GatewayDeps>();
+    pin<GatewayRuntimeRegistry>();
     pin<ModelSelectionQuery>();
     pin<ErrorCode>();
     pin<CircuitBreakerConfig>();
