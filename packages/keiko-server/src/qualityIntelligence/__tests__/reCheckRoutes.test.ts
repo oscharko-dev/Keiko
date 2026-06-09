@@ -171,10 +171,11 @@ function seedRunFromSources(args: {
   readonly editedRevisions?: readonly QualityIntelligence.QualityIntelligenceCandidateEditedRevision[];
   readonly findings?: Parameters<typeof recordQualityIntelligenceRun>[0]["findings"];
 }): ReturnType<typeof ingestInlineSources> {
-  const requestSources: QualityIntelligence.QualityIntelligenceInlineSource[] = args.sources.map((source) =>
-    source.kind === "requirements"
-      ? { kind: "requirements", label: source.label, text: source.text ?? "" }
-      : { kind: "workspace", label: source.label, path: source.path ?? "" },
+  const requestSources: QualityIntelligence.QualityIntelligenceInlineSource[] = args.sources.map(
+    (source) =>
+      source.kind === "requirements"
+        ? { kind: "requirements", label: source.label, text: source.text ?? "" }
+        : { kind: "workspace", label: source.label, path: source.path ?? "" },
   );
   const ingestion = ingestInlineSources({
     request: { sources: requestSources },
@@ -477,12 +478,36 @@ describe("handleQiRegenerateStale — run not found", () => {
 
 describe("handleQiRegenerateStale — no model configured", () => {
   it("returns 200 and writes a deterministic baseline run when no providers are configured", async () => {
+    // A real drift scenario: one requirement edited (changed-stale), one unchanged (preserved). This
+    // gives the regeneration an atom to work on so the no-providers baseline path runs and writes a
+    // succeeded run that preserves the fresh candidate — rather than the empty-merge guard tripping.
+    const runId = "run-noprov-baseline";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: originalText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-fresh", "Login test", [String(seeded.ingestedAtoms[0]?.atom.id)]),
+        qiCandidate(runId, "cand-stale", "MFA test", [String(seeded.ingestedAtoms[1]?.atom.id)]),
+      ],
+    });
     const body = {
-      sources: [{ kind: "requirements", label: "req-1", text: "REQ-1: User can log in" }],
+      sources: [
+        {
+          kind: "requirements",
+          label: "Spec",
+          text: "Login must work reliably\nMFA must also write an audit entry",
+        },
+      ],
     };
     const result = asResult(
       await handleQiRegenerateStale(
-        ctx("regenerate-stale", RUN_ID, makeReq(body)),
+        ctx("regenerate-stale", runId, makeReq(body)),
         deps(evidenceDir),
       ),
     );
@@ -492,8 +517,10 @@ describe("handleQiRegenerateStale — no model configured", () => {
       regeneratedCount: number;
       preservedCount: number;
     };
-    expect(response.runId).not.toBe(RUN_ID);
-    expect(response.regeneratedCount).toBe(0);
+    expect(response.runId).not.toBe(runId);
+    // The unchanged Login candidate is preserved; no model means no model provenance on the new run.
+    expect(response.preservedCount).toBe(1);
+    expect(response.regeneratedCount).toBeGreaterThanOrEqual(0);
     const manifest = loadQualityIntelligenceRun(response.runId, { evidenceDir });
     expect(manifest?.status).toBe("succeeded");
     expect(manifest?.modelId).toBeUndefined();
@@ -629,7 +656,9 @@ describe("handleQiReCheck — workspace content drift is atom-aware (#799)", () 
         runId,
         sources: [{ kind: "workspace", label: "Repo", path: dir }],
         candidates: [
-          qiCandidate(runId, "cand-ws-1", "Workspace test", [String(seeded.ingestedAtoms[0]?.atom.id)]),
+          qiCandidate(runId, "cand-ws-1", "Workspace test", [
+            String(seeded.ingestedAtoms[0]?.atom.id),
+          ]),
         ],
       });
 
@@ -678,7 +707,9 @@ describe("handleQiRegenerateStale — preserved candidates are materialised in t
       runId,
       sources: [{ kind: "requirements", label: "Spec", text: originalText }],
       candidates: [
-        qiCandidate(runId, "cand-preserved", "Login test", [String(seeded.ingestedAtoms[0]?.atom.id)]),
+        qiCandidate(runId, "cand-preserved", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
         qiCandidate(runId, "cand-stale", "MFA test", [String(seeded.ingestedAtoms[1]?.atom.id)]),
       ],
       editedRevisions: [
@@ -771,7 +802,9 @@ describe("handleQiRegenerateStale — legacy requirements runs fail closed witho
       runId,
       generatedAt: "2026-06-09T10:01:00.000Z",
       candidates: [
-        qiCandidate(runId, "cand-legacy", "Legacy MFA test", [String(seeded.ingestedAtoms[1]?.atom.id)]),
+        qiCandidate(runId, "cand-legacy", "Legacy MFA test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
       ],
       evidenceDir,
       redact: (value: unknown): unknown => value,
@@ -802,5 +835,259 @@ describe("handleQiRegenerateStale — legacy requirements runs fail closed witho
       "QI_REGEN_LEGACY_REQUIREMENTS_UNSUPPORTED",
     );
     expect(listQualityIntelligenceRuns({ evidenceDir })).toEqual(beforeRunIds);
+  });
+});
+
+describe("handleQiReCheck — workspace file order changes do NOT false-orphan unchanged files (#735 drift)", () => {
+  it("keeps unchanged files fresh when a new file is added ahead of them in discovery order", async () => {
+    const runId = "run-workspace-reorder";
+    const dir = mkdtempSync(join(tmpdir(), "qi-recheck-reorder-"));
+    try {
+      // Two unchanged spec files. Their atom ids are derived from the file PATH (not the discovery
+      // index), so adding a sibling that sorts ahead of them must not change their ids.
+      writeFileSync(join(dir, "a-auth.md"), "Auth requirement one.\n", "utf8");
+      writeFileSync(join(dir, "b-pay.md"), "Payment requirement one.\n", "utf8");
+      const seeded = ingestInlineSources({
+        request: { sources: [{ kind: "workspace", label: "Repo", path: dir }] },
+        runId,
+        registeredAt: "2026-06-09T10:00:00.000Z",
+      });
+      const atomIds = seeded.ingestedAtoms.map((entry) => String(entry.atom.id));
+      expect(atomIds.length).toBe(2);
+      seedRunFromSources({
+        runId,
+        sources: [{ kind: "workspace", label: "Repo", path: dir }],
+        candidates: atomIds.map((atomId, i) =>
+          qiCandidate(runId, `cand-ws-${String(i)}`, `Test ${String(i)}`, [atomId]),
+        ),
+      });
+
+      // Add a brand-new file that sorts FIRST — under the buggy index-based scheme this shifted every
+      // existing file's atom id and orphaned every candidate. The contents of a-auth.md/b-pay.md are
+      // untouched.
+      writeFileSync(join(dir, "0-intro.md"), "Intro with its own requirement statement.\n", "utf8");
+      const result = asResult(
+        await handleQiReCheck(
+          ctx(
+            "re-check",
+            runId,
+            makeReq({ sources: [{ kind: "workspace", label: "Repo", path: dir }] }),
+          ),
+          deps(evidenceDir),
+        ),
+      );
+
+      expect(result.status).toBe(200);
+      const body = result.body as {
+        staleCount: number;
+        fresh: readonly string[];
+        changedStale: readonly unknown[];
+        orphanedStale: readonly unknown[];
+      };
+      // Both original candidates' files are unchanged → no drift at all.
+      expect(body.staleCount).toBe(0);
+      expect([...body.fresh].sort()).toEqual(["cand-ws-0", "cand-ws-1"]);
+      expect(body.changedStale).toHaveLength(0);
+      expect(body.orphanedStale).toHaveLength(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("handleQiRegenerateStale — never turns a non-empty run into an empty one (#735 data-loss guard)", () => {
+  it("fails closed with QI_REGEN_WOULD_EMPTY when every candidate is orphaned and nothing is regeneratable", async () => {
+    const runId = "run-regen-would-empty";
+    const dir = mkdtempSync(join(tmpdir(), "qi-recheck-empty-"));
+    try {
+      writeFileSync(join(dir, "spec.md"), "The only tracked requirement.\n", "utf8");
+      const seeded = ingestInlineSources({
+        request: { sources: [{ kind: "workspace", label: "Repo", path: dir }] },
+        runId,
+        registeredAt: "2026-06-09T10:00:00.000Z",
+      });
+      seedRunFromSources({
+        runId,
+        sources: [{ kind: "workspace", label: "Repo", path: dir }],
+        candidates: [
+          qiCandidate(runId, "cand-only", "Only test", [String(seeded.ingestedAtoms[0]?.atom.id)]),
+        ],
+      });
+
+      // Replace the tracked file with an unrelated one: the original atom disappears (its candidate is
+      // orphaned) and there is no replacement atom to regenerate from → the merge would be empty.
+      rmSync(join(dir, "spec.md"));
+      writeFileSync(join(dir, "other.md"), "A completely different requirement.\n", "utf8");
+
+      const beforeRunIds = listQualityIntelligenceRuns({ evidenceDir });
+      const result = asResult(
+        await handleQiRegenerateStale(
+          ctx(
+            "regenerate-stale",
+            runId,
+            makeReq({ sources: [{ kind: "workspace", label: "Repo", path: dir }] }),
+          ),
+          deps(evidenceDir),
+        ),
+      );
+
+      expect(result.status).toBe(409);
+      expect((result.body as { error: { code: string } }).error.code).toBe("QI_REGEN_WOULD_EMPTY");
+      // No empty run was materialised.
+      expect(listQualityIntelligenceRuns({ evidenceDir })).toEqual(beforeRunIds);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("re-check / regenerate-stale — invalid run id is rejected with 400 (#735 hardening)", () => {
+  it("handleQiReCheck returns 400 QI_BAD_REQUEST for a traversal-shaped run id", async () => {
+    const result = asResult(
+      await handleQiReCheck(
+        ctx(
+          "re-check",
+          "run/../../etc/passwd",
+          makeReq({ sources: [{ kind: "requirements", label: "r", text: "x requirement" }] }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+
+  it("handleQiRegenerateStale returns 400 QI_BAD_REQUEST for a run id containing a NUL byte", async () => {
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          `run-${String.fromCharCode(0)}evil`,
+          makeReq({ sources: [{ kind: "requirements", label: "r", text: "x requirement" }] }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(400);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BAD_REQUEST");
+  });
+});
+
+describe("handleQiRegenerateStale — the original immutable run is never mutated (#743)", () => {
+  it("leaves the original manifest byte-identical after a regeneration writes a new run", async () => {
+    const runId = "run-immutable-original";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: originalText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-keep", "Login test", [String(seeded.ingestedAtoms[0]?.atom.id)]),
+        qiCandidate(runId, "cand-drift", "MFA test", [String(seeded.ingestedAtoms[1]?.atom.id)]),
+      ],
+    });
+
+    const before = JSON.stringify(loadQualityIntelligenceRun(runId, { evidenceDir }));
+    const beforeCandidates = JSON.stringify(
+      loadQualityIntelligenceCandidates(runId, { evidenceDir }),
+    );
+
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          makeReq({
+            sources: [
+              {
+                kind: "requirements",
+                label: "Spec",
+                text: "Login must work reliably\nMFA must also write an audit entry",
+              },
+            ],
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const newRunId = (result.body as { runId: string }).runId;
+    expect(newRunId).not.toBe(runId);
+
+    // The original run's manifest AND candidates artifact are unchanged after regeneration.
+    expect(JSON.stringify(loadQualityIntelligenceRun(runId, { evidenceDir }))).toBe(before);
+    expect(JSON.stringify(loadQualityIntelligenceCandidates(runId, { evidenceDir }))).toBe(
+      beforeCandidates,
+    );
+  });
+});
+
+describe("handleQiRegenerateStale — edit history of STALE candidates is dropped, fresh edits kept (#743)", () => {
+  it("never carries an edited revision of a regenerated/stale candidate into the new run", async () => {
+    const runId = "run-regen-edit-scope";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: originalText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-fresh", "Login test", [String(seeded.ingestedAtoms[0]?.atom.id)]),
+        qiCandidate(runId, "cand-stale", "MFA test", [String(seeded.ingestedAtoms[1]?.atom.id)]),
+      ],
+      editedRevisions: [
+        {
+          candidateId: "cand-fresh",
+          provenance: {
+            editedAt: "2026-06-09T10:02:00.000Z",
+            editedBy: "human",
+            editorLabel: "Reviewer A",
+          },
+          editedFields: { title: "Login test (edited)" },
+        },
+        {
+          candidateId: "cand-stale",
+          provenance: {
+            editedAt: "2026-06-09T10:03:00.000Z",
+            editedBy: "human",
+            editorLabel: "Reviewer B",
+          },
+          editedFields: { title: "MFA test (edited, will be regenerated away)" },
+        },
+      ],
+    });
+
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          makeReq({
+            sources: [
+              {
+                kind: "requirements",
+                label: "Spec",
+                text: "Login must work reliably\nMFA must also write an audit entry",
+              },
+            ],
+          }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+    expect(result.status).toBe(200);
+    const newRunId = (result.body as { runId: string }).runId;
+    const artifact = loadQualityIntelligenceCandidates(newRunId, { evidenceDir });
+    const preservedRevisionIds = artifact?.editedRevisions?.map((r) => r.candidateId) ?? [];
+    // The fresh candidate's edit is carried forward; the stale candidate's edit is NOT.
+    expect(preservedRevisionIds).toContain("cand-fresh");
+    expect(preservedRevisionIds).not.toContain("cand-stale");
   });
 });

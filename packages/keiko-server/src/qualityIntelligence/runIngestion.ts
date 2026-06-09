@@ -215,14 +215,17 @@ const atomKindForPath = (path: string): "code-fragment" | "document-excerpt" =>
 const workspaceAtom = (
   entry: { readonly path: string; readonly excerpt: string },
   envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
-  index: number,
 ): QualityIntelligenceIngestedAtom => {
   // entry.excerpt is already redacted by keiko-workspace; prefix the path so the model can
   // attribute generated cases to a file.
   const canonicalText = `${entry.path}\n${entry.excerpt}`;
-  const digest = sha256Hex(
-    `qi-atom-ws-v1|${String(envelopeId)}|${String(index)}|${entry.path}`,
-  ).slice(0, 32);
+  // The atom id is derived from the file PATH only — never the file's position in the discovery
+  // order (Epic #735 drift correctness). A path is unique within a workspace envelope, so the id is
+  // stable when other files are added/removed/reordered; an unchanged file keeps its id (and its
+  // canonicalHash), so drift detection never falsely orphans it. Content changes are caught by the
+  // canonicalHash diff, not the id. (v1 folded in the array index, which shifted on add/remove and
+  // false-orphaned every candidate of an otherwise-unchanged folder — see reCheckRoutes drift.)
+  const digest = sha256Hex(`qi-atom-ws-v2|${String(envelopeId)}|${entry.path}`).slice(0, 32);
   const atom: QI.QualityIntelligenceEvidenceAtom = {
     kind: atomKindForPath(entry.path),
     id: QualityIntelligence.asQualityIntelligenceEvidenceAtomId(`qi-atom-${digest}`),
@@ -287,7 +290,7 @@ function ingestWorkspace(
     },
     localRef: stableLocalRef("workspace", pack.workspaceRoot),
   };
-  const atoms = pack.selected.map((entry, i) => workspaceAtom(entry, envelopeId, i));
+  const atoms = pack.selected.map((entry) => workspaceAtom(entry, envelopeId));
   return { envelope, atoms };
 }
 
@@ -454,7 +457,7 @@ function ingestFile(
     localRef: stableLocalRef("file", absFile),
   };
   const atoms = [
-    workspaceAtom({ path: content.relativePath, excerpt: boundedText }, envelopeId, 0),
+    workspaceAtom({ path: content.relativePath, excerpt: boundedText }, envelopeId),
   ];
   return { envelope, atoms };
 }
@@ -522,12 +525,14 @@ function capsuleDocAtom(
   docId: string,
   text: string,
   envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
-  atomIndex: number,
 ): QualityIntelligenceIngestedAtom {
   const canonicalText = `${docId}\n${text}`;
-  const digest = sha256Hex(
-    `qi-atom-cap-v1|${String(envelopeId)}|${String(atomIndex)}|${docId}`,
-  ).slice(0, 32);
+  // Derive the atom id from the stable document id only — never its position in the corpus order
+  // (Epic #735 drift correctness, mirrors workspaceAtom). A capsule document id (and a Figma
+  // screen id) is unique within its envelope, so adding/removing a sibling document never shifts an
+  // unchanged document's atom id and never false-orphans its candidates. Content edits are caught by
+  // the canonicalHash diff.
+  const digest = sha256Hex(`qi-atom-cap-v2|${String(envelopeId)}|${docId}`).slice(0, 32);
   const atom: QI.QualityIntelligenceEvidenceAtom = {
     kind: "document-excerpt",
     id: QualityIntelligence.asQualityIntelligenceEvidenceAtomId(`qi-atom-${digest}`),
@@ -581,7 +586,7 @@ function buildCapsuleSource(build: CapsuleSourceBuild, byteBudget: number): OneS
     },
     localRef: build.scopeRef,
   };
-  const atoms = docs.map((d, i) => capsuleDocAtom(d.documentId, d.text, envelopeId, i));
+  const atoms = docs.map((d) => capsuleDocAtom(d.documentId, d.text, envelopeId));
   return { envelope, atoms };
 }
 
@@ -766,7 +771,7 @@ function ingestFigmaSnapshot(
     },
     localRef: stableLocalRef("figma-snapshot", source.snapshotRunId),
   };
-  const atoms = docs.map((d, i) => capsuleDocAtom(d.documentId, d.text, envelopeId, i));
+  const atoms = docs.map((d) => capsuleDocAtom(d.documentId, d.text, envelopeId));
   return { envelope, atoms };
 }
 

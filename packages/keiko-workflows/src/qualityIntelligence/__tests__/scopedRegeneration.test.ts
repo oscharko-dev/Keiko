@@ -86,9 +86,12 @@ describe("runScopedRegeneration", () => {
 
   it("reports narrowedAtomCount equal to the number of ingestedAtoms supplied", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
+    // Use a non-trivial count (3) so a constant-return mutation of narrowedAtomCount is caught
+    // rather than coincidentally matching a smaller fixture size.
     const atoms = [
       makeIngestedAtom("atom-1", "Stale req 1"),
       makeIngestedAtom("atom-2", "Stale req 2"),
+      makeIngestedAtom("atom-3", "Stale req 3"),
     ];
     const input: ScopedRegenerationInput = {
       newRunId: "qi-run-regen-002",
@@ -98,7 +101,7 @@ describe("runScopedRegeneration", () => {
       provenanceRefs: PROVENANCE,
     };
     const result = await runScopedRegeneration(input, makeDeps(store));
-    expect(result.narrowedAtomCount).toBe(2);
+    expect(result.narrowedAtomCount).toBe(3);
   });
 
   it("uses the supplied newRunId for the persisted manifest", async () => {

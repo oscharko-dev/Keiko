@@ -17,7 +17,13 @@ import { formatError } from "./qiShared";
 
 export interface DriftPanelProps {
   readonly runId: string;
-  readonly connectedSource: QualityIntelligenceInlineSource;
+  /**
+   * The inline sources this run was launched from (Epic #735). Re-check and regeneration run against
+   * ALL of them, in the same order they were generated from, so a multi-source run (folders +
+   * capsules + figma snapshots) drifts as a whole. Must be non-empty (the card hides the panel
+   * otherwise).
+   */
+  readonly connectedSources: readonly QualityIntelligenceInlineSource[];
   /** Called after a successful regeneration so the parent can surface the new run. */
   readonly onRegenerated?: ((result: QualityIntelligenceUiRegenerateResult) => void) | undefined;
   /** Seams for tests. */
@@ -48,7 +54,7 @@ function DriftIndicator({ staleCount }: { readonly staleCount: number }): ReactN
 
 export function DriftPanel({
   runId,
-  connectedSource,
+  connectedSources,
   onRegenerated,
   reCheckImpl = reCheckQiRun,
   regenerateImpl = regenerateStaleQiRun,
@@ -66,22 +72,25 @@ export function DriftPanel({
       setError(null);
       setRegenerated(null);
       try {
-        setReport(await reCheckImpl(runId, [connectedSource]));
+        setReport(await reCheckImpl(runId, connectedSources));
       } catch (err) {
         setError(formatError(err));
       } finally {
         setBusy(false);
       }
     })();
-  }, [reCheckImpl, runId, connectedSource]);
+  }, [reCheckImpl, runId, connectedSources]);
 
   const handleRegenerate = useCallback((): void => {
     void (async (): Promise<void> => {
       setBusy(true);
       setError(null);
       try {
-        const result = await regenerateImpl(runId, [connectedSource]);
+        const result = await regenerateImpl(runId, connectedSources);
         setRegenerated(result);
+        // The stale report described the OLD run; once a new run is written it no longer applies, so
+        // clear it to avoid showing a stale count next to the "regenerated" confirmation (#744).
+        setReport(null);
         onRegenerated?.(result);
       } catch (err) {
         setError(formatError(err));
@@ -89,7 +98,7 @@ export function DriftPanel({
         setBusy(false);
       }
     })();
-  }, [regenerateImpl, runId, connectedSource, onRegenerated]);
+  }, [regenerateImpl, runId, connectedSources, onRegenerated]);
 
   return (
     <section className="qi-drift-panel" aria-label="Drift detection">

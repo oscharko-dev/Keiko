@@ -232,33 +232,55 @@ function parseAndValidateManifest(json: string): QualityIntelligenceEvidenceMani
   return manifest;
 }
 
+function assertHashMatches(
+  label: string,
+  expected: string | undefined,
+  stored: string | undefined,
+): void {
+  if (expected !== stored) {
+    throw new EvidenceReadError(`QI manifest ${label} integrity hash mismatch`);
+  }
+}
+
+// Backward-compatible group check: a group that shipped before it was integrity-hashed (coverageMatrix
+// #738, sourceFingerprints #735) may exist on a legacy manifest without a stored hash. Enforce the
+// check only once a stored hash is present; new manifests always carry it, so tampering with a current
+// group is still caught.
+function assertOptionalHashMatches(
+  label: string,
+  value: unknown,
+  stored: string | undefined,
+): void {
+  if (stored === undefined) return;
+  if (sha256OfJson(value) !== stored) {
+    throw new EvidenceReadError(`QI manifest ${label} integrity hash mismatch`);
+  }
+}
+
 function assertIntegrityHashesMatch(manifest: QualityIntelligenceEvidenceManifest): void {
   const expected = buildIntegrityHashes(manifest.findings, manifest.exports, manifest.evidenceRefs);
+  assertHashMatches("findings", expected.findings, manifest.integrityHashes.findings);
+  assertHashMatches("exports", expected.exports, manifest.integrityHashes.exports);
+  assertHashMatches("evidenceRefs", expected.evidenceRefs, manifest.integrityHashes.evidenceRefs);
+  // atomFingerprints are hashed unconditionally whenever present (#821), so compare expected-vs-stored
+  // directly — a removed or added set (stored present, expected absent or vice versa) is caught too.
   const expectedAtomFingerprints =
     manifest.atomFingerprints === undefined ? undefined : sha256OfJson(manifest.atomFingerprints);
-  if (expected.findings !== manifest.integrityHashes.findings) {
-    throw new EvidenceReadError("QI manifest findings integrity hash mismatch");
-  }
-  if (expected.exports !== manifest.integrityHashes.exports) {
-    throw new EvidenceReadError("QI manifest exports integrity hash mismatch");
-  }
-  if (expected.evidenceRefs !== manifest.integrityHashes.evidenceRefs) {
-    throw new EvidenceReadError("QI manifest evidenceRefs integrity hash mismatch");
-  }
-  if (expectedAtomFingerprints !== manifest.integrityHashes.atomFingerprints) {
-    throw new EvidenceReadError("QI manifest atomFingerprints integrity hash mismatch");
-  }
-  // Backward-compatible: the coverage matrix shipped (#738) before it was integrity-hashed (#734
-  // hardening), so legacy manifests carry the matrix without a hash. Enforce the check only once a
-  // stored hash exists; new manifests always carry it, so tampering with a current matrix is caught.
-  const expectedCoverageMatrix =
-    manifest.coverageMatrix === undefined ? undefined : sha256OfJson(manifest.coverageMatrix);
-  if (
-    manifest.integrityHashes.coverageMatrix !== undefined &&
-    expectedCoverageMatrix !== manifest.integrityHashes.coverageMatrix
-  ) {
-    throw new EvidenceReadError("QI manifest coverageMatrix integrity hash mismatch");
-  }
+  assertHashMatches(
+    "atomFingerprints",
+    expectedAtomFingerprints,
+    manifest.integrityHashes.atomFingerprints,
+  );
+  assertOptionalHashMatches(
+    "coverageMatrix",
+    manifest.coverageMatrix,
+    manifest.integrityHashes.coverageMatrix,
+  );
+  assertOptionalHashMatches(
+    "sourceFingerprints",
+    manifest.sourceFingerprints,
+    manifest.integrityHashes.sourceFingerprints,
+  );
 }
 
 function assertManifestIntegrity(manifest: QualityIntelligenceEvidenceManifest): void {
@@ -417,6 +439,7 @@ function buildIntegrityHashes(
   evidenceRefs: QualityIntelligenceEvidenceManifest["evidenceRefs"],
   atomFingerprints?: QualityIntelligenceEvidenceManifest["atomFingerprints"],
   coverageMatrix?: QualityIntelligenceEvidenceManifest["coverageMatrix"],
+  sourceFingerprints?: QualityIntelligenceEvidenceManifest["sourceFingerprints"],
 ): QualityIntelligenceIntegrityHashes {
   return {
     findings: sha256OfJson(findings),
@@ -424,6 +447,9 @@ function buildIntegrityHashes(
     evidenceRefs: sha256OfJson(evidenceRefs),
     ...(atomFingerprints !== undefined ? { atomFingerprints: sha256OfJson(atomFingerprints) } : {}),
     ...(coverageMatrix !== undefined ? { coverageMatrix: sha256OfJson(coverageMatrix) } : {}),
+    ...(sourceFingerprints !== undefined
+      ? { sourceFingerprints: sha256OfJson(sourceFingerprints) }
+      : {}),
   };
 }
 
@@ -556,6 +582,7 @@ export function recordQualityIntelligenceRun(
     redacted.evidenceRefs,
     input.atomFingerprints,
     input.coverageMatrix,
+    input.sourceFingerprints,
   );
   const manifest = buildRunManifest(input, redacted, summary, integrityHashes);
   return { manifest, location: store.record(manifest) };

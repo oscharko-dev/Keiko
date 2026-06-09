@@ -29,6 +29,13 @@ export interface QualityIntelligenceIntegrityHashes {
   readonly exports: string;
   readonly evidenceRefs: string;
   readonly atomFingerprints?: string;
+  /**
+   * Hash of the persisted per-envelope source fingerprints (Epic #735). Drift detection falls back
+   * to these when atom-level fingerprints are absent, so a tampered set could mis-report staleness;
+   * hashing them makes that tampering detectable. Optional for backward-compat with manifests
+   * written before it was hashed (enforced on read only when present).
+   */
+  readonly sourceFingerprints?: string;
   /** Hash of the persisted coverage matrix (Epic #734) so a tampered matrix is detectable. */
   readonly coverageMatrix?: string;
 }

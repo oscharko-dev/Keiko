@@ -10,7 +10,6 @@ import type { ReactNode } from "react";
 import type {
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceCandidateEditableFields,
-  QualityIntelligenceInlineSource,
 } from "@oscharko-dev/keiko-contracts";
 import {
   editQiCandidate,
@@ -47,10 +46,15 @@ function readStoredReviewerLabel(): string {
 export interface QiRunCardProps {
   readonly runId: string;
   /**
-   * The source this run was launched from (Epic #735). When present, the card offers drift
-   * re-check + targeted regeneration; when absent, that affordance is hidden.
+   * The sources this run was launched from (Epic #735). When non-empty, the card offers drift
+   * re-check + targeted regeneration against them; when empty/absent, that affordance is hidden.
    */
-  readonly connectedSource?: DriftPanelProps["connectedSource"] | undefined;
+  readonly connectedSources?: DriftPanelProps["connectedSources"] | undefined;
+  /**
+   * Called after a successful targeted regeneration with the new run's result. The hub uses this to
+   * open the new immutable run on the canvas (Issue #744 "refreshed card"). Absent → no-op.
+   */
+  readonly onRegenerated?: DriftPanelProps["onRegenerated"];
   /** Seam for tests. */
   readonly fetchDetailImpl?: typeof fetchQiRunDetail;
   readonly reviewImpl?: typeof reviewQiRun;
@@ -187,7 +191,8 @@ function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDe
 
 export function QiRunCard({
   runId,
-  connectedSource,
+  connectedSources,
+  onRegenerated,
   fetchDetailImpl = fetchQiRunDetail,
   reviewImpl = reviewQiRun,
   editImpl = editQiCandidate,
@@ -317,11 +322,11 @@ export function QiRunCard({
             <SummaryStrip detail={detail} />
             <FindingsList detail={detail} />
             <CoveragePanel detail={detail} />
-            {connectedSource !== undefined ? (
+            {connectedSources !== undefined && connectedSources.length > 0 ? (
               <DriftPanel
                 runId={runId}
-                connectedSource={connectedSource}
-                onRegenerated={() => void loadDetail()}
+                connectedSources={connectedSources}
+                onRegenerated={onRegenerated}
                 reCheckImpl={reCheckImpl}
                 regenerateImpl={regenerateImpl}
               />

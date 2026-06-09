@@ -28,7 +28,7 @@ import {
   type AtomCoverageStatus,
   type PolicyProfile,
 } from "@oscharko-dev/keiko-quality-intelligence";
-import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { assertValidRunId, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   createInMemoryQualityIntelligenceLocalStore,
   loadQualityIntelligenceCandidates,
@@ -67,6 +67,19 @@ const errorResult = (status: number, code: string, message: string): RouteResult
   status,
   body: { error: { code, message } },
 });
+
+// Validate the (already-non-empty) :id path param and map an invalid id to a 400 (mirrors the
+// evidence read handlers) instead of letting it reach the store and surface as a generic 500 in the
+// outer catch. assertValidRunId rejects separators / `..` / NUL, so a traversal-shaped id never
+// reaches a filesystem path. Returns the error result to short-circuit, or null when the id is valid.
+function invalidRunIdFormat(id: string): RouteResult | null {
+  try {
+    assertValidRunId(id);
+    return null;
+  } catch {
+    return errorResult(400, "QI_BAD_REQUEST", "Run id is invalid.");
+  }
+}
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -956,12 +969,27 @@ function immediateRegenerationResult(
       body: { runId: id, regeneratedCount: 0, preservedCount: drift.oldCandidates.length },
     };
   }
-  if (!narrowed.legacyRequirementsFallback) return null;
-  return errorResult(
-    409,
-    "QI_REGEN_LEGACY_REQUIREMENTS_UNSUPPORTED",
-    "This run predates atom-level requirements drift metadata. Start a new QI run against the current requirements sources instead.",
-  );
+  if (narrowed.legacyRequirementsFallback) {
+    return errorResult(
+      409,
+      "QI_REGEN_LEGACY_REQUIREMENTS_UNSUPPORTED",
+      "This run predates atom-level requirements drift metadata. Start a new QI run against the current requirements sources instead.",
+    );
+  }
+  // Data-loss guard: targeted regeneration must never turn a non-empty run into an empty one. If
+  // every candidate is stale yet nothing maps to a regeneratable atom (preserved == 0 AND nothing to
+  // regenerate), persisting the merge would silently drop the entire run. This is the catastrophic
+  // shape an atom-id scheme drift would take; fail closed with an actionable error instead (Epic
+  // #735 drift correctness). The legitimate "some tests orphaned, some preserved" case keeps
+  // preserved > 0 and is unaffected; a no-drift run already returned above.
+  if (narrowed.preservedCandidates.length === 0 && narrowed.atomsToRegenerate.length === 0) {
+    return errorResult(
+      409,
+      "QI_REGEN_WOULD_EMPTY",
+      "Regenerating the stale tests would remove every test in this run because the current source no longer maps to any of them. Start a fresh QI run against the current source instead.",
+    );
+  }
+  return null;
 }
 
 function resolveScopedRegenerationTarget(
@@ -1062,6 +1090,8 @@ export async function handleQiReCheck(
   if (id === undefined || id.trim().length === 0) {
     return errorResult(400, "QI_BAD_REQUEST", "Run id is required.");
   }
+  const invalidId = invalidRunIdFormat(id);
+  if (invalidId !== null) return invalidId;
   const evidenceDir = deps.evidenceDir;
   if (evidenceDir === undefined) {
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
@@ -1097,6 +1127,8 @@ export async function handleQiRegenerateStale(
   if (id === undefined || id.trim().length === 0) {
     return errorResult(400, "QI_BAD_REQUEST", "Run id is required.");
   }
+  const invalidId = invalidRunIdFormat(id);
+  if (invalidId !== null) return invalidId;
   const evidenceDir = deps.evidenceDir;
   if (evidenceDir === undefined) {
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");

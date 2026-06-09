@@ -279,6 +279,40 @@ describe("load-time integrity verification (issue #637)", () => {
     );
   });
 
+  it("integrity-hashes sourceFingerprints and round-trips them (Epic #735)", () => {
+    const result = recordQualityIntelligenceRun(
+      {
+        ...baseInput("run-crud-srcfp"),
+        sourceFingerprints: [{ envelopeId: "env-1", integrityHashSha256Hex: "a".repeat(64) }],
+      },
+      { evidenceDir },
+    );
+    expect(result.manifest.integrityHashes.sourceFingerprints).toBeDefined();
+    const loaded = loadQualityIntelligenceRun("run-crud-srcfp", { evidenceDir });
+    expect(loaded?.sourceFingerprints?.[0]?.envelopeId).toBe("env-1");
+  });
+
+  it("rejects a load when a sourceFingerprints entry is tampered without recomputing the integrity hash (Epic #735)", async () => {
+    recordQualityIntelligenceRun(
+      {
+        ...baseInput("run-tamper-srcfp"),
+        sourceFingerprints: [{ envelopeId: "env-1", integrityHashSha256Hex: "a".repeat(64) }],
+      },
+      { evidenceDir },
+    );
+    const original = await readManifest("run-tamper-srcfp");
+    const sourceFingerprints = original.sourceFingerprints as readonly Record<string, unknown>[];
+    await writeManifest("run-tamper-srcfp", {
+      ...original,
+      // Flip the recorded hash of the existing envelope — drift detection would otherwise trust a
+      // forged "unchanged" fingerprint. The recomputed hash no longer matches the stored one.
+      sourceFingerprints: [{ ...sourceFingerprints[0], integrityHashSha256Hex: "b".repeat(64) }],
+    });
+    expect(() => loadQualityIntelligenceRun("run-tamper-srcfp", { evidenceDir })).toThrow(
+      EvidenceReadError,
+    );
+  });
+
   it("skips a tampered manifest in list when load is the iteration mechanism (BFF parity)", async () => {
     recordQualityIntelligenceRun(inputWithFinding("run-tamper-list-bad"), { evidenceDir });
     recordQualityIntelligenceRun(baseInput("run-tamper-list-good"), { evidenceDir });

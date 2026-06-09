@@ -285,13 +285,13 @@ describe("QiRunCard", () => {
     expect(badge.className).toContain("qi-quality-low");
   });
 
-  it("renders the drift panel when a connected source is provided", async () => {
+  it("renders the drift panel when connected sources are provided", async () => {
     const detail = makeDetail("qi-run-d1", [makeCandidate("tc-1", "A test")]);
     render(
       <QiRunCard
         runId="qi-run-d1"
         fetchDetailImpl={fetchOk(detail)}
-        connectedSource={{ kind: "file", label: "Fachkonzept.md", path: "/abs/Fachkonzept.md" }}
+        connectedSources={[{ kind: "file", label: "Fachkonzept.md", path: "/abs/Fachkonzept.md" }]}
       />,
     );
     expect(await screen.findByTestId("qi-drift-recheck")).toBeInTheDocument();
@@ -300,6 +300,13 @@ describe("QiRunCard", () => {
   it("hides the drift panel when no connected source is provided", async () => {
     const detail = makeDetail("qi-run-d2", [makeCandidate("tc-1", "A test")]);
     render(<QiRunCard runId="qi-run-d2" fetchDetailImpl={fetchOk(detail)} />);
+    await screen.findByText("A test");
+    expect(screen.queryByTestId("qi-drift-recheck")).not.toBeInTheDocument();
+  });
+
+  it("hides the drift panel when connected sources is an empty array", async () => {
+    const detail = makeDetail("qi-run-d3", [makeCandidate("tc-1", "A test")]);
+    render(<QiRunCard runId="qi-run-d3" fetchDetailImpl={fetchOk(detail)} connectedSources={[]} />);
     await screen.findByText("A test");
     expect(screen.queryByTestId("qi-drift-recheck")).not.toBeInTheDocument();
   });

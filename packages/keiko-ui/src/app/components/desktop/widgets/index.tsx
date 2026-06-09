@@ -1,4 +1,5 @@
 import { registerWindowRender } from "../windows/WindowsRegistry";
+import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { ProjectPanel } from "./panels/ProjectPanel";
 import { SearchPanel } from "./panels/SearchPanel";
 import { PluginsPanel } from "./panels/PluginsPanel";
@@ -22,6 +23,7 @@ import { FigmaSnapshotWindow } from "./figma/FigmaSnapshotWindow";
 import { QiHubPanel } from "./quality-intelligence/QiHubPanel";
 import { QiRunCard } from "./quality-intelligence/QiRunCard";
 import { RelationshipsView } from "../../../relationships/RelationshipsView";
+import { buildConnectedRunSources } from "./quality-intelligence/connectedSources";
 import type { QualityIntelligenceInlineSource } from "@oscharko-dev/keiko-contracts";
 
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
@@ -34,23 +36,45 @@ function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
   return typeof v === "boolean" ? v : undefined;
 }
 
-// Reconstruct the QI run source from a qiRun window's cfg so the run card can re-check drift
-// (Epic #735). A connected file takes precedence over a connected folder; absent both → undefined
-// (the card then hides the drift affordance).
-function qiConnectedSource(
+// Reconstruct the inline sources a qiRun window's run was launched from so the run card can re-check
+// drift (Epic #735). The hub serialises the connected source set (file / folders / capsules /
+// capsule-sets / figma snapshots, in the RunLauncher's exact order) into `connectedSourcesJson` when
+// it opens the run; we parse it here so re-check sees byte-identical sources and an unchanged source
+// reports no drift. Older windows that carry only the single connectedFilePath/connectedRoot scalars
+// fall back to reconstructing a single source. Empty → the card hides the drift affordance.
+function qiConnectedSources(
   cfg: Record<string, unknown>,
-): QualityIntelligenceInlineSource | undefined {
-  const filePath = str(cfg, "connectedFilePath");
-  if (filePath !== undefined && filePath.length > 0) {
-    const label = filePath.split("/").pop() ?? filePath;
-    return { kind: "file", label, path: filePath };
+): readonly QualityIntelligenceInlineSource[] {
+  const json = str(cfg, "connectedSourcesJson");
+  if (json !== undefined && json.length > 0) {
+    try {
+      const parsed: unknown = JSON.parse(json);
+      // The server re-validates every source entry, so a light array guard is enough here.
+      if (Array.isArray(parsed)) return parsed as readonly QualityIntelligenceInlineSource[];
+    } catch {
+      // fall through to the legacy single-source reconstruction
+    }
   }
-  const root = str(cfg, "connectedRoot");
-  if (root !== undefined && root.length > 0) {
-    const label = root.split("/").pop() ?? root;
-    return { kind: "workspace", label, path: root };
-  }
-  return undefined;
+  return buildConnectedRunSources({
+    connectedFilePath: str(cfg, "connectedFilePath") ?? null,
+    connectedRoot: str(cfg, "connectedRoot") ?? null,
+  });
+}
+
+// Serialise the currently-connected source set (Files folders/file, Connector capsules, Figma
+// snapshots) into a scalar cfg field so it can ride through openWindow (whose cfg values must be
+// scalars). Reuses the SAME builder the RunLauncher generates from, so a re-check reconstructs the
+// exact sources — same order, same labels — and never reports false drift on an unchanged source.
+function connectedSourcesCfgFromCtx(ctx: WindowRenderContext): Record<string, string> {
+  const sources = buildConnectedRunSources({
+    connectedFilePath: ctx.linkedFilePath ?? null,
+    connectedRoot: ctx.linkedRoot,
+    connectedRoots: ctx.linkedRoots,
+    connectedCapsuleIds: ctx.linkedCapsuleIds,
+    connectedCapsuleSetIds: ctx.linkedCapsuleSetIds,
+    connectedFigmaSnapshotRunIds: ctx.linkedFigmaSnapshotRunIds,
+  });
+  return sources.length > 0 ? { connectedSourcesJson: JSON.stringify(sources) } : {};
 }
 
 function agentAccess(cfg: Record<string, unknown>): "ask" | "full" | undefined {
@@ -96,15 +120,7 @@ registerWindowRender("settings", () => <SettingsPanel />);
 registerWindowRender("quality", (_cfg, ctx) => (
   <QiHubPanel
     openRun={(runId) => {
-      ctx.openWindow("qiRun", {
-        runId,
-        ...(ctx.linkedFilePath !== undefined && ctx.linkedFilePath !== null
-          ? { connectedFilePath: ctx.linkedFilePath }
-          : {}),
-        ...(ctx.linkedRoot !== undefined && ctx.linkedRoot !== null
-          ? { connectedRoot: ctx.linkedRoot }
-          : {}),
-      });
+      ctx.openWindow("qiRun", { runId, ...connectedSourcesCfgFromCtx(ctx) });
     }}
     connectedRoot={ctx.linkedRoot}
     connectedFilePath={ctx.linkedFilePath ?? null}
@@ -114,15 +130,31 @@ registerWindowRender("quality", (_cfg, ctx) => (
     connectedFigmaSnapshotRunIds={ctx.linkedFigmaSnapshotRunIds}
   />
 ));
-registerWindowRender("qiRun", (cfg) => {
+registerWindowRender("qiRun", (cfg, ctx) => {
   const runId = str(cfg, "runId");
-  const connectedSource = qiConnectedSource(cfg);
-  return runId !== undefined && runId !== "" ? (
-    <QiRunCard runId={runId} connectedSource={connectedSource} />
-  ) : (
-    <div className="lk-empty">
-      <p className="lk-empty-body">Open a run from the Quality Intelligence hub.</p>
-    </div>
+  if (runId === undefined || runId === "") {
+    return (
+      <div className="lk-empty">
+        <p className="lk-empty-body">Open a run from the Quality Intelligence hub.</p>
+      </div>
+    );
+  }
+  const connectedSources = qiConnectedSources(cfg);
+  // A regeneration writes a NEW immutable run; open it on the canvas so the user sees the merged
+  // (fresh + regenerated) tests, carrying the same connected sources so the new card can itself
+  // re-check drift (Epic #735, Issue #744 "refreshed card"). The original run card is left intact.
+  const carried = str(cfg, "connectedSourcesJson");
+  return (
+    <QiRunCard
+      runId={runId}
+      connectedSources={connectedSources}
+      onRegenerated={(result) => {
+        ctx.openWindow("qiRun", {
+          runId: result.runId,
+          ...(carried !== undefined && carried.length > 0 ? { connectedSourcesJson: carried } : {}),
+        });
+      }}
+    />
   );
 });
 
