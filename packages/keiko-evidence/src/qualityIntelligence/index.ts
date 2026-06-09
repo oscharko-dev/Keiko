@@ -87,6 +87,7 @@ export {
 } from "./figmaSnapshot/schema.js";
 export type {
   FigmaSnapshotImageRef,
+  FigmaSnapshotLinkRow,
   FigmaSnapshotProvenanceRow,
   FigmaSnapshotRecord,
   FigmaSnapshotRedactionSummary,

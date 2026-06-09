@@ -585,25 +585,61 @@ function visionAugmentedScreenText(
   return QualityIntelligenceFigma.mergeVisionHints(baselineText, hints).text;
 }
 
-// Derive the redacted, budget-capped canonical text for every parseable screen. A screen whose
-// opaque irJson cannot be parsed is skipped (never crashes the run); the per-run byte budget bounds
-// the cumulative corpus so an oversized board never hard-fails on QI_PROMPT_TOO_LARGE.
+interface ParsedScreen {
+  readonly row: FigmaSnapshotRecord["screens"][number];
+  readonly ir: QualityIntelligenceFigma.ScreenIr;
+}
+
+// Parse every screen's opaque irJson once; an unparseable screen is dropped (never crashes the run).
+function parseScreens(record: FigmaSnapshotRecord): readonly ParsedScreen[] {
+  const parsed: ParsedScreen[] = [];
+  for (const row of record.screens) {
+    const ir = QualityIntelligenceFigma.parseScreenIr(row.irJson);
+    if (ir !== undefined) parsed.push({ row, ir });
+  }
+  return parsed;
+}
+
+// Derive the deterministic navigation/flow/coverage test items per screen from the parsed screens +
+// the snapshot's raw inter-screen links (#811). Composes into the baseline below through #754's
+// `extraItems` seam. When the snapshot carries no `links` (an older record), every screen maps to no
+// nav items and the baseline is identical to the IR-only path — purely additive.
+function navItemsByScreen(
+  parsed: readonly ParsedScreen[],
+  links: readonly QualityIntelligenceFigma.InterScreenLink[],
+): ReadonlyMap<string, readonly QualityIntelligenceFigma.StructuralTestItem[]> {
+  const irResult: QualityIntelligenceFigma.ScreenIrResult = {
+    screens: parsed.map((p) => p.ir),
+    links,
+    tokens: { colors: [], typography: [], spacing: [], radius: [] },
+    reduction: { inputNodeCount: 0, keptNodeCount: 0, removedNodeCount: 0, removedRatio: 0 },
+  };
+  return QualityIntelligenceFigma.deriveNavTestItemsByScreen(
+    QualityIntelligenceFigma.deriveNavGraph(irResult),
+  );
+}
+
+// Derive the redacted, budget-capped canonical text for every parseable screen. Each screen's
+// deterministic structural baseline (#754) is augmented additively with its navigation/flow test
+// items (#811) through the `extraItems` seam, then optionally with vision hints. The per-run byte
+// budget bounds the cumulative corpus so an oversized board never hard-fails on QI_PROMPT_TOO_LARGE.
 function figmaScreenDocs(
   record: FigmaSnapshotRecord,
   vision: FigmaVisionHintProvider | undefined,
 ): readonly CorpusDoc[] {
+  const parsed = parseScreens(record);
+  const navItems = navItemsByScreen(parsed, record.links ?? []);
   const docs: CorpusDoc[] = [];
   let totalBytes = 0;
-  for (const screen of record.screens) {
-    const ir = QualityIntelligenceFigma.parseScreenIr(screen.irJson);
-    if (ir === undefined) continue;
-    const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir);
-    const augmented = visionAugmentedScreenText(baseline, screen, vision);
+  for (const { row, ir } of parsed) {
+    const extraItems = navItems.get(ir.id) ?? [];
+    const baseline = QualityIntelligenceFigma.deriveScreenTestBaseline(ir, extraItems);
+    const augmented = visionAugmentedScreenText(baseline, row, vision);
     const capped = truncateToUtf8Bytes(redact(augmented), CAPSULE_MAX_BYTES_PER_DOCUMENT);
     if (capped.trim().length === 0) continue;
     const bytes = utf8ByteLength(capped);
     if (docs.length > 0 && totalBytes + bytes > CAPSULE_BUDGET_BYTES) break;
-    docs.push({ documentId: `${screen.screenId} (${ir.name})`, text: capped });
+    docs.push({ documentId: `${row.screenId} (${ir.name})`, text: capped });
     totalBytes += bytes;
   }
   return docs;

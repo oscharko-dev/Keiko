@@ -22,7 +22,12 @@ export type StructuralTestCategory =
   | "field-validation"
   | "control-action"
   | "screen-render"
-  | "state";
+  | "state"
+  // Navigation/flow categories (Issue #811). Additive members contributed through the `extraItems`
+  // seam by the deterministic navigation-graph derivation (navGraph.ts); never produced here.
+  | "navigation"
+  | "flow"
+  | "coverage-notice";
 
 /** One deterministic, per-screen-attributable test item derived from the Screen-IR. */
 export interface StructuralTestItem {

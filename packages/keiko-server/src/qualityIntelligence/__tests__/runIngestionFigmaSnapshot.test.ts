@@ -52,12 +52,14 @@ const screenRow = (screenId: string, irJson: unknown): FigmaSnapshotRecord["scre
 
 const record = (
   screens: readonly FigmaSnapshotRecord["screens"][number][],
+  links?: FigmaSnapshotRecord["links"],
 ): FigmaSnapshotRecord => ({
   figmaSnapshotSchemaVersion: 1,
   runId: "snap-1",
   provenance: { fileKey: "fk", nodeId: "1:2", version: undefined, fetchedAt: TS },
   screens,
   skippedScreens: [],
+  ...(links !== undefined ? { links } : {}),
   integrityHash: "root-hash",
   redactionSummary: { totalStringsScanned: 0, stringsRedacted: 0, patternsMatched: {} },
 });
@@ -298,5 +300,79 @@ describe("figma-snapshot ingestion — multi-source composition", () => {
     expect(kinds).toContain("figma-snapshot");
     expect(kinds).toContain("requirements");
     expect(result.envelopes).toHaveLength(2);
+  });
+});
+
+// ─── Navigation/flow composition through the extraItems seam (#811) ───────────────
+//
+// The nav-derived test items are composed into each screen's structural baseline additively. A
+// snapshot WITHOUT links degrades to zero nav items (identical to the IR-only path); a snapshot WITH
+// links contributes navigation, flow, and coverage-notice items attributed per screen.
+
+describe("figma-snapshot ingestion — navigation/flow composition (#811)", () => {
+  // Two screens: Login (has a button) → Home; Home is a dead end (no outgoing link).
+  const navRecord = (): FigmaSnapshotRecord =>
+    record(
+      [
+        screenRow(
+          "s-login",
+          screenIr(
+            "s-login",
+            "Login",
+            irNode("login-root", "container", { children: [irNode("login-btn", "button")] }),
+          ),
+        ),
+        screenRow("s-home", screenIr("s-home", "Home", irNode("home-root", "container"))),
+      ],
+      [{ sourceNodeId: "login-btn", trigger: "ON_CLICK", targetNodeId: "home-root" }],
+    );
+
+  it("adds a navigation test item to the source screen's atom text", () => {
+    const result = ingestInlineSources(
+      input([figmaSource()], { figmaSnapshotLoader: loaderFor(navRecord()) }),
+    );
+    const loginText =
+      result.ingestedAtoms.find((a) => a.canonicalText.includes("[s-login]"))?.canonicalText ?? "";
+
+    expect(loginText).toContain("(navigation)");
+    expect(loginText).toContain("Login");
+    expect(loginText).toContain("Home");
+    // The deterministic structural baseline is still present (composition is additive).
+    expect(loginText).toContain("(screen-render)");
+  });
+
+  it("adds a dead-end coverage notice to the terminal screen's atom text", () => {
+    const result = ingestInlineSources(
+      input([figmaSource()], { figmaSnapshotLoader: loaderFor(navRecord()) }),
+    );
+    const homeText =
+      result.ingestedAtoms.find((a) => a.canonicalText.includes("[s-home]"))?.canonicalText ?? "";
+
+    expect(homeText).toContain("(coverage-notice)");
+    expect(homeText.toLowerCase()).toContain("dead end");
+  });
+
+  it("degrades to zero nav items when the snapshot carries no links (older record)", () => {
+    const result = ingestInlineSources(
+      input([figmaSource()], {
+        figmaSnapshotLoader: loaderFor(
+          record([
+            screenRow(
+              "s-login",
+              screenIr(
+                "s-login",
+                "Login",
+                irNode("login-root", "container", { children: [irNode("login-btn", "button")] }),
+              ),
+            ),
+          ]),
+        ),
+      }),
+    );
+    const text = result.ingestedAtoms[0]?.canonicalText ?? "";
+
+    expect(text).toContain("(screen-render)");
+    expect(text).not.toContain("(navigation)");
+    expect(text).not.toContain("(flow)");
   });
 });

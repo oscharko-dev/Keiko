@@ -43,6 +43,19 @@ export interface FigmaSnapshotScreenRow {
   readonly integrityHash: string;
 }
 
+/**
+ * A raw inter-screen transition carried for the navigation/flow graph (#811). OPTIONAL and additive:
+ * a record without `links` (e.g. an older snapshot) is still valid and the navigation derivation
+ * degrades to zero nav items. NOT part of any integrity hash — `links` is non-identity design
+ * metadata, so adding it does not change the drift hash (#735). Node ids + trigger are design content
+ * (already redaction-safe); no token, secret, or url ever reaches this shape.
+ */
+export interface FigmaSnapshotLinkRow {
+  readonly sourceNodeId: string;
+  readonly trigger: string;
+  readonly targetNodeId: string;
+}
+
 /** Token-free provenance carried for audit. `fetchedAt` is audit-only and NOT in any hash. */
 export interface FigmaSnapshotProvenanceRow {
   readonly fileKey: string;
@@ -63,6 +76,8 @@ export interface FigmaSnapshotRecord {
   readonly provenance: FigmaSnapshotProvenanceRow;
   readonly screens: readonly FigmaSnapshotScreenRow[];
   readonly skippedScreens: readonly FigmaSnapshotSkippedScreenRow[];
+  /** Raw inter-screen transitions for the navigation/flow graph (#811). Optional + additive. */
+  readonly links?: readonly FigmaSnapshotLinkRow[];
   readonly integrityHash: string;
   readonly redactionSummary: FigmaSnapshotRedactionSummary;
 }
@@ -73,6 +88,7 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "provenance",
   "screens",
   "skippedScreens",
+  "links",
   "integrityHash",
   "redactionSummary",
 ]);

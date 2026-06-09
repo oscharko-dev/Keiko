@@ -85,6 +85,7 @@ export {
   validateFigmaSnapshotRecord,
   createNodeFigmaSnapshotStore,
   type FigmaSnapshotImageRef,
+  type FigmaSnapshotLinkRow,
   type FigmaSnapshotProvenanceRow,
   type FigmaSnapshotRecord,
   type FigmaSnapshotRedactionSummary,

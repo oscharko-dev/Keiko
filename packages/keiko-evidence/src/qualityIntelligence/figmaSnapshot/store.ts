@@ -39,6 +39,7 @@ import { QI_SUBDIR } from "../store.js";
 import {
   FIGMA_SNAPSHOT_SCHEMA_VERSION,
   validateFigmaSnapshotRecord,
+  type FigmaSnapshotLinkRow,
   type FigmaSnapshotRecord,
   type FigmaSnapshotScreenRow,
   type FigmaSnapshotSkippedScreenRow,
@@ -66,6 +67,8 @@ export interface RecordFigmaSnapshotInput {
   readonly integrityHash: string;
   readonly screens: readonly RecordFigmaSnapshotScreenInput[];
   readonly skippedScreens: readonly FigmaSnapshotSkippedScreenRow[];
+  /** Raw inter-screen transitions for the navigation/flow graph (#811). Optional + additive. */
+  readonly links?: readonly FigmaSnapshotLinkRow[];
 }
 
 export interface RecordFigmaSnapshotResult {
@@ -183,6 +186,9 @@ function assembleRecord(
     },
     screens: screenRows,
     skippedScreens: input.skippedScreens,
+    // Omit `links` entirely when absent so an older snapshot stays byte-minimal and the optional
+    // field never serialises as `undefined` (exactOptionalPropertyTypes-safe).
+    ...(input.links !== undefined ? { links: input.links } : {}),
     integrityHash: input.integrityHash,
     redactionSummary: { totalStringsScanned: 0, stringsRedacted: 0, patternsMatched: {} },
   };

@@ -140,4 +140,53 @@ describe("createNodeFigmaSnapshotStore", () => {
     expect(loaded.screens).toHaveLength(0);
     expect(loaded.skippedScreens).toHaveLength(0);
   });
+
+  // ─── Inter-screen links — additive, optional, hash-neutral (#811) ──────────────────
+
+  it("round-trips optional inter-screen links when provided", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record({
+      ...baseInput(),
+      links: [{ sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" }],
+    });
+
+    const loaded = loadOrThrow(store, RUN_ID);
+    expect(loaded.links).toEqual([
+      { sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" },
+    ]);
+  });
+
+  it("omits `links` from the persisted record when none are provided (older snapshot)", () => {
+    const store = createNodeFigmaSnapshotStore(dir);
+    store.record(baseInput());
+
+    const loaded = loadOrThrow(store, RUN_ID);
+    // An older snapshot carries no links: the field is absent and a navigation derivation downstream
+    // degrades to zero nav items rather than crashing.
+    expect(loaded.links).toBeUndefined();
+    expect("links" in loaded).toBe(false);
+  });
+
+  it("keeps the snapshot integrity hash unchanged whether or not links are present", () => {
+    // The caller computes `integrityHash` over the snapshot identity (schema version + pinned
+    // version + per-screen IR/image hashes); `links` is non-identity metadata and must NOT enter it.
+    // The store records the caller's hash verbatim, so two records that differ only by `links` carry
+    // an identical integrity hash — drift detection (#735) stays stable.
+    const withLinks = createNodeFigmaSnapshotStore(dir);
+    withLinks.record({
+      ...baseInput(),
+      links: [{ sourceNodeId: "1:1", trigger: "ON_CLICK", targetNodeId: "1:2" }],
+    });
+    const a = loadOrThrow(withLinks, RUN_ID).integrityHash;
+
+    const other = mkdtempSync(join(tmpdir(), "figma-snapshot-nolinks-"));
+    try {
+      const withoutLinks = createNodeFigmaSnapshotStore(other);
+      withoutLinks.record(baseInput());
+      const b = loadOrThrow(withoutLinks, RUN_ID).integrityHash;
+      expect(a).toBe(b);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
 });

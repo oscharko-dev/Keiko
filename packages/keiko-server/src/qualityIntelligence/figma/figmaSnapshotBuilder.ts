@@ -199,6 +199,9 @@ export const buildFigmaSnapshot = async (
     provenance: input.provenance,
     screens,
     skippedScreens,
+    // Carried verbatim from the Screen-IR (#752) for the navigation/flow graph (#811). NOT folded
+    // into the integrity hash below — `links` is non-identity metadata, so drift (#735) is stable.
+    links: input.ir.links,
     integrityHash: hashSnapshot(SNAPSHOT_SCHEMA_VERSION, input.provenance.version, screens),
   };
 };

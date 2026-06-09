@@ -56,5 +56,11 @@ export interface FigmaSnapshot {
   readonly provenance: FigmaProvenance;
   readonly screens: readonly FigmaSnapshotScreen[];
   readonly skippedScreens: readonly FigmaSkippedScreen[];
+  /**
+   * Raw inter-screen transitions carried from the Screen-IR (#752) for the navigation/flow graph
+   * (#811). NOT part of `integrityHash` — non-identity design metadata, so it never affects drift
+   * (#735). Downstream persistence stores it on the snapshot record additively.
+   */
+  readonly links: readonly QualityIntelligenceFigma.InterScreenLink[];
   readonly integrityHash: string;
 }

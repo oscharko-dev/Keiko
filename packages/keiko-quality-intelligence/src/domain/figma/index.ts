@@ -25,6 +25,24 @@ export type {
 export { mergeVisionHints } from "./visionAugmentation.js";
 export type { VisionMergeResult } from "./visionAugmentation.js";
 
+// Deterministic navigation/flow graph + routing hints + per-screen nav test items (Issue #811).
+// Pure, model-free: derived from the IR's inter-screen links; composes into the QI run additively
+// through `deriveScreenTestBaseline`'s `extraItems` seam.
+export {
+  deriveNavGraph,
+  deriveNavFlows,
+  deriveRoutingHints,
+  deriveNavTestItemsByScreen,
+} from "./navGraph.js";
+export type {
+  NavEdge,
+  NavFlow,
+  NavGraph,
+  NavNode,
+  RoutingHint,
+  UnresolvedLink,
+} from "./navGraph.js";
+
 export type { FigmaSourceNode } from "./sourceNode.js";
 
 export type {
