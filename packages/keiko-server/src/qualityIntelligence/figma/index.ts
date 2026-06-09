@@ -24,6 +24,20 @@ export {
   type FigmaHttpResponse,
 } from "./figmaHttpPort.js";
 export {
+  createDefaultFigmaRenderPort,
+  type FigmaRenderPort,
+  type FigmaRenderRequest,
+  type FigmaRenderResponse,
+} from "./figmaRenderPort.js";
+export { buildFigmaSnapshot, type BuildFigmaSnapshotInput } from "./figmaSnapshotBuilder.js";
+export type {
+  FigmaRenderedImage,
+  FigmaSkippedScreen,
+  FigmaSkippedScreenReason,
+  FigmaSnapshot,
+  FigmaSnapshotScreen,
+} from "./figmaSnapshotTypes.js";
+export {
   FigmaConnectorError,
   figmaConnectorErrorBody,
   type FigmaConnectorErrorBody,

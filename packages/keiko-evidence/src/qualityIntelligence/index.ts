@@ -80,6 +80,30 @@ export {
   type ContainedJsonArtifactStoreOptions,
 } from "./companionStore.js";
 
+// ─── Figma Snapshot evidence artifact (Epic #750, Issue #753) ───────────────────────
+export {
+  FIGMA_SNAPSHOT_SCHEMA_VERSION,
+  validateFigmaSnapshotRecord,
+} from "./figmaSnapshot/schema.js";
+export type {
+  FigmaSnapshotImageRef,
+  FigmaSnapshotProvenanceRow,
+  FigmaSnapshotRecord,
+  FigmaSnapshotRedactionSummary,
+  FigmaSnapshotScreenRow,
+  FigmaSnapshotSkipReason,
+  FigmaSnapshotSkippedScreenRow,
+  FigmaSnapshotValidationResult,
+} from "./figmaSnapshot/schema.js";
+export { createNodeFigmaSnapshotStore } from "./figmaSnapshot/store.js";
+export type {
+  FigmaSnapshotStore,
+  FigmaSnapshotStoreOptions,
+  RecordFigmaSnapshotInput,
+  RecordFigmaSnapshotResult,
+  RecordFigmaSnapshotScreenInput,
+} from "./figmaSnapshot/store.js";
+
 // ─── Retention, deletion, recovery (M3) ────────────────────────────────────────────
 export {
   applyQualityIntelligenceRetention,
