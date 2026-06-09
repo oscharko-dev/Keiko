@@ -80,3 +80,42 @@ export {
   classifyTokenFailure,
   type FigmaTokenSources,
 } from "./figmaTokenSource.js";
+export { deriveFigmaScopeRef, type FigmaScopeRef } from "./figmaScopeRef.js";
+export {
+  appendFigmaConnectorAudit,
+  loadFigmaConnectorAudit,
+  FIGMA_AUDIT_SCHEMA_VERSION,
+  type AppendFigmaConnectorAuditInput,
+  type FigmaConnectorAction,
+  type FigmaConnectorAuditArtifact,
+  type FigmaConnectorAuditCounts,
+  type FigmaConnectorAuditEntry,
+  type FigmaConnectorOutcome,
+} from "./figmaConnectorAudit.js";
+export {
+  recordReadOnlyConsent,
+  loadReadOnlyConsent,
+  hasReadOnlyConsent,
+  assertReadOnlyConsent,
+  EXPECTED_FIGMA_SCOPES,
+  FIGMA_CONSENT_SCHEMA_VERSION,
+  type FigmaScopeConsent,
+  type RecordReadOnlyConsentInput,
+} from "./figmaConsent.js";
+export {
+  computeFigmaConnectorMetrics,
+  type FigmaA11yMetrics,
+  type FigmaAugmentationShare,
+  type FigmaAugmentationTally,
+  type FigmaConnectorMetrics,
+  type FigmaConnectorMetricsExtras,
+  type FigmaNavGraphMetrics,
+} from "./figmaConnectorMetrics.js";
+export {
+  observeFigmaSnapshot,
+  observeFigmaRevoke,
+  type ObservedActionContext,
+  type ObservedRevokeInput,
+  type ObservedSnapshotInput,
+  type ObservedSnapshotResult,
+} from "./figmaObservedActions.js";
