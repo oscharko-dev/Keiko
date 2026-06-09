@@ -43,6 +43,28 @@ export type {
   UnresolvedLink,
 } from "./navGraph.js";
 
+// Deterministic design-to-code emission: target-neutral plan + pluggable CodeTargetAdapter seam +
+// the framework-agnostic HTML/CSS adapter + the model-only-for-naming port (Issue #755). Pure,
+// model-free: the structural emission is fully deterministic; the naming port only renames elements
+// and never changes structure. Consumes design tokens (#752) and routing hints (#811).
+export { buildEmissionPlan } from "./emissionPlan.js";
+export type {
+  CodeEmissionPlan,
+  EmissionElement,
+  EmissionInput,
+  EmissionNavTarget,
+  EmissionRole,
+  ScreenEmission,
+} from "./emissionPlan.js";
+
+export { emitCode } from "./codeTargetAdapter.js";
+export type { CodeArtifact, CodeFile, CodeTargetAdapter } from "./codeTargetAdapter.js";
+
+export { applyNaming } from "./semanticNaming.js";
+export type { SemanticNamingProvider, SemanticNamingRequest } from "./semanticNaming.js";
+
+export { htmlCssAdapter } from "./htmlCssAdapter.js";
+
 export type { FigmaSourceNode } from "./sourceNode.js";
 
 export type {
