@@ -70,12 +70,15 @@ export function ExportBar({ runId, exportImpl = exportQiRun }: ExportBarProps): 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
-  const isTms = ADAPTERS.find((a) => a.id === adapter)?.tms ?? false;
+  const [downloaded, setDownloaded] = useState<string | null>(null);
+  const selected = ADAPTERS.find((a) => a.id === adapter);
+  const isTms = selected?.tms ?? false;
 
   const handleExport = useCallback(async (): Promise<void> => {
     setBusy(true);
     setError(null);
     setPreview(null);
+    setDownloaded(null);
     try {
       const res = await exportImpl(runId, adapter, { dryRun: isTms, approvedOnly: false });
       if (res.dryRun) {
@@ -83,7 +86,10 @@ export function ExportBar({ runId, exportImpl = exportQiRun }: ExportBarProps): 
           `${res.candidateCount.toString()} candidates · ${res.byteLen.toString()} bytes\n\n${res.preview}`,
         );
       } else {
-        triggerDownload(res.filename, res.contentType, res.body);
+        // Binary formats (PDF / ZIP) arrive base64-encoded; forward the encoding so the Blob is built
+        // from the DECODED bytes, not the base64 text. Omitting it corrupts the downloaded file.
+        triggerDownload(res.filename, res.contentType, res.body, res.encoding);
+        setDownloaded(res.filename);
       }
     } catch (err) {
       setError(formatError(err));
@@ -104,6 +110,7 @@ export function ExportBar({ runId, exportImpl = exportQiRun }: ExportBarProps): 
             setAdapter(e.target.value);
             setPreview(null);
             setError(null);
+            setDownloaded(null);
           }}
         >
           {ADAPTERS.map((a) => (
@@ -123,6 +130,23 @@ export function ExportBar({ runId, exportImpl = exportQiRun }: ExportBarProps): 
       >
         {isTms ? "Preview" : "Download"}
       </button>
+      {isTms ? (
+        <p className="qi-export-hint" role="note" data-testid="qi-export-connector-hint">
+          {selected?.id === "quality-center"
+            ? "Quality Center is preview-only. Configure a connector to enable live export."
+            : "External target — preview only. Configure a connector to enable live export."}
+        </p>
+      ) : null}
+      {downloaded !== null ? (
+        <p
+          className="qi-export-success"
+          role="status"
+          aria-live="polite"
+          data-testid="qi-export-success"
+        >
+          {`Downloaded ${downloaded}`}
+        </p>
+      ) : null}
       {preview !== null ? (
         <pre
           className="qi-export-preview"

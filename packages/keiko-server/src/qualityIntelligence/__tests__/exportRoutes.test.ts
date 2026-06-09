@@ -610,4 +610,38 @@ describe("handleQiExport — Epic #711 multi-format export", () => {
       "QI_EXTERNAL_EXPORT_DISABLED",
     );
   });
+
+  it("ZIP bundle entries are named for the run with contained, traversal-free names", async () => {
+    const result = await exportWith("zip-bundle");
+    expect(result.status).toBe(200);
+    const body = result.body as { encoding: string; body: string };
+    const bytes = Buffer.from(body.body, "base64");
+    // Parse central-directory file names from the STORE ZIP.
+    const names: string[] = [];
+    for (let i = 0; i + 4 <= bytes.length; i++) {
+      if (bytes.readUInt32LE(i) !== 0x02014b50) continue;
+      const nameLen = bytes.readUInt16LE(i + 28);
+      const extraLen = bytes.readUInt16LE(i + 30);
+      const commentLen = bytes.readUInt16LE(i + 32);
+      names.push(bytes.toString("utf8", i + 46, i + 46 + nameLen));
+      i += 46 + nameLen + extraLen + commentLen - 1;
+    }
+    expect(names).toEqual([`${RUN_ID}.csv`, `${RUN_ID}.md`, `${RUN_ID}.txt`]);
+    for (const name of names) {
+      expect(name).not.toContain("/");
+      expect(name).not.toContain("\\");
+      expect(name).not.toContain("..");
+    }
+  });
+});
+
+// ─── Request-body size cap (Issue #721 — size caps enforced) ─────────────────────
+
+describe("handleQiExport — request body size cap", () => {
+  it("returns 413 QI_BODY_TOO_LARGE for a body exceeding 16KB", async () => {
+    const huge = JSON.stringify({ adapter: "csv", pad: "x".repeat(17 * 1024) });
+    const result = asResult(await handleQiExport(ctx(RUN_ID, makeRawReq(huge)), deps(evidenceDir)));
+    expect(result.status).toBe(413);
+    expect((result.body as { error: { code: string } }).error.code).toBe("QI_BODY_TOO_LARGE");
+  });
 });

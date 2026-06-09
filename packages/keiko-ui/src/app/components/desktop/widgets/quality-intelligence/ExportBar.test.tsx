@@ -539,4 +539,104 @@ describe("ExportBar — Epic #711 multi-format adapters", () => {
     });
     expect(screen.queryByTestId("qi-export-error")).not.toBeInTheDocument();
   });
+
+  // The download Blob is built inside the component; capture it via URL.createObjectURL so we can
+  // assert the DECODED bytes. If res.encoding is dropped, the Blob holds the base64 TEXT and the
+  // magic-byte assertions below fail — exactly the corruption these tests guard against.
+  async function captureDownloadBytes(
+    adapterId: string,
+    result: Record<string, unknown>,
+  ): Promise<Uint8Array> {
+    const blobs: Blob[] = [];
+    const createSpy = vi
+      .spyOn(URL, "createObjectURL")
+      .mockImplementation((b: Blob | MediaSource) => {
+        blobs.push(b as Blob);
+        return "blob:mock";
+      });
+    const revokeSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    try {
+      const user = userEvent.setup();
+      const exportImpl = vi.fn().mockResolvedValue(result) as unknown as ExportQiRunFn;
+      render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
+      await user.selectOptions(
+        screen.getByRole("combobox", { name: /adapter|format|export/i }),
+        adapterId,
+      );
+      await user.click(screen.getByRole("button", { name: /download/i }));
+      await waitFor(() => {
+        expect(createSpy).toHaveBeenCalled();
+      });
+      const blob = blobs[0] as Blob;
+      return new Uint8Array(await blob.arrayBuffer());
+    } finally {
+      createSpy.mockRestore();
+      revokeSpy.mockRestore();
+    }
+  }
+
+  it("decodes the base64 PDF body so the Blob holds real %PDF- bytes (not the base64 text)", async () => {
+    const bytes = await captureDownloadBytes("pdf", {
+      dryRun: false,
+      adapter: "pdf",
+      filename: "run-001.pdf",
+      contentType: "application/pdf",
+      byteLen: 16,
+      encoding: "base64",
+      body: btoa("%PDF-1.4 minimal body"),
+    });
+    expect(new TextDecoder().decode(bytes.subarray(0, 5))).toBe("%PDF-");
+  });
+
+  it("decodes the base64 ZIP body so the Blob holds the PK signature (not the base64 text)", async () => {
+    const zipText = "PKrest-of-archive";
+    const bytes = await captureDownloadBytes("zip-bundle", {
+      dryRun: false,
+      adapter: "zip-bundle",
+      filename: "run-001.zip",
+      contentType: "application/zip",
+      byteLen: zipText.length,
+      encoding: "base64",
+      body: btoa(zipText),
+    });
+    expect(bytes[0]).toBe(0x50); // 'P'
+    expect(bytes[1]).toBe(0x4b); // 'K'
+  });
+
+  it("shows a download-success confirmation after a local export", async () => {
+    const user = userEvent.setup();
+    const exportImpl = makeLocalExportFake({ filename: "run-001.csv" });
+    render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /adapter|format|export/i }),
+      "csv",
+    );
+    await user.click(screen.getByRole("button", { name: /download/i }));
+    await waitFor(() => {
+      expect(screen.getByTestId("qi-export-success")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("qi-export-success")).toHaveTextContent(/run-001\.csv/);
+  });
+
+  it("surfaces a configure-connector affordance for the disabled Quality Center option", async () => {
+    const user = userEvent.setup();
+    render(<ExportBar runId="run-001" />);
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /adapter|format|export/i }),
+      "quality-center",
+    );
+    const hint = screen.getByTestId("qi-export-connector-hint");
+    expect(hint).toBeInTheDocument();
+    expect(hint).toHaveTextContent(/configure a connector/i);
+  });
+
+  it("does not show the connector hint for a local format", async () => {
+    const user = userEvent.setup();
+    render(<ExportBar runId="run-001" />);
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: /adapter|format|export/i }),
+      "markdown",
+    );
+    expect(screen.queryByTestId("qi-export-connector-hint")).not.toBeInTheDocument();
+  });
 });

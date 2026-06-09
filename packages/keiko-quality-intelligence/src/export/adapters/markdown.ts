@@ -11,22 +11,29 @@ import type {
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
 import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { inlineField, inlineFields } from "../textSafety.js";
 
 const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number =>
   a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0;
 
 const mdList = (items: readonly string[]): string =>
-  items.length === 0 ? "_none_\n" : items.map((item) => `- ${item}`).join("\n") + "\n";
+  items.length === 0
+    ? "_none_\n"
+    : inlineFields(items)
+        .map((item) => `- ${item}`)
+        .join("\n") + "\n";
 
 function renderCandidate(candidate: QualityIntelligenceTestCaseCandidate, runId: string): string {
   const lines: string[] = [];
-  lines.push(`## ${candidate.title}\n`);
+  lines.push(`## ${inlineField(candidate.title)}\n`);
   lines.push(`**ID:** ${candidate.id}  `);
   lines.push(`**Run:** ${runId}  `);
   lines.push(`**Priority:** ${candidate.priority}  `);
   lines.push(`**Risk class:** ${candidate.riskClass}  `);
   lines.push(`**Status:** ${candidate.status}  `);
-  lines.push(`**Tags:** ${candidate.tags.length > 0 ? candidate.tags.join(", ") : "_none_"}  `);
+  lines.push(
+    `**Tags:** ${candidate.tags.length > 0 ? inlineFields(candidate.tags).join(", ") : "_none_"}  `,
+  );
   lines.push("");
   lines.push("### Preconditions\n");
   lines.push(mdList(candidate.preconditions));
@@ -34,7 +41,9 @@ function renderCandidate(candidate: QualityIntelligenceTestCaseCandidate, runId:
   lines.push(
     candidate.steps.length === 0
       ? "_none_\n"
-      : candidate.steps.map((s, i) => `${String(i + 1)}. ${s}`).join("\n") + "\n",
+      : inlineFields(candidate.steps)
+          .map((s, i) => `${String(i + 1)}. ${s}`)
+          .join("\n") + "\n",
   );
   lines.push("### Expected results\n");
   lines.push(mdList(candidate.expectedResults));

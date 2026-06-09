@@ -71,4 +71,36 @@ describe("adaptToPlainText", () => {
     const out = adaptToPlainText(bundle([c]), [c]);
     expect(out).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/u);
   });
+
+  it("folds an embedded newline in a step so each step stays on one row", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      steps: ["Open\nthe page", "Submit"],
+    };
+    const out = adaptToPlainText(bundle([c]), [c]);
+    expect(out).toContain("1. Open the page");
+    expect(out).toContain("2. Submit");
+    expect(out).not.toContain("\nthe page");
+  });
+
+  it("renders empty field lists as (none)", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      preconditions: [],
+      steps: [],
+      expectedResults: [],
+      tags: [],
+    };
+    const out = adaptToPlainText(bundle([c]), [c]);
+    expect(out).toContain("Tags:       (none)");
+    expect(out.match(/\(none\)/gu)?.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("introduces no provider URL, bearer token, or prompt scaffolding of its own", () => {
+    const c = candidate("tc-1", "Plain redacted title");
+    const out = adaptToPlainText(bundle([c]), [c]);
+    expect(out).not.toMatch(/https?:\/\//iu);
+    expect(out).not.toMatch(/bearer\s|api[_-]?key|sk-[a-z0-9]/iu);
+    expect(out).not.toMatch(/system prompt|you are an? /iu);
+  });
 });

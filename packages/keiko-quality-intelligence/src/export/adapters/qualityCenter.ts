@@ -15,6 +15,7 @@ import type {
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
 import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { inlineField, inlineFields } from "../textSafety.js";
 
 const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number =>
   a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0;
@@ -22,12 +23,12 @@ const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }
 const DIVIDER = "-".repeat(60);
 
 const joinPipe = (items: readonly string[]): string =>
-  items.length === 0 ? "(none)" : items.join(" | ");
+  items.length === 0 ? "(none)" : inlineFields(items).join(" | ");
 
 function renderEntry(candidate: QualityIntelligenceTestCaseCandidate, index: number): string {
   const lines: string[] = [];
   lines.push(DIVIDER);
-  lines.push(`QC-${String(index + 1).padStart(4, "0")} ${candidate.title}`);
+  lines.push(`QC-${String(index + 1).padStart(4, "0")} ${inlineField(candidate.title)}`);
   lines.push(`  ID:           ${candidate.id}`);
   lines.push(`  Priority:     ${candidate.priority}`);
   lines.push(`  Risk class:   ${candidate.riskClass}`);

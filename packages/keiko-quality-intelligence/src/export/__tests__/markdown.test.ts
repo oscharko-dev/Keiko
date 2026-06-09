@@ -73,4 +73,44 @@ describe("adaptToMarkdown", () => {
     const out = adaptToMarkdown(bundle([c]), [c]);
     expect(out).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/u);
   });
+
+  it("folds an embedded newline in a step into one space so the list stays intact", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      steps: ["First line\nsecond line", "Tab\tseparated"],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    // The step renders as a single numbered list item, not two stray lines.
+    expect(out).toContain("1. First line second line");
+    expect(out).toContain("2. Tab separated");
+    // No bare continuation line that would break the ordered list.
+    expect(out).not.toContain("\nsecond line");
+  });
+
+  it("folds an embedded newline in the title so the heading stays on one line", () => {
+    const c = candidate("tc-1", "Title with\na break");
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).toContain("## Title with a break");
+  });
+
+  it("renders empty field lists as _none_ rather than emitting broken markup", () => {
+    const c: QualityIntelligenceTestCaseCandidate = {
+      ...candidate("tc-1", "X"),
+      preconditions: [],
+      steps: [],
+      expectedResults: [],
+      tags: [],
+    };
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).toContain("**Tags:** _none_");
+    expect(out.match(/_none_/gu)?.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("introduces no provider URL, bearer token, or prompt scaffolding of its own", () => {
+    const c = candidate("tc-1", "Plain redacted title");
+    const out = adaptToMarkdown(bundle([c]), [c]);
+    expect(out).not.toMatch(/https?:\/\//iu);
+    expect(out).not.toMatch(/bearer\s|api[_-]?key|sk-[a-z0-9]/iu);
+    expect(out).not.toMatch(/system prompt|you are an? /iu);
+  });
 });

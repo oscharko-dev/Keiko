@@ -8366,6 +8366,20 @@ select.dlg-input {
   margin: 8px 0 0;
   font-family: var(--font-mono, monospace);
 }
+.qi-export-hint {
+  width: 100%;
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+.qi-export-success {
+  width: 100%;
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg);
+}
 
 /* ─── Epic #270 — QI Workspace windows (hub + run card) ───────────────────── */
 

@@ -11,6 +11,7 @@ import type {
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
 import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { inlineField, inlineFields } from "../textSafety.js";
 
 const byCandidateIdAsc = (a: { candidateId: string }, b: { candidateId: string }): number =>
   a.candidateId < b.candidateId ? -1 : a.candidateId > b.candidateId ? 1 : 0;
@@ -31,21 +32,23 @@ const numberedList = (items: readonly string[], indent = "  "): string =>
 function renderCandidate(candidate: QualityIntelligenceTestCaseCandidate, index: number): string {
   const lines: string[] = [];
   lines.push(`${DIVIDER}\n`);
-  lines.push(`CANDIDATE ${String(index + 1)}: ${candidate.title}\n`);
+  lines.push(`CANDIDATE ${String(index + 1)}: ${inlineField(candidate.title)}\n`);
   lines.push(`  ID:         ${candidate.id}`);
   lines.push(`  Priority:   ${candidate.priority}`);
   lines.push(`  Risk class: ${candidate.riskClass}`);
   lines.push(`  Status:     ${candidate.status}`);
-  lines.push(`  Tags:       ${candidate.tags.length > 0 ? candidate.tags.join(", ") : "(none)"}`);
+  lines.push(
+    `  Tags:       ${candidate.tags.length > 0 ? inlineFields(candidate.tags).join(", ") : "(none)"}`,
+  );
   lines.push("");
   lines.push("  Preconditions:");
-  lines.push(listItems(candidate.preconditions, "    ").trimEnd());
+  lines.push(listItems(inlineFields(candidate.preconditions), "    ").trimEnd());
   lines.push("");
   lines.push("  Steps:");
-  lines.push(numberedList(candidate.steps, "    ").trimEnd());
+  lines.push(numberedList(inlineFields(candidate.steps), "    ").trimEnd());
   lines.push("");
   lines.push("  Expected results:");
-  lines.push(listItems(candidate.expectedResults, "    ").trimEnd());
+  lines.push(listItems(inlineFields(candidate.expectedResults), "    ").trimEnd());
   return lines.join("\n") + "\n";
 }
 
