@@ -92,3 +92,76 @@ export class FigmaConnectorError extends Error {
     this.code = code;
   }
 }
+
+// Node.js / undici error codes that indicate a TLS / certificate failure.
+const TLS_CODES: ReadonlySet<string> = new Set([
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "CERT_HAS_EXPIRED",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+  "UNABLE_TO_GET_ISSUER_CERT",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+]);
+
+// Node.js / undici error codes that indicate a connectivity / DNS / timeout failure.
+const CONNECTIVITY_CODES: ReadonlySet<string> = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "EPIPE",
+  "ECONNABORTED",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+
+const TLS_MSG_RE = /cert|self.?signed|unable to (?:verify|get).*(issuer|cert)|tls/i;
+const CONNECTIVITY_MSG_RE = /socket hang ?up|network|timeout|fetch failed|econn|enotfound/i;
+
+const extractCode = (err: unknown): string | undefined => {
+  if (err !== null && typeof err === "object") {
+    const code = (err as Record<string, unknown>).code;
+    if (typeof code === "string") return code;
+  }
+  return undefined;
+};
+
+const extractCauseCode = (err: unknown): string | undefined => {
+  if (err !== null && typeof err === "object") {
+    return extractCode((err as Record<string, unknown>).cause);
+  }
+  return undefined;
+};
+
+const extractMessage = (err: unknown): string => {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  return "";
+};
+
+/**
+ * Classify a transport-level throw from `fetch` or the body read into a stable
+ * {@link FigmaConnectorErrorCode}. Side-effect-free and total — any non-Error
+ * throwable (string, undefined) maps to `FIGMA_PROXY_EGRESS_FAILED`.
+ *
+ * Inspects `err.code`, `err.cause.code`, and `err.message` in that order of
+ * precedence so Node.js `TypeError: fetch failed` wrappers (undici wraps the
+ * underlying `cause.code`) are classified correctly.
+ */
+export const classifyFigmaTransportError = (err: unknown): FigmaConnectorErrorCode => {
+  const code = extractCode(err) ?? extractCauseCode(err);
+  if (code !== undefined) {
+    if (TLS_CODES.has(code)) return "FIGMA_TLS_CA_FAILURE";
+    if (CONNECTIVITY_CODES.has(code)) return "FIGMA_PROXY_UNREACHABLE";
+  }
+  const msg = extractMessage(err);
+  if (TLS_MSG_RE.test(msg)) return "FIGMA_TLS_CA_FAILURE";
+  if (CONNECTIVITY_MSG_RE.test(msg)) return "FIGMA_PROXY_UNREACHABLE";
+  return "FIGMA_PROXY_EGRESS_FAILED";
+};

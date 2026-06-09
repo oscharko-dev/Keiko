@@ -257,6 +257,30 @@ describe("governedSnapshotBuild — links + tokens persist round-trip (#753/#752
   });
 });
 
+// ─── provenance.fetchedAt threading (#753) ──────────────────────────────────────
+
+describe("governedSnapshotBuild — provenance.fetchedAt threading (#753)", () => {
+  it("sets provenance.fetchedAt to deps.now (not the epoch)", async () => {
+    const result = await governedSnapshotBuild(URL_OK, depsWith({ acknowledgeReadOnly: true }));
+    expect(result.provenance.fetchedAt).toBe("2026-06-09T00:00:00.000Z");
+    expect(result.snapshot.provenance.fetchedAt).toBe("2026-06-09T00:00:00.000Z");
+  });
+
+  it("integrity hash is stable when only deps.now changes (fetchedAt excluded from hash)", async () => {
+    const r1 = await governedSnapshotBuild(
+      URL_OK,
+      depsWith({ now: "2026-01-01T00:00:00.000Z", acknowledgeReadOnly: true }),
+    );
+    const r2 = await governedSnapshotBuild(
+      URL_OK,
+      depsWith({ now: "2026-06-09T12:34:56.789Z", acknowledgeReadOnly: true }),
+    );
+    expect(r1.snapshot.integrityHash).toBe(r2.snapshot.integrityHash);
+    // fetchedAt differs — confirming the two runs are distinct
+    expect(r1.snapshot.provenance.fetchedAt).not.toBe(r2.snapshot.provenance.fetchedAt);
+  });
+});
+
 // ─── revoke (#758/#760) ─────────────────────────────────────────────────────────
 
 describe("figma token vault — revoke (#758)", () => {

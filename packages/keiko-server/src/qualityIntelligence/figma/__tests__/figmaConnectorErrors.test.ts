@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyFigmaTransportError,
   FigmaConnectorError,
   figmaConnectorErrorBody,
   type FigmaConnectorErrorCode,
@@ -81,4 +82,81 @@ describe("FigmaConnectorError", () => {
       expect(body.error.message.length).toBeGreaterThan(20);
     }
   });
+});
+
+describe("classifyFigmaTransportError", () => {
+  // ── TLS by .code ────────────────────────────────────────────────────────────
+  it("classifies UNABLE_TO_VERIFY_LEAF_SIGNATURE as FIGMA_TLS_CA_FAILURE", () => {
+    expect(
+      classifyFigmaTransportError(
+        Object.assign(new Error("x"), { code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE" }),
+      ),
+    ).toBe("FIGMA_TLS_CA_FAILURE");
+  });
+
+  it("classifies DEPTH_ZERO_SELF_SIGNED_CERT as FIGMA_TLS_CA_FAILURE", () => {
+    expect(
+      classifyFigmaTransportError(
+        Object.assign(new Error("x"), { code: "DEPTH_ZERO_SELF_SIGNED_CERT" }),
+      ),
+    ).toBe("FIGMA_TLS_CA_FAILURE");
+  });
+
+  // ── TLS by .cause.code ──────────────────────────────────────────────────────
+  it("classifies TLS code on .cause as FIGMA_TLS_CA_FAILURE", () => {
+    expect(
+      classifyFigmaTransportError(
+        Object.assign(new TypeError("fetch failed"), {
+          cause: { code: "SELF_SIGNED_CERT_IN_CHAIN" },
+        }),
+      ),
+    ).toBe("FIGMA_TLS_CA_FAILURE");
+  });
+
+  // ── TLS by message ──────────────────────────────────────────────────────────
+  it("classifies message 'unable to verify the first certificate' as FIGMA_TLS_CA_FAILURE", () => {
+    expect(classifyFigmaTransportError(new Error("unable to verify the first certificate"))).toBe(
+      "FIGMA_TLS_CA_FAILURE",
+    );
+  });
+
+  // ── Connectivity by .code ───────────────────────────────────────────────────
+  it.each(["ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "ENOTFOUND"] as const)(
+    "classifies %s as FIGMA_PROXY_UNREACHABLE",
+    (code) => {
+      expect(classifyFigmaTransportError(Object.assign(new Error("x"), { code }))).toBe(
+        "FIGMA_PROXY_UNREACHABLE",
+      );
+    },
+  );
+
+  // ── Connectivity by .cause.code ─────────────────────────────────────────────
+  it("classifies ENOTFOUND on .cause as FIGMA_PROXY_UNREACHABLE", () => {
+    expect(
+      classifyFigmaTransportError(
+        Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } }),
+      ),
+    ).toBe("FIGMA_PROXY_UNREACHABLE");
+  });
+
+  // ── Connectivity by message ─────────────────────────────────────────────────
+  it("classifies message 'socket hang up' as FIGMA_PROXY_UNREACHABLE", () => {
+    expect(classifyFigmaTransportError(new Error("socket hang up"))).toBe(
+      "FIGMA_PROXY_UNREACHABLE",
+    );
+  });
+
+  // ── Fallback ────────────────────────────────────────────────────────────────
+  it("classifies an unrecognised Error as FIGMA_PROXY_EGRESS_FAILED", () => {
+    expect(classifyFigmaTransportError(new Error("weird egress glitch"))).toBe(
+      "FIGMA_PROXY_EGRESS_FAILED",
+    );
+  });
+
+  it.each([undefined, "boom", 42])(
+    "classifies non-Error throwable %s as FIGMA_PROXY_EGRESS_FAILED",
+    (value) => {
+      expect(classifyFigmaTransportError(value)).toBe("FIGMA_PROXY_EGRESS_FAILED");
+    },
+  );
 });

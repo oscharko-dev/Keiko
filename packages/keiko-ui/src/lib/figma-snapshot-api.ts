@@ -143,5 +143,6 @@ export interface FigmaCodegenResponse {
 export async function generateFigmaCode(runId: string): Promise<FigmaCodegenResponse> {
   return fetchJson<FigmaCodegenResponse>(`/api/figma/snapshots/${encodeURIComponent(runId)}/code`, {
     method: "POST",
+    body: JSON.stringify({}),
   });
 }

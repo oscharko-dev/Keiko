@@ -9,6 +9,8 @@
 // default adapter below, immediately before the platform `fetch` call — it is never
 // logged here and never re-emitted by the port.
 
+import { classifyFigmaTransportError, FigmaConnectorError } from "./figmaConnectorErrors.js";
+
 export interface FigmaHttpRequest {
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
@@ -52,9 +54,14 @@ const parseJsonBody = async (response: Response): Promise<unknown> => {
  */
 export const createDefaultFigmaHttpPort = (): FigmaHttpPort => {
   return async (request: FigmaHttpRequest): Promise<FigmaHttpResponse> => {
-    const response = await fetch(request.url, { method: "GET", headers: { ...request.headers } });
-    const headers = collectHeaders(response);
-    const json = await parseJsonBody(response);
-    return { status: response.status, json, headers };
+    try {
+      const response = await fetch(request.url, { method: "GET", headers: { ...request.headers } });
+      const headers = collectHeaders(response);
+      const json = await parseJsonBody(response);
+      return { status: response.status, json, headers };
+    } catch (err) {
+      if (err instanceof FigmaConnectorError) throw err;
+      throw new FigmaConnectorError(classifyFigmaTransportError(err));
+    }
   };
 };

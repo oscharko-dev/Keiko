@@ -141,7 +141,7 @@ const auditedDeepFetch = async (
   action: "snapshot" | "resnapshot",
 ): Promise<FigmaScopedResult> => {
   try {
-    return await connector.fetchScopedNodesDeep(boardLink);
+    return await connector.fetchScopedNodesDeep(boardLink, { fetchedAt: deps.now });
   } catch (error) {
     appendFigmaConnectorAudit({
       scopeRef,
