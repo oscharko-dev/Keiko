@@ -36,7 +36,9 @@ const fixed2 = (value: number): string => value.toFixed(2);
 const joinSemicolon = (values: readonly string[]): string => values.join(" ; ");
 
 // Escape Markdown table delimiters so an id containing a pipe cannot break the row structure.
-const mdCell = (value: string): string => value.replace(/\|/gu, "\\|");
+// Backslashes are escaped FIRST so a literal backslash cannot consume the following escape and a
+// pre-existing `\|` cannot smuggle an unescaped pipe through (CWE-20 incomplete-sanitization).
+const mdCell = (value: string): string => value.replace(/\\/gu, "\\\\").replace(/\|/gu, "\\|");
 
 /**
  * Render the coverage matrix as a spreadsheet-safe CSV traceability matrix: one row per
