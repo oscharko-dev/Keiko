@@ -232,6 +232,7 @@ export interface PersistArgs {
   readonly coverageMatrix?: QualityIntelligenceRecordInput["coverageMatrix"];
   readonly qualityScore?: number | null;
   readonly sourceFingerprints?: QualityIntelligenceRecordInput["sourceFingerprints"];
+  readonly atomFingerprints?: QualityIntelligenceRecordInput["atomFingerprints"];
   /** Model id that generated the candidates (Epic #761). */
   readonly modelId?: string;
   /** Redaction-safe request parameter scalars (Epic #761). */
@@ -281,6 +282,7 @@ export function persistRun(args: PersistArgs): QualityIntelligenceRecordResult {
     ...(args.sourceFingerprints !== undefined
       ? { sourceFingerprints: args.sourceFingerprints }
       : {}),
+    ...(args.atomFingerprints !== undefined ? { atomFingerprints: args.atomFingerprints } : {}),
     ...(args.modelId !== undefined ? { modelId: args.modelId } : {}),
     ...(args.modelParameters !== undefined ? { modelParameters: args.modelParameters } : {}),
     ...(args.seedUsed !== undefined ? { seedUsed: args.seedUsed } : {}),

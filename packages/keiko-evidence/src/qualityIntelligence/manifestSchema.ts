@@ -28,6 +28,7 @@ export interface QualityIntelligenceIntegrityHashes {
   readonly findings: string;
   readonly exports: string;
   readonly evidenceRefs: string;
+  readonly atomFingerprints?: string;
 }
 
 // Counts-only summary of what redaction did during build. We deliberately do NOT carry the
@@ -85,6 +86,13 @@ export interface QualityIntelligenceSourceFingerprintRow {
   readonly integrityHashSha256Hex: string;
 }
 
+/** Per-atom content fingerprint row persisted in the manifest (Epic #735, Issues #798/#799). */
+export interface QualityIntelligenceAtomFingerprintRow {
+  readonly atomId: string;
+  readonly envelopeId: string;
+  readonly canonicalHashSha256Hex: string;
+}
+
 export interface QualityIntelligenceProvenanceRefs {
   readonly envelopeIds: readonly string[];
   readonly auditSummaryId: QualityIntelligenceAuditSummaryId;
@@ -120,6 +128,8 @@ export interface QualityIntelligenceEvidenceManifest {
   readonly qualityScore?: number | null;
   /** Optional: per-envelope content fingerprints for drift detection (Epic #735, Issue #742). */
   readonly sourceFingerprints?: readonly QualityIntelligenceSourceFingerprintRow[];
+  /** Optional: per-atom content fingerprints for atom-aware drift detection (#798/#799). */
+  readonly atomFingerprints?: readonly QualityIntelligenceAtomFingerprintRow[];
   /** Optional: model id that generated the candidates (Epic #761, Issue #763). */
   readonly modelId?: string;
   /** Optional: redaction-safe request parameter scalars (e.g. responseFormat, seed) (Epic #761). */
@@ -152,6 +162,7 @@ const ALLOWED_TOP_LEVEL_KEYS: ReadonlySet<string> = new Set<string>([
   "coverageMatrix",
   "qualityScore",
   "sourceFingerprints",
+  "atomFingerprints",
   "modelId",
   "modelParameters",
   "seedUsed",

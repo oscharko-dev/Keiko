@@ -45,7 +45,15 @@ function buildValidManifest(): QualityIntelligenceEvidenceManifest {
       findings: "0".repeat(64),
       exports: "0".repeat(64),
       evidenceRefs: "0".repeat(64),
+      atomFingerprints: "0".repeat(64),
     },
+    atomFingerprints: [
+      {
+        atomId: "atom-1",
+        envelopeId: "env-1",
+        canonicalHashSha256Hex: "a".repeat(64),
+      },
+    ],
   };
 }
 

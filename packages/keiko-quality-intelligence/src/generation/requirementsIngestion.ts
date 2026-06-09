@@ -56,11 +56,8 @@ const splitIntoStatements = (raw: string): readonly string[] => {
   return sentences.length > 0 ? sentences : [single];
 };
 
-const deriveAtomId = (envelopeId: EnvelopeId, index: number, text: string): AtomId => {
-  const digest = sha256Hex(`qi-atom-v1|${String(envelopeId)}|${String(index)}|${text}`).slice(
-    0,
-    32,
-  );
+const deriveAtomId = (envelopeId: EnvelopeId, text: string): AtomId => {
+  const digest = sha256Hex(`qi-atom-v2|${String(envelopeId)}|${text}`).slice(0, 32);
   return QualityIntelligence.asQualityIntelligenceEvidenceAtomId(`qi-atom-${digest}`);
 };
 
@@ -81,12 +78,11 @@ export const splitRequirementsIntoAtoms = (
     if (out.length >= maxAtoms) break;
     if (seen.has(statement)) continue;
     seen.add(statement);
-    const index = out.length;
     out.push(
       Object.freeze<IngestedRequirementAtom>({
         atom: Object.freeze<RequirementAtom>({
           kind: "requirement",
-          id: deriveAtomId(options.envelopeId, index, statement),
+          id: deriveAtomId(options.envelopeId, statement),
           sourceEnvelopeId: options.envelopeId,
           canonicalHashSha256Hex: sha256Hex(statement),
           redactionStatus: "not-required",

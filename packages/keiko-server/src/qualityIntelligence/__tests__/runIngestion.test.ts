@@ -420,6 +420,51 @@ describe("ingestInlineSources — happy path", () => {
     const summary = result.sourceSummaries[0];
     expect(summary?.atomCount).toBe(result.ingestedAtoms.length);
   });
+
+  it("keeps the requirements envelope id stable when the requirement text changes in-place", () => {
+    const before = ingestInlineSources(
+      input([requirementsSource("Spec", "REQ-1: Login must work\nREQ-2: MFA must work")]),
+    );
+    const after = ingestInlineSources(
+      input([requirementsSource("Spec", "REQ-1: Login must work\nREQ-2: MFA must also log an audit entry")]),
+    );
+    expect(before.envelopes[0]?.id).toBe(after.envelopes[0]?.id);
+    expect(before.envelopes[0]?.localRef).toBe("req:0");
+    expect(after.envelopes[0]?.localRef).toBe("req:0");
+  });
+
+  it("keeps unchanged requirement atom ids stable when another line is inserted before them", () => {
+    const before = ingestInlineSources(
+      input([requirementsSource("Spec", "Login must work reliably\nMFA must work reliably")]),
+    );
+    const after = ingestInlineSources(
+      input([
+        requirementsSource(
+          "Spec",
+          "Inserted unrelated requirement\nLogin must work reliably\nMFA must work reliably",
+        ),
+      ]),
+    );
+    expect(before.ingestedAtoms[0]?.atom.id).toBe(after.ingestedAtoms[1]?.atom.id);
+    expect(before.ingestedAtoms[1]?.atom.id).toBe(after.ingestedAtoms[2]?.atom.id);
+  });
+
+  it("detects workspace file content edits through atom hashes while keeping atom ids stable", () => {
+    const dir = mkdtempSync(join(tmpdir(), "qi-ws-stable-"));
+    try {
+      const path = join(dir, "spec.md");
+      writeFileSync(path, "Version one content.\n", "utf8");
+      const before = ingestInlineSources(input([{ kind: "workspace", label: "Repo", path: dir }]));
+      writeFileSync(path, "Version two content.\n", "utf8");
+      const after = ingestInlineSources(input([{ kind: "workspace", label: "Repo", path: dir }]));
+      expect(before.ingestedAtoms[0]?.atom.id).toBe(after.ingestedAtoms[0]?.atom.id);
+      expect(before.ingestedAtoms[0]?.atom.canonicalHashSha256Hex).not.toBe(
+        after.ingestedAtoms[0]?.atom.canonicalHashSha256Hex,
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─── Label sanitisation ───────────────────────────────────────────────────────

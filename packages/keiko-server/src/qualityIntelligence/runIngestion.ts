@@ -92,6 +92,18 @@ const envelopeIdFor = (
   return QualityIntelligence.asQualityIntelligenceSourceEnvelopeId(`qi-src-${digest}`);
 };
 
+const REQUIREMENTS_ENVELOPE_PREFIX = "qi-src-req-";
+
+const requirementsEnvelopeIdFor = (index: number): QI.QualityIntelligenceSourceEnvelopeId => {
+  const digest = sha256Hex(`qi-src-req-v1|${String(index)}`).slice(0, 24);
+  return QualityIntelligence.asQualityIntelligenceSourceEnvelopeId(
+    `${REQUIREMENTS_ENVELOPE_PREFIX}${digest}`,
+  );
+};
+
+const stableLocalRef = (prefix: string, value: string): string =>
+  `${prefix}:${sha256Hex(value).slice(0, 24)}`;
+
 const auditSummaryIdFor = (runId: string): QI.QualityIntelligenceAuditSummaryId =>
   QualityIntelligence.asQualityIntelligenceAuditSummaryId(
     `qi-audit-${sha256Hex(runId).slice(0, 24)}`,
@@ -116,7 +128,7 @@ function ingestRequirements(
     );
   }
   const label = sanitiseLabel(source.label);
-  const envelopeId = envelopeIdFor(index, label, text);
+  const envelopeId = requirementsEnvelopeIdFor(index);
   const atoms = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(text, { envelopeId });
   if (atoms.length === 0) {
     throw new QiIngestionError(
@@ -133,7 +145,7 @@ function ingestRequirements(
       registeredAt,
       integrityHashSha256Hex: sha256Hex(text),
     },
-    localRef: String(envelopeId),
+    localRef: `req:${String(index)}`,
   };
   return { envelope, atoms };
 }
@@ -214,7 +226,7 @@ function ingestWorkspace(
         `${pack.workspaceRoot}|${pack.selected.map((e) => e.path).join(",")}`,
       ),
     },
-    localRef: String(envelopeId),
+    localRef: stableLocalRef("workspace", pack.workspaceRoot),
   };
   const atoms = pack.selected.map((entry, i) => workspaceAtom(entry, envelopeId, i));
   return { envelope, atoms };
@@ -378,7 +390,7 @@ function ingestFile(
       registeredAt,
       integrityHashSha256Hex: sha256Hex(`${content.relativePath}|${content.text}`),
     },
-    localRef: String(envelopeId),
+    localRef: stableLocalRef("file", absFile),
   };
   const atoms = [
     workspaceAtom({ path: content.relativePath, excerpt: content.text }, envelopeId, 0),
@@ -467,6 +479,8 @@ interface CapsuleSourceBuild {
   readonly registeredAt: string;
   /** Stable key folded into the envelope id (the capsule id or capsule-set id). */
   readonly envelopeKey: string;
+  /** Stable opaque source ref used for drift grouping. */
+  readonly scopeRef: string;
   /** Provenance origin descriptor (no secrets — an id, never content). */
   readonly origin: string;
   readonly rawDocs: readonly CorpusDoc[];
@@ -499,7 +513,7 @@ function buildCapsuleSource(build: CapsuleSourceBuild): OneSource {
       registeredAt: build.registeredAt,
       integrityHashSha256Hex: sha256Hex(joinedText),
     },
-    localRef: String(envelopeId),
+    localRef: build.scopeRef,
   };
   const atoms = docs.map((d, i) => capsuleDocAtom(d.documentId, d.text, envelopeId, i));
   return { envelope, atoms };
@@ -517,6 +531,7 @@ function ingestCapsule(
     index,
     registeredAt,
     envelopeKey: source.capsuleId,
+    scopeRef: stableLocalRef("capsule", source.capsuleId),
     origin: `local-knowledge-capsule:${source.capsuleId}`,
     rawDocs: resolver.capsule(source.capsuleId),
     emptyError: `Capsule "${label}" has no indexed content or could not be opened.`,
@@ -535,6 +550,7 @@ function ingestCapsuleSet(
     index,
     registeredAt,
     envelopeKey: source.capsuleSetId,
+    scopeRef: stableLocalRef("capsule-set", source.capsuleSetId),
     origin: `local-knowledge-capsule-set:${source.capsuleSetId}`,
     rawDocs: resolver.capsuleSet(source.capsuleSetId),
     emptyError: `Capsule set "${label}" has no indexed content or could not be opened.`,
