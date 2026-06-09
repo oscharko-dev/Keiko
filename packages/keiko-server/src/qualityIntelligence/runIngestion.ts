@@ -53,6 +53,27 @@ function perSourceAtomBudget(total: number, sourceCount: number): number {
   return Math.max(1, Math.floor(total / sourceCount));
 }
 
+// Global per-run evidence byte budget. Each source kind (workspace / file / capsule) was previously
+// allowed ~192KB INDEPENDENTLY, so N large sources summed to N×192KB and blew the model prompt cap
+// (MAX_PROMPT_BYTES = 256KB) — failing the entire N+1 run with QI_PROMPT_TOO_LARGE (Epic #729
+// headline). The byte budget is now a single global pool split fairly across sources, mirroring the
+// atom-budget split, so the merged evidence text stays bounded regardless of N. A single source keeps
+// the full budget (identical to the prior single-source behaviour).
+const EVIDENCE_BUDGET_BYTES = 196_608;
+// Never starve a source below this many bytes — a tiny share is still usable context.
+const MIN_SOURCE_BUDGET_BYTES = 4_096;
+
+/**
+ * Fair per-source UTF-8 byte budget — the byte analogue of {@link perSourceAtomBudget}. Floor-divides
+ * the global evidence byte pool across sources (Chat byte-split parity) with a non-zero floor so the
+ * summed canonical text of all sources stays under the model prompt ceiling and no single large
+ * source can exhaust the budget for the others (Epic #729 / #730 multi-source containment).
+ */
+function perSourceByteBudget(sourceCount: number): number {
+  if (sourceCount <= 1) return EVIDENCE_BUDGET_BYTES;
+  return Math.max(MIN_SOURCE_BUDGET_BYTES, Math.floor(EVIDENCE_BUDGET_BYTES / sourceCount));
+}
+
 export class QiIngestionError extends Error {
   public readonly code: string;
   constructor(code: string, message: string) {
@@ -68,6 +89,19 @@ export interface QiSourceSummary {
   readonly atomCount: number;
 }
 
+/**
+ * A connected source that could not be ingested (empty, denied, binary, unavailable capsule, …) and
+ * was SKIPPED so the remaining sources still produce a run (Epic #729 N+1 resilience / Chat parity).
+ * Carries only a sanitised label + the safe coded reason — never source content. The run still fails
+ * (re-raising the first coded error) when EVERY source is skipped.
+ */
+export interface QiSkippedSource {
+  readonly label: string;
+  readonly kind: QualityIntelligenceInlineSource["kind"];
+  readonly code: string;
+  readonly message: string;
+}
+
 export interface QiIngestionResult {
   readonly envelopes: readonly QI.QualityIntelligenceSourceEnvelope[];
   readonly ingestedAtoms: readonly QualityIntelligenceIngestedAtom[];
@@ -78,6 +112,11 @@ export interface QiIngestionResult {
   readonly sourceSummaries: readonly QiSourceSummary[];
   /** Number of sources dropped because the request exceeded MAX_QI_SOURCES (Epic #729). */
   readonly droppedSourceCount: number;
+  /**
+   * Sources that ingested to nothing usable and were skipped (a subset of the connected sources),
+   * so the healthy sources still produced the run (Epic #729 N+1 resilience). Empty on the happy path.
+   */
+  readonly skippedSources: readonly QiSkippedSource[];
 }
 
 const sanitiseLabel = (label: string): string => {
@@ -85,6 +124,18 @@ const sanitiseLabel = (label: string): string => {
   const safe = trimmed.length === 0 ? "Untitled source" : trimmed;
   return safe.length > MAX_LABEL_CHARS ? `${safe.slice(0, MAX_LABEL_CHARS - 1)}…` : safe;
 };
+
+// Reject a source whose absolute path (any segment) names a denied credential location. isDenied
+// inspects EVERY path segment, so a denied ancestor cannot be hidden by rooting a read deeper. Shared
+// by the folder and single-file paths so both honour the same containment guard (Epic #729 security).
+function assertNotDenied(absPath: string, label: string, noun: string): void {
+  if (isDenied(absPath)) {
+    throw new QiIngestionError(
+      "QI_SOURCE_DENIED",
+      `${noun} "${label}" is in a protected location.`,
+    );
+  }
+}
 
 const envelopeIdFor = (
   index: number,
@@ -190,8 +241,13 @@ function ingestWorkspace(
   source: Extract<QualityIntelligenceInlineSource, { kind: "workspace" }>,
   index: number,
   registeredAt: string,
+  byteBudget: number,
 ): OneSource {
   const label = sanitiseLabel(source.label);
+  // Reject a folder whose ROOT names a denied credential location: connecting e.g. ~/.aws or
+  // ~/.docker AS A FOLDER would otherwise ingest credential files whose RELATIVE paths
+  // ("credentials", "config.json") never trip the per-file deny check (#729 security).
+  assertNotDenied(resolve(source.path), label, "Folder");
   let workspace: ReturnType<typeof detectWorkspaceAt>;
   try {
     workspace = detectWorkspaceAt(source.path);
@@ -209,7 +265,7 @@ function ingestWorkspace(
     workspace,
     {
       ...DEFAULT_CONTEXT_REQUEST,
-      budgetBytes: WORKSPACE_BUDGET_BYTES,
+      budgetBytes: Math.min(WORKSPACE_BUDGET_BYTES, byteBudget),
       maxBytesPerFile: WORKSPACE_MAX_BYTES_PER_FILE,
     },
     files,
@@ -350,6 +406,7 @@ function ingestFile(
   source: Extract<QualityIntelligenceInlineSource, { kind: "file" }>,
   index: number,
   registeredAt: string,
+  byteBudget: number,
 ): OneSource {
   const label = sanitiseLabel(source.label);
   if (!isAbsolute(source.path)) {
@@ -362,13 +419,9 @@ function ingestFile(
       `File "${label}" is not a supported single-file document.`,
     );
   }
-  // Defense in depth: reject any path whose segments name a denied credential directory or file
-  // (.ssh, .aws, .env, *.pem, id_rsa, …) regardless of how the workspace root resolves below.
-  // isDenied inspects EVERY segment of the absolute path, so a denied ancestor directory cannot be
-  // hidden by rooting the read at the file's own parent directory.
-  if (isDenied(absFile)) {
-    throw new QiIngestionError("QI_SOURCE_DENIED", `File "${label}" is in a protected location.`);
-  }
+  // Reject any path whose segments name a denied credential directory or file (.ssh, .aws, .env,
+  // *.pem, id_rsa, …) regardless of how the workspace root resolves below.
+  assertNotDenied(absFile, label, "File");
   const content = readSingleFileContent(absFile, label);
   // keiko-workspace decodes as UTF-8; a NUL byte is the canonical binary marker. A binary file that
   // slipped past the strict text/code gate (e.g. a mis-named ".txt") is rejected here, never
@@ -383,6 +436,11 @@ function ingestFile(
   if (content.text.trim().length === 0) {
     throw new QiIngestionError("QI_SOURCE_EMPTY", `File "${label}" produced no usable content.`);
   }
+  // Bound the single file's contributed text to this source's fair share of the global evidence byte
+  // budget so a large file cannot, alongside other connected sources, blow the model prompt cap and
+  // fail the whole N+1 run (Epic #729). A lone connected file keeps the full budget unchanged
+  // (byteBudget === EVIDENCE_BUDGET_BYTES, so boundedText === content.text).
+  const boundedText = truncateToUtf8Bytes(content.text, byteBudget);
   const envelopeId = envelopeIdFor(index, label, content.relativePath);
   const envelope: QI.QualityIntelligenceSourceEnvelope = {
     id: envelopeId,
@@ -391,12 +449,12 @@ function ingestFile(
     provenance: {
       origin: "file",
       registeredAt,
-      integrityHashSha256Hex: sha256Hex(`${content.relativePath}|${content.text}`),
+      integrityHashSha256Hex: sha256Hex(`${content.relativePath}|${boundedText}`),
     },
     localRef: stableLocalRef("file", absFile),
   };
   const atoms = [
-    workspaceAtom({ path: content.relativePath, excerpt: content.text }, envelopeId, 0),
+    workspaceAtom({ path: content.relativePath, excerpt: boundedText }, envelopeId, 0),
   ];
   return { envelope, atoms };
 }
@@ -435,17 +493,22 @@ interface CorpusDoc {
 // here to honour the atom's redactionStatus:"redacted" and the epic's no-credential-leakage DoD
 // (Epic #710, Issue #717). Each document is capped to the per-document budget and ingestion stops
 // once the cumulative corpus reaches the per-run budget so an oversized capsule degrades gracefully.
-function processCapsuleDocs(docs: readonly CorpusDoc[]): readonly CorpusDoc[] {
+function processCapsuleDocs(docs: readonly CorpusDoc[], byteBudget: number): readonly CorpusDoc[] {
+  // The per-run corpus budget is the smaller of the capsule's own ceiling and this source's fair
+  // share of the global evidence byte budget (Epic #729 N+1 split). The per-document cap is likewise
+  // never larger than the per-run budget so the always-included first document cannot exceed it.
+  const perRunBudget = Math.min(CAPSULE_BUDGET_BYTES, byteBudget);
+  const perDocBudget = Math.min(CAPSULE_MAX_BYTES_PER_DOCUMENT, perRunBudget);
   const processed: CorpusDoc[] = [];
   let totalBytes = 0;
   for (const doc of docs) {
-    const capped = truncateToUtf8Bytes(redact(doc.text), CAPSULE_MAX_BYTES_PER_DOCUMENT);
+    const capped = truncateToUtf8Bytes(redact(doc.text), perDocBudget);
     if (capped.trim().length === 0) continue;
     const bytes = utf8ByteLength(capped);
     // Always include the first usable document (capped to ≤ the per-document budget); thereafter
     // stop before a document would push the corpus past the per-run budget so the total stays
     // bounded (never the raw corpus) and the run never hard-fails on QI_PROMPT_TOO_LARGE.
-    if (processed.length > 0 && totalBytes + bytes > CAPSULE_BUDGET_BYTES) break;
+    if (processed.length > 0 && totalBytes + bytes > perRunBudget) break;
     processed.push({ documentId: doc.documentId, text: capped });
     totalBytes += bytes;
   }
@@ -494,11 +557,11 @@ interface CapsuleSourceBuild {
 // Shared builder for capsule and capsule-set sources: both resolve to a flat list of corpus
 // documents that are redacted, budget-capped, and mapped to one local-knowledge-capsule envelope
 // plus per-document atoms (Epic #710, Issue #716/#717).
-function buildCapsuleSource(build: CapsuleSourceBuild): OneSource {
+function buildCapsuleSource(build: CapsuleSourceBuild, byteBudget: number): OneSource {
   if (build.rawDocs.length === 0) {
     throw new QiIngestionError("QI_CAPSULE_UNAVAILABLE", build.emptyError);
   }
-  const docs = processCapsuleDocs(build.rawDocs);
+  const docs = processCapsuleDocs(build.rawDocs, byteBudget);
   if (docs.length === 0) {
     throw new QiIngestionError(
       "QI_SOURCE_EMPTY",
@@ -527,18 +590,22 @@ function ingestCapsule(
   index: number,
   registeredAt: string,
   resolver: CapsuleResolver,
+  byteBudget: number,
 ): OneSource {
   const label = sanitiseLabel(source.label);
-  return buildCapsuleSource({
-    label,
-    index,
-    registeredAt,
-    envelopeKey: source.capsuleId,
-    scopeRef: stableLocalRef("capsule", source.capsuleId),
-    origin: `local-knowledge-capsule:${source.capsuleId}`,
-    rawDocs: resolver.capsule(source.capsuleId),
-    emptyError: `Capsule "${label}" has no indexed content or could not be opened.`,
-  });
+  return buildCapsuleSource(
+    {
+      label,
+      index,
+      registeredAt,
+      envelopeKey: source.capsuleId,
+      scopeRef: stableLocalRef("capsule", source.capsuleId),
+      origin: `local-knowledge-capsule:${source.capsuleId}`,
+      rawDocs: resolver.capsule(source.capsuleId),
+      emptyError: `Capsule "${label}" has no indexed content or could not be opened.`,
+    },
+    byteBudget,
+  );
 }
 
 function ingestCapsuleSet(
@@ -546,18 +613,22 @@ function ingestCapsuleSet(
   index: number,
   registeredAt: string,
   resolver: CapsuleResolver,
+  byteBudget: number,
 ): OneSource {
   const label = sanitiseLabel(source.label);
-  return buildCapsuleSource({
-    label,
-    index,
-    registeredAt,
-    envelopeKey: source.capsuleSetId,
-    scopeRef: stableLocalRef("capsule-set", source.capsuleSetId),
-    origin: `local-knowledge-capsule-set:${source.capsuleSetId}`,
-    rawDocs: resolver.capsuleSet(source.capsuleSetId),
-    emptyError: `Capsule set "${label}" has no indexed content or could not be opened.`,
-  });
+  return buildCapsuleSource(
+    {
+      label,
+      index,
+      registeredAt,
+      envelopeKey: source.capsuleSetId,
+      scopeRef: stableLocalRef("capsule-set", source.capsuleSetId),
+      origin: `local-knowledge-capsule-set:${source.capsuleSetId}`,
+      rawDocs: resolver.capsuleSet(source.capsuleSetId),
+      emptyError: `Capsule set "${label}" has no indexed content or could not be opened.`,
+    },
+    byteBudget,
+  );
 }
 
 // ─── Figma snapshot source (Epic #750, Issue #754) ───────────────────────────────
@@ -706,14 +777,15 @@ function ingestOne(
   capsuleResolver: CapsuleResolver | undefined,
   figmaSnapshotLoader: FigmaSnapshotLoader | undefined,
   figmaVision: FigmaVisionHintProvider | undefined,
+  byteBudget: number,
 ): OneSource {
   switch (source.kind) {
     case "requirements":
       return ingestRequirements(source, index, registeredAt);
     case "workspace":
-      return ingestWorkspace(source, index, registeredAt);
+      return ingestWorkspace(source, index, registeredAt, byteBudget);
     case "file":
-      return ingestFile(source, index, registeredAt);
+      return ingestFile(source, index, registeredAt, byteBudget);
     case "capsule":
       if (capsuleResolver === undefined) {
         throw new QiIngestionError(
@@ -721,7 +793,7 @@ function ingestOne(
           "Capsule sources are unavailable: the Local Knowledge store is not configured.",
         );
       }
-      return ingestCapsule(source, index, registeredAt, capsuleResolver);
+      return ingestCapsule(source, index, registeredAt, capsuleResolver, byteBudget);
     case "capsule-set":
       if (capsuleResolver === undefined) {
         throw new QiIngestionError(
@@ -729,7 +801,7 @@ function ingestOne(
           "Capsule-set sources are unavailable: the Local Knowledge store is not configured.",
         );
       }
-      return ingestCapsuleSet(source, index, registeredAt, capsuleResolver);
+      return ingestCapsuleSet(source, index, registeredAt, capsuleResolver, byteBudget);
     case "figma-snapshot":
       if (figmaSnapshotLoader === undefined) {
         throw new QiIngestionError(
@@ -765,6 +837,68 @@ export interface IngestInlineSourcesInput {
  * keiko-workspace traversal + redaction (no independent repository traversal). Throws
  * `QiIngestionError` with a safe, user-actionable code on empty / oversized / unreadable input.
  */
+// Mutable accumulator threaded through the per-source ingest loop (keeps ingestInlineSources within
+// the function-length limit while preserving the exact loop semantics).
+interface IngestAccumulator {
+  readonly envelopes: QI.QualityIntelligenceSourceEnvelope[];
+  readonly ingestedAtoms: QualityIntelligenceIngestedAtom[];
+  readonly sourceSummaries: QiSourceSummary[];
+  readonly skippedSources: QiSkippedSource[];
+  firstSkipError?: QiIngestionError;
+}
+
+interface PerSourceBudgets {
+  readonly atomBudget: number;
+  readonly byteBudget: number;
+}
+
+/**
+ * Ingest one source into the accumulator (Epic #729 N+1 resilience). On a per-source QiIngestionError
+ * the source is recorded as skipped and ingestion continues with the rest; a genuine (non-coded) bug
+ * still throws so it is never silently swallowed. Each successful source takes its fair atom share,
+ * bounded by the global cap so the total never exceeds it.
+ */
+function ingestSourceInto(
+  acc: IngestAccumulator,
+  source: QualityIntelligenceInlineSource,
+  index: number,
+  input: IngestInlineSourcesInput,
+  budgets: PerSourceBudgets,
+): void {
+  let ingested: OneSource;
+  try {
+    ingested = ingestOne(
+      source,
+      index,
+      input.registeredAt,
+      input.capsuleResolver,
+      input.figmaSnapshotLoader,
+      input.figmaVision,
+      budgets.byteBudget,
+    );
+  } catch (error) {
+    if (!(error instanceof QiIngestionError)) throw error;
+    acc.firstSkipError ??= error;
+    acc.skippedSources.push({
+      label: sanitiseLabel(source.label),
+      kind: source.kind,
+      code: error.code,
+      message: error.message,
+    });
+    return;
+  }
+  const { envelope, atoms } = ingested;
+  const take = Math.min(budgets.atomBudget, MAX_TOTAL_ATOMS - acc.ingestedAtoms.length);
+  const taken = take <= 0 ? [] : atoms.slice(0, take);
+  acc.envelopes.push(envelope);
+  acc.ingestedAtoms.push(...taken);
+  acc.sourceSummaries.push({
+    label: envelope.displayLabel,
+    kind: source.kind,
+    atomCount: taken.length,
+  });
+}
+
 export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestionResult {
   // Read through the typed property in the loop: `Array.isArray` would widen a local binding of the
   // readonly union array to `any[]`, so the guard checks length on the typed property directly.
@@ -772,50 +906,46 @@ export function ingestInlineSources(input: IngestInlineSourcesInput): QiIngestio
   if (allSources.length === 0) {
     throw new QiIngestionError("QI_NO_SOURCES", "At least one source is required to start a run.");
   }
-  // Cap the source count BEFORE ingestion (no partial work for dropped sources), then split the
-  // global atom budget fairly so no single source starves the others (Chat N+1 parity, #730).
+  // Cap the source count BEFORE ingestion (no partial work for dropped sources), then split BOTH the
+  // global atom budget and the global evidence BYTE budget fairly so no single source starves the
+  // others and the merged prompt stays under the model ceiling regardless of N (Chat N+1 parity,
+  // #730) — preventing one large source from hard-failing the whole run with QI_PROMPT_TOO_LARGE.
   const sources = allSources.slice(0, MAX_QI_SOURCES);
   const droppedSourceCount = allSources.length - sources.length;
-  const perSourceBudget = perSourceAtomBudget(MAX_TOTAL_ATOMS, sources.length);
-  const envelopes: QI.QualityIntelligenceSourceEnvelope[] = [];
-  const ingestedAtoms: QualityIntelligenceIngestedAtom[] = [];
-  const sourceSummaries: QiSourceSummary[] = [];
+  const budgets: PerSourceBudgets = {
+    atomBudget: perSourceAtomBudget(MAX_TOTAL_ATOMS, sources.length),
+    byteBudget: perSourceByteBudget(sources.length),
+  };
+  // N+1 resilience (Chat parity): each source is ingested independently; a source that produces
+  // nothing usable is skipped + recorded so the healthy ones still produce the run. The run fails only
+  // when EVERY source fails — re-raising the FIRST coded error so a single bad source keeps its
+  // specific, user-actionable code + message (unchanged single-source UX).
+  const acc: IngestAccumulator = {
+    envelopes: [],
+    ingestedAtoms: [],
+    sourceSummaries: [],
+    skippedSources: [],
+  };
   for (let i = 0; i < sources.length; i += 1) {
     const source = sources[i];
     if (source === undefined) continue;
-    const { envelope, atoms } = ingestOne(
-      source,
-      i,
-      input.registeredAt,
-      input.capsuleResolver,
-      input.figmaSnapshotLoader,
-      input.figmaVision,
-    );
-    // Each source gets its fair share, bounded by the global cap so the total never exceeds it.
-    const take = Math.min(perSourceBudget, MAX_TOTAL_ATOMS - ingestedAtoms.length);
-    const taken = take <= 0 ? [] : atoms.slice(0, take);
-    envelopes.push(envelope);
-    ingestedAtoms.push(...taken);
-    sourceSummaries.push({
-      label: envelope.displayLabel,
-      kind: source.kind,
-      atomCount: taken.length,
-    });
+    ingestSourceInto(acc, source, i, input, budgets);
   }
-  if (ingestedAtoms.length === 0) {
-    throw new QiIngestionError(
-      "QI_SOURCE_EMPTY",
-      "No usable evidence was produced from the sources.",
+  if (acc.ingestedAtoms.length === 0) {
+    throw (
+      acc.firstSkipError ??
+      new QiIngestionError("QI_SOURCE_EMPTY", "No usable evidence was produced from the sources.")
     );
   }
   return {
-    envelopes,
-    ingestedAtoms,
+    envelopes: acc.envelopes,
+    ingestedAtoms: acc.ingestedAtoms,
     provenanceRefs: {
-      envelopeIds: envelopes.map((e) => String(e.id)),
+      envelopeIds: acc.envelopes.map((e) => String(e.id)),
       auditSummaryId: auditSummaryIdFor(input.runId),
     },
-    sourceSummaries,
+    sourceSummaries: acc.sourceSummaries,
     droppedSourceCount,
+    skippedSources: acc.skippedSources,
   };
 }

@@ -8075,6 +8075,26 @@ select.dlg-input {
   font-weight: 600;
   color: var(--fg);
 }
+/* Coverage notice (Epic #729 / Issue #730): sources dropped past the 16-source cap, or skipped
+   because they ingested to nothing usable. Mirrors .grounded-coverage-notice — text uses --fg
+   (16.96:1 on --card-2 in dark, high contrast on near-white --card-2 in light; WCAG 1.4.3) and the
+   warning cue is the --warn left border, which is not subject to text-contrast rules. */
+.qi-coverage-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--card-2);
+  border-left: 3px solid var(--warn);
+  border-radius: 4px;
+}
+.qi-coverage-line {
+  margin: 0;
+  color: var(--fg);
+}
 .qi-field {
   display: flex;
   flex-direction: column;

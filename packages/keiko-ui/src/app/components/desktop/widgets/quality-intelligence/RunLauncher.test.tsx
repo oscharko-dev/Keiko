@@ -411,6 +411,57 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
       expect(onRunCompleted).toHaveBeenCalledWith(acceptedRunId);
     });
   });
+
+  it("renders a coverage notice when the accepted frame reports dropped + skipped sources (#729 #730)", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: "run-cov-1",
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 2,
+        atomCount: 4,
+        droppedSourceCount: 3,
+        skippedSources: [
+          { label: "Empty capsule", kind: "capsule", code: "QI_CAPSULE_UNAVAILABLE" },
+        ],
+      },
+      DONE_FRAME,
+    ]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={vi.fn()} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Spec line");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    const notice = await screen.findByTestId("qi-coverage-notice");
+    // Both halves of the coverage notice render: the >16 cap drop AND the per-source skip with label.
+    expect(notice).toHaveTextContent("3 sources over the 16-source limit were not included");
+    expect(notice).toHaveTextContent("1 connected source could not be read");
+    expect(notice).toHaveTextContent("Empty capsule");
+  });
+
+  it("renders NO coverage notice when no sources were dropped or skipped", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([
+      {
+        type: "accepted",
+        runId: "run-cov-2",
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        sourceCount: 2,
+        atomCount: 4,
+      },
+      DONE_FRAME,
+    ]);
+    render(<RunLauncher startImpl={startImpl} onRunCompleted={vi.fn()} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Spec line");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByTestId("qi-coverage-notice")).not.toBeInTheDocument();
+  });
 });
 
 describe("RunLauncher — cancel behaviour", () => {
@@ -624,7 +675,7 @@ describe("RunLauncher — connected single file (Epic #709, Issue #714)", () => 
     expect(req.sources[0]).toMatchObject({ kind: "file", path: FILE });
   });
 
-  it("prefers the connected file over N+1 folders AND capsules, sending only the file", async () => {
+  it("aggregates a connected file + N folders + N capsules into one N+1 request (Epic #729 headline)", async () => {
     const user = userEvent.setup();
     const { startImpl } = makeStreamingFake([DONE_FRAME]);
     render(
@@ -637,8 +688,9 @@ describe("RunLauncher — connected single file (Epic #709, Issue #714)", () => 
       />,
     );
 
-    // Banner stays file-scoped even with folders + capsules also connected.
-    expect(screen.getByTestId("qi-connected-source")).toHaveTextContent("Connected file");
+    // The hub lists ALL connected sources together — the file is no longer mutually exclusive with
+    // the folders + capsules (the former bug). Headline AC: file + folders + capsules simultaneously.
+    expect(screen.getByTestId("qi-connected-source")).toHaveTextContent("Connected sources (6)");
     await user.click(screen.getByRole("button", { name: /generate test cases/i }));
     await waitFor(() => {
       expect(startImpl).toHaveBeenCalledTimes(1);
@@ -646,10 +698,22 @@ describe("RunLauncher — connected single file (Epic #709, Issue #714)", () => 
     const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
       Parameters<StartQiRunFn>[0],
     ];
-    // The single file wins outright — it is not augmented with the 2 folders + 3 capsules, so the
-    // per-source budget is never split nine ways. A regression that prepends the file would fail.
-    expect(req.sources).toHaveLength(1);
-    expect(req.sources[0]).toMatchObject({ kind: "file", path: FILE });
+    // ALL six connected sources are sent in one request, each attributable per source (file + 2
+    // folders + 3 capsules). A regression that re-introduces file-exclusive precedence would drop the
+    // folders + capsules and fail here.
+    expect(req.sources).toHaveLength(6);
+    expect(req.sources.filter((s) => s.kind === "file")).toEqual([
+      { kind: "file", label: "funds-transfer.md", path: FILE },
+    ]);
+    expect(req.sources.filter((s) => s.kind === "workspace").map((s) => s.path)).toEqual([
+      "/work/a",
+      "/work/b",
+    ]);
+    expect(req.sources.filter((s) => s.kind === "capsule").map((s) => s.capsuleId)).toEqual([
+      "cap-1",
+      "cap-2",
+      "cap-3",
+    ]);
   });
 
   it("ignores a relative connected file when no connectedRoot is present", () => {

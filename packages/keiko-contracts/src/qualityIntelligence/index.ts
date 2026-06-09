@@ -214,6 +214,7 @@ export type {
   QualityIntelligenceUiStalenessReport,
   QualityIntelligenceUiRegenerateResult,
   QualityIntelligenceStartRunRequest,
+  QualityIntelligenceSkippedSource,
   QualityIntelligenceRunStreamAccepted,
   QualityIntelligenceRunStreamEvent,
   QualityIntelligenceRunStreamDone,

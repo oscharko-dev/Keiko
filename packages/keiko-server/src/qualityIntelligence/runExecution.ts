@@ -25,6 +25,7 @@ import {
 import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
 import { ingestInlineSources, QiIngestionError } from "./runIngestion.js";
+import type { QiSkippedSource } from "./runIngestion.js";
 import { makeCapsuleResolver } from "./capsuleAdapter.js";
 import { makeFigmaSnapshotLoader, makeFigmaVisionHintProvider } from "./figmaSnapshotAdapter.js";
 import { createQiGenerationPort, QiGenerationError } from "./generationPort.js";
@@ -52,6 +53,8 @@ export interface QiRunAccepted {
   readonly modelId?: string | undefined;
   /** Sources dropped because the request exceeded the 16-source cap (Epic #729). */
   readonly droppedSourceCount: number;
+  /** Connected sources skipped because they ingested to nothing usable (Epic #729 N+1 resilience). */
+  readonly skippedSources: readonly QiSkippedSource[];
 }
 
 export interface ExecuteQiRunInput {
@@ -101,6 +104,7 @@ function buildAccepted(
     atomCount: ingestion.ingestedAtoms.length,
     ...(modelId !== undefined ? { modelId } : {}),
     droppedSourceCount: ingestion.droppedSourceCount,
+    skippedSources: ingestion.skippedSources,
   };
 }
 

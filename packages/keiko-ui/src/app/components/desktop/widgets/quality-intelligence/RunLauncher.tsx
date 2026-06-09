@@ -8,16 +8,14 @@
 import { useCallback, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
-  QualityIntelligenceCapsuleSource,
-  QualityIntelligenceCapsuleSetSource,
-  QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceRunStreamMessage,
+  QualityIntelligenceSkippedSource,
   QualityIntelligenceStartRunRequest,
-  QualityIntelligenceWorkspaceSource,
 } from "@oscharko-dev/keiko-contracts";
 import { startQiRun } from "@/lib/quality-intelligence-api";
 import { ApiError } from "@/lib/api";
-import { MAX_SCOPES } from "../../hooks/workspaceActions";
+import { buildConnectedRunSources } from "./connectedSources";
+import type { ConnectedRunSource } from "./connectedSources";
 
 const PROFILES: ReadonlyArray<{ id: string; label: string }> = [
   { id: "regression-default", label: "Regression (default)" },
@@ -31,6 +29,10 @@ interface Progress {
   readonly candidates: number;
   readonly findings: number;
   readonly atomCount: number | null;
+  // Coverage notice (Epic #729): sources dropped past the 16-source cap, and sources skipped because
+  // they ingested to nothing usable while the healthy sources still produced the run.
+  readonly droppedSourceCount: number;
+  readonly skippedSources: readonly QualityIntelligenceSkippedSource[];
 }
 
 const INITIAL_PROGRESS: Progress = {
@@ -39,6 +41,8 @@ const INITIAL_PROGRESS: Progress = {
   candidates: 0,
   findings: 0,
   atomCount: null,
+  droppedSourceCount: 0,
+  skippedSources: [],
 };
 
 function formatError(err: unknown): string {
@@ -49,7 +53,13 @@ function formatError(err: unknown): string {
 
 function reduceProgress(prev: Progress, msg: QualityIntelligenceRunStreamMessage): Progress {
   if (msg.type === "accepted") {
-    return { ...prev, phase: "Ingested sources", atomCount: msg.atomCount };
+    return {
+      ...prev,
+      phase: "Ingested sources",
+      atomCount: msg.atomCount,
+      droppedSourceCount: msg.droppedSourceCount ?? 0,
+      skippedSources: msg.skippedSources ?? [],
+    };
   }
   if (msg.type === "event") {
     const candidates = msg.kind === "candidate:proposed" ? prev.candidates + 1 : prev.candidates;
@@ -100,126 +110,40 @@ export interface RunLauncherProps {
   readonly connectedFigmaSnapshotRunIds?: readonly string[] | undefined;
 }
 
-function baseName(p: string): string {
-  const parts = p.split(/[\\/]/u).filter((s) => s.length > 0);
-  return parts.length > 0 ? (parts[parts.length - 1] ?? p) : p;
-}
-
-function isAbsoluteBrowserPath(path: string): boolean {
-  return (
-    path.startsWith("/") ||
-    /^[A-Za-z]:[/\\]/u.test(path) ||
-    path.startsWith("\\\\") ||
-    path.startsWith("//")
-  );
-}
-
-function toPortablePath(path: string): string {
-  return path.replaceAll("\\", "/");
-}
-
-function trimTrailingSeparators(path: string): string {
-  if (/^[A-Za-z]:[/\\]?$/u.test(path)) return path.replaceAll("\\", "/");
-  if (/^\/\/[^/]+\/[^/]+$/u.test(toPortablePath(path))) return toPortablePath(path);
-  return toPortablePath(path).replace(/\/+$/u, "");
-}
-
-function resolveConnectedFilePath(
-  connectedRoot: string | null,
-  connectedFilePath: string | null,
-): string | null {
-  const candidate = connectedFilePath?.trim() ?? "";
-  if (candidate.length === 0) return null;
-  if (isAbsoluteBrowserPath(candidate)) return candidate;
-
-  const root = connectedRoot?.trim() ?? "";
-  if (root.length === 0) return null;
-  const joinedRoot = trimTrailingSeparators(root);
-  const relativePath = toPortablePath(candidate).replace(/^\/+/u, "");
-  return `${joinedRoot}/${relativePath}`;
-}
-
-/**
- * Builds workspace sources from connected roots. Dedupes and caps at MAX_SCOPES.
- * Falls back to `fallbackRoot` when `roots` is empty/undefined (back-compat with single root).
- */
-function buildConnectedSources(
-  roots: readonly string[] | null | undefined,
-  fallbackRoot: string | null,
-): QualityIntelligenceWorkspaceSource[] {
-  const effective =
-    roots !== undefined && roots !== null && roots.length > 0
-      ? roots
-      : fallbackRoot !== null
-        ? [fallbackRoot]
-        : [];
-  const seen = new Set<string>();
-  const result: QualityIntelligenceWorkspaceSource[] = [];
-  for (const root of effective) {
-    if (result.length >= MAX_SCOPES) break;
-    if (seen.has(root)) continue;
-    seen.add(root);
-    result.push({ kind: "workspace", label: baseName(root), path: root });
+// Human-readable kind name for a connected source, used in the accessible connected-source list.
+function sourceKindLabel(source: ConnectedRunSource): string {
+  switch (source.kind) {
+    case "file":
+      return "File";
+    case "workspace":
+      return "Folder";
+    case "capsule":
+      return "Capsule";
+    case "capsule-set":
+      return "Capsule set";
+    case "figma-snapshot":
+      return "Figma snapshot";
   }
-  return result;
 }
 
-/**
- * Builds capsule sources from connected capsule ids. Dedupes and caps at MAX_SCOPES.
- * Label is the capsule id itself (opaque string — no filesystem baseName).
- */
-function buildCapsuleSources(
-  capsuleIds: readonly string[] | null | undefined,
-): QualityIntelligenceCapsuleSource[] {
-  if (capsuleIds === undefined || capsuleIds === null || capsuleIds.length === 0) return [];
-  const seen = new Set<string>();
-  const result: QualityIntelligenceCapsuleSource[] = [];
-  for (const id of capsuleIds) {
-    if (result.length >= MAX_SCOPES) break;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    result.push({ kind: "capsule", label: id, capsuleId: id });
+// The displayable value (path or opaque id) for a connected source.
+function sourceValue(source: ConnectedRunSource): string {
+  switch (source.kind) {
+    case "file":
+    case "workspace":
+      return source.path;
+    case "capsule":
+      return source.capsuleId;
+    case "capsule-set":
+      return source.capsuleSetId;
+    case "figma-snapshot":
+      return source.snapshotRunId;
   }
-  return result;
 }
 
-/**
- * Builds capsule-set sources from connected capsule-set ids. Dedupes and caps at MAX_SCOPES.
- * Label is the capsule-set id itself (opaque string — no filesystem baseName).
- */
-function buildCapsuleSetSources(
-  capsuleSetIds: readonly string[] | null | undefined,
-): QualityIntelligenceCapsuleSetSource[] {
-  if (capsuleSetIds === undefined || capsuleSetIds === null || capsuleSetIds.length === 0)
-    return [];
-  const seen = new Set<string>();
-  const result: QualityIntelligenceCapsuleSetSource[] = [];
-  for (const id of capsuleSetIds) {
-    if (result.length >= MAX_SCOPES) break;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    result.push({ kind: "capsule-set", label: id, capsuleSetId: id });
-  }
-  return result;
-}
-
-/**
- * Builds figma-snapshot sources from connected snapshot run ids (Epic #750 #756).
- * Dedupes and caps at MAX_SCOPES. Label is the run id itself (opaque string).
- */
-function buildFigmaSnapshotSources(
-  runIds: readonly string[] | null | undefined,
-): QualityIntelligenceFigmaSnapshotSource[] {
-  if (runIds === undefined || runIds === null || runIds.length === 0) return [];
-  const seen = new Set<string>();
-  const result: QualityIntelligenceFigmaSnapshotSource[] = [];
-  for (const id of runIds) {
-    if (result.length >= MAX_SCOPES) break;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    result.push({ kind: "figma-snapshot", label: id, snapshotRunId: id });
-  }
-  return result;
+// Stable React key / dedupe key for a connected source (kind + path or id).
+function sourceItemKey(source: ConnectedRunSource): string {
+  return `${source.kind}:${sourceValue(source)}`;
 }
 
 export function RunLauncher({
@@ -244,21 +168,19 @@ export function RunLauncher({
   const abortRef = useRef<AbortController | null>(null);
   const completedRunIdRef = useRef<string | null>(null);
 
-  // A connected Files window contributes a default Generate source. A focused file takes precedence
-  // over the folder root, so connecting a single Fachkonzept document generates from that one file.
-  // Connected Connector windows contribute capsule sources (appended after workspace sources).
-  const connectedFile = resolveConnectedFilePath(connectedRoot, connectedFilePath);
-  const connectedFolder = connectedRoot ?? null;
-  const workspaceSources = buildConnectedSources(connectedRoots, connectedFolder);
-  const capsuleSources = buildCapsuleSources(connectedCapsuleIds);
-  const capsuleSetSources = buildCapsuleSetSources(connectedCapsuleSetIds);
-  const figmaSnapshotSources = buildFigmaSnapshotSources(connectedFigmaSnapshotRunIds);
-  const connectedSourceCount =
-    workspaceSources.length +
-    capsuleSources.length +
-    capsuleSetSources.length +
-    figmaSnapshotSources.length;
-  const hasConnected = connectedFile !== null || connectedSourceCount > 0;
+  // Fold EVERY connected Files/Connector/Figma window into one deduped, capped multi-source list
+  // (Epic #729 N+1): a focused single file, connected folders, capsules, capsule-sets, AND figma
+  // snapshots are aggregated together — the additive replacement for the old file-exclusive
+  // precedence that suppressed the rest. Manual input (below) still overrides the connected sources.
+  const connectedSources = buildConnectedRunSources({
+    connectedRoot,
+    connectedFilePath,
+    connectedRoots,
+    connectedCapsuleIds,
+    connectedCapsuleSetIds,
+    connectedFigmaSnapshotRunIds,
+  });
+  const hasConnected = connectedSources.length > 0;
   const manualReady =
     sourceKind === "requirements" ? text.trim().length > 0 : path.trim().length > 0;
   const ready = manualReady || hasConnected;
@@ -290,26 +212,14 @@ export function RunLauncher({
     completedRunIdRef.current = null;
     const controller = new AbortController();
     abortRef.current = controller;
-    // Precedence: manual input wins; then connected file (single); then folders + capsules combined.
+    // Precedence: manual input (requirements text or a folder path) overrides everything; otherwise
+    // ALL connected sources go together (Epic #729 N+1 — file + folders + capsules in one request).
     const sources: QualityIntelligenceStartRunRequest["sources"] =
       sourceKind === "requirements" && text.trim().length > 0
         ? [{ kind: "requirements", label: label.trim() || "Requirements", text }]
         : sourceKind === "workspace" && path.trim().length > 0
           ? [{ kind: "workspace", label: label.trim() || "Folder", path: path.trim() }]
-          : connectedFile !== null
-            ? [
-                {
-                  kind: "file",
-                  label: label.trim() || baseName(connectedFile),
-                  path: connectedFile,
-                },
-              ]
-            : ([
-                ...workspaceSources,
-                ...capsuleSources,
-                ...capsuleSetSources,
-                ...figmaSnapshotSources,
-              ] as QualityIntelligenceStartRunRequest["sources"]);
+          : (connectedSources as QualityIntelligenceStartRunRequest["sources"]);
     const request: QualityIntelligenceStartRunRequest = {
       sources,
       profileId,
@@ -333,11 +243,7 @@ export function RunLauncher({
     label,
     profileId,
     running,
-    connectedFile,
-    workspaceSources,
-    capsuleSources,
-    capsuleSetSources,
-    figmaSnapshotSources,
+    connectedSources,
     onMessage,
     onRunCompleted,
     parsedSeed,
@@ -355,79 +261,37 @@ export function RunLauncher({
         <h2 className="qi-col-title">New run</h2>
       </header>
       <div className="qi-launcher-body">
-        {connectedFile !== null ? (
-          <div className="qi-connected-source" data-testid="qi-connected-source">
-            <span className="qi-connected-kind">Connected file</span>
-            <span className="qi-connected-path qi-monospace" title={connectedFile}>
-              {connectedFile}
-            </span>
-            <span className="qi-connected-hint">Generate uses the connected file.</span>
-          </div>
-        ) : connectedSourceCount > 1 ? (
+        {connectedSources.length === 1 && connectedSources[0] !== undefined ? (
           <div className="qi-connected-source" data-testid="qi-connected-source">
             <span className="qi-connected-kind">
-              Connected sources ({connectedSourceCount.toString()})
+              Connected {sourceKindLabel(connectedSources[0]).toLowerCase()}
+            </span>
+            <span
+              className="qi-connected-path qi-monospace"
+              title={sourceValue(connectedSources[0])}
+            >
+              {sourceValue(connectedSources[0])}
+            </span>
+            <span className="qi-connected-hint">
+              Generate uses the connected {sourceKindLabel(connectedSources[0]).toLowerCase()}.
+            </span>
+          </div>
+        ) : connectedSources.length > 1 ? (
+          <div className="qi-connected-source" data-testid="qi-connected-source">
+            <span className="qi-connected-kind">
+              Connected sources ({connectedSources.length.toString()})
             </span>
             <ul className="qi-connected-roots" aria-label="Connected sources">
-              {workspaceSources.map((s) => (
-                <li key={s.path} className="qi-connected-root-item">
-                  <span className="qi-connected-root-name">{s.label}</span>
-                  <span className="qi-connected-path qi-monospace" title={s.path}>
-                    {s.path}
-                  </span>
-                </li>
-              ))}
-              {capsuleSources.map((s) => (
-                <li key={s.capsuleId} className="qi-connected-root-item">
-                  <span className="qi-connected-root-name">Capsule</span>
-                  <span className="qi-connected-path qi-monospace" title={s.capsuleId}>
-                    {s.capsuleId}
-                  </span>
-                </li>
-              ))}
-              {capsuleSetSources.map((s) => (
-                <li key={s.capsuleSetId} className="qi-connected-root-item">
-                  <span className="qi-connected-root-name">Capsule set</span>
-                  <span className="qi-connected-path qi-monospace" title={s.capsuleSetId}>
-                    {s.capsuleSetId}
+              {connectedSources.map((s) => (
+                <li key={sourceItemKey(s)} className="qi-connected-root-item">
+                  <span className="qi-connected-root-name">{sourceKindLabel(s)}</span>
+                  <span className="qi-connected-path qi-monospace" title={sourceValue(s)}>
+                    {sourceValue(s)}
                   </span>
                 </li>
               ))}
             </ul>
             <span className="qi-connected-hint">Generate uses all connected sources.</span>
-          </div>
-        ) : workspaceSources.length === 1 ? (
-          <div className="qi-connected-source" data-testid="qi-connected-source">
-            <span className="qi-connected-kind">Connected folder</span>
-            <span
-              className="qi-connected-path qi-monospace"
-              title={workspaceSources[0]?.path ?? ""}
-            >
-              {workspaceSources[0]?.path ?? ""}
-            </span>
-            <span className="qi-connected-hint">Generate uses the connected source.</span>
-          </div>
-        ) : capsuleSources.length === 1 ? (
-          <div className="qi-connected-source" data-testid="qi-connected-source">
-            <span className="qi-connected-kind">Connected capsule</span>
-            <span
-              className="qi-connected-path qi-monospace"
-              title={capsuleSources[0]?.capsuleId ?? ""}
-            >
-              {capsuleSources[0]?.capsuleId ?? ""}
-            </span>
-            <span className="qi-connected-hint">Generate uses the connected capsule.</span>
-          </div>
-        ) : capsuleSetSources.length === 1 ? (
-          <div className="qi-connected-source" data-testid="qi-connected-source">
-            <span className="qi-connected-kind">Connected capsule set</span>
-            <span
-              className="qi-connected-path qi-monospace"
-              title={capsuleSetSources[0]?.capsuleSetId ?? ""}
-            >
-              {capsuleSetSources[0]?.capsuleSetId ?? ""}
-            </span>
-            <span className="qi-connected-hint">Generate uses the connected capsule set.</span>
           </div>
         ) : null}
         <div className="qi-launcher-row">
@@ -554,6 +418,30 @@ export function RunLauncher({
               {progress.candidates.toString()} test case{progress.candidates !== 1 ? "s" : ""}
               {progress.findings > 0 ? ` · ${progress.findings.toString()} findings` : ""}
             </span>
+          </div>
+        ) : null}
+        {progress.droppedSourceCount > 0 || progress.skippedSources.length > 0 ? (
+          <div
+            className="qi-coverage-notice"
+            role="status"
+            aria-live="polite"
+            data-testid="qi-coverage-notice"
+          >
+            {progress.droppedSourceCount > 0 ? (
+              <p className="qi-coverage-line">
+                {progress.droppedSourceCount.toString()} source
+                {progress.droppedSourceCount !== 1 ? "s" : ""} over the 16-source limit{" "}
+                {progress.droppedSourceCount !== 1 ? "were" : "was"} not included.
+              </p>
+            ) : null}
+            {progress.skippedSources.length > 0 ? (
+              <p className="qi-coverage-line">
+                {progress.skippedSources.length.toString()} connected source
+                {progress.skippedSources.length !== 1 ? "s" : ""} could not be read and{" "}
+                {progress.skippedSources.length !== 1 ? "were" : "was"} skipped:{" "}
+                {progress.skippedSources.map((s) => s.label).join(", ")}.
+              </p>
+            ) : null}
           </div>
         ) : null}
         {error !== null ? (

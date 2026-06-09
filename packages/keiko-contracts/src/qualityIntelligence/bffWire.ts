@@ -300,6 +300,17 @@ export interface QualityIntelligenceStartRunRequest {
 // `POST /api/quality-intelligence/runs` responds with an SSE stream of these messages. Each carries
 // only ids / counts / safe enums — never raw prompts, model output, credentials, or source content.
 
+/**
+ * A connected source that ingested to nothing usable (empty / denied / binary / unavailable capsule)
+ * and was skipped so the remaining sources still produced the run (Epic #729 N+1 resilience). Carries
+ * only a sanitised label, the source kind, and a safe coded reason — never source content.
+ */
+export interface QualityIntelligenceSkippedSource {
+  readonly label: string;
+  readonly kind: string;
+  readonly code: string;
+}
+
 export interface QualityIntelligenceRunStreamAccepted {
   readonly type: "accepted";
   readonly runId: string;
@@ -311,6 +322,12 @@ export interface QualityIntelligenceRunStreamAccepted {
    * when sources were dropped; the UI surfaces a coverage notice. Additive on the wire.
    */
   readonly droppedSourceCount?: number;
+  /**
+   * Connected sources skipped because they ingested to nothing usable, while the healthy sources
+   * still produced the run (Epic #729 N+1 resilience). Present and non-empty only when a source was
+   * skipped; the UI surfaces a per-source coverage notice. Additive on the wire.
+   */
+  readonly skippedSources?: readonly QualityIntelligenceSkippedSource[];
 }
 
 export interface QualityIntelligenceRunStreamEvent {

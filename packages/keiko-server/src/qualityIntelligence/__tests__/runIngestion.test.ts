@@ -426,7 +426,12 @@ describe("ingestInlineSources — happy path", () => {
       input([requirementsSource("Spec", "REQ-1: Login must work\nREQ-2: MFA must work")]),
     );
     const after = ingestInlineSources(
-      input([requirementsSource("Spec", "REQ-1: Login must work\nREQ-2: MFA must also log an audit entry")]),
+      input([
+        requirementsSource(
+          "Spec",
+          "REQ-1: Login must work\nREQ-2: MFA must also log an audit entry",
+        ),
+      ]),
     );
     expect(before.envelopes[0]?.id).toBe(after.envelopes[0]?.id);
     expect(before.envelopes[0]?.localRef).toBe("req:0");
@@ -887,5 +892,210 @@ describe("ingestInlineSources — capsule-set source (Issue #716/#718)", () => {
     ];
     ingest(inputWithResolver([capsuleSetSource("Set", "set-y")], capsule, capsuleSet));
     expect(capsuleCalls).toBe(0);
+  });
+});
+
+// ─── N+1 resilience, byte budget, containment, cross-kind provenance (Epic #729) ──
+
+const MAX_PROMPT_BYTES = 256_000;
+
+// Build a single supported file of approximately `bytes` UTF-8 bytes under a fresh temp dir.
+function makeLargeFile(prefix: string, bytes: number): { dir: string; path: string } {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const path = join(dir, "big.md");
+  const unit = "Detailed requirement statement number for coverage. ";
+  writeFileSync(path, unit.repeat(Math.ceil(bytes / unit.length)), "utf8");
+  return { dir, path };
+}
+
+describe("ingestInlineSources — N+1 partial-failure resilience (Issue #730 empty subset)", () => {
+  it("skips an empty source and still ingests the healthy ones (fail-soft, not fail-all)", () => {
+    const result = ingest(
+      input([requirementsSource("Good", VALID_TEXT), requirementsSource("Bad", "   \n\t  ")]),
+    );
+    // The good source produced atoms; the run did NOT abort on the empty one.
+    expect(result.ingestedAtoms.length).toBeGreaterThan(0);
+    expect(result.sourceSummaries.map((s) => s.label)).toEqual(["Good"]);
+    // The skipped source is recorded with its coded reason for the coverage notice.
+    expect(result.skippedSources).toHaveLength(1);
+    expect(result.skippedSources[0]).toMatchObject({
+      label: "Bad",
+      kind: "requirements",
+      code: "QI_SOURCE_EMPTY",
+    });
+    expect(typeof result.skippedSources[0]?.message).toBe("string");
+  });
+
+  it("skips an unavailable capsule while a healthy file/requirements source still produces the run", () => {
+    const result = ingest(
+      inputWithResolver(
+        [requirementsSource("Good", VALID_TEXT), capsuleSource("EmptyCap", "cap-none")],
+        () => [],
+      ),
+    );
+    expect(result.sourceSummaries.map((s) => s.kind)).toEqual(["requirements"]);
+    expect(result.skippedSources.map((s) => s.code)).toEqual(["QI_CAPSULE_UNAVAILABLE"]);
+    expect(result.skippedSources.map((s) => s.kind)).toEqual(["capsule"]);
+  });
+
+  it("reports an empty skippedSources list on the all-healthy happy path", () => {
+    const result = ingest(input([requirementsSource("A", VALID_TEXT)]));
+    expect(result.skippedSources).toEqual([]);
+  });
+
+  it("still fails the run when EVERY source fails, re-raising the FIRST source's specific code", () => {
+    // Two bad sources of different kinds: a blank requirements (QI_SOURCE_EMPTY) then an unsupported
+    // file. The run must throw the FIRST source's code, NOT a generic aggregate, preserving the
+    // actionable single-source message contract.
+    const dir = mkdtempSync(join(tmpdir(), "qi-allbad-"));
+    try {
+      const binPath = join(dir, "weird.bin");
+      writeFileSync(binPath, "data", "utf8");
+      try {
+        ingestInlineSources(
+          input([
+            requirementsSource("Blank", "   "),
+            { kind: "file", label: "Bin", path: binPath },
+          ]),
+        );
+        expect.fail("should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(QiIngestionError);
+        expect((err as QiIngestionError).code).toBe("QI_SOURCE_EMPTY");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ingestInlineSources — global byte budget split (Issue #730 containment)", () => {
+  it("truncates a large file to its fair byte share when other sources are connected", () => {
+    const { dir, path } = makeLargeFile("qi-bytes-", 150_000);
+    try {
+      const lone = ingest(input([{ kind: "file", label: "Big", path }]));
+      const pair = ingest(
+        input([{ kind: "file", label: "Big", path }, requirementsSource("R", VALID_TEXT)]),
+      );
+      const loneBytes = Buffer.byteLength(lone.ingestedAtoms[0]?.canonicalText ?? "", "utf8");
+      const pairFileBytes = Buffer.byteLength(pair.ingestedAtoms[0]?.canonicalText ?? "", "utf8");
+      // Alone the file keeps (nearly) all its content; with a second source it is truncated to its
+      // ~half share so the merged prompt cannot exceed the model ceiling.
+      expect(loneBytes).toBeGreaterThan(pairFileBytes);
+      expect(pairFileBytes).toBeLessThanOrEqual(196_608 / 2 + 256);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps three large file sources together under the model prompt byte ceiling (headline N+1)", () => {
+    const a = makeLargeFile("qi-bytes-a-", 150_000);
+    const b = makeLargeFile("qi-bytes-b-", 150_000);
+    const c = makeLargeFile("qi-bytes-c-", 150_000);
+    try {
+      const result = ingest(
+        input([
+          { kind: "file", label: "A", path: a.path },
+          { kind: "file", label: "B", path: b.path },
+          { kind: "file", label: "C", path: c.path },
+        ]),
+      );
+      const totalBytes = result.ingestedAtoms.reduce(
+        (sum, atom) => sum + Buffer.byteLength(atom.canonicalText, "utf8"),
+        0,
+      );
+      // Old behaviour: 3 × 150KB = 450KB → QI_PROMPT_TOO_LARGE. Now the merged evidence stays bounded.
+      expect(totalBytes).toBeLessThan(MAX_PROMPT_BYTES);
+      expect(result.sourceSummaries.length).toBe(3);
+    } finally {
+      for (const t of [a, b, c]) rmSync(t.dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ingestInlineSources — folder deny-root containment (Epic #729 security)", () => {
+  it("rejects a folder source whose ROOT is a denied credential directory (QI_SOURCE_DENIED)", () => {
+    const base = mkdtempSync(join(tmpdir(), "qi-deny-"));
+    const denied = join(base, ".aws");
+    mkdirSync(denied);
+    writeFileSync(join(denied, "credentials"), "aws_secret=should-never-ingest\n", "utf8");
+    try {
+      ingestInlineSources(input([{ kind: "workspace", label: "Creds", path: denied }]));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(QiIngestionError);
+      expect((err as QiIngestionError).code).toBe("QI_SOURCE_DENIED");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("skips a denied folder among healthy sources instead of failing the whole run", () => {
+    const base = mkdtempSync(join(tmpdir(), "qi-deny-mix-"));
+    const denied = join(base, ".ssh");
+    mkdirSync(denied);
+    writeFileSync(join(denied, "id_rsa"), "PRIVATE KEY\n", "utf8");
+    try {
+      const result = ingest(
+        input([
+          requirementsSource("Good", VALID_TEXT),
+          { kind: "workspace", label: "Keys", path: denied },
+        ]),
+      );
+      expect(result.sourceSummaries.map((s) => s.kind)).toEqual(["requirements"]);
+      expect(result.skippedSources.map((s) => s.code)).toEqual(["QI_SOURCE_DENIED"]);
+      // The credential content never reaches any ingested atom.
+      const joined = result.ingestedAtoms.map((a) => a.canonicalText).join("\n");
+      expect(joined).not.toContain("PRIVATE KEY");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ingestInlineSources — cross-kind source-tagged provenance (Issue #732)", () => {
+  it("aggregates workspace + file + capsule into three distinct, attributable envelopes", () => {
+    const wsDir = mkdtempSync(join(tmpdir(), "qi-prov-ws-"));
+    writeFileSync(
+      join(wsDir, "login.md"),
+      "The login screen shall validate credentials.\n",
+      "utf8",
+    );
+    const fileDir = mkdtempSync(join(tmpdir(), "qi-prov-file-"));
+    const filePath = join(fileDir, "transfer.md");
+    writeFileSync(filePath, "The transfer shall enforce the daily limit.\n", "utf8");
+    try {
+      const result = ingest(
+        inputWithResolver(
+          [
+            { kind: "workspace", label: "LoginFolder", path: wsDir },
+            { kind: "file", label: "TransferDoc", path: filePath },
+            capsuleSource("StatementCap", "cap-statement"),
+          ],
+          () => [{ documentId: "stmt", text: "The statement shall list all bookings." }],
+        ),
+      );
+      // Three sources → three envelopes, each tagged with its own provenance origin.
+      expect(result.envelopes.length).toBe(3);
+      expect(result.sourceSummaries.map((s) => s.kind)).toEqual(["workspace", "file", "capsule"]);
+      expect(result.envelopes.map((e) => e.provenance.origin)).toEqual([
+        "workspace",
+        "file",
+        "local-knowledge-capsule:cap-statement",
+      ]);
+      // Every ingested atom maps back to one of exactly these three envelopes (attributable per source).
+      const envelopeIds = new Set(result.envelopes.map((e) => String(e.id)));
+      for (const atom of result.ingestedAtoms) {
+        expect(envelopeIds.has(String(atom.atom.sourceEnvelopeId))).toBe(true);
+      }
+      // All three envelopes are actually cited by at least one atom.
+      const citedEnvelopes = new Set(
+        result.ingestedAtoms.map((a) => String(a.atom.sourceEnvelopeId)),
+      );
+      expect(citedEnvelopes.size).toBe(3);
+    } finally {
+      rmSync(wsDir, { recursive: true, force: true });
+      rmSync(fileDir, { recursive: true, force: true });
+    }
   });
 });

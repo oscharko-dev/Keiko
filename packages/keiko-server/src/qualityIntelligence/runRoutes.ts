@@ -297,6 +297,9 @@ async function streamRunExecution(
           ...(accepted.droppedSourceCount > 0
             ? { droppedSourceCount: accepted.droppedSourceCount }
             : {}),
+          ...(accepted.skippedSources.length > 0
+            ? { skippedSources: accepted.skippedSources }
+            : {}),
         });
       },
       onEvent: (event) => {

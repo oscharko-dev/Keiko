@@ -455,3 +455,75 @@ describe("makeMutations.add — QI run-card dedup (#270)", () => {
     expect(h.cards()).toHaveLength(2);
   });
 });
+
+// ─── Epic #729 #731 — linkedAllFilesRoots (N+1 multiple folders reader) ──────────
+
+describe("linkedAllFilesRoots (Epic #729 #731)", () => {
+  it("returns empty when the quality window has no connections", () => {
+    const { linkedAllFilesRoots } = makeConnectHarness([win("quality", {}, "quality")], []);
+    expect(linkedAllFilesRoots("quality")).toEqual([]);
+  });
+
+  it("returns BOTH roots for two connected Files windows (not just the first)", () => {
+    const { linkedAllFilesRoots } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("files", { resolvedRoot: "/work/a" }, "files-1"),
+        win("files", { resolvedRoot: "/work/b" }, "files-2"),
+      ],
+      [conn("quality", "files-1"), conn("quality", "files-2")],
+    );
+    expect(linkedAllFilesRoots("quality")).toEqual(["/work/a", "/work/b"]);
+  });
+
+  it("works when the quality window is on the b-side of the connection", () => {
+    const { linkedAllFilesRoots } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("files", { resolvedRoot: "/work/c" }, "files-1")],
+      [conn("files-1", "quality")],
+    );
+    expect(linkedAllFilesRoots("quality")).toEqual(["/work/c"]);
+  });
+
+  it("deduplicates the same root connected from two Files windows", () => {
+    const { linkedAllFilesRoots } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("files", { resolvedRoot: "/work/dup" }, "files-1"),
+        win("files", { resolvedRoot: "/work/dup" }, "files-2"),
+      ],
+      [conn("quality", "files-1"), conn("quality", "files-2")],
+    );
+    expect(linkedAllFilesRoots("quality")).toEqual(["/work/dup"]);
+  });
+
+  it("excludes a Files window with only the 'src' sentinel (no real root to bind)", () => {
+    const { linkedAllFilesRoots } = makeConnectHarness(
+      [win("quality", {}, "quality"), win("files", {}, "files-1")],
+      [conn("quality", "files-1")],
+    );
+    expect(linkedAllFilesRoots("quality")).toEqual([]);
+  });
+
+  it("excludes non-Files connected windows", () => {
+    const { linkedAllFilesRoots } = makeConnectHarness(
+      [
+        win("quality", {}, "quality"),
+        win("connector", { selectedKind: "capsule", selectedId: "cap-1" }, "conn-1"),
+      ],
+      [conn("quality", "conn-1")],
+    );
+    expect(linkedAllFilesRoots("quality")).toEqual([]);
+  });
+
+  it("caps the list at MAX_SCOPES when more than 16 Files windows are connected", () => {
+    const filesWins = Array.from({ length: 20 }, (_unused, i) =>
+      win("files", { resolvedRoot: `/work/f${String(i)}` }, `files-${String(i)}`),
+    );
+    const conns = filesWins.map((w) => conn("quality", w.id));
+    const { linkedAllFilesRoots } = makeConnectHarness(
+      [win("quality", {}, "quality"), ...filesWins],
+      conns,
+    );
+    expect(linkedAllFilesRoots("quality")).toHaveLength(MAX_SCOPES);
+  });
+});

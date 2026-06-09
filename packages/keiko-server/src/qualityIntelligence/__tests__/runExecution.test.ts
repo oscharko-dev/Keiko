@@ -504,3 +504,43 @@ describe("executeQiRun — candidate artifact persistence", () => {
     // The test is meaningful on the success path.
   });
 });
+
+// ─── Coverage-notice propagation to the accepted frame (Epic #729) ───────────────
+
+describe("executeQiRun — N+1 coverage propagation", () => {
+  it("propagates droppedSourceCount to onAccepted when >16 sources are submitted", async () => {
+    const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
+    const sources = Array.from({ length: 17 }, (_, i) => ({
+      kind: "requirements" as const,
+      label: `S${String(i)}`,
+      text: `The system shall satisfy requirement ${String(i)} for coverage precisely.`,
+    }));
+    await executeQiRun(
+      makeInput(evidenceDir, { onAccepted, request: makeRequest({ sources }) }),
+    );
+    expect(onAccepted.mock.calls[0]?.[0]?.droppedSourceCount).toBe(1);
+  });
+
+  it("propagates skippedSources to onAccepted while the healthy source still runs", async () => {
+    const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
+    await executeQiRun(
+      makeInput(evidenceDir, {
+        onAccepted,
+        request: makeRequest({
+          sources: [VALID_SOURCE, { kind: "requirements", label: "Blank", text: "   \n\t " }],
+        }),
+      }),
+    );
+    const accepted = onAccepted.mock.calls[0]?.[0];
+    expect(accepted?.sourceCount).toBe(1);
+    expect(accepted?.skippedSources.map((s) => s.code)).toEqual(["QI_SOURCE_EMPTY"]);
+    expect(accepted?.skippedSources.map((s) => s.label)).toEqual(["Blank"]);
+  });
+
+  it("reports zero dropped and no skipped sources on the happy path", async () => {
+    const onAccepted = vi.fn<(accepted: QiRunAccepted) => void>();
+    await executeQiRun(makeInput(evidenceDir, { onAccepted }));
+    expect(onAccepted.mock.calls[0]?.[0]?.droppedSourceCount).toBe(0);
+    expect(onAccepted.mock.calls[0]?.[0]?.skippedSources).toEqual([]);
+  });
+});

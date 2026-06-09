@@ -645,6 +645,7 @@ export type {
   QualityIntelligenceCapsuleSetSource,
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceStartRunRequest,
+  QualityIntelligenceSkippedSource,
   QualityIntelligenceRunStreamAccepted,
   QualityIntelligenceRunStreamEvent,
   QualityIntelligenceRunStreamDone,
