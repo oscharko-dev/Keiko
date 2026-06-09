@@ -83,7 +83,7 @@ function ReviewControls({
   readonly state: QualityIntelligenceReviewState;
   readonly onReview: (candidateId: string, action: QiReviewAction) => void;
   readonly disabled?: boolean;
-  readonly disabledReason?: string;
+  readonly disabledReason?: string | undefined;
 }): ReactNode {
   return (
     <div className="qi-cand-actions" role="group" aria-label="Review decision">
@@ -138,7 +138,7 @@ function CandidateView({
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onStartEdit?: (() => void) | undefined;
   readonly actionsDisabled?: boolean;
-  readonly actionsDisabledReason?: string;
+  readonly actionsDisabledReason?: string | undefined;
 }): ReactNode {
   return (
     <>
@@ -200,7 +200,7 @@ function CandidateCard({
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onEdit?: QiCandidateEdit | undefined;
   readonly actionsDisabled?: boolean;
-  readonly actionsDisabledReason?: string;
+  readonly actionsDisabledReason?: string | undefined;
 }): ReactNode {
   const [editing, setEditing] = useState(false);
   const handleSave = async (edited: QualityIntelligenceCandidateEditableFields): Promise<void> => {
@@ -241,7 +241,7 @@ export interface CandidatesPaneProps {
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onEdit?: QiCandidateEdit | undefined;
   readonly actionsDisabled?: boolean;
-  readonly actionsDisabledReason?: string;
+  readonly actionsDisabledReason?: string | undefined;
 }
 
 export function CandidatesPane({
