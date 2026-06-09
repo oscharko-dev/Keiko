@@ -33,6 +33,8 @@ import {
   buildFigmaSnapshot,
   FigmaConnectorError,
   type FigmaConnectorErrorCode,
+  type FigmaScopeCoverage,
+  type ScopedPaginationLimits,
 } from "./figma/index.js";
 import { resolveFigmaToken } from "./figma/figmaTokenSource.js";
 import { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intelligence";
@@ -143,6 +145,12 @@ export interface FigmaSnapshotSummary {
   /** Integrity hash over the snapshot content — deterministic for drift detection (#735). */
   readonly integrityHash: string;
   /**
+   * Deep-fetch coverage telemetry (#837) — present on a freshly-built snapshot (POST response).
+   * Lets the UI honestly report how much of a huge instance-heavy board was deep-fetched vs
+   * truncated by the bounded per-screen budgets. Build-time only; never persisted in the snapshot.
+   */
+  readonly coverage?: FigmaScopeCoverage;
+  /**
    * Per-screen summary for the UI gallery. IR display names + image metadata only.
    * PNG bytes are NOT returned — the client shows a placeholder pending a future
    * screen-image route (/{runId}/screens/:index).
@@ -173,16 +181,37 @@ function buildReductionHint(screenCount: number, skippedCount: number): string {
   return `${screenCount.toString()} screen${screenCount !== 1 ? "s" : ""} from ${total.toString()} detected${skippedClause}`;
 }
 
+// Counts interaction-hint roles over a stored ScreenIr node tree (`{ root: { interactionHint,
+// children } }`). Duck-typed: it does NOT import the IR domain, only walks the serialised shape the
+// snapshot persists. Bounded by the tree size already capped at fetch time.
+function countRoles(irJson: unknown): { fields: number; controls: number; texts: number } {
+  const counts = { fields: 0, controls: 0, texts: 0 };
+  const visit = (node: unknown): void => {
+    if (typeof node !== "object" || node === null) return;
+    const n = node as Record<string, unknown>;
+    const hint = typeof n.interactionHint === "string" ? n.interactionHint : "";
+    if (hint === "input") counts.fields += 1;
+    else if (hint === "button" || hint === "link") counts.controls += 1;
+    else if (hint === "text") counts.texts += 1;
+    if (Array.isArray(n.children)) for (const child of n.children) visit(child);
+  };
+  const ir =
+    typeof irJson === "object" && irJson !== null ? (irJson as Record<string, unknown>) : {};
+  visit(ir.root);
+  return counts;
+}
+
 // Produces a brief structural summary string from a ScreenIr value (duck-typed — keeps this
-// module honest: it does NOT import the IR domain or depend on its internal shape).
+// module honest: it does NOT import the IR domain or depend on its internal shape). Walks the IR
+// node tree (`root`) to count fields/controls/text, which is where the structure actually lives —
+// the previous flat `ir.fields`/`ir.controls` lookup never matched the persisted shape and always
+// returned the bare "screen" fallback.
 function irSummaryFromJson(irJson: unknown): string {
-  if (typeof irJson !== "object" || irJson === null) return "screen";
-  const ir = irJson as Record<string, unknown>;
-  const fields = Array.isArray(ir.fields) ? ir.fields.length : 0;
-  const controls = Array.isArray(ir.controls) ? ir.controls.length : 0;
+  const { fields, controls, texts } = countRoles(irJson);
   const parts: string[] = [];
   if (fields > 0) parts.push(`${fields.toString()} field${fields !== 1 ? "s" : ""}`);
   if (controls > 0) parts.push(`${controls.toString()} control${controls !== 1 ? "s" : ""}`);
+  if (texts > 0) parts.push(`${texts.toString()} text${texts !== 1 ? "s" : ""}`);
   return parts.length > 0 ? parts.join(", ") : "screen";
 }
 
@@ -193,9 +222,16 @@ function screenNameFromIrJson(irJson: unknown): string {
   return typeof name === "string" && name.length > 0 ? name : "Screen";
 }
 
-function recordToSummary(record: FigmaSnapshotRecord): FigmaSnapshotSummary {
+function recordToSummary(
+  record: FigmaSnapshotRecord,
+  coverage?: FigmaScopeCoverage,
+): FigmaSnapshotSummary {
   const screenCount = record.screens.length;
   const skippedCount = record.skippedScreens.length;
+  const truncatedClause =
+    coverage !== undefined && (coverage.screensTruncated > 0 || coverage.capped)
+      ? `; ${coverage.screensTruncated.toString()} partially captured (deep content bounded)`
+      : "";
   return {
     runId: record.runId,
     fileKey: record.provenance.fileKey,
@@ -204,8 +240,9 @@ function recordToSummary(record: FigmaSnapshotRecord): FigmaSnapshotSummary {
     fetchedAt: record.provenance.fetchedAt,
     screenCount,
     skippedCount,
-    reductionHint: buildReductionHint(screenCount, skippedCount),
+    reductionHint: `${buildReductionHint(screenCount, skippedCount)}${truncatedClause}`,
     integrityHash: record.integrityHash,
+    ...(coverage !== undefined ? { coverage } : {}),
     screens: record.screens.map((s) => ({
       screenId: s.screenId,
       name: screenNameFromIrJson(s.irJson),
@@ -264,6 +301,28 @@ type FigmaScopedResult = Awaited<
   ReturnType<ReturnType<typeof createFigmaConnector>["fetchScopedNodes"]>
 >;
 
+// Deployment-overridable deep scoped-pagination budgets (#837). Operators on a tighter Figma plan can
+// dial concurrency/depth/screen-count down (or up) via env without a code change; an unset or
+// non-positive value falls back to the connector default. Mirrors the #532 KEIKO_GROUNDING_* pattern.
+function figmaPaginationFromEnv(env: EnvSource): Partial<ScopedPaginationLimits> {
+  const readPositiveInt = (raw: string | undefined): number | undefined => {
+    if (raw === undefined) return undefined;
+    const value = Number(raw);
+    return Number.isInteger(value) && value > 0 ? value : undefined;
+  };
+  const overrides: Record<string, number> = {};
+  const apply = (key: keyof ScopedPaginationLimits, envName: string): void => {
+    const value = readPositiveInt(env[envName]);
+    if (value !== undefined) overrides[key] = value;
+  };
+  apply("pageDepth", "KEIKO_FIGMA_PAGE_DEPTH");
+  apply("maxNodesPerScreen", "KEIKO_FIGMA_MAX_NODES_PER_SCREEN");
+  apply("maxFetchesPerScreen", "KEIKO_FIGMA_MAX_FETCHES_PER_SCREEN");
+  apply("maxScreensDeep", "KEIKO_FIGMA_MAX_SCREENS_DEEP");
+  apply("fetchConcurrency", "KEIKO_FIGMA_FETCH_CONCURRENCY");
+  return overrides;
+}
+
 /** Fetches scoped nodes + runs IR cleaning + renders the snapshot. No store interaction. */
 async function fetchAndBuild(
   boardLink: string,
@@ -272,10 +331,16 @@ async function fetchAndBuild(
 ): Promise<{ scoped: FigmaScopedResult; snapshot: FigmaSnapshotBuild } | RouteResult> {
   const httpPort = createDefaultFigmaHttpPort();
   const renderPort = createDefaultFigmaRenderPort();
-  const connector = createFigmaConnector({ http: httpPort, env });
+  const connector = createFigmaConnector({
+    http: httpPort,
+    env,
+    config: { pagination: figmaPaginationFromEnv(env) },
+  });
   let scoped: FigmaScopedResult;
   try {
-    scoped = await connector.fetchScopedNodes(boardLink);
+    // Deep scoped-pagination fetch (#837): per-screen bounded deepening so in-screen text survives
+    // into the IR (a11y contrast #812 + text-aware codegen #755). Stays in the snapshot boundary.
+    scoped = await connector.fetchScopedNodesDeep(boardLink);
   } catch (err) {
     if (err instanceof FigmaConnectorError) {
       return { status: figmaStatusForCode(err.code), body: figmaErrorBody(err.code) };
@@ -352,7 +417,7 @@ export async function handleFigmaTriggerSnapshot(
   const runId = `fs-${randomUUID()}`;
   const stored = persistSnapshot(evidenceDir, runId, buildResult.scoped, buildResult.snapshot);
   if ("status" in stored) return stored;
-  return { status: 201, body: recordToSummary(stored) };
+  return { status: 201, body: recordToSummary(stored, buildResult.scoped.coverage) };
 }
 
 // ─── GET /api/figma/snapshots/:runId ──────────────────────────────────────────

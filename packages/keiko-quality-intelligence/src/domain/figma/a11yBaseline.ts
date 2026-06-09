@@ -30,6 +30,13 @@ const MIN_TARGET_SIZE = 24;
 const AA_NORMAL = 4.5;
 const AA_LARGE = 3.0;
 
+// Generous per-screen item cap so a pathologically dense real screen (thousands of TEXT nodes →
+// thousands of contrast checks) cannot make the a11y baseline unbounded in memory/output. Small
+// fixtures stay far below it, so it is invisible except on huge boards. Deterministic: the first
+// `MAX_A11Y_ITEMS_PER_SCREEN` items (stable order) are kept and a single coverage notice records the
+// remainder, so the same IR yields the same truncated set every run.
+const MAX_A11Y_ITEMS_PER_SCREEN = 800;
+
 const INTERACTIVE = new Set<IrNode["interactionHint"]>(["button", "input", "link"]);
 
 // ─── WCAG relative luminance + contrast ratio (exact, model-free) ─────────────────
@@ -242,7 +249,27 @@ export function deriveA11yTestItemsByScreen(
     const acc: WalkAccumulator = { items: [], focusables: [] };
     visit(screen.root, ctx, undefined, acc);
     if (acc.focusables.length >= 2) acc.items.push(focusOrderItem(ctx, acc.focusables));
-    byScreen.set(screen.id, acc.items);
+    byScreen.set(screen.id, capItems(ctx, acc.items));
   }
   return byScreen;
+}
+
+// Deterministically bound a screen's a11y items: keep the first MAX (stable order), and when more
+// were derived, append ONE coverage notice recording how many were omitted (never a silent cut).
+function capItems(
+  ctx: ScreenContext,
+  items: readonly StructuralTestItem[],
+): readonly StructuralTestItem[] {
+  if (items.length <= MAX_A11Y_ITEMS_PER_SCREEN) return items;
+  const omitted = items.length - MAX_A11Y_ITEMS_PER_SCREEN;
+  const kept = items.slice(0, MAX_A11Y_ITEMS_PER_SCREEN);
+  kept.push(
+    noticeItem(
+      ctx,
+      ctx.screenId,
+      "a11y-cap",
+      `Screen "${ctx.screenName}" has more accessibility checks than the per-screen baseline shows: ${String(omitted)} additional checks were omitted to keep the baseline bounded`,
+    ),
+  );
+  return kept;
 }

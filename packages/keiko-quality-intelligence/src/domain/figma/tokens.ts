@@ -18,7 +18,7 @@ import {
   readString,
   type FigmaSourceNode,
 } from "./sourceNode.js";
-import { paintColorToHex } from "./color.js";
+import { isVisiblePaint, paintColorToHex } from "./color.js";
 import type {
   ColorToken,
   DesignTokens,
@@ -32,6 +32,7 @@ const collectPaintColors = (node: FigmaSourceNode, key: string, out: Set<string>
   for (const paint of readArray(node[key])) {
     const record = asNode(paint);
     if (record === undefined || readString(record.type) !== "SOLID") continue;
+    if (!isVisiblePaint(record)) continue;
     const hex = paintColorToHex(record);
     if (hex !== undefined) out.add(hex);
   }

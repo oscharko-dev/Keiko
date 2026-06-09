@@ -339,3 +339,40 @@ describe("deriveA11yTestItemsByScreen — determinism + attribution", () => {
     expect(deriveA11yTestItemsByScreen([ir]).get("s15") ?? []).toHaveLength(0);
   });
 });
+
+// Resilience (#837 follow-on): deep-fetched real screens can carry thousands of TEXT nodes; the
+// baseline must stay bounded with an honest coverage notice instead of an unbounded item list.
+describe("deriveA11yTestItemsByScreen — per-screen item cap", () => {
+  const manyTextScreen = (count: number): ScreenIr => {
+    const children: IrNode[] = [];
+    for (let i = 0; i < count; i += 1) {
+      children.push(node(`t${String(i)}`, "text", { text: `t${String(i)}`, textColor: "#000000" }));
+    }
+    // The root carries a background so every TEXT child yields a contrast item.
+    return screen(
+      "big",
+      "Big",
+      node("root", "container", { backgroundColor: "#ffffff", children }),
+    );
+  };
+
+  it("caps a pathologically dense screen at 800 items + one coverage notice", () => {
+    const items = deriveA11yTestItemsByScreen([manyTextScreen(900)]).get("big") ?? [];
+    expect(items).toHaveLength(801);
+    const notice = items[items.length - 1];
+    expect(notice?.category).toBe("coverage-notice");
+    expect(notice?.title).toContain("additional checks were omitted");
+  });
+
+  it("does not cap a screen under the limit (no spurious notice)", () => {
+    const items = deriveA11yTestItemsByScreen([manyTextScreen(10)]).get("big") ?? [];
+    expect(items.length).toBeLessThan(800);
+    expect(items.some((i) => i.title.includes("additional checks were omitted"))).toBe(false);
+  });
+
+  it("remains deterministic at the cap boundary", () => {
+    const a = deriveA11yTestItemsByScreen([manyTextScreen(900)]).get("big") ?? [];
+    const b = deriveA11yTestItemsByScreen([manyTextScreen(900)]).get("big") ?? [];
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});

@@ -95,6 +95,11 @@ function evidenceStatusLabel(wins: readonly AppWindow[] | null): string {
 const CARD_TYPES: readonly WindowType[] = [
   "chat",
   "connector",
+  // Epic #750 #756 — the Figma Snapshot window was registered (WindowsRegistry + render + TYPE_ORDER)
+  // but omitted here, so it never appeared in the New-Window palette or the "New …" command list,
+  // i.e. a user could not open it at all (an unreachable surface). Listed here (ordered as in
+  // TYPE_ORDER) so it is launchable like every other card.
+  "figma",
   "files",
   "editor",
   "browser",

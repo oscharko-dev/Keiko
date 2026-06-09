@@ -44,6 +44,15 @@ export {
   type FigmaRetrySleep,
 } from "./figmaRetry.js";
 export { mapWithConcurrency } from "./figmaConcurrency.js";
+export {
+  paginateScopedDocument,
+  discoverScreenNodes,
+  DEFAULT_SCOPED_PAGINATION_LIMITS,
+  type FigmaScopeCoverage,
+  type RawFigmaNode,
+  type ScopedNodeFetcher,
+  type ScopedPaginationLimits,
+} from "./figmaScopedPagination.js";
 export type {
   FigmaRenderedImage,
   FigmaSkippedScreen,

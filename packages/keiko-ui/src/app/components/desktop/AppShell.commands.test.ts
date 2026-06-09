@@ -76,6 +76,9 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(newCommands.find((c) => c.id === "new-chat")).toBeDefined();
     expect(newCommands.find((c) => c.id === "new-files")).toBeDefined();
     expect(newCommands.find((c) => c.id === "new-review")).toBeDefined();
+    // Epic #750 #756 — the Figma Snapshot window must be launchable (it was unreachable when "figma"
+    // was missing from CARD_TYPES); pin it so the surface cannot regress to dead code.
+    expect(newCommands.find((c) => c.id === "new-figma")).toBeDefined();
   });
 
   it("includes Tile / Split / Cascade / Theme commands", () => {
