@@ -16,6 +16,7 @@ import { FigmaConnectorError } from "./figmaConnectorErrors.js";
 import type { FigmaHttpPort } from "./figmaHttpPort.js";
 import { parseFigmaTarget, type FigmaTarget } from "./figmaUrl.js";
 import { resolveReadiness, type FigmaNode, type ReadinessSignal } from "./figmaReadiness.js";
+import { classifyTokenFailure, resolveFigmaToken } from "./figmaTokenSource.js";
 
 const FIGMA_API_ORIGIN = "https://api.figma.com";
 const DEFAULT_DEPTH = 4;
@@ -37,6 +38,10 @@ export interface FigmaConnectorDeps {
   readonly http: FigmaHttpPort;
   readonly env: FigmaEnv;
   readonly config?: FigmaConnectorConfig;
+  // Highest-precedence token source: the decrypted PAT from the encrypted vault (#758). When
+  // absent the connector falls back to config then the FIGMA_ACCESS_TOKEN env var (the dev
+  // default from #751), so the env-auth path keeps working unchanged with no vault entry.
+  readonly vaultToken?: string;
 }
 
 export interface FigmaFetchOptions {
@@ -61,12 +66,12 @@ export interface FigmaConnector {
   fetchScopedNodes(url: string, options?: FigmaFetchOptions): Promise<FigmaScopedResult>;
 }
 
-const resolveToken = (deps: FigmaConnectorDeps): string => {
-  const candidate = deps.config?.accessToken ?? deps.env.FIGMA_ACCESS_TOKEN ?? "";
-  const token = candidate.trim();
-  if (token.length === 0) throw new FigmaConnectorError("FIGMA_TOKEN_MISSING");
-  return token;
-};
+const resolveToken = (deps: FigmaConnectorDeps): string =>
+  resolveFigmaToken({
+    vaultToken: deps.vaultToken,
+    configToken: deps.config?.accessToken,
+    envToken: deps.env.FIGMA_ACCESS_TOKEN,
+  });
 
 const buildScopedUrl = (
   target: FigmaTarget,
@@ -80,15 +85,21 @@ const buildScopedUrl = (
   return url.toString();
 };
 
-const statusToError = (status: number): FigmaConnectorError => {
-  if (status === 404) return new FigmaConnectorError("FIGMA_NOT_FOUND");
-  if (status === 401 || status === 403) return new FigmaConnectorError("FIGMA_INSUFFICIENT_SCOPE");
-  if (status >= 500) return new FigmaConnectorError("FIGMA_UPSTREAM_UNAVAILABLE");
-  return new FigmaConnectorError("FIGMA_INTERNAL");
-};
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+// Figma error bodies carry a short reason in `err` (occasionally `message`). We pass only that
+// generic string to the structural classifier so a 403 resolves to the most specific coded error
+// (expired / revoked / insufficient-scope) without ever surfacing the raw payload. The token is
+// never part of a response body, so this cannot leak it.
+const extractFigmaReason = (body: unknown): string | undefined => {
+  if (!isRecord(body)) return undefined;
+  const reason = body.err ?? body.message;
+  return typeof reason === "string" ? reason : undefined;
+};
+
+const statusToError = (status: number, body: unknown): FigmaConnectorError =>
+  classifyTokenFailure(status, extractFigmaReason(body));
 
 const extractDocument = (body: unknown, nodeId: string): FigmaNode => {
   if (!isRecord(body) || !isRecord(body.nodes)) throw new FigmaConnectorError("FIGMA_INTERNAL");
@@ -125,7 +136,9 @@ export const createFigmaConnector = (deps: FigmaConnectorDeps): FigmaConnector =
 
     const requestUrl = buildScopedUrl(target, depth, options.version);
     const response = await deps.http({ url: requestUrl, headers: { "X-Figma-Token": token } });
-    if (response.status < 200 || response.status >= 300) throw statusToError(response.status);
+    if (response.status < 200 || response.status >= 300) {
+      throw statusToError(response.status, response.json);
+    }
 
     const document = extractDocument(response.json, target.nodeId);
     guardScopeSize(document, maxNodeCount);

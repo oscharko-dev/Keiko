@@ -143,6 +143,30 @@ describe("createFigmaConnector — token contract", () => {
     expect(firstRequest(recorder).headers["X-Figma-Token"]).toBe("config-token");
   });
 
+  it("prefers the vault token over config and env (#758 precedence)", async () => {
+    const recorder = recordingPort(okResponse());
+    const connector = createFigmaConnector({
+      http: recorder.port,
+      env: { FIGMA_ACCESS_TOKEN: "env-token" },
+      config: { accessToken: "config-token" },
+      vaultToken: "vault-token",
+    });
+
+    await connector.fetchScopedNodes(URL_OK);
+    expect(firstRequest(recorder).headers["X-Figma-Token"]).toBe("vault-token");
+  });
+
+  it("falls back to the FIGMA_ACCESS_TOKEN env var when no vault token (#751 dev default preserved)", async () => {
+    const recorder = recordingPort(okResponse());
+    const connector = createFigmaConnector({
+      http: recorder.port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+    });
+
+    await connector.fetchScopedNodes(URL_OK);
+    expect(firstRequest(recorder).headers["X-Figma-Token"]).toBe(TOKEN);
+  });
+
   it("refuses with FIGMA_TOKEN_MISSING when no token is configured", async () => {
     const recorder = recordingPort(okResponse());
     const connector = createFigmaConnector({ http: recorder.port, env: {} });
@@ -229,16 +253,34 @@ describe("createFigmaConnector — coded errors", () => {
     ).rejects.toMatchObject({ code: "FIGMA_NOT_FOUND" });
   });
 
-  it("maps 403 to FIGMA_INSUFFICIENT_SCOPE", async () => {
+  it("maps a reasonless 403 to the safe default FIGMA_TOKEN_INVALID (#758 taxonomy)", async () => {
     await expect(
       connectorWith({ status: 403, json: {} }).fetchScopedNodes(URL_OK),
+    ).rejects.toMatchObject({ code: "FIGMA_TOKEN_INVALID" });
+  });
+
+  it("maps a 403 scope reason to FIGMA_INSUFFICIENT_SCOPE (#758 taxonomy)", async () => {
+    await expect(
+      connectorWith({ status: 403, json: { err: "Invalid scope(s)" } }).fetchScopedNodes(URL_OK),
     ).rejects.toMatchObject({ code: "FIGMA_INSUFFICIENT_SCOPE" });
   });
 
-  it("maps 401 to FIGMA_INSUFFICIENT_SCOPE (bad/invalid token)", async () => {
+  it("maps a 403 expired reason to FIGMA_TOKEN_EXPIRED (#758 taxonomy)", async () => {
+    await expect(
+      connectorWith({ status: 403, json: { err: "Token has expired" } }).fetchScopedNodes(URL_OK),
+    ).rejects.toMatchObject({ code: "FIGMA_TOKEN_EXPIRED" });
+  });
+
+  it("maps 401 to FIGMA_TOKEN_INVALID (bad/invalid token, #758 taxonomy)", async () => {
     await expect(
       connectorWith({ status: 401, json: {} }).fetchScopedNodes(URL_OK),
-    ).rejects.toMatchObject({ code: "FIGMA_INSUFFICIENT_SCOPE" });
+    ).rejects.toMatchObject({ code: "FIGMA_TOKEN_INVALID" });
+  });
+
+  it("maps a 407 proxy response to FIGMA_PROXY_EGRESS_FAILED (#758 taxonomy)", async () => {
+    await expect(
+      connectorWith({ status: 407, json: {} }).fetchScopedNodes(URL_OK),
+    ).rejects.toMatchObject({ code: "FIGMA_PROXY_EGRESS_FAILED" });
   });
 
   it("maps 5xx to FIGMA_UPSTREAM_UNAVAILABLE", async () => {

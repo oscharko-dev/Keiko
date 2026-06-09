@@ -37,3 +37,18 @@ export {
   type ReadinessOptions,
   type ReadinessSignal,
 } from "./figmaReadiness.js";
+export {
+  createFigmaTokenStore,
+  resolveFigmaVaultKey,
+  NO_FIGMA_KEYCHAIN,
+  type FigmaTokenStore,
+  type FigmaTokenStoreDeps,
+  type FigmaKeychainAccess,
+  type FigmaVaultKeySource,
+  type ResolvedFigmaVaultKey,
+} from "./figmaTokenStore.js";
+export {
+  resolveFigmaToken,
+  classifyTokenFailure,
+  type FigmaTokenSources,
+} from "./figmaTokenSource.js";
