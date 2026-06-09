@@ -239,7 +239,11 @@ async function generateCandidates(
   return {
     candidates: truncateCandidates(deduplicateCandidates(parsed.candidates), maxCandidates),
     ...(result.modelId !== undefined ? { modelId: result.modelId } : {}),
-    ...(result.seedUsed !== undefined ? { seedUsed: result.seedUsed } : {}),
+    ...(result.modelId !== undefined
+      ? { seedUsed: result.seedUsed ?? null }
+      : result.seedUsed !== undefined
+        ? { seedUsed: result.seedUsed }
+        : {}),
     modelParameters: result.modelParameters,
   };
 }
