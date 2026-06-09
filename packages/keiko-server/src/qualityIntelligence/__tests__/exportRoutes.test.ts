@@ -508,6 +508,7 @@ describe("handleQiExport — Epic #711 multi-format export", () => {
       scope: "candidate",
       candidateId: "cand-001",
       reviewerLabel: "tester",
+      now: "2026-06-01T12:00:00.000Z",
     });
   };
 
