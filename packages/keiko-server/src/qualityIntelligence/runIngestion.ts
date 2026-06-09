@@ -230,9 +230,11 @@ const SINGLE_FILE_MAX_BYTES = WORKSPACE_BUDGET_BYTES;
 const DOC_TEXT_EXTENSION =
   /\.(?:md|markdown|txt|text|rst|adoc|asciidoc|json|ya?ml|xml|html?|csv|tsv|ini|toml|cfg|conf|properties|tex|org)$/iu;
 
-// PDF and DOCX are intentionally accepted in single-file mode for parity with folder-backed QI:
-// the read path stays keiko-workspace only, so these are best-effort UTF-8/redaction reads, not
-// dedicated document parsers.
+// PDF and DOCX are accepted in single-file mode for parity with folder-backed QI: the read path
+// stays keiko-workspace only (best-effort UTF-8/redaction reads, no dedicated document parser). A
+// genuinely text-based PDF/DOCX decodes to usable prose and is ingested; a compressed/binary one
+// decodes to NUL bytes + control-character noise (the real text lives in DEFLATE streams) and is
+// rejected with a user-actionable error rather than silently feeding the model garbage (#713).
 const BEST_EFFORT_DOCUMENT_EXTENSION = /\.(?:pdf|docx)$/iu;
 
 const isSupportedFilePath = (path: string): boolean =>
@@ -242,6 +244,47 @@ const isSupportedFilePath = (path: string): boolean =>
 
 const requiresStrictTextGuard = (path: string): boolean =>
   CODE_EXTENSION.test(path) || DOC_TEXT_EXTENSION.test(path);
+
+// A best-effort document whose decoded text is dominated by binary noise carries none of the
+// document's actual prose. Reject above this control-character density so the model never receives
+// unusable content. Kept low (10%) but non-zero so that prose with stray control bytes still reads.
+const DOCUMENT_CONTROL_CHAR_RATIO_LIMIT = 0.1;
+
+// A control character (excluding ordinary tab/newline/CR), DEL, or the Unicode replacement char —
+// the residue of decoding compressed/binary bytes as UTF-8. Printable prose (incl. umlauts/ß) is
+// never counted.
+function isControlChar(code: number): boolean {
+  const allowedWhitespace = code === 0x09 || code === 0x0a || code === 0x0d;
+  return (code < 0x20 && !allowedWhitespace) || code === 0x7f || code === 0xfffd;
+}
+
+// Detect a best-effort PDF/DOCX read that produced binary noise instead of extractable text. A NUL
+// byte is the canonical binary marker; a high control-character ratio catches mojibake without one.
+// German prose (umlauts, ß) is fully printable, so it never trips this guard.
+function looksBinaryDocument(text: string): boolean {
+  if (text.includes("\u0000")) return true;
+  let control = 0;
+  let total = 0;
+  for (const ch of text) {
+    total += 1;
+    if (isControlChar(ch.codePointAt(0) ?? 0)) control += 1;
+  }
+  return total > 0 && control / total > DOCUMENT_CONTROL_CHAR_RATIO_LIMIT;
+}
+
+const documentFormatLabel = (path: string): string => (/\.pdf$/iu.test(path) ? "PDF" : "Word");
+
+// A best-effort PDF/DOCX whose decoded text is binary noise (compressed streams, ZIP members)
+// carries none of the document's prose. Reject with actionable guidance instead of ingesting
+// garbage the model cannot use — a text-based PDF/DOCX still ingests normally (#713).
+function assertBestEffortDocumentText(absFile: string, label: string, text: string): void {
+  if (!BEST_EFFORT_DOCUMENT_EXTENSION.test(absFile) || !looksBinaryDocument(text)) return;
+  throw new QiIngestionError(
+    "QI_SOURCE_UNSUPPORTED",
+    `File "${label}" is a ${documentFormatLabel(absFile)} document whose text could not be ` +
+      `extracted. Export it to Markdown or plain text and connect that instead.`,
+  );
+}
 
 // Resolve a single file's workspace root and read it through the keiko-workspace boundary-checked
 // read path (`readWorkspaceFile`: lexical containment -> deny rules -> symlink realpath gate -> size
@@ -295,10 +338,7 @@ function ingestFile(
 ): OneSource {
   const label = sanitiseLabel(source.label);
   if (!isAbsolute(source.path)) {
-    throw new QiIngestionError(
-      "QI_BAD_SOURCE",
-      "File source paths must be absolute local paths.",
-    );
+    throw new QiIngestionError("QI_BAD_SOURCE", "File source paths must be absolute local paths.");
   }
   const absFile = resolve(source.path);
   if (!isSupportedFilePath(absFile)) {
@@ -317,13 +357,14 @@ function ingestFile(
   const content = readSingleFileContent(absFile, label);
   // keiko-workspace decodes as UTF-8; a NUL byte is the canonical binary marker. A binary file that
   // slipped past the strict text/code gate (e.g. a mis-named ".txt") is rejected here, never
-  // partially ingested. PDF/DOCX intentionally skip this check for folder-parity best-effort reads.
+  // partially ingested. PDF/DOCX get a dedicated binary-noise check below (their own format).
   if (requiresStrictTextGuard(absFile) && content.text.includes("\u0000")) {
     throw new QiIngestionError(
       "QI_SOURCE_UNSUPPORTED",
       `File "${label}" appears to be binary, not text.`,
     );
   }
+  assertBestEffortDocumentText(absFile, label, content.text);
   if (content.text.trim().length === 0) {
     throw new QiIngestionError("QI_SOURCE_EMPTY", `File "${label}" produced no usable content.`);
   }

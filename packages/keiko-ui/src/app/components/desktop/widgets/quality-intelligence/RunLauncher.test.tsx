@@ -593,7 +593,46 @@ describe("RunLauncher — connected single file (Epic #709, Issue #714)", () => 
     const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
       Parameters<StartQiRunFn>[0],
     ];
+    // The connected file REPLACES the folder — it is the only source, not prepended to it.
+    expect(req.sources).toHaveLength(1);
     expect(req.sources[0]).toMatchObject({ kind: "file", path: FILE });
+  });
+
+  it("prefers the connected file over N+1 folders AND capsules, sending only the file", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        onRunCompleted={vi.fn()}
+        connectedFilePath={FILE}
+        connectedRoots={["/work/a", "/work/b"]}
+        connectedCapsuleIds={["cap-1", "cap-2", "cap-3"]}
+      />,
+    );
+
+    // Banner stays file-scoped even with folders + capsules also connected.
+    expect(screen.getByTestId("qi-connected-source")).toHaveTextContent("Connected file");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+    const [req] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    // The single file wins outright — it is not augmented with the 2 folders + 3 capsules, so the
+    // per-source budget is never split nine ways. A regression that prepends the file would fail.
+    expect(req.sources).toHaveLength(1);
+    expect(req.sources[0]).toMatchObject({ kind: "file", path: FILE });
+  });
+
+  it("ignores a relative connected file when no connectedRoot is present", () => {
+    // resolveConnectedFilePath cannot build an absolute path from a bare relative file with no root,
+    // so it returns null: no banner, and Generate stays disabled (never emits a relative source the
+    // server would reject with QI_BAD_SOURCE).
+    render(<RunLauncher onRunCompleted={vi.fn()} connectedFilePath="spec.md" />);
+    expect(screen.queryByTestId("qi-connected-source")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /generate test cases/i })).toBeDisabled();
   });
 
   it("lets manual requirements text override the connected file", async () => {
