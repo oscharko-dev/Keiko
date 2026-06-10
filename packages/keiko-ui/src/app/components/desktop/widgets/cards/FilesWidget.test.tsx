@@ -177,7 +177,12 @@ describe("FilesWidget", () => {
 
     await waitFor(() => {
       expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
-        { kind: "workspace-root", relativePaths: [], connectedAtMs: expect.any(Number) },
+        {
+          kind: "workspace-root",
+          relativePaths: [],
+          connectedAtMs: expect.any(Number),
+          root: "/repo",
+        },
       ]);
     });
     expect(session.replaceChat).toHaveBeenCalledWith(updated);
@@ -203,7 +208,12 @@ describe("FilesWidget", () => {
 
     await waitFor(() => {
       expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
-        { kind: "directory", relativePaths: ["src"], connectedAtMs: expect.any(Number) },
+        {
+          kind: "directory",
+          relativePaths: ["src"],
+          connectedAtMs: expect.any(Number),
+          root: "/repo",
+        },
       ]);
     });
     expect(session.replaceChat).toHaveBeenCalledWith(updated);
