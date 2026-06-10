@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -72,6 +72,20 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(deps.store).toBeDefined();
     expect(deps.store.listProjects()).toEqual([]);
     deps.store.close();
+  });
+
+  it("passes the injected env to the memory vault path resolver", () => {
+    const memoryDir = tmp("mem-env-");
+    const evidenceDir = tmp("ev-mem-env-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { KEIKO_MEMORY_DIR: memoryDir },
+      store: createInMemoryUiStore(),
+    });
+    expect(existsSync(join(memoryDir, "keiko-memory.db"))).toBe(true);
+    deps.store.close();
+    deps.memoryVault?.close();
   });
 });
 

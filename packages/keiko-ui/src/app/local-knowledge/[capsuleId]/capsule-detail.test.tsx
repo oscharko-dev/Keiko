@@ -160,12 +160,15 @@ describe("CapsuleDetail — overview section", () => {
     expect(screen.getByText("internal")).toBeInTheDocument();
   });
 
-  it("renders lifecycle status badge", async () => {
+  it("renders lifecycle status badge with the shared human-readable label", async () => {
     render(<CapsuleDetail fetchDetailImpl={resolveDetail()} />);
 
+    // STATUS_LABELS maps "ready" → "Indexed" — same terminology as the
+    // connector-graph capsule list (uiux-fix F033, C006).
     await waitFor(() => {
-      const badge = screen.getByRole("status", { name: /Status: ready/i });
+      const badge = screen.getByRole("status", { name: /Status: Indexed/i });
       expect(badge).toBeInTheDocument();
+      expect(badge.textContent).toBe("Indexed");
     });
   });
 

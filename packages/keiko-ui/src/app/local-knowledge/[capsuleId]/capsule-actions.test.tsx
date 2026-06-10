@@ -51,11 +51,7 @@ describe("CapsuleActions — connect source", () => {
     const user = userEvent.setup();
     const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
     const onActionComplete = vi.fn();
-    render(
-      <CapsuleActions
-        {...defaultProps({ connectCapsuleSourceImpl, onActionComplete })}
-      />,
-    );
+    render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl, onActionComplete })} />);
 
     await user.type(screen.getByLabelText(/absolute folder path to connect/i), "/docs/manuals");
     await user.click(screen.getByRole("button", { name: /^connect$/i }));
@@ -75,7 +71,7 @@ describe("CapsuleActions — connect source", () => {
     const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
-    await user.selectOptions(screen.getByLabelText(/source scope kind/i), "repository");
+    await user.selectOptions(screen.getByLabelText(/connect source/i), "repository");
     await user.type(screen.getByLabelText(/absolute repository path to connect/i), "/repo/app");
     await user.click(screen.getByRole("button", { name: /^connect$/i }));
 
@@ -92,7 +88,7 @@ describe("CapsuleActions — connect source", () => {
     const connectCapsuleSourceImpl = vi.fn().mockResolvedValue({} as CapsuleDetailResponse);
     render(<CapsuleActions {...defaultProps({ connectCapsuleSourceImpl })} />);
 
-    await user.selectOptions(screen.getByLabelText(/source scope kind/i), "files");
+    await user.selectOptions(screen.getByLabelText(/connect source/i), "files");
     const connectButton = screen.getByRole("button", { name: /^connect$/i });
     expect(connectButton).toBeDisabled();
 

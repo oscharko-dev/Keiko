@@ -146,16 +146,20 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   editor: {
     title: "Editor",
     icon: "editor",
-    desc: "Edit a file",
+    desc: "Code preview (demo)",
     w: 480,
     h: 360,
     config: [
+      // Audit C302 — the old def "windows.jsx" was a design-prototype artifact that
+      // prefilled the form and then stuck in the header badge. Empty default; the
+      // placeholder carries the hint and the demo widget supplies its own label.
       {
         key: "file",
-        label: "File path",
+        label: "Tab label",
         type: "text",
-        def: "windows.jsx",
-        placeholder: "path/to/file.jsx",
+        def: "",
+        optional: true,
+        placeholder: "file.jsx",
       },
     ],
   },
@@ -166,7 +170,16 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     w: 460,
     h: 340,
     config: [
-      { key: "url", label: "URL", type: "text", def: "localhost:5173", placeholder: "https://…" },
+      // Audit C302 — "localhost:5173" was the Vite dev-server default of the design
+      // prototype; it prefilled the form and stuck in the header badge.
+      {
+        key: "url",
+        label: "URL",
+        type: "text",
+        def: "",
+        optional: true,
+        placeholder: "https://…",
+      },
     ],
   },
   terminal: {
@@ -282,7 +295,8 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     singleton: true,
   },
   mobile: {
-    title: "Keiko mobile",
+    // Audit C412 — title case like every other two-word title ("Figma Snapshot").
+    title: "Keiko Mobile",
     icon: "mobile",
     desc: "Mobile companion",
     w: 300,
@@ -311,7 +325,9 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
   notifications: {
     title: "Notifications",
     icon: "bell",
-    desc: "Notifications",
+    // Audit C412 — the desc only repeated the title; add information like the
+    // other palette descriptions ("Browse a folder", "Run commands").
+    desc: "Review alerts & updates",
     w: 300,
     h: 360,
     tool: true,

@@ -83,6 +83,36 @@ function buildOptions(fixture: Fixture, overrides: Partial<IndexingOptions> = {}
   return { ...base, ...overrides };
 }
 
+describe("runIndexingJob — source preconditions", () => {
+  it("rejects capsules without attached sources before creating an indexing job", async () => {
+    const { store, cleanup } = freshStore();
+    const capsuleId = "cap-empty" as KnowledgeCapsuleId;
+    createCapsule(store, sampleCapsuleInput({ id: capsuleId }));
+
+    try {
+      await expect(
+        drain(
+          runIndexingJob({
+            capsuleId,
+            parserRegistry: createDefaultParserRegistry(),
+            workspaceFs: memoryFs(ROOT, []),
+            embeddingAdapter: happyAdapter(),
+            store,
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "INVALID_OPTIONS" });
+
+      const jobs = store._internal.db
+        .prepare("SELECT COUNT(*) AS n FROM indexing_jobs WHERE capsule_id = :c")
+        .get({ c: capsuleId }) as { readonly n: number };
+      expect(jobs.n).toBe(0);
+      expect(getCapsule(store, capsuleId)?.lifecycleState).toBe("draft");
+    } finally {
+      cleanup();
+    }
+  });
+});
+
 // ─── Test 1: full happy path ─────────────────────────────────────────────────
 describe("runIndexingJob — happy path", () => {
   let fixture: Fixture;

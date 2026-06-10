@@ -19,3 +19,29 @@ describe("SearchPanel — accessible name (issue #644)", () => {
     expect(input).toHaveAttribute("type", "search");
   });
 });
+
+// uiux-fix F027 C040 — Search was an ornamental mock: a dead input, a fabricated
+// ⇧⇧ shortcut chip, and the hardcoded PROJECT_TREE demo rendered under the real
+// project name. Until real workspace search ships, the panel must be honest.
+describe("SearchPanel — honest placeholder instead of fabricated mock (F027 C040)", () => {
+  it("disables the input while search is not implemented", () => {
+    render(<SearchPanel />);
+    expect(screen.getByLabelText("Search files and symbols")).toBeDisabled();
+  });
+
+  it("does not render the fabricated demo project tree", () => {
+    render(<SearchPanel />);
+    expect(screen.queryByText("OrcaApplication.java")).toBeNull();
+    expect(screen.queryByText("backend")).toBeNull();
+  });
+
+  it("does not advertise the unregistered double-shift shortcut", () => {
+    render(<SearchPanel />);
+    expect(screen.queryByText("⇧⇧")).toBeNull();
+  });
+
+  it("shows the established coming-soon placeholder copy", () => {
+    render(<SearchPanel />);
+    expect(screen.getByText(/coming soon/i)).toBeInTheDocument();
+  });
+});

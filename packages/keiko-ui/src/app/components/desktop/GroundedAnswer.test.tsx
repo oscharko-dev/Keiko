@@ -1,7 +1,7 @@
 // Issue #185 — unit tests for the grounded Q&A presentation component. Extended in #187
 // with ContextPackSummary coverage and an axe-based a11y smoke.
 
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { GroundedAnswer } from "./GroundedAnswer";
 import type {
@@ -96,13 +96,19 @@ describe("GroundedAnswer", () => {
   });
 
   it("renders the busy placeholder when answer is undefined and busy", () => {
+    // uiux-fix F012 C163: source-neutral wording — the panel also serves
+    // capsule/connector-only chats where no repository is involved.
     render(<GroundedAnswer answer={undefined} busy={true} />);
-    expect(screen.getByText(/Exploring repository context/)).toBeInTheDocument();
+    expect(screen.getByText(/Searching connected sources/)).toBeInTheDocument();
   });
 
-  it("renders the assistant content", () => {
+  it("does not duplicate the assistant content (the persisted chat bubble is canonical)", () => {
+    // uiux-fix F009 C025: the panel previously re-rendered answer.content as raw
+    // pre-wrap text directly below the markdown bubble — evidence only now.
     render(<GroundedAnswer answer={answer()} busy={false} />);
-    expect(screen.getByText(/Inspected 1 file/)).toBeInTheDocument();
+    expect(screen.queryByText(/Inspected 1 file/)).not.toBeInTheDocument();
+    // The evidence surfaces stay rendered.
+    expect(screen.getByText("src/foo.ts:10-25")).toBeInTheDocument();
   });
 
   it("warns about partial coverage when files were too large or a binary format", () => {
@@ -207,9 +213,12 @@ describe("GroundedAnswer", () => {
       },
     };
     render(<GroundedAnswer answer={a} busy={false} />);
-    expect(screen.getByText(/Merged from the marketing folder/)).toBeInTheDocument();
+    // F009 C025: the merged answer text lives in the assistant bubble, not the panel.
+    expect(screen.queryByText(/Merged from the marketing folder/)).not.toBeInTheDocument();
     expect(screen.getByText(/src\/foo\.ts/)).toBeInTheDocument();
-    expect(screen.getByText(/\[1\] Quasar Manual \/ Product Docs · manual\.pdf · p\.287/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/\[1\] Quasar Manual \/ Product Docs · manual\.pdf · p\.287/),
+    ).toBeInTheDocument();
     expect(screen.getByText("Hybrid: 2 folder sources + 1 connector source")).toBeInTheDocument();
     expect(screen.getByText("Knowledge scope: Quasar Manual")).toBeInTheDocument();
   });
@@ -234,9 +243,15 @@ describe("GroundedAnswer", () => {
     expect(screen.queryAllByRole("button")).toHaveLength(0);
     expect(screen.getByText("src/foo.ts:1-4")).toBeInTheDocument();
     expect(screen.getByText("src/bar.ts:10-12")).toBeInTheDocument();
-    expect(screen.getByText("src/foo.ts:1-4").closest(".grounded-citation")).toHaveAttribute(
+    // uiux-fix F051 C306: the tooltip explains the trailing decimal (relevance score).
+    const chip = screen.getByText("src/foo.ts:1-4").closest(".grounded-citation");
+    expect(chip).toHaveAttribute(
       "title",
-      "Evidence citation in src/foo.ts at lines 1-4",
+      "Evidence citation in src/foo.ts at lines 1-4 — relevance 0.87",
+    );
+    // The score carries a screen-reader-only label so it is not announced as a bare number.
+    expect(chip?.querySelector(".grounded-citation-score .sr-only")?.textContent).toBe(
+      "relevance ",
     );
   });
 
@@ -248,7 +263,7 @@ describe("GroundedAnswer", () => {
     expect(screen.queryAllByRole("button")).toHaveLength(0);
     expect(screen.getByText("src/qux.ts").closest(".grounded-citation")).toHaveAttribute(
       "title",
-      "Evidence citation in src/qux.ts",
+      "Evidence citation in src/qux.ts — relevance 0.87",
     );
   });
 
@@ -261,12 +276,13 @@ describe("GroundedAnswer", () => {
       ],
     });
     render(<GroundedAnswer answer={a} busy={false} />);
+    // uiux-fix F012 C160: marker kinds are humanized ("no-evidence" -> "no evidence").
     expect(
-      screen.getByText("Uncertainty (3 markers — no-evidence, budget-clipped)"),
+      screen.getByText("Uncertainty (3 markers — no evidence, budget clipped)"),
     ).toBeInTheDocument();
-    expect(screen.getByText("no-evidence: excerpt unavailable for src/baz.ts")).toBeInTheDocument();
-    expect(screen.getByText("no-evidence: other")).toBeInTheDocument();
-    expect(screen.getByText("budget-clipped: clipped at foo")).toBeInTheDocument();
+    expect(screen.getByText("no evidence: excerpt unavailable for src/baz.ts")).toBeInTheDocument();
+    expect(screen.getByText("no evidence: other")).toBeInTheDocument();
+    expect(screen.getByText("budget clipped: clipped at foo")).toBeInTheDocument();
   });
 
   it("does not render an uncertainty line when there are no markers", () => {
@@ -287,14 +303,15 @@ describe("GroundedAnswer", () => {
         busy={false}
       />,
     );
+    // uiux-fix F012 C161: user-language wording instead of "evidence atoms" jargon.
     expect(
-      screen.getByText("Omitted: 3 evidence atoms (binary: 1, low relevance: 2)"),
+      screen.getByText("Not used: 3 excerpts (binary: 1, low relevance: 2)"),
     ).toBeInTheDocument();
   });
 
   it("does not render an omitted line when count is 0", () => {
     render(<GroundedAnswer answer={answer({ omittedCount: 0 })} busy={false} />);
-    expect(screen.queryByText(/Omitted:/)).toBeNull();
+    expect(screen.queryByText(/Not used:/)).toBeNull();
   });
 
   // ─── Issue #187: ContextPackSummary ─────────────────────────────────────────
@@ -349,38 +366,130 @@ describe("GroundedAnswer", () => {
   it("surfaces every context-pack usage and budget dimension as metric rows", () => {
     render(<GroundedAnswer answer={answer()} busy={false} />);
     const region = screen.getByRole("region", { name: "Context inspection summary" });
+    // uiux-fix F012 C162: bytes/time use the shared lib/format presenters; the
+    // searched row reads symmetrically; queryKind is humanized (C160).
     expect(region.textContent).toContain("Searched");
-    expect(region.textContent).toContain("3× / 16");
+    expect(region.textContent).toContain("3 / 16 searches");
     expect(region.textContent).toContain("Read");
     expect(region.textContent).toContain("5 / 32 files");
     expect(region.textContent).toContain("Bytes");
-    expect(region.textContent).toContain("12400 / 131072 B");
+    expect(region.textContent).toContain("12.1 KB / 128.0 KB");
+    // uiux-fix F051 C318: token counts are thousands-separated for readability.
     expect(region.textContent).toContain("Input");
-    expect(region.textContent).toContain("1500 / 32000 tokens");
+    expect(region.textContent).toContain("1,500 / 32,000 tokens");
     expect(region.textContent).toContain("Output");
-    expect(region.textContent).toContain("400 / 4096 tokens");
+    expect(region.textContent).toContain("400 / 4,096 tokens");
     expect(region.textContent).toContain("Rerank");
     expect(region.textContent).toContain("0 / 0 calls");
     expect(region.textContent).toContain("Time");
-    expect(region.textContent).toContain("1812 / 30000 ms");
+    expect(region.textContent).toContain("1.8 s / 30.0 s");
     expect(region.textContent).toContain("Query");
-    expect(region.textContent).toContain("natural-language");
+    expect(region.textContent).toContain("natural language");
+    expect(region.textContent).not.toContain("natural-language");
   });
 
   it("links to the local connected-context audit evidence when a run id is present", () => {
     render(<GroundedAnswer answer={answer({ evidenceRunId: "grounded-run-1" })} busy={false} />);
-    expect(
-      screen.getByRole("link", { name: "View connected-context audit evidence" }),
-    ).toHaveAttribute("href", "/api/evidence/grounded-run-1");
+    const link = screen.getByRole("link", { name: "View connected-context audit evidence" });
+    expect(link).toHaveAttribute("href", "/api/evidence/grounded-run-1");
+    // uiux-fix F012 C136/C164: the endpoint returns raw JSON — open in a new tab so the
+    // workspace survives, and use the app link pattern instead of UA default styling.
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    expect(link).toHaveClass("sm-link");
   });
 
-  it("renders HTML payload in answer.content as escaped text, not live markup", () => {
-    // Mutation guard: replacing `{answer.content}` with
-    // `<div dangerouslySetInnerHTML={{__html: answer.content}}/>` must fail this test.
+  // ─── uiux-fix F012 C091: citation cap + disclosure ───────────────────────────
+
+  it("caps the evidence list at 8 top-scored chips and reveals the rest on demand", () => {
+    const citations = Array.from({ length: 12 }, (_, i) =>
+      citation({
+        stableId: `atom-${String(i)}`,
+        scopePath: `src/file-${String(i)}.ts`,
+        score: (12 - i) / 12,
+      }),
+    );
+    const { container } = render(<GroundedAnswer answer={answer({ citations })} busy={false} />);
+    expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(8);
+    const toggle = screen.getByRole("button", { name: "Show all 12 sources" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(12);
+    const collapse = screen.getByRole("button", { name: "Show fewer sources" });
+    expect(collapse).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(collapse);
+    expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(8);
+  });
+
+  it("keeps the top-scored citations visible when collapsed (score-sorted cap)", () => {
+    const citations = [
+      citation({ stableId: "low", scopePath: "src/low.ts", score: 0.01 }),
+      ...Array.from({ length: 8 }, (_, i) =>
+        citation({
+          stableId: `hi-${String(i)}`,
+          scopePath: `src/hi-${String(i)}.ts`,
+          score: 0.9 - i * 0.01,
+        }),
+      ),
+    ];
+    render(<GroundedAnswer answer={answer({ citations })} busy={false} />);
+    // The weakest source is the one folded behind the disclosure, regardless of wire order.
+    expect(screen.queryByText(/src\/low\.ts/)).not.toBeInTheDocument();
+    expect(screen.getByText(/src\/hi-0\.ts/)).toBeInTheDocument();
+  });
+
+  it("renders no disclosure button when the citation list is within the cap", () => {
+    const citations = Array.from({ length: 8 }, (_, i) =>
+      citation({ stableId: `atom-${String(i)}`, scopePath: `src/f-${String(i)}.ts` }),
+    );
+    const { container } = render(<GroundedAnswer answer={answer({ citations })} busy={false} />);
+    expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(8);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("caps knowledge citations with the same disclosure pattern", () => {
+    const a: GroundedAnswerType = {
+      groundingKind: "local-knowledge",
+      userMessageId: "lk-u",
+      assistantMessageId: "lk-a",
+      content: "Answer [1].",
+      citations: Array.from({ length: 10 }, (_, i) => ({
+        stableId: `lk-${String(i)}`,
+        marker: `[${String(i + 1)}]`,
+        label: `doc-${String(i)}.md`,
+        score: 1 - i * 0.05,
+      })),
+      uncertainty: [],
+      omittedCount: 0,
+      elapsedMs: 5,
+      noEvidence: false,
+      contextPack: {
+        kind: "local-knowledge",
+        scopeKind: "capsule",
+        scopeId: "lk-1",
+        scopeLabel: "Caps",
+        capsuleCount: 1,
+        sourceCount: 1,
+        citationCount: 10,
+        referenceBudget: 10,
+        referencesUsed: 10,
+      },
+    };
+    const { container } = render(<GroundedAnswer answer={a} busy={false} />);
+    expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(8);
+    fireEvent.click(screen.getByRole("button", { name: "Show all 10 sources" }));
+    expect(container.querySelectorAll(".grounded-citations-item")).toHaveLength(10);
+  });
+
+  it("never renders answer.content into the panel — neither as text nor as markup", () => {
+    // uiux-fix F009 C025: the panel no longer re-renders answer.content at all
+    // (the persisted assistant bubble is the canonical rendering). Mutation guard:
+    // re-introducing `{answer.content}` or a dangerouslySetInnerHTML body must
+    // fail this test.
     const { container } = render(
       <GroundedAnswer answer={answer({ content: "<script>alert(1)</script>" })} busy={false} />,
     );
-    expect(container.textContent).toContain("<script>alert(1)</script>");
+    expect(container.textContent).not.toContain("<script>alert(1)</script>");
     expect(container.querySelectorAll("script")).toHaveLength(0);
   });
 });

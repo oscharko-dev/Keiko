@@ -164,7 +164,10 @@ function collectTypeExports(entryPoint) {
   if (symbol === undefined) {
     fail(`TypeScript module symbol not found for: ${entryPoint}`);
   }
-  return checker.getExportsOfModule(symbol).map((item) => item.getName()).sort();
+  return checker
+    .getExportsOfModule(symbol)
+    .map((item) => item.getName())
+    .sort();
 }
 
 function assertServerRuntimeSurface(paths) {

@@ -104,10 +104,13 @@ describe("TerminalWidget", () => {
     await screen.findByRole("combobox", { name: /command/i });
     await userEvent.type(screen.getByLabelText(/args/i), "-la");
     await userEvent.click(screen.getByRole("button", { name: /run/i }));
-    await screen.findByText(/exit 0/i);
+    // uiux-fix F018 C124: the visible badge plus the persistent sr-only live-region
+    // mirror both carry "exit 0" — the mirror exists before the result arrives so
+    // AT reliably announce it (WCAG 4.1.3).
+    const exitTexts = await screen.findAllByText(/exit 0/i);
+    expect(exitTexts.length).toBeGreaterThan(0);
     expect(screen.getByText(/hello/)).toBeInTheDocument();
-    // B2 — result container must have role="status"
-    expect(screen.getByRole("status")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/command finished: exit 0/i);
     expect(createTerminalExecution).toHaveBeenCalledWith({
       projectId: "/proj",
       command: "ls",
@@ -193,11 +196,11 @@ describe("TerminalWidget", () => {
     render(<TerminalWidget projectPath="/proj" />);
     await screen.findByRole("combobox", { name: /command/i });
     await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
-    // Submit — running becomes true, Cancel appears (disabled until started event).
+    // Submit — running becomes true, Cancel appears (aria-disabled until started event;
+    // uiux-fix F018 C124: aria-disabled keeps the button focusable so focus never drops).
     await userEvent.click(screen.getByRole("button", { name: /run/i }));
-    // Cancel is rendered but disabled while waiting for the started event.
     const cancel = await screen.findByRole("button", { name: /cancel/i });
-    expect(cancel).toBeDisabled();
+    expect(cancel).toHaveAttribute("aria-disabled", "true");
     // Dispatch the SSE execution-started event — Cancel should become enabled.
     FakeEventSource.last?.dispatch(
       "terminal:execution-started",
@@ -213,7 +216,12 @@ describe("TerminalWidget", () => {
         },
       }),
     );
-    await waitFor(() => expect(screen.getByRole("button", { name: /cancel/i })).not.toBeDisabled());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /cancel/i })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      ),
+    );
     // Click Cancel — should call abortTerminalExecution with the captured executionId.
     await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
     expect(abortTerminalExecution).toHaveBeenCalledWith("exec-abc");
@@ -229,7 +237,7 @@ describe("TerminalWidget", () => {
     await waitFor(() => expect(FakeEventSource.last).not.toBeNull());
     await userEvent.click(screen.getByRole("button", { name: /run/i }));
     const cancel = await screen.findByRole("button", { name: /cancel/i });
-    expect(cancel).toBeDisabled();
+    expect(cancel).toHaveAttribute("aria-disabled", "true");
     FakeEventSource.last?.dispatch(
       "terminal:execution-started",
       JSON.stringify({
@@ -244,7 +252,12 @@ describe("TerminalWidget", () => {
         },
       }),
     );
-    await waitFor(() => expect(screen.getByRole("button", { name: /cancel/i })).toBeDisabled());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /cancel/i })).toHaveAttribute(
+        "aria-disabled",
+        "true",
+      ),
+    );
     expect(abortTerminalExecution).not.toHaveBeenCalled();
   });
 

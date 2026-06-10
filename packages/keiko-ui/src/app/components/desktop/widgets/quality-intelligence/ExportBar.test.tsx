@@ -247,6 +247,81 @@ describe("ExportBar — local adapter export", () => {
 
     expect(screen.queryByTestId("qi-export-preview")).not.toBeInTheDocument();
   });
+
+  it("keeps the generated object URL alive until after the synthetic download click returns", async () => {
+    const user = userEvent.setup();
+    const exportImpl = makeLocalExportFake({ filename: "run-001.csv" });
+    const createSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mock");
+    const revokeSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    try {
+      render(<ExportBar runId="run-001" exportImpl={exportImpl} />);
+      await user.selectOptions(
+        screen.getByRole("combobox", { name: /adapter|format|export/i }),
+        "csv",
+      );
+      await user.click(screen.getByRole("button", { name: /download/i }));
+
+      await waitFor(() => {
+        expect(exportImpl).toHaveBeenCalledOnce();
+      });
+      expect(createSpy).toHaveBeenCalledOnce();
+      expect(revokeSpy).not.toHaveBeenCalled();
+
+      await waitFor(() => {
+        expect(revokeSpy).toHaveBeenCalledWith("blob:mock");
+      });
+    } finally {
+      createSpy.mockRestore();
+      revokeSpy.mockRestore();
+    }
+  });
+
+  it("posts through the real export API client when no export seam is injected", async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        dryRun: false,
+        adapter: "csv",
+        filename: "qi-run-export-885.csv",
+        contentType: "text/csv",
+        byteLen: 17,
+        body: "id,title\n1,Export",
+      }),
+    } as Response);
+    const createSpy = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:mock");
+    const revokeSpy = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      render(<ExportBar runId="qi-run-export-885" />);
+      await user.click(screen.getByRole("button", { name: /download/i }));
+
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalledOnce();
+      });
+      const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(path).toBe("/api/quality-intelligence/runs/qi-run-export-885/export");
+      expect(init.method).toBe("POST");
+      expect(init.headers).toMatchObject({
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Keiko-CSRF": "1",
+      });
+      expect(JSON.parse(String(init.body))).toEqual({
+        adapter: "csv",
+        dryRun: false,
+        approvedOnly: false,
+      });
+      expect(await screen.findByTestId("qi-export-success")).toHaveTextContent(
+        /qi-run-export-885\.csv/,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      createSpy.mockRestore();
+      revokeSpy.mockRestore();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

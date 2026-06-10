@@ -4,7 +4,7 @@
 
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, URL } from "node:url";
 
 const repoRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const scopedNativeRoots = [join(repoRoot, "node_modules", "@napi-rs")];

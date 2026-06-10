@@ -27,21 +27,12 @@ const PNG_FIXTURES: readonly PngFixture[] = [
   { file: "favicon.ico", width: 32, height: 32 },
 ];
 
-const OLD_PLACEHOLDER_HASHES = new Map([
+const OLD_PLACEHOLDER_HASHES: ReadonlyMap<string, string> = new Map([
   ["icon-192.png", "9059e1ba8b01fcf3e5f92eda3987ec790404ee704ce12de21d4bc447509f0cf8"],
   ["icon-512.png", "c3d0aae799bbe90e6504b2c2cdfc3a2ddb535fa08131ed529babcd99ad129faa"],
-  [
-    "icon-192-maskable.png",
-    "901d8e8505e89c0f0f40b116922262362d6f93335c824f69c936ad7a9fb497da",
-  ],
-  [
-    "icon-512-maskable.png",
-    "517ce6380ce284dd2bc3da83fce9c191c68e72b2f522ece8a2f6e44113bd952d",
-  ],
-  [
-    "apple-touch-icon.png",
-    "ffe14908c22279fe5d05b3d257019ca866ab697de0fa2b4e4ce3259caafc7850",
-  ],
+  ["icon-192-maskable.png", "901d8e8505e89c0f0f40b116922262362d6f93335c824f69c936ad7a9fb497da"],
+  ["icon-512-maskable.png", "517ce6380ce284dd2bc3da83fce9c191c68e72b2f522ece8a2f6e44113bd952d"],
+  ["apple-touch-icon.png", "ffe14908c22279fe5d05b3d257019ca866ab697de0fa2b4e4ce3259caafc7850"],
   ["favicon.ico", "f9f8abdd1383fa4adab6d08d77b94583aed94e69a4d729c391280c4d616c7069"],
 ] as const);
 
@@ -62,7 +53,9 @@ function readPngHeader(file: string): PngHeader {
 }
 
 function sha256(file: string): string {
-  return createHash("sha256").update(readFileSync(resolve(PUBLIC_DIR, file))).digest("hex");
+  return createHash("sha256")
+    .update(readFileSync(resolve(PUBLIC_DIR, file)))
+    .digest("hex");
 }
 
 describe("PWA icon assets (ADR-0024 D5, issue #123)", () => {

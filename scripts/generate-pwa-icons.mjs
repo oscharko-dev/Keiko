@@ -12,13 +12,7 @@
 // Usage: `node scripts/generate-pwa-icons.mjs`. Commit the regenerated assets.
 
 import { spawnSync } from "node:child_process";
-import {
-  copyFileSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -76,11 +70,9 @@ function buildIconSvg(size, options = {}) {
 }
 
 function renderSvg(inputSvg, outputPng) {
-  const result = spawnSync(
-    "sips",
-    ["-s", "format", "png", inputSvg, "--out", outputPng],
-    { encoding: "utf8" },
-  );
+  const result = spawnSync("sips", ["-s", "format", "png", inputSvg, "--out", outputPng], {
+    encoding: "utf8",
+  });
   if (result.status !== 0) {
     throw new Error(
       [

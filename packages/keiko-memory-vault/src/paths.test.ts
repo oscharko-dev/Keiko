@@ -92,6 +92,11 @@ describe("resolveMemoryDir", () => {
     }
   });
 
+  it("allows the gitignored workspace .keiko runtime root", () => {
+    const runtimeDir = join(process.cwd(), DEFAULT_STATE_DIR, MEMORY_DIR_NAME);
+    expect(resolveMemoryDir(runtimeDir, emptyEnv())).toBe(runtimeDir);
+  });
+
   it("rejects a symlinked target", () => {
     const base = freshTmp();
     const real = join(base, "real");
