@@ -93,6 +93,47 @@ function seedIssue672Repo(): void {
   );
 }
 
+function seedIssue876Repo(): void {
+  mkdirSync(join(ROOT, "src"), { recursive: true });
+  mkdirSync(join(ROOT, ".keiko/evidence/qi"), { recursive: true });
+  writeFileSync(
+    join(ROOT, "src/grounded-qa.ts"),
+    "export async function handleGroundedAsk() {\n" +
+      "  return 'real route handler';\n" +
+      "}\n" +
+      "export const GROUNDED_HANDLER_NAME = 'handleGroundedAsk';\n",
+  );
+  writeFileSync(
+    join(ROOT, "src/zod-config.ts"),
+    "import { z } from 'zod';\n" +
+      "export const ZodConfigSchema = z.object({ PORT: z.string() });\n" +
+      "export function parseZodConfig(input: unknown) {\n" +
+      "  return ZodConfigSchema.parse(input);\n" +
+      "}\n",
+  );
+  writeFileSync(
+    join(ROOT, "pnpm-lock.yaml"),
+    "lockfileVersion: '9.0'\n" +
+      "packages:\n" +
+      "  zod@3.23.8:\n" +
+      "    resolution: {integrity: sha512-zod}\n" +
+      "importers:\n" +
+      "  .:\n" +
+      "    dependencies:\n" +
+      "      zod:\n" +
+      "        specifier: ^3.23.8\n" +
+      "        version: 3.23.8\n",
+  );
+  writeFileSync(
+    join(ROOT, ".keiko/evidence/qi/run.candidates.json"),
+    JSON.stringify({
+      finding: "handleGroundedAsk grounded route handler",
+      summary: "handleGroundedAsk appears in cached evidence only",
+      packageName: "zod",
+    }) + "\n",
+  );
+}
+
 beforeEach(() => {
   ROOT = mkdtempSync(join(tmpdir(), "keiko-grounded-orch-"));
   seedRepo();
@@ -329,6 +370,56 @@ describe("runGroundedExploration", () => {
     ).toBe(true);
     expect(JSON.stringify(out.pack)).not.toContain(".keiko/evidence");
     expect(JSON.stringify(out.pack)).not.toContain("stale-internal-value");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("omits .keiko evidence artifacts when real source files answer a normal repository question", async () => {
+    seedIssue876Repo();
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Where is handleGroundedAsk implemented? Cite the source file.",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files[0]?.scopePath).toBe("src/grounded-qa.ts");
+    expect(out.pack.files.every((file) => !file.scopePath.startsWith(".keiko/evidence/"))).toBe(
+      true,
+    );
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
+  it("demotes lockfiles behind ordinary repository files for code-usage questions", async () => {
+    seedIssue876Repo();
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "How is ZodConfigSchema used in this repository? Cite the relevant code.",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files[0]?.scopePath).toBe("src/zod-config.ts");
+    const lockfileIndex = out.pack.files.findIndex((file) => file.scopePath === "pnpm-lock.yaml");
+    expect(lockfileIndex).not.toBe(0);
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) => excerpt.content.includes("ZodConfigSchema")),
+    ).toBe(true);
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
