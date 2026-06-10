@@ -201,6 +201,7 @@ export type {
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceUiAtomCoverage,
   QualityIntelligenceUiWeakTestFlag,
+  QualityIntelligenceUiDriftMetadata,
   QualityIntelligenceUiCandidate,
   QualityIntelligenceInlineSourceKind,
   QualityIntelligenceRequirementsSource,

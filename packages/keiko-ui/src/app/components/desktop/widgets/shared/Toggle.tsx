@@ -11,6 +11,7 @@ interface ToggleProps {
 export function Toggle({ on, onChange, label }: ToggleProps): ReactNode {
   return (
     <button
+      type="button"
       role="switch"
       aria-checked={on}
       aria-label={label}

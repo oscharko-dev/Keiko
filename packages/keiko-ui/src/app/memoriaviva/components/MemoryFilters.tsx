@@ -44,7 +44,9 @@ interface MemoryFiltersProps {
 // Label maps
 // ---------------------------------------------------------------------------
 
-const SCOPE_LABELS: Readonly<Record<MemoryScopeKind, string>> = {
+// Exported so rows/detail render the same curated labels as the filter chips
+// instead of raw enum values like "semantic-fact" (uiux-fix F005).
+export const SCOPE_LABELS: Readonly<Record<MemoryScopeKind, string>> = {
   user: "User",
   workspace: "Workspace",
   project: "Project",
@@ -52,7 +54,7 @@ const SCOPE_LABELS: Readonly<Record<MemoryScopeKind, string>> = {
   global: "Global",
 };
 
-const TYPE_LABELS: Readonly<Record<MemoryType, string>> = {
+export const TYPE_LABELS: Readonly<Record<MemoryType, string>> = {
   episodic: "Episodic",
   "semantic-fact": "Fact",
   procedural: "Procedural",

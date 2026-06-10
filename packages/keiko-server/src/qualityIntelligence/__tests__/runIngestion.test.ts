@@ -140,6 +140,28 @@ describe("ingestInlineSources — workspace folder (Issue #278)", () => {
     expect(result.ingestedAtoms.some((a) => a.canonicalText.includes("CSV"))).toBe(true);
   });
 
+  it("atomizes multiple requirements in one markdown file into separate requirement atoms", () => {
+    const dir = makeDir();
+    writeFileSync(
+      join(dir, "requirements.md"),
+      [
+        "REQ-DRIFT-001: The audit login flow must require multi-factor verification before access.",
+        "REQ-DRIFT-002: The audit transfer flow must show a confirmation screen before submit.",
+      ].join("\n"),
+      "utf8",
+    );
+    const result = ingest(input([{ kind: "workspace", label: "Drift fixture", path: dir }]));
+    expect(result.ingestedAtoms).toHaveLength(2);
+    expect(result.ingestedAtoms.map((entry) => entry.atom.kind)).toEqual([
+      "requirement",
+      "requirement",
+    ]);
+    expect(result.ingestedAtoms[0]?.canonicalText).toContain("requirements.md");
+    expect(result.ingestedAtoms[0]?.canonicalText).toContain("REQ-DRIFT-001");
+    expect(result.ingestedAtoms[1]?.canonicalText).toContain("REQ-DRIFT-002");
+    expect(result.sourceSummaries[0]?.atomCount).toBe(2);
+  });
+
   it("throws QI_SOURCE_EMPTY when the folder has no readable files", () => {
     const dir = makeDir();
     try {
@@ -189,6 +211,28 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     expect(result.ingestedAtoms[0]?.canonicalText.includes("IBAN")).toBe(true);
     expect(result.sourceSummaries[0]?.kind).toBe("file");
     expect(result.sourceSummaries[0]?.atomCount).toBe(1);
+  });
+
+  it("atomizes a multi-requirement single file for coverage traceability", () => {
+    const dir = makeDir();
+    const path = writeFile(
+      dir,
+      "requirements.md",
+      [
+        "REQ-DRIFT-001: The audit login flow must require multi-factor verification before access.",
+        "REQ-DRIFT-002: The audit transfer flow must show a confirmation screen before submit.",
+      ].join("\n"),
+    );
+    const result = ingest(input([fileSource("Requirements", path)]));
+    expect(result.ingestedAtoms).toHaveLength(2);
+    expect(result.ingestedAtoms.map((entry) => entry.atom.kind)).toEqual([
+      "requirement",
+      "requirement",
+    ]);
+    expect(result.ingestedAtoms[0]?.canonicalText).toContain("requirements.md");
+    expect(result.ingestedAtoms[0]?.canonicalText).toContain("REQ-DRIFT-001");
+    expect(result.ingestedAtoms[1]?.canonicalText).toContain("REQ-DRIFT-002");
+    expect(result.sourceSummaries[0]?.atomCount).toBe(2);
   });
 
   it("ingests ONLY the connected file, not its siblings in the same folder", () => {

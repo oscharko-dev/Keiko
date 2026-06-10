@@ -24,6 +24,7 @@
 // execution stay behind the existing workflow surfaces (NewWindowDialog → RunWindow).
 
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { Icons } from "./Icons";
 import { CHAT_WORKFLOW_CATALOG, findChatWorkflow } from "@/lib/chat-workflow-catalog";
 import { isWorkflowEligibleModel } from "@/lib/workflow-eligibility";
@@ -173,7 +174,13 @@ function WorkflowPickerDialog({ modelId, launch, onClose }: WorkflowPickerDialog
     setError(humanReason(outcome));
   }
 
-  return (
+  // Like GatewaySetupDialog (issue #422): ancestors include `.ws-scene`, whose
+  // transform/zoom makes it the containing block for `position: fixed`
+  // descendants, so the overlay would collapse to the 0x0 scene origin instead
+  // of covering the viewport. Portalling to document.body keeps the backdrop
+  // viewport-fixed. The focus trap is window-level and dialogRef-based, so it
+  // is portal-safe.
+  const dialogTree = (
     <div
       ref={dialogRef}
       role="dialog"
@@ -252,6 +259,8 @@ function WorkflowPickerDialog({ modelId, launch, onClose }: WorkflowPickerDialog
       </div>
     </div>
   );
+  if (typeof document === "undefined") return dialogTree;
+  return createPortal(dialogTree, document.body);
 }
 
 function humanReason(outcome: { reason: string; message?: string | undefined }): string {
@@ -280,17 +289,20 @@ const GROUNDED_WORKFLOW_CHOICES: ReadonlyArray<{
   {
     workflowKind: "unit-test-generation",
     label: "Generate unit tests",
-    description: "Use the grounded evidence as read-only context and propose in-scope test changes.",
+    description:
+      "Use the grounded evidence as read-only context and propose in-scope test changes.",
   },
   {
     workflowKind: "bug-investigation",
     label: "Investigate bug",
-    description: "Investigate a bug against the grounded evidence and keep writes inside approved paths.",
+    description:
+      "Investigate a bug against the grounded evidence and keep writes inside approved paths.",
   },
   {
     workflowKind: "verification",
     label: "Run verification",
-    description: "Run verification against the grounded workspace context without granting write access.",
+    description:
+      "Run verification against the grounded workspace context without granting write access.",
   },
 ] as const;
 
@@ -313,9 +325,7 @@ function splitLines(value: string): readonly string[] {
     .filter((entry) => entry.length > 0);
 }
 
-function groundedHumanReason(
-  outcome: LaunchGroundedWorkflowHandoffResult,
-): string {
+function groundedHumanReason(outcome: LaunchGroundedWorkflowHandoffResult): string {
   if (outcome.ok) return "";
   if (outcome.message !== undefined && outcome.message.length > 0) return outcome.message;
   switch (outcome.reason) {
@@ -335,10 +345,12 @@ function buildGroundedInput(
   bugDescription: string,
   bugTargetFiles: string,
   verifyTargetFiles: string,
-): { readonly ok: true; readonly input: Record<string, unknown> } | {
-  readonly ok: false;
-  readonly message: string;
-} {
+):
+  | { readonly ok: true; readonly input: Record<string, unknown> }
+  | {
+      readonly ok: false;
+      readonly message: string;
+    } {
   if (workflowKind === "unit-test-generation") {
     if (unitTargetMode === "changedFiles") {
       const filePaths = splitLines(unitTargetValue);
@@ -350,7 +362,8 @@ function buildGroundedInput(
     if (trimmed.length === 0) {
       return {
         ok: false,
-        message: unitTargetMode === "module" ? "Provide a module directory." : "Provide a target file.",
+        message:
+          unitTargetMode === "module" ? "Provide a module directory." : "Provide a target file.",
       };
     }
     return unitTargetMode === "module"
@@ -400,7 +413,11 @@ export function LaunchGroundedWorkflowButton({
 }: LaunchGroundedWorkflowButtonProps): ReactNode {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  if (answer === undefined || answer.groundingKind !== "connected-context" || modelId === undefined) {
+  if (
+    answer === undefined ||
+    answer.groundingKind !== "connected-context" ||
+    modelId === undefined
+  ) {
     return null;
   }
   return (
@@ -547,7 +564,9 @@ function GroundedWorkflowDialog({
 
   const choice = GROUNDED_WORKFLOW_CHOICES.find((entry) => entry.workflowKind === workflowKind);
 
-  return (
+  // Portal to document.body for the same reason as WorkflowPickerDialog above
+  // (transformed `.ws-scene` ancestor breaks `position: fixed`).
+  const dialogTree = (
     <div
       ref={dialogRef}
       role="dialog"
@@ -586,9 +605,7 @@ function GroundedWorkflowDialog({
                     className="wf-dialog-input mono"
                     value={unitTargetMode}
                     onChange={(event) =>
-                      setUnitTargetMode(
-                        event.target.value as "file" | "module" | "changedFiles",
-                      )
+                      setUnitTargetMode(event.target.value as "file" | "module" | "changedFiles")
                     }
                   >
                     <option value="file">File</option>
@@ -668,7 +685,11 @@ function GroundedWorkflowDialog({
               <legend>Expected checks</legend>
               <div className="wf-dialog-form" style={{ gap: 8 }}>
                 {GROUNDED_CHECK_CHOICES.map((check) => (
-                  <label key={check} className="wf-dialog-choice-desc" style={{ display: "flex", gap: 8 }}>
+                  <label
+                    key={check}
+                    className="wf-dialog-choice-desc"
+                    style={{ display: "flex", gap: 8 }}
+                  >
                     <input
                       type="checkbox"
                       checked={expectedChecks.includes(check)}
@@ -726,6 +747,8 @@ function GroundedWorkflowDialog({
       </div>
     </div>
   );
+  if (typeof document === "undefined") return dialogTree;
+  return createPortal(dialogTree, document.body);
 }
 
 // ─── 3. Run summary card for system chat messages ────────────────────────────
@@ -766,8 +789,14 @@ export function RunSummaryCard({ message }: RunSummaryCardProps): ReactNode {
         ) : null}
         {message.runId !== undefined ? (
           <p className="run-summary-card-meta mono">
-            run <span data-runid={message.runId}>{message.runId}</span>{" "}
-            <span className="run-summary-card-runshort">({runIdShort})</span>
+            run{" "}
+            <span
+              className="run-summary-card-runshort"
+              data-runid={message.runId}
+              title={message.runId}
+            >
+              {runIdShort}
+            </span>
           </p>
         ) : null}
       </div>

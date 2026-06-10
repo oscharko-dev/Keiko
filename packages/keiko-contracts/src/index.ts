@@ -633,6 +633,7 @@ export type {
   QualityIntelligenceUiRunTotals,
   QualityIntelligenceUiCandidate,
   QualityIntelligenceUiWeakTestFlag,
+  QualityIntelligenceUiDriftMetadata,
   QualityIntelligenceUiStalenessEntry,
   QualityIntelligenceUiStalenessReport,
   QualityIntelligenceUiRegenerateResult,

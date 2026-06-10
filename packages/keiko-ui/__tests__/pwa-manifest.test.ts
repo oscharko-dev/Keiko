@@ -45,7 +45,7 @@ describe("PWA manifest contract (ADR-0024 D4, issue #123)", () => {
   it.each([
     ["name", "Keiko"],
     ["short_name", "Keiko"],
-    ["description", "Keiko local developer-assist workspace."],
+    ["description", "Keiko — a governed agentic workspace for knowledge work."],
     ["start_url", "/"],
     ["scope", "/"],
     ["display", "standalone"],
@@ -58,9 +58,9 @@ describe("PWA manifest contract (ADR-0024 D4, issue #123)", () => {
     expect(m[field]).toBe(expected);
   });
 
-  it("declares categories as exactly ['developer-tools', 'productivity']", () => {
+  it("declares categories as exactly ['business', 'productivity', 'developer-tools']", () => {
     const m = loadManifest();
-    expect(m.categories).toEqual(["developer-tools", "productivity"]);
+    expect(m.categories).toEqual(["business", "productivity", "developer-tools"]);
   });
 
   it("lists exactly four icon entries covering both purposes and both sizes", () => {

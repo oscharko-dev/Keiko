@@ -31,6 +31,13 @@ function makeDetail(
     coveragePercentage,
     coverageByAtom,
     qualityScore: null,
+    drift: {
+      status: "unavailable",
+      sourceFingerprintCount: 0,
+      atomFingerprintCount: 0,
+      reCheckSupported: false,
+      regenerateStaleSupported: false,
+    },
   };
 }
 

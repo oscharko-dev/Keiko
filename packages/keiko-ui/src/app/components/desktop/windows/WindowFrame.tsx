@@ -50,7 +50,9 @@ function TooSmall({ icon, label }: TooSmallProps): ReactNode {
         <Icon size={28} />
       </div>
       <div className="ts-title">Too small to show {label}</div>
-      <div className="ts-sub">Enlarge the window or zoom out</div>
+      {/* Tiny mode depends on window size and *content* zoom only — point at the
+          content-zoom control, not the workspace "Zoom out" button (audit C300). */}
+      <div className="ts-sub">Enlarge the window or zoom its content out</div>
       <div className="ts-arrow" aria-hidden="true">
         <svg
           width="22"
@@ -188,6 +190,10 @@ function attachDragListeners(api: WorkspaceApi, geo: DragGeometry, session: Drag
     api.commitSnap(session.winId);
     document.body.style.cursor = "";
   };
+  // Audit C362 — the move listeners run on window without pointer capture, so a
+  // fast drag leaves the header and the cursor flickered to default/text over
+  // other surfaces. Pin the grabbing cursor globally for the gesture (up() resets).
+  document.body.style.cursor = "grabbing";
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
 }
@@ -384,12 +390,40 @@ export function WindowFrame({
   const onPortKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>): void => {
       if (e.key !== "Enter" && e.key !== " " && e.key !== "Spacebar") return;
+      // Keyboard completion of click-to-connect (WCAG 2.1.1, audit C004):
+      // when this window is a valid target of an in-flight connect, Enter or
+      // Space on its port confirms the link — mirroring the pointer path —
+      // instead of starting a new flow from this window. confirmConnect only
+      // reads preventDefault/stopPropagation off the event, so the same
+      // adapter cast used by startPortConnect is safe here.
+      if (connState === "valid") {
+        api.confirmConnect(win.id, {
+          preventDefault: () => e.preventDefault(),
+          stopPropagation: () => e.stopPropagation(),
+        } as ReactPointerEvent<Element>);
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       startPortConnect(e.currentTarget, e);
     },
-    [startPortConnect],
+    [startPortConnect, connState, api, win.id],
   );
+
+  // Audit C148 — closing a window removed the focused Close button from the DOM
+  // and dropped keyboard focus to <body>; the user had to re-tab from the top of
+  // the document. Move focus deterministically to the next top window (focusable
+  // via tabIndex={-1} on the section) or the New-window FAB once React committed
+  // the close. preventScroll guards against any residual scroll-on-focus.
+  const closeWithFocusRestore = useCallback((): void => {
+    api.close(win.id);
+    requestAnimationFrame(() => {
+      const next =
+        document.querySelector<HTMLElement>('.window[data-top="true"]') ??
+        document.querySelector<HTMLElement>(".ws-fab");
+      next?.focus({ preventScroll: true });
+    });
+  }, [api, win.id]);
 
   const sub = bodyMode === "full" ? subText(win.type, win.cfg) : null;
   const bodyStyle: CSSProperties = bodyMode === "tiny" ? {} : { zoom };
@@ -404,14 +438,28 @@ export function WindowFrame({
   return (
     <section
       className="window"
+      // Audit C408 — a name turns the section into a named region, so AT users
+      // can perceive window boundaries and jump between windows; C297 — the sub
+      // (path/URL/title) disambiguates multiple windows of the same type.
+      aria-label={sub !== null ? `${def.title} — ${sub}` : def.title}
+      aria-roledescription="window"
       data-top={top ? "true" : "false"}
       data-max={win.max ? "true" : "false"}
       data-conn={connState ?? undefined}
       data-window-id={win.id}
       style={sectionStyle}
+      tabIndex={-1}
       onPointerDown={(e) => {
         if (connState === "valid") api.confirmConnect(win.id, e);
         api.focus(win.id);
+      }}
+      // Audit C061 / WCAG 2.4.11 — tabbing into a lower, overlapped window must
+      // raise it, or the focused control (and its focus ring) stays fully hidden
+      // behind the top window; Cmd/Alt+Arrows also only act on the topZ window.
+      // The !top guard matters: makeFocus bumps z unconditionally, so without it
+      // every Tab step inside the top window would trigger a state update.
+      onFocusCapture={() => {
+        if (!top) api.focus(win.id);
       }}
     >
       {/* Header is a drag surface; keyboard equivalent is ⌘+Arrows handled by useKeyboardCtrls. */}
@@ -428,14 +476,25 @@ export function WindowFrame({
           <Icon size={14} />
         </span>
         <span className="win-title">{def.title}</span>
-        {sub !== null ? <span className="win-sub mono">{sub}</span> : null}
+        {/* Audit C159 — the badge ellipsizes at 150px; title= keeps the full
+            path/URL reachable for mouse users. */}
+        {sub !== null ? (
+          <span className="win-sub mono" title={sub}>
+            {sub}
+          </span>
+        ) : null}
         <span className="spacer" />
+        {/* Audit C297 — every window carried word-identical control labels; with
+            several windows open, screen-reader and voice-control users could not
+            tell WHICH window a Close/Zoom/Connect control acts on (WCAG 2.4.6).
+            def.title scopes each label; the visible chrome is unchanged. */}
         <div className="win-zoom">
           <button
             type="button"
             className="win-zbtn"
             title="Zoom content out"
-            aria-label="Zoom content out"
+            aria-label={`Zoom ${def.title} content out`}
+            disabled={zoom <= CONTENT_MIN_ZOOM}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setZoom(zoom - 0.1)}
           >
@@ -444,8 +503,8 @@ export function WindowFrame({
           <button
             type="button"
             className="win-zpct"
-            title="Reset zoom"
-            aria-label="Reset content zoom"
+            title="Reset content zoom to 100%"
+            aria-label={`${String(Math.round(zoom * 100))}% — reset ${def.title} content zoom`}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => api.update(win.id, { zoom: 1 })}
           >
@@ -455,7 +514,8 @@ export function WindowFrame({
             type="button"
             className="win-zbtn"
             title="Zoom content in"
-            aria-label="Zoom content in"
+            aria-label={`Zoom ${def.title} content in`}
+            disabled={zoom >= CONTENT_MAX_ZOOM}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setZoom(zoom + 0.1)}
           >
@@ -466,7 +526,7 @@ export function WindowFrame({
           type="button"
           className="win-btn"
           title={win.max ? "Restore" : "Maximize"}
-          aria-label={win.max ? "Restore window" : "Maximize window"}
+          aria-label={win.max ? `Restore ${def.title} window` : `Maximize ${def.title} window`}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={() => api.maximize(win.id)}
         >
@@ -476,9 +536,9 @@ export function WindowFrame({
           type="button"
           className="win-btn win-close"
           title="Close"
-          aria-label="Close window"
+          aria-label={`Close ${def.title} window`}
           onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => api.close(win.id)}
+          onClick={closeWithFocusRestore}
         >
           <Icons.close size={14} />
         </button>
@@ -496,8 +556,8 @@ export function WindowFrame({
             <div
               key={`p${d}`}
               className={`win-port wp-${d}`}
-              title="Click to connect to another card"
-              aria-label={`Connect from ${d === "t" ? "top" : d === "r" ? "right" : d === "b" ? "bottom" : "left"} edge`}
+              title="Click to connect to another window"
+              aria-label={`Connect ${def.title} from ${d === "t" ? "top" : d === "r" ? "right" : d === "b" ? "bottom" : "left"} edge`}
               role="button"
               tabIndex={0}
               onPointerDown={onPortPointerDown}

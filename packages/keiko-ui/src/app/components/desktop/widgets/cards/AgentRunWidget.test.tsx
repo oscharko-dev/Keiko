@@ -110,10 +110,57 @@ describe("AgentRunWidget", () => {
     expect(screen.getAllByText(/50 tok/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/\$/u)).not.toBeInTheDocument();
 
+    // uiux-fix F018 C258: Apply is two-stage — the first click arms an explicit
+    // confirm step that names the blast radius, the second click writes.
     await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(applyRun).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /confirm apply \(1 file\)/i }));
 
     await waitFor(() => expect(applyRun).toHaveBeenCalledWith("run-123456"));
     expect((await screen.findAllByText("Applied")).length).toBeGreaterThan(0);
+  });
+
+  // uiux-fix F018 C026/C109: SSE disconnects must be visible and the log must be a live region
+  it("renders the SSE disconnect notice inside the run-events log", async () => {
+    vi.mocked(useSSE).mockReturnValue({
+      status: "error",
+      error: "Stream disconnected. Attempting to reconnect…",
+      events: [],
+    });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({ report: { status: "running" } });
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", model: "example-chat-model", runId: "run-sse-err" }}
+        linkedRoot={null}
+        linkedFilePath={undefined}
+      />,
+    );
+
+    const log = screen.getByRole("log", { name: "Run events" });
+    expect(log).toHaveTextContent("Stream disconnected. Attempting to reconnect…");
+    expect(screen.queryByText(/waiting for run events/i)).not.toBeInTheDocument();
+  });
+
+  // uiux-fix F018 C259/C265: header shows a human-readable status, not the raw enum
+  it("maps raw report status enums to readable labels in the header", async () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "terminal", error: null, events: [] });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({
+      report: { status: "fix-proposed", durationMs: 5, proposedDiff: "diff --git a/x b/x" },
+    });
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "bug-investigation", model: "example-chat-model", runId: "run-label" }}
+        linkedRoot={null}
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(await screen.findByText("Fix proposed")).toBeInTheDocument();
+    expect(screen.queryByText("fix-proposed")).not.toBeInTheDocument();
   });
 
   it("renders explain reports and terminal failure details without a diff", async () => {
