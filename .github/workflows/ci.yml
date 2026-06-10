@@ -4,7 +4,7 @@ on:
   push:
     branches: [dev]
   pull_request:
-    branches: [dev, main]
+    branches: [dev]
 
 permissions: {}
 
@@ -15,22 +15,12 @@ jobs:
     permissions: {}
     steps:
       - name: Confirm dev branch gate
-        env:
-          BASE_REF: ${{ github.base_ref }}
-          HEAD_REF: ${{ github.head_ref }}
-          REF_NAME: ${{ github.ref }}
         run: |
-          if [ "$REF_NAME" = "refs/heads/dev" ] || [ "$BASE_REF" = "dev" ]; then
-            echo "Protected dev branch gate satisfied."
-            exit 0
+          if [ "${{ github.ref }}" != "refs/heads/dev" ] && [ "${{ github.base_ref }}" != "dev" ]; then
+            echo "This gate is only valid for the protected dev branch."
+            exit 1
           fi
-          if [ "$BASE_REF" = "main" ] && { [ "$HEAD_REF" = "dev" ] || [ "$HEAD_REF" = "codex/promote-main-020-beta0" ]; }; then
-            echo "Protected main promotion gate satisfied."
-            exit 0
-          fi
-          echo "This gate is only valid for dev checks or approved dev-to-main release promotion."
-          echo "base_ref=$BASE_REF head_ref=$HEAD_REF ref=$REF_NAME"
-          exit 1
+          echo "Protected dev branch gate satisfied."
 
   ci:
     runs-on: ubuntu-latest
@@ -175,6 +165,7 @@ jobs:
           npm run build
           npm run prepare:bin
           npm run build:ui
+          npm run prune:package-native-optionals
       - name: Verify package surface
         run: npm run check:package-surface
       - name: Smoke - keiko ui serves /api/health

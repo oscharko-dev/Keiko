@@ -29,18 +29,46 @@ function readCiJobBlock(): string {
   return block.join("\n");
 }
 
+function readWorkflowJobBlock(workflowPath: string, jobName: string): string {
+  const workflow = readText(workflowPath);
+  const lines = workflow.split(/\r?\n/);
+  const start = lines.findIndex((line) => line === `  ${jobName}:`);
+  if (start === -1) {
+    throw new Error(`jobs.${jobName} block not found in ${workflowPath}`);
+  }
+  const block = [];
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (index > start && /^ {2}[^ ]/u.test(line)) break;
+    block.push(line);
+  }
+  return block.join("\n");
+}
+
+function expectPruneBeforePackageSurface(jobBlock: string): void {
+  const pruneIndex = jobBlock.indexOf("npm run prune:package-native-optionals");
+  const surfaceIndex = jobBlock.indexOf("npm run check:package-surface");
+
+  expect(pruneIndex).toBeGreaterThanOrEqual(0);
+  expect(surfaceIndex).toBeGreaterThanOrEqual(0);
+  expect(pruneIndex).toBeLessThan(surfaceIndex);
+}
+
 // Issue #287 extended the chain with `check:qi-supply-chain` (ADR-0023 D5/D11/D12); issue
 // #433 (Epic #423) added `check:version-consistency` so the packed artifact cannot ship with
 // a manifest/version mismatch; Epic #423 also restores `arch:check` to the real publish path
 // so architecture violations cannot bypass the release hook; Epic #423 post-closure audit
 // added `arch:check:negative` immediately after `arch:check` so rule deletions are caught in
-// the publish path, not only in CI. The pin stays "exact" against the live `package.json`;
-// it does not lock the chain to a particular historical length.
+// the publish path, not only in CI. Release fix #895 adds native optional dependency pruning
+// before architecture/package-surface checks so publisher-machine canvas payloads cannot leak
+// into the bundled artifact. The pin stays "exact" against the live `package.json`; it does
+// not lock the chain to a particular historical length.
 const PACKAGE_SURFACE_CHAIN = [
   "npm run clean",
   "npm run build",
   "npm run prepare:bin",
   "npm run build:ui",
+  "npm run prune:package-native-optionals",
   "npm run arch:check",
   "npm run arch:check:negative",
   "npm run check:package-surface",
@@ -78,6 +106,13 @@ describe("Issue #12 docs drift", () => {
     );
     expect(versionGate).toContain("root src/ must stay minimal");
     expect(versionGate).toContain("root facade drifted beyond the approved minimal facade");
+  });
+
+  it("prunes publisher-native optional dependencies before manual package-surface gates", () => {
+    expectPruneBeforePackageSurface(readWorkflowJobBlock(".github/workflows/ci.yml", "ui"));
+    expectPruneBeforePackageSurface(
+      readWorkflowJobBlock(".github/workflows/release.yml", "release-verify"),
+    );
   });
 
   it("states that gen-tests and investigate do not persist evidence manifests", () => {

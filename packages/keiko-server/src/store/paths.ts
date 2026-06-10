@@ -15,6 +15,12 @@ function isInsideCurrentWorkingDirectory(path: string): boolean {
   return resolved === cwd || resolved.startsWith(`${cwd}${sep}`);
 }
 
+function isInsideRuntimeStateRoot(path: string, workspaceRoot: string): boolean {
+  const runtimeRoot = resolve(workspaceRoot, UI_DB_DIRNAME);
+  const resolved = resolve(path);
+  return resolved === runtimeRoot || resolved.startsWith(`${runtimeRoot}${sep}`);
+}
+
 function hasSymlinkAncestor(path: string): boolean {
   let current = dirname(path);
   const root = parse(current).root;
@@ -40,7 +46,10 @@ function resolveConfiguredPath(path: string, label: string): string {
     throw invalidRequest(`${label} must be absolute.`);
   }
   const resolved = normalize(path);
-  if (isInsideCurrentWorkingDirectory(resolved)) {
+  if (
+    isInsideCurrentWorkingDirectory(resolved) &&
+    !isInsideRuntimeStateRoot(resolved, process.cwd())
+  ) {
     throw invalidRequest(`${label} must not be inside the current workspace.`);
   }
   if (existsSync(resolved) && lstatSync(resolved).isSymbolicLink()) {
@@ -79,7 +88,10 @@ export function assertUiDbOutsideProject(uiDbPath: string | undefined, projectPa
   const resolvedDbPath = resolve(uiDbPath);
   const resolvedDbDir = dirname(resolvedDbPath);
   const resolvedProject = resolve(projectPath);
-  if (containsPath(resolvedProject, resolvedDbPath)) {
+  if (
+    containsPath(resolvedProject, resolvedDbPath) &&
+    !isInsideRuntimeStateRoot(resolvedDbPath, resolvedProject)
+  ) {
     throw invalidRequest("UI database path must not be inside a selected project.");
   }
   if (containsPath(resolvedDbDir, resolvedProject)) {

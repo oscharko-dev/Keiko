@@ -126,6 +126,31 @@ function useChannelFlow(
   return { flowing: sending || afterglow, intensity };
 }
 
+// Audit C301 — the badge is the only element describing the relationship, yet a single click on
+// it deleted the connection (plus the server-side unbind PATCH) with no confirmation or undo.
+// Removal is now two-stage: the first click arms the badge (label flips to "Remove?", danger
+// styling), a second click within the window confirms; the arm auto-expires so a hesitant or
+// accidental first click never leaves a live destructive trigger behind.
+const REMOVE_ARM_TIMEOUT_MS = 3_000;
+
+function useArmedRemove(): {
+  readonly armedId: string | null;
+  readonly arm: (id: string) => void;
+  readonly disarm: () => void;
+} {
+  const [armedId, setArmedId] = useState<string | null>(null);
+  useEffect(() => {
+    if (armedId === null) return;
+    const timer = setTimeout(() => setArmedId(null), REMOVE_ARM_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [armedId]);
+  return {
+    armedId,
+    arm: (id: string) => setArmedId(id),
+    disarm: () => setArmedId(null),
+  };
+}
+
 function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(false);
   useEffect(() => {
@@ -215,6 +240,7 @@ export function ConnectionsLayer({
 }: ConnectionsLayerProps): ReactNode {
   const session = useOptionalChatSessionContext();
   const reducedMotion = usePrefersReducedMotion();
+  const { armedId, arm, disarm } = useArmedRemove();
   // A data exchange is live whenever the chat session has a request in flight. We only light up
   // chat↔data-source edges (dataChannel), so an ungrounded reply over a chat with no source edge
   // animates nothing. Heavy/light intensity is remembered from the last settled answer (see useChannelFlow).
@@ -223,63 +249,88 @@ export function ConnectionsLayer({
   const items = resolveConnections(wins, conns);
   const temp = connecting !== null ? tempPath(connecting, wins) : null;
   return (
-    <div className="conn-layer">
-      {/* viewBox + matching .conn-svg CSS gives a real ±10000 viewport with
+    <>
+      <div className="conn-layer">
+        {/* viewBox + matching .conn-svg CSS gives a real ±10000 viewport with
           1:1 world↔pixel mapping. No <marker>: links are symmetric, not flows. */}
-      <svg
-        className="conn-svg"
-        viewBox="-10000 -10000 20000 20000"
-        preserveAspectRatio="xMidYMid meet"
-      >
+        <svg
+          className="conn-svg"
+          viewBox="-10000 -10000 20000 20000"
+          preserveAspectRatio="xMidYMid meet"
+        >
+          {items.map((it) => {
+            const active = flowing && it.dataChannel;
+            const pathId = `conn-path-${it.c.id}`;
+            return (
+              <g key={it.c.id}>
+                <path
+                  id={pathId}
+                  className="conn-path"
+                  d={it.d}
+                  data-active={active ? "true" : undefined}
+                  data-intensity={active ? intensity : undefined}
+                  data-reduced-motion={active && reducedMotion ? "true" : undefined}
+                />
+                {active && !reducedMotion ? (
+                  <FlowParticles pathId={pathId} intensity={intensity} />
+                ) : null}
+              </g>
+            );
+          })}
+          {temp !== null ? <path className="conn-path conn-temp" d={temp.d} /> : null}
+          {temp !== null ? <circle className="conn-dot" cx={temp.ex} cy={temp.ey} r="5" /> : null}
+        </svg>
+      </div>
+      {/* Audit C123 (workspace--visual) — the remove badge is the ONLY affordance to detach a
+          connection, but .conn-layer sits at z-index 0 below every window: a badge whose edge
+          midpoint lands under a window was invisible AND unclickable. Badges therefore live in
+          their own layer above the windows; the lines stay below (unchanged look). */}
+      <div className="conn-badge-layer">
         {items.map((it) => {
           const active = flowing && it.dataChannel;
-          const pathId = `conn-path-${it.c.id}`;
+          const armed = armedId === it.c.id;
           return (
-            <g key={it.c.id}>
-              <path
-                id={pathId}
-                className="conn-path"
-                d={it.d}
-                data-active={active ? "true" : undefined}
-                data-intensity={active ? intensity : undefined}
-                data-reduced-motion={active && reducedMotion ? "true" : undefined}
-              />
-              {active && !reducedMotion ? (
-                <FlowParticles pathId={pathId} intensity={intensity} />
+            <button
+              key={it.c.id}
+              type="button"
+              className="conn-badge"
+              data-active={active ? "true" : undefined}
+              data-intensity={active ? intensity : undefined}
+              data-armed={armed ? "true" : undefined}
+              style={{ left: it.mid.x, top: it.mid.y }}
+              onClick={() => {
+                // Audit C301 — two-stage removal: first click arms, second confirms.
+                if (armed) {
+                  disarm();
+                  api.removeConn(it.c.id);
+                } else {
+                  arm(it.c.id);
+                }
+              }}
+              onBlur={() => {
+                if (armed) disarm();
+              }}
+              title={
+                armed ? `Click again to remove: ${it.label}` : `Remove connection: ${it.label}`
+              }
+              aria-label={
+                armed
+                  ? `Confirm removal of connection: ${it.label}. Activate again to remove.`
+                  : active
+                    ? `${it.label} — ${intensity} data exchange in progress. Activate to remove connection.`
+                    : `Remove connection: ${it.label}`
+              }
+            >
+              <Icons.git size={11} /> <span>{armed ? "Remove?" : it.label}</span>
+              {active && !armed ? (
+                <span className="conn-flow-tag" aria-hidden="true">
+                  {intensity === "heavy" ? "⇶" : "→"}
+                </span>
               ) : null}
-            </g>
+            </button>
           );
         })}
-        {temp !== null ? <path className="conn-path conn-temp" d={temp.d} /> : null}
-        {temp !== null ? <circle className="conn-dot" cx={temp.ex} cy={temp.ey} r="5" /> : null}
-      </svg>
-      {items.map((it) => {
-        const active = flowing && it.dataChannel;
-        return (
-          <button
-            key={it.c.id}
-            type="button"
-            className="conn-badge"
-            data-active={active ? "true" : undefined}
-            data-intensity={active ? intensity : undefined}
-            style={{ left: it.mid.x, top: it.mid.y }}
-            onClick={() => api.removeConn(it.c.id)}
-            title="Remove connection"
-            aria-label={
-              active
-                ? `${it.label} — ${intensity} data exchange in progress. Activate to remove connection.`
-                : `Remove connection: ${it.label}`
-            }
-          >
-            <Icons.git size={11} /> <span>{it.label}</span>
-            {active ? (
-              <span className="conn-flow-tag" aria-hidden="true">
-                {intensity === "heavy" ? "⇶" : "→"}
-              </span>
-            ) : null}
-          </button>
-        );
-      })}
-    </div>
+      </div>
+    </>
   );
 }

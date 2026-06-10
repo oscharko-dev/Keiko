@@ -81,6 +81,19 @@ function resolveExecutionStrategy(
   request: QualityIntelligenceStartRunRequest,
 ): ResolvedExecutionStrategy {
   const selection = resolveQiTestDesignSelection(deps, request.modelId);
+  // Seeded runs without an explicit model are release evidence. If automatic routing would pick a
+  // model that cannot apply the seed, prefer the deterministic structural baseline over
+  // nondeterministic model/judge augmentation. Explicit model requests keep their existing
+  // attribution contract and persist `seedUsed: null` when the model cannot apply the seed.
+  if (
+    request.modelId === undefined &&
+    request.seed !== undefined &&
+    (selection.kind === "baseline" || selection.capability.supportsSeeding !== true)
+  ) {
+    return {
+      generate: createQiGenerationPort(deps, { kind: "baseline" }),
+    };
+  }
   if (selection.kind === "model") {
     return {
       modelId: selection.modelId,

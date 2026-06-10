@@ -3,14 +3,16 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { SafeMarkdown } from "./SafeMarkdown";
 
 // ---------------------------------------------------------------------------
-// 1. Heading renders as h1
+// 1. Heading renders demoted (h1 → h3) so model output stays out of the app's
+//    top-level document outline (audit C315); visual classes are unchanged.
 // ---------------------------------------------------------------------------
 describe("SafeMarkdown — heading", () => {
-  it("renders # Heading as <h1> with correct text", () => {
+  it("renders # Heading demoted to <h3> with correct text", () => {
     render(<SafeMarkdown source="# Hello World" />);
-    const h1 = screen.getByRole("heading", { level: 1 });
-    expect(h1).toBeDefined();
-    expect(h1.textContent).toBe("Hello World");
+    const heading = screen.getByRole("heading", { level: 3 });
+    expect(heading).toBeDefined();
+    expect(heading.textContent).toBe("Hello World");
+    expect(heading.className).toContain("sm-h1");
   });
 });
 
@@ -85,7 +87,9 @@ describe("SafeMarkdown — copy button without clipboard API", () => {
 describe("SafeMarkdown — safe link", () => {
   it("renders <a> with rel=noopener noreferrer and target=_blank", () => {
     render(<SafeMarkdown source="[Docs](https://docs.example.com)" />);
-    const link = screen.getByRole("link", { name: "Docs" });
+    // accessible name includes the sr-only new-tab hint (audit C316); regex because
+    // jsdom's accname computation drops the boundary space that browsers keep
+    const link = screen.getByRole("link", { name: /Docs.*opens in new tab/ });
     expect(link).toBeDefined();
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
     expect(link.getAttribute("target")).toBe("_blank");
@@ -215,7 +219,7 @@ describe("SafeMarkdownBoundary — SM-1 plain-text fallback", () => {
   it("renders parsed markdown normally when the renderer does not throw", async () => {
     const { SafeMarkdownBoundary } = await import("./SafeMarkdown");
     render(<SafeMarkdownBoundary source="# Boundary Heading" />);
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Boundary Heading");
+    expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("Boundary Heading");
     expect(document.querySelector('[data-markdown-fallback="true"]')).toBeNull();
   });
 });

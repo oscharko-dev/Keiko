@@ -14,10 +14,13 @@ import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 
 const pushMock = vi.fn();
 const searchParamsMock = { get: vi.fn().mockReturnValue(null) };
+// Mutable holder: tests can swap the object identity to simulate a URL change
+// (MemoryList reloads when the searchParams identity changes).
+let currentSearchParams: { get: (key: string) => string | null } = searchParamsMock;
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: pushMock }),
-  useSearchParams: () => searchParamsMock,
+  useSearchParams: () => currentSearchParams,
 }));
 
 vi.mock("next/link", () => ({
@@ -85,12 +88,48 @@ beforeEach(() => {
   pushMock.mockReset();
   emptyFetch.mockReset().mockResolvedValue(makeListResponse([]));
   searchParamsMock.get.mockReturnValue(null);
+  currentSearchParams = searchParamsMock;
 });
 
 describe("MemoryList — loading state", () => {
   it("shows loading indicator initially", () => {
     render(<MemoryList fetchMemoriesImpl={fetchWith([])} />);
-    expect(screen.getByRole("status")).toBeInTheDocument();
+    // Two status regions exist now (loading indicator + result summary live
+    // region, uiux-fix F035) — assert the visible loading message directly.
+    expect(screen.getByText("Loading memories…")).toBeInTheDocument();
+  });
+
+  it("keeps the previous list visible during a refetch (stale-while-revalidate)", async () => {
+    let resolveSecond: (() => void) | undefined;
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(makeListResponse([makeRecord({ body: "Stable memory" })]))
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveSecond = () => {
+              resolve(makeListResponse([makeRecord({ body: "Stable memory" })]));
+            };
+          }),
+      );
+    const { rerender } = render(<MemoryList fetchMemoriesImpl={fetchImpl} />);
+    await waitFor(() => {
+      expect(screen.getByText("Stable memory")).toBeInTheDocument();
+    });
+
+    // Simulate a filter change: new searchParams identity triggers a reload.
+    currentSearchParams = { get: () => null };
+    rerender(<MemoryList fetchMemoriesImpl={fetchImpl} />);
+
+    // The old list stays rendered while the refetch is in flight — no
+    // full-list replacement by the loading paragraph (uiux-fix F035).
+    expect(screen.getByText("Stable memory")).toBeInTheDocument();
+    expect(screen.queryByText("Loading memories…")).toBeNull();
+
+    resolveSecond?.();
+    await waitFor(() => {
+      expect(screen.getByText("Stable memory")).toBeInTheDocument();
+    });
   });
 });
 

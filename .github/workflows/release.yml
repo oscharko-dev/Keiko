@@ -65,6 +65,7 @@ jobs:
         run: |
           npm run prepare:bin
           npm run build:ui
+          npm run prune:package-native-optionals
       - name: Package surface
         run: npm run check:package-surface
       - name: Installable-package smoke

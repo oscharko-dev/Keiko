@@ -1,7 +1,7 @@
 // Issue #540 (Epic #532) — RelationshipInspectorPanel unit tests
 //
 // Covers:
-//   • Empty state (null id) — component returns null, container is empty
+//   • Empty state (null id) — guidance empty state ("Select a relationship…")
 //   • Loading state — aria-busy=true on wrapper while fetching
 //   • Error state — surfaces server message verbatim in lk-alert
 //   • Loaded state — RELATIONSHIP_AUTHORITY_DISCLAIMER rendered verbatim
@@ -112,10 +112,12 @@ describe("RelationshipInspectorPanel", () => {
   });
 
   describe("empty state (null id)", () => {
-    it("renders nothing when relationshipId is null", () => {
-      const { container } = renderInspector(null);
-      // Component returns null — container has no child elements
-      expect(container.firstChild).toBeNull();
+    it("renders a guidance empty state when relationshipId is null", () => {
+      renderInspector(null);
+      // The Relationships window renders this panel directly (no host fallback), so the
+      // panel itself must show an empty state instead of a blank column (uiux-fix F025).
+      const empty = screen.getByTestId("inspector-empty");
+      expect(empty.textContent).toContain("Select a relationship");
     });
 
     it("does not call getRelationship when id is null", () => {
@@ -238,6 +240,24 @@ describe("RelationshipInspectorPanel", () => {
         expect(container.querySelector('[data-activity-state="high-throughput"]')).not.toBeNull();
       });
       expect(screen.getByText("High throughput (61)")).toBeDefined();
+    });
+
+    // uiux-fix F025: "View Evidence" must NOT navigate — the app has no /evidence route (the old
+    // window.location.href assignment landed on the Next 404 page and destroyed the workspace).
+    // It scrolls to the in-panel "Evidence references" section instead.
+    it("View Evidence scrolls to the evidence section instead of navigating", async () => {
+      // vitest.setup.ts stubs HTMLElement.prototype.scrollIntoView — spy there.
+      const scrollSpy = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+      try {
+        const hrefBefore = window.location.href;
+        renderInspector("rel-abc");
+        const btn = await screen.findByRole("button", { name: /view evidence/i });
+        fireEvent.click(btn);
+        expect(scrollSpy).toHaveBeenCalled();
+        expect(window.location.href).toBe(hrefBefore);
+      } finally {
+        scrollSpy.mockRestore();
+      }
     });
   });
 
@@ -525,9 +545,10 @@ describe("RelationshipInspectorPanel", () => {
       expect(results).toHaveNoViolations();
     });
 
-    it("passes axe on empty state (null id returns null)", async () => {
+    it("passes axe on empty state (null id renders guidance)", async () => {
       const { container } = renderInspector(null);
-      // container is empty — axe should still pass
+      // Guidance empty state (uiux-fix F025) must be accessible
+      expect(container.querySelector("[data-testid='inspector-empty']")).not.toBeNull();
       const results = await axe(container);
       expect(results).toHaveNoViolations();
     });

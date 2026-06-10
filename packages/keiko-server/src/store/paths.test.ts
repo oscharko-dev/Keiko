@@ -71,6 +71,13 @@ describe("resolveUiDbPath", () => {
     expectCode(() => resolveUiDbPath(join(process.cwd(), "keiko-ui.db"), {}), "invalid_request");
   });
 
+  it("allows the gitignored workspace .keiko runtime root", () => {
+    const runtimeDir = join(process.cwd(), ".keiko", "ui");
+    expect(resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: runtimeDir })).toBe(
+      join(runtimeDir, "keiko-ui.db"),
+    );
+  });
+
   it("rejects a symlinked data directory", () => {
     if (process.platform === "win32") return;
     const target = makeTempDir();
@@ -94,11 +101,19 @@ describe("resolveUiDbPath", () => {
 describe("assertUiDbOutsideProject", () => {
   it("rejects a UI DB path inside a selected project outside process.cwd()", () => {
     const project = join(makeTempDir(), "repo");
-    const dbPath = join(project, ".keiko", "keiko-ui.db");
+    const dbPath = join(project, "state", "keiko-ui.db");
     expect(project.startsWith(process.cwd())).toBe(false);
     expectCode(() => {
       assertUiDbOutsideProject(dbPath, project);
     }, "invalid_request");
+  });
+
+  it("allows a selected project to contain its own .keiko runtime UI DB", () => {
+    const project = makeTempDir();
+    const dbPath = join(project, ".keiko", "ui", "keiko-ui.db");
+    expect(() => {
+      assertUiDbOutsideProject(dbPath, project);
+    }).not.toThrow();
   });
 
   it("rejects a selected project inside the UI DB directory", () => {

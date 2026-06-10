@@ -250,7 +250,7 @@ describe("POST /api/projects", () => {
   });
 
   it("rejects a project when the configured UI DB is inside that project", async () => {
-    await restartWithDeps({ uiDbPath: join(projDir, ".keiko", "keiko-ui.db") });
+    await restartWithDeps({ uiDbPath: join(projDir, "state", "keiko-ui.db") });
 
     const res = await fetch(url("/api/projects"), {
       method: "POST",
@@ -263,6 +263,19 @@ describe("POST /api/projects", () => {
     expect(body.error.code).toBe("invalid_request");
     expect(body.error.message).toMatch(/UI database path/i);
     expect(store.listProjects()).toHaveLength(0);
+  });
+
+  it("allows a project when the configured UI DB is under its .keiko runtime root", async () => {
+    await restartWithDeps({ uiDbPath: join(projDir, ".keiko", "ui", "keiko-ui.db") });
+
+    const res = await fetch(url("/api/projects"), {
+      method: "POST",
+      headers: POST_HEADERS,
+      body: JSON.stringify({ path: projDir }),
+    });
+
+    expect(res.status).toBe(201);
+    expect(store.listProjects()).toHaveLength(1);
   });
 
   it("rejects a project inside the configured UI DB directory", async () => {

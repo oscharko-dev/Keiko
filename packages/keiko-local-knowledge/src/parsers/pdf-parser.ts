@@ -4,7 +4,6 @@ import type {
   ParserDiagnostic,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 import { diagnostic, emptyResult, oversizeDiagnostic, shouldStop } from "./_internal.js";
 import type {
@@ -39,6 +38,14 @@ interface PdfDocumentLike {
 
 interface PdfLoadingTaskLike {
   readonly promise: Promise<PdfDocumentLike>;
+}
+
+interface PdfJsModule {
+  readonly getDocument: (params: {
+    readonly data: Uint8Array;
+    readonly useWorkerFetch: false;
+    readonly verbosity: 0;
+  }) => PdfLoadingTaskLike;
 }
 
 function hasPdfMagic(bytes: Uint8Array): boolean {
@@ -90,16 +97,20 @@ function syncFallback(capability: ParserCapability): ParserAdapter["parse"] {
   };
 }
 
-function loadPdfDocument(bytes: Uint8Array): Promise<PdfDocumentLike> {
+async function loadPdfDocument(bytes: Uint8Array): Promise<PdfDocumentLike> {
+  const pdfjs = (await import("pdfjs-dist/legacy/build/pdf.mjs")) as unknown as PdfJsModule;
   const task = pdfjs.getDocument({
     data: bytes,
     useWorkerFetch: false,
     verbosity: 0,
-  }) as unknown as PdfLoadingTaskLike;
+  });
   return task.promise;
 }
 
-function unsupportedMediaUnit(documentId: ParserSelectionInput["documentId"], reason: string): ParsedUnit {
+function unsupportedMediaUnit(
+  documentId: ParserSelectionInput["documentId"],
+  reason: string,
+): ParsedUnit {
   return { kind: "unsupported-media", documentId, reason };
 }
 
@@ -169,7 +180,14 @@ function noTextResult(
     capability,
     input.documentId,
     options,
-    [diagnostic("UNSUPPORTED_FORMAT", "pdf has no extractable text layer", input.documentId, "info")],
+    [
+      diagnostic(
+        "UNSUPPORTED_FORMAT",
+        "pdf has no extractable text layer",
+        input.documentId,
+        "info",
+      ),
+    ],
     [unsupportedMediaUnit(input.documentId, "pdf-no-text-layer")],
   );
 }
@@ -230,7 +248,12 @@ async function asyncParse(
   const startedAt = options.now();
   try {
     const doc = await loadPdfDocument(input.bytes);
-    const { diagnostics, pages, units, pageTexts } = await extractPages(doc, input, options, startedAt);
+    const { diagnostics, pages, units, pageTexts } = await extractPages(
+      doc,
+      input,
+      options,
+      startedAt,
+    );
 
     if (isAborted(options.signal)) {
       return cancelled(capability, input, options);

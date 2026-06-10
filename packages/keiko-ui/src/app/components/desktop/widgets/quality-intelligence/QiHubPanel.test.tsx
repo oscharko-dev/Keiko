@@ -20,14 +20,17 @@ function makeRun(
   };
 }
 
+// fetchQiRuns returns the full wire envelope (issue #646) so the hub can render the
+// "more available" indicator when the route truncated the list (uiux-fix F030 C277).
 const fakeFetch = (
   runs: readonly QualityIntelligenceUiRunSummary[],
 ): typeof import("@/lib/quality-intelligence-api").fetchQiRuns =>
-  vi
-    .fn()
-    .mockResolvedValue(
-      runs,
-    ) as unknown as typeof import("@/lib/quality-intelligence-api").fetchQiRuns;
+  vi.fn().mockResolvedValue({
+    runs,
+    limit: 50,
+    totalRunIds: runs.length,
+    truncated: false,
+  }) as unknown as typeof import("@/lib/quality-intelligence-api").fetchQiRuns;
 
 describe("QiHubPanel", () => {
   it("renders the run launcher form", async () => {
@@ -58,6 +61,58 @@ describe("QiHubPanel", () => {
   it("shows an empty state when there are no runs", async () => {
     render(<QiHubPanel openRun={vi.fn()} fetchRunsImpl={fakeFetch([])} />);
     expect(await screen.findByText(/no runs yet/i)).toBeInTheDocument();
+  });
+
+  it("names each run row with status, date and case count for assistive tech (F030 C270)", async () => {
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-aaaa1111", "failed")])}
+      />,
+    );
+    // aria-label replaces the computed name — it must carry status + date + case count, not
+    // just the id, so failed and succeeded runs are distinguishable while list-navigating.
+    // "test cases" is the suite-wide object name (uiux-fix F047 C388).
+    expect(
+      await screen.findByRole("button", {
+        name: /open run qi-run-aaaa1111 — Failed, .*3 test cases/i,
+      }),
+    ).toBeInTheDocument();
+  });
+
+  it("leads with the run date and truncates the opaque id with an ellipsis (F038 C145)", async () => {
+    render(
+      <QiHubPanel
+        openRun={vi.fn()}
+        fetchRunsImpl={fakeFetch([makeRun("qi-run-cccc3333-very-long-id", "succeeded")])}
+      />,
+    );
+    // The wire summary carries no source label, so the date is the only human-recognizable
+    // signal — it renders as the primary line; the id is secondary meta and must visibly
+    // signal its truncation (slice(0, 16) + "…"), never pose as a complete id.
+    expect(await screen.findByText("qi-run-cccc3333-…")).toBeInTheDocument();
+    const row = screen.getByRole("button", { name: /open run qi-run-cccc3333-very-long-id/i });
+    const title = row.querySelector(".qi-run-title");
+    expect(title).not.toBeNull();
+    expect(title?.textContent).toBe(
+      new Date("2026-06-01T10:00:00.000Z").toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }),
+    );
+  });
+
+  it("shows a 'more available' note and the total count when the list is truncated (F030 C277)", async () => {
+    const truncatedFetch = vi.fn().mockResolvedValue({
+      runs: [makeRun("qi-run-aaaa1111", "succeeded"), makeRun("qi-run-bbbb2222", "failed")],
+      limit: 2,
+      totalRunIds: 5,
+      truncated: true,
+    }) as unknown as typeof import("@/lib/quality-intelligence-api").fetchQiRuns;
+    render(<QiHubPanel openRun={vi.fn()} fetchRunsImpl={truncatedFetch} />);
+    expect(await screen.findByTestId("qi-runs-truncated")).toHaveTextContent(
+      "Showing 2 of 5 runs.",
+    );
   });
 
   it("surfaces a retryable error when the run list fails to load", async () => {

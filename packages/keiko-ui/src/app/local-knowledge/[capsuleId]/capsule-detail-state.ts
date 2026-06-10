@@ -5,7 +5,7 @@ import { useState, useEffect, useCallback } from "react";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { fetchCapsuleDetail } from "@/lib/local-knowledge-api";
 import type { CapsuleDetail } from "@/lib/local-knowledge-api";
-import { ApiError } from "@/lib/api";
+import { formatError } from "../format-error";
 
 export type DetailLoadStatus = "loading" | "ready" | "error";
 
@@ -14,12 +14,6 @@ export interface CapsuleDetailState {
   readonly loadStatus: DetailLoadStatus;
   readonly loadError: string | null;
   readonly reload: () => void;
-}
-
-function formatError(error: unknown): string {
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return "An unexpected error occurred.";
 }
 
 export function useCapsuleDetail(

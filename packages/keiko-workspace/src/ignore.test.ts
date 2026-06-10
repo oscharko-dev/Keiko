@@ -25,6 +25,9 @@ describe("isDenied (always-on security)", () => {
     ".npmrc",
     "node_modules",
     "node_modules/left-pad/index.js",
+    ".keiko",
+    ".keiko/evidence/qi/run.candidates.json",
+    "repo/.keiko/evidence/qi/run.manifest.json",
     "dist",
     "dist/index.js",
     "build/output.js",
@@ -99,6 +102,8 @@ describe("isDenied (always-on security)", () => {
     "accounts.json",
     "config.php",
     "history.txt",
+    ".keiko.example",
+    "docs/keiko.md",
   ]) {
     it(`does not deny ${allowed}`, () => {
       expect(isDenied(allowed)).toBe(false);
@@ -116,6 +121,7 @@ describe("isDenied (always-on security)", () => {
     expect(isDenied("keys/server.PEM")).toBe(true);
     expect(isDenied("DIST/out.js")).toBe(true);
     expect(isDenied(".ds_store")).toBe(true);
+    expect(isDenied(".Keiko/evidence/qi/run.candidates.json")).toBe(true);
   });
 
   it("still allows .env.example regardless of case", () => {

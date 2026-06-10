@@ -50,6 +50,12 @@ Keiko's long-term direction is a governed workspace where people can delegate kn
 
 Software engineering is the first use case because repositories, tests, reviews, and tool calls create hard evidence. The product direction is broader: a controlled agentic workspace for enterprise knowledge work.
 
+## Report bugs and findings
+
+If you find a defect while using Keiko, open a GitHub issue with the structured [User-Finding form](https://github.com/oscharko-dev/Keiko/blob/dev/.github/ISSUE_TEMPLATE/user_finding.yml). Do not open a blank issue for reproducible bug intake.
+
+The form captures version, platform, reproduction steps, expected behavior, actual behavior, impact, environment, and redacted evidence. Do not include API keys, customer data, private screenshots, internal model endpoints, private logs, or other secrets.
+
 ## Quickstart
 ## What's New in 0.2.0
 
@@ -236,11 +242,6 @@ Read the full contracts and decisions:
 - [Connected context privacy contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/connected-context-privacy.md)
 - [ADR-0022: Connected context privacy](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0022-connected-context-privacy.md)
 
-## Report bugs and findings
-
-If you find a defect while using Keiko, open a GitHub issue with the structured [Bug report form](https://github.com/oscharko-dev/Keiko/issues/new?template=2.bug.yml). Do not open a blank issue for reproducible bug intake.
-
-The form captures version, platform, reproduction steps, expected behavior, actual behavior, impact, environment, and redacted evidence. Do not include API keys, customer data, private screenshots, internal model endpoints, private logs, or other secrets.
 
 ## Troubleshooting
 

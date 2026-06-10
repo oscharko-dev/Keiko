@@ -182,7 +182,7 @@ describe("InstallBanner", () => {
       window.dispatchEvent(event);
     });
 
-    const dismissBtn = screen.getByRole("button", { name: /dismiss install banner/i });
+    const dismissBtn = screen.getByRole("button", { name: /not now/i });
     act(() => {
       fireEvent.click(dismissBtn);
     });
@@ -191,7 +191,35 @@ describe("InstallBanner", () => {
     expect(screen.queryByRole("region", { name: "Install Keiko" })).toBeNull();
   });
 
-  it("pressing Escape dismisses the banner", () => {
+  it("renders the banner again when the dismissal is older than 30 days (C248)", () => {
+    const fortyDaysAgo = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000).toISOString();
+    localStorage.setItem("keiko.pwa.dismissed", fortyDaysAgo);
+    render(<InstallBanner />);
+    const event = makePromptEvent();
+    act(() => {
+      window.dispatchEvent(event);
+    });
+    expect(screen.getByRole("region", { name: "Install Keiko" })).toBeInTheDocument();
+  });
+
+  it("pressing Escape with focus inside the banner dismisses it", () => {
+    render(<InstallBanner />);
+    const event = makePromptEvent();
+    act(() => {
+      window.dispatchEvent(event);
+    });
+
+    const dismissBtn = screen.getByRole("button", { name: /not now/i });
+    act(() => {
+      dismissBtn.focus();
+      fireEvent.keyDown(dismissBtn, { key: "Escape" });
+    });
+
+    expect(localStorage.getItem("keiko.pwa.dismissed")).not.toBeNull();
+    expect(screen.queryByRole("region", { name: "Install Keiko" })).toBeNull();
+  });
+
+  it("pressing Escape elsewhere in the app does NOT dismiss the banner (C037)", () => {
     render(<InstallBanner />);
     const event = makePromptEvent();
     act(() => {
@@ -200,10 +228,11 @@ describe("InstallBanner", () => {
 
     act(() => {
       fireEvent.keyDown(window, { key: "Escape" });
+      fireEvent.keyDown(document.body, { key: "Escape" });
     });
 
-    expect(localStorage.getItem("keiko.pwa.dismissed")).not.toBeNull();
-    expect(screen.queryByRole("region", { name: "Install Keiko" })).toBeNull();
+    expect(localStorage.getItem("keiko.pwa.dismissed")).toBeNull();
+    expect(screen.getByRole("region", { name: "Install Keiko" })).toBeInTheDocument();
   });
 
   // ── iOS Add to Home Screen path ───────────────────────────────────────────
@@ -220,7 +249,7 @@ describe("InstallBanner", () => {
   it("renders the dismiss button for iOS path too", () => {
     mockDetectSupport.mockReturnValue("ios-add-to-home");
     render(<InstallBanner />);
-    expect(screen.getByRole("button", { name: /dismiss install banner/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /not now/i })).toBeInTheDocument();
   });
 
   // ── Tab order ─────────────────────────────────────────────────────────────
@@ -234,9 +263,7 @@ describe("InstallBanner", () => {
 
     const buttons = screen.getAllByRole("button");
     const installIndex = buttons.findIndex((b) => /install keiko/i.test(b.textContent ?? ""));
-    const dismissIndex = buttons.findIndex((b) =>
-      /dismiss install banner/i.test(b.getAttribute("aria-label") ?? ""),
-    );
+    const dismissIndex = buttons.findIndex((b) => /not now/i.test(b.textContent ?? ""));
     expect(installIndex).toBeLessThan(dismissIndex);
   });
 

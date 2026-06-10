@@ -31,4 +31,10 @@ describe("check-package-surface script", () => {
     expect(source).toContain("root runtime export contract drifted");
     expect(source).toContain("root declaration export contract drifted");
   });
+
+  it("rejects bundled optional native canvas payloads from the publisher platform", () => {
+    const source = readFileSync(scriptPath, "utf8");
+    expect(source).toContain("node_modules/@napi-rs/canvas");
+    expect(source).toContain("platform-specific optional native canvas dependency");
+  });
 });

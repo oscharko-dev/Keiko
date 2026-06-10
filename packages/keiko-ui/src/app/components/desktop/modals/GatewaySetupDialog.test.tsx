@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setupGateway } from "@/lib/api";
+import { ApiError, setupGateway } from "@/lib/api";
 import { GatewaySetupDialog } from "./GatewaySetupDialog";
 
 vi.mock("@/lib/api", () => ({
@@ -132,5 +132,29 @@ describe("GatewaySetupDialog", () => {
       apiKeyHeaderName: "X-Litellm-Key",
       deploymentNames: [],
     });
+
+    // C084: the async test result must be announced — success is a status live region.
+    expect(await screen.findByRole("status")).toHaveTextContent(/verified 1 workflow chat model/i);
+  });
+
+  it("announces a failed test via role=alert, keeps the code as a secondary line, and refocuses Base URL (C084/C186/C191)", async () => {
+    vi.mocked(setupGateway).mockRejectedValueOnce(
+      new ApiError("GATEWAY_PROBE_FAILED", "The gateway did not respond.", 502),
+    );
+    render(<GatewaySetupDialog />);
+
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://llm-gateway.example.com/v1");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    const alert = await screen.findByRole("alert");
+    // Human message first — never a raw "CODE: message" prefix (C191) …
+    expect(alert.textContent?.startsWith("GATEWAY_PROBE_FAILED")).toBe(false);
+    expect(alert).toHaveTextContent("The gateway did not respond.");
+    // … but the machine code stays available for support as a secondary line.
+    expect(alert).toHaveTextContent("GATEWAY_PROBE_FAILED");
+
+    // C186: after the failure the controls re-enable and focus returns to Base URL.
+    await waitFor(() => expect(screen.getByLabelText(/base url/i)).toHaveFocus());
   });
 });

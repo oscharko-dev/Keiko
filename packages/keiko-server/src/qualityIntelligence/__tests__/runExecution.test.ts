@@ -3,7 +3,7 @@
 // Uses a temp evidenceDir (real filesystem), a fake ModelPort that returns canned JSON,
 // and identity redaction. Tests the happy-path contracts + all coded error cases.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +35,30 @@ function emptyStore(): EvidenceStore {
 
 /** A canned response that the model-routed workflow can parse as zero candidates (empty array). */
 const EMPTY_CANDIDATES_JSON = JSON.stringify({ testCases: [] });
+const COVERING_TWO_REQUIREMENTS_JSON = JSON.stringify({
+  testCases: [
+    {
+      title: "Verify MFA is required before audit login access",
+      preconditions: ["An audit user is registered."],
+      steps: ["Attempt audit login without MFA."],
+      expectedResults: ["Access is not granted before MFA verification."],
+      priority: "P1",
+      riskClass: "compliance",
+      derivedFromEvidenceIndexes: [1],
+      tags: ["audit-login"],
+    },
+    {
+      title: "Verify transfer confirmation is shown before submission",
+      preconditions: ["An audit transfer is ready for review."],
+      steps: ["Attempt to submit the transfer."],
+      expectedResults: ["A confirmation screen appears before funds are submitted."],
+      priority: "P1",
+      riskClass: "regression",
+      derivedFromEvidenceIndexes: [2],
+      tags: ["audit-transfer"],
+    },
+  ],
+});
 
 function usageMeta(promptTokens: number, completionTokens: number): NormalizedResponse["usage"] {
   return {
@@ -76,7 +100,10 @@ function fakeUnparseablePort(): ModelPort {
   };
 }
 
-function chatCapability(modelId: string, overrides: Partial<ModelCapability> = {}): ModelCapability {
+function chatCapability(
+  modelId: string,
+  overrides: Partial<ModelCapability> = {},
+): ModelCapability {
   return {
     id: modelId,
     kind: "chat",
@@ -168,6 +195,72 @@ function requestWithoutModel(): QualityIntelligenceStartRunRequest {
   return { sources: [VALID_SOURCE] };
 }
 
+function determinismAuditRequest(): QualityIntelligenceStartRunRequest {
+  return {
+    profileId: "regression-default",
+    seed: 761,
+    sources: [
+      {
+        kind: "requirements",
+        label: "Determinism audit source",
+        text: [
+          "REQ-DETERMINISM-001: A payment approval screen must require a second approver for transfers above 10000 EUR.",
+          "REQ-DETERMINISM-002: The approval screen must reject submission when the second approver is the same user as the requester.",
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+function nondeterministicPort(callCounter: { count: number }): ModelPort {
+  return {
+    call: (request: GatewayRequest): Promise<NormalizedResponse> => {
+      callCounter.count += 1;
+      return Promise.resolve({
+        content: JSON.stringify([
+          {
+            title: `Nondeterministic model output ${String(callCounter.count)}`,
+            steps: ["Model-only step"],
+            expectedResults: ["Model-only result"],
+            derivedFromEvidenceIndexes: [1],
+          },
+        ]),
+        modelId: request.modelId,
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: usageMeta(100, 50),
+      });
+    },
+  };
+}
+
+function candidateProjection(
+  runId: string,
+  evidenceDir: string,
+): {
+  readonly count: number;
+  readonly titles: readonly string[];
+  readonly steps: readonly (readonly string[])[];
+  readonly expectedResults: readonly (readonly string[])[];
+} {
+  const artifact = loadQualityIntelligenceCandidates(runId, { evidenceDir });
+  const candidates = artifact?.candidates ?? [];
+  return {
+    count: candidates.length,
+    titles: candidates.map((candidate) => candidate.title),
+    steps: candidates.map((candidate) => candidate.steps),
+    expectedResults: candidates.map((candidate) => candidate.expectedResults),
+  };
+}
+
+function expectSeededBaselineManifest(runId: string, evidenceDir: string): void {
+  const manifest = loadQualityIntelligenceRun(runId, { evidenceDir });
+  expect(manifest).toBeDefined();
+  expect(manifest?.modelId).toBeUndefined();
+  expect(manifest?.seedUsed).toBeUndefined();
+}
+
 function makeInput(
   evidenceDir: string,
   overrides: Partial<ExecuteQiRunInput> = {},
@@ -236,6 +329,42 @@ describe("executeQiRun — happy path", () => {
     const summary = await runQi(makeInput(evidenceDir));
     expect(typeof summary.runId).toBe("string");
     expect((summary.runId as string).length).toBeGreaterThan(0);
+  });
+
+  it("persists one coverage row per requirement atom from a multi-requirement local file", async () => {
+    const sourceDir = join(evidenceDir, "source");
+    mkdirSync(sourceDir);
+    writeFileSync(
+      join(sourceDir, "requirements.md"),
+      [
+        "REQ-DRIFT-001: The audit login flow must require multi-factor verification before account access is granted.",
+        "REQ-DRIFT-002: The audit transfer flow must show a confirmation screen before funds are submitted.",
+      ].join("\n"),
+      "utf8",
+    );
+    await runQi(
+      makeInput(evidenceDir, {
+        request: makeRequest({
+          sources: [{ kind: "workspace", label: "Drift fixture", path: sourceDir }],
+          modelId: MODEL_ID,
+        }),
+        deps: buildDeps({
+          evidenceDir,
+          modelPort: fakeChatPort(COVERING_TWO_REQUIREMENTS_JSON),
+        }),
+      }),
+    );
+
+    const manifest = loadQualityIntelligenceRun("run-exec-001", { evidenceDir });
+    const matrix = manifest?.coverageMatrix ?? [];
+    expect(matrix).toHaveLength(2);
+    expect(matrix.map((row) => row.status)).toEqual(["covered", "covered"]);
+    expect(matrix.map((row) => row.requirementExcerptRedacted ?? "")).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("REQ-DRIFT-001"),
+        expect.stringContaining("REQ-DRIFT-002"),
+      ]),
+    );
   });
 });
 
@@ -320,6 +449,48 @@ describe("executeQiRun — model selection", () => {
 });
 
 describe("executeQiRun — seed persistence", () => {
+  it("routes seeded requests to the deterministic baseline when the selected model cannot apply seeds", async () => {
+    const callCounter = { count: 0 };
+    const request = determinismAuditRequest();
+    const deps = buildDeps({ evidenceDir, modelPort: nondeterministicPort(callCounter) });
+
+    const first = await executeQiRun(
+      makeInput(evidenceDir, {
+        request,
+        runId: "run-seeded-baseline-a",
+        deps,
+      }),
+    );
+    const second = await executeQiRun(
+      makeInput(evidenceDir, {
+        request,
+        runId: "run-seeded-baseline-b",
+        deps,
+      }),
+    );
+
+    expect(first.status).toBe("succeeded");
+    expect(second.status).toBe("succeeded");
+    expect(callCounter.count).toBe(0);
+    expect(first.modelGatewayCallCount).toBe(0);
+    expect(second.modelGatewayCallCount).toBe(0);
+    expect(first.qualityScore).toBeNull();
+    expect(second.qualityScore).toBeNull();
+    expectSeededBaselineManifest("run-seeded-baseline-a", evidenceDir);
+    expectSeededBaselineManifest("run-seeded-baseline-b", evidenceDir);
+
+    const firstManifest = loadQualityIntelligenceRun("run-seeded-baseline-a", { evidenceDir });
+    const secondManifest = loadQualityIntelligenceRun("run-seeded-baseline-b", { evidenceDir });
+    expect(firstManifest?.totals).toEqual(secondManifest?.totals);
+
+    const firstProjection = candidateProjection("run-seeded-baseline-a", evidenceDir);
+    const secondProjection = candidateProjection("run-seeded-baseline-b", evidenceDir);
+    expect(firstProjection.count).toBeGreaterThan(0);
+    expect(firstProjection.titles).toEqual(secondProjection.titles);
+    expect(firstProjection.steps).toEqual(secondProjection.steps);
+    expect(firstProjection.expectedResults).toEqual(secondProjection.expectedResults);
+  });
+
   it("persists the applied seed when the selected model advertises seeding support", async () => {
     let seenSeed: number | undefined;
     const port: ModelPort = {
@@ -515,9 +686,7 @@ describe("executeQiRun — N+1 coverage propagation", () => {
       label: `S${String(i)}`,
       text: `The system shall satisfy requirement ${String(i)} for coverage precisely.`,
     }));
-    await executeQiRun(
-      makeInput(evidenceDir, { onAccepted, request: makeRequest({ sources }) }),
-    );
+    await executeQiRun(makeInput(evidenceDir, { onAccepted, request: makeRequest({ sources }) }));
     expect(onAccepted.mock.calls[0]?.[0]?.droppedSourceCount).toBe(1);
   });
 

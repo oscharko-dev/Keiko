@@ -81,7 +81,10 @@ describe("BrowserWidget", () => {
     expect(screen.getByRole("textbox", { name: "Port" })).toBeInTheDocument();
     expect(screen.getByRole("textbox", { name: "URL" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Apply$/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Open session/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Open session/i })).toHaveAttribute(
+      "aria-disabled",
+      "false",
+    );
   });
 
   it("keeps the visible labels in the accessible names for label-in-name compliance", () => {
@@ -96,10 +99,19 @@ describe("BrowserWidget", () => {
     render(<BrowserWidget />);
     await userEvent.click(screen.getByRole("button", { name: /Open session/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^Navigate$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^Navigate$/i })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
     });
-    expect(screen.getByRole("button", { name: /^Close$/i })).toBeEnabled();
-    expect(screen.getByRole("button", { name: /^Screenshot$/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^Close$/i })).toHaveAttribute(
+      "aria-disabled",
+      "false",
+    );
+    expect(screen.getByRole("button", { name: /^Screenshot$/i })).toHaveAttribute(
+      "aria-disabled",
+      "false",
+    );
   });
 
   it("POSTs navigate and reflects the SSE navigated event", async () => {
@@ -111,7 +123,10 @@ describe("BrowserWidget", () => {
     render(<BrowserWidget />);
     await userEvent.click(screen.getByRole("button", { name: /Open session/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^Navigate$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^Navigate$/i })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
     });
     await userEvent.click(screen.getByRole("button", { name: /^Navigate$/i }));
     await waitFor(() => {
@@ -142,7 +157,10 @@ describe("BrowserWidget", () => {
     render(<BrowserWidget />);
     await userEvent.click(screen.getByRole("button", { name: /Open session/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^Navigate$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^Navigate$/i })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
     });
     await userEvent.click(screen.getByRole("button", { name: /^Navigate$/i }));
     const alert = await screen.findByRole("alert");
@@ -169,16 +187,21 @@ describe("BrowserWidget", () => {
     render(<BrowserWidget />);
     await userEvent.click(screen.getByRole("button", { name: /Open session/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^Screenshot$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^Screenshot$/i })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
     });
     await userEvent.click(screen.getByRole("button", { name: /^Screenshot$/i }));
     const applyButton = await screen.findByRole("button", { name: /^Apply$/i });
     await waitFor(() => {
-      expect(applyButton).toBeEnabled();
+      expect(applyButton).toHaveAttribute("aria-disabled", "false");
     });
     await userEvent.click(applyButton);
+    // uiux-fix F018 C124: text appears in the visible line AND the persistent
+    // sr-only status mirror
     await waitFor(() => {
-      expect(screen.getByText(/browser-1\.png/)).toBeInTheDocument();
+      expect(screen.getAllByText(/browser-1\.png/).length).toBeGreaterThan(0);
     });
   });
 
@@ -191,8 +214,9 @@ describe("BrowserWidget", () => {
     });
     render(<BrowserWidget />);
     await userEvent.click(screen.getByRole("button", { name: /^Check$/i }));
+    // uiux-fix F018 C124: visible line + persistent sr-only status mirror
     await waitFor(() => {
-      expect(screen.getByText(/Reachable: yes/)).toBeInTheDocument();
+      expect(screen.getAllByText(/Reachable: yes/).length).toBeGreaterThan(0);
     });
   });
 
@@ -202,20 +226,27 @@ describe("BrowserWidget", () => {
     render(<BrowserWidget />);
     await userEvent.click(screen.getByRole("button", { name: /Open session/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^Close$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^Close$/i })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
     });
     await userEvent.click(screen.getByRole("button", { name: /^Close$/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Open session/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /Open session/i })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
     });
     expect(deleteBrowserSession).toHaveBeenCalledWith("session-1");
   });
 
-  it("event log container has aria-live polite for screen-reader announcements", () => {
+  it("event log container is an accessible log region (implicit polite live region)", () => {
+    // F019 C256: role="log" replaces the bare aria-live div — it carries an
+    // implicit aria-live="polite" AND exposes the aria-label as accessible name.
     render(<BrowserWidget />);
-    const log = document.querySelector(".bw-log");
-    expect(log).toHaveAttribute("aria-live", "polite");
-    expect(log).toHaveAttribute("aria-atomic", "false");
+    const log = screen.getByRole("log", { name: "Browser event log" });
+    expect(log).toHaveClass("bw-log");
   });
 
   it("keeps the contrast-sensitive widget class hooks in the rendered markup", async () => {
@@ -232,15 +263,23 @@ describe("BrowserWidget", () => {
     expect(screen.getByRole("button", { name: /^Close$/i })).toHaveClass("bw-btn-danger");
 
     await userEvent.click(screen.getByRole("button", { name: /^Check$/i }));
+    // uiux-fix F018 C124: the persistent sr-only mirror matches too — assert the
+    // visible .bw-status line explicitly
     await waitFor(() => {
-      expect(screen.getByText(/Reachable: yes/)).toBeInTheDocument();
+      expect(screen.getAllByText(/Reachable: yes/).length).toBeGreaterThan(0);
     });
-    const status = screen.getByText(/Reachable: yes/).closest(".bw-status");
+    const status = screen
+      .getAllByText(/Reachable: yes/)
+      .map((el) => el.closest(".bw-status"))
+      .find((el) => el !== null);
     expect(status).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /Open session/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^Navigate$/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^Navigate$/i })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
     });
     expect(FakeEventSource.last).not.toBeNull();
     act(() => {
@@ -272,7 +311,10 @@ describe("BrowserWidget", () => {
     render(<BrowserWidget />);
     await userEvent.click(screen.getByRole("button", { name: /Open session/i }));
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /Capture HTML/i })).toBeEnabled();
+      expect(screen.getByRole("button", { name: /Capture HTML/i })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
     });
     await userEvent.click(screen.getByRole("button", { name: /Capture HTML/i }));
     await waitFor(() => {

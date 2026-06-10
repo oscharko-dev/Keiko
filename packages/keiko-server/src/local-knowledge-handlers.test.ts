@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addSourceToCapsule,
   createCapsule,
+  getCapsule,
   listCapsules,
   openKnowledgeStore,
   resolveKnowledgeStorePath,
@@ -182,11 +183,7 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
-async function waitUntil(
-  predicate: () => boolean,
-  timeoutMs = 2_000,
-  stepMs = 10,
-): Promise<void> {
+async function waitUntil(predicate: () => boolean, timeoutMs = 2_000, stepMs = 10): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) {
@@ -256,7 +253,9 @@ describe("local-knowledge handlers", () => {
       dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
     });
     const auditKinds = verify._internal.db
-      .prepare("SELECT kind FROM capsule_audit_events WHERE capsule_id = :c ORDER BY occurred_at ASC, kind ASC")
+      .prepare(
+        "SELECT kind FROM capsule_audit_events WHERE capsule_id = :c ORDER BY occurred_at ASC, kind ASC",
+      )
       .all({ c: "cap-1" }) as unknown as readonly { readonly kind: string }[];
     const membershipKinds = verify._internal.db
       .prepare(
@@ -718,6 +717,46 @@ describe("local-knowledge handlers", () => {
       .get({ c: capId }) as { readonly n: number };
     verify.close();
     expect(jobs.n).toBe(1);
+  });
+
+  it("rejects capsule indexing before any source is attached", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "keiko-lk-"));
+    tempDirs.push(tmp);
+
+    const created = await handleCreateLocalKnowledgeCapsule(
+      baseCtx(tmp, "POST", { displayName: "Empty Capsule" }),
+      depsFor(tmp),
+    );
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const createdBody = created.body as { readonly capsule: { readonly id: KnowledgeCapsuleId } };
+    const emptyCapsuleId = createdBody.capsule.id;
+
+    const result = await handleStartLocalKnowledgeCapsuleIndexing(
+      {
+        ...baseCtx(tmp, "POST", { confirm: true }),
+        params: { capsuleId: String(emptyCapsuleId) },
+      },
+      depsFor(tmp),
+    );
+
+    expect(result.status).toBe(409);
+    const body = result.body as {
+      readonly error: { readonly code: string; readonly message: string };
+    };
+    expect(body.error.code).toBe("LOCAL_KNOWLEDGE_CONFLICT");
+    expect(body.error.message).toContain("Attach at least one source");
+
+    const verify = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: tmp }),
+    });
+    const jobs = verify._internal.db
+      .prepare("SELECT COUNT(*) AS n FROM indexing_jobs WHERE capsule_id = :c")
+      .get({ c: emptyCapsuleId }) as { readonly n: number };
+    const capsule = getCapsule(verify, emptyCapsuleId);
+    verify.close();
+
+    expect(jobs.n).toBe(0);
+    expect(capsule?.lifecycleState).toBe("draft");
   });
 
   it("projects embedding-failed runs into capsule health instead of indexed source counts", async () => {
