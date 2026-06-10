@@ -76,7 +76,10 @@ function fakeUnparseablePort(): ModelPort {
   };
 }
 
-function chatCapability(modelId: string, overrides: Partial<ModelCapability> = {}): ModelCapability {
+function chatCapability(
+  modelId: string,
+  overrides: Partial<ModelCapability> = {},
+): ModelCapability {
   return {
     id: modelId,
     kind: "chat",
@@ -166,6 +169,72 @@ function makeRequest(
  */
 function requestWithoutModel(): QualityIntelligenceStartRunRequest {
   return { sources: [VALID_SOURCE] };
+}
+
+function determinismAuditRequest(): QualityIntelligenceStartRunRequest {
+  return {
+    profileId: "regression-default",
+    seed: 761,
+    sources: [
+      {
+        kind: "requirements",
+        label: "Determinism audit source",
+        text: [
+          "REQ-DETERMINISM-001: A payment approval screen must require a second approver for transfers above 10000 EUR.",
+          "REQ-DETERMINISM-002: The approval screen must reject submission when the second approver is the same user as the requester.",
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+function nondeterministicPort(callCounter: { count: number }): ModelPort {
+  return {
+    call: (request: GatewayRequest): Promise<NormalizedResponse> => {
+      callCounter.count += 1;
+      return Promise.resolve({
+        content: JSON.stringify([
+          {
+            title: `Nondeterministic model output ${String(callCounter.count)}`,
+            steps: ["Model-only step"],
+            expectedResults: ["Model-only result"],
+            derivedFromEvidenceIndexes: [1],
+          },
+        ]),
+        modelId: request.modelId,
+        finishReason: "stop",
+        toolCalls: [],
+        structuredOutput: null,
+        usage: usageMeta(100, 50),
+      });
+    },
+  };
+}
+
+function candidateProjection(
+  runId: string,
+  evidenceDir: string,
+): {
+  readonly count: number;
+  readonly titles: readonly string[];
+  readonly steps: readonly (readonly string[])[];
+  readonly expectedResults: readonly (readonly string[])[];
+} {
+  const artifact = loadQualityIntelligenceCandidates(runId, { evidenceDir });
+  const candidates = artifact?.candidates ?? [];
+  return {
+    count: candidates.length,
+    titles: candidates.map((candidate) => candidate.title),
+    steps: candidates.map((candidate) => candidate.steps),
+    expectedResults: candidates.map((candidate) => candidate.expectedResults),
+  };
+}
+
+function expectSeededBaselineManifest(runId: string, evidenceDir: string): void {
+  const manifest = loadQualityIntelligenceRun(runId, { evidenceDir });
+  expect(manifest).toBeDefined();
+  expect(manifest?.modelId).toBeUndefined();
+  expect(manifest?.seedUsed).toBeUndefined();
 }
 
 function makeInput(
@@ -320,6 +389,48 @@ describe("executeQiRun — model selection", () => {
 });
 
 describe("executeQiRun — seed persistence", () => {
+  it("routes seeded requests to the deterministic baseline when the selected model cannot apply seeds", async () => {
+    const callCounter = { count: 0 };
+    const request = determinismAuditRequest();
+    const deps = buildDeps({ evidenceDir, modelPort: nondeterministicPort(callCounter) });
+
+    const first = await executeQiRun(
+      makeInput(evidenceDir, {
+        request,
+        runId: "run-seeded-baseline-a",
+        deps,
+      }),
+    );
+    const second = await executeQiRun(
+      makeInput(evidenceDir, {
+        request,
+        runId: "run-seeded-baseline-b",
+        deps,
+      }),
+    );
+
+    expect(first.status).toBe("succeeded");
+    expect(second.status).toBe("succeeded");
+    expect(callCounter.count).toBe(0);
+    expect(first.modelGatewayCallCount).toBe(0);
+    expect(second.modelGatewayCallCount).toBe(0);
+    expect(first.qualityScore).toBeNull();
+    expect(second.qualityScore).toBeNull();
+    expectSeededBaselineManifest("run-seeded-baseline-a", evidenceDir);
+    expectSeededBaselineManifest("run-seeded-baseline-b", evidenceDir);
+
+    const firstManifest = loadQualityIntelligenceRun("run-seeded-baseline-a", { evidenceDir });
+    const secondManifest = loadQualityIntelligenceRun("run-seeded-baseline-b", { evidenceDir });
+    expect(firstManifest?.totals).toEqual(secondManifest?.totals);
+
+    const firstProjection = candidateProjection("run-seeded-baseline-a", evidenceDir);
+    const secondProjection = candidateProjection("run-seeded-baseline-b", evidenceDir);
+    expect(firstProjection.count).toBeGreaterThan(0);
+    expect(firstProjection.titles).toEqual(secondProjection.titles);
+    expect(firstProjection.steps).toEqual(secondProjection.steps);
+    expect(firstProjection.expectedResults).toEqual(secondProjection.expectedResults);
+  });
+
   it("persists the applied seed when the selected model advertises seeding support", async () => {
     let seenSeed: number | undefined;
     const port: ModelPort = {
@@ -515,9 +626,7 @@ describe("executeQiRun — N+1 coverage propagation", () => {
       label: `S${String(i)}`,
       text: `The system shall satisfy requirement ${String(i)} for coverage precisely.`,
     }));
-    await executeQiRun(
-      makeInput(evidenceDir, { onAccepted, request: makeRequest({ sources }) }),
-    );
+    await executeQiRun(makeInput(evidenceDir, { onAccepted, request: makeRequest({ sources }) }));
     expect(onAccepted.mock.calls[0]?.[0]?.droppedSourceCount).toBe(1);
   });
 
