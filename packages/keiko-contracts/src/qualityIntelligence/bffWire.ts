@@ -10,7 +10,7 @@
 //   QualityIntelligenceUiFindingSummary — per-finding row for the detail panel
 //   QualityIntelligenceUiEvidenceRef — evidence reference for the detail panel
 //   QualityIntelligenceUiRunDetail   — single-run detail projection (adds finding refs,
-//                                      candidate ids, evidence refs, schema version)
+//                                      candidate ids, evidence refs, schema version, drift metadata)
 //
 // Invariants enforced by BFF producers:
 //   - No field that appears here derives from a raw prompt, API key, bearer token,
@@ -108,6 +108,20 @@ export interface QualityIntelligenceUiWeakTestFlag {
   readonly rationale: string;
 }
 
+export interface QualityIntelligenceUiDriftMetadata {
+  /**
+   * GET run detail is read-only: it reports whether drift tracking metadata exists, but never
+   * re-reads local sources. Clients call re-check with current source handles to compute staleness.
+   */
+  readonly status: "not-checked" | "unavailable";
+  /** Count only; raw fingerprint hashes stay in evidence and are never sent to the browser. */
+  readonly sourceFingerprintCount: number;
+  /** Count only; raw atom hashes stay in evidence and are never sent to the browser. */
+  readonly atomFingerprintCount: number;
+  readonly reCheckSupported: boolean;
+  readonly regenerateStaleSupported: boolean;
+}
+
 /**
  * Single-run detail projection.
  * Adds full finding rows, candidate id refs, evidence refs, and the manifest schema
@@ -144,6 +158,8 @@ export interface QualityIntelligenceUiRunDetail {
    * when the judge stage was skipped, unavailable, or no candidate was judged.
    */
   readonly qualityScore: number | null;
+  /** Browser-safe Living Tests drift metadata; never contains raw source text, paths, or hashes. */
+  readonly drift: QualityIntelligenceUiDriftMetadata;
 }
 
 /**

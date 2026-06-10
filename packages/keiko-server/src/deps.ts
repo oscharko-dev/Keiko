@@ -491,6 +491,7 @@ function buildBrowserManager(options: {
 function buildMemoryVault(
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
+  env: EnvSource,
 ): MemoryVaultStore {
   return createBffMemoryVault(
     redactString,
@@ -498,6 +499,7 @@ function buildMemoryVault(
     // shares the same redactString closure as the live-payload redactor so audit
     // summaries inherit the same secret-shape scrubbing as wire traffic.
     createMemoryAuditHandler({ evidenceStore, redactString }),
+    env,
   );
 }
 
@@ -561,7 +563,7 @@ function buildPeripherals(
       evidenceStore,
       redactor: liveRedactor,
     }),
-    memoryVault: buildMemoryVault(redactString, evidenceStore),
+    memoryVault: buildMemoryVault(redactString, evidenceStore, options.env),
   };
 }
 

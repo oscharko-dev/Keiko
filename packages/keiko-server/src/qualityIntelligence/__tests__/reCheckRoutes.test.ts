@@ -758,10 +758,12 @@ describe("handleQiRegenerateStale — preserved candidates are materialised in t
       regeneratedCount: number;
       preservedCount: number;
     };
-    expect(body.regeneratedCount).toBe(0);
+    expect(body.regeneratedCount).toBe(1);
     expect(body.preservedCount).toBe(1);
     const artifact = loadQualityIntelligenceCandidates(body.runId, { evidenceDir });
-    expect(artifact?.candidates.map((candidate) => candidate.id)).toEqual(["cand-preserved"]);
+    const candidateIds = artifact?.candidates.map((candidate) => candidate.id) ?? [];
+    expect(candidateIds).toContain("cand-preserved");
+    expect(candidateIds).toHaveLength(2);
     expect(artifact?.editedRevisions?.map((revision) => revision.candidateId)).toEqual([
       "cand-preserved",
     ]);

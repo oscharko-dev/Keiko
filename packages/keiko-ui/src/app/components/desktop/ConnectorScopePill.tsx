@@ -15,8 +15,10 @@
 //  - minimum 24×24 target (WCAG 2.5.8)
 //  - stable keys derived from kind+id, not array indices
 
-import { useState, type ReactNode } from "react";
-import { ApiError, updateChatLocalKnowledgeScopes } from "@/lib/api";
+import { useRef, useState, type ReactNode } from "react";
+import { updateChatLocalKnowledgeScopes } from "@/lib/api";
+import { restoreScopeHeaderFocus } from "./ConnectedScopePill";
+import { formatUserError } from "./format-error";
 import { effectiveLocalKnowledgeScopes } from "./hooks/workspaceActions";
 import type { Chat, ChatLocalKnowledgeScope } from "@/lib/types";
 
@@ -37,14 +39,15 @@ function scopeLabel(scope: ChatLocalKnowledgeScope, labels: ReadonlyMap<string, 
   const key = scopeKey(scope);
   const resolved = labels.get(key);
   if (resolved !== undefined && resolved.length > 0) return resolved;
-  if (scope.kind === "capsule") return `Connector: ${scope.capsuleId}`;
-  return `Connector set: ${scope.capsuleSetId}`;
+  // uiux-fix F041 (C173) — the entity is called "capsule" everywhere else
+  // (grounding select, Local Knowledge UI); the pill must not call it "Connector".
+  if (scope.kind === "capsule") return `Capsule: ${scope.capsuleId}`;
+  return `Capsule set: ${scope.capsuleSetId}`;
 }
 
 function formatErrorMessage(error: unknown): string {
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return "Unable to disconnect connector.";
+  // uiux-fix F041 (C171) — message first, machine code as trailing detail.
+  return formatUserError(error, "Unable to disconnect capsule.");
 }
 
 interface ConnectorPillItemProps {
@@ -66,6 +69,7 @@ function ConnectorPillItem({
 }: ConnectorPillItemProps): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const disconnectRef = useRef<HTMLButtonElement | null>(null);
   const label = scopeLabel(scope, labels);
   const key = scopeKey(scope);
 
@@ -73,10 +77,13 @@ function ConnectorPillItem({
     if (busy) return;
     setError(null);
     setBusy(true);
+    // uiux-fix F010 (C169): capture the stable header ancestor before this pill unmounts.
+    const header = disconnectRef.current?.closest(".chat-scope-header");
     try {
       const remaining = allScopes.filter((s) => scopeKey(s) !== key);
       const response = await updateScopes(chat.id, remaining.length > 0 ? remaining : null);
       onDisconnect?.(response.chat);
+      restoreScopeHeaderFocus(header);
     } catch (caught) {
       setError(formatErrorMessage(caught));
     } finally {
@@ -91,10 +98,13 @@ function ConnectorPillItem({
         <span role="status" aria-live="polite">
           {label}
         </span>
+        {/* aria-disabled (not native disabled) while busy: native disabled drops keyboard
+            focus mid-request (C169); the handleDisconnect busy guard blocks re-activation. */}
         <button
           type="button"
+          ref={disconnectRef}
           className="scope-pill-disconnect"
-          disabled={busy}
+          aria-disabled={busy}
           aria-label={`Disconnect ${label} from chat`}
           title={`Disconnect ${label} from chat`}
           onClick={() => {

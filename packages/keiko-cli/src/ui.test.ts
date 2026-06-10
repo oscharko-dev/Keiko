@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import type { Server } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseUiArgs, runUiCli, waitForShutdown, type UiCliDeps } from "./ui.js";
+import { parseUiArgs, runUiCli, waitForShutdown, type UiCliArgs, type UiCliDeps } from "./ui.js";
 import { DEFAULT_UI_PORT } from "@oscharko-dev/keiko-server";
 import type { UiHandlerDeps } from "@oscharko-dev/keiko-server";
 import type { CliIo } from "./runner.js";
@@ -17,6 +17,14 @@ function captureIo(): { io: CliIo; out: string[]; err: string[] } {
     out,
     err,
   };
+}
+
+function expectParsed(args: readonly string[]): UiCliArgs {
+  const parsed = parseUiArgs(args);
+  if (parsed === null || parsed === "help") {
+    throw new Error(`expected parsed ui args for ${args.join(" ")}`);
+  }
+  return parsed;
 }
 
 // A fake server that records its listen call without binding a socket.
@@ -44,7 +52,17 @@ describe("parseUiArgs", () => {
   });
 
   it("parses a valid --port", () => {
-    expect(parseUiArgs(["--port", "5000"])?.port).toBe(5000);
+    expect(expectParsed(["--port", "5000"]).port).toBe(5000);
+  });
+
+  it("returns help for --help without interpreting adjacent flags", () => {
+    expect(parseUiArgs(["--help", "--port", "5000"])).toBe("help");
+    expect(parseUiArgs(["-h"])).toBe("help");
+  });
+
+  it("rejects unknown flags instead of ignoring them", () => {
+    expect(parseUiArgs(["--no-open"])).toBeNull();
+    expect(parseUiArgs(["--port", "5000", "--unknown"])).toBeNull();
   });
 
   it("rejects a non-numeric --port", () => {
@@ -70,14 +88,14 @@ describe("parseUiArgs", () => {
   });
 
   it("captures --evidence-dir and --config", () => {
-    const parsed = parseUiArgs(["--evidence-dir", "/e", "--config", "/c.json"]);
-    expect(parsed?.evidenceDir).toBe("/e");
-    expect(parsed?.config).toBe("/c.json");
+    const parsed = expectParsed(["--evidence-dir", "/e", "--config", "/c.json"]);
+    expect(parsed.evidenceDir).toBe("/e");
+    expect(parsed.config).toBe("/c.json");
   });
 
   it("captures --ui-db", () => {
-    const parsed = parseUiArgs(["--ui-db", "/tmp/keiko-ui.db"]);
-    expect(parsed?.uiDbPath).toBe("/tmp/keiko-ui.db");
+    const parsed = expectParsed(["--ui-db", "/tmp/keiko-ui.db"]);
+    expect(parsed.uiDbPath).toBe("/tmp/keiko-ui.db");
   });
 
   it("rejects --ui-db without a value", () => {
@@ -106,6 +124,30 @@ describe("runUiCli", () => {
     const code = await runUiCli(["--host", "0.0.0.0"], io, {});
     expect(code).toBe(2);
     expect(err.join("")).toContain("Usage:");
+  });
+
+  it("prints help and exits before sqlite re-exec or server startup", async () => {
+    const { io, out, err } = captureIo();
+    let spawned = 0;
+    const code = await runUiCli(
+      ["--help", "--port", "1996"],
+      io,
+      {},
+      {
+        currentExecArgv: () => [],
+        sqliteProbe: () => false,
+        spawnFn: () => {
+          spawned += 1;
+          throw new Error("help must not re-exec");
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(out.join("")).toContain("keiko ui");
+    expect(out.join("")).toContain("--port PORT");
+    expect(err.join("")).toBe("");
+    expect(spawned).toBe(0);
   });
 
   it("fails fast when --ui-db is relative", async () => {
@@ -145,6 +187,61 @@ describe("runUiCli", () => {
     expect(out.join("")).toContain("http://127.0.0.1:4399");
   });
 
+  it("defaults UI and memory state to the workspace-local .keiko runtime root", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-state-"));
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, {}, deps);
+      expect(code).toBe(0);
+      expect(captured[0]?.uiDbPath).toBe(join(cwd, ".keiko", "ui", "keiko-ui.db"));
+      expect(captured[0]?.env.KEIKO_STATE_DIR).toBe(join(cwd, ".keiko"));
+      expect(captured[0]?.env.KEIKO_MEMORY_DIR).toBe(join(cwd, ".keiko", "memory"));
+      captured[0]?.store.close();
+      captured[0]?.memoryVault?.close();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves explicit state overrides while defaulting missing runtime paths", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-state-override-"));
+    const stateDir = join(cwd, "state");
+    const uiDbPath = join(cwd, ".keiko", "ui", "custom-ui.db");
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      cwd,
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli(["--ui-db", uiDbPath], io, { KEIKO_STATE_DIR: stateDir }, deps);
+      expect(code).toBe(0);
+      expect(captured[0]?.uiDbPath).toBe(uiDbPath);
+      expect(captured[0]?.env.KEIKO_STATE_DIR).toBe(stateDir);
+      expect(captured[0]?.env.KEIKO_UI_DATA_DIR).toBeUndefined();
+      expect(captured[0]?.env.KEIKO_MEMORY_DIR).toBe(join(stateDir, "memory"));
+      captured[0]?.store.close();
+      captured[0]?.memoryVault?.close();
+    } finally {
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
   it("loads KEIKO_* values from local .env and ignores unrelated keys", async () => {
     const { io } = captureIo();
     const cwd = await mkdtemp(join(tmpdir(), "keiko-ui-cli-dotenv-"));
@@ -182,6 +279,8 @@ describe("runUiCli", () => {
       expect(captured[0]?.configPresent).toBe(true);
       expect(captured[0]?.config?.providers[0]?.modelId).toBe("example-chat-model");
       expect(captured[0]?.env.NPM_TOKEN).toBeUndefined();
+      captured[0]?.store.close();
+      captured[0]?.memoryVault?.close();
     } finally {
       await rm(cwd, { recursive: true, force: true });
     }

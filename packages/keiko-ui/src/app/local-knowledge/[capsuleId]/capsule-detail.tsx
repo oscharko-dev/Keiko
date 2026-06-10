@@ -18,6 +18,8 @@ import type {
   CapsuleDetail as CapsuleDetailData,
   SourceIndexStats,
 } from "@/lib/local-knowledge-api";
+import Link from "next/link";
+import { STATUS_LABELS } from "../connector-graph-types";
 import { useCapsuleDetail } from "./capsule-detail-state";
 import { CapsuleActions } from "./capsule-actions";
 import { CapsuleRename } from "./capsule-rename";
@@ -33,7 +35,10 @@ function formatBytes(bytes: number): string {
 }
 
 function formatTs(epochMs: number): string {
-  return new Date(epochMs).toLocaleString(undefined, {
+  // Explicit en-US: the surrounding UI copy is English; an OS-locale date
+  // ("10. Juni 2026") next to "Last indexed" mixed languages per machine
+  // (uiux-fix F033, C367).
+  return new Date(epochMs).toLocaleString("en-US", {
     dateStyle: "medium",
     timeStyle: "short",
   });
@@ -129,9 +134,9 @@ function OverviewSection({ data }: { data: CapsuleDetailData }): ReactNode {
               className="lk-badge"
               data-state={capsule.lifecycleState}
               role="status"
-              aria-label={`Status: ${capsule.lifecycleState}`}
+              aria-label={`Status: ${STATUS_LABELS[capsule.lifecycleState]}`}
             >
-              {capsule.lifecycleState}
+              {STATUS_LABELS[capsule.lifecycleState]}
             </span>
           }
         />
@@ -201,7 +206,9 @@ function SourcesSection({ sources }: { sources: readonly SourceIndexStats[] }): 
       <ul className="lkd-list" aria-label="Capsule sources">
         {sources.map((src) => (
           <li key={src.sourceId} className="lkd-source-row">
-            <div className="lkd-source-name">{src.displayName}</div>
+            <div className="lkd-source-name" title={src.displayName}>
+              {src.displayName}
+            </div>
             <div className="lkd-source-scope">{src.scope.kind}</div>
             <div className="lkd-source-counts" aria-label="Document counts">
               <span className="lkd-count lkd-count-ok" title="Indexed">
@@ -409,6 +416,19 @@ export function CapsuleDetail({ fetchDetailImpl }: CapsuleDetailProps = {}): Rea
   }
 
   if (loadStatus === "error" || data === null) {
+    // Missing capsuleId is not a transient failure — retrying with the same
+    // empty id can never succeed. Offer the way back to the overview instead
+    // (uiux-fix F033, C229).
+    if (capsuleId === "") {
+      return (
+        <div role="alert" aria-live="assertive" className="lk-alert">
+          No capsule selected. Open a capsule from the Local Knowledge overview.
+          <Link href="/local-knowledge" className="lk-alert-retry">
+            Back to Local Knowledge
+          </Link>
+        </div>
+      );
+    }
     return (
       <div role="alert" aria-live="assertive" className="lk-alert">
         {loadError ?? "Failed to load capsule."}
@@ -436,14 +456,18 @@ export function CapsuleDetail({ fetchDetailImpl }: CapsuleDetailProps = {}): Rea
             : {})}
           onRenamed={reload}
         />
-        <CapsuleActions
-          capsuleId={capsuleId}
-          capsuleDisplayName={data.capsule.displayName}
-          sourceCount={data.sources.length}
-          lifecycleState={data.capsule.lifecycleState}
-          onActionComplete={reload}
-        />
       </header>
+
+      {/* Own block below the header: the multi-line connect form, Index-now row
+          and action buttons no longer compete with the H1 inside the
+          .lk-header flex row (uiux-fix F033, C104). */}
+      <CapsuleActions
+        capsuleId={capsuleId}
+        capsuleDisplayName={data.capsule.displayName}
+        sourceCount={data.sources.length}
+        lifecycleState={data.capsule.lifecycleState}
+        onActionComplete={reload}
+      />
 
       <OverviewSection data={data} />
       <PrivacySection />

@@ -20,7 +20,8 @@ import {
   startIndexing,
 } from "@/lib/local-knowledge-api";
 import type { CapsuleActionResponse, ConnectCapsuleSourceScope } from "@/lib/local-knowledge-api";
-import { ApiError } from "@/lib/api";
+import { Icons } from "@/app/components/desktop/Icons";
+import { formatError } from "../format-error";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,12 +37,6 @@ interface ConfirmState {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function formatError(error: unknown): string {
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return "An unexpected error occurred.";
-}
 
 function actionTitle(kind: ActionKind): string {
   if (kind === "delete") return "Delete capsule";
@@ -144,22 +139,30 @@ function ConnectSourceForm({
       <label htmlFor="lkd-connect-kind" className="lkd-connect-label">
         Connect source
       </label>
-      <div className="lkd-connect-row" style={{ marginBottom: 8 }}>
-        <select
-          id="lkd-connect-kind"
-          className="dlg-input"
-          value={scopeKind}
-          disabled={busy}
-          aria-label="Source scope kind"
-          onChange={(e) => {
-            setScopeKind(e.target.value as ConnectCapsuleSourceScope["kind"]);
-            setConnectError(null);
-          }}
-        >
-          <option value="folder">Folder</option>
-          <option value="repository">Repository</option>
-          <option value="files">Files</option>
-        </select>
+      <div className="lkd-connect-row">
+        {/* No aria-label here: the visible "Connect source" label (htmlFor above)
+            provides the accessible name, so WCAG 2.5.3 Label in Name holds
+            (uiux-fix F033, C365). The select sits in the app's .dlg-selwrap
+            chevron wrapper so it is recognisable as a dropdown (C234). */}
+        <span className="dlg-selwrap">
+          <select
+            id="lkd-connect-kind"
+            className="dlg-input"
+            value={scopeKind}
+            disabled={busy}
+            onChange={(e) => {
+              setScopeKind(e.target.value as ConnectCapsuleSourceScope["kind"]);
+              setConnectError(null);
+            }}
+          >
+            <option value="folder">Folder</option>
+            <option value="repository">Repository</option>
+            <option value="files">Files</option>
+          </select>
+          <span className="dlg-selchev">
+            <Icons.chevron size={15} />
+          </span>
+        </span>
       </div>
       <div className="lkd-connect-row">
         <input
@@ -184,7 +187,7 @@ function ConnectSourceForm({
         />
       </div>
       {scopeKind === "files" ? (
-        <div className="lkd-connect-row" style={{ marginTop: 8 }}>
+        <div className="lkd-connect-row">
           <textarea
             className="dlg-input lkd-connect-input"
             value={filesInput}
@@ -196,7 +199,7 @@ function ConnectSourceForm({
           />
         </div>
       ) : null}
-      <div className="lkd-connect-row" style={{ marginTop: 8 }}>
+      <div className="lkd-connect-row">
         <button
           type="button"
           className="lk-btn lk-btn-ghost"
@@ -208,7 +211,7 @@ function ConnectSourceForm({
         </button>
       </div>
       {connectError !== null ? (
-        <div role="alert" aria-live="assertive" className="lk-alert" style={{ marginTop: 4 }}>
+        <div role="alert" aria-live="assertive" className="lk-alert">
           {connectError}
         </div>
       ) : null}
@@ -225,6 +228,17 @@ function useFocusTrap(
   active: boolean,
   onEscape: () => void,
 ): void {
+  // Remember the element that opened the dialog and give focus back to it when
+  // the dialog unmounts — WCAG 2.4.3; mirrors useComposeFocusTrap in
+  // capsule-set-compose.tsx (uiux-fix F033, C036). Kept in a separate effect:
+  // the keydown effect below re-runs whenever `onEscape` gets a new identity,
+  // and restoring focus on every re-render would yank focus out of the form.
+  useEffect(() => {
+    if (!active) return undefined;
+    const trigger = document.activeElement as HTMLElement | null;
+    return () => trigger?.focus?.();
+  }, [active]);
+
   useEffect(() => {
     if (!active) return undefined;
     const dialog = dialogRef.current;
@@ -256,7 +270,12 @@ function useFocusTrap(
       }
       if (event.key !== "Tab") return;
       const focusables = focusablesIn(narrowedDialog);
-      if (focusables.length === 0) return;
+      if (focusables.length === 0) {
+        // All controls are disabled while busy — keep Tab from escaping
+        // behind the backdrop (uiux-fix F033, C036).
+        event.preventDefault();
+        return;
+      }
       const first = focusables[0] as HTMLElement;
       const last = focusables[focusables.length - 1] as HTMLElement;
       if (event.shiftKey && document.activeElement === first) {
@@ -311,6 +330,23 @@ function ConfirmModal({
     }
   }, [kind]);
 
+  // While busy every control is disabled, which blurs the focused element to
+  // document.body. Park focus on the dialog container (tabIndex={-1}) instead;
+  // when the request ends and the dialog is still open (error path), move it
+  // back to the first control (uiux-fix F033, C036).
+  const wasBusyRef = useRef(false);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    if (busy) {
+      wasBusyRef.current = true;
+      dialog.focus();
+    } else if (wasBusyRef.current) {
+      wasBusyRef.current = false;
+      dialog.querySelector<HTMLElement>("button:not([disabled]),input:not([disabled])")?.focus();
+    }
+  }, [busy]);
+
   const requiresTypedName = kind === "delete";
   const confirmEnabled = !busy && (!requiresTypedName || nameInput === capsuleDisplayName);
 
@@ -332,6 +368,7 @@ function ConfirmModal({
         aria-labelledby={titleId}
         aria-describedby={descId}
         className="dlg"
+        tabIndex={-1}
       >
         <div className="dlg-head">
           <div className="dlg-htext">
@@ -491,8 +528,11 @@ export function CapsuleActions({
 
   const showIndexButton = sourceCount > 0 && lifecycleState !== "ready";
 
+  // Rendered as its own block BELOW the .lk-header row (capsule-detail.tsx):
+  // the multi-line connect form used to be squeezed into the header flex row
+  // next to the H1 (uiux-fix F033, C104).
   return (
-    <>
+    <section className="lkd-tools" aria-label="Capsule tools">
       <ConnectSourceForm
         capsuleId={capsuleId}
         onConnected={onActionComplete}
@@ -512,7 +552,7 @@ export function CapsuleActions({
             {indexBusy ? "Indexing…" : "Index now"}
           </button>
           {indexError !== null ? (
-            <div role="alert" aria-live="assertive" className="lk-alert" style={{ marginTop: 4 }}>
+            <div role="alert" aria-live="assertive" className="lk-alert">
               {indexError}
             </div>
           ) : null}
@@ -562,6 +602,6 @@ export function CapsuleActions({
           onCancel={handleCancel}
         />
       ) : null}
-    </>
+    </section>
   );
 }

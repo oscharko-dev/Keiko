@@ -81,7 +81,7 @@ describe("ReviewQueue — populated state", () => {
     expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
   });
 
-  it("renders conflicted memory with Dismiss button (no Accept)", async () => {
+  it("renders conflicted memory with Reject conflict button (no Accept)", async () => {
     const record = makeConflicted(makeId(3), "Conflicting preference");
     render(
       <ReviewQueue
@@ -94,7 +94,26 @@ describe("ReviewQueue — populated state", () => {
       expect(screen.getByText("Conflicting preference")).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    // Honest label (uiux-fix F035): the action permanently rejects the
+    // conflicted memory — it is not a mere queue dismissal.
+    expect(screen.getByRole("button", { name: "Reject conflict" })).toBeInTheDocument();
+  });
+
+  it("links each row to the memory detail page", async () => {
+    const record = makeProposed(makeId(12), "Linked proposal");
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith([record])}
+        acceptImpl={acceptOk()}
+        rejectImpl={rejectOk()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByRole("link", { name: "View details" })).toHaveAttribute(
+        "href",
+        "/memoriaviva/detail?id=mem-q-12",
+      );
+    });
   });
 
   it("removes row from queue after Accept", async () => {
@@ -133,6 +152,57 @@ describe("ReviewQueue — populated state", () => {
     await waitFor(() => {
       expect(screen.queryByText("Memory to reject")).toBeNull();
     });
+  });
+
+  it("announces the result and moves focus to the next row after an action (uiux-fix F035)", async () => {
+    const records = [
+      makeProposed(makeId(20), "First in queue"),
+      makeProposed(makeId(21), "Second in queue"),
+    ];
+    const user = userEvent.setup();
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith(records)}
+        acceptImpl={acceptOk()}
+        rejectImpl={rejectOk()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("First in queue")).toBeInTheDocument();
+    });
+
+    const [firstAccept] = screen.getAllByRole("button", { name: "Accept" });
+    expect(firstAccept).toBeDefined();
+    if (firstAccept === undefined) throw new Error("Expected an Accept button.");
+    await user.click(firstAccept);
+
+    await waitFor(() => {
+      expect(screen.queryByText("First in queue")).toBeNull();
+    });
+    // Focus lands on the next row's first action button instead of <body>.
+    expect(screen.getByRole("button", { name: "Accept" })).toHaveFocus();
+    // The dedicated status region announces the outcome.
+    expect(screen.getByText("Memory accepted")).toBeInTheDocument();
+  });
+
+  it("moves focus to the heading when the last row is removed (uiux-fix F035)", async () => {
+    const record = makeProposed(makeId(22), "Only entry");
+    const user = userEvent.setup();
+    render(
+      <ReviewQueue
+        fetchQueueImpl={queueWith([record])}
+        acceptImpl={acceptOk()}
+        rejectImpl={rejectOk()}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Only entry")).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: "Accept" }));
+    await waitFor(() => {
+      expect(screen.queryByText("Only entry")).toBeNull();
+    });
+    expect(screen.getByRole("heading", { name: "Review queue" })).toHaveFocus();
   });
 
   it("shows row-level error when accept fails", async () => {
@@ -191,8 +261,10 @@ describe("ReviewQueue — populated state", () => {
       throw new Error("Expected both review queue accept buttons to be rendered.");
     }
     await user.click(firstAcceptButton);
-    expect(firstAcceptButton).toBeDisabled();
-    expect(secondAcceptButton).toBeEnabled();
+    // aria-disabled (not native disabled) keeps the busy button focusable so
+    // keyboard focus is not thrown to <body> mid-action (uiux-fix F005).
+    expect(firstAcceptButton).toHaveAttribute("aria-disabled", "true");
+    expect(secondAcceptButton).toHaveAttribute("aria-disabled", "false");
 
     resolveAccept?.();
     await waitFor(() => {

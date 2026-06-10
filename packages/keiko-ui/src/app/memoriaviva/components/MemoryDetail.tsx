@@ -7,23 +7,18 @@
 // WCAG: semantic dl/dt/dd for metadata, role="status" aria-live="polite" for
 // loading/error regions. focus-visible rings on action links.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 import { fetchMemory, type MemoryDetailResponse } from "@/lib/memory-api";
-import { ApiError } from "@/lib/api";
+import { formatError } from "./format-error";
+import { TYPE_LABELS } from "./MemoryFilters";
 import { MemoryActions } from "./MemoryActions";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function formatError(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return "An unexpected error occurred.";
-}
 
 function formatTs(epochMs: number): string {
   return new Date(epochMs).toLocaleString();
@@ -151,15 +146,11 @@ function RecordHeader({ record }: { readonly record: MemoryRecord }): ReactNode 
       </Link>
       <div className="mc-detail-title-row">
         <h1 className="lk-title" style={{ flex: 1 }}>
-          {record.type.charAt(0).toUpperCase() + record.type.slice(1)} memory
+          {TYPE_LABELS[record.type]} memory
         </h1>
-        <span
-          role="status"
-          aria-label={`Status: ${record.status}`}
-          className={`mc-badge mc-badge-${record.status}`}
-        >
-          {record.status}
-        </span>
+        {/* static metadata label — role="status" would announce it as a live
+            region (uiux-fix F005) */}
+        <span className={`mc-badge mc-badge-${record.status}`}>{record.status}</span>
         {record.pinned ? (
           <span aria-label="Pinned" className="mc-badge mc-badge-pinned">
             Pinned
@@ -183,6 +174,23 @@ export function MemoryDetail({ id, fetchMemoryImpl = fetchMemory }: MemoryDetail
   const [record, setRecord] = useState<MemoryRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // True after a destructive action (forget/delete) cleared the record — the
+  // empty state then confirms the removal and offers a way back instead of a
+  // dead-end "Memory not found" (uiux-fix F005).
+  const [removed, setRemoved] = useState(false);
+  const removedBackLinkRef = useRef<HTMLAnchorElement>(null);
+
+  const handleRecordChange = useCallback((updated: MemoryRecord | null): void => {
+    if (updated === null) setRemoved(true);
+    setRecord(updated);
+  }, []);
+
+  // The forget/delete dialog tries to restore focus to its (now unmounted)
+  // trigger button; move focus to the back link so keyboard users keep an
+  // anchor after the destructive action.
+  useEffect(() => {
+    if (removed && record === null) removedBackLinkRef.current?.focus();
+  }, [removed, record]);
 
   const load = useCallback(async (): Promise<void> => {
     setLoading(true);
@@ -211,25 +219,44 @@ export function MemoryDetail({ id, fetchMemoryImpl = fetchMemory }: MemoryDetail
 
   if (error !== null) {
     return (
-      <div role="alert" aria-live="assertive" className="lk-alert">
-        {error}
-        <button
-          type="button"
-          className="lk-alert-retry"
-          onClick={() => {
-            void load();
-          }}
-        >
-          Retry
-        </button>
-      </div>
+      <>
+        <div role="alert" aria-live="assertive" className="lk-alert">
+          {error}
+          <button
+            type="button"
+            className="lk-alert-retry"
+            onClick={() => {
+              void load();
+            }}
+          >
+            Retry
+          </button>
+        </div>
+        <p>
+          <Link href="/memoriaviva" className="lk-btn lk-btn-ghost">
+            Back to MemoriaViva
+          </Link>
+        </p>
+      </>
     );
   }
 
   if (record === null) {
     return (
       <div className="lk-empty">
-        <p className="lk-empty-title">Memory not found</p>
+        <div>
+          <p className="lk-empty-title">{removed ? "Memory removed" : "Memory not found"}</p>
+          <p role="status" aria-live="polite" className="lk-empty-body">
+            {removed
+              ? "The memory was forgotten or deleted and is no longer available."
+              : "This memory may have been deleted. Open a memory from the list instead."}
+          </p>
+          <p>
+            <Link ref={removedBackLinkRef} href="/memoriaviva" className="lk-btn lk-btn-ghost">
+              Back to MemoriaViva
+            </Link>
+          </p>
+        </div>
       </div>
     );
   }
@@ -248,7 +275,7 @@ export function MemoryDetail({ id, fetchMemoryImpl = fetchMemory }: MemoryDetail
         <dl className="mc-meta">
           <MetaField label="ID" value={<code className="mc-code">{record.id}</code>} />
           <MetaField label="Scope" value={formatScope(record.scope)} />
-          <MetaField label="Type" value={record.type} />
+          <MetaField label="Type" value={TYPE_LABELS[record.type]} />
           <MetaField label="Created" value={formatTs(record.createdAt)} />
           <MetaField label="Updated" value={formatTs(record.updatedAt)} />
           {record.staleReason !== undefined ? (
@@ -267,7 +294,7 @@ export function MemoryDetail({ id, fetchMemoryImpl = fetchMemory }: MemoryDetail
 
       <section aria-label="Actions" className="mc-section">
         <h2 className="lk-section-head">Actions</h2>
-        <MemoryActions record={record} onRecordChange={setRecord} />
+        <MemoryActions record={record} onRecordChange={handleRecordChange} />
       </section>
     </article>
   );

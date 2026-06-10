@@ -5,7 +5,7 @@
 // `onSave` handler (which calls the BFF edit route + reloads the run detail). Escape cancels.
 // Keyboard-accessible: every control is labelled; Escape on any field cancels without persisting.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   QualityIntelligence,
@@ -173,6 +173,9 @@ function SelectField<T extends string>({
   );
 }
 
+// Save/Cancel use aria-disabled (NOT native disabled) while a save is in flight: the just-activated
+// Save button keeps focus, so on the error path (form stays open) the keyboard user is not dropped
+// to <body> and Escape keeps working. Activation is blocked by handler guards instead.
 function EditActions({
   onCancel,
   saving,
@@ -182,14 +185,20 @@ function EditActions({
 }): ReactNode {
   return (
     <div className="qi-edit-actions">
-      <button type="submit" className="qi-btn qi-btn-approve qi-edit-save" disabled={saving}>
+      <button
+        type="submit"
+        className="qi-btn qi-btn-approve qi-edit-save"
+        aria-disabled={saving || undefined}
+      >
         Save
       </button>
       <button
         type="button"
         className="qi-btn qi-btn-secondary qi-edit-cancel"
-        onClick={onCancel}
-        disabled={saving}
+        aria-disabled={saving || undefined}
+        onClick={() => {
+          if (!saving) onCancel();
+        }}
       >
         Cancel
       </button>
@@ -211,11 +220,24 @@ export function CandidateEditForm({
   const [state, setState] = useState<FormState>(() => initialState(candidate));
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   const formRef = useRef<HTMLFormElement>(null);
   const set = <K extends keyof FormState>(key: K, value: FormState[K]): void => {
     setSaveError(null);
+    setConfirmDiscard(false);
     setState((prev) => ({ ...prev, [key]: value }));
   };
+  // Cancelling with unsaved edits requires a second activation (two-stage discard): a stray Escape
+  // mid-typing must not silently destroy minutes of editing. A pristine form closes immediately.
+  const requestCancel = useCallback((): void => {
+    if (saving) return;
+    const dirty = Object.keys(diffEdited(candidate, state)).length > 0;
+    if (!dirty || confirmDiscard) {
+      onCancel();
+      return;
+    }
+    setConfirmDiscard(true);
+  }, [candidate, confirmDiscard, onCancel, saving, state]);
   // Escape cancels the edit. Handled as a document keydown listener scoped to the form's lifetime
   // rather than a JSX handler on the (non-interactive) <form>, so the keyboard affordance works for
   // the whole open form without a noninteractive-element a11y violation. Scoped to THIS form: only
@@ -225,13 +247,13 @@ export function CandidateEditForm({
     const onKey = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || saving) return;
       const form = formRef.current;
-      if (form !== null && form.contains(document.activeElement)) onCancel();
+      if (form !== null && form.contains(document.activeElement)) requestCancel();
     };
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
     };
-  }, [onCancel, saving]);
+  }, [requestCancel, saving]);
   // Move focus into the form when it opens. The inline form replaces the (now-removed) Edit button,
   // so without this a keyboard user would be dropped to <body>; CandidatesPane restores focus to the
   // Edit trigger on close. Done via a ref (not the autoFocus prop) to satisfy jsx-a11y/no-autofocus.
@@ -332,7 +354,12 @@ export function CandidateEditForm({
           {saveError}
         </p>
       ) : null}
-      <EditActions onCancel={onCancel} saving={saving} />
+      {confirmDiscard ? (
+        <p className="qi-edit-discard-note" role="status">
+          Unsaved changes — press Escape or activate Cancel again to discard them.
+        </p>
+      ) : null}
+      <EditActions onCancel={requestCancel} saving={saving} />
     </form>
   );
 }

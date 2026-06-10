@@ -605,8 +605,10 @@ describe("CandidatesPane — inline editing", () => {
     await user.click(saveButton);
 
     expect(onEdit).toHaveBeenCalledTimes(1);
-    expect(saveButton).toBeDisabled();
-    expect(cancelButton).toBeDisabled();
+    // Save/Cancel use aria-disabled (not native disabled) while the save is in flight so the
+    // just-activated control keeps focus; duplicate submits are blocked in the handler.
+    expect(saveButton).toHaveAttribute("aria-disabled", "true");
+    expect(cancelButton).toHaveAttribute("aria-disabled", "true");
 
     await user.click(saveButton);
     expect(onEdit).toHaveBeenCalledTimes(1);
