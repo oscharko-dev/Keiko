@@ -1,6 +1,6 @@
 // Issue #185 AC3 — tests for the grounded-request cancel button in ChatWindow.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { CapsuleSetId, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
@@ -231,8 +231,10 @@ describe("ChatWindow local knowledge scope disclosure", () => {
       const select = screen.getByLabelText("Grounding mode") as HTMLSelectElement;
       expect(select.value).toBe("capsule:cap-stale");
     });
+    // uiux-fix F041 (C173) — "(unavailable)" is the single degraded suffix
+    // (previously "(not ready)" for capsules vs "(unavailable)" for sets).
     expect(
-      screen.getByRole("option", { name: "Knowledge capsule: cap-stale (not ready)" }),
+      screen.getByRole("option", { name: "Knowledge capsule: cap-stale (unavailable)" }),
     ).toBeInTheDocument();
   });
 
@@ -390,7 +392,7 @@ describe("ChatWindow memory controls", () => {
       }),
     );
 
-    await user.click(screen.getByRole("button", { name: /no memory included/i }));
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
     await user.click(screen.getByRole("button", { name: /review forget/i }));
     await user.click(screen.getByRole("button", { name: /forget permanently/i }));
     await waitFor(() => expect(forgetMemoryAction).toHaveBeenCalledWith("mem-forget-1"));
@@ -421,7 +423,7 @@ describe("ChatWindow memory controls", () => {
       }),
     );
 
-    await user.click(screen.getByRole("button", { name: /no memory included/i }));
+    await user.click(screen.getByRole("button", { name: /no memories included/i }));
     await user.click(screen.getByRole("button", { name: /review forget/i }));
     await user.click(screen.getByRole("button", { name: /forget permanently/i }));
     await waitFor(() => {
@@ -509,5 +511,64 @@ describe("ChatWindow: no 'example-workspace' placeholder label (#146 MINOR)", ()
     );
     // The empty-state sub renders "Working in myproject. What would you like to explore?"
     expect(screen.getByText(/Working in myproject/)).toBeInTheDocument();
+  });
+});
+
+// uiux-fix F042 (C208) — per-bubble copy affordance for assistant messages.
+describe("ChatWindow message copy", () => {
+  it("copies assistant plaintext with citation markers stripped; user bubbles get no copy button", async () => {
+    // jsdom does not implement navigator.clipboard — same descriptor swap as
+    // the SafeMarkdown code-block copy test.
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
+    const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        messages: [
+          {
+            id: "m1",
+            chatId: "chat-1",
+            role: "user",
+            content: "What is the capital?",
+            timestamp: 1,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+          {
+            id: "m2",
+            chatId: "chat-1",
+            role: "assistant",
+            content: "Paris 【1】 is the capital [2].",
+            timestamp: 2,
+            runId: undefined,
+            workflowId: undefined,
+            workflowStatus: undefined,
+            shortResult: undefined,
+            taskType: undefined,
+          },
+        ],
+      }),
+    );
+
+    // Exactly one copy button — the assistant bubble's. User bubbles carry none.
+    expect(screen.getAllByRole("button", { name: "Copy message" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+    await waitFor(() => {
+      // Citation markers (ASCII + CJK/fullwidth glyphs) and their leading
+      // whitespace are stripped from the copied plaintext.
+      expect(writeText).toHaveBeenCalledWith("Paris is the capital.");
+    });
+
+    if (clipboardDescriptor !== undefined) {
+      Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
+    }
   });
 });

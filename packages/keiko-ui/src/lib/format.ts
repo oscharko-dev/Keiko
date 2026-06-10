@@ -3,7 +3,7 @@
  * No side effects. No DOM access. No imports from src/.
  */
 
-import type { CostClass, VerificationStatus } from "./types";
+import type { CostClass, RunStatus, VerificationStatus } from "./types";
 
 // ---------------------------------------------------------------------------
 // Bytes → human-readable
@@ -28,7 +28,7 @@ export function formatMs(ms: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// costClass badge label + Tailwind classes
+// costClass badge label
 // ---------------------------------------------------------------------------
 
 export function costClassLabel(costClass: CostClass | "unknown"): string {
@@ -44,21 +44,27 @@ export function costClassLabel(costClass: CostClass | "unknown"): string {
   }
 }
 
-export function costClassClasses(costClass: CostClass | "unknown"): string {
-  switch (costClass) {
-    case "low":
-      return "bg-emerald-950/40 text-emerald-300 border border-emerald-800/40";
-    case "medium":
-      return "bg-yellow-950/40 text-yellow-300 border border-yellow-800/40";
-    case "high":
-      return "bg-red-950/40 text-red-300 border border-red-800/40";
-    case "unknown":
-      return "bg-elevated text-ink-muted";
-  }
+// ---------------------------------------------------------------------------
+// Run status label (shared by ReviewWidget + AgentRunWidget — uiux-fix F018 C259)
+// ---------------------------------------------------------------------------
+
+export function runStatusLabel(status: RunStatus): string {
+  const map: Record<RunStatus, string> = {
+    running: "Running",
+    completed: "Completed",
+    "dry-run": "Dry run",
+    rejected: "Rejected",
+    cancelled: "Cancelled",
+    failed: "Failed",
+    "fix-applied": "Fix applied",
+    "fix-proposed": "Fix proposed",
+    "investigation-only": "Investigation only",
+  };
+  return map[status] ?? status;
 }
 
 // ---------------------------------------------------------------------------
-// Verification status label + Tailwind classes
+// Verification status label
 // ---------------------------------------------------------------------------
 
 export function verificationStatusLabel(status: VerificationStatus): string {
@@ -77,22 +83,6 @@ export function verificationStatusLabel(status: VerificationStatus): string {
       return "Cancelled";
     case "resource-exceeded":
       return "Resource exceeded";
-  }
-}
-
-export function verificationStatusClasses(status: VerificationStatus): string {
-  switch (status) {
-    case "passed":
-      return "bg-emerald-950/40 text-emerald-300 border border-emerald-800/40";
-    case "failed":
-    case "resource-exceeded":
-      return "bg-red-950/40 text-red-300 border border-red-800/40";
-    case "timed-out":
-    case "denied":
-      return "bg-amber-950/40 text-amber-300 border border-amber-800/40";
-    case "skipped":
-    case "cancelled":
-      return "bg-elevated text-ink-muted";
   }
 }
 
@@ -147,24 +137,10 @@ export function toDateString(value: number | string): string {
 // ---------------------------------------------------------------------------
 // Outcome badge
 // ---------------------------------------------------------------------------
-
-export function outcomeClasses(outcome: string): string {
-  switch (outcome) {
-    case "completed":
-    case "fix-applied":
-      return "bg-emerald-950/40 text-emerald-300 border border-emerald-800/40";
-    case "cancelled":
-      return "bg-elevated text-ink-muted";
-    case "failed":
-    case "limit-exceeded":
-      return "bg-red-950/40 text-red-300 border border-red-800/40";
-    case "dry-run":
-    case "fix-proposed":
-      return "bg-sky-950/40 text-sky-300 border border-sky-800/40";
-    default:
-      return "bg-elevated text-ink-muted";
-  }
-}
+// Note: the former costClassClasses/verificationStatusClasses/outcomeClasses
+// exports returned Tailwind utility strings, but Tailwind was removed from
+// keiko-ui (see postcss.config.mjs) — they were unused, latent-unstyled traps
+// and were deleted (uiux-fix F018 C152).
 
 export function outcomeLabel(outcome: string): string {
   switch (outcome) {

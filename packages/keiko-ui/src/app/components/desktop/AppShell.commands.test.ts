@@ -12,7 +12,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
-import { buildAppShellCommands } from "./AppShell";
+import { buildAppShellCommands, headerStatus } from "./AppShell";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 
 function fakeApi(): WorkspaceApi {
@@ -182,5 +182,89 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     const project = commands.find((c) => c.id === "open-project");
     project?.run();
     expect(onTool).toHaveBeenCalledWith("project");
+  });
+
+  // uiux-fix F008 C222 — keiko, settings, quality and relationships are registered tool windows
+  // with LeftRail buttons but were missing from TOOL_TYPES, making them unreachable from the
+  // command palette (same forgotten-WindowType pattern as #756/"figma"). Pin them.
+  it("includes Open commands for settings, quality, relationships and keiko", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    const ids = new Set(commands.map((c) => c.id));
+    expect(ids.has("open-settings")).toBe(true);
+    expect(ids.has("open-quality")).toBe(true);
+    expect(ids.has("open-relationships")).toBe(true);
+    expect(ids.has("open-keiko")).toBe(true);
+  });
+
+  // uiux-fix F008 C141 — shortcut discoverability: the undo/redo rows surface their chords.
+  it("annotates the Undo/Redo commands with their keyboard chords", () => {
+    const commands = buildAppShellCommands(
+      fakeApi(),
+      vi.fn(),
+      vi.fn(),
+      "dark",
+      vi.fn(),
+      fakeUndoStack(),
+    );
+    expect(commands.find((c) => c.id === "undo")?.shortcut).toBe("⌘Z");
+    expect(commands.find((c) => c.id === "redo")?.shortcut).toBe("⇧⌘Z");
+  });
+});
+
+// uiux-fix F008 C043/C118 — the header status pill derives from real session state instead of a
+// hardcoded "connected" literal that contradicted the footer during outages.
+describe("headerStatus — header status pill derivation (F008 C043/C118)", () => {
+  const base = {
+    loading: false,
+    error: undefined,
+    hasProject: true,
+    projectAvailable: true,
+    noEligibleModels: false,
+  };
+
+  it("reports Connected/ok when the session is healthy", () => {
+    expect(headerStatus(base)).toEqual({ label: "Connected", tone: "ok" });
+  });
+
+  it("reports Connecting/warn while the session loads", () => {
+    expect(headerStatus({ ...base, loading: true })).toEqual({
+      label: "Connecting",
+      tone: "warn",
+    });
+  });
+
+  it("reports Disconnected/danger on a session error", () => {
+    expect(headerStatus({ ...base, error: "boom" })).toEqual({
+      label: "Disconnected",
+      tone: "danger",
+    });
+  });
+
+  it("reports Disconnected/danger when the active project is unavailable", () => {
+    expect(headerStatus({ ...base, projectAvailable: false })).toEqual({
+      label: "Disconnected",
+      tone: "danger",
+    });
+  });
+
+  it("reports Setup required/warn when no eligible model is configured", () => {
+    expect(headerStatus({ ...base, noEligibleModels: true })).toEqual({
+      label: "Setup required",
+      tone: "warn",
+    });
+  });
+
+  it("reports Setup required/warn when no project is selected (not Disconnected)", () => {
+    expect(headerStatus({ ...base, hasProject: false, projectAvailable: false })).toEqual({
+      label: "Setup required",
+      tone: "warn",
+    });
   });
 });

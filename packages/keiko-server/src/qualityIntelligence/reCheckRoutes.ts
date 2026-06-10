@@ -114,6 +114,42 @@ function validateCapsuleSource(
   return { kind: "capsule", label, capsuleId: raw.capsuleId };
 }
 
+function validateCapsuleSetSource(
+  label: string,
+  raw: Record<string, unknown>,
+): QI.QualityIntelligenceCapsuleSetSource | undefined {
+  if (typeof raw.capsuleSetId !== "string" || raw.capsuleSetId.trim().length === 0) {
+    return undefined;
+  }
+  return { kind: "capsule-set", label, capsuleSetId: raw.capsuleSetId };
+}
+
+function validateFigmaSnapshotSource(
+  label: string,
+  raw: Record<string, unknown>,
+): QI.QualityIntelligenceFigmaSnapshotSource | undefined {
+  if (typeof raw.snapshotRunId !== "string" || raw.snapshotRunId.trim().length === 0) {
+    return undefined;
+  }
+  return { kind: "figma-snapshot", label, snapshotRunId: raw.snapshotRunId };
+}
+
+function validateConnectorSource(
+  label: string,
+  raw: Record<string, unknown>,
+): QI.QualityIntelligenceInlineSource | undefined {
+  if (raw.kind === "capsule") {
+    return validateCapsuleSource(label, raw);
+  }
+  if (raw.kind === "capsule-set") {
+    return validateCapsuleSetSource(label, raw);
+  }
+  if (raw.kind === "figma-snapshot") {
+    return validateFigmaSnapshotSource(label, raw);
+  }
+  return undefined;
+}
+
 function validateSource(raw: unknown): QI.QualityIntelligenceInlineSource | undefined {
   if (!isObject(raw) || typeof raw.label !== "string") return undefined;
   const label = raw.label;
@@ -126,10 +162,7 @@ function validateSource(raw: unknown): QI.QualityIntelligenceInlineSource | unde
   if (raw.kind === "file" && typeof raw.path === "string") {
     return { kind: "file", label, path: raw.path };
   }
-  if (raw.kind === "capsule") {
-    return validateCapsuleSource(label, raw);
-  }
-  return undefined;
+  return validateConnectorSource(label, raw);
 }
 
 type ParseSourcesOutcome =

@@ -165,7 +165,7 @@ describe("extractDocumentContext — aggregate budget", () => {
     expect(entries[3]?.truncated).toBe(true);
   });
 
-  it("drops a document entirely when zero aggregate budget remains", async () => {
+  it("drops a document entirely when zero aggregate budget remains — and says so (C075)", async () => {
     const chunk = "a".repeat(MAX_DOCUMENT_CONTEXT_TEXT_BYTES);
     // Four full 64 KiB docs already saturate the 256 KiB aggregate; a fifth gets nothing.
     const docs: PendingDocument[] = [
@@ -173,23 +173,43 @@ describe("extractDocumentContext — aggregate budget", () => {
       makeDoc({ id: "b", name: "b.txt", text: chunk }),
       makeDoc({ id: "c", name: "c.txt", text: chunk }),
       makeDoc({ id: "d", name: "d.txt", text: chunk }),
-      makeDoc({ id: "e", name: "e.txt", text: chunk }),
+      makeDoc({ id: "e", name: "/Users/secret/e.txt", text: chunk }),
     ];
-    const { entries } = await extractDocumentContext(docs);
+    const { entries, failures } = await extractDocumentContext(docs);
     expect(entries.map((e) => e.id)).not.toContain("e");
     const total = entries.reduce(
       (sum, e) => sum + utf8Bytes(e.text) + utf8Bytes(e.truncationMarker ?? ""),
       0,
     );
     expect(total).toBeLessThanOrEqual(MAX_AGGREGATE_DOCUMENT_BYTES);
+    // The completely-dropped document must surface a basename-only message instead of vanishing.
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('"e.txt"');
+    expect(failures[0]).toContain("256 KB");
+    expect(failures[0]).not.toContain("/Users/");
   });
 
-  it("caps the number of emitted entries at MAX_DOCUMENT_CONTEXT_ENTRIES", async () => {
+  it("caps the number of emitted entries at MAX_DOCUMENT_CONTEXT_ENTRIES and reports the rest (C075)", async () => {
     const docs: PendingDocument[] = Array.from({ length: 20 }, (_unused, i) =>
       makeDoc({ id: `d${String(i)}`, name: `d${String(i)}.txt`, text: "x" }),
     );
-    const { entries } = await extractDocumentContext(docs);
+    const { entries, failures } = await extractDocumentContext(docs);
     expect(entries.length).toBeLessThanOrEqual(MAX_DOCUMENT_CONTEXT_ENTRIES);
+    // d16..d19 fall over the 16-entry cap — each must produce a count-skip message.
+    expect(failures).toHaveLength(4);
+    expect(failures.join(" ")).toContain('"d16.txt"');
+    expect(failures.join(" ")).toContain('"d19.txt"');
+    expect(failures.join(" ")).toContain("first 16 documents");
+  });
+
+  it("stays silent for genuinely empty files and binary (PDF) documents", async () => {
+    const { entries, failures } = await extractDocumentContext([
+      makeDoc({ id: "empty", name: "empty.txt", text: "" }),
+      { ...makeDoc({ id: "pdf", name: "spec.pdf", text: "x" }), mimeType: "application/pdf" },
+    ]);
+    expect(entries).toEqual([]);
+    // Empty file lost nothing; the PDF metadata-only path is by design — no noise for either.
+    expect(failures).toEqual([]);
   });
 });
 
@@ -202,6 +222,10 @@ describe("extractDocumentContext — unreadable files", () => {
     expect(message).toContain("locked.txt");
     expect(message).not.toContain("/Users/");
     expect(message).not.toContain("EACCES");
+    // C317 — the message is shown BEFORE the send and must not claim other attachments
+    // "were still sent" (false for a single attachment, past tense before the send).
+    expect(message).not.toContain("other attachments");
+    expect(message).not.toContain("were still sent");
   });
 
   it("emits readable docs and reports only the unreadable ones", async () => {

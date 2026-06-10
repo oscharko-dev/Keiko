@@ -23,6 +23,8 @@ import {
   sanitizePersistedWindows,
 } from "./workspace-persistence";
 import {
+  connectorChatBind,
+  filesChatBindRoot,
   makeConnectActions,
   makeLayoutActions,
   makeMutations,
@@ -37,8 +39,10 @@ export type { UseWorkspaceResult, ViewportWorld, WorkspaceApi };
 const WS_LS = "keiko.workspace.v4";
 const CONN_LS = "keiko.conns.v1";
 const VIEW_LS = "keiko.view";
-const MIN_ZOOM = 0.3;
-const MAX_ZOOM = 2.5;
+// Exported so the zoom controls in Workspace.tsx can disable themselves at the
+// clamp limits instead of swallowing clicks silently (audit C132/C361).
+export const MIN_ZOOM = 0.3;
+export const MAX_ZOOM = 2.5;
 const CONTENT_MIN_ZOOM = 0.5;
 const CONTENT_MAX_ZOOM = 2;
 
@@ -265,6 +269,20 @@ interface UseKeyboardArgs {
   readonly cancelConnectRef: MutableRefObject<() => void>;
 }
 
+// Audit C296 — the content-zoom chord matches event.code, not event.key: macOS
+// Option composes characters (Option+- yields "–", Option+0 yields "º"), so a
+// key-based comparison would make the alt chord unmatchable on Macs — the same
+// trap audit C125 fixed in useKeyboardShortcuts. Maps to the logical key that
+// nextContentZoom understands.
+const CONTENT_ZOOM_CODES: Readonly<Record<string, string>> = {
+  Equal: "=",
+  NumpadAdd: "+",
+  Minus: "-",
+  NumpadSubtract: "-",
+  Digit0: "0",
+  Numpad0: "0",
+};
+
 function handleContentZoomKey(
   setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
   key: string,
@@ -294,14 +312,24 @@ function handleArrowKey(
 function useKeyboardCtrls({ setWins, rect, cancelConnectRef }: UseKeyboardArgs): void {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (isFormField(document.activeElement)) return;
+      // Escape must cancel an in-flight connect even when focus sits in a form
+      // field (e.g. the chat composer) — the form-field guard below otherwise
+      // swallows the cancel. cancelConnect is a no-op when no connect is
+      // active, so other Escape consumers stay unaffected (audit C298).
       if (e.key === "Escape") {
         cancelConnectRef.current();
         return;
       }
-      if ((e.metaKey || e.ctrlKey) && ["=", "+", "-", "_", "0"].includes(e.key)) {
+      if (isFormField(document.activeElement)) return;
+      // Audit C296 — plain Cmd/Ctrl+Plus/Minus/0 used to be preventDefault'ed
+      // app-wide, hijacking the browser's page zoom (the primary text-scaling
+      // tool, WCAG 1.4.4) for a single-window content zoom. Content zoom now
+      // requires Alt as well (consistent with Alt = resize on the arrow chords);
+      // the browser chords pass through untouched.
+      const zoomKey = CONTENT_ZOOM_CODES[e.code];
+      if ((e.metaKey || e.ctrlKey) && e.altKey && zoomKey !== undefined) {
         e.preventDefault();
-        handleContentZoomKey(setWins, e.key);
+        handleContentZoomKey(setWins, zoomKey);
         return;
       }
       if (!/^Arrow/.test(e.key)) return;
@@ -326,6 +354,18 @@ interface UseFitMaximizedArgs {
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
 }
 
+// Exported for tests. Maximized windows track the viewport exactly; floating
+// windows are clamped so at least a 120px-wide strip of the title bar (38px
+// tall) stays inside the visible workspace — the same margins as the drag
+// clamp in WindowFrame. Without this, shrinking the viewport could strand a
+// window entirely off-screen with no visible recovery path (audit C132).
+export function fitWindowToViewport(w: AppWindow, vp: ViewportWorld): AppWindow {
+  if (w.max) return { ...w, x: vp.x, y: vp.y, w: vp.w, h: vp.h };
+  const x = Math.max(vp.x - (w.w - 120), Math.min(vp.x + vp.w - 120, w.x));
+  const y = Math.max(vp.y, Math.min(vp.y + vp.h - 38, w.y));
+  return x === w.x && y === w.y ? w : { ...w, x, y };
+}
+
 function useFitMaximized({ wsRef, viewRef, setWins }: UseFitMaximizedArgs): void {
   useEffect(() => {
     const el = wsRef.current;
@@ -339,11 +379,7 @@ function useFitMaximized({ wsRef, viewRef, setWins }: UseFitMaximizedArgs): void
         w: r.width / v.zoom,
         h: r.height / v.zoom,
       };
-      setWins((ws) =>
-        ws === null
-          ? ws
-          : ws.map((w) => (w.max ? { ...w, x: vp.x, y: vp.y, w: vp.w, h: vp.h } : w)),
-      );
+      setWins((ws) => (ws === null ? ws : ws.map((w) => fitWindowToViewport(w, vp))));
     });
     ro.observe(el);
     return () => {
@@ -461,6 +497,29 @@ export function useWorkspace(
   });
   cancelConnectRef.current = cancelConnect;
 
+  // uiux-fix F008 C120 — closing a connected window must fire the same unbind callbacks as
+  // removing the edge badge (removeConn), otherwise the visible relationship disappears while
+  // the chat stays server-side grounded against the folder/capsule. useConnectionPrune cannot
+  // do this: by the time it runs, the closed window is gone from winsRef and the bind roots can
+  // no longer be derived — so the teardown runs here, BEFORE the window list shrinks. The prune
+  // effect afterwards only sweeps the now-orphaned edge objects.
+  const closeWithTeardown: WorkspaceApi["close"] = (id) => {
+    const win = winsRef.current.find((w) => w.id === id);
+    if (win !== undefined) {
+      for (const c of connsRef.current) {
+        const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
+        if (otherId === null) continue;
+        const other = winsRef.current.find((w) => w.id === otherId);
+        if (other === undefined) continue;
+        const root = filesChatBindRoot(win, other);
+        if (root !== null) opts.onScopeUnbind?.(root);
+        const scope = connectorChatBind(win, other);
+        if (scope !== null) opts.onConnectorUnbind?.(scope);
+      }
+    }
+    close(id);
+  };
+
   // Component unmount must also drop the global listener.
   useEffect(
     () => () => {
@@ -476,7 +535,7 @@ export function useWorkspace(
     add,
     toggleTool,
     focus,
-    close,
+    close: closeWithTeardown,
     maximize,
     update,
     setSnap,

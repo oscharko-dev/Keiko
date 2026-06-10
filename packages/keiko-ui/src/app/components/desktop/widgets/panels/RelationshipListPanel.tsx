@@ -11,7 +11,8 @@
 // localStorage key: keiko.relationships.density (#63 precedent)
 //
 // Focus mode: toggled with F key; Escape restores (ui-blueprint.md §"Focus mode").
-// Filter input focused with / key.
+// Filter input focused with / key. Shortcuts are panel-scoped — they fire only while
+// focus is inside the panel container (WCAG 2.1.4 Character Key Shortcuts).
 //
 // WCAG 2.2 AA: <button aria-pressed>, 24×24 min touch target, focus-visible ring.
 // Suspense boundary wrapping required (visual-density-rules.md §"Suspense boundary").
@@ -31,7 +32,11 @@ import {
   RELATIONSHIP_TYPES,
   RELATIONSHIP_OBJECT_KINDS,
 } from "@oscharko-dev/keiko-contracts";
-import { listRelationships, RelationshipApiError } from "../../../../relationships/api";
+import {
+  listRelationships,
+  RelationshipApiError,
+  BACKEND_UNREACHABLE_MESSAGE,
+} from "../../../../relationships/api";
 import type { ApiRelationship } from "../../../../relationships/api";
 import { RelationshipEdgeBadge } from "./RelationshipEdgeBadge";
 
@@ -245,7 +250,9 @@ export function RelationshipListPanel({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [truncated, setTruncated] = useState(false);
-  const [totalHint, setTotalHint] = useState<number | null>(null);
+
+  // Panel root — keyboard shortcuts are bound here, NOT on window (WCAG 2.1.4)
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Filter input
   const filterInputRef = useRef<HTMLInputElement | null>(null);
@@ -259,12 +266,17 @@ export function RelationshipListPanel({
   const changeDensity = useCallback(
     (mode: DensityMode) => {
       setDensity(mode);
-      // URL override is NOT written to localStorage (visual-density-rules.md §"Forbidden patterns")
-      if (filters.relDensity === undefined) {
-        writeDensityToStorage(mode);
-      }
+      // uiux-fix F046 C395: propagate the mode to the parent view so the inspector
+      // (densityMode → transitionCap) follows the same switch — the labelled control
+      // previously changed only the list half of the surface.
+      onFilterChange({ relDensity: mode });
+      // Persist the explicit user choice. The forbidden pattern in
+      // visual-density-rules.md is *silently* persisting a read override — but the
+      // click itself now sets relDensity, so the old `=== undefined` guard would have
+      // blocked every persist after the first click.
+      writeDensityToStorage(mode);
     },
-    [filters.relDensity],
+    [onFilterChange],
   );
 
   useEffect(() => {
@@ -305,12 +317,8 @@ export function RelationshipListPanel({
       });
       setItems(result.entries);
       setTruncated(result.truncated);
-      setTotalHint(result.truncated ? result.entries.length + 1 : result.entries.length);
     } catch (err) {
-      const msg =
-        err instanceof RelationshipApiError
-          ? err.message
-          : "Unable to reach the local backend. Check that `keiko serve` is running.";
+      const msg = err instanceof RelationshipApiError ? err.message : BACKEND_UNREACHABLE_MESSAGE;
       setError(msg);
     } finally {
       setLoading(false);
@@ -321,48 +329,37 @@ export function RelationshipListPanel({
     void fetchItems();
   }, [fetchItems]);
 
-  // ─── Focus mode toggle ────────────────────────────────────────────────────
-  // `F` toggles focus mode; `Escape` clears (ui-blueprint.md §"Focus mode").
-  // We handle here rather than through useKeyboardShortcuts to avoid a global conflict
-  // — the list panel is the owner of focus mode state.
+  // ─── Panel-scoped keyboard shortcuts ──────────────────────────────────────
+  // `F` toggles focus mode; `Escape` clears (ui-blueprint.md §"Focus mode"); `/`
+  // focuses the filter input. Bound to the panel root, NOT window: single-character
+  // shortcuts must only be active while focus is inside the panel (WCAG 2.1.4
+  // Character Key Shortcuts) — a window listener fired across the entire desktop
+  // while the Relationships window was merely open in the background.
   useEffect(() => {
+    const el = containerRef.current;
+    if (el === null) return;
     function onKey(e: globalThis.KeyboardEvent): void {
       if (hasModalDialogOpen()) return;
-      // Only handle when no input is focused
-      const active = document.activeElement;
+      // Only handle when no input is focused (incl. contentEditable surfaces)
+      const target = e.target;
       const isInput =
-        active instanceof HTMLInputElement ||
-        active instanceof HTMLTextAreaElement ||
-        active instanceof HTMLSelectElement;
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
       if (isInput) return;
       if (e.key === "f" || e.key === "F") {
         e.preventDefault();
         setFocusMode((prev) => !prev);
-      }
-      if (e.key === "Escape") {
+      } else if (e.key === "Escape") {
         setFocusMode(false);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  // Filter input focused with `/` (ui-blueprint.md §"Filtering")
-  useEffect(() => {
-    function onKey(e: globalThis.KeyboardEvent): void {
-      if (hasModalDialogOpen()) return;
-      const active = document.activeElement;
-      const isInput =
-        active instanceof HTMLInputElement ||
-        active instanceof HTMLTextAreaElement ||
-        active instanceof HTMLSelectElement;
-      if (!isInput && e.key === "/") {
+      } else if (e.key === "/") {
         e.preventDefault();
         filterInputRef.current?.focus();
       }
     }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    el.addEventListener("keydown", onKey);
+    return () => el.removeEventListener("keydown", onKey);
   }, []);
 
   // ─── Filter input handler ─────────────────────────────────────────────────
@@ -383,10 +380,25 @@ export function RelationshipListPanel({
 
   const visibleItems = useMemo(() => {
     const parsed = parseFilters(filters);
-    const activityFiltered =
-      parsed.activities.length === 0
+    // The API filters only on a single exact enum value; partial input, typos and
+    // comma-separated multi-values previously fell through to the UNFILTERED list with
+    // no feedback (the filter looked broken). Apply the raw input as a case-insensitive
+    // substring match client-side so every input visibly narrows the list — unmatched
+    // input now yields the empty state instead of silently showing everything.
+    const rawTypeTokens = (filters.relType ?? "")
+      .split(",")
+      .map((v) => v.trim().toLowerCase())
+      .filter((v) => v.length > 0);
+    const typeFiltered =
+      rawTypeTokens.length === 0
         ? items
         : items.filter((item) =>
+            rawTypeTokens.some((token) => item.type.toLowerCase().includes(token)),
+          );
+    const activityFiltered =
+      parsed.activities.length === 0
+        ? typeFiltered
+        : typeFiltered.filter((item) =>
             parsed.activities.includes(
               resolveRelationshipActivity(item.id, item.lifecycle, activityMap),
             ),
@@ -403,11 +415,29 @@ export function RelationshipListPanel({
     extraAnimated > 0 ? summarizeOverflowActivities(overflowItems, activityMap) : "";
 
   // ─── Accessible filter-change announcement ────────────────────────────────
-  // aria-live="polite" on a visually-hidden region (ui-blueprint.md §"Filtering")
-  const filterAnnouncement =
-    truncated && totalHint !== null
-      ? `Showing first ${String(visibleItems.length)} of ${String(totalHint)} relationships.`
-      : `Showing ${String(visibleItems.length)} relationship${visibleItems.length !== 1 ? "s" : ""}.`;
+  // aria-live="polite" on a visually-hidden region (ui-blueprint.md §"Filtering").
+  // No fabricated total: the API reports truncation but not how many entries exist
+  // beyond the cap, so the copy must not invent one (was "of N" with N = visible + 1).
+  const filterAnnouncement = truncated
+    ? `Showing first ${String(visibleItems.length)} relationships — more available.`
+    : `Showing ${String(visibleItems.length)} relationship${visibleItems.length !== 1 ? "s" : ""}.`;
+
+  // User-visible filters (beyond the implicit lifecycle=active scope) — drives the
+  // empty-state copy: a virgin graph must not blame a "current filter" the user never set.
+  const hasUserFilter =
+    (filters.relType ?? "").trim().length > 0 ||
+    (filters.relActivity ?? "").trim().length > 0 ||
+    (filters.relSrcKind ?? "").trim().length > 0 ||
+    (filters.relTgtKind ?? "").trim().length > 0 ||
+    ((filters.relLifecycle ?? "").trim().length > 0 && filters.relLifecycle !== "active");
+
+  // Lifecycle scope — must mirror the fetch default exactly (fetchItems pins
+  // lifecycle=active when no single valid value is set). Surfacing it as a select makes
+  // the previously invisible active-only scope visible AND changeable (draft/blocked/
+  // stale/archived/... were unreachable through the UI before).
+  const parsedLifecycles = splitFilter(filters.relLifecycle, RELATIONSHIP_LIFECYCLE_STATES);
+  const lifecycleValue: RelationshipLifecycleState =
+    parsedLifecycles.length === 1 ? (parsedLifecycles[0] ?? "active") : "active";
 
   // ─── Row keyboard handler ─────────────────────────────────────────────────
 
@@ -422,16 +452,20 @@ export function RelationshipListPanel({
 
   return (
     <div
+      ref={containerRef}
       className="tw-pad"
       data-testid="relationship-list-panel"
-      // Focus mode adds data attribute for CSS opacity hook (visual-density-rules.md §"Focus mode")
+      // Focus mode (visual-density-rules.md §"Focus mode"): non-incident rows are dimmed
+      // inline (opacity 0.4); the focused row carries data-incident and is highlighted via
+      // the globals.css hook scoped under this attribute (uiux-fix F046 C397).
       data-relationship-focus={focusMode ? "true" : undefined}
     >
-      {/* Density switcher */}
+      {/* Density switcher — uiux-fix F018 C042: the four buttons need ~296px but the
+          list column offers ~254px; wrapping keeps the labels inside their buttons. */}
       <div
         role="group"
         aria-label="Relationship density"
-        style={{ display: "flex", gap: 4, marginBottom: 8 }}
+        style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}
       >
         {(["minimal", "standard", "dense"] as const).map((mode) => (
           <button
@@ -460,10 +494,13 @@ export function RelationshipListPanel({
 
       {/* Filter input */}
       <div style={{ marginBottom: 8 }}>
+        {/* uiux-fix F046 C288: .rb-row-k only sets color — without an explicit size the
+            label rendered at the 16px UA default, larger than the 13px input below it.
+            11px/600 matches the app's micro-label scale (.tw-label). */}
         <label
           htmlFor="rel-type-filter"
           className="rb-row-k"
-          style={{ display: "block", marginBottom: 2 }}
+          style={{ display: "block", marginBottom: 2, fontSize: 11, fontWeight: 600 }}
         >
           Filter by type (press / to focus)
         </label>
@@ -471,6 +508,7 @@ export function RelationshipListPanel({
           id="rel-type-filter"
           ref={filterInputRef}
           type="text"
+          list="rel-type-filter-options"
           value={typeFilter}
           onChange={handleTypeFilterChange}
           placeholder="e.g. reads-context"
@@ -478,13 +516,57 @@ export function RelationshipListPanel({
           style={{
             width: "100%",
             background: "var(--inset)",
-            border: "1px solid var(--border)",
-            borderRadius: 4,
+            border: "1px solid var(--line)",
+            // 9px / 13px match the app input scale (.srch-box / .srch-box input);
+            // 4px / 12px sat below every radius and input size used elsewhere.
+            borderRadius: 9,
             padding: "4px 8px",
+            minHeight: 24,
             color: "var(--fg)",
-            fontSize: 12,
+            fontSize: 13,
           }}
         />
+        {/* Valid relationship types as autocomplete — the field only filters on these */}
+        <datalist id="rel-type-filter-options">
+          {RELATIONSHIP_TYPES.map((t) => (
+            <option key={t} value={t} />
+          ))}
+        </datalist>
+      </div>
+
+      {/* Lifecycle scope — the API requires a selective filter; the list used to pin
+          lifecycle=active invisibly, making every other lifecycle unreachable. */}
+      <div style={{ marginBottom: 8 }}>
+        <label
+          htmlFor="rel-lifecycle-filter"
+          className="rb-row-k"
+          // Same micro-label scale as the type-filter label above (uiux-fix F046 C288).
+          style={{ display: "block", marginBottom: 2, fontSize: 11, fontWeight: 600 }}
+        >
+          Lifecycle
+        </label>
+        <select
+          id="rel-lifecycle-filter"
+          value={lifecycleValue}
+          onChange={(e) => onFilterChange({ relLifecycle: e.target.value })}
+          aria-label="Filter relationships by lifecycle"
+          style={{
+            width: "100%",
+            background: "var(--inset)",
+            border: "1px solid var(--line)",
+            borderRadius: 9,
+            padding: "4px 8px",
+            minHeight: 24,
+            color: "var(--fg)",
+            fontSize: 13,
+          }}
+        >
+          {RELATIONSHIP_LIFECYCLE_STATES.map((state) => (
+            <option key={state} value={state}>
+              {state}
+            </option>
+          ))}
+        </select>
       </div>
 
       {/* Accessible live announcement of filter result (ui-blueprint.md §"Filtering") */}
@@ -492,11 +574,13 @@ export function RelationshipListPanel({
         {filterAnnouncement}
       </div>
 
-      {/* Visible footer line (error-and-denial-ux.md §"Bounded-query-exceeded UX") */}
+      {/* Visible truncation note (error-and-denial-ux.md §"Bounded-query-exceeded UX").
+          No className="footer" — that is the app-shell footer (46px surface bar) and
+          rendered this one-liner as a massive colored band; no aria-live either, the
+          visually-hidden region above already announces the same text (was doubled). */}
       {truncated && (
         <div
-          className="footer"
-          aria-live="polite"
+          data-testid="list-truncation-note"
           style={{ fontSize: 11, color: "var(--fg-muted)", marginBottom: 6 }}
         >
           {filterAnnouncement}
@@ -513,29 +597,45 @@ export function RelationshipListPanel({
         </div>
       )}
 
-      {/* Loading state */}
-      {loading && (
-        <div
-          style={{ color: "var(--fg-muted)", fontSize: 12, padding: "8px 0" }}
-          aria-label="Loading relationships"
-        >
+      {/* Loading state (uiux-fix F046 C289/C392) — rendered only while there is nothing
+          to keep on screen (initial load). Refetches keep the stale list mounted below
+          (aria-busy + dim) instead of swapping the whole panel for a "Loading…" row on
+          every debounced keystroke and density click, which jumped the layout height and
+          lost the scroll position. role="status" (live region) so the visible text is
+          announced; the previous aria-label sat on a generic div, where ARIA naming is
+          prohibited and ignored. .insp-empty aligns the typography with the empty state. */}
+      {loading && items.length === 0 && (
+        <div role="status" className="insp-empty">
           Loading…
         </div>
       )}
 
-      {/* Empty state */}
-      {!loading && error === null && visibleItems.length === 0 && (
+      {/* Empty state — two cases: a virgin graph must not blame a "current filter" the
+          user never set; it should point at the next step instead. During a refetch it
+          only renders when stale items exist and the client-side filter narrowed them to
+          zero (synchronous truth); otherwise the loading row above covers the gap. */}
+      {(!loading || items.length > 0) && error === null && visibleItems.length === 0 && (
         <div className="insp-empty" data-testid="list-empty">
-          No relationships found for the current filter.
+          {hasUserFilter
+            ? "No relationships match the current filter."
+            : 'No active relationships yet. Create one with "+ New relationship", or connect a source — connections appear here automatically.'}
         </div>
       )}
 
-      {/* Relationship list */}
-      {!loading && visibleItems.length > 0 && (
+      {/* Relationship list — stays mounted during refetches (stale-while-revalidate);
+          aria-busy + reduced opacity signal the in-flight update without unmounting. */}
+      {visibleItems.length > 0 && (
         <div
           role="list"
           aria-label="Relationships"
-          style={{ display: "flex", flexDirection: "column", gap: 2 }}
+          aria-busy={loading || undefined}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 2,
+            opacity: loading ? 0.6 : 1,
+            transition: "opacity 0.15s ease",
+          }}
         >
           {animatedItems.map((item) => {
             const isSelected = item.id === selectedId;
@@ -547,25 +647,15 @@ export function RelationshipListPanel({
                 <button
                   type="button"
                   aria-pressed={isSelected}
-                  aria-label={`${item.type} relationship from ${item.source.kind} to ${item.target.kind}, lifecycle: ${item.lifecycle}`}
+                  aria-label={`${item.type} relationship from ${item.source.kind} ${item.source.id} to ${item.target.kind} ${item.target.id}, lifecycle: ${item.lifecycle}`}
+                  title={`${item.source.id} → ${item.target.id}`}
                   onClick={() => onSelect(item.id)}
                   onKeyDown={(e) => onRowKeyDown(e, item.id)}
                   data-incident={isFocusedNeighbour ? "true" : undefined}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    width: "100%",
-                    minHeight: 32,
-                    padding: "4px 6px",
-                    background: isSelected ? "var(--accent-dim)" : "transparent",
-                    border: "1px solid transparent",
-                    borderColor: isSelected ? "var(--accent-line)" : "transparent",
-                    borderRadius: 4,
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}
-                  className="focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent"
+                  // .rel-row replaces dead Tailwind utilities (project has no Tailwind):
+                  // real hover background, app-conventional accent focus ring, and the
+                  // selected state via [aria-pressed="true"] (was inline background).
+                  className="rel-row"
                 >
                   <RelationshipEdgeBadge
                     type={item.type as RelationshipType}
@@ -575,19 +665,35 @@ export function RelationshipListPanel({
                     animateOverride={animateBadges}
                     highContrast={highContrast}
                   />
-                  <span
-                    style={{
-                      fontSize: 12,
-                      color: "var(--fg)",
-                      flex: 1,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {item.source.kind} → {item.target.kind}
+                  <span style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: "var(--fg)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {item.source.kind} → {item.target.kind}
+                    </span>
+                    {/* Distinguishing line — without it, rows with the same kinds were
+                        byte-identical and only resolvable by clicking through them. */}
+                    <span
+                      style={{
+                        fontSize: 10.5,
+                        color: "var(--fg-muted)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {item.summary ?? `${item.source.id} → ${item.target.id}`}
+                    </span>
                   </span>
-                  <span style={{ fontSize: 11, color: "var(--fg-faint)", whiteSpace: "nowrap" }}>
+                  {/* --fg-muted: --fg-faint measured 2.52:1 dark / 2.91:1 light (AA fail)
+                      on this meaning-bearing status label (globals.css #527 note). */}
+                  <span style={{ fontSize: 11, color: "var(--fg-muted)", whiteSpace: "nowrap" }}>
                     {item.lifecycle}
                   </span>
                 </button>

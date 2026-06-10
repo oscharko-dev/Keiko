@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { ApiError, applyRun, fetchEvidenceManifest, fetchRunReport } from "../../../../../lib/api";
-import type { ChangedFile, RunReport, RunStatus } from "../../../../../lib/types";
+import { runStatusLabel } from "../../../../../lib/format";
+import type { ChangedFile, RunReport } from "../../../../../lib/types";
 import { langOf, highlightLines } from "./shared/syntaxHighlight";
 import type { Token } from "./shared/syntaxHighlight";
 import { parseUnifiedDiff } from "./shared/diffParser";
@@ -12,6 +13,12 @@ import type { DiffFile, DiffHunk, DiffLine } from "./shared/diffParser";
 export interface ReviewWidgetProps {
   /** Run ID for the patch under review. When omitted, shows the empty state. */
   readonly runId?: string;
+  /**
+   * uiux-fix F018 C110: invoked when the user submits a run ID from the empty
+   * state. The window registration persists it via ctx.updateCfg — without this
+   * callback a review window opened without a run ID was a dead end.
+   */
+  readonly onRunIdSubmit?: (runId: string) => void;
 }
 
 interface ErrorState {
@@ -33,25 +40,15 @@ function errorFromUnknown(value: unknown): ErrorState {
 
 function shortPath(p: string): string {
   if (p.length <= 40) return p;
-  const slash = p.lastIndexOf("/");
-  if (slash === -1) return p;
-  return `…/${p.slice(slash + 1)}`;
+  // keep the last directory so same-named files (index.ts, types.ts) stay
+  // distinguishable in the file list (uiux-fix F023 C262)
+  const parts = p.split("/");
+  if (parts.length <= 2) return p;
+  return `…/${parts.slice(-2).join("/")}`;
 }
 
-function statusLabel(s: RunStatus): string {
-  const map: Record<RunStatus, string> = {
-    running: "Running",
-    completed: "Completed",
-    "dry-run": "Dry run",
-    rejected: "Rejected",
-    cancelled: "Cancelled",
-    failed: "Failed",
-    "fix-applied": "Fix applied",
-    "fix-proposed": "Fix proposed",
-    "investigation-only": "Investigation only",
-  };
-  return map[s] ?? s;
-}
+// uiux-fix F018 C259: the RunStatus→label map moved to lib/format runStatusLabel so
+// the AgentRunWidget header and this widget share one terminology.
 
 function canApplyReport(report: RunReport): boolean {
   return (
@@ -88,14 +85,11 @@ function EvidenceControl({ href, hasManifest, error }: EvidenceControlProps): Re
   }
 
   if (error !== null) {
+    // message rendered inline — title/aria-label-only details are unreachable
+    // for sighted keyboard users (WCAG 1.4.13; uiux-fix F023 C379)
     return (
-      <span
-        className="rv-evidence-link rv-evidence-error"
-        role="status"
-        aria-label={`Evidence unavailable: ${error.message}`}
-        title={error.message}
-      >
-        Evidence error
+      <span className="rv-evidence-link rv-evidence-error" role="status">
+        Evidence error: {error.message}
       </span>
     );
   }
@@ -218,7 +212,7 @@ function DiffFileSection({
 
 // --- main widget ------------------------------------------------------------
 
-export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
+export function ReviewWidget({ runId, onRunIdSubmit }: ReviewWidgetProps): ReactNode {
   const [report, setReport] = useState<RunReport | null>(null);
   const [hasManifest, setHasManifest] = useState(false);
   const [evidenceError, setEvidenceError] = useState<ErrorState | null>(null);
@@ -227,6 +221,18 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<ErrorState | null>(null);
   const [activeFile, setActiveFile] = useState<number | null>(null);
+  // uiux-fix F018 C110: inline run-ID entry for the empty state
+  const [runIdInput, setRunIdInput] = useState("");
+  // uiux-fix F018 C258: Apply writes to the working tree — require an explicit
+  // second click ("Confirm apply (N files)") that times out back to "Apply".
+  const [confirmApply, setConfirmApply] = useState(false);
+  const confirmTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current !== null) window.clearTimeout(confirmTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (runId === undefined || runId === "") return;
@@ -268,7 +274,7 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
   }, [runId]);
 
   const doApply = (): void => {
-    if (runId === undefined || report === null || !canApplyReport(report)) return;
+    if (runId === undefined || report === null || !canApplyReport(report) || applying) return;
     setApplying(true);
     setApplyError(null);
     void applyRun(runId)
@@ -280,6 +286,27 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
         setApplyError(errorFromUnknown(err));
         setApplying(false);
       });
+  };
+
+  // uiux-fix F018 C258: first click arms the confirm state (auto-resets after 6 s),
+  // the second click actually applies.
+  const onApplyClick = (): void => {
+    if (applying) return;
+    if (!confirmApply) {
+      setConfirmApply(true);
+      if (confirmTimerRef.current !== null) window.clearTimeout(confirmTimerRef.current);
+      confirmTimerRef.current = window.setTimeout(() => {
+        setConfirmApply(false);
+        confirmTimerRef.current = null;
+      }, 6000);
+      return;
+    }
+    if (confirmTimerRef.current !== null) {
+      window.clearTimeout(confirmTimerRef.current);
+      confirmTimerRef.current = null;
+    }
+    setConfirmApply(false);
+    doApply();
   };
 
   const selectFile = (index: number): void => {
@@ -306,34 +333,72 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
   const selectedFile = selectedFileIndex !== null ? diff?.files[selectedFileIndex] : undefined;
   const isRunning = report?.status === "running";
 
-  // State 1: no runId
+  // State 1: no runId — uiux-fix F018 C110: there is no editable "window
+  // configuration" after opening, so offer an inline run-ID form instead of
+  // pointing at a dead end. Without the persistence callback the old copy stays.
   if (runId === undefined || runId === "") {
     return (
       <section className="review rv-empty" aria-label="Diff review">
         <h2 className="rv-empty-h">Review</h2>
-        <p className="rv-empty-p">
-          Enter a run ID in the window configuration to load a proposed diff.
-        </p>
+        {onRunIdSubmit !== undefined ? (
+          <>
+            <p className="rv-empty-p">Paste a run ID below to load a proposed diff.</p>
+            <form
+              className="rv-empty-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                const trimmed = runIdInput.trim();
+                if (trimmed.length === 0) return;
+                onRunIdSubmit(trimmed);
+              }}
+            >
+              <label className="rv-empty-label" htmlFor="rv-runid-input">
+                Run ID
+              </label>
+              <input
+                id="rv-runid-input"
+                className="rv-runid-input mono"
+                type="text"
+                value={runIdInput}
+                onChange={(e) => setRunIdInput(e.target.value)}
+                placeholder="e.g. 7f3a9c12…"
+              />
+              <button type="submit" className="arun-btn">
+                Load run
+              </button>
+            </form>
+          </>
+        ) : (
+          <p className="rv-empty-p">
+            Enter a run ID in the window configuration to load a proposed diff.
+          </p>
+        )}
       </section>
     );
   }
 
   return (
     <section className="review" aria-label="Diff review">
-      {/* State 2: loading */}
+      {/* State 2: loading. role="status" exposes the aria-label and announces the
+          loading state; aria-label on a bare div has no effect for AT (C256). */}
       {loading && (
-        <div className="rv-loading" aria-busy="true" aria-label="Loading diff">
+        <div className="rv-loading" role="status" aria-busy="true" aria-label="Loading diff">
           <div className="rv-skel" />
           <div className="rv-skel rv-skel-sm" />
         </div>
       )}
 
-      {/* State 3: fetch error */}
+      {/* State 3: fetch error. uiux-fix F018 C124: the human message leads; the
+          machine code is demoted to a small mono detail instead of a bold prefix. */}
       {!loading && fetchError !== null && (
         <div role="alert" className="rv-error">
-          {fetchError.code === "NOT_FOUND"
-            ? "No run with that ID was found."
-            : `${fetchError.code}: ${fetchError.message}`}
+          {fetchError.code === "NOT_FOUND" ? (
+            "No run with that ID was found."
+          ) : (
+            <>
+              {fetchError.message} <span className="err-code mono">({fetchError.code})</span>
+            </>
+          )}
           {(hasManifest || evidenceError !== null) && (
             <span className="rv-error-evidence">
               <EvidenceControl
@@ -346,12 +411,20 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
         </div>
       )}
 
-      {/* State 4: running */}
-      {!loading && fetchError === null && report !== null && isRunning && (
-        <p role="status" aria-live="polite" className="rv-no-diff">
-          Run is still running. The proposed diff will appear when the run completes.
-        </p>
-      )}
+      {/* State 4: running. uiux-fix F018 C124: the live region stays mounted (class
+          swaps to .sr-only when empty) so AT reliably announce the text — a region
+          mounted together with its content is often missed by NVDA/VoiceOver. */}
+      <p
+        role="status"
+        aria-live="polite"
+        className={
+          !loading && fetchError === null && report !== null && isRunning ? "rv-no-diff" : "sr-only"
+        }
+      >
+        {!loading && fetchError === null && report !== null && isRunning
+          ? "Run is still running. The proposed diff will appear when the run completes."
+          : ""}
+      </p>
 
       {/* State 4: no diff */}
       {!loading && fetchError === null && report !== null && !isRunning && !hasDiff(report) && (
@@ -362,7 +435,7 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
       {!loading && fetchError === null && report !== null && hasDiff(report) && (
         <>
           <div className="rv-header">
-            <span className="rv-status mono">{statusLabel(report.status)}</span>
+            <span className="rv-status mono">{runStatusLabel(report.status)}</span>
             {report.modelId !== undefined && (
               <span className="rv-model mono">{report.modelId}</span>
             )}
@@ -391,6 +464,7 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
                           <button
                             type="button"
                             className="rv-filerow"
+                            title={file.path}
                             aria-pressed={selected}
                             aria-controls={selected ? `rv-file-${idx}` : undefined}
                             onClick={() => selectFile(idx)}
@@ -449,8 +523,19 @@ export function ReviewWidget({ runId }: ReviewWidgetProps): ReactNode {
             {report.appliedAt !== undefined ? (
               <span className="rv-final mono">Applied</span>
             ) : canApplyReport(report) ? (
-              <button type="button" className="arun-btn" disabled={applying} onClick={doApply}>
-                {applying ? "Applying…" : "Apply"}
+              // uiux-fix F018 C124/C258: aria-disabled keeps focus on the button while
+              // applying; the confirm step names the blast radius before writing.
+              <button
+                type="button"
+                className="arun-btn"
+                aria-disabled={applying}
+                onClick={onApplyClick}
+              >
+                {applying
+                  ? "Applying…"
+                  : confirmApply
+                    ? `Confirm apply (${(diff?.files.length ?? 0).toString()} file${diff?.files.length === 1 ? "" : "s"})`
+                    : "Apply"}
               </button>
             ) : null}
           </div>

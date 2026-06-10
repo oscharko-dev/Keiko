@@ -5,15 +5,22 @@
 // completion notify the panel to refresh + select the new run. Accessible: labelled inputs,
 // aria-live progress region, focus-visible controls, 24×24 min targets.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type {
+  QualityIntelligenceInlineSource,
   QualityIntelligenceRunStreamMessage,
   QualityIntelligenceSkippedSource,
   QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { startQiRun } from "@/lib/quality-intelligence-api";
-import { ApiError } from "@/lib/api";
+import {
+  fetchCapsules,
+  fetchCapsuleSets,
+  type CapsuleListEntry,
+  type CapsuleSetListEntry,
+} from "@/lib/local-knowledge-api";
+import { formatCodedError, formatError } from "./qiShared";
 import { buildConnectedRunSources } from "./connectedSources";
 import type { ConnectedRunSource } from "./connectedSources";
 
@@ -22,6 +29,10 @@ const PROFILES: ReadonlyArray<{ id: string; label: string }> = [
   { id: "banking-default", label: "Banking" },
   { id: "insurance-default", label: "Insurance" },
 ];
+
+type ManualSourceKind = "requirements" | "workspace" | "file" | "capsule" | "capsule-set";
+type FetchCapsulesFn = typeof fetchCapsules;
+type FetchCapsuleSetsFn = typeof fetchCapsuleSets;
 
 interface Progress {
   readonly phase: string;
@@ -45,12 +56,6 @@ const INITIAL_PROGRESS: Progress = {
   skippedSources: [],
 };
 
-function formatError(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return "An unexpected error occurred.";
-}
-
 function reduceProgress(prev: Progress, msg: QualityIntelligenceRunStreamMessage): Progress {
   if (msg.type === "accepted") {
     return {
@@ -71,8 +76,12 @@ function reduceProgress(prev: Progress, msg: QualityIntelligenceRunStreamMessage
 }
 
 export interface RunLauncherProps {
-  readonly onRunCompleted?: ((runId: string) => void) | undefined;
+  readonly onRunCompleted?:
+    | ((runId: string, recheckableSources: readonly QualityIntelligenceInlineSource[]) => void)
+    | undefined;
   readonly startImpl?: typeof startQiRun;
+  readonly fetchCapsulesImpl?: FetchCapsulesFn;
+  readonly fetchCapsuleSetsImpl?: FetchCapsuleSetsFn;
   /**
    * Folder bound via a Workspace relationship edge to a Files window (Epic #270 Slice 1). When
    * present it is the default "Generate" source — so a knowledge worker connects a Fachkonzept
@@ -146,9 +155,17 @@ function sourceItemKey(source: ConnectedRunSource): string {
   return `${source.kind}:${sourceValue(source)}`;
 }
 
+function recheckableSourcesForWindow(
+  sources: QualityIntelligenceStartRunRequest["sources"],
+): readonly QualityIntelligenceInlineSource[] {
+  return sources.filter((source) => source.kind !== "requirements");
+}
+
 export function RunLauncher({
   onRunCompleted,
   startImpl = startQiRun,
+  fetchCapsulesImpl = fetchCapsules,
+  fetchCapsuleSetsImpl = fetchCapsuleSets,
   connectedRoot = null,
   connectedFilePath = null,
   connectedRoots,
@@ -157,9 +174,15 @@ export function RunLauncher({
   connectedFigmaSnapshotRunIds,
 }: RunLauncherProps): ReactNode {
   const [label, setLabel] = useState("");
-  const [sourceKind, setSourceKind] = useState<"requirements" | "workspace">("requirements");
+  const [sourceKind, setSourceKind] = useState<ManualSourceKind>("requirements");
   const [text, setText] = useState("");
   const [path, setPath] = useState("");
+  const [capsuleId, setCapsuleId] = useState("");
+  const [capsuleSetId, setCapsuleSetId] = useState("");
+  const [capsules, setCapsules] = useState<readonly CapsuleListEntry[]>([]);
+  const [capsuleSets, setCapsuleSets] = useState<readonly CapsuleSetListEntry[]>([]);
+  const [connectorLoading, setConnectorLoading] = useState(false);
+  const [connectorError, setConnectorError] = useState<string | null>(null);
   const [profileId, setProfileId] = useState("regression-default");
   const [seed, setSeed] = useState("");
   const [running, setRunning] = useState(false);
@@ -181,9 +204,24 @@ export function RunLauncher({
     connectedFigmaSnapshotRunIds,
   });
   const hasConnected = connectedSources.length > 0;
+  const selectedCapsule = capsules.find((c) => c.id === capsuleId);
+  const selectedCapsuleSet = capsuleSets.find((s) => s.id === capsuleSetId);
+  const pathReady = path.trim().length > 0;
   const manualReady =
-    sourceKind === "requirements" ? text.trim().length > 0 : path.trim().length > 0;
-  const ready = manualReady || hasConnected;
+    sourceKind === "requirements"
+      ? text.trim().length > 0
+      : sourceKind === "workspace" || sourceKind === "file"
+        ? pathReady
+        : sourceKind === "capsule"
+          ? capsuleId.trim().length > 0
+          : capsuleSetId.trim().length > 0;
+  const connectedFallbackAllowed =
+    sourceKind === "requirements"
+      ? text.trim().length === 0
+      : sourceKind === "workspace" || sourceKind === "file"
+        ? !pathReady
+        : false;
+  const ready = manualReady || (connectedFallbackAllowed && hasConnected);
   const trimmedSeed = seed.trim();
   const parsedSeed =
     trimmedSeed.length === 0
@@ -193,33 +231,118 @@ export function RunLauncher({
         : Number.NaN;
   const seedValid =
     parsedSeed === undefined || (Number.isSafeInteger(parsedSeed) && Number.isFinite(parsedSeed));
+  // Generate stays focusable when blocked (aria-disabled, not native disabled) so keyboard and
+  // screen-reader users can reach it and hear WHY it is inactive via aria-describedby — the same
+  // governance pattern as GovernedActionButton in CandidatesPane (Epic #712).
+  const generateBlocked = !ready || !seedValid;
+  const generateHintId = useId();
+  const seedErrorId = useId();
+  const labelHintId = useId();
+  const generateDescribedBy = !ready ? generateHintId : !seedValid ? seedErrorId : undefined;
 
   const onMessage = useCallback((msg: QualityIntelligenceRunStreamMessage): void => {
     if (msg.type === "accepted") completedRunIdRef.current = msg.runId;
-    if (msg.type === "error") setError(`${msg.code}: ${msg.message}`);
+    if (msg.type === "error") setError(formatCodedError(msg.code, msg.message));
     setProgress((prev) => reduceProgress(prev, msg));
   }, []);
 
-  const handleStart = useCallback(async (): Promise<void> => {
-    if (!ready || running) return;
-    if (!seedValid) {
-      setError("Seed must be a non-negative integer.");
-      return;
+  const needsConnectorList = sourceKind === "capsule" || sourceKind === "capsule-set";
+
+  useEffect(() => {
+    if (!needsConnectorList) return;
+    let cancelled = false;
+    async function loadConnectors(): Promise<void> {
+      setConnectorLoading(true);
+      setConnectorError(null);
+      try {
+        const [capsuleResult, capsuleSetResult] = await Promise.allSettled([
+          fetchCapsulesImpl(),
+          fetchCapsuleSetsImpl(),
+        ]);
+        if (cancelled) return;
+        if (capsuleResult.status === "fulfilled") {
+          setCapsules(capsuleResult.value.capsules.filter((c) => c.lifecycleState === "ready"));
+        } else {
+          setCapsules([]);
+          if (sourceKind === "capsule") setConnectorError(formatError(capsuleResult.reason));
+        }
+        if (capsuleSetResult.status === "fulfilled") {
+          setCapsuleSets(capsuleSetResult.value.capsuleSets);
+        } else {
+          setCapsuleSets([]);
+          if (sourceKind === "capsule-set") setConnectorError(formatError(capsuleSetResult.reason));
+        }
+      } finally {
+        if (!cancelled) setConnectorLoading(false);
+      }
     }
+    void loadConnectors();
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchCapsulesImpl, fetchCapsuleSetsImpl, needsConnectorList, sourceKind]);
+
+  useEffect(() => {
+    if (sourceKind === "capsule") {
+      const next = capsules.some((c) => c.id === capsuleId) ? capsuleId : (capsules[0]?.id ?? "");
+      if (next !== capsuleId) setCapsuleId(next);
+    }
+    if (sourceKind === "capsule-set") {
+      const next = capsuleSets.some((s) => s.id === capsuleSetId)
+        ? capsuleSetId
+        : (capsuleSets[0]?.id ?? "");
+      if (next !== capsuleSetId) setCapsuleSetId(next);
+    }
+  }, [capsuleId, capsuleSetId, capsuleSets, capsules, sourceKind]);
+
+  const buildManualSources = useCallback(():
+    | QualityIntelligenceStartRunRequest["sources"]
+    | null => {
+    const trimmedLabel = label.trim();
+    if (sourceKind === "requirements" && text.trim().length > 0) {
+      return [{ kind: "requirements", label: trimmedLabel || "Requirements", text }];
+    }
+    if (sourceKind === "workspace" && path.trim().length > 0) {
+      return [{ kind: "workspace", label: trimmedLabel || "Folder", path: path.trim() }];
+    }
+    if (sourceKind === "file" && path.trim().length > 0) {
+      return [{ kind: "file", label: trimmedLabel || "File", path: path.trim() }];
+    }
+    if (sourceKind === "capsule" && capsuleId.trim().length > 0) {
+      return [
+        {
+          kind: "capsule",
+          label: trimmedLabel || selectedCapsule?.displayName || "Knowledge capsule",
+          capsuleId: capsuleId.trim(),
+        },
+      ];
+    }
+    if (sourceKind === "capsule-set" && capsuleSetId.trim().length > 0) {
+      return [
+        {
+          kind: "capsule-set",
+          label: trimmedLabel || selectedCapsuleSet?.displayName || "Capsule set",
+          capsuleSetId: capsuleSetId.trim(),
+        },
+      ];
+    }
+    return null;
+  }, [capsuleId, capsuleSetId, label, path, selectedCapsule, selectedCapsuleSet, sourceKind, text]);
+
+  const handleStart = useCallback(async (): Promise<void> => {
+    // Defensive guard — the Generate button already no-ops while blocked (aria-disabled pattern),
+    // and an invalid seed surfaces as an inline field error next to the input.
+    if (!ready || running || !seedValid) return;
     setRunning(true);
     setError(null);
     setProgress(INITIAL_PROGRESS);
     completedRunIdRef.current = null;
     const controller = new AbortController();
     abortRef.current = controller;
-    // Precedence: manual input (requirements text or a folder path) overrides everything; otherwise
-    // ALL connected sources go together (Epic #729 N+1 — file + folders + capsules in one request).
+    // Precedence: manual input overrides everything; otherwise ALL connected sources go together
+    // (Epic #729 N+1 — file + folders + capsules in one request).
     const sources: QualityIntelligenceStartRunRequest["sources"] =
-      sourceKind === "requirements" && text.trim().length > 0
-        ? [{ kind: "requirements", label: label.trim() || "Requirements", text }]
-        : sourceKind === "workspace" && path.trim().length > 0
-          ? [{ kind: "workspace", label: label.trim() || "Folder", path: path.trim() }]
-          : (connectedSources as QualityIntelligenceStartRunRequest["sources"]);
+      buildManualSources() ?? (connectedSources as QualityIntelligenceStartRunRequest["sources"]);
     const request: QualityIntelligenceStartRunRequest = {
       sources,
       profileId,
@@ -228,7 +351,7 @@ export function RunLauncher({
     try {
       await startImpl(request, controller.signal, onMessage);
       const runId = completedRunIdRef.current;
-      if (runId !== null) onRunCompleted?.(runId);
+      if (runId !== null) onRunCompleted?.(runId, recheckableSourcesForWindow(sources));
     } catch (err) {
       if (!controller.signal.aborted) setError(formatError(err));
     } finally {
@@ -237,13 +360,10 @@ export function RunLauncher({
     }
   }, [
     ready,
-    sourceKind,
-    text,
-    path,
-    label,
     profileId,
     running,
     connectedSources,
+    buildManualSources,
     onMessage,
     onRunCompleted,
     parsedSeed,
@@ -254,6 +374,91 @@ export function RunLauncher({
   const handleCancel = useCallback((): void => {
     abortRef.current?.abort();
   }, []);
+
+  function renderSourceInput(): ReactNode {
+    if (sourceKind === "requirements") {
+      return (
+        <label className="qi-field">
+          <span className="qi-field-label">Requirements</span>
+          <textarea
+            className="qi-textarea"
+            value={text}
+            rows={6}
+            placeholder="Paste requirements or acceptance criteria, one statement per line."
+            disabled={running}
+            onChange={(e) => {
+              setText(e.target.value);
+            }}
+          />
+        </label>
+      );
+    }
+    if (sourceKind === "workspace" || sourceKind === "file") {
+      const isFile = sourceKind === "file";
+      return (
+        <label className="qi-field">
+          <span className="qi-field-label">{isFile ? "File path" : "Folder path"}</span>
+          <input
+            type="text"
+            className="qi-input"
+            value={path}
+            placeholder={isFile ? "/absolute/path/to/requirements.md" : "/absolute/path/to/folder"}
+            disabled={running}
+            onChange={(e) => {
+              setPath(e.target.value);
+            }}
+          />
+        </label>
+      );
+    }
+    const isCapsule = sourceKind === "capsule";
+    const options = isCapsule ? capsules : capsuleSets;
+    return (
+      <label className="qi-field">
+        <span className="qi-field-label">{isCapsule ? "Knowledge capsule" : "Capsule set"}</span>
+        <select
+          className="qi-select"
+          value={isCapsule ? capsuleId : capsuleSetId}
+          disabled={running || connectorLoading || connectorError !== null || options.length === 0}
+          onChange={(e) => {
+            if (isCapsule) setCapsuleId(e.target.value);
+            else setCapsuleSetId(e.target.value);
+          }}
+        >
+          {connectorLoading ? <option value="">Loading connectors...</option> : null}
+          {!connectorLoading && options.length === 0 ? (
+            <option value="">{isCapsule ? "No ready capsules" : "No capsule sets"}</option>
+          ) : null}
+          {isCapsule
+            ? capsules.map((cap) => (
+                <option key={cap.id} value={cap.id}>
+                  {cap.displayName}
+                </option>
+              ))
+            : capsuleSets.map((set) => (
+                <option key={set.id} value={set.id}>
+                  {`${set.displayName} (${String(set.capsuleCount)} capsules)`}
+                </option>
+              ))}
+        </select>
+      </label>
+    );
+  }
+
+  // Coverage-notice sentences are built once and shared by the visible notice AND the persistent
+  // sr-only live region (uiux-fix F047 C155: the notice was a role="status" element inserted
+  // together with its content, which screen readers often skip).
+  const droppedNotice =
+    progress.droppedSourceCount > 0
+      ? `${progress.droppedSourceCount.toString()} source${progress.droppedSourceCount !== 1 ? "s" : ""} over the 16-source limit ${progress.droppedSourceCount !== 1 ? "were" : "was"} not included.`
+      : null;
+  const skippedNotice =
+    progress.skippedSources.length > 0
+      ? `${progress.skippedSources.length.toString()} connected source${progress.skippedSources.length !== 1 ? "s" : ""} could not be read and ${progress.skippedSources.length !== 1 ? "were" : "was"} skipped: ${progress.skippedSources.map((s) => s.label).join(", ")}.`
+      : null;
+  const coverageAnnouncement = [droppedNotice, skippedNotice]
+    .filter((line): line is string => line !== null)
+    .join(" ");
 
   return (
     <section className="qi-launcher" aria-label="Start a Quality Intelligence run">
@@ -273,7 +478,9 @@ export function RunLauncher({
               {sourceValue(connectedSources[0])}
             </span>
             <span className="qi-connected-hint">
-              Generate uses the connected {sourceKindLabel(connectedSources[0]).toLowerCase()}.
+              {manualReady
+                ? "Manual input below overrides the connected source for this run."
+                : `Generate uses the connected ${sourceKindLabel(connectedSources[0]).toLowerCase()}.`}
             </span>
           </div>
         ) : connectedSources.length > 1 ? (
@@ -291,7 +498,11 @@ export function RunLauncher({
                 </li>
               ))}
             </ul>
-            <span className="qi-connected-hint">Generate uses all connected sources.</span>
+            <span className="qi-connected-hint">
+              {manualReady
+                ? "Manual input below overrides the connected sources for this run."
+                : "Generate uses all connected sources."}
+            </span>
           </div>
         ) : null}
         <div className="qi-launcher-row">
@@ -303,10 +514,16 @@ export function RunLauncher({
               value={label}
               placeholder="e.g. Funds Transfer — acceptance criteria"
               disabled={running}
+              aria-describedby={hasConnected && !manualReady ? labelHintId : undefined}
               onChange={(e) => {
                 setLabel(e.target.value);
               }}
             />
+            {hasConnected && !manualReady ? (
+              <span className="qi-field-hint" id={labelHintId}>
+                Applies to manual input only — connected sources use their own labels.
+              </span>
+            ) : null}
           </label>
           <label className="qi-field qi-field-kind">
             <span className="qi-field-label">Source type</span>
@@ -315,44 +532,33 @@ export function RunLauncher({
               value={sourceKind}
               disabled={running}
               onChange={(e) => {
-                setSourceKind(e.target.value === "workspace" ? "workspace" : "requirements");
+                const next = e.target.value;
+                setSourceKind(
+                  next === "workspace" ||
+                    next === "file" ||
+                    next === "capsule" ||
+                    next === "capsule-set"
+                    ? next
+                    : "requirements",
+                );
                 setError(null);
+                setConnectorError(null);
               }}
             >
               <option value="requirements">Requirements text</option>
               <option value="workspace">Local folder</option>
+              <option value="file">Single file</option>
+              <option value="capsule">Knowledge capsule</option>
+              <option value="capsule-set">Capsule set</option>
             </select>
           </label>
         </div>
-        {sourceKind === "requirements" ? (
-          <label className="qi-field">
-            <span className="qi-field-label">Requirements</span>
-            <textarea
-              className="qi-textarea"
-              value={text}
-              rows={6}
-              placeholder="Paste requirements or acceptance criteria, one statement per line."
-              disabled={running}
-              onChange={(e) => {
-                setText(e.target.value);
-              }}
-            />
-          </label>
-        ) : (
-          <label className="qi-field">
-            <span className="qi-field-label">Folder path</span>
-            <input
-              type="text"
-              className="qi-input"
-              value={path}
-              placeholder="/absolute/path/to/requirements-folder"
-              disabled={running}
-              onChange={(e) => {
-                setPath(e.target.value);
-              }}
-            />
-          </label>
-        )}
+        {renderSourceInput()}
+        {connectorError !== null ? (
+          <p className="lk-alert" role="alert" data-testid="qi-connector-error">
+            {connectorError}
+          </p>
+        ) : null}
         <div className="qi-launcher-controls">
           <label className="qi-field qi-field-inline">
             <span className="qi-field-label">Policy profile</span>
@@ -381,28 +587,44 @@ export function RunLauncher({
               value={seed}
               placeholder="e.g. 42"
               disabled={running}
+              aria-invalid={seedValid ? undefined : true}
+              aria-describedby={seedValid ? undefined : seedErrorId}
               onChange={(e) => {
                 setSeed(e.target.value);
                 setError(null);
               }}
             />
+            {!seedValid ? (
+              <span className="qi-field-error" id={seedErrorId}>
+                Seed must be a non-negative integer.
+              </span>
+            ) : null}
           </label>
-          {running ? (
-            <button type="button" className="qi-btn qi-btn-secondary" onClick={handleCancel}>
-              Cancel
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="qi-btn qi-btn-primary"
-              disabled={!ready || !seedValid}
-              onClick={() => {
-                void handleStart();
-              }}
-            >
-              Generate test cases
-            </button>
-          )}
+          {/* ONE persistent button that swaps label/handler between Generate and Cancel: two
+              conditionally-rendered buttons would unmount the focused element on every state
+              change and drop keyboard focus onto <body> (WCAG 2.4.3, audit C031). */}
+          <button
+            type="button"
+            className={running ? "qi-btn qi-btn-secondary" : "qi-btn qi-btn-primary"}
+            aria-disabled={(!running && generateBlocked) || undefined}
+            aria-describedby={running ? undefined : generateDescribedBy}
+            onClick={() => {
+              if (running) {
+                handleCancel();
+                return;
+              }
+              if (generateBlocked) return;
+              void handleStart();
+            }}
+          >
+            {running ? "Cancel" : "Generate test cases"}
+          </button>
+          {!running && !ready ? (
+            <span className="qi-generate-hint" id={generateHintId}>
+              Add requirements text, a folder path, a file path, select a capsule, select a capsule
+              set, or connect a source to generate.
+            </span>
+          ) : null}
         </div>
         {running ? (
           <div
@@ -416,32 +638,23 @@ export function RunLauncher({
             <span className="qi-progress-text">
               {progress.stageName !== null ? `Stage: ${progress.stageName} · ` : ""}
               {progress.candidates.toString()} test case{progress.candidates !== 1 ? "s" : ""}
-              {progress.findings > 0 ? ` · ${progress.findings.toString()} findings` : ""}
+              {/* "1 finding", not "1 findings" — same singular/plural care as the test-case count
+                  two tokens earlier (uiux-fix F047 C276). */}
+              {progress.findings > 0
+                ? ` · ${progress.findings.toString()} finding${progress.findings !== 1 ? "s" : ""}`
+                : ""}
             </span>
           </div>
         ) : null}
-        {progress.droppedSourceCount > 0 || progress.skippedSources.length > 0 ? (
-          <div
-            className="qi-coverage-notice"
-            role="status"
-            aria-live="polite"
-            data-testid="qi-coverage-notice"
-          >
-            {progress.droppedSourceCount > 0 ? (
-              <p className="qi-coverage-line">
-                {progress.droppedSourceCount.toString()} source
-                {progress.droppedSourceCount !== 1 ? "s" : ""} over the 16-source limit{" "}
-                {progress.droppedSourceCount !== 1 ? "were" : "was"} not included.
-              </p>
-            ) : null}
-            {progress.skippedSources.length > 0 ? (
-              <p className="qi-coverage-line">
-                {progress.skippedSources.length.toString()} connected source
-                {progress.skippedSources.length !== 1 ? "s" : ""} could not be read and{" "}
-                {progress.skippedSources.length !== 1 ? "were" : "was"} skipped:{" "}
-                {progress.skippedSources.map((s) => s.label).join(", ")}.
-              </p>
-            ) : null}
+        {/* Persistent live region for the coverage notice (uiux-fix F047 C155) — mounted from the
+            first render; the visible notice below stays conditional and carries no live role. */}
+        <p className="sr-only" role="status" aria-live="polite">
+          {coverageAnnouncement}
+        </p>
+        {droppedNotice !== null || skippedNotice !== null ? (
+          <div className="qi-coverage-notice" data-testid="qi-coverage-notice">
+            {droppedNotice !== null ? <p className="qi-coverage-line">{droppedNotice}</p> : null}
+            {skippedNotice !== null ? <p className="qi-coverage-line">{skippedNotice}</p> : null}
           </div>
         ) : null}
         {error !== null ? (

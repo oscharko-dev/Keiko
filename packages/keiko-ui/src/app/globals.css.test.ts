@@ -130,12 +130,7 @@ describe("Fix 2 — reduced-motion wrapping (WCAG 2.3.3)", () => {
     ).toBeGreaterThan(0);
   }
 
-  it(".chat-spin base has animation: none", () => {
-    assertBaseIsNone(".chat-spin");
-  });
-  it(".chat-spin animation is inside no-preference block", () => {
-    assertAnimationInsideNoPreference("spin 1.6s linear infinite", ".chat-spin");
-  });
+  // .chat-spin removed as dead legacy-sidebar code (uiux-fix F037 C327)
 
   it(".conn-dot base has animation: none", () => {
     assertBaseIsNone(".conn-dot");
@@ -178,9 +173,7 @@ describe("Fix 2 — reduced-motion wrapping (WCAG 2.3.3)", () => {
     assertBaseIsNone(".rv-skel");
   });
 
-  it(".tm-cursor base has animation: none", () => {
-    assertBaseIsNone(".tm-cursor");
-  });
+  // .tm-cursor removed as dead terminal-mock code (uiux-fix F049 C335)
 
   it(".gw-setup base has animation: none", () => {
     assertBaseIsNone(".gw-setup");
@@ -310,5 +303,78 @@ describe("Fix 4 — mobile root toolbar compression", () => {
   });
 });
 
+// ─── uiux-fix F010 — context-budget indicator + scope-pill focus ring ─────────
+
+describe("uiux-fix F010 — cmp-budget styling and scope-pill focus visibility", () => {
+  it("defines the cmp-budget layout and badge rules (C044/C081 — classes were orphaned)", () => {
+    expect(css).toContain(".cmp-budget-row");
+    expect(css).toContain(".cmp-budget-badge-exceeded");
+    expect(css).toContain(".cmp-budget-clear:focus-visible");
+    expect(css).toContain(".cmp-budget-clear:disabled");
+    // The flex row is what un-merges the inline text run ("tokensLowiClear history").
+    const rowIdx = css.indexOf(".cmp-budget-row");
+    const rowBlock = css.slice(rowIdx, css.indexOf("}", rowIdx) + 1);
+    expect(rowBlock).toContain("display: flex");
+    expect(rowBlock).toContain("gap: 8px");
+  });
+
+  it("light theme overrides the low-badge text to ink-inverse (raw accent ≈1.97:1 on the tint)", () => {
+    expect(css).toContain('[data-theme="light"] .cmp-budget-badge-low');
+  });
+
+  it("reveals the cmp-budget-info data-tip on focus-visible as well as hover (C321)", () => {
+    expect(css).toContain(".cmp-budget-info[data-tip]:focus-visible::after");
+    expect(css).toContain(".cmp-budget-info[data-tip]:hover::after");
+  });
+
+  it("styles the connector pill modifier distinctly from folder pills (C326)", () => {
+    expect(css).toContain(".scope-pill--connector");
+  });
+
+  it("scope-pill disconnect focus ring is NOT accent-on-accent (C045, WCAG 2.4.7)", () => {
+    const idx = css.indexOf(".scope-pill-disconnect:focus-visible");
+    expect(idx).toBeGreaterThan(-1);
+    const block = css.slice(idx, css.indexOf("}", idx) + 1);
+    // The × sits inside the accent-filled pill: its ring must use ink-inverse, not accent.
+    expect(block).toContain("outline: 2px solid var(--ink-inverse)");
+    expect(block).not.toContain("outline: 2px solid var(--accent)");
+    // The shared selector (which gave both buttons the accent ring) must be gone.
+    expect(css).not.toMatch(
+      /\.scope-pill-disconnect:focus-visible,\s*\.scope-connect-btn:focus-visible/,
+    );
+  });
+});
+
 // ── Verify indexOfNth helper is unused externally (suppress unused-import lint) ─
 void indexOfNth;
+
+// ─── uiux-fix F013 — header responsive stages + project-tab truncation ────────
+
+describe("uiux-fix F013 — header responsive stages and tab truncation", () => {
+  it("adds the 1100px/1000px header visibility stages (C101, WCAG 1.4.10)", () => {
+    // search from the F013 marker — the footer has its own (earlier) 1000px stage
+    const marker = css.indexOf("uiux-fix F013: header responsive");
+    expect(marker).toBeGreaterThan(-1);
+    const idx1100 = css.indexOf("@media (max-width: 1100px)", marker);
+    const idx1000 = css.indexOf("@media (max-width: 1000px)", marker);
+    expect(idx1100).toBeGreaterThan(-1);
+    expect(idx1000).toBeGreaterThan(-1);
+    expect(css.slice(idx1000, idx1000 + 400)).toContain(".header .tb-btn");
+  });
+
+  it("truncates the project-tab label instead of overflowing/wrapping (C157/C225)", () => {
+    const marker = css.indexOf("uiux-fix F013: header responsive");
+    expect(marker).toBeGreaterThan(-1);
+    const spanIdx = css.indexOf(".tb-tab > span {", marker);
+    expect(spanIdx).toBeGreaterThan(-1);
+    const block = css.slice(spanIdx, css.indexOf("}", spanIdx) + 1);
+    expect(block).toContain("text-overflow: ellipsis");
+    expect(block).toContain("max-width: 220px");
+  });
+
+  it("drops all orphaned .tb-newtab rules with the dead button (C059)", () => {
+    expect(css).not.toContain(".tb-newtab {");
+    expect(css).not.toContain(".tb-newtab:hover");
+    expect(css).not.toContain(".tb-newtab:focus-visible");
+  });
+});

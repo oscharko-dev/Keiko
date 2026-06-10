@@ -27,7 +27,8 @@ export function TimelinePanel(): ReactNode {
   const items = useActivitySubscription();
 
   return (
-    <div className="tl">
+    // role="log" implies aria-live="polite": streamed entries are announced to assistive tech.
+    <div className="tl" role="log" aria-label="Activity timeline">
       {items.length === 0 && (
         <div className="tl-empty">
           No activity yet.
@@ -39,9 +40,12 @@ export function TimelinePanel(): ReactNode {
         <div className="tl-row" key={i}>
           <span
             className="tl-dot"
+            aria-hidden="true"
             style={{ background: KIND_COLOR[e.type] ?? "var(--fg-faint)" }}
           />
           <div className="tl-body">
+            {/* The event kind is otherwise only colour-coded via the dot (WCAG 1.4.1). */}
+            <span className="visually-hidden">{e.type}</span>
             <span className="tl-text">{e.text}</span>
             <span className="tl-meta mono">
               {e.agent ?? "workspace"} · {formatTime(e.time)}
