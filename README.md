@@ -151,7 +151,7 @@ For an OS shortcut that starts the local server in one step:
 keiko launcher install
 ```
 
-This generates a shortcut in `~/.local/share/applications/` (Linux), `~/Applications/` (macOS), or `%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\` (Windows). Remove it with `keiko launcher remove`. Firefox and Safari users can follow the manual fallback instructions in the [PWA installability contract](docs/pwa-installability-contract.md).
+This generates a shortcut in `~/.local/share/applications/` (Linux), `~/Applications/` (macOS), or `%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\` (Windows). Remove it with `keiko launcher remove`. Firefox and Safari users can follow the manual fallback instructions in the [PWA installability contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pwa-installability-contract.md).
 
 ## Configuration
 
@@ -212,8 +212,8 @@ Every grounded answer in the Conversation Center shows a context inspection summ
 
 Read the full contracts and decisions:
 
-- [Connected context privacy contract](docs/connected-context-privacy.md)
-- [ADR-0022: Connected context privacy](docs/adr/ADR-0022-connected-context-privacy.md)
+- [Connected context privacy contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/connected-context-privacy.md)
+- [ADR-0022: Connected context privacy](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0022-connected-context-privacy.md)
 
 ## Report bugs and findings
 
@@ -232,7 +232,7 @@ The form captures version, platform, reproduction steps, expected behavior, actu
 | Custom proxy key fails | Confirm whether your gateway expects `Authorization` or a custom API-key header such as `X-Litellm-Key`. |
 | Stale process state    | Run `npm run keiko:stop`, delete `.keiko/ui.pid` if the process is no longer running, then start again.  |
 
-For categorized playbooks covering TLS trust, first-run gateway setup, `NO_MODEL`, workspace path validation, and run-engine command denials, see the [Troubleshooting guide](docs/troubleshooting/README.md).
+For categorized playbooks covering TLS trust, first-run gateway setup, `NO_MODEL`, workspace path validation, and run-engine command denials, see the [Troubleshooting guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/troubleshooting/README.md).
 
 ## Repository notes
 
@@ -245,11 +245,11 @@ This repository already carries several strong open-source engineering patterns 
 
 ## Further reading
 
-- [Local UI guide](docs/ui-runbook.md)
-- [Security and audit boundaries](docs/security-and-audit-boundaries.md)
-- [Troubleshooting guide](docs/troubleshooting/README.md)
-- [Pilot guide](docs/pilot/runbook.md)
-- [Pilot evaluation](docs/pilot/go-no-go.md)
+- [Local UI guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/ui-runbook.md)
+- [Security and audit boundaries](https://github.com/oscharko-dev/Keiko/blob/dev/docs/security-and-audit-boundaries.md)
+- [Troubleshooting guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/troubleshooting/README.md)
+- [Pilot guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pilot/runbook.md)
+- [Pilot evaluation](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pilot/go-no-go.md)
 - [Contributing guide](CONTRIBUTING.md)
 - [Security policy](SECURITY.md)
 
