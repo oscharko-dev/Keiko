@@ -86,10 +86,24 @@ export interface FigmaSnapshotSummary {
  * @param boardLink Full Figma board URL including a `node-id` param, e.g.
  *   https://www.figma.com/design/{key}/{name}?node-id=123:456
  */
-export async function triggerFigmaSnapshot(boardLink: string): Promise<FigmaSnapshotSummary> {
+export interface TriggerFigmaSnapshotOptions {
+  /** Records the explicit read-only-scope acknowledgement (#760) before the first build for a scope. */
+  readonly acknowledgeReadOnly?: boolean;
+  /** Audits the build as a re-snapshot — a fresh, explicit, full scoped re-fetch (#759). */
+  readonly isResnapshot?: boolean;
+}
+
+export async function triggerFigmaSnapshot(
+  boardLink: string,
+  options: TriggerFigmaSnapshotOptions = {},
+): Promise<FigmaSnapshotSummary> {
   return fetchJson<FigmaSnapshotSummary>("/api/figma/snapshots", {
     method: "POST",
-    body: JSON.stringify({ boardLink }),
+    body: JSON.stringify({
+      boardLink,
+      ...(options.acknowledgeReadOnly === true ? { acknowledgeReadOnly: true } : {}),
+      ...(options.isResnapshot === true ? { isResnapshot: true } : {}),
+    }),
   });
 }
 
@@ -101,4 +115,34 @@ export async function triggerFigmaSnapshot(boardLink: string): Promise<FigmaSnap
  */
 export async function loadFigmaSnapshotSummary(runId: string): Promise<FigmaSnapshotSummary> {
   return fetchJson<FigmaSnapshotSummary>(`/api/figma/snapshots/${encodeURIComponent(runId)}`);
+}
+
+// ─── POST /api/figma/snapshots/:runId/code (design-to-code #755) ────────────────
+
+/** One reviewable file in the generated code artifact. */
+export interface FigmaCodeFile {
+  readonly path: string;
+  readonly contents: string;
+}
+
+/** The reviewable design-to-code artifact for a stored snapshot (#755). */
+export interface FigmaCodegenResponse {
+  readonly runId: string;
+  readonly adapterName: string;
+  readonly fileCount: number;
+  readonly totalBytes: number;
+  readonly screenCount: number;
+  readonly files: readonly FigmaCodeFile[];
+}
+
+/**
+ * Generate reviewable frontend code (semantic HTML/CSS + design tokens) from a stored snapshot.
+ * Deterministic + model-free server-side: reads ONLY the stored snapshot, never Figma. The result is
+ * a proposal for review, never auto-applied.
+ */
+export async function generateFigmaCode(runId: string): Promise<FigmaCodegenResponse> {
+  return fetchJson<FigmaCodegenResponse>(`/api/figma/snapshots/${encodeURIComponent(runId)}/code`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }

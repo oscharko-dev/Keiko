@@ -11,6 +11,8 @@
 // headers the caller supplies so the proxy adapter can add transport headers. The token is
 // never materialised here and never logged.
 
+import { classifyFigmaTransportError, FigmaConnectorError } from "./figmaConnectorErrors.js";
+
 export interface FigmaRenderRequest {
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
@@ -34,12 +36,17 @@ export type FigmaRenderPort = (request: FigmaRenderRequest) => Promise<FigmaRend
  */
 export const createDefaultFigmaRenderPort = (): FigmaRenderPort => {
   return async (request: FigmaRenderRequest): Promise<FigmaRenderResponse> => {
-    const response = await fetch(request.url, { method: "GET", headers: { ...request.headers } });
-    const headers: Record<string, string> = {};
-    response.headers.forEach((value, name) => {
-      headers[name] = value;
-    });
-    const buffer = await response.arrayBuffer();
-    return { status: response.status, bytes: new Uint8Array(buffer), headers };
+    try {
+      const response = await fetch(request.url, { method: "GET", headers: { ...request.headers } });
+      const headers: Record<string, string> = {};
+      response.headers.forEach((value, name) => {
+        headers[name] = value;
+      });
+      const buffer = await response.arrayBuffer();
+      return { status: response.status, bytes: new Uint8Array(buffer), headers };
+    } catch (err) {
+      if (err instanceof FigmaConnectorError) throw err;
+      throw new FigmaConnectorError(classifyFigmaTransportError(err));
+    }
   };
 };

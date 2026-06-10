@@ -44,7 +44,10 @@ export const resnapshotFigma = async (
   deps: ResnapshotFigmaDeps,
   options: FigmaFetchOptions = {},
 ): Promise<FigmaSnapshot> => {
-  const scoped = await deps.connector.fetchScopedNodes(url, options);
+  // Deep scoped-pagination fetch (#837): a re-snapshot must capture the same in-screen text the
+  // initial build does, so the regenerated drift baseline (#735) is comparable. Still a FULL,
+  // explicit, on-demand re-fetch — no delta, no incremental skip — within the snapshot boundary.
+  const scoped = await deps.connector.fetchScopedNodesDeep(url, options);
   const ir = deps.cleanToIr(scoped);
 
   const buildInput: BuildFigmaSnapshotInput = {

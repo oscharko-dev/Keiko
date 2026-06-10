@@ -26,11 +26,16 @@ export interface FigmaRetryPolicy {
   readonly maxDelayMs: number;
 }
 
-/** Bounded, conservative default well inside Figma's documented limits. */
+/**
+ * Bounded, conservative default well inside Figma's documented limits. Patient enough (8 retries,
+ * 45s ceiling) that the multi-fetch deep scoped-pagination build (#837) absorbs the cost-based 429
+ * bursts a large board provokes instead of aborting, while staying finite so a genuinely down API
+ * still fails fast-ish.
+ */
 export const DEFAULT_FIGMA_RETRY_POLICY: FigmaRetryPolicy = {
-  maxRetries: 5,
+  maxRetries: 8,
   baseDelayMs: 500,
-  maxDelayMs: 30_000,
+  maxDelayMs: 45_000,
 };
 
 /** The minimum a backoff-capable response must expose: a status and (lower-cased) headers. */

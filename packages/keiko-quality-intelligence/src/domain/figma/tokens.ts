@@ -18,7 +18,7 @@ import {
   readString,
   type FigmaSourceNode,
 } from "./sourceNode.js";
-import { paintColorToHex } from "./color.js";
+import { isVisiblePaint, paintColorToHex } from "./color.js";
 import type {
   ColorToken,
   DesignTokens,
@@ -32,6 +32,7 @@ const collectPaintColors = (node: FigmaSourceNode, key: string, out: Set<string>
   for (const paint of readArray(node[key])) {
     const record = asNode(paint);
     if (record === undefined || readString(record.type) !== "SOLID") continue;
+    if (!isVisiblePaint(record)) continue;
     const hex = paintColorToHex(record);
     if (hex !== undefined) out.add(hex);
   }
@@ -108,5 +109,76 @@ export const extractDesignTokens = (screens: readonly PrunedNode[]): DesignToken
     typography: [...acc.typography.values()].sort((a, b) => a.id.localeCompare(b.id)),
     spacing: toSpacingTokens(acc.spacing),
     radius: toRadiusTokens(acc.radius),
+  };
+};
+
+// ─── Tolerant parse of a persisted/serialised design-tokens artifact (#752 → #755) ──────
+//
+// The snapshot persists the tokens artifact as an opaque JSON value (like the screen IR). Design-to-
+// code (#755) reads the STORED snapshot, so it must re-hydrate the typed shape defensively: a missing
+// or malformed family yields an empty list (codegen emits a smaller token table) rather than crashing.
+
+const EMPTY_DESIGN_TOKENS: DesignTokens = { colors: [], typography: [], spacing: [], radius: [] };
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isString = (value: unknown): value is string => typeof value === "string";
+const isFiniteNumber = (value: unknown): value is number =>
+  typeof value === "number" && Number.isFinite(value);
+
+const parseColorRows = (value: unknown): readonly ColorToken[] =>
+  (Array.isArray(value) ? value : []).flatMap((entry) =>
+    isRecord(entry) && isString(entry.value)
+      ? [{ id: `color:${entry.value}`, kind: "color" as const, value: entry.value }]
+      : [],
+  );
+
+const parseTypographyRows = (value: unknown): readonly TypographyToken[] =>
+  (Array.isArray(value) ? value : []).flatMap((entry) => {
+    if (
+      !isRecord(entry) ||
+      !isString(entry.fontFamily) ||
+      !isFiniteNumber(entry.fontSize) ||
+      !isFiniteNumber(entry.fontWeight) ||
+      !isFiniteNumber(entry.lineHeight)
+    ) {
+      return [];
+    }
+    const id = `typography:${entry.fontFamily}|${String(entry.fontSize)}|${String(entry.fontWeight)}|${String(entry.lineHeight)}`;
+    return [
+      {
+        id,
+        kind: "typography" as const,
+        fontFamily: entry.fontFamily,
+        fontSize: entry.fontSize,
+        fontWeight: entry.fontWeight,
+        lineHeight: entry.lineHeight,
+      },
+    ];
+  });
+
+const parseScalarRows = <K extends "spacing" | "radius">(
+  value: unknown,
+  kind: K,
+): readonly { id: string; kind: K; value: number }[] =>
+  (Array.isArray(value) ? value : []).flatMap((entry) =>
+    isRecord(entry) && isFiniteNumber(entry.value)
+      ? [{ id: `${kind}:${String(entry.value)}`, kind, value: entry.value }]
+      : [],
+  );
+
+/**
+ * Re-hydrate a {@link DesignTokens} value from the opaque, serialised tokens artifact persisted in a
+ * Figma Snapshot (#753). Total + defensive: a non-object or any malformed family degrades to an empty
+ * list so design-to-code (#755) never crashes on an old or partial snapshot. Stable shape, no IO.
+ */
+export const parseDesignTokens = (value: unknown): DesignTokens => {
+  if (!isRecord(value)) return EMPTY_DESIGN_TOKENS;
+  return {
+    colors: parseColorRows(value.colors),
+    typography: parseTypographyRows(value.typography),
+    spacing: parseScalarRows(value.spacing, "spacing"),
+    radius: parseScalarRows(value.radius, "radius"),
   };
 };

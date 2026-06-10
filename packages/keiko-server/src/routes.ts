@@ -130,7 +130,9 @@ import {
 import {
   handleFigmaTriggerSnapshot,
   handleFigmaLoadSnapshot,
+  handleFigmaRevokeToken,
 } from "./qualityIntelligence/figmaSnapshotRoutes.js";
+import { handleFigmaGenerateCode } from "./qualityIntelligence/figmaCodegenRoutes.js";
 
 export interface ApiError {
   readonly error: { readonly code: string; readonly message: string };
@@ -443,6 +445,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Token: resolved server-side from FIGMA_ACCESS_TOKEN env or vault; never in request or response.
   { method: "POST", pattern: "/api/figma/snapshots", handler: handleFigmaTriggerSnapshot },
   { method: "GET", pattern: "/api/figma/snapshots/:runId", handler: handleFigmaLoadSnapshot },
+  // Epic #750 #758/#760 — operator revokes the stored encrypted PAT (audited key removal).
+  { method: "DELETE", pattern: "/api/figma/token", handler: handleFigmaRevokeToken },
+  // Epic #750 #755 — design-to-code: emit reviewable HTML/CSS from a stored snapshot.
+  { method: "POST", pattern: "/api/figma/snapshots/:runId/code", handler: handleFigmaGenerateCode },
   // Issue #281 (Epic #270) — Conversation Center → QI workflow handoff route group.
   // Single POST seam; the body is a typed `QualityIntelligenceConversationCenterHandoff`
   // envelope (refs only, no chat content). Registered as a sibling group so concurrent

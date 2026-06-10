@@ -62,7 +62,10 @@ const harness = (screenIds: readonly string[]): Harness => {
 
   const deps: ResnapshotFigmaDeps = {
     connector: {
-      fetchScopedNodes: (_url, _options) => {
+      // Re-snapshot uses the deep (scoped-pagination) path (#837); the shallow method is provided
+      // only to satisfy the FigmaConnector interface and is not exercised here.
+      fetchScopedNodes: (_url, _options) => Promise.resolve(scopedResult()),
+      fetchScopedNodesDeep: (_url, _options) => {
         fetchCalls += 1;
         return Promise.resolve(scopedResult());
       },
@@ -124,7 +127,8 @@ describe("resnapshotFigma — explicit full re-snapshot (#759, #735)", () => {
     const deps: ResnapshotFigmaDeps = {
       ...h.deps,
       connector: {
-        fetchScopedNodes: (_url, options) => {
+        fetchScopedNodes: (_url, _options) => Promise.resolve(scopedResult()),
+        fetchScopedNodesDeep: (_url, options) => {
           seenVersion = options?.version;
           return Promise.resolve(scopedResult());
         },

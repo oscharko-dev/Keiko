@@ -20,7 +20,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
-import type { FigmaSnapshotSummary } from "@/lib/figma-snapshot-api";
+import type { FigmaSnapshotSummary, FigmaCodegenResponse } from "@/lib/figma-snapshot-api";
 import type { FigmaSnapshotWindowProps } from "./FigmaSnapshotWindow";
 import { FigmaSnapshotWindow } from "./FigmaSnapshotWindow";
 
@@ -160,15 +160,21 @@ describe("FigmaSnapshotWindow", () => {
   });
 
   describe("trigger — success", () => {
-    it("calls triggerImpl with the board link only — no PAT", async () => {
+    it("calls triggerImpl with the board link + token-free options — no PAT", async () => {
       const trigger = resolvingTrigger();
       renderWindow({ triggerImpl: trigger });
       const user = userEvent.setup();
       await typeAndSubmit(user);
       await waitFor(() => expect(trigger).toHaveBeenCalledTimes(1));
-      expect(trigger).toHaveBeenCalledWith(VALID_LINK);
-      // Security: only one argument (the board link), no token in any position.
-      expect(trigger.mock.calls[0]).toHaveLength(1);
+      // Board link + the consent/re-snapshot options object (#760/#759) — never a token.
+      expect(trigger).toHaveBeenCalledWith(VALID_LINK, {
+        acknowledgeReadOnly: false,
+        isResnapshot: false,
+      });
+      // Security: no argument carries a token-like value.
+      const serialised = JSON.stringify(trigger.mock.calls[0]);
+      expect(serialised).not.toContain("figd_");
+      expect(serialised.toLowerCase()).not.toContain("token");
     });
 
     it("shows building state while triggerImpl is pending", async () => {
@@ -338,6 +344,59 @@ describe("FigmaSnapshotWindow", () => {
       const { container } = renderWindow({ snapshotRunId: "fs-abc123" });
       const results = await axe(container);
       expect(results).toHaveNoViolations();
+    });
+  });
+
+  describe("read-only-scope consent (#760)", () => {
+    it("passes acknowledgeReadOnly:true to triggerImpl when the consent box is checked", async () => {
+      const trigger = resolvingTrigger();
+      renderWindow({ triggerImpl: trigger });
+      const user = userEvent.setup();
+      await user.click(screen.getByRole("checkbox", { name: /read-only and least-privilege/iu }));
+      await typeAndSubmit(user);
+      await waitFor(() => expect(trigger).toHaveBeenCalledTimes(1));
+      expect(trigger).toHaveBeenCalledWith(VALID_LINK, {
+        acknowledgeReadOnly: true,
+        isResnapshot: false,
+      });
+    });
+  });
+
+  describe("design-to-code (#755)", () => {
+    const MOCK_CODE: FigmaCodegenResponse = {
+      runId: "fs-test-run-id-1234",
+      adapterName: "html-css",
+      fileCount: 3,
+      totalBytes: 1234,
+      screenCount: 2,
+      files: [
+        { path: "index.html", contents: "<!doctype html>" },
+        { path: "tokens.css", contents: ":root { --color-1: #000000; }" },
+        { path: "screens/screen-1.html", contents: "<main>Welcome</main>" },
+      ],
+    };
+
+    function resolvingCodegen(): Required<FigmaSnapshotWindowProps>["codegenImpl"] & {
+      mock: { calls: unknown[][] };
+    } {
+      return vi.fn(
+        async (_runId: string) => MOCK_CODE,
+      ) as unknown as Required<FigmaSnapshotWindowProps>["codegenImpl"] & {
+        mock: { calls: unknown[][] };
+      };
+    }
+
+    it("generates reviewable code from the stored snapshot and lists the files", async () => {
+      const codegen = resolvingCodegen();
+      renderWindow({ triggerImpl: resolvingTrigger(), codegenImpl: codegen });
+      const user = userEvent.setup();
+      await typeAndSubmit(user);
+      await waitForDone();
+      await user.click(screen.getByRole("button", { name: /generate code/iu }));
+      await waitFor(() => expect(codegen).toHaveBeenCalledWith("fs-test-run-id-1234"));
+      expect(await screen.findByText("index.html")).toBeInTheDocument();
+      expect(screen.getByText("tokens.css")).toBeInTheDocument();
+      expect(screen.getByText(/proposal only, never auto-applied/iu)).toBeInTheDocument();
     });
   });
 });

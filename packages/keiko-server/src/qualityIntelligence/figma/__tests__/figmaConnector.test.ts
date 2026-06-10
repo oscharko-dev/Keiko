@@ -344,6 +344,150 @@ describe("createFigmaConnector — depth cap", () => {
   });
 });
 
+describe("createFigmaConnector — deep scoped pagination (#837)", () => {
+  interface Tree {
+    readonly id: string;
+    readonly type: string;
+    readonly characters?: string;
+    readonly children?: readonly Tree[];
+  }
+
+  const findById = (root: Tree, id: string): Tree | undefined => {
+    if (root.id === id) return root;
+    for (const c of root.children ?? []) {
+      const hit = findById(c, id);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  };
+
+  // Serve any node id from `full`, truncated at the requested `depth` (children:[] at the frontier),
+  // exactly like GET /v1/files/:key/nodes. `statusById` injects a non-200 for a specific node id.
+  const treePort = (full: Tree, statusById: Map<string, number> = new Map()): FigmaHttpPort => {
+    const truncate = (n: Tree, depth: number): unknown => ({
+      id: n.id,
+      name: n.id,
+      type: n.type,
+      ...(n.characters !== undefined ? { characters: n.characters } : {}),
+      children: depth <= 0 ? [] : (n.children ?? []).map((c) => truncate(c, depth - 1)),
+    });
+    return (request) => {
+      const url = new URL(request.url);
+      const id = url.searchParams.get("ids") ?? "";
+      const depth = Number(url.searchParams.get("depth") ?? "0");
+      const status = statusById.get(id);
+      if (status !== undefined) return Promise.resolve({ status, json: {}, headers: {} });
+      const target = findById(full, id);
+      if (target === undefined) return Promise.resolve({ status: 404, json: {}, headers: {} });
+      return Promise.resolve({
+        status: 200,
+        json: nodesResponse(id, truncate(target, depth)),
+        headers: {},
+      });
+    };
+  };
+
+  // Root is the scoped CANVAS (id 12:34 — matches URL_OK's node-id). Each screen hides its TEXT at
+  // screen-depth 3, below a shallow page-depth-2 frontier — the #837 shape.
+  const screen = (id: string): Tree => ({
+    id,
+    type: "FRAME",
+    children: [
+      {
+        id: `${id}-a`,
+        type: "FRAME",
+        children: [
+          {
+            id: `${id}-b`,
+            type: "FRAME",
+            children: [{ id: `${id}-t`, type: "TEXT", characters: "x" }],
+          },
+        ],
+      },
+    ],
+  });
+  const fullTree = (screenIds: readonly string[]): Tree => ({
+    id: "12:34",
+    type: "CANVAS",
+    children: screenIds.map(screen),
+  });
+
+  const deepConfig = { depth: 2, pagination: { pageDepth: 2, fetchConcurrency: 2 } } as const;
+
+  const countText = (node: unknown): number => {
+    if (typeof node !== "object" || node === null) return 0;
+    const n = node as { type?: unknown; children?: unknown };
+    const self = n.type === "TEXT" ? 1 : 0;
+    const kids = Array.isArray(n.children) ? n.children : [];
+    return self + kids.reduce<number>((s, c) => s + countText(c), 0);
+  };
+
+  it("recovers deep in-screen text the shallow fetch misses, and reports coverage", async () => {
+    const connector = createFigmaConnector({
+      http: treePort(fullTree(["s1", "s2"])),
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      config: deepConfig,
+    });
+
+    const shallow = await connector.fetchScopedNodes(URL_OK);
+    expect(countText(shallow.nodes)).toBe(0); // depth-2 discovery misses depth-3 text
+
+    const deep = await connector.fetchScopedNodesDeep(URL_OK);
+    expect(countText(deep.nodes)).toBe(2); // both screens' text recovered
+    expect(deep.coverage).toMatchObject({
+      screenCount: 2,
+      screensDeepFetched: 2,
+      capped: false,
+    });
+  });
+
+  it("never leaks the token on the deep path (header only)", async () => {
+    const requests: FigmaHttpRequest[] = [];
+    const base = treePort(fullTree(["s1"]));
+    const connector = createFigmaConnector({
+      http: (req) => {
+        requests.push(req);
+        return base(req);
+      },
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      config: deepConfig,
+    });
+
+    const deep = await connector.fetchScopedNodesDeep(URL_OK);
+    expect(JSON.stringify(deep)).not.toContain(TOKEN);
+    for (const req of requests) {
+      expect(req.headers["X-Figma-Token"]).toBe(TOKEN);
+      expect(req.url).not.toContain(TOKEN);
+    }
+  });
+
+  it("aborts the build on an auth failure during a per-screen fetch (no silent shallow)", async () => {
+    // Discovery (12:34) succeeds; the s1 deep fetch 403s → must abort, not degrade to shallow.
+    const port = treePort(fullTree(["s1", "s2"]), new Map([["s1", 403]]));
+    const connector = createFigmaConnector({
+      http: port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      config: deepConfig,
+    });
+    await expect(connector.fetchScopedNodesDeep(URL_OK)).rejects.toMatchObject({
+      code: "FIGMA_TOKEN_INVALID",
+    });
+  });
+
+  it("soft-skips a transient per-screen 5xx, keeping that screen shallow and the build alive", async () => {
+    const port = treePort(fullTree(["s1", "s2"]), new Map([["s1", 503]]));
+    const connector = createFigmaConnector({
+      http: port,
+      env: { FIGMA_ACCESS_TOKEN: TOKEN },
+      config: deepConfig,
+    });
+    const deep = await connector.fetchScopedNodesDeep(URL_OK);
+    // s2 deepened (1 text), s1 stayed shallow (0) — the build did not abort.
+    expect(countText(deep.nodes)).toBe(1);
+    expect(deep.coverage?.screensDeepFetched).toBe(1);
+  });
+});
+
 describe("createFigmaConnector — resilience (#759)", () => {
   const TEST_POLICY = { maxRetries: 3, baseDelayMs: 100, maxDelayMs: 5000 } as const;
 
