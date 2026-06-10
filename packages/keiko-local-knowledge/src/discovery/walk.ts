@@ -230,10 +230,13 @@ function* yieldFileIfAllowed(
   yield { kind: "file", file: { relativePath, sizeBytes: size } };
 }
 
-function safeReadDir(
-  fs: WorkspaceFs,
-  absolutePath: string,
-): readonly { readonly name: string; readonly isDirectory: boolean; readonly isFile: boolean }[] {
+interface WalkDirEntry {
+  readonly name: string;
+  readonly isDirectory: boolean;
+  readonly isFile: boolean;
+}
+
+function safeReadDir(fs: WorkspaceFs, absolutePath: string): readonly WalkDirEntry[] {
   try {
     return fs.readDir(absolutePath);
   } catch {
@@ -246,6 +249,25 @@ function safeReadDir(
 // observe abort between any two checks.
 function isAborted(ctx: WalkContext): boolean {
   return ctx.options.signal?.aborted === true;
+}
+
+function* yieldDirectoryEntry(
+  ctx: WalkContext,
+  absoluteDir: string,
+  entry: WalkDirEntry,
+  depth: number,
+): Generator<WalkYield> {
+  const childAbs = joinAbs(absoluteDir, entry.name);
+  const childRel = toPosixRelative(ctx.bounds.rootPath, childAbs);
+  if (entry.isDirectory) {
+    if (isDeniedRelativePath(childRel)) return;
+    if (shouldSkipDirectoryEntry(ctx, entry.name)) return;
+    yield* descend(ctx, childAbs, depth + 1);
+    return;
+  }
+  if (entry.isFile) {
+    yield* yieldFileIfAllowed(ctx, childAbs, childRel);
+  }
 }
 
 function* descend(ctx: WalkContext, absoluteDir: string, depth: number): Generator<WalkYield> {
@@ -268,18 +290,7 @@ function* descend(ctx: WalkContext, absoluteDir: string, depth: number): Generat
       yield abortYield();
       return;
     }
-    const childAbs = joinAbs(absoluteDir, entry.name);
-    const childRel = toPosixRelative(ctx.bounds.rootPath, childAbs);
-    if (entry.isDirectory) {
-      if (isDeniedRelativePath(childRel)) continue;
-      if (shouldSkipDirectoryEntry(ctx, entry.name)) continue;
-      yield* descend(ctx, childAbs, depth + 1);
-      continue;
-    }
-    if (!entry.isFile) {
-      continue;
-    }
-    yield* yieldFileIfAllowed(ctx, childAbs, childRel);
+    yield* yieldDirectoryEntry(ctx, absoluteDir, entry, depth);
   }
 }
 

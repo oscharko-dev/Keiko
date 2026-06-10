@@ -60,8 +60,7 @@ interface ScanContext {
 }
 
 function stringifyLeaf(value: unknown): string {
-  const json = JSON.stringify(value);
-  return json ?? String(value);
+  return JSON.stringify(value);
 }
 
 function appendNormalizedLeaf(

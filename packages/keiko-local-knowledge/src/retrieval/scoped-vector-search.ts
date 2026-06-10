@@ -78,7 +78,7 @@ function readVectorsForCapsule(
   capsuleId: KnowledgeCapsuleId,
   sourceFilter?: readonly KnowledgeSourceId[],
 ): readonly VectorRow[] {
-  if (sourceFilter !== undefined && sourceFilter.length === 0) return [];
+  if (sourceFilter?.length === 0) return [];
   const params: Record<string, string> = { c: String(capsuleId) };
   const sourceClause =
     sourceFilter === undefined

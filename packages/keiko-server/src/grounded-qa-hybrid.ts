@@ -859,6 +859,12 @@ interface ResolvedAnswerer {
   readonly answer: HybridAnswerer;
 }
 
+interface AnswerMeta {
+  readonly folderScopeCount: number;
+  readonly connectorScopeCount: number;
+  readonly connectorResult: ConnectorRetrieval;
+}
+
 function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | RouteResult {
   if (ctx.answer !== undefined) return { answer: ctx.answer };
   const model = ctx.deps.modelPortFactory(ctx.modelId);
@@ -866,6 +872,42 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
   return { answer: createHybridAnswerer(model, ctx.modelId, ctx.signal) };
+}
+
+function assembleHybridNoEvidenceRoute(
+  ctx: HybridGroundedAskCtx,
+  store: KnowledgeStore,
+  folders: readonly RetrievedFolder[],
+  meta: AnswerMeta,
+  selected: readonly SelectedCandidate<HybridPayload>[],
+  limits: ReturnType<typeof currentGroundingLimits>,
+): RouteResult {
+  const content = redactString(
+    ctx.deps.redactor,
+    "No evidence found in the selected connected sources.",
+  );
+  const [userMessage, assistantMessage] = persistGroundedExchange(
+    ctx.deps,
+    ctx.chat.id,
+    redactString(ctx.deps.redactor, ctx.content),
+    content,
+  );
+  const answer = assembleHybridAnswer(
+    ctx,
+    {
+      folders,
+      connectors: meta.connectorResult.retrieved,
+      skipped: meta.connectorResult.skipped,
+      folderSourceCount: meta.folderScopeCount,
+      connectorSourceCount: meta.connectorScopeCount,
+    },
+    store,
+    selected,
+    limits,
+    { content, usage: { promptTokens: 0, completionTokens: 0 } },
+    { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
+  );
+  return { status: 200, body: answer };
 }
 
 export async function runHybridGroundedAsk(ctx: HybridGroundedAskCtx): Promise<RouteResult> {
@@ -912,41 +954,12 @@ async function answerAndAssemble(
   ctx: HybridGroundedAskCtx,
   store: KnowledgeStore,
   folders: readonly RetrievedFolder[],
-  meta: {
-    readonly folderScopeCount: number;
-    readonly connectorScopeCount: number;
-    readonly connectorResult: ConnectorRetrieval;
-  },
+  meta: AnswerMeta,
 ): Promise<RouteResult> {
   const limits = currentGroundingLimits(ctx.deps);
   const selected = buildUnifiedSelection(ctx, folders, meta.connectorResult.retrieved, store);
   if (selected.length === 0) {
-    const content = redactString(
-      ctx.deps.redactor,
-      "No evidence found in the selected connected sources.",
-    );
-    const [userMessage, assistantMessage] = persistGroundedExchange(
-      ctx.deps,
-      ctx.chat.id,
-      redactString(ctx.deps.redactor, ctx.content),
-      content,
-    );
-    const answer = assembleHybridAnswer(
-      ctx,
-      {
-        folders,
-        connectors: meta.connectorResult.retrieved,
-        skipped: meta.connectorResult.skipped,
-        folderSourceCount: meta.folderScopeCount,
-        connectorSourceCount: meta.connectorScopeCount,
-      },
-      store,
-      selected,
-      limits,
-      { content, usage: { promptTokens: 0, completionTokens: 0 } },
-      { userMessageId: userMessage.id, assistantMessageId: assistantMessage.id },
-    );
-    return { status: 200, body: answer };
+    return assembleHybridNoEvidenceRoute(ctx, store, folders, meta, selected, limits);
   }
   const answerer = resolveHybridAnswerer(ctx);
   if ("status" in answerer) return answerer;
