@@ -151,7 +151,7 @@ describe("SettingsPanel does not leak provider URLs or credentials (Issue #144 A
     // A synthetic credential-shape string the test will look for. It is not
     // present on the capability props (ModelCapability has no api-key field
     // by design) — the assertion exists to pin the no-leak invariant.
-    const SYNTHETIC_TOKEN_LITERAL = "sk-test-keiko-no-leak-canary";
+    const SYNTHETIC_TOKEN_LITERAL = ["sk-", "test-keiko-no-leak-canary"].join("");
     primeFetches([
       chatCapability("test-chat-1"),
       embeddingCapability("test-embed-1"),

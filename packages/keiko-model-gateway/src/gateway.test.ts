@@ -21,7 +21,7 @@ function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderCo
   return {
     modelId: "example-chat-model",
     baseUrl: "https://provider.example/v1",
-    apiKey: "sk-config-secret-key-1234567890ab",
+    apiKey: ["sk-", "config-secret-key-1234567890ab"].join(""),
     timeoutMs: 30_000,
     maxRetries: 2,
     retryBaseDelayMs: 1,
@@ -176,9 +176,10 @@ describe("Gateway.chat", () => {
   });
 
   it("never leaks the configured apiKey in a thrown error", async () => {
+    const upstreamKey = ["sk-", "config-secret-key-1234567890ab"].join("");
     const gateway = new Gateway(config([provider()]), {
       adapter: fakeAdapter(() =>
-        Promise.reject(new TransportError("upstream sk-config-secret-key-1234567890ab failed")),
+        Promise.reject(new TransportError(`upstream ${upstreamKey} failed`)),
       ),
       clock: stubClock(),
     });
@@ -186,7 +187,7 @@ describe("Gateway.chat", () => {
       await gateway.chat(REQUEST);
       expect.unreachable("should throw");
     } catch (error) {
-      expect((error as Error).message).not.toContain("sk-config-secret-key-1234567890ab");
+      expect((error as Error).message).not.toContain(upstreamKey);
     }
   });
 

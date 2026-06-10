@@ -268,7 +268,7 @@ describe("createMemoryAuditHandler", () => {
   it("redacts an api_key= assignment pattern in the audit summary", () => {
     const store = createInMemoryEvidenceStore();
     // Fragmented literal — source file must not contain the pattern contiguously.
-    const secretValue = "super-secret-value-1234";
+    const secretValue = ["super-secret-value-", "1234"].join("");
     const apiKeyId = ["api_key=", secretValue].join("");
     const redact = createAuditRedactor({ additionalSecrets: [secretValue] }, {});
     const handler = createMemoryAuditHandler({

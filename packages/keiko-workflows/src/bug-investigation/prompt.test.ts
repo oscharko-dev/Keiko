@@ -50,7 +50,7 @@ describe("buildBugPrompt (AC #9 prompt construction)", () => {
   });
 
   it("redacts secret-shaped failure evidence before model prompt construction", () => {
-    const secret = "Bearer tiny_token";
+    const secret = ["Bearer", " ", "tiny_token"].join("");
     const report: BugReportInput = {
       description: `do not leak ${secret}`,
       failingOutput: `AssertionError token=${secret}`,
@@ -64,7 +64,7 @@ describe("buildBugPrompt (AC #9 prompt construction)", () => {
   });
 
   it("redacts secret-shaped evidence before the final prompt clamp", () => {
-    const secret = `ghp_${"C".repeat(36)}`;
+    const secret = ["ghp_", "C".repeat(36)].join("");
     const report: BugReportInput = {
       failingOutput: `${"a".repeat(16_380)}${secret}`,
     };

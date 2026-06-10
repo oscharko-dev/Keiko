@@ -176,9 +176,10 @@ const validProposalWithSecret = JSON.stringify({
     type: "depends-on",
     source: { kind: "capsule", id: "cap-3" },
     target: { kind: "capsule", id: "cap-4" },
-    summary: "leaked sk-ABCDEFGHIJKL hint",
+    summary: `leaked ${["sk-", "ABCDEFGHIJKL"].join("")} hint`,
   },
 });
+const proposalSecret = ["sk-", "ABCDEFGHIJKL"].join("");
 
 function startsWorkflowBody(sourceId: string, targetId: string): string {
   return JSON.stringify({
@@ -421,7 +422,7 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
     expect(
       JSON.stringify(result.body),
       "redactor's scrubbed output must reach the response body — bypass would leave the secret token visible",
-    ).not.toContain("sk-ABCDEFGHIJKL");
+    ).not.toContain(proposalSecret);
   });
 
   it("validate denies duplicate starts-workflow with a cardinality reason before persistence", async () => {
@@ -671,7 +672,10 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
       headers: { "idempotency-key": "patch-redact", "if-match": etag },
       body: JSON.stringify({
         schemaVersion: "1",
-        transition: { to: "archived", summary: "moved sk-TRANSITION1234 into archive" },
+        transition: {
+          to: "archived",
+          summary: `moved ${["sk-", "TRANSITION1234"].join("")} into archive`,
+        },
       }),
     });
     const res = await handleRelationshipPatch(makeCtx(patch, { id }), deps);
@@ -803,7 +807,7 @@ describe("PATCH /api/relationships/:id reconnect contract", () => {
         schemaVersion: "1",
         reconnect: {
           target: { kind: "capsule", id: "cap-9" },
-          summary: "relinked sk-RECONNECT1234 target",
+          summary: `relinked ${["sk-", "RECONNECT1234"].join("")} target`,
         },
       }),
     });

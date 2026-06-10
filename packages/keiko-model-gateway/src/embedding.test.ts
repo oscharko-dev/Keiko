@@ -12,7 +12,7 @@ import {
   type OpenAIEmbeddingRequest,
 } from "./openai-embedding-adapter.js";
 
-const SECRET_API_KEY = "sk-test-keiko-embedding-1234567890abcdef";
+const SECRET_API_KEY = ["sk-", "test-keiko-embedding-1234567890abcdef"].join("");
 const PROVIDER_ENDPOINT = "https://internal.example.invalid/v1";
 
 const PROBE: EmbeddingProbeOptions = {
@@ -412,6 +412,7 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
   }
 
   it("formats the authorization header as 'Bearer <key>' for the default header name", async () => {
+    const apiKey = ["sk-", "test"].join("");
     let capturedAuth: string | null = null;
     const fetchImpl = mockFetch((_url, init) => {
       const headers = init.headers as Record<string, string>;
@@ -423,16 +424,17 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
     });
     const outcome = await requestOpenAIEmbedding({
       endpoint: "https://example.test/v1",
-      apiKey: "sk-test",
+      apiKey,
       modelId: "text-embedding-3-small",
       input: "ping",
       fetchImpl,
     });
     expect(outcome.ok).toBe(true);
-    expect(capturedAuth).toBe("Bearer sk-test");
+    expect(capturedAuth).toBe(`Bearer ${apiKey}`);
   });
 
   it("does NOT double-prefix when the apiKey already includes 'Bearer ' (Copilot)", async () => {
+    const bearerKey = ["Bearer", " ", "already-prefixed"].join("");
     let capturedAuth: string | null = null;
     const fetchImpl = mockFetch((_url, init) => {
       const headers = init.headers as Record<string, string>;
@@ -444,12 +446,12 @@ describe("requestOpenAIEmbedding (direct transport)", () => {
     });
     await requestOpenAIEmbedding({
       endpoint: "https://example.test/v1",
-      apiKey: "Bearer already-prefixed",
+      apiKey: bearerKey,
       modelId: "m",
       input: "ping",
       fetchImpl,
     });
-    expect(capturedAuth).toBe("Bearer already-prefixed");
+    expect(capturedAuth).toBe(bearerKey);
   });
 
   it("uses raw key value for non-Bearer header names (e.g. api-key)", async () => {

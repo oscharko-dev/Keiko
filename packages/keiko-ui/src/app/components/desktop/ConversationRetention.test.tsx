@@ -112,7 +112,7 @@ describe("conversation retention and audit-leak regression (#154)", () => {
     // boundary (see conversation-audit.test.ts), but the UI must not undo that work.
     // We use a clearly-shaped token; if the BFF ever regresses, the value reaching the UI
     // would be redacted to "[REDACTED]" and never the raw shape below.
-    const leakedToken = "sk-test-1234567890ABCDEFGH";
+    const leakedToken = ["sk-", "test-1234567890ABCDEFGH"].join("");
     const session = makeSession({
       activeChat: makeChat(),
       messages: [makeUserMessage("hello")],

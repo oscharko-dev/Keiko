@@ -15,7 +15,7 @@ import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./
 const CONFIG: ModelProviderConfig = {
   modelId: "example-chat-model",
   baseUrl: "https://provider.example/v1",
-  apiKey: "example-test-token-1234567890abcd",
+  apiKey: ["example-test-token-", "1234567890abcd"].join(""),
   timeoutMs: 30_000,
   maxRetries: 3,
   retryBaseDelayMs: 500,
@@ -66,7 +66,7 @@ describe("OpenAiAdapter.call", () => {
       );
     });
     await adapter.call(REQUEST, CONFIG);
-    expect(seenAuth).toBe("Bearer example-test-token-1234567890abcd");
+    expect(seenAuth).toBe(`Bearer ${CONFIG.apiKey}`);
   });
 
   it("sends a LiteLLM custom API key header without an Authorization fallback", async () => {
@@ -82,7 +82,7 @@ describe("OpenAiAdapter.call", () => {
     });
     await adapter.call(REQUEST, { ...CONFIG, apiKeyHeaderName: "x-litellm-key" });
     expect(seenAuth).toBeNull();
-    expect(seenCustom).toBe("Bearer example-test-token-1234567890abcd");
+    expect(seenCustom).toBe(`Bearer ${CONFIG.apiKey}`);
   });
 
   it("sends an x-api-key custom API key header as a raw token", async () => {
@@ -98,7 +98,7 @@ describe("OpenAiAdapter.call", () => {
     });
     await adapter.call(REQUEST, { ...CONFIG, apiKeyHeaderName: "x-api-key" });
     expect(seenAuth).toBeNull();
-    expect(seenCustom).toBe("example-test-token-1234567890abcd");
+    expect(seenCustom).toBe(CONFIG.apiKey);
   });
 
   it("throws AuthenticationError on HTTP 401", async () => {
@@ -191,13 +191,14 @@ describe("OpenAiAdapter.call", () => {
   });
 
   it("never includes the raw response body verbatim in a thrown error", async () => {
-    const secretBody = { error: "contains sk-leak-aaaaaaaaaaaaaaaaaaaa internal trace" };
+    const leakedKey = ["sk-", "leak-aaaaaaaaaaaaaaaaaaaa"].join("");
+    const secretBody = { error: `contains ${leakedKey} internal trace` };
     const adapter = adapterWith(() => Promise.resolve(jsonResponse(secretBody, { status: 500 })));
     try {
       await adapter.call(REQUEST, CONFIG);
       expect.unreachable("should throw");
     } catch (error) {
-      expect((error as Error).message).not.toContain("sk-leak-aaaaaaaaaaaaaaaaaaaa");
+      expect((error as Error).message).not.toContain(leakedKey);
       expect((error as Error).message).not.toContain("internal trace");
     }
   });
