@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Keiko",
+  title: "Keiko | Ex experientia disco",
   description: "Keiko local developer-assist workspace.",
   manifest: "/manifest.webmanifest",
   icons: {
