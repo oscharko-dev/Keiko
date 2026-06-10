@@ -50,6 +50,13 @@ function makeDetail(
     coveragePercentage,
     coverageByAtom,
     qualityScore,
+    drift: {
+      status: "unavailable",
+      sourceFingerprintCount: 0,
+      atomFingerprintCount: 0,
+      reCheckSupported: false,
+      regenerateStaleSupported: false,
+    },
   };
 }
 
@@ -109,6 +116,77 @@ describe("QiRunCard", () => {
     });
     // Detail is reloaded after the decision (initial load + post-review reload).
     expect((fetchImpl as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("locks the review controls and labels the clicked button Saving… while a review is in flight (F029 C275)", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    const detail = makeDetail("qi-run-pending", [makeCandidate("tc-1", "Successful login")]);
+    let resolveReview: (() => void) | undefined;
+    const reviewImpl = vi.fn().mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveReview = resolve;
+        }),
+    ) as unknown as typeof import("@/lib/quality-intelligence-api").reviewQiRun;
+
+    render(
+      <QiRunCard runId="qi-run-pending" fetchDetailImpl={fetchOk(detail)} reviewImpl={reviewImpl} />,
+    );
+    const approveButton = await screen.findByRole("button", { name: /approve/i });
+    await user.click(approveButton);
+
+    // The clicked button shows in-flight feedback; the whole group is aria-disabled (focusable).
+    expect(approveButton).toHaveTextContent("Saving…");
+    expect(approveButton).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: /^reject$/i })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    // An impatient second click must not fire a duplicate review request (duplicate audit entry).
+    await user.click(approveButton);
+    expect(reviewImpl).toHaveBeenCalledTimes(1);
+
+    resolveReview?.();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^approve$/i })).not.toHaveAttribute(
+        "aria-disabled",
+      );
+    });
+  });
+
+  it("keeps the run content rendered and shows a dismissible alert when a review action fails (F030 C113)", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("keiko.qi.reviewerLabel", "Alice");
+    const detail = makeDetail("qi-run-rev-fail", [makeCandidate("tc-1", "Successful login")]);
+    const reviewImpl = vi
+      .fn()
+      .mockRejectedValue(
+        new Error("FORBIDDEN: review not allowed."),
+      ) as unknown as typeof import("@/lib/quality-intelligence-api").reviewQiRun;
+
+    render(
+      <QiRunCard
+        runId="qi-run-rev-fail"
+        fetchDetailImpl={fetchOk(detail)}
+        reviewImpl={reviewImpl}
+      />,
+    );
+    const approveButton = await screen.findByRole("button", { name: /approve/i });
+    await waitFor(() => {
+      expect(approveButton).toBeEnabled();
+    });
+    await user.click(approveButton);
+
+    const alert = await screen.findByTestId("qi-action-error");
+    expect(alert).toHaveTextContent("FORBIDDEN: review not allowed.");
+    // The card content must NOT be replaced by a full ErrorState — the work context stays.
+    expect(screen.getByText("Successful login")).toBeInTheDocument();
+    expect(screen.queryByTestId("qi-error-state")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /dismiss/i }));
+    expect(screen.queryByTestId("qi-action-error")).not.toBeInTheDocument();
   });
 
   it("surfaces a retryable error when the detail fetch fails", async () => {
@@ -280,8 +358,9 @@ describe("QiRunCard", () => {
     const detail = makeDetail("qi-run-q1", [makeCandidate("tc-1", "A test")], [], 0, 84.6);
     render(<QiRunCard runId="qi-run-q1" fetchDetailImpl={fetchOk(detail)} />);
     const badge = await screen.findByTestId("qi-quality-badge");
-    expect(badge).toHaveTextContent("85");
-    expect(badge).toHaveAttribute("aria-label", "Quality score: 85 out of 100");
+    // The score context is sr-only text (aria-label is prohibited on a generic <span>).
+    expect(badge).toHaveTextContent("85 out of 100");
+    expect(badge).not.toHaveAttribute("aria-label");
     // 70-89 → mid tier (amber).
     expect(badge.className).toContain("qi-quality-mid");
   });
@@ -291,7 +370,8 @@ describe("QiRunCard", () => {
     render(<QiRunCard runId="qi-run-q2" fetchDetailImpl={fetchOk(detail)} />);
     const badge = await screen.findByTestId("qi-quality-badge");
     expect(badge).toHaveTextContent("—");
-    expect(badge).toHaveAttribute("aria-label", "Quality score: not available");
+    // The em-dash alone is meaningless to assistive tech — sr-only text carries the meaning.
+    expect(badge).toHaveTextContent("Quality score not available");
   });
 
   it("applies the high tier class for a score of 90 or above", async () => {
@@ -325,6 +405,24 @@ describe("QiRunCard", () => {
     render(<QiRunCard runId="qi-run-d2" fetchDetailImpl={fetchOk(detail)} />);
     await screen.findByText("A test");
     expect(screen.queryByTestId("qi-drift-recheck")).not.toBeInTheDocument();
+  });
+
+  it("shows disabled drift guidance when fingerprints exist but no source handle is available", async () => {
+    const detail: QualityIntelligenceUiRunDetail = {
+      ...makeDetail("qi-run-d4", [makeCandidate("tc-1", "A test")]),
+      drift: {
+        status: "not-checked",
+        sourceFingerprintCount: 1,
+        atomFingerprintCount: 1,
+        reCheckSupported: true,
+        regenerateStaleSupported: true,
+      },
+    };
+    render(<QiRunCard runId="qi-run-d4" fetchDetailImpl={fetchOk(detail)} />);
+    expect(await screen.findByTestId("qi-drift-unavailable")).toHaveTextContent(
+      /no current source handle/i,
+    );
+    expect(screen.getByTestId("qi-drift-recheck-unavailable")).toBeDisabled();
   });
 
   it("hides the drift panel when connected sources is an empty array", async () => {

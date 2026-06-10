@@ -40,6 +40,7 @@ import {
   patchRelationship,
   deleteRelationship,
   RelationshipApiError,
+  BACKEND_UNREACHABLE_MESSAGE,
 } from "../../../../relationships/api";
 import type {
   ApiRelationship,
@@ -549,7 +550,7 @@ function DenialSection({
           <div key={code} style={{ marginBottom: i < codes.length - 1 ? 8 : 0 }}>
             <div
               style={{
-                fontFamily: "var(--mono)",
+                fontFamily: "var(--font-mono)",
                 fontSize: 11,
                 color: "var(--fg-muted)",
                 marginBottom: 2,
@@ -642,7 +643,11 @@ function ActionRow({
         className={`arun-btn${canReconnect ? " primary" : ""}`}
         aria-disabled={!canReconnect || mutating}
         aria-label="Reconnect — only available for blocked relationships"
-        title={canReconnect ? "Reconnect (R)" : "Only blocked relationships can be reconnected."}
+        title={
+          canReconnect
+            ? "Reconnect this relationship"
+            : "Only blocked relationships can be reconnected."
+        }
         disabled={!canReconnect || mutating}
         onClick={canReconnect ? onReconnect : undefined}
       >
@@ -653,7 +658,9 @@ function ActionRow({
         className="arun-btn"
         aria-disabled={!canArchive || mutating}
         aria-label="Archive — only available for active relationships"
-        title={canArchive ? "Archive (A)" : "Only active relationships can be archived."}
+        title={
+          canArchive ? "Archive this relationship" : "Only active relationships can be archived."
+        }
         disabled={!canArchive || mutating}
         onClick={canArchive ? onArchive : undefined}
       >
@@ -664,7 +671,7 @@ function ActionRow({
         className="arun-btn"
         aria-disabled={!canRevoke || mutating}
         aria-label="Revoke relationship"
-        title={canRevoke ? "Revoke (Shift+Delete)" : "Already revoked or superseded."}
+        title={canRevoke ? "Revoke this relationship" : "Already revoked or superseded."}
         disabled={!canRevoke || mutating}
         onClick={canRevoke ? onRevoke : undefined}
         style={{ color: canRevoke ? "var(--danger)" : undefined }}
@@ -676,20 +683,24 @@ function ActionRow({
         className="arun-btn"
         aria-disabled={!canViewImpact}
         aria-label="View impact analysis"
-        title={canViewImpact ? "View Impact (I)" : "Impact analysis is unavailable in this state."}
+        title={
+          canViewImpact
+            ? "Toggle the impact analysis card"
+            : "Impact analysis is unavailable in this state."
+        }
         disabled={!canViewImpact}
         onClick={canViewImpact ? onViewImpact : undefined}
       >
-        View Impact
+        View impact
       </button>
       <button
         type="button"
         className="arun-btn"
         aria-label="View evidence references"
-        title="View Evidence (E)"
+        title="Jump to the evidence references section"
         onClick={onViewEvidence}
       >
-        View Evidence
+        View evidence
       </button>
     </div>
   );
@@ -795,10 +806,7 @@ export function RelationshipInspectorPanel({
       if (fetchGeneration.current !== generation) {
         return;
       }
-      const msg =
-        err instanceof RelationshipApiError
-          ? err.message
-          : "Unable to reach the local backend. Check that `keiko serve` is running.";
+      const msg = err instanceof RelationshipApiError ? err.message : BACKEND_UNREACHABLE_MESSAGE;
       setError(msg);
     } finally {
       if (skeletonTimer.current === timer) {
@@ -909,21 +917,31 @@ export function RelationshipInspectorPanel({
     [onViewImpact],
   );
 
+  // "View Evidence" scrolls to the in-panel "Evidence references" section. There is no
+  // /evidence route in the app, and navigating away would destroy the Workspace window
+  // context (see evidenceReferenceIds above), so the action stays inside the inspector.
+  const evidenceSectionRef = useRef<HTMLDivElement | null>(null);
   const handleViewEvidence = useCallback(() => {
-    if (rel !== null) {
-      window.location.href = `/evidence?relId=${encodeURIComponent(rel.id)}`;
-    }
-  }, [rel]);
-
-  // ─── Keyboard shortcuts (inspector-spec.md §"Keyboard map") ───────────────
-  // Chords: R=Reconnect, A=Archive, Shift+Delete=Revoke, I=ViewImpact, E=ViewEvidence
-  // Registered via the existing useKeyboardShortcuts substrate in the parent —
-  // the panel itself handles them only when focused (no global binding from this component).
+    evidenceSectionRef.current?.scrollIntoView?.({ block: "start" });
+  }, []);
 
   // ─── Empty state (inspector-spec.md §"Empty state") ───────────────────────
 
   if (relationshipId === null) {
-    return null; // Host InspectorPanel renders its default content
+    // The Relationships window renders this panel directly (RelationshipsView has no host
+    // InspectorPanel with default content), so an explicit empty state is required — otherwise
+    // the entire right column is a blank surface on first open.
+    return (
+      <div className="tw-pad" data-testid="relationship-inspector-panel">
+        <SectionLabel style={{ marginTop: 0 }}>Relationship</SectionLabel>
+        <div className="insp-empty" data-testid="inspector-empty">
+          Select a relationship from the list to inspect it.
+        </div>
+        <div style={{ fontSize: 12, color: "var(--fg-muted)", marginTop: 4 }}>
+          If the list is empty, use “+ New relationship” in the toolbar to create one.
+        </div>
+      </div>
+    );
   }
 
   const explainDenial = toDenialDetails(explain?.decision.reasons);
@@ -1037,8 +1055,10 @@ export function RelationshipInspectorPanel({
             hasMore={false}
           />
 
-          {/* Section 8: Evidence references */}
-          <EvidenceSection rel={rel} />
+          {/* Section 8: Evidence references — scroll target for the "View Evidence" action */}
+          <div ref={evidenceSectionRef}>
+            <EvidenceSection rel={rel} />
+          </div>
 
           {/* Section 9: Impact summary + bounded dependency walk (#542) */}
           <ImpactSection

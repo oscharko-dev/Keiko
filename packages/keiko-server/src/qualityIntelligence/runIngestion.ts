@@ -208,6 +208,7 @@ const WORKSPACE_BUDGET_BYTES = 196_608;
 const WORKSPACE_MAX_BYTES_PER_FILE = 16_384;
 const CODE_EXTENSION =
   /\.(?:ts|tsx|js|jsx|mjs|cjs|py|java|go|rb|rs|cs|cpp|cc|c|h|hpp|kt|swift|php|scala|sql)$/iu;
+const REQUIREMENT_TEXT_EXTENSION = /\.(?:md|markdown|txt|text|rst|adoc|asciidoc|org)$/iu;
 
 const atomKindForPath = (path: string): "code-fragment" | "document-excerpt" =>
   CODE_EXTENSION.test(path) ? "code-fragment" : "document-excerpt";
@@ -236,6 +237,63 @@ const workspaceAtom = (
   };
   return { atom, canonicalText };
 };
+
+const requirementAtomIdFor = (
+  envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
+  path: string,
+  statement: string,
+): QI.QualityIntelligenceEvidenceAtomId => {
+  const digest = sha256Hex(`qi-atom-doc-req-v1|${String(envelopeId)}|${path}|${statement}`).slice(
+    0,
+    32,
+  );
+  return QualityIntelligence.asQualityIntelligenceEvidenceAtomId(`qi-atom-${digest}`);
+};
+
+const stripRequirementDocumentStructure = (text: string): string =>
+  text
+    .split(/\r?\n/u)
+    .filter((line) => !/^\s{0,3}#{1,6}\s+\S/u.test(line))
+    .join("\n");
+
+function documentRequirementAtoms(
+  entry: { readonly path: string; readonly excerpt: string },
+  envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
+): readonly QualityIntelligenceIngestedAtom[] {
+  if (!REQUIREMENT_TEXT_EXTENSION.test(entry.path)) return Object.freeze([]);
+  const split = QualityIntelligenceGeneration.splitRequirementsIntoAtoms(
+    stripRequirementDocumentStructure(entry.excerpt),
+    {
+      envelopeId,
+      maxAtoms: MAX_TOTAL_ATOMS,
+    },
+  );
+  if (split.length <= 1) return Object.freeze([]);
+  return Object.freeze(
+    split.map((requirement) => {
+      const canonicalText = `${entry.path}\n${requirement.canonicalText}`;
+      const atom: QI.QualityIntelligenceRequirementAtom = {
+        kind: "requirement",
+        id: requirementAtomIdFor(envelopeId, entry.path, requirement.canonicalText),
+        sourceEnvelopeId: envelopeId,
+        canonicalHashSha256Hex: sha256Hex(canonicalText),
+        redactionStatus: "redacted",
+        lifecycleStatus: "draft",
+      };
+      return Object.freeze({ atom: Object.freeze(atom), canonicalText });
+    }),
+  );
+}
+
+function atomsForWorkspaceEntry(
+  entry: { readonly path: string; readonly excerpt: string },
+  envelopeId: QI.QualityIntelligenceSourceEnvelopeId,
+): readonly QualityIntelligenceIngestedAtom[] {
+  const requirementAtoms = documentRequirementAtoms(entry, envelopeId);
+  return requirementAtoms.length > 0
+    ? requirementAtoms
+    : Object.freeze([workspaceAtom(entry, envelopeId)]);
+}
 
 // Ingest a local folder by REUSING keiko-workspace traversal + redaction (no independent
 // repository traversal — Issue #278 stop condition). Each selected, already-redacted context
@@ -290,7 +348,7 @@ function ingestWorkspace(
     },
     localRef: stableLocalRef("workspace", pack.workspaceRoot),
   };
-  const atoms = pack.selected.map((entry) => workspaceAtom(entry, envelopeId));
+  const atoms = pack.selected.flatMap((entry) => atomsForWorkspaceEntry(entry, envelopeId));
   return { envelope, atoms };
 }
 
@@ -456,9 +514,10 @@ function ingestFile(
     },
     localRef: stableLocalRef("file", absFile),
   };
-  const atoms = [
-    workspaceAtom({ path: content.relativePath, excerpt: boundedText }, envelopeId),
-  ];
+  const atoms = atomsForWorkspaceEntry(
+    { path: content.relativePath, excerpt: boundedText },
+    envelopeId,
+  );
   return { envelope, atoms };
 }
 

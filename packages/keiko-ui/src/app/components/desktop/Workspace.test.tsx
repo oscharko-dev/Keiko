@@ -140,7 +140,9 @@ describe("Workspace card connections", () => {
 
     render(<Workspace ws={ws} wsRef={createRef<HTMLDivElement>()} openPalette={() => undefined} />);
 
-    const targetMaximizeButton = screen.getAllByRole("button", { name: "Maximize window" })[1];
+    // uiux-fix F031 C297 — control labels are window-scoped now ("Maximize Files
+    // window"), so the files-1 target is addressable by name directly.
+    const targetMaximizeButton = screen.getByRole("button", { name: "Maximize Files window" });
     expect(targetMaximizeButton).toBeDefined();
 
     fireEvent.pointerDown(targetMaximizeButton as HTMLElement, { button: 0 });
@@ -162,7 +164,7 @@ describe("Workspace card connections", () => {
       />,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: /connect from top edge/i }), {
+    fireEvent.pointerDown(screen.getByRole("button", { name: /connect agents from top edge/i }), {
       button: 0,
       clientX: 112,
       clientY: 128,
@@ -225,7 +227,7 @@ describe("Workspace card connections", () => {
       />,
     );
 
-    const port = screen.getByRole("button", { name: /connect from top edge/i });
+    const port = screen.getByRole("button", { name: /connect agents from top edge/i });
     port.focus();
     await user.keyboard("{Enter}");
 
@@ -234,5 +236,96 @@ describe("Workspace card connections", () => {
       "agents-1",
       expect.objectContaining({ clientX: expect.any(Number), clientY: expect.any(Number) }),
     );
+  });
+
+  it("confirms an in-flight connection with Enter on a valid target's port (WCAG 2.1.1)", async () => {
+    // Keyboard users can START a connect flow but previously had no keyboard
+    // path to COMPLETE it — Enter on the target port must confirm, not start
+    // a new flow from the target window (audit C004).
+    const confirmConnect = vi.fn();
+    const startConnect = vi.fn();
+    const workspaceApi = api({ confirmConnect, startConnect });
+    const wins = [
+      appWindow({ id: "agents-1", type: "agents", z: 1 }),
+      appWindow({ id: "files-1", type: "files", x: 420, z: 2 }),
+    ];
+    const user = userEvent.setup();
+
+    render(
+      <Workspace
+        ws={workspace({
+          wins,
+          connecting: { from: "agents-1", x: 100, y: 100 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    // uiux-fix F031 C297 — port labels are window-scoped, so the files-1 target
+    // port is addressable by name directly.
+    const targetPort = screen.getByRole("button", { name: /connect files from top edge/i });
+    expect(targetPort).toBeDefined();
+    (targetPort as HTMLElement).focus();
+    await user.keyboard("{Enter}");
+
+    expect(confirmConnect).toHaveBeenCalledTimes(1);
+    expect(confirmConnect).toHaveBeenCalledWith("files-1", expect.any(Object));
+    expect(startConnect).not.toHaveBeenCalled();
+  });
+
+  it("keeps Enter on an invalid target's port starting a new flow (pointer parity)", async () => {
+    // agents↔agents is not connectable (canConnect rejects same types), so the
+    // target stays an invalid drop target and Enter restarts the flow from it —
+    // identical to today's pointer behaviour on invalid targets.
+    const confirmConnect = vi.fn();
+    const startConnect = vi.fn();
+    const workspaceApi = api({ confirmConnect, startConnect });
+    const wins = [
+      appWindow({ id: "agents-1", type: "agents", z: 1 }),
+      appWindow({ id: "agents-2", type: "agents", x: 420, z: 2 }),
+    ];
+    const user = userEvent.setup();
+
+    render(
+      <Workspace
+        ws={workspace({
+          wins,
+          connecting: { from: "agents-1", x: 100, y: 100 },
+          api: workspaceApi,
+        })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const targetPort = screen.getAllByRole("button", { name: /connect agents from top edge/i })[1];
+    expect(targetPort).toBeDefined();
+    (targetPort as HTMLElement).focus();
+    await user.keyboard("{Enter}");
+
+    expect(confirmConnect).not.toHaveBeenCalled();
+    expect(startConnect).toHaveBeenCalledTimes(1);
+    expect(startConnect).toHaveBeenCalledWith("agents-2", expect.any(Object));
+  });
+
+  it("announces the connect flow in a polite live region", () => {
+    const wins = [
+      appWindow({ id: "agents-1", type: "agents", z: 1 }),
+      appWindow({ id: "files-1", type: "files", x: 420, z: 2 }),
+    ];
+    const { container } = render(
+      <Workspace
+        ws={workspace({ wins, connecting: { from: "agents-1", x: 100, y: 100 } })}
+        wsRef={createRef<HTMLDivElement>()}
+        openPalette={() => undefined}
+      />,
+    );
+
+    const live = container.querySelector('[aria-live="polite"]');
+    expect(live).not.toBeNull();
+    expect(live?.textContent).toMatch(/connecting from/i);
+    expect(live?.textContent).toMatch(/escape to cancel/i);
   });
 });

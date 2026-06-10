@@ -11,20 +11,15 @@ import {
   cancelIndexing,
   disconnectCapsule,
 } from "@/lib/local-knowledge-api";
-import { ApiError } from "@/lib/api";
+import { formatError } from "./format-error";
 import type {
   ConnectorGraphProps,
   ConnectorGraphState,
   CapsuleListEntry,
   CapsuleActionResponse,
   LoadStatus,
+  RowActionKind,
 } from "./connector-graph-types";
-
-function formatError(error: unknown): string {
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return "An unexpected error occurred.";
-}
 
 function useCapsuleLoader(fetchCapsulesImpl: typeof fetchCapsules): {
   capsules: readonly CapsuleListEntry[];
@@ -70,7 +65,9 @@ function useCapsuleActions(
   disconnectCapsuleImpl: typeof disconnectCapsule,
 ): {
   actionBusy: KnowledgeCapsuleId | null;
+  actionKind: RowActionKind | null;
   actionError: string | null;
+  clearActionError: () => void;
   handleStartIndexing: (id: KnowledgeCapsuleId) => void;
   handleCancelIndexing: (id: KnowledgeCapsuleId) => void;
   handleDisconnect: (id: KnowledgeCapsuleId) => void;
@@ -78,13 +75,19 @@ function useCapsuleActions(
 } {
   const router = useRouter();
   const [actionBusy, setActionBusy] = useState<KnowledgeCapsuleId | null>(null);
+  // Tracked alongside the busy id so the row can swap the triggered button's
+  // label to "Indexing…" / "Cancelling…" / "Disconnecting…" — matching the
+  // detail page's busy feedback (uiux-fix F048, C233).
+  const [actionKind, setActionKind] = useState<RowActionKind | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   async function runAction(
     id: KnowledgeCapsuleId,
+    kind: RowActionKind,
     action: () => Promise<CapsuleActionResponse>,
   ): Promise<void> {
     setActionBusy(id);
+    setActionKind(kind);
     setActionError(null);
     try {
       await action();
@@ -93,25 +96,34 @@ function useCapsuleActions(
       setActionError(formatError(error));
     } finally {
       setActionBusy(null);
+      setActionKind(null);
     }
   }
 
   function handleStartIndexing(id: KnowledgeCapsuleId): void {
-    void runAction(id, () => startIndexingImpl(id));
+    void runAction(id, "index", () => startIndexingImpl(id));
   }
   function handleCancelIndexing(id: KnowledgeCapsuleId): void {
-    void runAction(id, () => cancelIndexingImpl(id));
+    void runAction(id, "cancel", () => cancelIndexingImpl(id));
   }
   function handleDisconnect(id: KnowledgeCapsuleId): void {
-    void runAction(id, () => disconnectCapsuleImpl(id));
+    void runAction(id, "disconnect", () => disconnectCapsuleImpl(id));
   }
   function handleOpenHealth(id: KnowledgeCapsuleId): void {
     router.push(`/local-knowledge/capsule?capsuleId=${encodeURIComponent(id)}`);
   }
 
+  // Error banners need an explicit dismiss — previously they stuck around
+  // until the next action replaced them (uiux-fix F032, C230).
+  function clearActionError(): void {
+    setActionError(null);
+  }
+
   return {
     actionBusy,
+    actionKind,
     actionError,
+    clearActionError,
     handleStartIndexing,
     handleCancelIndexing,
     handleDisconnect,
@@ -125,6 +137,7 @@ function useCapsuleCreate(
 ): {
   creating: boolean;
   createError: string | null;
+  clearCreateError: () => void;
   handleCreateCapsule: (name: string) => Promise<void>;
 } {
   const [creating, setCreating] = useState(false);
@@ -143,7 +156,11 @@ function useCapsuleCreate(
     }
   }
 
-  return { creating, createError, handleCreateCapsule: doCreate };
+  function clearCreateError(): void {
+    setCreateError(null);
+  }
+
+  return { creating, createError, clearCreateError, handleCreateCapsule: doCreate };
 }
 
 export function useConnectorGraph(props: ConnectorGraphProps): ConnectorGraphState {
@@ -158,13 +175,15 @@ export function useConnectorGraph(props: ConnectorGraphProps): ConnectorGraphSta
   const { capsules, loadStatus, loadError, reload } = useCapsuleLoader(fetchCapsulesImpl);
   const {
     actionBusy,
+    actionKind,
     actionError,
+    clearActionError,
     handleStartIndexing,
     handleCancelIndexing,
     handleDisconnect,
     handleOpenHealth,
   } = useCapsuleActions(reload, startIndexingImpl, cancelIndexingImpl, disconnectCapsuleImpl);
-  const { creating, createError, handleCreateCapsule } = useCapsuleCreate(
+  const { creating, createError, clearCreateError, handleCreateCapsule } = useCapsuleCreate(
     createCapsuleImpl,
     reload,
   );
@@ -174,10 +193,13 @@ export function useConnectorGraph(props: ConnectorGraphProps): ConnectorGraphSta
     loadStatus,
     loadError,
     actionBusy,
+    actionKind,
     actionError,
     creating,
     createError,
     reload,
+    clearCreateError,
+    clearActionError,
     handleStartIndexing,
     handleCancelIndexing,
     handleDisconnect,

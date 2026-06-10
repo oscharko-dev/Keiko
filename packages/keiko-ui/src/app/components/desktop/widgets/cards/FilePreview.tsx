@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { CSSProperties, KeyboardEvent, ReactNode } from "react";
 import { ApiError, fetchFilesPreview } from "../../../../../lib/api";
 import type { FilesPreviewResponse } from "../../../../../lib/types";
 import { useOptionalChatSessionContext } from "../../context/ChatSessionContext";
@@ -33,7 +33,12 @@ function classifyError(error: unknown): PreviewError {
     return { message: DENIED_PREVIEW_MESSAGE, denied: true };
   }
   if (error instanceof Error) {
-    return { message: error.message, denied: false };
+    // fetchJson falls back to a bare "HTTP <status>" when the BFF error envelope is
+    // unparseable — not a user-facing sentence (audit F044 C348).
+    const message = /^HTTP \d+$/.test(error.message)
+      ? "The file could not be loaded. Try again."
+      : error.message;
+    return { message, denied: false };
   }
   return { message: "Unable to read this file.", denied: false };
 }
@@ -59,7 +64,11 @@ function formatDate(timestamp: number): string {
 }
 
 function previewKindLabel(preview: FilesPreviewResponse): string {
-  if (preview.kind === "text") return langOf(preview.name);
+  // The chip shows the real file type (server-derived extension), not the internal
+  // tokenizer bucket from langOf() — that bucket folds .rb into "py", build.gradle
+  // into "js" and unknowns into "code", which reads as a wrong type label in the UI
+  // (audit F044 C200). langOf stays highlight-only.
+  if (preview.kind === "text") return preview.extension ?? "text";
   if (preview.kind === "image") return preview.mime;
   return preview.extension ?? "binary";
 }
@@ -93,6 +102,26 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
   const [preview, setPreview] = useState<FilesPreviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<PreviewError | null>(null);
+  // Bumping retryKey re-runs the fetch effect — transient failures (network, 500) get the
+  // same Retry affordance the file tree already offers (audit F044 C348).
+  const [retryKey, setRetryKey] = useState(0);
+  const backRef = useRef<HTMLButtonElement | null>(null);
+
+  // Focus management (WCAG 2.4.3): opening the preview unmounts the focused tree row, which
+  // would drop focus onto document.body. Move it onto the Back button so keyboard and
+  // screen-reader users land at the top of the new surface. preventScroll keeps the window
+  // from jumping while the preview lays out.
+  useEffect(() => {
+    backRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  // Escape closes the preview (shortcut for Back/Close). Scoped to the preview container and
+  // stopped from propagating so global window shortcuts never double-handle it.
+  const onPreviewKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    if (event.key !== "Escape") return;
+    event.stopPropagation();
+    onClose();
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -112,7 +141,7 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
     return () => {
       cancelled = true;
     };
-  }, [path, root]);
+  }, [path, root, retryKey]);
 
   const denied = error?.denied === true;
   const lang =
@@ -136,11 +165,15 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
       : [];
 
   return (
-    <div className="fpv">
+    // The keydown listener is a keyboard shortcut for the Back/Close buttons inside this
+    // container, not a standalone interaction — static-element-interactions does not apply.
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+    <div className="fpv" onKeyDown={onPreviewKeyDown}>
       <div className="fpv-bar">
         <button
           className="fpv-back"
           type="button"
+          ref={backRef}
           onClick={onClose}
           title="Back to files"
           aria-label="Back to files"
@@ -174,25 +207,57 @@ export function FilePreview({ root, path, onClose }: FilePreviewProps): ReactNod
         </button>
       </div>
 
-      {loading ? <div className="fpv-state">Loading preview...</div> : null}
+      {loading ? (
+        <div className="fpv-state" role="status">
+          Loading preview…
+        </div>
+      ) : null}
       {error !== null ? (
         <div className="fpv-state fpv-error" role="alert">
-          {error.message}
+          <span>{error.message}</span>
+          {/* Denied is a deliberate safety invariant, not a transient failure — no Retry. */}
+          {!error.denied ? (
+            <button
+              type="button"
+              className="fpv-retry"
+              onClick={() => setRetryKey((key) => key + 1)}
+            >
+              Retry
+            </button>
+          ) : null}
         </div>
       ) : null}
 
       {preview?.kind === "text" ? (
         <>
           {preview.truncated ? (
+            // Copy must not point at the Editor window: it is a static mock that cannot open
+            // files, so "open it in the editor" would send the user into a dead end (audit C198).
             <div className="fpv-banner">
-              Preview truncated at {formatBytes(preview.maxBytes)}. Open the file in the editor for
-              full content.
+              Preview truncated at {formatBytes(preview.maxBytes)}. Larger files can&apos;t be shown
+              in full here.
             </div>
           ) : null}
           {!shouldHighlight ? (
             <div className="fpv-banner">Syntax highlighting disabled for large previews.</div>
           ) : null}
-          <div className="fpv-code mono">
+          <div
+            className="fpv-code mono"
+            // Scrollable code pane: tabIndex makes the overflow region keyboard-scrollable
+            // (WCAG 2.1.1); jsx-a11y's default allowlist only covers role="tabpanel".
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+            tabIndex={0}
+            role="region"
+            aria-label={`File preview: ${preview.name}`}
+            // The 44px default gutter fits 4 digits; previews under MAX_HIGHLIGHT_BYTES can
+            // exceed 9,999 lines, so the gutter grows with the widest line number instead of
+            // overflowing its fixed box (audit F044 C351). 16px = the gutter's padding-right.
+            style={
+              {
+                "--fpv-gutter-w": `max(44px, calc(${String(String(lines.length).length)}ch + 16px))`,
+              } as CSSProperties
+            }
+          >
             {lines.map((toks, i) => (
               <div className="fpv-line" key={i}>
                 <span className="fpv-num">{i + 1}</span>

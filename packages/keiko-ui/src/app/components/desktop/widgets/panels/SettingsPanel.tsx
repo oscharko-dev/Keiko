@@ -23,6 +23,16 @@ function conversationIneligibilityLabel(reason: ConversationIneligibilityReason)
   return "Not a chat model — not selectable for text conversation";
 }
 
+// uiux-fix C359/C057: short visible badge copy — the full explanation above
+// already ends with "not selectable …", so prefixing it produced the redundant
+// 71-char "Not selectable: … — not selectable for text conversation" that also
+// overflowed the settings window. The long form stays in aria-label/title.
+function conversationIneligibilityShortLabel(reason: ConversationIneligibilityReason): string {
+  if (reason === "embedding-only") return "embedding model";
+  if (reason === "ocr-vision-only") return "OCR/vision-only";
+  return "not a chat model";
+}
+
 function ConversationEligibilityBadge({ model }: { readonly model: ModelCapability }): ReactNode {
   const reason = explainConversationIneligibility(model);
   if (reason === undefined) {
@@ -43,8 +53,9 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
       data-testid="conv-elig-no"
       role="status"
       aria-label={"Model eligibility: " + conversationIneligibilityLabel(reason)}
+      title={conversationIneligibilityLabel(reason)}
     >
-      Not selectable: {conversationIneligibilityLabel(reason)}
+      Not selectable — {conversationIneligibilityShortLabel(reason)}
     </span>
   );
 }
@@ -105,7 +116,7 @@ function GeneralPrefs(): ReactNode {
           <div className="set-sec-t">Workspace wallpaper</div>
           <div className="set-sec-d">
             Liquid Chrome — a subtle metallic flow behind the grid that reacts to your cursor and
-            clicks. Set to 0 % for the plain workspace background.
+            clicks. Set to 0% for the plain workspace background.
           </div>
         </div>
       </div>
@@ -139,6 +150,25 @@ function GeneralPrefs(): ReactNode {
 
 type Tab = "models" | "general" | "security";
 
+// uiux-fix C287: raw transport strings ("HTTP 500", "Failed to fetch") are
+// codes, not explanations — map them to a human-readable message. Messages
+// from the BFF error envelope (anything else) pass through unchanged.
+function describeSettingsLoadError(error: unknown): string {
+  const fallback = "Could not load gateway settings — the local Keiko backend did not respond.";
+  if (!(error instanceof Error)) return fallback;
+  const message = error.message.trim();
+  if (message.length === 0 || /^HTTP \d+$/u.test(message)) return fallback;
+  // Browser-native fetch failure strings (Chrome / Safari / Firefox).
+  if (
+    message === "Failed to fetch" ||
+    message === "Load failed" ||
+    message === "NetworkError when attempting to fetch a resource."
+  ) {
+    return fallback;
+  }
+  return message;
+}
+
 export function SettingsPanel(): ReactNode {
   const [tab, setTab] = useState<Tab>("models");
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
@@ -146,6 +176,8 @@ export function SettingsPanel(): ReactNode {
   const [loadingModels, setLoadingModels] = useState(true);
   const [modelError, setModelError] = useState<string | undefined>();
   const [setupOpen, setSetupOpen] = useState(false);
+  // uiux-fix C287: bumping the tick re-runs the load effect (Retry button).
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -160,7 +192,7 @@ export function SettingsPanel(): ReactNode {
         setModels(modelPayload.models);
       } catch (error) {
         if (cancelled) return;
-        setModelError(error instanceof Error ? error.message : "Could not load gateway settings.");
+        setModelError(describeSettingsLoadError(error));
       } finally {
         if (!cancelled) setLoadingModels(false);
       }
@@ -170,7 +202,7 @@ export function SettingsPanel(): ReactNode {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadTick]);
 
   // Issue #144: source of truth is the helper, not an inline kind check.
   const chatCount = models.filter(isConversationEligibleModel).length;
@@ -181,11 +213,15 @@ export function SettingsPanel(): ReactNode {
     : hasDiscoveredModels
       ? "Gateway connected"
       : "Gateway configured";
+  // uiux-fix C286: with models discovered but zero conversation-eligible ones
+  // (e.g. embedding/OCR-only gateways) the detail must not claim chat works.
   const gatewayStatusDetail = !gatewayConfigured
     ? "Enter the gateway base URL and API token before using chat or agent workflows."
-    : hasDiscoveredModels
-      ? "Keiko can use the configured gateway models for chat and agent workflows."
-      : "The gateway is configured, but no conversation-capable models are currently available.";
+    : !hasDiscoveredModels
+      ? "The gateway is configured, but no conversation-capable models are currently available."
+      : chatCount === 0
+        ? "Gateway connected, but none of the discovered models can be used for conversation. Add a chat-capable deployment."
+        : "Keiko can use the configured gateway models for chat and agent workflows.";
   const gatewayStatusTone = gatewayConfigured ? "connected" : "untested";
 
   return (
@@ -204,9 +240,14 @@ export function SettingsPanel(): ReactNode {
             key={id}
             className="set-tab"
             data-on={tab === id}
+            // uiux-fix C070: expose the active tab to assistive technology —
+            // toggle-button pattern, same as the density buttons in
+            // RelationshipListPanel (state was previously CSS-only via data-on).
+            aria-pressed={tab === id}
             onClick={() => setTab(id)}
           >
-            {id === "models" ? "Local Models" : id === "general" ? "General" : "Security"}
+            {/* uiux-fix C147: the tab shows the remote model gateway, not local models */}
+            {id === "models" ? "Models" : id === "general" ? "General" : "Security"}
           </button>
         ))}
       </div>
@@ -246,12 +287,29 @@ export function SettingsPanel(): ReactNode {
               />
             </div>
 
-            {modelError !== undefined ? <div className="gw-error">{modelError}</div> : null}
+            {/* uiux-fix C285/C287: async failure is announced (role=alert) and
+                recoverable in place via Retry — fetchModels drops its cached
+                promise on rejection, so a retry really re-fetches. */}
+            {modelError !== undefined ? (
+              <div className="gw-error" role="alert">
+                {modelError}
+                <button
+                  type="button"
+                  className="gw-error-retry"
+                  onClick={() => setReloadTick((tick) => tick + 1)}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : null}
 
+            {/* uiux-fix C285: loading -> result transition is announced */}
             {loadingModels ? (
-              <div className="set-placeholder">Loading gateway models...</div>
+              <div className="set-placeholder" role="status">
+                Loading gateway models…
+              </div>
             ) : models.length === 0 ? (
-              <div className="set-placeholder">
+              <div className="set-placeholder" role="status">
                 {gatewayConfigured
                   ? "No conversation-capable models are currently available. Review the gateway configuration or discovered model set."
                   : "No models are configured yet. Connect the gateway to load configured model capabilities."}

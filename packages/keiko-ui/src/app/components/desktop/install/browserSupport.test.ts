@@ -69,7 +69,7 @@ describe("detectSupport", () => {
     expect(detectSupport(CHROME_MACOS.toUpperCase())).toBe("supported");
   });
 
-  it("treats Chrome/mobile as manual (no beforeinstallprompt on mobile Chrome)", () => {
+  it("treats Chrome/mobile as manual (Android intentionally out of scope per ADR-0024 D3)", () => {
     expect(detectSupport(CHROME_ANDROID)).toBe("manual");
   });
 });

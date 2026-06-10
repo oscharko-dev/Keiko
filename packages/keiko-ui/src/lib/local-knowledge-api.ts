@@ -74,7 +74,12 @@ async function parseError(res: Response): Promise<{ code: string; message: strin
     const envelope = (await res.json()) as { error: { code: string; message: string } };
     return { code: envelope.error.code, message: envelope.error.message };
   } catch {
-    return { code: "INTERNAL", message: `HTTP ${res.status.toString()}` };
+    // No parseable error envelope — keep the message human-readable instead of
+    // the raw "INTERNAL: HTTP 500" machine string (uiux-fix F033, C064).
+    return {
+      code: "INTERNAL",
+      message: `The server returned an unexpected error (HTTP ${res.status.toString()}). Try again.`,
+    };
   }
 }
 

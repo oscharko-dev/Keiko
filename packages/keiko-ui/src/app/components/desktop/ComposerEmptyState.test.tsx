@@ -277,8 +277,11 @@ describe("AC #2 — disabled controls aria-describedby", () => {
 describe("AC #3 — loading state", () => {
   it("renders a role=status element with 'Connecting' or 'Loading' text while loading", () => {
     renderWindow(makeSession({ loading: true, activeChat: makeChat() }));
-    const statusEl = screen.getByRole("status");
-    expect(statusEl.textContent).toMatch(/connecting|loading/i);
+    // uiux-fix F041 (C170) — the send-lifecycle status region is now permanently
+    // mounted (empty while idle), so the loading indicator is one of several
+    // role=status regions rather than the only one.
+    const statusEls = screen.getAllByRole("status");
+    expect(statusEls.some((el) => /connecting|loading/i.test(el.textContent ?? ""))).toBe(true);
   });
 
   it("renders a 'Loading models…' option in the select while loading", () => {
@@ -290,7 +293,7 @@ describe("AC #3 — loading state", () => {
     expect(options.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("does not render a role=status element once loading is false", () => {
+  it("announces no status text once loading is false (lifecycle region stays mounted, empty)", () => {
     renderWindow(
       makeSession({
         loading: false,
@@ -298,7 +301,12 @@ describe("AC #3 — loading state", () => {
         models: [chatModelCapability("example-chat-model")],
       }),
     );
-    expect(screen.queryByRole("status")).toBeNull();
+    // uiux-fix F041 (C170) — the persistent send-lifecycle live region remains in
+    // the DOM but must be empty; the loading indicator itself must be gone.
+    expect(screen.queryByText(/connecting to your gateway/i)).toBeNull();
+    for (const statusEl of screen.queryAllByRole("status")) {
+      expect(statusEl).toBeEmptyDOMElement();
+    }
   });
 });
 

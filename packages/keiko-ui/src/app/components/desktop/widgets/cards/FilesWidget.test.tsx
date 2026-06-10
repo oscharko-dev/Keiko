@@ -149,7 +149,8 @@ describe("FilesWidget", () => {
     expect(fetchFilesTree).toHaveBeenCalledWith("/repo space", "");
     expect(onActiveFileChange).toHaveBeenCalledWith(null, "/repo space");
 
-    await userEvent.click(screen.getByRole("button", { name: /package\.json/i }));
+    // tree rows expose ARIA tree semantics (role=treeitem) since audit C143
+    await userEvent.click(screen.getByRole("treeitem", { name: /package\.json/i }));
 
     await waitFor(() =>
       expect(fetchFilesPreview).toHaveBeenCalledWith("/repo space", "package.json"),
@@ -195,8 +196,10 @@ describe("FilesWidget", () => {
     vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: updated });
     const session = renderWithSession(<FilesWidget root="/repo" />);
 
-    await screen.findByRole("button", { name: /src/i });
-    await userEvent.click(screen.getByRole("button", { name: "Connect folder" }));
+    await screen.findByRole("treeitem", { name: /^src$/i });
+    // accessible name carries the target folder so multiple tree pills are
+    // distinguishable for screen readers (audit C214)
+    await userEvent.click(screen.getByRole("button", { name: "Connect folder: src" }));
 
     await waitFor(() => {
       expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
@@ -213,6 +216,20 @@ describe("FilesWidget", () => {
 
     expect(await screen.findByText("No registered project is available.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Connect repository" })).toBeNull();
+    // audit C021: the no-root state is a NOTE, not an error — retrying could never
+    // change anything, so no Retry button may render here.
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("shows actionable empty-state copy when the root bar is available", async () => {
+    vi.mocked(fetchProjects).mockResolvedValueOnce({ projects: [] });
+
+    render(<FilesWidget onRootChange={() => undefined} />);
+
+    expect(
+      await screen.findByText("No folder is open yet. Enter a folder path above and press Open."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 
   it("renders tree loading errors", async () => {
@@ -222,6 +239,111 @@ describe("FilesWidget", () => {
 
     expect(await screen.findByText("access denied")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+  });
+
+  // WCAG 2.4.3 (audit C031) — opening the preview unmounts the focused tree row and closing
+  // re-mounts the whole tree: without explicit focus management both transitions dropped
+  // keyboard focus onto <body>.
+  it("moves focus into the preview on open and restores the file row on close (incl. Escape)", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        {
+          ...treeEntryBase,
+          name: "package.json",
+          path: "package.json",
+          kind: "file",
+          extension: "json",
+        },
+      ],
+    });
+    vi.mocked(fetchFilesPreview).mockResolvedValue({
+      root: "/repo",
+      path: "package.json",
+      name: "package.json",
+      sizeBytes: 18,
+      modifiedAt: 1,
+      extension: "json",
+      mime: "application/json",
+      symlink: false,
+      kind: "text",
+      content: '{"name":"keiko"}\n',
+      truncated: false,
+      maxBytes: 1_000_000,
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    await userEvent.click(await screen.findByRole("treeitem", { name: /package\.json/i }));
+
+    // Opening: focus lands on the Back button at the top of the preview surface.
+    const back = await screen.findByRole("button", { name: "Back to files" });
+    expect(back).toHaveFocus();
+
+    // Closing via Back: focus returns to the previewed file's tree row.
+    await userEvent.click(back);
+    await waitFor(() => {
+      expect(screen.getByRole("treeitem", { name: /package\.json/i })).toHaveFocus();
+    });
+
+    // Escape inside the preview closes it as well (shortcut for Back/Close).
+    await userEvent.click(screen.getByRole("treeitem", { name: /package\.json/i }));
+    await screen.findByRole("button", { name: "Back to files" });
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => {
+      expect(screen.getByRole("treeitem", { name: /package\.json/i })).toHaveFocus();
+    });
+    expect(screen.queryByRole("button", { name: "Back to files" })).not.toBeInTheDocument();
+  });
+
+  it("exposes tree semantics, arrow-key navigation and focusable unreadable symlinks", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [
+        { ...treeEntryBase, name: "src", path: "src", kind: "directory" },
+        {
+          ...treeEntryBase,
+          name: "broken",
+          path: "broken",
+          kind: "file",
+          symlink: true,
+          readable: false,
+        },
+        { ...treeEntryBase, name: "a.txt", path: "a.txt", kind: "file" },
+      ],
+    });
+
+    render(<FilesWidget root="/repo" />);
+
+    // ARIA tree semantics (audit C143): container is a tree, rows are level-1 treeitems
+    const dirRow = await screen.findByRole("treeitem", { name: /^src$/i });
+    expect(screen.getByRole("tree", { name: "Files" })).toBeInTheDocument();
+    expect(dirRow).toHaveAttribute("aria-level", "1");
+
+    // Unreadable symlink (audit C196/C349): aria-disabled instead of native disabled —
+    // stays focusable, carries a neutral reason, and the click is guarded.
+    const brokenRow = screen.getByRole("treeitem", { name: /broken/i });
+    expect(brokenRow).not.toBeDisabled();
+    expect(brokenRow).toHaveAttribute("aria-disabled", "true");
+    expect(brokenRow).toHaveAccessibleDescription("This link can't be opened from this folder.");
+    await userEvent.click(brokenRow);
+    expect(fetchFilesPreview).not.toHaveBeenCalled();
+
+    // Arrow keys traverse the visible rows (audit C215)
+    const fileRow = screen.getByRole("treeitem", { name: /a\.txt/i });
+    dirRow.focus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(brokenRow).toHaveFocus();
+    await userEvent.keyboard("{ArrowDown}");
+    expect(fileRow).toHaveFocus();
+    await userEvent.keyboard("{Home}");
+    expect(dirRow).toHaveFocus();
+    await userEvent.keyboard("{End}");
+    expect(fileRow).toHaveFocus();
   });
 });
 

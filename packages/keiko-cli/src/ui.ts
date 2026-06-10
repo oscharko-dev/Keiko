@@ -13,7 +13,7 @@
 
 import type { Server } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
@@ -32,6 +32,7 @@ import type { CliIo } from "./runner.js";
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const SQLITE_FLAG = "--experimental-sqlite";
 const KEIKO_ENV_NAME_RE = /^KEIKO_[A-Z0-9_]+$/;
+const DEFAULT_STATE_DIR = ".keiko";
 
 const USAGE = `Usage:
   keiko ui [--port PORT] [--host 127.0.0.1|localhost] [--evidence-dir PATH] [--config PATH] [--ui-db PATH]
@@ -164,6 +165,34 @@ function loadLocalKeikoEnv(cwd: string, env: EnvSource): EnvSource {
 
 function resolveUiConfigPath(parsed: UiCliArgs, env: EnvSource): string | undefined {
   return parsed.config ?? env.KEIKO_CONFIG_FILE;
+}
+
+function hasEnvValue(value: string | undefined): value is string {
+  return value !== undefined && value.length > 0;
+}
+
+function resolveRuntimeStateDir(cwd: string, env: EnvSource): string {
+  const raw = env.KEIKO_STATE_DIR;
+  if (hasEnvValue(raw)) {
+    return isAbsolute(raw) ? raw : resolve(cwd, raw);
+  }
+  return resolve(cwd, DEFAULT_STATE_DIR);
+}
+
+function withDefaultLocalRuntimeStateEnv(
+  cwd: string,
+  parsed: UiCliArgs,
+  env: EnvSource,
+): EnvSource {
+  const stateDir = resolveRuntimeStateDir(cwd, env);
+  const next: Record<string, string | undefined> = { ...env, KEIKO_STATE_DIR: stateDir };
+  if (parsed.uiDbPath === undefined && !hasEnvValue(next.KEIKO_UI_DATA_DIR)) {
+    next.KEIKO_UI_DATA_DIR = join(stateDir, "ui");
+  }
+  if (!hasEnvValue(next.KEIKO_MEMORY_DIR)) {
+    next.KEIKO_MEMORY_DIR = join(stateDir, "memory");
+  }
+  return next;
 }
 
 // Conservative request/header timeouts on the loopback BFF (defense in depth, L2/L3): even on
@@ -310,7 +339,8 @@ export async function runUiCli(
   env: EnvSource,
   deps: UiCliDeps = {},
 ): Promise<number> {
-  const effectiveEnv = loadLocalKeikoEnv(deps.cwd ?? process.cwd(), env);
+  const cwd = deps.cwd ?? process.cwd();
+  const effectiveEnv = loadLocalKeikoEnv(cwd, env);
   const reExec = await maybeReExecForSqlite(effectiveEnv, deps);
   if (reExec !== undefined) return reExec;
   const parsed = parseUiArgs(args);
@@ -323,7 +353,11 @@ export async function runUiCli(
     return 1;
   }
   const csp = await loadCspHeader(deps.hashesFile ?? join(staticRoot, "..", "csp-hashes.json"));
-  const handlerDeps = buildHandlerDepsOrReport(parsed, effectiveEnv, io);
+  const handlerDeps = buildHandlerDepsOrReport(
+    parsed,
+    withDefaultLocalRuntimeStateEnv(cwd, parsed, effectiveEnv),
+    io,
+  );
   if (typeof handlerDeps === "number") return handlerDeps;
   const factory = deps.createServer ?? createUiServer;
   const server = await factory({ staticRoot, csp, port: parsed.port, handlerDeps });

@@ -49,9 +49,21 @@ describe("canConnect — quality ↔ connector (#710 #718)", () => {
 });
 
 describe("relLabel — files ↔ quality (#270)", () => {
-  it("labels a files↔quality edge with the connected folder", () => {
+  // uiux-fix F008 C074 — the label shows the folder BASENAME (a full absolute path grew the
+  // destructive remove badge to hundreds of pixels) and never invents the "src" sentinel.
+  it("labels a files↔quality edge with the connected folder's basename", () => {
     const label = relLabel(snap("files", { root: "/work/spec" }), snap("quality"));
-    expect(label).toBe("uses /work/spec/");
+    expect(label).toBe("uses spec/");
+  });
+
+  it("prefers the resolved root persisted by the Files widget", () => {
+    const label = relLabel(snap("files", { resolvedRoot: "/a/b/fachkonzepte" }), snap("chat"));
+    expect(label).toBe("uses fachkonzepte/");
+  });
+
+  it("is honest when no folder is configured instead of fabricating 'src'", () => {
+    expect(relLabel(snap("files"), snap("chat"))).toBe("no folder selected");
+    expect(relLabel(snap("files", { root: "" }), snap("quality"))).toBe("no folder selected");
   });
 });
 

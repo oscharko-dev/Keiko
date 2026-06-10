@@ -10,13 +10,8 @@ import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } fr
 import { createPortal } from "react-dom";
 import { CAPSULE_SET_MAX_MEMBERS, type KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { createCapsuleSet, type CapsuleListEntry } from "@/lib/local-knowledge-api";
-import { ApiError } from "@/lib/api";
-
-function formatError(error: unknown): string {
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return "An unexpected error occurred.";
-}
+import { STATUS_LABELS } from "./connector-graph-types";
+import { formatError } from "./format-error";
 
 function focusablesIn(root: HTMLElement): readonly HTMLElement[] {
   return Array.from(
@@ -31,11 +26,20 @@ function useComposeFocusTrap(
   busy: boolean,
   onCancel: () => void,
 ): void {
+  // Capture the opener ONCE and restore focus to it when the dialog unmounts.
+  // This must not depend on `busy`: the previous single effect re-ran on every
+  // busy flip, and its cleanup refocused the trigger BEHIND the backdrop
+  // mid-request (uiux-fix F033, C036).
+  useEffect(() => {
+    const trigger = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    if (dialog !== null) focusablesIn(dialog)[0]?.focus();
+    return () => trigger?.focus?.();
+  }, [dialogRef]);
+
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog === null) return undefined;
-    const trigger = document.activeElement as HTMLElement | null;
-    focusablesIn(dialog)[0]?.focus();
     function handleKeyDown(event: KeyboardEvent): void {
       if (event.key === "Escape" && !busy) {
         event.preventDefault();
@@ -44,7 +48,12 @@ function useComposeFocusTrap(
       }
       if (event.key !== "Tab") return;
       const focusables = focusablesIn(dialog as HTMLDivElement);
-      if (focusables.length === 0) return;
+      if (focusables.length === 0) {
+        // All controls are disabled while busy — keep Tab from escaping
+        // behind the backdrop (uiux-fix F033, C036).
+        event.preventDefault();
+        return;
+      }
       const first = focusables[0];
       const last = focusables[focusables.length - 1];
       if (event.shiftKey && document.activeElement === first) {
@@ -56,11 +65,25 @@ function useComposeFocusTrap(
       }
     }
     dialog.addEventListener("keydown", handleKeyDown);
-    return () => {
-      dialog.removeEventListener("keydown", handleKeyDown);
-      trigger?.focus?.();
-    };
+    return () => dialog.removeEventListener("keydown", handleKeyDown);
   }, [dialogRef, busy, onCancel]);
+
+  // While busy every control is disabled, which blurs the focused element to
+  // document.body. Park focus on the dialog container (tabIndex={-1}) instead;
+  // when the request ends and the dialog is still open (error path), move it
+  // back to the first control (uiux-fix F033, C036).
+  const wasBusyRef = useRef(false);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (dialog === null) return;
+    if (busy) {
+      wasBusyRef.current = true;
+      dialog.focus();
+    } else if (wasBusyRef.current) {
+      wasBusyRef.current = false;
+      focusablesIn(dialog)[0]?.focus();
+    }
+  }, [dialogRef, busy]);
 }
 
 function MemberCheckbox({
@@ -83,9 +106,11 @@ function MemberCheckbox({
           disabled={disabled}
           onChange={() => onToggle(capsule.id)}
         />
-        <span className="lk-compose-member-name">{capsule.displayName}</span>
+        <span className="lk-compose-member-name" title={capsule.displayName}>
+          {capsule.displayName}
+        </span>
         <span className="lk-badge" data-state={capsule.lifecycleState}>
-          {capsule.lifecycleState}
+          {STATUS_LABELS[capsule.lifecycleState]}
         </span>
       </label>
     </li>
@@ -160,6 +185,7 @@ export function CapsuleSetComposeDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        tabIndex={-1}
       >
         <h2 id={titleId} className="mc-dialog-title">
           Combine capsules into a set
@@ -219,7 +245,10 @@ export function CapsuleSetComposeDialog({
               disabled={busy}
               aria-busy={busy}
             >
-              {busy ? "Combining…" : "Create set"}
+              {/* One verb through the whole flow — header "Combine capsules",
+                  dialog title, submit and busy label all say Combine
+                  (uiux-fix F048, C368). */}
+              {busy ? "Combining…" : "Combine"}
             </button>
           </div>
         </form>

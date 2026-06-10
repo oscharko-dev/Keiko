@@ -314,7 +314,7 @@ describe("Footer selectedModel display (AC #4)", () => {
         projectName="Keiko"
         branchLabel="main"
         shellStatusLabel="Ready"
-        evidenceStatusLabel="Open review"
+        evidenceStatusLabel="No review open"
       />,
     );
     expect(screen.getByText(/gpt-4o/i)).toBeInTheDocument();
@@ -329,7 +329,7 @@ describe("Footer selectedModel display (AC #4)", () => {
         projectName="Keiko"
         branchLabel="main"
         shellStatusLabel="Ready"
-        evidenceStatusLabel="Open review"
+        evidenceStatusLabel="No review open"
       />,
     );
     expect(screen.getByText(/No model selected/i)).toBeInTheDocument();
