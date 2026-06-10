@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { Icons } from "./Icons";
 
 interface Editor {
@@ -36,6 +36,14 @@ function readStoredId(): string {
 
 function findEditor(id: string): Editor {
   return EDITORS.find((editor) => editor.id === id) ?? EDITORS[3]!;
+}
+
+/* APG menu keyboard contract: ArrowDown/ArrowUp cycle, Home/End jump (uiux-fix F011 C168). */
+function nextItemIndex(key: string, activeIndex: number, count: number): number {
+  if (key === "ArrowDown") return activeIndex < 0 ? 0 : (activeIndex + 1) % count;
+  if (key === "ArrowUp") return activeIndex < 0 ? count - 1 : (activeIndex - 1 + count) % count;
+  if (key === "Home") return 0;
+  return count - 1;
 }
 
 interface EditorTileProps {
@@ -83,9 +91,13 @@ interface EditorMenuProps {
 export function EditorMenu({ project }: EditorMenuProps): ReactNode {
   const [open, setOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string>(readStoredId);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const current = findEditor(selectedId);
-  const triggerLabel = `Open in ${current.name}`;
-  const accessibleLabel = `Open ${project} in ${current.name}`;
+  /* Preference-only control until an open-in-editor BFF route exists: the copy
+     must not promise an "Open …" action that never happens (uiux-fix F011 C080). */
+  const triggerLabel = `Editor: ${current.name}`;
+  const accessibleLabel = `Preferred editor for ${project}: ${current.name}`;
 
   useEffect(() => {
     try {
@@ -95,15 +107,49 @@ export function EditorMenu({ project }: EditorMenuProps): ReactNode {
     }
   }, [selectedId]);
 
+  /* role=menu contract: move focus to the selected item when the menu opens (C168). */
+  useEffect(() => {
+    if (!open) return;
+    const menu = menuRef.current;
+    if (menu === null) return;
+    const target =
+      menu.querySelector<HTMLButtonElement>('.edm-item[data-sel="true"]') ??
+      menu.querySelector<HTMLButtonElement>(".edm-item");
+    target?.focus();
+  }, [open]);
+
+  const closeAndRestoreFocus = (): void => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  };
+
   const choose = (id: string): void => {
     setSelectedId(id);
-    setOpen(false);
+    closeAndRestoreFocus();
+  };
+
+  const onMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      closeAndRestoreFocus();
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const menu = menuRef.current;
+    if (menu === null) return;
+    const items = Array.from(menu.querySelectorAll<HTMLButtonElement>(".edm-item"));
+    if (items.length === 0) return;
+    event.preventDefault();
+    const activeIndex = items.findIndex((item) => item === document.activeElement);
+    items[nextItemIndex(event.key, activeIndex, items.length)]?.focus();
   };
 
   return (
     <div className="edm">
       <button
         type="button"
+        ref={triggerRef}
         className="edm-trigger"
         onClick={() => setOpen((value) => !value)}
         title={accessibleLabel}
@@ -123,8 +169,14 @@ export function EditorMenu({ project }: EditorMenuProps): ReactNode {
             aria-hidden="true"
             role="presentation"
           />
-          <div className="edm-menu" role="menu">
-            <div className="edm-head mono">Open “{project}” in…</div>
+          <div
+            className="edm-menu"
+            role="menu"
+            tabIndex={-1}
+            ref={menuRef}
+            onKeyDown={onMenuKeyDown}
+          >
+            <div className="edm-head mono">Preferred editor for “{project}”</div>
             {EDITORS.map((editor) => (
               <button
                 key={editor.id}

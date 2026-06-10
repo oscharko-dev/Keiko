@@ -53,7 +53,11 @@ export function useSSE(runId: string | null): UseSSEResult {
       es = new EventSource(fullUrl);
 
       es.onopen = () => {
-        if (!cancelled) setStatus("live");
+        if (cancelled) return;
+        setStatus("live");
+        // uiux-fix F018 C026: clear the disconnect message once the automatic
+        // reconnect succeeds, so the error text lives exactly as long as the outage.
+        setError(null);
       };
 
       es.onerror = () => {

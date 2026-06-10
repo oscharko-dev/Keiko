@@ -115,9 +115,14 @@ function DirectoryPicker({
     [requestRoot],
   );
 
+  // uiux-fix F017 C341 — load once when the picker opens. Re-running on every outer
+  // input keystroke fired a fetch per character and flashed transient errors
+  // ("Enter an absolute folder path.") while the user was still typing; navigation
+  // stays explicit via Go/Enter/row clicks.
   useEffect(() => {
     void load(value.length > 0 ? value : undefined);
-  }, [load, value]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional mount-only load
+  }, []);
 
   const choose = (): void => {
     if (listing !== null) {
@@ -132,10 +137,15 @@ function DirectoryPicker({
         <input
           className="dlg-input mono dir-path"
           value={draft}
+          aria-label="Folder path"
+          placeholder="/absolute/folder/path"
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
+              // uiux-fix F017 C364 — the dialog submits on plain Enter in inputs now;
+              // keep Enter-to-navigate local to the picker.
+              event.stopPropagation();
               void load(draft);
             }
           }}
@@ -180,11 +190,19 @@ function DirectoryPicker({
             <span>{entry.name}</span>
           </button>
         ))}
-        {loading ? <div className="dir-note">Loading directories...</div> : null}
+        {loading ? (
+          <div className="dir-note" role="status">
+            Loading directories…
+          </div>
+        ) : null}
         {!loading && listing !== null && listing.entries.length === 0 ? (
           <div className="dir-note">No child directories.</div>
         ) : null}
-        {error !== null ? <div className="dir-error">{error}</div> : null}
+        {error !== null ? (
+          <div className="dir-error" role="alert">
+            {error}
+          </div>
+        ) : null}
       </div>
       <div className="dir-actions">
         <button type="button" className="dlg-btn" onClick={onClose}>
@@ -378,17 +396,17 @@ function validationMessage(
   if (workspaceRoot.length === 0) return "Workspace is required.";
   if (modelId.length === 0) return "No model is available.";
   if (workflow === "explain-plan" && fields.explainFilePath.trim().length === 0) {
-    return "Explain plan requires a filePath.";
+    return "Explain plan requires a file path.";
   }
   if (workflow === "unit-test-generation") {
     if (fields.unitTargetKind === "file" && fields.unitFilePath.trim().length === 0) {
-      return "Unit test generation requires a filePath.";
+      return "Unit test generation requires a file path.";
     }
     if (fields.unitTargetKind === "module" && fields.unitModuleDir.trim().length === 0) {
-      return "Unit test generation requires a moduleDir.";
+      return "Unit test generation requires a module folder.";
     }
     if (fields.unitTargetKind === "changedFiles" && splitPaths(fields.unitFilePaths).length === 0) {
-      return "Unit test generation requires at least one filePath.";
+      return "Unit test generation requires at least one file path.";
     }
   }
   if (workflow === "bug-investigation") {
@@ -459,7 +477,11 @@ function renderField(
           onClick={() => openDirectoryPicker(f.key)}
           onChange={(e) => set(f.key, e.target.value)}
         />
-        <button type="button" className="dlg-dirbtn" onClick={() => openDirectoryPicker(f.key)}>
+        <button
+          type="button"
+          className="dlg-btn dlg-dirbtn"
+          onClick={() => openDirectoryPicker(f.key)}
+        >
           Browse
         </button>
       </span>
@@ -649,7 +671,7 @@ function AgentLauncher({
       return (
         <>
           <label className="dlg-field">
-            <span className="dlg-label">filePath</span>
+            <span className="dlg-label">File path</span>
             <input
               className="dlg-input mono"
               placeholder="src/file.ts"
@@ -681,7 +703,7 @@ function AgentLauncher({
       return (
         <>
           <label className="dlg-field">
-            <span className="dlg-label">targetKind</span>
+            <span className="dlg-label">Target</span>
             <span className="dlg-selwrap">
               <select
                 className="dlg-input mono"
@@ -692,9 +714,9 @@ function AgentLauncher({
                   })
                 }
               >
-                <option value="file">file</option>
-                <option value="module">module</option>
-                <option value="changedFiles">changedFiles</option>
+                <option value="file">Single file</option>
+                <option value="module">Module</option>
+                <option value="changedFiles">Changed files</option>
               </select>
               <span className="dlg-selchev">
                 <Icons.chevron size={15} />
@@ -703,7 +725,7 @@ function AgentLauncher({
           </label>
           {fields.unitTargetKind === "module" ? (
             <label className="dlg-field">
-              <span className="dlg-label">moduleDir</span>
+              <span className="dlg-label">Module folder</span>
               <input
                 className="dlg-input mono"
                 placeholder="src/module"
@@ -718,7 +740,7 @@ function AgentLauncher({
             </label>
           ) : fields.unitTargetKind === "changedFiles" ? (
             <label className="dlg-field">
-              <span className="dlg-label">filePaths</span>
+              <span className="dlg-label">File paths</span>
               <textarea
                 className="dlg-input dlg-textarea mono"
                 rows={2}
@@ -732,7 +754,7 @@ function AgentLauncher({
             </label>
           ) : (
             <label className="dlg-field">
-              <span className="dlg-label">filePath</span>
+              <span className="dlg-label">File path</span>
               <input
                 className="dlg-input mono"
                 placeholder="src/file.ts"
@@ -838,7 +860,7 @@ function AgentLauncher({
           />
           <button
             type="button"
-            className="dlg-dirbtn"
+            className="dlg-btn dlg-dirbtn"
             onClick={() => setDirectoryField("agentWorkspace")}
           >
             Browse
@@ -862,7 +884,7 @@ function AgentLauncher({
             disabled={registering}
             onClick={() => void registerWorkspace()}
           >
-            {registering ? "Registering..." : "Register workspace"}
+            {registering ? "Registering…" : "Register workspace"}
           </button>
         </div>
       ) : null}
@@ -887,7 +909,12 @@ function AgentLauncher({
         </span>
       </label>
       {currentFile !== null ? (
-        <button type="button" className="dlg-current-file" onClick={useCurrentFile}>
+        <button
+          type="button"
+          className="dlg-current-file"
+          onClick={useCurrentFile}
+          title={currentFile}
+        >
           <Icons.files size={13} /> Use current file <span className="mono">{currentFile}</span>
         </button>
       ) : null}
@@ -899,9 +926,20 @@ function AgentLauncher({
           disabled={!canStart}
           onClick={() => void startAgent()}
         >
-          {starting ? "Starting..." : "Start agent"}
+          {starting ? "Starting…" : "Start agent"}
         </button>
-        {loading ? <span className="dlg-note">Loading models and projects...</span> : null}
+        {loading ? (
+          <span className="dlg-note" role="status">
+            Loading models and projects…
+          </span>
+        ) : null}
+        {/* uiux-fix F017 C189 — the disabled Start button never reached the click guard,
+            so its validation copy was dead code; surface the reason inline instead. */}
+        {!loading && validation !== null ? (
+          <span className="dlg-note" role="status">
+            {validation}
+          </span>
+        ) : null}
       </div>
     </>
   );
@@ -921,23 +959,56 @@ export function NewWindowDialog({
   const [dialogError, setDialogError] = useState<string | null>(null);
   const [directoryField, setDirectoryField] = useState<string | null>(null);
   const firstFieldRef = useRef<HTMLElement | null>(null);
+  const dlgRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     // capture the element that opened this dialog so we can return focus on close
     triggerRef.current = document.activeElement as HTMLElement | null;
     return () => {
-      triggerRef.current?.focus?.();
+      const trigger = triggerRef.current;
+      // Audit C148 — confirming from the Empty State unmounts the trigger button
+      // (the first window replaces the empty state), so focusing it silently
+      // dropped keyboard focus to <body>. Fall back to the freshly created top
+      // window (focusable via tabIndex={-1}) or the New-window FAB — the same
+      // deterministic targets as WindowFrame's close-with-focus-restore. The rAF
+      // waits for React to commit the new window before querying it.
+      if (trigger !== null && trigger.isConnected) {
+        trigger.focus();
+        return;
+      }
+      requestAnimationFrame(() => {
+        const next =
+          document.querySelector<HTMLElement>('.window[data-top="true"]') ??
+          document.querySelector<HTMLElement>(".ws-fab");
+        next?.focus({ preventScroll: true });
+      });
     };
   }, []);
 
   useEffect(() => {
     const r = requestAnimationFrame(() => {
       setShown(true);
-      firstFieldRef.current?.focus();
+      // uiux-fix F008 C053 — config-less types (connector, figma) have no first field, so focus
+      // used to stay on the trigger OUTSIDE this aria-modal dialog: Escape and the Tab trap
+      // (both bound to the dialog div) never fired. Fall back to the dialog container itself.
+      (firstFieldRef.current ?? dlgRef.current)?.focus();
     });
     return () => cancelAnimationFrame(r);
   }, []);
+
+  // uiux-fix F008 C053 — window-level Escape covers the residual cases where focus sits outside
+  // the dialog (the div's own onKeyDown only fires while focus is inside). Scoped to the dialog's
+  // lifetime via the effect cleanup so it never eats Escape meant for other overlays.
+  useEffect(() => {
+    const onWindowKeyDown = (e: globalThis.KeyboardEvent): void => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onWindowKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onWindowKeyDown);
+    };
+  }, [onClose]);
 
   // ADR-0018 — no shell prefetch: the terminal tool is a permitted-command picker now. The
   // window only needs a projectPath and an optional cwd, both supplied via the form below.
@@ -977,6 +1048,18 @@ export function NewWindowDialog({
       submit();
       return;
     }
+    // uiux-fix F017 C364 — plain Enter in a single-line field confirms the dialog
+    // (one-field-dialog expectation). Textareas keep Enter for newlines, buttons keep
+    // native activation, and the DirectoryPicker path input stops propagation so its
+    // Enter keeps navigating instead of submitting.
+    if (e.key === "Enter") {
+      const tag = e.target instanceof HTMLElement ? e.target.tagName : "";
+      if (tag === "INPUT" || tag === "SELECT") {
+        e.preventDefault();
+        submit();
+      }
+      return;
+    }
     if (e.key !== "Tab") return;
     const f = focusableInside(e.currentTarget);
     if (f.length === 0) return;
@@ -998,11 +1081,13 @@ export function NewWindowDialog({
     <div className={"dlg-overlay" + (shown ? " in" : "")} onPointerDown={onClose}>
       {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- modal dialog needs Esc/Tab/⌘Enter key handling */}
       <div
+        ref={dlgRef}
         className="dlg"
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-window-title"
         aria-describedby="new-window-desc"
+        tabIndex={-1}
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={onKey}
       >
@@ -1074,7 +1159,11 @@ export function NewWindowDialog({
                 ) : null}
               </label>
             ))}
-          {dialogError !== null ? <div className="dlg-error">{dialogError}</div> : null}
+          {dialogError !== null ? (
+            <div className="dlg-error" role="alert">
+              {dialogError}
+            </div>
+          ) : null}
         </div>
         <div className="dlg-foot">
           <button type="button" className="dlg-btn" onClick={onClose}>

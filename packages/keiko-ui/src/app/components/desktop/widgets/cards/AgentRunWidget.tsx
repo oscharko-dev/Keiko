@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   ApiError,
@@ -10,7 +10,14 @@ import {
   fetchModels,
   fetchRunReport,
 } from "../../../../../lib/api";
-import { formatMs, formatTokens } from "../../../../../lib/format";
+import {
+  costClassLabel,
+  formatBytes,
+  formatMs,
+  formatTokens,
+  outcomeLabel,
+  runStatusLabel,
+} from "../../../../../lib/format";
 import { useSSE } from "../../../../../lib/useSSE";
 import type {
   AgentWorkflowId,
@@ -136,13 +143,13 @@ function eventLabel(event: HarnessEvent): string {
     case "state:transition":
       return `${event.from} -> ${event.to}${event.reason === undefined ? "" : `: ${event.reason}`}`;
     case "model:call:started":
-      return `Model call started (${event.contextBytes.toString()} bytes)`;
+      return `Model call started (${formatBytes(event.contextBytes)})`;
     case "model:call:completed":
       return `Model call completed (${formatTokens(event.usage.promptTokens + event.usage.completionTokens)} tokens)`;
     case "model:call:failed":
       return `Model call failed: ${event.message}`;
     case "patch:proposed":
-      return `Patch proposed (${event.patchBytes.toString()} bytes)`;
+      return `Patch proposed (${formatBytes(event.patchBytes)})`;
     case "verification:result":
       return `Verification ${event.passed ? "passed" : "failed"}: ${event.detail}`;
     case "workflow:started":
@@ -188,12 +195,32 @@ function reportStatus(report: RunReport | null, evidence: EvidenceManifest | nul
   return "loading";
 }
 
+// uiux-fix F018 C259: human-readable status for the header — ReviewWidget already
+// maps the same RunStatus values via the shared runStatusLabel presenter; raw
+// kebab-case enums ("dry-run", "fix-proposed") and the "loading" placeholder
+// must not surface verbatim.
+function reportStatusLabel(report: RunReport | null, evidence: EvidenceManifest | null): string {
+  if (report !== null) return runStatusLabel(report.status);
+  if (evidence !== null) return outcomeLabel(evidence.run.outcome);
+  return "Loading…";
+}
+
+// uiux-fix F018 C258: count files in a unified diff so Apply can state its blast
+// radius before writing to the working tree.
+function diffFileCount(diff: string | undefined): number {
+  if (diff === undefined || diff.length === 0) return 0;
+  const headers = diff.match(/^diff --git /gm);
+  if (headers !== null) return headers.length;
+  const plusFiles = diff.match(/^\+\+\+ /gm);
+  return plusFiles === null ? 0 : plusFiles.length;
+}
+
 function shortSummary(
   workflow: AgentWorkflowId | null,
   report: RunReport | null,
   evidence: EvidenceManifest | null,
 ): string {
-  if (report === null && evidence === null) return "Loading run state...";
+  if (report === null && evidence === null) return "Loading run state…";
   const label = workflow === null ? "Agent run" : WORKFLOW_LABELS[workflow];
   if (report?.status === "running") return `${label} is running.`;
   if (report?.status === "dry-run") return `${label} produced a reviewable dry-run.`;
@@ -341,6 +368,11 @@ export function AgentRunWidget({
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [costClass, setCostClass] = useState<CostClass | null>(null);
+  // uiux-fix F018 C258: Apply writes to the working tree — require an explicit
+  // second click ("Confirm apply (N files)") that times out back to "Apply".
+  const [confirmApply, setConfirmApply] = useState(false);
+  const confirmTimerRef = useRef<number | null>(null);
+  const evidenceLinkRef = useRef<HTMLAnchorElement | null>(null);
 
   const loadReport = useCallback(async (): Promise<void> => {
     if (runId === null) return;
@@ -398,8 +430,28 @@ export function AgentRunWidget({
       ? Math.max(0, Date.now() - Number(new Date(sse.events[0]?.ts ?? Date.now())))
       : 0);
   const status = reportStatus(report, evidence);
+  const statusLabel = reportStatusLabel(report, evidence);
   const terminal = report !== null && TERMINAL_REPORT_STATUSES.has(report.status);
   const showApply = canApply(workflow, report);
+  const showCancel = !terminal && report?.status === "running";
+  const applyFileCount = diffFileCount(report?.proposedDiff);
+
+  // uiux-fix F018 C124: the Cancel button unmounts the moment the run turns
+  // terminal; if it held keyboard focus the browser silently drops focus to
+  // <body>. Restore it to the always-rendered Evidence control instead.
+  const prevShowCancelRef = useRef(false);
+  useEffect(() => {
+    if (prevShowCancelRef.current && !showCancel && document.activeElement === document.body) {
+      evidenceLinkRef.current?.focus();
+    }
+    prevShowCancelRef.current = showCancel;
+  }, [showCancel]);
+
+  useEffect(() => {
+    return () => {
+      if (confirmTimerRef.current !== null) window.clearTimeout(confirmTimerRef.current);
+    };
+  }, []);
 
   const doCancel = async (): Promise<void> => {
     if (runId === null) return;
@@ -413,7 +465,7 @@ export function AgentRunWidget({
   };
 
   const doApply = async (): Promise<void> => {
-    if (runId === null || !showApply) return;
+    if (runId === null || !showApply || applying) return;
     setApplying(true);
     setApplyError(null);
     try {
@@ -428,11 +480,32 @@ export function AgentRunWidget({
     }
   };
 
+  // uiux-fix F018 C258: first click arms the confirm state (auto-resets after 6 s),
+  // the second click actually applies.
+  const onApplyClick = (): void => {
+    if (applying) return;
+    if (!confirmApply) {
+      setConfirmApply(true);
+      if (confirmTimerRef.current !== null) window.clearTimeout(confirmTimerRef.current);
+      confirmTimerRef.current = window.setTimeout(() => {
+        setConfirmApply(false);
+        confirmTimerRef.current = null;
+      }, 6000);
+      return;
+    }
+    if (confirmTimerRef.current !== null) {
+      window.clearTimeout(confirmTimerRef.current);
+      confirmTimerRef.current = null;
+    }
+    setConfirmApply(false);
+    void doApply();
+  };
+
   if (runId === null || workflow === null) {
     return (
       <div className="arun arun-empty">
         <div className="arun-result-title">Agent run is not configured.</div>
-        <p>Open a new Agent window from the launcher to start a BFF workflow.</p>
+        <p>Open a new Agent window from the launcher to start a workflow.</p>
       </div>
     );
   }
@@ -441,18 +514,32 @@ export function AgentRunWidget({
     <div className="arun arun-real">
       <div className="arun-head">
         <span className="arun-role">{WORKFLOW_LABELS[workflow]}</span>
-        <span className="ag-model mono">{modelId}</span>
-        {costClass !== null ? <span className="arun-gov">{costClass}</span> : null}
+        {/* uiux-fix F054 C385: cfg.model is optional — skip the pill entirely so no
+            empty bordered artefact renders between the workflow label and status. */}
+        {modelId.length > 0 ? <span className="ag-model mono">{modelId}</span> : null}
+        {/* uiux-fix F054 C382: human-readable cost class ("Low cost") instead of the
+            raw enum, plus a title explaining what the pill refers to. */}
+        {costClass !== null ? (
+          <span className="arun-gov" title="Model cost class">
+            {costClassLabel(costClass)}
+          </span>
+        ) : null}
         <span className="spacer" />
         <span className="arun-status">
-          <span className="dot" data-live={report?.status === "running"} />
-          {status}
+          {/* uiux-fix F018 C265: data-status feeds the idle/terminal dot colours in
+              globals.css — the bare .dot class paints no background at all. */}
+          <span className="dot" data-live={report?.status === "running"} data-status={status} />
+          {statusLabel}
         </span>
       </div>
 
-      <div className="arun-summary">
+      {/* uiux-fix F018 C109: announce run completion (shortSummary changes) to AT.
+          title carries the full run id, which is otherwise unobtainable (C110). */}
+      <div className="arun-summary" role="status" aria-live="polite">
         <strong>{shortSummary(workflow, report, evidence)}</strong>
-        <span className="mono">run {runId.slice(0, 8)}</span>
+        <span className="mono" title={runId}>
+          run {runId.slice(0, 8)}
+        </span>
       </div>
 
       <div className="arun-meters">
@@ -471,20 +558,28 @@ export function AgentRunWidget({
         <div className="arun-meter">
           <span className="arun-mk">Latency</span>
           <span className="arun-mv mono">
-            {usage.requestCount === 0 ? "-" : formatMs(usage.latencyMs)}
+            {usage.requestCount === 0 ? "—" : formatMs(usage.latencyMs)}
           </span>
         </div>
       </div>
 
+      {/* uiux-fix F018 C266: absolute paths are single unbreakable words — wrap them in a
+          truncating span and expose the full path via title so the end stays reachable. */}
       <div className="arun-perms">
-        <span className="arun-perm" data-on={linkedRoot !== null}>
+        <span
+          className="arun-perm"
+          data-on={linkedRoot !== null}
+          title={linkedRoot !== null ? linkedRoot : (cfg.workspaceRoot ?? undefined)}
+        >
           <Icons.files size={11} />
-          {linkedRoot !== null ? linkedRoot : (cfg.workspaceRoot ?? "no workspace")}
+          <span className="arun-perm-path">
+            {linkedRoot !== null ? linkedRoot : (cfg.workspaceRoot ?? "no workspace")}
+          </span>
         </span>
         {linkedFilePath !== undefined ? (
-          <span className="arun-perm" data-on={true}>
+          <span className="arun-perm" data-on={true} title={linkedFilePath}>
             <Icons.files size={11} />
-            {linkedFilePath}
+            <span className="arun-perm-path">{linkedFilePath}</span>
           </span>
         ) : null}
       </div>
@@ -496,14 +591,33 @@ export function AgentRunWidget({
         </details>
       ) : null}
 
-      <div className="arun-log">
-        {sse.events.length === 0 ? (
+      {/* uiux-fix F018 C109: role=log announces appended entries (TerminalWidget
+          pattern). The C026 disconnect row below lives inside this live region, so
+          it needs no role of its own. */}
+      <div className="arun-log" role="log" aria-live="polite" aria-label="Run events">
+        {sse.status === "error" && sse.error !== null ? (
+          // uiux-fix F018 C026: a dropped stream froze the log without any hint;
+          // useSSE clears the error again once the auto-reconnect succeeds.
           <div className="arun-log-row">
             <span className="arun-log-ico">
               <Icons.reset size={12} />
             </span>
-            <span className="arun-log-text">Waiting for run events...</span>
+            <span className="arun-log-text">{sse.error}</span>
           </div>
+        ) : null}
+        {sse.events.length === 0 ? (
+          sse.status === "error" ? null : (
+            <div className="arun-log-row">
+              <span className="arun-log-ico">
+                <Icons.reset size={12} />
+              </span>
+              <span className="arun-log-text">
+                {sse.status === "connecting"
+                  ? "Connecting to run events…"
+                  : "Waiting for run events…"}
+              </span>
+            </div>
+          )
         ) : (
           sse.events
             .slice()
@@ -565,8 +679,17 @@ export function AgentRunWidget({
         </div>
       ) : null}
 
-      {error !== null ? <div className="arun-error">{error}</div> : null}
-      {applyError !== null ? <div className="arun-error">{applyError}</div> : null}
+      {/* uiux-fix F018 C109: async failures must be announced (WCAG 4.1.3) */}
+      {error !== null ? (
+        <div className="arun-error" role="alert">
+          {error}
+        </div>
+      ) : null}
+      {applyError !== null ? (
+        <div className="arun-error" role="alert">
+          {applyError}
+        </div>
+      ) : null}
 
       <div className="arun-controls">
         <a
@@ -574,22 +697,29 @@ export function AgentRunWidget({
           href={`/api/evidence/${encodeURIComponent(runId)}`}
           target="_blank"
           rel="noreferrer"
+          ref={evidenceLinkRef}
         >
           Evidence
         </a>
         {showApply ? (
+          // uiux-fix F018 C124: aria-disabled + click guard instead of HTML disabled
+          // so the focused button does not throw focus to <body> while applying.
           <button
             type="button"
             className="arun-btn"
-            disabled={applying}
-            onClick={() => void doApply()}
+            aria-disabled={applying}
+            onClick={onApplyClick}
           >
-            {applying ? "Applying..." : "Apply"}
+            {applying
+              ? "Applying…"
+              : confirmApply
+                ? `Confirm apply (${applyFileCount.toString()} file${applyFileCount === 1 ? "" : "s"})`
+                : "Apply"}
           </button>
         ) : report?.appliedAt !== undefined ? (
           <span className="arun-final mono">Applied</span>
         ) : null}
-        {!terminal && report?.status === "running" ? (
+        {showCancel ? (
           <button type="button" className="arun-btn danger" onClick={() => void doCancel()}>
             Cancel
           </button>

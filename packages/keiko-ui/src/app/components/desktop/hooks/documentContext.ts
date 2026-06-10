@@ -76,8 +76,24 @@ function basename(name: string): string {
   return lastSlash >= 0 ? name.slice(lastSlash + 1) : name;
 }
 
+// All three message builders run BEFORE the actual send, so they speak in the future tense
+// (audit C317 — the old copy claimed "the other attachments were still sent" even for a single
+// attachment and before any send happened). displayName is always basename-only (AC #4 #147).
 function failureMessage(displayName: string): string {
-  return `Couldn't read "${displayName}" — it was skipped. The other attachments were still sent.`;
+  return `Couldn't read "${displayName}" — it will be skipped. Your message will be sent without it.`;
+}
+
+const AGGREGATE_LIMIT_LABEL = `${String(MAX_AGGREGATE_DOCUMENT_BYTES / 1024)} KB`;
+
+// Audit C075 — a document dropped because earlier files exhausted the aggregate byte budget used
+// to vanish silently; the model then replied "I can't see the document" with zero user feedback.
+function budgetSkipMessage(displayName: string): string {
+  return `"${displayName}" won't be sent — the ${AGGREGATE_LIMIT_LABEL} attachment limit was already used by earlier files.`;
+}
+
+// Audit C075 — same silence for documents beyond the 16-entry cap.
+function countSkipMessage(displayName: string): string {
+  return `"${displayName}" won't be sent — only the first ${String(MAX_DOCUMENT_CONTEXT_ENTRIES)} documents are included.`;
 }
 
 interface ExtractionState {
@@ -114,7 +130,10 @@ async function readDocumentInto(
   state: ExtractionState,
   doc: PendingDocument,
 ): Promise<string | undefined> {
-  if (state.remainingAggregate <= 0) return undefined;
+  // Audit C075 — every complete drop must surface a message; only genuinely empty files stay
+  // silent (nothing was lost). The returned failure flows into the same setError pipeline as
+  // read failures (useChatSession.buildDocumentContext).
+  if (state.remainingAggregate <= 0) return budgetSkipMessage(basename(doc.name));
   let raw: string;
   try {
     raw = await doc.file.text();
@@ -126,9 +145,11 @@ async function readDocumentInto(
   // the marker cost so a truncated entry's text + marker still fits the remaining aggregate.
   const aggregateRoom = state.remainingAggregate - utf8ByteLength(DOCUMENT_TRUNCATION_MARKER);
   const perEntryBudget = Math.min(MAX_DOCUMENT_CONTEXT_TEXT_BYTES, Math.max(aggregateRoom, 0));
-  if (perEntryBudget <= 0) return undefined;
+  if (perEntryBudget <= 0) return budgetSkipMessage(basename(doc.name));
   const { entry, consumed } = buildEntry(doc, raw, perEntryBudget);
-  if (entry.text.length === 0) return undefined;
+  if (entry.text.length === 0) {
+    return raw.length === 0 ? undefined : budgetSkipMessage(basename(doc.name));
+  }
   state.entries.push(entry);
   state.remainingAggregate -= consumed;
   return undefined;
@@ -140,14 +161,18 @@ async function readDocumentInto(
 export async function extractDocumentContext(
   documents: readonly PendingDocument[],
 ): Promise<DocumentExtractionResult> {
-  const extractable = documents
-    .filter((doc) => isTextExtractableMime(doc.mimeType))
-    .slice(0, MAX_DOCUMENT_CONTEXT_ENTRIES);
+  const extractable = documents.filter((doc) => isTextExtractableMime(doc.mimeType));
+  const included = extractable.slice(0, MAX_DOCUMENT_CONTEXT_ENTRIES);
   const state: ExtractionState = { entries: [], remainingAggregate: MAX_AGGREGATE_DOCUMENT_BYTES };
   const failures: string[] = [];
-  for (const doc of extractable) {
+  for (const doc of included) {
     const failure = await readDocumentInto(state, doc);
     if (failure !== undefined) failures.push(failure);
+  }
+  // Audit C075 — documents beyond the 16-entry cap were sliced away without any hint. Binary
+  // documents (PDF) are intentionally NOT reported: their metadata-only path is by design.
+  for (const doc of extractable.slice(MAX_DOCUMENT_CONTEXT_ENTRIES)) {
+    failures.push(countSkipMessage(basename(doc.name)));
   }
   return { entries: state.entries, failures };
 }

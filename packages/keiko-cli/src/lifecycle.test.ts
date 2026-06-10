@@ -96,6 +96,9 @@ describe("runLifecycleCli", () => {
     expect(spawned[0]?.args).toEqual(
       expect.arrayContaining(["ui", "--port", "4321", "--host", "127.0.0.1"]),
     );
+    expect(spawned[0]?.opts.env).toMatchObject({
+      KEIKO_STATE_DIR: join(root, ".keiko-test"),
+    });
     expect(readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8")).toBe("12345\n");
     expect(existsSync(join(root, ".keiko-test", "ui.log"))).toBe(true);
     expect(c.out()).toContain("Keiko UI running");

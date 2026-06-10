@@ -5,7 +5,8 @@
  *
  * Visibility rules (all must be true):
  *  1. keiko.pwa.installed absent in localStorage
- *  2. keiko.pwa.dismissed absent in localStorage
+ *  2. keiko.pwa.dismissed absent in localStorage or older than 30 days
+ *     ("Not now" promises deferral, not permanence — audit C248)
  *  3. window.matchMedia("(display-mode: standalone)").matches === false
  *  4. Either a deferred beforeinstallprompt is available (Chromium) OR
  *     browserSupport returns "ios-add-to-home" (iOS Safari fallback).
@@ -17,7 +18,7 @@
  * WCAG 2.2 AA — contrast, keyboard, focus-visible, 24×24 target, reduced-motion.
  */
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { detectSupport } from "./browserSupport";
 import { useInstallPrompt } from "./useInstallPrompt";
 
@@ -38,8 +39,12 @@ const COPY = {
   },
 } as const;
 
+// Visible text doubles as the accessible name (WCAG 2.5.3 Label in Name — audit C014).
 const NOT_NOW_LABEL = "Not now";
-const CLOSE_LABEL = "Dismiss install banner";
+
+// "Not now" is a deferral, not a permanent opt-out: the dismissal expires after
+// 30 days so the affordance eventually returns (audit C248).
+const DISMISS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -57,7 +62,13 @@ function isAlreadyInstalled(): boolean {
 
 function isAlreadyDismissed(): boolean {
   if (typeof window === "undefined") return false;
-  return localStorage.getItem("keiko.pwa.dismissed") !== null;
+  const raw = localStorage.getItem("keiko.pwa.dismissed");
+  if (raw === null) return false;
+  // The stored value is an ISO timestamp; honour it as a TTL. Unparseable
+  // legacy values stay dismissed (conservative — no surprise re-prompt).
+  const dismissedAt = Date.parse(raw);
+  if (Number.isNaN(dismissedAt)) return true;
+  return Date.now() - dismissedAt < DISMISS_TTL_MS;
 }
 
 // ---------------------------------------------------------------------------
@@ -83,16 +94,19 @@ export function InstallBanner(): ReactNode {
     await triggerInstall();
   }, [triggerInstall]);
 
-  // Keyboard handler: Escape closes the banner.
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key === "Escape") {
+  // Keyboard handler: Escape closes the banner — scoped to focus INSIDE the
+  // banner (React bubbling on the <aside>), never a window-wide listener.
+  // A global listener permanently dismissed the banner whenever Escape was
+  // pressed anywhere in the app, even while the banner was not rendered
+  // (audit C037).
+  const onBannerKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLElement>): void => {
+      if (e.key === "Escape" && !e.defaultPrevented) {
         dismiss();
       }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [dismiss]);
+    },
+    [dismiss],
+  );
 
   // ---------------------------------------------------------------------------
   // Visibility gate
@@ -113,7 +127,13 @@ export function InstallBanner(): ReactNode {
   const copy = COPY[support];
 
   return (
-    <aside className="install-banner" role="region" aria-label="Install Keiko">
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- Escape-to-dismiss must be scoped to focus inside the banner (audit C037); the buttons inside are the interactive targets
+    <aside
+      className="install-banner"
+      role="region"
+      aria-label="Install Keiko"
+      onKeyDown={onBannerKeyDown}
+    >
       <div className="install-banner-body">
         <div className="install-banner-text">
           <span className="install-banner-heading">{copy.heading}</span>
@@ -130,13 +150,8 @@ export function InstallBanner(): ReactNode {
               {copy.install}
             </button>
           )}
-          <button
-            type="button"
-            className="install-banner-btn-dismiss"
-            aria-label={CLOSE_LABEL}
-            onClick={dismiss}
-          >
-            <span aria-hidden="true">{NOT_NOW_LABEL}</span>
+          <button type="button" className="install-banner-btn-dismiss" onClick={dismiss}>
+            {NOT_NOW_LABEL}
           </button>
         </div>
       </div>

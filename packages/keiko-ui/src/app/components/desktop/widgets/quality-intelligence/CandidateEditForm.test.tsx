@@ -97,4 +97,40 @@ describe("CandidateEditForm", () => {
     await user.keyboard("{Escape}");
     expect(onCancel).not.toHaveBeenCalled();
   });
+
+  it("requires a second Escape to discard unsaved changes (two-stage discard, F029 C279)", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    render(<CandidateEditForm candidate={makeCandidate()} onSave={vi.fn()} onCancel={onCancel} />);
+    await user.type(screen.getByRole("textbox", { name: /^title$/i }), " edited");
+    await user.keyboard("{Escape}");
+    // First Escape warns instead of destroying the edits.
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent(/unsaved changes/i);
+    await user.keyboard("{Escape}");
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-arms the discard warning when the user keeps editing after the first Escape", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    render(<CandidateEditForm candidate={makeCandidate()} onSave={vi.fn()} onCancel={onCancel} />);
+    const title = screen.getByRole("textbox", { name: /^title$/i });
+    await user.type(title, " edited");
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("status")).toHaveTextContent(/unsaved changes/i);
+    // Continuing to edit clears the warning; the next Escape warns again instead of discarding.
+    await user.type(title, "!");
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("cancels immediately via the Cancel button when the form is pristine", async () => {
+    const user = userEvent.setup();
+    const onCancel = vi.fn();
+    render(<CandidateEditForm candidate={makeCandidate()} onSave={vi.fn()} onCancel={onCancel} />);
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
 });

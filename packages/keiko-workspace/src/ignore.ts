@@ -70,6 +70,9 @@ export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
   "service-account*.json",
   // deps
   "node_modules",
+  // Keiko runtime/evidence state. These files are internal product artifacts, not repository
+  // source, and must never be discoverable through connected repository grounding.
+  ".keiko",
   // build
   "dist",
   "build",

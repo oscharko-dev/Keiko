@@ -6,7 +6,7 @@
 //   - the rendered markup contains no host-name pattern or credential-shape
 //     literal (the no-leak invariant).
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCapability } from "@/lib/types";
 import { SettingsPanel } from "./SettingsPanel";
@@ -181,5 +181,55 @@ describe("SettingsPanel gateway summary semantics", () => {
       screen.getByText(/review the gateway configuration or discovered model set/i),
     ).toBeInTheDocument();
     expect(screen.queryByText("Gateway setup required")).toBeNull();
+  });
+
+  // uiux-fix C286: discovered-but-not-chat-capable models must not claim chat works.
+  it("does not claim chat capability when no discovered model is conversation-eligible", async () => {
+    primeFetches([embeddingCapability("test-embed-1")]);
+    render(<SettingsPanel />);
+    await waitFor(() => {
+      expect(screen.getByText("Gateway connected")).toBeInTheDocument();
+    });
+    expect(
+      screen.getByText(/none of the discovered models can be used for conversation/i),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/keiko can use the configured gateway models for chat/i)).toBeNull();
+  });
+});
+
+describe("SettingsPanel load-error handling (uiux-fix C287/C285)", () => {
+  it("maps raw transport errors to a readable alert and recovers via Retry", async () => {
+    fetchConfigMock.mockRejectedValueOnce(new Error("HTTP 500"));
+    fetchModelsMock.mockRejectedValueOnce(new Error("HTTP 500"));
+    fetchConfigMock.mockResolvedValue({ config: null, configPresent: true });
+    fetchModelsMock.mockResolvedValue({ models: [chatCapability("test-chat-1")] });
+
+    render(<SettingsPanel />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Could not load gateway settings");
+    expect(alert.textContent).not.toContain("HTTP 500");
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("conv-elig-ok")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("SettingsPanel tabs (uiux-fix C070/C147)", () => {
+  it("exposes the active tab via aria-pressed and labels the gateway tab 'Models'", async () => {
+    primeFetches([]);
+    render(<SettingsPanel />);
+    const modelsTab = screen.getByRole("button", { name: "Models" });
+    expect(modelsTab).toHaveAttribute("aria-pressed", "true");
+    const generalTab = screen.getByRole("button", { name: "General" });
+    expect(generalTab).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(generalTab);
+    expect(generalTab).toHaveAttribute("aria-pressed", "true");
+    expect(modelsTab).toHaveAttribute("aria-pressed", "false");
+    await waitFor(() => {
+      expect(fetchModelsMock).toHaveBeenCalled();
+    });
   });
 });

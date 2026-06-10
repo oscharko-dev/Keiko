@@ -298,6 +298,40 @@ describe("runGroundedExploration", () => {
     expect(validateConnectedContextPack(out.pack).ok).toBe(true);
   });
 
+  it("grounds direct package.json metadata requests without leaking internal .keiko evidence", async () => {
+    writeFileSync(join(ROOT, "package.json"), '{\n  "packageManager": "npm@10.9.8"\n}\n');
+    mkdirSync(join(ROOT, ".keiko/evidence/qi"), { recursive: true });
+    writeFileSync(
+      join(ROOT, ".keiko/evidence/qi/run.candidates.json"),
+      '{"packageManager":"stale-internal-value","connected":"repository","context":"evidence"}\n',
+    );
+
+    const out = await retrieveConnectedContextPack(
+      input({
+        scope: happyScope({ kind: "workspace-root", relativePaths: [], explicitConnection: true }),
+        query: happyQuery({
+          text: "Using only the connected repository context, what is the exact packageManager value in package.json? Reply with the exact value only.",
+        }),
+      }),
+      {
+        answerer: echoAnswerer,
+        nowMs: () => NOW,
+        detectWorkspace: () => fakeWorkspace(),
+      },
+    );
+
+    expect(out.pack.files[0]?.scopePath).toBe("package.json");
+    expect(out.pack.files.every((file) => !file.scopePath.startsWith(".keiko/"))).toBe(true);
+    expect(
+      out.pack.files[0]?.excerpts.some((excerpt) =>
+        excerpt.content.includes('"packageManager": "npm@10.9.8"'),
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(out.pack)).not.toContain(".keiko/evidence");
+    expect(JSON.stringify(out.pack)).not.toContain("stale-internal-value");
+    expect(validateConnectedContextPack(out.pack).ok).toBe(true);
+  });
+
   it("adds a no-evidence uncertainty marker when retrieval finds no matching atoms", async () => {
     const out = await runGroundedExploration(
       input({
