@@ -1,6 +1,13 @@
 "use client";
 
-import { useEffect, useRef, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { Icons } from "../Icons";
 import { type WIN_TYPES as WinTypes, type WindowType } from "../windows/WindowsRegistry";
 
@@ -11,12 +18,37 @@ interface PaletteProps {
   readonly onClose: () => void;
 }
 
+// .palette-grid is a fixed two-column grid (globals.css grid-template-columns:
+// 1fr 1fr) — vertical arrow steps move by one row, i.e. two cards (audit C363).
+const GRID_COLUMNS = 2;
+
+const ARROW_DELTAS: ReadonlyMap<string, number> = new Map([
+  ["ArrowRight", 1],
+  ["ArrowLeft", -1],
+  ["ArrowDown", GRID_COLUMNS],
+  ["ArrowUp", -GRID_COLUMNS],
+]);
+
+/** APG-grid-style roving focus target; null when the key is not a grid key. */
+function nextCardIndex(key: string, current: number, count: number): number | null {
+  if (count === 0) return null;
+  if (key === "Home") return 0;
+  if (key === "End") return count - 1;
+  const delta = ARROW_DELTAS.get(key);
+  if (delta === undefined) return null;
+  return Math.max(0, Math.min(count - 1, current + delta));
+}
+
 export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNode {
   // Match design palette.jsx behaviour: focus the first card on mount and
   // allow Escape to close (the design relies on it; the prior impl had no
   // keyboard handler at all).
   const ref = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
+  // Roving tabindex over the cards (audit C363): exactly one card is a Tab
+  // stop; arrows move within the grid. onFocus keeps the index in sync when
+  // focus arrives by click or Shift+Tab from the close button.
+  const [activeIdx, setActiveIdx] = useState(0);
   useEffect(() => {
     triggerRef.current = document.activeElement as HTMLElement | null;
     const first = ref.current?.querySelector<HTMLButtonElement>(".pal-card");
@@ -52,7 +84,18 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
     if (e.key === "Escape") {
       e.preventDefault();
       onClose();
+      return;
     }
+    // Arrow-key navigation over the card grid with a roving tabindex (audit
+    // C363, APG grid pattern). Only when a card is the event target — the
+    // close button keeps its plain Tab behaviour.
+    if (!(e.target instanceof HTMLElement) || !e.target.classList.contains("pal-card")) return;
+    const cards = Array.from(ref.current?.querySelectorAll<HTMLButtonElement>(".pal-card") ?? []);
+    const next = nextCardIndex(e.key, cards.indexOf(e.target as HTMLButtonElement), cards.length);
+    if (next === null) return;
+    e.preventDefault();
+    setActiveIdx(next);
+    cards[next]?.focus();
   };
 
   const onBlur = (e: FocusEvent<HTMLDivElement>): void => {
@@ -72,6 +115,9 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
       role="dialog"
       aria-labelledby="palette-title"
       aria-describedby="palette-desc"
+      // tabIndex -1: a click on non-focusable palette chrome keeps focus inside,
+      // so the Escape handler stays reachable and onBlur does not misfire (audit C007).
+      tabIndex={-1}
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={onKeyDown}
       onBlur={onBlur}
@@ -93,18 +139,25 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
           type="button"
           className="palette-x"
           onClick={onClose}
-          aria-label="Close window picker"
+          aria-label="Close"
           title="Close"
         >
           <Icons.close size={16} />
         </button>
       </div>
       <div className="palette-grid">
-        {order.map((k) => {
+        {order.map((k, i) => {
           const t = types[k];
           const Icon = Icons[t.icon];
           return (
-            <button type="button" className="pal-card pal-main" key={k} onClick={() => onAdd(k)}>
+            <button
+              type="button"
+              className="pal-card pal-main"
+              key={k}
+              tabIndex={i === activeIdx ? 0 : -1}
+              onFocus={() => setActiveIdx(i)}
+              onClick={() => onAdd(k)}
+            >
               <span className="pal-ico">
                 <Icon size={18} />
               </span>

@@ -5,16 +5,10 @@
 // PATCHes /capsules/:id and asks the parent to reload so every section reflects the new
 // label. Metadata editing is intentionally not exposed yet (no store migration).
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode, type Ref } from "react";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import { renameCapsule, type RenameCapsulePatch } from "@/lib/local-knowledge-api";
-import { ApiError } from "@/lib/api";
-
-function formatError(error: unknown): string {
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return "An unexpected error occurred.";
-}
+import { formatError } from "../format-error";
 
 // Minimal patch: only fields that actually changed. Returns null when nothing changed so
 // the caller can close the editor without a no-op request (the BFF rejects empty patches).
@@ -37,6 +31,7 @@ interface RenameFieldsProps {
   readonly description: string;
   readonly busy: boolean;
   readonly error: string | null;
+  readonly nameInputRef: Ref<HTMLInputElement>;
   readonly onNameChange: (value: string) => void;
   readonly onDescriptionChange: (value: string) => void;
   readonly onCancel: () => void;
@@ -48,13 +43,30 @@ function RenameFields({
   description,
   busy,
   error,
+  nameInputRef,
   onNameChange,
   onDescriptionChange,
   onCancel,
   onSubmit,
 }: RenameFieldsProps): ReactNode {
+  const formRef = useRef<HTMLFormElement>(null);
+  // Escape cancels the inline edit (#712 pattern): a document keydown listener scoped to this
+  // form's lifetime — not a JSX handler on the non-interactive <form> (jsx-a11y). Only cancels
+  // while focus is inside the form, and never mid-save, so a stray Escape can't tear the form
+  // down under an in-flight PATCH.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key !== "Escape" || busy) return;
+      const form = formRef.current;
+      if (form !== null && form.contains(document.activeElement)) onCancel();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [busy, onCancel]);
   return (
-    <form className="lkd-rename-form" aria-label="Rename capsule" onSubmit={onSubmit}>
+    <form className="lkd-rename-form" aria-label="Rename capsule" onSubmit={onSubmit} ref={formRef}>
       <div className="dlg-field">
         <label htmlFor="lkd-rename-name" className="dlg-label">
           Display name
@@ -63,6 +75,7 @@ function RenameFields({
           id="lkd-rename-name"
           type="text"
           className="dlg-input"
+          ref={nameInputRef}
           value={name}
           disabled={busy}
           autoComplete="off"
@@ -122,6 +135,21 @@ export function CapsuleRename({
   const [draftDescription, setDraftDescription] = useState(description ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
+  const renameButtonRef = useRef<HTMLButtonElement | null>(null);
+  const wasEditingRef = useRef(false);
+
+  // Focus management (WCAG 2.4.3, #712 pattern): opening replaces the focused Rename button
+  // with the form — move focus into the first field; closing (cancel OR successful save)
+  // unmounts the form — return focus to the re-mounted Rename button.
+  useEffect(() => {
+    if (editing) {
+      nameInputRef.current?.focus();
+    } else if (wasEditingRef.current) {
+      renameButtonRef.current?.focus();
+    }
+    wasEditingRef.current = editing;
+  }, [editing]);
 
   function open(): void {
     setName(displayName);
@@ -167,6 +195,7 @@ export function CapsuleRename({
         type="button"
         className="lk-btn lk-btn-ghost"
         aria-label={`Rename capsule ${displayName}`}
+        ref={renameButtonRef}
         onClick={open}
       >
         Rename
@@ -180,6 +209,7 @@ export function CapsuleRename({
       description={draftDescription}
       busy={busy}
       error={error}
+      nameInputRef={nameInputRef}
       onNameChange={setName}
       onDescriptionChange={setDraftDescription}
       onCancel={cancel}

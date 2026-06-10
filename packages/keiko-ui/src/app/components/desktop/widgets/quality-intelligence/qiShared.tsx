@@ -4,11 +4,33 @@
 // Used by the QI hub (run list) and the per-run result card. Pure, no data fetching.
 
 import type { ReactNode } from "react";
-import type { QualityIntelligenceUiWeakTestFlag } from "@oscharko-dev/keiko-contracts";
+import type {
+  QualityIntelligenceReviewState,
+  QualityIntelligenceUiWeakTestFlag,
+} from "@oscharko-dev/keiko-contracts";
 import { ApiError } from "@/lib/api";
 
+// Human labels for review states — shared by the candidate review badges (CandidatesPane) and the
+// run summary (QiRunCard) so the same state never renders in two spellings on one card
+// (uiux-fix F030 C272: "Changes-Requested" via CSS capitalize vs "Changes requested").
+export const REVIEW_LABEL: Readonly<Record<QualityIntelligenceReviewState, string>> = {
+  open: "Open",
+  approved: "Approved",
+  "changes-requested": "Changes requested",
+  rejected: "Rejected",
+  withdrawn: "Withdrawn",
+};
+
+// Coded errors render message-first with the machine code trailing in parentheses — users read the
+// human sentence, auditors still get the stable code (uiux-fix F047 C271: the raw "QI_…: message"
+// prefix leaked the machine code as the headline). Also used by the SSE error frames (RunLauncher),
+// which carry code + message as plain fields rather than an ApiError instance.
+export function formatCodedError(code: string, message: string): string {
+  return `${message} (${code})`;
+}
+
 export function formatError(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
+  if (err instanceof ApiError) return formatCodedError(err.code, err.message);
   if (err instanceof Error) return err.message;
   return "An unexpected error occurred.";
 }
@@ -41,17 +63,19 @@ function isRunStatus(s: string): s is RunStatus {
   return s === "running" || s === "succeeded" || s === "failed" || s === "cancelled";
 }
 
+/** Human label for a run status — falls back to the raw value for unknown statuses. */
+export function runStatusLabel(status: string): string {
+  return isRunStatus(status) ? STATUS_LABEL[status] : status;
+}
+
 // A status badge is a STATIC label, not a live region — it carries no role="status" (that role is
-// reserved for the container regions that actually receive async updates). The visible label plus
-// the aria-label context ("Status: …") name it for assistive tech.
+// reserved for the container regions that actually receive async updates). No aria-label either:
+// naming is prohibited on a generic <span> (ARIA 1.2) and assistive tech ignores it — the visible
+// label is the accessible content.
 export function StatusBadge({ status }: { readonly status: string }): ReactNode {
-  const label = isRunStatus(status) ? STATUS_LABEL[status] : status;
+  const label = runStatusLabel(status);
   const cls = isRunStatus(status) ? STATUS_CLASS[status] : "qi-badge-default";
-  return (
-    <span aria-label={`Status: ${label}`} className={`qi-badge ${cls}`}>
-      {label}
-    </span>
-  );
+  return <span className={`qi-badge ${cls}`}>{label}</span>;
 }
 
 type FindingSeverity = "critical" | "high" | "medium" | "low";
@@ -67,10 +91,13 @@ function isFindingSeverity(s: string): s is FindingSeverity {
   return s === "critical" || s === "high" || s === "medium" || s === "low";
 }
 
+// No aria-label (prohibited on a generic <span>); the "Severity:" context lives in a
+// screen-reader-only prefix so the visible chip stays compact.
 export function SeverityBadge({ severity }: { readonly severity: string }): ReactNode {
   const cls = isFindingSeverity(severity) ? SEVERITY_CLASS[severity] : "qi-sev-low";
   return (
-    <span aria-label={`Severity: ${severity}`} className={`qi-sev ${cls}`}>
+    <span className={`qi-sev ${cls}`}>
+      <span className="sr-only">Severity: </span>
       {severity}
     </span>
   );
@@ -85,26 +112,22 @@ function qualityTierClass(rounded: number): string {
   return "qi-quality-low";
 }
 
+// aria-label is prohibited (and ignored) on a generic <span>, so the score context is carried by
+// screen-reader-only text instead: the bare em-dash / number alone would be meaningless to AT.
 export function QualityScoreBadge({ score }: { readonly score: number | null }): ReactNode {
   if (score === null) {
     return (
-      <span
-        aria-label="Quality score: not available"
-        className="qi-badge qi-badge-default"
-        data-testid="qi-quality-badge"
-      >
-        —
+      <span className="qi-badge qi-badge-default" data-testid="qi-quality-badge">
+        <span aria-hidden="true">—</span>
+        <span className="sr-only">Quality score not available</span>
       </span>
     );
   }
   const rounded = Math.round(score);
   return (
-    <span
-      aria-label={`Quality score: ${rounded.toString()} out of 100`}
-      className={`qi-badge ${qualityTierClass(rounded)}`}
-      data-testid="qi-quality-badge"
-    >
+    <span className={`qi-badge ${qualityTierClass(rounded)}`} data-testid="qi-quality-badge">
       {rounded.toString()}
+      <span className="sr-only"> out of 100</span>
     </span>
   );
 }

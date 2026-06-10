@@ -5,7 +5,7 @@
  */
 
 import type {
-  QualityIntelligenceUiRunSummary,
+  QualityIntelligenceUiRunListResponse,
   QualityIntelligenceUiRunDetail,
   QualityIntelligenceUiCandidate,
   QualityIntelligenceCandidateEditableFields,
@@ -53,11 +53,13 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 // GET /api/quality-intelligence/runs
 // ---------------------------------------------------------------------------
 
-export async function fetchQiRuns(): Promise<readonly QualityIntelligenceUiRunSummary[]> {
-  const res = await fetchJson<{ runs: readonly QualityIntelligenceUiRunSummary[] }>(
-    "/api/quality-intelligence/runs",
-  );
-  return res.runs;
+/**
+ * Returns the full run-list envelope. `limit` / `totalRunIds` / `truncated` are part of the wire
+ * contract (issue #646) so the hub can render a "more available" indicator when the route
+ * truncated the list — discarding them hid older runs without any hint (uiux-fix F030 C277).
+ */
+export async function fetchQiRuns(): Promise<QualityIntelligenceUiRunListResponse> {
+  return fetchJson<QualityIntelligenceUiRunListResponse>("/api/quality-intelligence/runs");
 }
 
 // ---------------------------------------------------------------------------

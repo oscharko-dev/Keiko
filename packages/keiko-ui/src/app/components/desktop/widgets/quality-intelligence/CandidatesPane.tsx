@@ -14,7 +14,7 @@ import type {
   QualityIntelligenceCandidateEditableFields,
 } from "@oscharko-dev/keiko-contracts";
 import { CandidateEditForm } from "./CandidateEditForm";
-import { WeakTestFlag } from "./qiShared";
+import { REVIEW_LABEL, WeakTestFlag } from "./qiShared";
 
 const INITIAL_VISIBLE = 25;
 
@@ -25,13 +25,11 @@ export type QiCandidateEdit = (
   edited: QualityIntelligenceCandidateEditableFields,
 ) => Promise<void> | void;
 
-const REVIEW_LABEL: Readonly<Record<QualityIntelligenceReviewState, string>> = {
-  open: "Open",
-  approved: "Approved",
-  "changes-requested": "Changes requested",
-  rejected: "Rejected",
-  withdrawn: "Withdrawn",
-};
+/** A review request currently in flight (no second request may start until it settles). */
+export interface QiPendingReview {
+  readonly candidateId: string;
+  readonly action: QiReviewAction;
+}
 
 const REVIEW_CLASS: Readonly<Record<QualityIntelligenceReviewState, string>> = {
   open: "qi-review-open",
@@ -41,12 +39,12 @@ const REVIEW_CLASS: Readonly<Record<QualityIntelligenceReviewState, string>> = {
   withdrawn: "qi-review-withdrawn",
 };
 
+// No aria-label here: naming is prohibited on a generic <span> (ARIA 1.2), so assistive tech ignores
+// it. The "Review:" context is supplied via a screen-reader-only prefix instead.
 function ReviewBadge({ state }: { readonly state: QualityIntelligenceReviewState }): ReactNode {
   return (
-    <span
-      className={`qi-review-badge ${REVIEW_CLASS[state]}`}
-      aria-label={`Review: ${REVIEW_LABEL[state]}`}
-    >
+    <span className={`qi-review-badge ${REVIEW_CLASS[state]}`}>
+      <span className="sr-only">Review: </span>
       {REVIEW_LABEL[state]}
     </span>
   );
@@ -114,20 +112,27 @@ function ReviewControls({
   onReview,
   disabled = false,
   describedBy,
+  pendingReview,
 }: {
   readonly candidateId: string;
   readonly state: QualityIntelligenceReviewState;
   readonly onReview: (candidateId: string, action: QiReviewAction) => void;
   readonly disabled?: boolean;
   readonly describedBy?: string | undefined;
+  readonly pendingReview?: QiPendingReview | null | undefined;
 }): ReactNode {
+  // While any review request is in flight, every review button is locked (aria-disabled keeps them
+  // focusable) and the clicked one is relabelled "Saving…" so the round-trip has visible feedback.
+  const reviewBusy = pendingReview !== null && pendingReview !== undefined;
+  const isSaving = (action: QiReviewAction): boolean =>
+    reviewBusy && pendingReview.candidateId === candidateId && pendingReview.action === action;
   return (
     <div className="qi-cand-actions" role="group" aria-label="Review decision">
       <GovernedActionButton
         className="qi-btn qi-btn-approve"
-        label="Approve"
+        label={isSaving("approve") ? "Saving…" : "Approve"}
         pressed={state === "approved"}
-        disabled={disabled}
+        disabled={disabled || reviewBusy}
         describedBy={describedBy}
         onActivate={() => {
           onReview(candidateId, "approve");
@@ -135,9 +140,9 @@ function ReviewControls({
       />
       <GovernedActionButton
         className="qi-btn qi-btn-reject"
-        label="Reject"
+        label={isSaving("reject") ? "Saving…" : "Reject"}
         pressed={state === "rejected"}
-        disabled={disabled}
+        disabled={disabled || reviewBusy}
         describedBy={describedBy}
         onActivate={() => {
           onReview(candidateId, "reject");
@@ -145,9 +150,9 @@ function ReviewControls({
       />
       <GovernedActionButton
         className="qi-btn qi-btn-secondary"
-        label="Request changes"
+        label={isSaving("request-changes") ? "Saving…" : "Request changes"}
         pressed={state === "changes-requested"}
-        disabled={disabled}
+        disabled={disabled || reviewBusy}
         describedBy={describedBy}
         onActivate={() => {
           onReview(candidateId, "request-changes");
@@ -164,6 +169,7 @@ function CandidateView({
   actionsDisabled = false,
   describedBy,
   editButtonRef,
+  pendingReview,
 }: {
   readonly candidate: QualityIntelligenceUiCandidate;
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
@@ -171,6 +177,7 @@ function CandidateView({
   readonly actionsDisabled?: boolean;
   readonly describedBy?: string | undefined;
   readonly editButtonRef?: Ref<HTMLButtonElement> | undefined;
+  readonly pendingReview?: QiPendingReview | null | undefined;
 }): ReactNode {
   return (
     <>
@@ -218,6 +225,7 @@ function CandidateView({
             onReview={onReview}
             disabled={actionsDisabled}
             describedBy={describedBy}
+            pendingReview={pendingReview}
           />
         ) : null}
       </div>
@@ -231,12 +239,14 @@ function CandidateCard({
   onEdit,
   actionsDisabled = false,
   describedBy,
+  pendingReview,
 }: {
   readonly candidate: QualityIntelligenceUiCandidate;
   readonly onReview?: ((candidateId: string, action: QiReviewAction) => void) | undefined;
   readonly onEdit?: QiCandidateEdit | undefined;
   readonly actionsDisabled?: boolean;
   readonly describedBy?: string | undefined;
+  readonly pendingReview?: QiPendingReview | null | undefined;
 }): ReactNode {
   const [editing, setEditing] = useState(false);
   const editButtonRef = useRef<HTMLButtonElement>(null);
@@ -267,6 +277,7 @@ function CandidateCard({
           onReview={onReview}
           actionsDisabled={actionsDisabled}
           describedBy={describedBy}
+          pendingReview={pendingReview}
           editButtonRef={editButtonRef}
           onStartEdit={
             onEdit !== undefined
@@ -287,6 +298,8 @@ export interface CandidatesPaneProps {
   readonly onEdit?: QiCandidateEdit | undefined;
   readonly actionsDisabled?: boolean;
   readonly actionsDisabledReason?: string | undefined;
+  /** Review request currently in flight — locks the review controls and labels it "Saving…". */
+  readonly pendingReview?: QiPendingReview | null | undefined;
 }
 
 export function CandidatesPane({
@@ -295,6 +308,7 @@ export function CandidatesPane({
   onEdit,
   actionsDisabled = false,
   actionsDisabledReason,
+  pendingReview,
 }: CandidatesPaneProps): ReactNode {
   const [visible, setVisible] = useState(INITIAL_VISIBLE);
   const governanceNoteId = useId();
@@ -324,6 +338,7 @@ export function CandidatesPane({
             onEdit={onEdit}
             actionsDisabled={actionsDisabled}
             describedBy={showGovernanceNote ? governanceNoteId : undefined}
+            pendingReview={pendingReview}
           />
         ))}
       </ul>

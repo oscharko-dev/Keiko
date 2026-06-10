@@ -13,7 +13,7 @@ import type {
   QualityIntelligenceStartRunRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { startQiRun } from "@/lib/quality-intelligence-api";
-import { ApiError } from "@/lib/api";
+import { formatCodedError, formatError } from "./qiShared";
 import { buildConnectedRunSources } from "./connectedSources";
 import type { ConnectedRunSource } from "./connectedSources";
 
@@ -44,12 +44,6 @@ const INITIAL_PROGRESS: Progress = {
   droppedSourceCount: 0,
   skippedSources: [],
 };
-
-function formatError(err: unknown): string {
-  if (err instanceof ApiError) return `${err.code}: ${err.message}`;
-  if (err instanceof Error) return err.message;
-  return "An unexpected error occurred.";
-}
 
 function reduceProgress(prev: Progress, msg: QualityIntelligenceRunStreamMessage): Progress {
   if (msg.type === "accepted") {
@@ -204,7 +198,7 @@ export function RunLauncher({
 
   const onMessage = useCallback((msg: QualityIntelligenceRunStreamMessage): void => {
     if (msg.type === "accepted") completedRunIdRef.current = msg.runId;
-    if (msg.type === "error") setError(`${msg.code}: ${msg.message}`);
+    if (msg.type === "error") setError(formatCodedError(msg.code, msg.message));
     setProgress((prev) => reduceProgress(prev, msg));
   }, []);
 
@@ -260,6 +254,21 @@ export function RunLauncher({
   const handleCancel = useCallback((): void => {
     abortRef.current?.abort();
   }, []);
+
+  // Coverage-notice sentences are built once and shared by the visible notice AND the persistent
+  // sr-only live region (uiux-fix F047 C155: the notice was a role="status" element inserted
+  // together with its content, which screen readers often skip).
+  const droppedNotice =
+    progress.droppedSourceCount > 0
+      ? `${progress.droppedSourceCount.toString()} source${progress.droppedSourceCount !== 1 ? "s" : ""} over the 16-source limit ${progress.droppedSourceCount !== 1 ? "were" : "was"} not included.`
+      : null;
+  const skippedNotice =
+    progress.skippedSources.length > 0
+      ? `${progress.skippedSources.length.toString()} connected source${progress.skippedSources.length !== 1 ? "s" : ""} could not be read and ${progress.skippedSources.length !== 1 ? "were" : "was"} skipped: ${progress.skippedSources.map((s) => s.label).join(", ")}.`
+      : null;
+  const coverageAnnouncement = [droppedNotice, skippedNotice]
+    .filter((line): line is string => line !== null)
+    .join(" ");
 
   return (
     <section className="qi-launcher" aria-label="Start a Quality Intelligence run">
@@ -412,24 +421,25 @@ export function RunLauncher({
               </span>
             ) : null}
           </label>
-          {running ? (
-            <button type="button" className="qi-btn qi-btn-secondary" onClick={handleCancel}>
-              Cancel
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="qi-btn qi-btn-primary"
-              aria-disabled={generateBlocked || undefined}
-              aria-describedby={generateDescribedBy}
-              onClick={() => {
-                if (generateBlocked) return;
-                void handleStart();
-              }}
-            >
-              Generate test cases
-            </button>
-          )}
+          {/* ONE persistent button that swaps label/handler between Generate and Cancel: two
+              conditionally-rendered buttons would unmount the focused element on every state
+              change and drop keyboard focus onto <body> (WCAG 2.4.3, audit C031). */}
+          <button
+            type="button"
+            className={running ? "qi-btn qi-btn-secondary" : "qi-btn qi-btn-primary"}
+            aria-disabled={(!running && generateBlocked) || undefined}
+            aria-describedby={running ? undefined : generateDescribedBy}
+            onClick={() => {
+              if (running) {
+                handleCancel();
+                return;
+              }
+              if (generateBlocked) return;
+              void handleStart();
+            }}
+          >
+            {running ? "Cancel" : "Generate test cases"}
+          </button>
           {!running && !ready ? (
             <span className="qi-generate-hint" id={generateHintId}>
               Add requirements text, a folder path, or connect a source to generate.
@@ -448,32 +458,23 @@ export function RunLauncher({
             <span className="qi-progress-text">
               {progress.stageName !== null ? `Stage: ${progress.stageName} · ` : ""}
               {progress.candidates.toString()} test case{progress.candidates !== 1 ? "s" : ""}
-              {progress.findings > 0 ? ` · ${progress.findings.toString()} findings` : ""}
+              {/* "1 finding", not "1 findings" — same singular/plural care as the test-case count
+                  two tokens earlier (uiux-fix F047 C276). */}
+              {progress.findings > 0
+                ? ` · ${progress.findings.toString()} finding${progress.findings !== 1 ? "s" : ""}`
+                : ""}
             </span>
           </div>
         ) : null}
-        {progress.droppedSourceCount > 0 || progress.skippedSources.length > 0 ? (
-          <div
-            className="qi-coverage-notice"
-            role="status"
-            aria-live="polite"
-            data-testid="qi-coverage-notice"
-          >
-            {progress.droppedSourceCount > 0 ? (
-              <p className="qi-coverage-line">
-                {progress.droppedSourceCount.toString()} source
-                {progress.droppedSourceCount !== 1 ? "s" : ""} over the 16-source limit{" "}
-                {progress.droppedSourceCount !== 1 ? "were" : "was"} not included.
-              </p>
-            ) : null}
-            {progress.skippedSources.length > 0 ? (
-              <p className="qi-coverage-line">
-                {progress.skippedSources.length.toString()} connected source
-                {progress.skippedSources.length !== 1 ? "s" : ""} could not be read and{" "}
-                {progress.skippedSources.length !== 1 ? "were" : "was"} skipped:{" "}
-                {progress.skippedSources.map((s) => s.label).join(", ")}.
-              </p>
-            ) : null}
+        {/* Persistent live region for the coverage notice (uiux-fix F047 C155) — mounted from the
+            first render; the visible notice below stays conditional and carries no live role. */}
+        <p className="sr-only" role="status" aria-live="polite">
+          {coverageAnnouncement}
+        </p>
+        {droppedNotice !== null || skippedNotice !== null ? (
+          <div className="qi-coverage-notice" data-testid="qi-coverage-notice">
+            {droppedNotice !== null ? <p className="qi-coverage-line">{droppedNotice}</p> : null}
+            {skippedNotice !== null ? <p className="qi-coverage-line">{skippedNotice}</p> : null}
           </div>
         ) : null}
         {error !== null ? (

@@ -32,6 +32,7 @@ import {
   BACKEND_UNREACHABLE_MESSAGE,
 } from "../../../relationships/api";
 import type { ApiRelationship } from "../../../relationships/api";
+import { Icons } from "../Icons";
 
 // ─── Per-denial-code UI messages (verbatim from denial-reasons.md) ─────────────
 // These are displayed only when the server returns a denial — never invented by the UI.
@@ -343,14 +344,17 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           <span id={descId} className="visually-hidden">
             Create a new relationship between two workspace endpoints.
           </span>
+          {/* Same close-control identity as Palette/NewWindowDialog: square
+              .palette-x with the Icons.close glyph, aria-label === title (audit C037). */}
           <button
             type="button"
-            className="arun-btn"
+            className="palette-x"
             onClick={() => onClose(null)}
-            aria-label="Close dialog"
-            style={{ marginLeft: "auto", minWidth: 24, minHeight: 24 }}
+            aria-label="Close"
+            title="Close"
+            style={{ marginLeft: "auto" }}
           >
-            ✕
+            <Icons.close size={16} />
           </button>
         </div>
 

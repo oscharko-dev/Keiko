@@ -376,6 +376,32 @@ describe("RunLauncher — run lifecycle (in-progress state)", () => {
     expect(screen.queryByRole("button", { name: /cancel/i })).not.toBeInTheDocument();
   });
 
+  it("keeps keyboard focus on the same persistent button while it swaps Generate↔Cancel (WCAG 2.4.3, audit C031)", async () => {
+    const user = userEvent.setup();
+    const { startImpl, resolveStall } = makeStallingFake();
+    render(<RunLauncher startImpl={startImpl} />);
+
+    await user.type(screen.getByRole("textbox", { name: /requirements/i }), "Persistent focus");
+    const button = screen.getByRole("button", { name: /generate test cases/i });
+    await user.click(button);
+
+    // While running the SAME DOM node relabels to "Cancel" — focus must not fall to <body>.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /cancel/i })).toBe(button);
+    });
+    expect(button).toHaveFocus();
+
+    act(() => {
+      resolveStall();
+    });
+
+    // After the run ends it relabels back to Generate, still focused.
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /generate test cases/i })).toBe(button);
+    });
+    expect(button).toHaveFocus();
+  });
+
   it("renders the progress region (data-testid qi-launch-progress) while the run is active", async () => {
     const user = userEvent.setup();
     const { startImpl, resolveStall } = makeStallingFake();

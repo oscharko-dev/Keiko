@@ -77,10 +77,12 @@ export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
   if (pair.includes("keiko")) return "governed by";
   if (pair[0] === "agents" && pair[1] === "agents") return "delegates";
   if (pair.includes("terminal")) return "runs in";
-  if (pair.includes("plugins")) return "tools";
+  // Every label must read as a mini-sentence predicate ("Chat uses tools Plugins");
+  // bare "tools" / "linked" carried no relationship meaning (uiux-fix F048, C409).
+  if (pair.includes("plugins")) return "uses tools";
   if (pair.includes("review")) return "reviews";
   if (pair.includes("browser")) return "browses";
-  return "linked";
+  return "connected";
 }
 
 export interface BezierPath {

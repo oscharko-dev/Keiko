@@ -158,19 +158,64 @@ describe("BudgetIndicator", () => {
     expect(alert.textContent).toMatch(/Context exceeds the selected model'?s window/);
   });
 
-  it("invokes the clear-history callback when the Clear history button is clicked", async () => {
+  // uiux-fix F010 (C175): clearing is destructive-looking on a core path, so the button
+  // opens an inline confirm step; only the confirm click invokes the callback, and a
+  // role="status" note then explains the reset is not persisted.
+  it("invokes the clear-history callback only after the inline confirm step", async () => {
     const user = userEvent.setup();
     const onClearHistory = vi.fn();
     render(<BudgetIndicator budget={makeBudget()} onClearHistory={onClearHistory} />);
     await user.click(
       screen.getByRole("button", { name: "Clear conversation history for next prompt" }),
     );
+    // First activation only reveals the confirm step.
+    expect(onClearHistory).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Clear" }));
     expect(onClearHistory).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toHaveTextContent(/messages remain saved/i);
+  });
+
+  it("cancels the inline confirm without clearing (C175)", async () => {
+    const user = userEvent.setup();
+    const onClearHistory = vi.fn();
+    render(<BudgetIndicator budget={makeBudget()} onClearHistory={onClearHistory} />);
+    await user.click(
+      screen.getByRole("button", { name: "Clear conversation history for next prompt" }),
+    );
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClearHistory).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: "Clear conversation history for next prompt" }),
+    ).toBeInTheDocument();
   });
 
   it("hides itself entirely when budget is undefined (no known model limits)", () => {
     const { container } = render(<BudgetIndicator budget={undefined} onClearHistory={vi.fn()} />);
     expect(container.firstChild).toBeNull();
+  });
+
+  // uiux-fix F010 (C204): live runtime models report contextWindow 0 — the indicator
+  // previously self-hid completely, so users got no context feedback at all. It now
+  // renders a count-only fallback: no "/ window", no pressure badge, no exceeded alert.
+  it("renders a count-only fallback without badge or alert when the window is unknown (0)", () => {
+    render(
+      <BudgetIndicator
+        budget={makeBudget({ contextWindowTokens: 0, pressure: "exceeded" })}
+        onClearHistory={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Approximate context: 500 tokens")).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Context pressure:/)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  // uiux-fix F010 (C321): the approximate-tokens hint must be keyboard-reachable —
+  // the icon is focusable and carries the data-tip text revealed on focus via CSS.
+  it("exposes the approximate-tokens hint to keyboard users (focusable data-tip icon)", () => {
+    render(<BudgetIndicator budget={makeBudget()} onClearHistory={vi.fn()} />);
+    const icon = screen.getByLabelText(/Token counts are approximate/);
+    expect(icon.getAttribute("tabindex")).toBe("0");
+    expect(icon.getAttribute("data-tip")).toMatch(/Actual model usage may vary/);
   });
 });
 
@@ -300,7 +345,8 @@ describe("ChatWindow with a contextWindow:0 model (CB-F1)", () => {
         <ChatWindow />
       </ChatSessionProvider>,
     );
-    // No exceeded alert is rendered (BudgetIndicator self-hides at window <= 0).
+    // No exceeded alert is rendered (BudgetIndicator falls back to a count-only
+    // row without badge/alert at window <= 0 — uiux-fix F010 C204).
     expect(screen.queryByText(/Context exceeds the selected model/)).toBeNull();
     const sendButton = screen.getByRole("button", { name: "Send message" });
     // Send is NOT blocked by budget — aria-disabled must not be "true".

@@ -196,6 +196,15 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       <WorkspaceShader />
       <div className="ws-grid" style={bgStyle} aria-hidden="true" />
       <ConnectAnnouncer wins={wins} connecting={connecting} conns={conns} />
+      {connecting !== null ? (
+        // Visible counterpart to ConnectAnnouncer for sighted users — connect
+        // mode otherwise only signals via cursor/dimming, leaving the exits
+        // (Escape, background click) undiscoverable (audit F052/C411).
+        // aria-hidden: the live region above already announces this.
+        <div className="ws-connect-hint" aria-hidden="true">
+          Click a highlighted window to connect — Esc to cancel
+        </div>
+      ) : null}
       {empty ? (
         <div className="ws-empty">
           {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG directly */}

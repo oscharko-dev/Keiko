@@ -269,6 +269,20 @@ interface UseKeyboardArgs {
   readonly cancelConnectRef: MutableRefObject<() => void>;
 }
 
+// Audit C296 — the content-zoom chord matches event.code, not event.key: macOS
+// Option composes characters (Option+- yields "–", Option+0 yields "º"), so a
+// key-based comparison would make the alt chord unmatchable on Macs — the same
+// trap audit C125 fixed in useKeyboardShortcuts. Maps to the logical key that
+// nextContentZoom understands.
+const CONTENT_ZOOM_CODES: Readonly<Record<string, string>> = {
+  Equal: "=",
+  NumpadAdd: "+",
+  Minus: "-",
+  NumpadSubtract: "-",
+  Digit0: "0",
+  Numpad0: "0",
+};
+
 function handleContentZoomKey(
   setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
   key: string,
@@ -307,9 +321,15 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef }: UseKeyboardArgs):
         return;
       }
       if (isFormField(document.activeElement)) return;
-      if ((e.metaKey || e.ctrlKey) && ["=", "+", "-", "_", "0"].includes(e.key)) {
+      // Audit C296 — plain Cmd/Ctrl+Plus/Minus/0 used to be preventDefault'ed
+      // app-wide, hijacking the browser's page zoom (the primary text-scaling
+      // tool, WCAG 1.4.4) for a single-window content zoom. Content zoom now
+      // requires Alt as well (consistent with Alt = resize on the arrow chords);
+      // the browser chords pass through untouched.
+      const zoomKey = CONTENT_ZOOM_CODES[e.code];
+      if ((e.metaKey || e.ctrlKey) && e.altKey && zoomKey !== undefined) {
         e.preventDefault();
-        handleContentZoomKey(setWins, e.key);
+        handleContentZoomKey(setWins, zoomKey);
         return;
       }
       if (!/^Arrow/.test(e.key)) return;

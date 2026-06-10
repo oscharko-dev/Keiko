@@ -140,7 +140,9 @@ describe("Workspace card connections", () => {
 
     render(<Workspace ws={ws} wsRef={createRef<HTMLDivElement>()} openPalette={() => undefined} />);
 
-    const targetMaximizeButton = screen.getAllByRole("button", { name: "Maximize window" })[1];
+    // uiux-fix F031 C297 — control labels are window-scoped now ("Maximize Files
+    // window"), so the files-1 target is addressable by name directly.
+    const targetMaximizeButton = screen.getByRole("button", { name: "Maximize Files window" });
     expect(targetMaximizeButton).toBeDefined();
 
     fireEvent.pointerDown(targetMaximizeButton as HTMLElement, { button: 0 });
@@ -162,7 +164,7 @@ describe("Workspace card connections", () => {
       />,
     );
 
-    fireEvent.pointerDown(screen.getByRole("button", { name: /connect from top edge/i }), {
+    fireEvent.pointerDown(screen.getByRole("button", { name: /connect agents from top edge/i }), {
       button: 0,
       clientX: 112,
       clientY: 128,
@@ -225,7 +227,7 @@ describe("Workspace card connections", () => {
       />,
     );
 
-    const port = screen.getByRole("button", { name: /connect from top edge/i });
+    const port = screen.getByRole("button", { name: /connect agents from top edge/i });
     port.focus();
     await user.keyboard("{Enter}");
 
@@ -261,8 +263,9 @@ describe("Workspace card connections", () => {
       />,
     );
 
-    // Ports render per window in wins order; index 1 is the files-1 window.
-    const targetPort = screen.getAllByRole("button", { name: /connect from top edge/i })[1];
+    // uiux-fix F031 C297 — port labels are window-scoped, so the files-1 target
+    // port is addressable by name directly.
+    const targetPort = screen.getByRole("button", { name: /connect files from top edge/i });
     expect(targetPort).toBeDefined();
     (targetPort as HTMLElement).focus();
     await user.keyboard("{Enter}");
@@ -297,7 +300,7 @@ describe("Workspace card connections", () => {
       />,
     );
 
-    const targetPort = screen.getAllByRole("button", { name: /connect from top edge/i })[1];
+    const targetPort = screen.getAllByRole("button", { name: /connect agents from top edge/i })[1];
     expect(targetPort).toBeDefined();
     (targetPort as HTMLElement).focus();
     await user.keyboard("{Enter}");

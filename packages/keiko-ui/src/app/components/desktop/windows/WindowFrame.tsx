@@ -190,6 +190,10 @@ function attachDragListeners(api: WorkspaceApi, geo: DragGeometry, session: Drag
     api.commitSnap(session.winId);
     document.body.style.cursor = "";
   };
+  // Audit C362 — the move listeners run on window without pointer capture, so a
+  // fast drag leaves the header and the cursor flickered to default/text over
+  // other surfaces. Pin the grabbing cursor globally for the gesture (up() resets).
+  document.body.style.cursor = "grabbing";
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", up);
 }
@@ -434,6 +438,11 @@ export function WindowFrame({
   return (
     <section
       className="window"
+      // Audit C408 — a name turns the section into a named region, so AT users
+      // can perceive window boundaries and jump between windows; C297 — the sub
+      // (path/URL/title) disambiguates multiple windows of the same type.
+      aria-label={sub !== null ? `${def.title} — ${sub}` : def.title}
+      aria-roledescription="window"
       data-top={top ? "true" : "false"}
       data-max={win.max ? "true" : "false"}
       data-conn={connState ?? undefined}
@@ -467,14 +476,24 @@ export function WindowFrame({
           <Icon size={14} />
         </span>
         <span className="win-title">{def.title}</span>
-        {sub !== null ? <span className="win-sub mono">{sub}</span> : null}
+        {/* Audit C159 — the badge ellipsizes at 150px; title= keeps the full
+            path/URL reachable for mouse users. */}
+        {sub !== null ? (
+          <span className="win-sub mono" title={sub}>
+            {sub}
+          </span>
+        ) : null}
         <span className="spacer" />
+        {/* Audit C297 — every window carried word-identical control labels; with
+            several windows open, screen-reader and voice-control users could not
+            tell WHICH window a Close/Zoom/Connect control acts on (WCAG 2.4.6).
+            def.title scopes each label; the visible chrome is unchanged. */}
         <div className="win-zoom">
           <button
             type="button"
             className="win-zbtn"
             title="Zoom content out"
-            aria-label="Zoom content out"
+            aria-label={`Zoom ${def.title} content out`}
             disabled={zoom <= CONTENT_MIN_ZOOM}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setZoom(zoom - 0.1)}
@@ -485,7 +504,7 @@ export function WindowFrame({
             type="button"
             className="win-zpct"
             title="Reset content zoom to 100%"
-            aria-label={`${String(Math.round(zoom * 100))}% — reset content zoom`}
+            aria-label={`${String(Math.round(zoom * 100))}% — reset ${def.title} content zoom`}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => api.update(win.id, { zoom: 1 })}
           >
@@ -495,7 +514,7 @@ export function WindowFrame({
             type="button"
             className="win-zbtn"
             title="Zoom content in"
-            aria-label="Zoom content in"
+            aria-label={`Zoom ${def.title} content in`}
             disabled={zoom >= CONTENT_MAX_ZOOM}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setZoom(zoom + 0.1)}
@@ -507,7 +526,7 @@ export function WindowFrame({
           type="button"
           className="win-btn"
           title={win.max ? "Restore" : "Maximize"}
-          aria-label={win.max ? "Restore window" : "Maximize window"}
+          aria-label={win.max ? `Restore ${def.title} window` : `Maximize ${def.title} window`}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={() => api.maximize(win.id)}
         >
@@ -517,7 +536,7 @@ export function WindowFrame({
           type="button"
           className="win-btn win-close"
           title="Close"
-          aria-label="Close window"
+          aria-label={`Close ${def.title} window`}
           onPointerDown={(e) => e.stopPropagation()}
           onClick={closeWithFocusRestore}
         >
@@ -538,7 +557,7 @@ export function WindowFrame({
               key={`p${d}`}
               className={`win-port wp-${d}`}
               title="Click to connect to another window"
-              aria-label={`Connect from ${d === "t" ? "top" : d === "r" ? "right" : d === "b" ? "bottom" : "left"} edge`}
+              aria-label={`Connect ${def.title} from ${d === "t" ? "top" : d === "r" ? "right" : d === "b" ? "bottom" : "left"} edge`}
               role="button"
               tabIndex={0}
               onPointerDown={onPortPointerDown}

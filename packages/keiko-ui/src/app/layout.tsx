@@ -4,7 +4,10 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Keiko",
-  description: "Keiko local developer-assist workspace.",
+  // uiux-fix F038 C376: aligned with the official README positioning ("a governed agentic
+  // workspace for knowledge work") — "developer-assist" misdescribed the product to the
+  // non-developer audiences the install surface reaches.
+  description: "Keiko — a governed agentic workspace for knowledge work.",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [

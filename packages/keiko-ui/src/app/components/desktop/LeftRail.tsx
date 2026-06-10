@@ -21,7 +21,7 @@ const PRIMARY: readonly RailTool[] = [
 
 const SECONDARY: readonly RailTool[] = [
   { id: "automations", icon: "automations", label: "Automations" },
-  { id: "mobile", icon: "mobile", label: "Keiko mobile" },
+  { id: "mobile", icon: "mobile", label: "Keiko Mobile" },
 ];
 
 function RailButton({

@@ -30,7 +30,10 @@ export function detectSupport(ua: string): SupportLevel {
     return "manual";
   }
 
-  // Chromium-family desktop/Android browsers with beforeinstallprompt support
+  // Chromium-family DESKTOP browsers with beforeinstallprompt support.
+  // Android Chrome does fire beforeinstallprompt, but is intentionally out of
+  // scope for the first release per the ADR-0024 D3 platform matrix (desktop
+  // macOS/Windows/Linux only) — hence the !mobile guard maps it to "manual".
   if (lc.includes("chrome/") && !lc.includes("mobile")) {
     return "supported";
   }

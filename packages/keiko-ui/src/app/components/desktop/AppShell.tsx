@@ -65,7 +65,9 @@ function branchLabelOrFallback(label: string | undefined): string {
 }
 
 function projectNameOrFallback(name: string | undefined, loading: boolean): string {
-  if (loading) return "Loading project...";
+  // uiux-fix F039 C401 — typographic ellipsis ("…", matching the footer's "You · manual"
+  // typography level) instead of three ASCII dots.
+  if (loading) return "Loading project…";
   return name !== undefined && name.trim().length > 0 ? name : "No project selected";
 }
 
@@ -76,7 +78,9 @@ function shellStatusLabel(args: {
   readonly projectAvailable: boolean;
   readonly noEligibleModels: boolean;
 }): string {
-  if (args.loading) return "Loading shell";
+  // uiux-fix F039 C401 — "Loading shell…" matches the header tab's "Loading project…" style
+  // (both visible at the same moment during boot).
+  if (args.loading) return "Loading shell…";
   if (args.error !== undefined) return "Shell error";
   if (!args.hasProject) return "No project selected";
   if (!args.projectAvailable) return "Project unavailable";
@@ -336,6 +340,16 @@ function AppShellInner(): ReactNode {
 
   const openPalette = useCallback((): void => setPalOpen(true), []);
   const closePalette = useCallback((): void => setPalOpen(false), []);
+  // uiux-fix F013 C023 — the header's window buttons act on the front (highest-z)
+  // window via the existing maximize toggle: expand maximizes a windowed front
+  // window, restore returns a maximized one to its previous geometry (the toggle's
+  // restore branch keeps w.prev intact). No-op when no window is open.
+  const onExpandFront = useCallback((): void => {
+    if (active !== null && !active.max) ws.api.maximize(active.id);
+  }, [active, ws.api]);
+  const onRestoreFront = useCallback((): void => {
+    if (active !== null && active.max) ws.api.maximize(active.id);
+  }, [active, ws.api]);
   const pick = useCallback((type: WindowType): void => {
     setPalOpen(false);
     setPending(type);
@@ -383,6 +397,9 @@ function AppShellInner(): ReactNode {
   );
   const closeDialog = useCallback((): void => setPending(null), []);
   const closeCmdk = useCallback((): void => setCmdkOpen(false), []);
+  // uiux-fix F039 C223 — visible, clickable entry point for the command palette (the Cmd/Ctrl+K
+  // chord was otherwise undiscoverable: only a hover tooltip mentioned it).
+  const openCmdk = useCallback((): void => setCmdkOpen(true), []);
   const statusRef = useRef<HTMLElement | null>(null);
   const setStatusRef = useCallback((node: HTMLElement | null): void => {
     statusRef.current = node;
@@ -497,9 +514,12 @@ function AppShellInner(): ReactNode {
             statusTone={headerStatusValue.tone}
             onModeChange={twin.setMode}
             openPalette={openPalette}
+            openCommandPalette={openCmdk}
             onTileAll={ws.api.tileAll}
             onSplitFront={ws.api.splitFront}
             onCascade={ws.api.cascade}
+            onExpandFront={onExpandFront}
+            onRestoreFront={onRestoreFront}
           />
           <div className="mid">
             <LeftRail
@@ -561,7 +581,21 @@ export function AppShell(): ReactNode {
   useEffect(() => {
     registerSw();
   }, []);
-  if (!mounted) return <div className="app" aria-hidden="true" />;
+  // uiux-fix F039 C402 — the gate used to be a completely empty .app: from first paint until
+  // hydration finished the user saw a bare surface colour with zero loading feedback. A pure-CSS
+  // placeholder (pulsing logo, reduced-motion-safe) gives that feedback. The hydration guarantee
+  // is untouched: the placeholder is static markup, so the build-time prerender and the client's
+  // first render stay byte-identical.
+  if (!mounted) {
+    return (
+      <div className="app" aria-hidden="true">
+        <div className="app-boot">
+          {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG; next/image would inject a wrapper that breaks the centered placeholder */}
+          <img className="app-boot-logo" src="/assets/keiko-logo.svg" alt="" />
+        </div>
+      </div>
+    );
+  }
   return (
     <TwinProvider>
       <AppShellInner />

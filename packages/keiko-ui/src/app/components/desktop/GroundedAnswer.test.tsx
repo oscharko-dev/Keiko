@@ -243,9 +243,15 @@ describe("GroundedAnswer", () => {
     expect(screen.queryAllByRole("button")).toHaveLength(0);
     expect(screen.getByText("src/foo.ts:1-4")).toBeInTheDocument();
     expect(screen.getByText("src/bar.ts:10-12")).toBeInTheDocument();
-    expect(screen.getByText("src/foo.ts:1-4").closest(".grounded-citation")).toHaveAttribute(
+    // uiux-fix F051 C306: the tooltip explains the trailing decimal (relevance score).
+    const chip = screen.getByText("src/foo.ts:1-4").closest(".grounded-citation");
+    expect(chip).toHaveAttribute(
       "title",
-      "Evidence citation in src/foo.ts at lines 1-4",
+      "Evidence citation in src/foo.ts at lines 1-4 — relevance 0.87",
+    );
+    // The score carries a screen-reader-only label so it is not announced as a bare number.
+    expect(chip?.querySelector(".grounded-citation-score .sr-only")?.textContent).toBe(
+      "relevance ",
     );
   });
 
@@ -257,7 +263,7 @@ describe("GroundedAnswer", () => {
     expect(screen.queryAllByRole("button")).toHaveLength(0);
     expect(screen.getByText("src/qux.ts").closest(".grounded-citation")).toHaveAttribute(
       "title",
-      "Evidence citation in src/qux.ts",
+      "Evidence citation in src/qux.ts — relevance 0.87",
     );
   });
 
@@ -368,10 +374,11 @@ describe("GroundedAnswer", () => {
     expect(region.textContent).toContain("5 / 32 files");
     expect(region.textContent).toContain("Bytes");
     expect(region.textContent).toContain("12.1 KB / 128.0 KB");
+    // uiux-fix F051 C318: token counts are thousands-separated for readability.
     expect(region.textContent).toContain("Input");
-    expect(region.textContent).toContain("1500 / 32000 tokens");
+    expect(region.textContent).toContain("1,500 / 32,000 tokens");
     expect(region.textContent).toContain("Output");
-    expect(region.textContent).toContain("400 / 4096 tokens");
+    expect(region.textContent).toContain("400 / 4,096 tokens");
     expect(region.textContent).toContain("Rerank");
     expect(region.textContent).toContain("0 / 0 calls");
     expect(region.textContent).toContain("Time");

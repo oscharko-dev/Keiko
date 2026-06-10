@@ -169,7 +169,13 @@ export function EditorMenu({ project }: EditorMenuProps): ReactNode {
             aria-hidden="true"
             role="presentation"
           />
-          <div className="edm-menu" role="menu" ref={menuRef} onKeyDown={onMenuKeyDown}>
+          <div
+            className="edm-menu"
+            role="menu"
+            tabIndex={-1}
+            ref={menuRef}
+            onKeyDown={onMenuKeyDown}
+          >
             <div className="edm-head mono">Preferred editor for “{project}”</div>
             {EDITORS.map((editor) => (
               <button

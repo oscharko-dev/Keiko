@@ -36,6 +36,7 @@ import type {
   WorkflowKind,
 } from "@/lib/types";
 import { estimateConversationBudget, isConversationEligibleModel } from "@/lib/types";
+import { formatUserError } from "../format-error";
 import { extractDocumentContext, type PendingDocument } from "./documentContext";
 
 // ─── Attachment types (Issue #147) ────────────────────────────────────────────
@@ -192,9 +193,8 @@ export function isBudgetExceeded(budget: ConversationBudgetEstimate | undefined)
 function errorMessage(error: unknown): string {
   // AC#3 — context-overflow provider errors map to a single actionable message.
   if (isContextOversizedError(error)) return CONTEXT_OVERSIZED_USER_MESSAGE;
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return "Unknown error";
+  // uiux-fix F041 (C171) — message first, machine code as trailing detail.
+  return formatUserError(error, "Something went wrong. Try again.");
 }
 
 function sortChats(chats: readonly Chat[]): Chat[] {

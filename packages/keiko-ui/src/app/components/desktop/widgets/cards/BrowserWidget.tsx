@@ -101,6 +101,9 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
   const [session, setSession] = useState<BrowserSessionMeta | null>(null);
   const [reachability, setReachability] = useState<CdpReachability | null>(null);
   const [working, setWorking] = useState(false);
+  // C260 — name the in-flight CDP operation so the user gets visible + announced
+  // feedback ("Navigating…") instead of only silently disabled buttons.
+  const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [error, setError] = useState<ErrorState | null>(null);
   const [events, setEvents] = useState<readonly BrowserEventEnvelope[]>([]);
   const [pendingShot, setPendingShot] = useState<PendingShot | null>(null);
@@ -268,9 +271,27 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
 
   const openDisabled = useMemo(() => working || session !== null, [working, session]);
   const sessionRequiredDisabled = useMemo(() => working || session === null, [working, session]);
+  const checkDisabled = working || session !== null;
+  const applyDisabled = working || pendingShot === null;
+
+  // uiux-fix F018 C124: the busiest status wins the announcement; the persistent
+  // sr-only live region below must exist BEFORE the text changes, otherwise
+  // NVDA/VoiceOver frequently miss the first (and only) announcement.
+  const statusAnnouncement =
+    working && busyLabel !== null
+      ? busyLabel
+      : pendingShot !== null
+        ? "Screenshot ready (dry-run) — press Apply to persist."
+        : persistedPath !== null
+          ? `Persisted as ${persistedPath}.`
+          : lastOrigin !== null
+            ? `Current origin: ${lastOrigin}`
+            : reachability !== null && session === null
+              ? `Reachable: ${reachability.reachable ? "yes" : "no"}`
+              : "";
 
   return (
-    <div className="browser" aria-label="Browser tool">
+    <div className="browser">
       <div className="bw-bar">
         <span
           className="bw-dot"
@@ -300,14 +321,20 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
         </label>
       </div>
 
-      <div className="bw-actions" role="toolbar" aria-label="Browser actions">
+      {/* role="group" (not "toolbar"): the toolbar pattern promises arrow-key roving
+          tabindex which these independent buttons do not implement (C254).
+          uiux-fix F018 C124: aria-disabled + click guards instead of HTML disabled —
+          disabling the just-clicked (focused) button throws keyboard focus to <body>. */}
+      <div className="bw-actions" role="group" aria-label="Browser actions">
         <button
           type="button"
           className="bw-btn"
           onClick={(): void => {
+            if (checkDisabled) return;
+            setBusyLabel("Checking Chrome…");
             void handleCheckStatus();
           }}
-          disabled={working || session !== null}
+          aria-disabled={checkDisabled}
         >
           Check
         </button>
@@ -315,9 +342,11 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
           type="button"
           className="bw-btn bw-btn-primary"
           onClick={(): void => {
+            if (openDisabled) return;
+            setBusyLabel("Opening session…");
             void handleOpen();
           }}
-          disabled={openDisabled}
+          aria-disabled={openDisabled}
         >
           Open session
         </button>
@@ -325,9 +354,11 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
           type="button"
           className="bw-btn"
           onClick={(): void => {
+            if (sessionRequiredDisabled) return;
+            setBusyLabel("Navigating…");
             void handleNavigate();
           }}
-          disabled={sessionRequiredDisabled}
+          aria-disabled={sessionRequiredDisabled}
         >
           Navigate
         </button>
@@ -335,9 +366,11 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
           type="button"
           className="bw-btn"
           onClick={(): void => {
+            if (sessionRequiredDisabled) return;
+            setBusyLabel("Capturing screenshot…");
             void handleScreenshot();
           }}
-          disabled={sessionRequiredDisabled}
+          aria-disabled={sessionRequiredDisabled}
         >
           Screenshot
         </button>
@@ -345,9 +378,11 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
           type="button"
           className="bw-btn"
           onClick={(): void => {
+            if (applyDisabled) return;
+            setBusyLabel("Applying screenshot…");
             void handleApply();
           }}
-          disabled={working || pendingShot === null}
+          aria-disabled={applyDisabled}
         >
           Apply
         </button>
@@ -355,9 +390,11 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
           type="button"
           className="bw-btn"
           onClick={(): void => {
+            if (sessionRequiredDisabled) return;
+            setBusyLabel("Capturing HTML…");
             void handleContent();
           }}
-          disabled={sessionRequiredDisabled}
+          aria-disabled={sessionRequiredDisabled}
         >
           Capture HTML
         </button>
@@ -365,42 +402,53 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
           type="button"
           className="bw-btn bw-btn-danger"
           onClick={(): void => {
+            if (sessionRequiredDisabled) return;
+            setBusyLabel("Closing session…");
             void handleClose();
           }}
-          disabled={sessionRequiredDisabled}
+          aria-disabled={sessionRequiredDisabled}
         >
           Close
         </button>
       </div>
 
+      {/* uiux-fix F018 C124: persistent live region (announcement mirror); the visible
+          status lines below stay conditional but no longer carry role=status, which
+          was unreliable because the regions mounted together with their content. */}
+      <p className="sr-only" role="status" aria-live="polite">
+        {statusAnnouncement}
+      </p>
+
+      {working && busyLabel !== null ? <p className="bw-status">{busyLabel}</p> : null}
+
       {reachability !== null && session === null ? (
-        <p className="bw-status" role="status">
+        <p className="bw-status">
           Reachable: {reachability.reachable ? "yes" : "no"}
           {reachability.browserVersion === null ? "" : ` — ${reachability.browserVersion}`}
         </p>
       ) : null}
 
       {lastOrigin !== null ? (
-        <p className="bw-status" role="status" aria-live="polite">
+        <p className="bw-status">
           Current origin: <span className="mono">{lastOrigin}</span>
         </p>
       ) : null}
 
       {pendingShot !== null ? (
-        <p className="bw-status" role="status">
-          Screenshot ready (dry-run) — press Apply to persist.
-        </p>
+        <p className="bw-status">Screenshot ready (dry-run) — press Apply to persist.</p>
       ) : null}
 
       {persistedPath !== null ? (
-        <p className="bw-status" role="status">
+        <p className="bw-status">
           Persisted as <span className="mono">{persistedPath}</span>.
         </p>
       ) : null}
 
+      {/* uiux-fix F018 C124: human message first; the machine code is a small mono
+          detail instead of a bold prefix ("INTERNAL: Unexpected error."). */}
       {error !== null ? (
         <div className="bw-error" role="alert">
-          <strong>{error.code}</strong>: {error.message}
+          {error.message} <span className="err-code mono">({error.code})</span>
         </div>
       ) : null}
 
@@ -417,21 +465,32 @@ export function BrowserWidget(props: BrowserWidgetProps): ReactNode {
         ) : (
           <>
             <div className="ph-stripes" aria-hidden="true" />
+            {/* C261 — no live stream exists; screenshots are captured manually,
+                so the copy must direct the user instead of promising a preview. */}
             <div className="bw-overlay mono">
-              {session === null ? "no session" : "live preview"}
+              {session === null
+                ? "No session — choose a port and press Open session"
+                : "Session open — use Screenshot to capture a preview"}
             </div>
           </>
         )}
       </div>
 
-      <div className="bw-log" aria-label="Browser event log" aria-live="polite" aria-atomic="false">
+      {/* role="log" exposes the aria-label and announces appended entries
+          (implicit aria-live="polite"); a bare aria-live div has no accessible name. */}
+      <div className="bw-log" role="log" aria-label="Browser event log">
         <ul className="bw-log-list">
-          {events.slice(-10).map((event, idx) => (
-            <li key={`${String(event.kind)}-${String(idx)}`} className="bw-log-item">
-              <span className="bw-log-kind">{eventLabel(event.kind)}</span>
-              <span className="bw-log-detail mono">{eventDetail(event)}</span>
-            </li>
-          ))}
+          {/* uiux-fix F018 C124: newest-first like the Terminal and Agent logs — the
+              140px scroll viewport otherwise hides exactly the newest entries. */}
+          {events
+            .slice(-10)
+            .reverse()
+            .map((event, idx) => (
+              <li key={`${String(event.kind)}-${String(idx)}`} className="bw-log-item">
+                <span className="bw-log-kind">{eventLabel(event.kind)}</span>
+                <span className="bw-log-detail mono">{eventDetail(event)}</span>
+              </li>
+            ))}
         </ul>
       </div>
     </div>

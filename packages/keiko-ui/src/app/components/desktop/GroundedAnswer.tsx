@@ -38,6 +38,13 @@ function formatCapWith(value: number, format: (n: number) => string): string {
   return Number.isFinite(value) ? format(value) : "—";
 }
 
+// Thousands-separated counts for the token rows — five-/six-digit raw values like
+// "32000" are hard to parse in the 11px mono column (uiux-fix F051 C318). Fixed
+// en-US grouping keeps the output deterministic across runtimes.
+function formatCount(value: number): string {
+  return value.toLocaleString("en-US");
+}
+
 // Internal enum tokens (e.g. "no-evidence", "natural-language", "capsule-set") are
 // hyphen-joined pipeline vocabulary; render them as plain words for knowledge workers
 // (uiux-fix F012 C160 — same humanizer the omission reasons already used).
@@ -106,11 +113,11 @@ function ContextPackSummary({
         />
         <MetricRow
           label="Input"
-          value={`${String(usage.modelInputTokens)} / ${formatCap(budget.modelInputTokensMax)} tokens`}
+          value={`${formatCount(usage.modelInputTokens)} / ${formatCapWith(budget.modelInputTokensMax, formatCount)} tokens`}
         />
         <MetricRow
           label="Output"
-          value={`${String(usage.modelOutputTokens)} / ${formatCap(budget.modelOutputTokensMax)} tokens`}
+          value={`${formatCount(usage.modelOutputTokens)} / ${formatCapWith(budget.modelOutputTokensMax, formatCount)} tokens`}
         />
         <MetricRow
           label="Rerank"
@@ -134,10 +141,25 @@ function formatRange(citation: GroundedEvidenceCitation): string {
 }
 
 function citationTitle(citation: GroundedEvidenceCitation): string {
+  // uiux-fix F051 C306 — the tooltip must explain the trailing decimal on the chip
+  // (a retrieval relevance score), not just the source location.
+  const relevance = `relevance ${citation.score.toFixed(2)}`;
   if (citation.lineRange === undefined) {
-    return `Evidence citation in ${citation.scopePath}`;
+    return `Evidence citation in ${citation.scopePath} — ${relevance}`;
   }
-  return `Evidence citation in ${citation.scopePath} at lines ${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)}`;
+  return `Evidence citation in ${citation.scopePath} at lines ${String(citation.lineRange.startLine)}-${String(citation.lineRange.endLine)} — ${relevance}`;
+}
+
+// uiux-fix F051 C306 — the score was a naked decimal ("0.87") with no visual or accessible
+// label. The sr-only prefix gives screen readers "relevance 0.87" instead of a bare number;
+// sighted users get the explanation via the chip tooltip (citationTitle above / the LK title).
+function CitationScore({ score }: { readonly score: number }): ReactNode {
+  return (
+    <span className="grounded-citation-score">
+      <span className="sr-only">relevance </span>
+      {score.toFixed(2)}
+    </span>
+  );
 }
 
 function CitationReference({
@@ -148,7 +170,7 @@ function CitationReference({
   return (
     <span className="grounded-citation" title={citationTitle(citation)}>
       <span>{formatRange(citation)}</span>
-      <span className="grounded-citation-score">{citation.score.toFixed(2)}</span>
+      <CitationScore score={citation.score} />
     </span>
   );
 }
@@ -239,13 +261,15 @@ function LocalKnowledgeCitationList({
             <span
               className="grounded-citation"
               title={
+                // uiux-fix F051 C306 — explain the trailing decimal (relevance score)
+                // in the tooltip, mirroring citationTitle above.
                 citation.source === undefined
-                  ? citation.label
-                  : `${citation.source} · ${citation.label}`
+                  ? `${citation.label} — relevance ${citation.score.toFixed(2)}`
+                  : `${citation.source} · ${citation.label} — relevance ${citation.score.toFixed(2)}`
               }
             >
               <span>{labelForCitation(citation)}</span>
-              <span className="grounded-citation-score">{citation.score.toFixed(2)}</span>
+              <CitationScore score={citation.score} />
             </span>
           </li>
         ))}
