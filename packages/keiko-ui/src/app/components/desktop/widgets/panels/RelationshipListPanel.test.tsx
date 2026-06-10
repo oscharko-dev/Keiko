@@ -114,12 +114,39 @@ describe("RelationshipListPanel", () => {
   });
 
   describe("loading state", () => {
-    it("shows 'Loading…' text while fetching", async () => {
+    it("shows 'Loading…' as a role=status live region while fetching", async () => {
+      // uiux-fix F046 C392: aria-label on a generic div is prohibited ARIA and was
+      // ignored by screen readers — the visible text must live in a role="status" region.
       mockListRelationships.mockReturnValue(new Promise(() => undefined));
       renderPanel();
       await waitFor(() => {
-        expect(screen.getByText(/loading/i)).toBeDefined();
+        expect(screen.getByRole("status").textContent).toMatch(/loading/i);
       });
+    });
+
+    it("keeps the stale list mounted (aria-busy) during a refetch instead of swapping to 'Loading…'", async () => {
+      // uiux-fix F046 C289: fetchItems re-runs on every density click and debounced filter
+      // keystroke; unmounting the list for a full-panel "Loading…" row jumped the layout
+      // and lost the scroll position. Stale-while-revalidate: rows stay, aria-busy signals.
+      const rel = makeRelationship("rel-swr");
+      mockListRelationships.mockResolvedValue({
+        entries: [rel],
+        truncated: false,
+        nextCursor: null,
+      });
+      const { container } = renderPanel({ filters: { relDensity: "standard" } });
+      await waitFor(() => {
+        expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+      });
+      // Second fetch (density click) never resolves — the panel is mid-refetch.
+      mockListRelationships.mockReturnValue(new Promise(() => undefined));
+      fireEvent.click(screen.getByRole("button", { name: /dense/i }));
+      await waitFor(() => {
+        expect(container.querySelector('[role="list"]')?.getAttribute("aria-busy")).toBe("true");
+      });
+      expect(container.querySelectorAll('[role="listitem"]').length).toBeGreaterThan(0);
+      // No full-panel "Loading…" swap (the edge badge has its own role=status, so query by text).
+      expect(screen.queryByText(/^loading…$/i)).toBeNull();
     });
   });
 
@@ -313,7 +340,8 @@ describe("RelationshipListPanel", () => {
       });
       const onFilterChange = vi.fn();
       renderPanel({ onFilterChange });
-      const input = screen.getByRole("textbox");
+      // The type filter is a combobox: input + datalist of valid relationship types (F026 C071)
+      const input = screen.getByRole("combobox", { name: /filter relationships by type/i });
       fireEvent.change(input, { target: { value: "reads" } });
       // 250ms debounce
       await waitFor(
@@ -324,15 +352,16 @@ describe("RelationshipListPanel", () => {
       );
     });
 
-    it("clicking a density button changes active density (internal state, not onFilterChange)", async () => {
-      // changeDensity only sets local state + localStorage; it does NOT call onFilterChange.
-      // (visual-density-rules.md §"Forbidden patterns": density URL writes deferred to page level)
+    it("clicking a density button changes active density and propagates relDensity", async () => {
+      // uiux-fix F046 C395: changeDensity must also call onFilterChange({ relDensity }) so the
+      // parent view (and through it the inspector's transitionCap) follows the same mode — the
+      // switch previously changed only the list half of the surface.
       mockListRelationships.mockResolvedValue({
         entries: [],
         truncated: false,
         nextCursor: null,
       });
-      renderPanel({ filters: { relDensity: "standard" } });
+      const { onFilterChange } = renderPanel({ filters: { relDensity: "standard" } });
       await waitFor(() => {
         expect(screen.getByRole("button", { name: /minimal/i })).toBeDefined();
       });
@@ -347,6 +376,7 @@ describe("RelationshipListPanel", () => {
           "true",
         );
       });
+      expect(onFilterChange).toHaveBeenCalledWith({ relDensity: "minimal" });
     });
 
     it("resyncs density and type filter when URL-backed props change", async () => {
@@ -367,7 +397,9 @@ describe("RelationshipListPanel", () => {
       expect(screen.getByRole("button", { name: /minimal/i }).getAttribute("aria-pressed")).toBe(
         "true",
       );
-      expect(screen.getByRole("textbox")).toHaveValue("reads-context");
+      expect(screen.getByRole("combobox", { name: /filter relationships by type/i })).toHaveValue(
+        "reads-context",
+      );
 
       view.rerender(
         <RelationshipListPanel
@@ -382,7 +414,9 @@ describe("RelationshipListPanel", () => {
           "true",
         );
       });
-      expect(screen.getByRole("textbox")).toHaveValue("produces-evidence");
+      expect(screen.getByRole("combobox", { name: /filter relationships by type/i })).toHaveValue(
+        "produces-evidence",
+      );
       const lastCall = mockListRelationships.mock.calls.at(-1);
       expect(lastCall?.[0]?.limit).toBe(512);
     });
@@ -398,10 +432,15 @@ describe("RelationshipListPanel", () => {
       });
       const { container } = renderPanel();
       await waitFor(() => {
-        // The footer div with class="footer" renders the filterAnnouncement text
-        const footer = container.querySelector(".footer");
-        expect(footer).not.toBeNull();
-        expect(footer?.textContent).toMatch(/showing first/i);
+        // The visible truncation note renders the filterAnnouncement text. It must NOT
+        // reuse class="footer" (the 46px app-shell footer bar — uiux-fix F026 C041) and
+        // must not fabricate a total the API never reported (C115).
+        const note = container.querySelector("[data-testid='list-truncation-note']");
+        expect(note).not.toBeNull();
+        expect(note?.textContent).toMatch(/showing first/i);
+        expect(note?.textContent).toMatch(/more available/i);
+        expect(note?.textContent).not.toMatch(/of \d+/i);
+        expect(note?.classList.contains("footer")).toBe(false);
       });
     });
   });
@@ -430,7 +469,9 @@ describe("RelationshipListPanel", () => {
       });
       renderPanel();
       await waitFor(() => {
-        expect(screen.getByRole("textbox")).toBeDefined();
+        expect(
+          screen.getByRole("combobox", { name: /filter relationships by type/i }),
+        ).toBeDefined();
       });
 
       const modal = document.createElement("div");
@@ -439,11 +480,37 @@ describe("RelationshipListPanel", () => {
       document.body.appendChild(modal);
 
       try {
-        fireEvent.keyDown(window, { key: "/" });
-        expect(document.activeElement).not.toBe(screen.getByRole("textbox"));
+        // Shortcuts are panel-scoped (F026 C039): fire from inside the panel container —
+        // the modal guard must still suppress the slash shortcut.
+        fireEvent.keyDown(screen.getByTestId("relationship-list-panel"), { key: "/" });
+        expect(document.activeElement).not.toBe(
+          screen.getByRole("combobox", { name: /filter relationships by type/i }),
+        );
       } finally {
         modal.remove();
       }
+    });
+  });
+
+  describe("panel-scoped shortcuts (WCAG 2.1.4)", () => {
+    it("slash focuses the filter from inside the panel but NOT from a window keydown", async () => {
+      mockListRelationships.mockResolvedValue({
+        entries: [],
+        truncated: false,
+        nextCursor: null,
+      });
+      renderPanel();
+      const filterInput = await screen.findByRole("combobox", {
+        name: /filter relationships by type/i,
+      });
+
+      // Single-character shortcuts must not fire app-wide while the window is merely
+      // open in the background (uiux-fix F026 C039).
+      fireEvent.keyDown(window, { key: "/" });
+      expect(document.activeElement).not.toBe(filterInput);
+
+      fireEvent.keyDown(screen.getByTestId("relationship-list-panel"), { key: "/" });
+      expect(document.activeElement).toBe(filterInput);
     });
   });
 

@@ -10,7 +10,8 @@
 // 24×24 target via min-w/min-h utilities, disabled state announced via aria-disabled.
 
 import { useId, useState, type ReactNode } from "react";
-import { ApiError, updateChatConnectedScopes } from "@/lib/api";
+import { updateChatConnectedScopes } from "@/lib/api";
+import { formatUserError } from "./format-error";
 import type { Chat, ChatConnectedScope, SelectedScopeKind } from "@/lib/types";
 import { effectiveScopes } from "./hooks/workspaceActions";
 
@@ -31,6 +32,12 @@ export interface ScopeConnectButtonProps {
   readonly updateScope?: typeof updateChatConnectedScopes;
   // Injectable clock seam for tests. Defaults to Date.now.
   readonly now?: () => number;
+  // Human-readable name of the bind target (e.g. the folder name). Folded into the
+  // accessible name so multiple pills in the Files tree are distinguishable for
+  // screen readers (audit C214 — six identical "Update connected scope" names).
+  // `| undefined` keeps explicit pass-through of optional values legal under
+  // exactOptionalPropertyTypes (FilesWidget passes `targetName?: string` straight in).
+  readonly targetName?: string | undefined;
 }
 
 function actionLabel(
@@ -44,9 +51,8 @@ function actionLabel(
 }
 
 function formatErrorMessage(error: unknown): string {
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return "Unable to connect scope.";
+  // uiux-fix F041 (C171) — message first, machine code as trailing detail.
+  return formatUserError(error, "Unable to connect scope.");
 }
 
 export function ScopeConnectButton({
@@ -58,6 +64,7 @@ export function ScopeConnectButton({
   chat,
   updateScope = updateChatConnectedScopes,
   now = Date.now,
+  targetName,
 }: ScopeConnectButtonProps): ReactNode {
   const hintId = useId();
   const [busy, setBusy] = useState(false);
@@ -65,7 +72,10 @@ export function ScopeConnectButton({
   const empty = scopeKind !== "workspace-root" && candidateRelativePaths.length === 0;
   const disabled = empty || busy;
   const label = actionLabel(scopeKind, currentScopeKind);
-  const tooltip = empty ? "Select a folder or file first" : label;
+  // Distinguishable accessible name per target (WCAG 2.4.6, audit C214); the
+  // visible label stays generic — the row itself shows the folder name.
+  const accessibleLabel = targetName !== undefined ? `${label}: ${targetName}` : label;
+  const tooltip = empty ? "Select a folder or file first" : accessibleLabel;
 
   async function handleClick(): Promise<void> {
     if (disabled) return;
@@ -113,7 +123,7 @@ export function ScopeConnectButton({
         className="scope-connect-btn"
         disabled={busy}
         aria-disabled={ariaDisabled}
-        aria-label={empty ? "Connect to chat (no selection)" : label}
+        aria-label={empty ? "Connect to chat (no selection)" : accessibleLabel}
         aria-describedby={empty ? hintId : undefined}
         title={tooltip}
         onClick={() => {

@@ -390,6 +390,25 @@ describe("searchText (memFs)", () => {
     expect(r.atoms.every((a) => a.scopePath !== ".env")).toBe(true);
   });
 
+  it("omits internal .keiko evidence while grounding package.json metadata", async () => {
+    const { scope, fs } = memScope({
+      "package.json": '{\n  "packageManager": "npm@10.9.8"\n}\n',
+      ".keiko/evidence/qi/run.candidates.json":
+        '{"packageManager":"stale-internal-value","connected":"repository","context":"evidence"}\n',
+    });
+    const r = await searchText(
+      scope,
+      nlq(
+        "Using only the connected repository context, what is the exact packageManager value in package.json?",
+      ),
+      DEFAULT_SEARCH_LIMITS,
+      { fs, nowMs: FIXED_NOW },
+    );
+    expect(r.atoms.map((a) => a.scopePath)).toEqual(["package.json"]);
+    expect(r.atoms[0]?.lineRange).toEqual({ startLine: 2, endLine: 2 });
+    expect(r.atoms.every((a) => !a.scopePath.startsWith(".keiko/"))).toBe(true);
+  });
+
   it("respects scope.workspace.ignoreLines for gitignore filtering", async () => {
     const { scope, fs } = memScope(
       { "src/a.ts": "match\n", "build/b.ts": "match\n" },
@@ -795,6 +814,24 @@ describe("Copilot finding fixes (memFs)", () => {
         { fs, nowMs: FIXED_NOW },
       ),
     ).rejects.toBeInstanceOf(WorkspaceError);
+  });
+
+  it("readExcerpt refuses internal .keiko evidence paths", async () => {
+    const { scope, fs } = memScope({
+      ".keiko/evidence/qi/run.candidates.json": '{"packageManager":"stale-internal-value"}\n',
+    });
+    await expect(
+      readExcerpt(
+        scope,
+        {
+          scopePath: ".keiko/evidence/qi/run.candidates.json",
+          startLine: 1,
+          endLine: 1,
+          maxBytes: 100,
+        },
+        { fs, nowMs: FIXED_NOW },
+      ),
+    ).rejects.toBeInstanceOf(RepoSearchUnsupportedFileError);
   });
 
   it("readExcerpt refuses a path outside scope.relativePaths", async () => {

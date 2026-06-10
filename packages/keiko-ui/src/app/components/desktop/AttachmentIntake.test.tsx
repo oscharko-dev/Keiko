@@ -11,7 +11,7 @@
 //   - Static top-level imports from "@/lib/types" only.
 //   - All session deps injected via ChatSessionProvider.
 
-import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow } from "./ChatWindow";
@@ -406,8 +406,12 @@ describe("AC #4 — no absolute paths leaked in chip display", () => {
 
     renderWindow(session);
 
-    const img = screen.getByRole("img", { hidden: true });
-    const src = img.getAttribute("src") ?? "";
+    // uiux-fix F040 C320 — the thumbnail is decorative (alt="", filename is
+    // adjacent text), so it carries no img role; query by class instead.
+    const img = document.querySelector("img.attach-chip-thumb");
+    expect(img).not.toBeNull();
+    expect(img).toHaveAttribute("alt", "");
+    const src = img?.getAttribute("src") ?? "";
     expect(src).toMatch(/^data:/);
     expect(src).not.toContain("/Users/");
     expect(src).not.toContain("C:\\");
@@ -424,15 +428,45 @@ describe("Accessibility", () => {
     expect(screen.getByRole("button", { name: "Attach file" })).toBeInTheDocument();
   });
 
-  it("drop zone has aria-label='Drop files here to attach'", () => {
+  it("drop zone is decorative and hidden until a file drag is active (uiux-fix F040 C207/C320)", () => {
     const session = makeSession({
       models: [makeModelCapability({ supportsImageInput: true })],
     });
     renderWindow(session);
 
-    // The drop zone is a presentation div; check by aria-label.
-    const dropZone = document.querySelector('[aria-label="Drop files here to attach"]');
+    // No aria-label (was prohibited on role="presentation"); the accessible
+    // attach path is the AttachButton. Hidden (data-active=false) until a
+    // window-level file drag begins.
+    const dropZone = document.querySelector(".attach-drop-zone");
     expect(dropZone).not.toBeNull();
+    expect(dropZone).toHaveAttribute("aria-hidden", "true");
+    expect(dropZone).not.toHaveAttribute("aria-label");
+    expect(dropZone).toHaveAttribute("data-active", "false");
+  });
+
+  it("drop zone is revealed on window dragenter with files and hidden again on drop (F040 C207)", () => {
+    const session = makeSession({
+      models: [makeModelCapability({ supportsImageInput: true })],
+    });
+    renderWindow(session);
+
+    const dropZone = document.querySelector(".attach-drop-zone");
+    expect(dropZone).not.toBeNull();
+
+    fireEvent.dragEnter(window, { dataTransfer: { types: ["Files"] } });
+    expect(dropZone).toHaveAttribute("data-active", "true");
+
+    fireEvent.drop(window, { dataTransfer: { types: ["Files"], files: [] } });
+    expect(dropZone).toHaveAttribute("data-active", "false");
+  });
+
+  it("drop zone is not rendered at all when the model has no attachment support (F040 C207)", () => {
+    const session = makeSession({
+      models: [makeModelCapability({ supportsImageInput: false, supportsDocumentInput: false })],
+    });
+    renderWindow(session);
+
+    expect(document.querySelector(".attach-drop-zone")).toBeNull();
   });
 
   it("attach button stays focusable (not HTML-disabled) when model has no attachment support", () => {

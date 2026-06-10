@@ -41,10 +41,15 @@ export function canConnect(a: string | undefined, b: string | undefined): boolea
   return (CONNECTABLE[a] ?? []).includes(b) || (CONNECTABLE[b] ?? []).includes(a);
 }
 
-function configRoot(cfg: Record<string, unknown> | undefined): string {
-  if (cfg === undefined) return "src";
+// uiux-fix F008 C074 — never invent a path: prefer the resolved root persisted by the Files
+// widget (same precedence as filesContextFor in workspaceActions.ts), fall back to the
+// configured root, and return null instead of the fabricated "src" sentinel when neither is set.
+function configRoot(cfg: Record<string, unknown> | undefined): string | null {
+  if (cfg === undefined) return null;
+  const resolved = cfg["resolvedRoot"];
+  if (typeof resolved === "string" && resolved.length > 0) return resolved;
   const value = cfg["root"];
-  return typeof value === "string" && value.length > 0 ? value : "src";
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
@@ -55,7 +60,13 @@ export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
     other !== null &&
     (other.type === "chat" || other.type === "agents" || other.type === "quality")
   ) {
-    return `uses ${configRoot(filesSide.cfg)}/`;
+    const root = configRoot(filesSide.cfg);
+    // Honest empty state: nothing is bound yet, so the badge must not claim a folder.
+    if (root === null) return "no folder selected";
+    // Show only the basename — full absolute paths blew the badge up to hundreds of pixels
+    // of destructive (remove) click area on the canvas.
+    const base = root.split(/[/\\]/u).filter(Boolean).pop() ?? root;
+    return `uses ${base}/`;
   }
   const pair: readonly [string, string] = [a.type, b.type];
   // A Connector edge (chat↔connector or quality↔connector) means the bound window draws on the
@@ -66,10 +77,12 @@ export function relLabel(a: WinSnapshot, b: WinSnapshot): string {
   if (pair.includes("keiko")) return "governed by";
   if (pair[0] === "agents" && pair[1] === "agents") return "delegates";
   if (pair.includes("terminal")) return "runs in";
-  if (pair.includes("plugins")) return "tools";
+  // Every label must read as a mini-sentence predicate ("Chat uses tools Plugins");
+  // bare "tools" / "linked" carried no relationship meaning (uiux-fix F048, C409).
+  if (pair.includes("plugins")) return "uses tools";
   if (pair.includes("review")) return "reviews";
   if (pair.includes("browser")) return "browses";
-  return "linked";
+  return "connected";
 }
 
 export interface BezierPath {

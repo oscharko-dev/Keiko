@@ -218,13 +218,15 @@ describe("MemoryDetail — success state with full record", () => {
     });
   });
 
-  it("renders the status badge", async () => {
+  it("renders the status badge as a static label (no live region)", async () => {
     const record = makeRecord({ status: "accepted" });
     render(<MemoryDetail id="mem-001" fetchMemoryImpl={resolvesWith(record)} />);
 
     await waitFor(() => {
-      expect(screen.getByRole("status", { name: /status: accepted/i })).toBeInTheDocument();
+      expect(screen.getByText("accepted")).toBeInTheDocument();
     });
+    // Static metadata badges must not be role="status" live regions (uiux-fix F005).
+    expect(screen.getByText("accepted").className).toContain("mc-badge-accepted");
   });
 
   it("renders the sensitivity from provenance", async () => {

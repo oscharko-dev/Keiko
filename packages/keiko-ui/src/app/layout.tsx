@@ -4,7 +4,10 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Keiko",
-  description: "Keiko local developer-assist workspace.",
+  // uiux-fix F038 C376: aligned with the official README positioning ("a governed agentic
+  // workspace for knowledge work") — "developer-assist" misdescribed the product to the
+  // non-developer audiences the install surface reaches.
+  description: "Keiko — a governed agentic workspace for knowledge work.",
   manifest: "/manifest.webmanifest",
   icons: {
     icon: [
@@ -28,10 +31,21 @@ export const viewport: Viewport = {
   themeColor: "#4EBA87",
 };
 
+// Pre-hydration theme bootstrap (audit C219): data-theme was only ever set by the desktop
+// shell's useTheme hook, so full-page routes (/memoriaviva, /local-knowledge) ignored the stored
+// preference and always rendered the dark :root tokens. This inline script applies the persisted
+// "keiko.theme" before first paint on EVERY route; useTheme stays the single toggle-writer.
+// Inline scripts are allowed by their SHA-256 hash (extractInlineScriptHashes in keiko-server),
+// computed from the exported HTML — no CSP loosening involved.
+const THEME_BOOTSTRAP = `try{var t=localStorage.getItem("keiko.theme");if(t==="light"||t==="dark")document.documentElement.dataset.theme=t}catch(e){}`;
+
 export default function RootLayout({ children }: { children: ReactNode }): ReactNode {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
+        {children}
+      </body>
     </html>
   );
 }

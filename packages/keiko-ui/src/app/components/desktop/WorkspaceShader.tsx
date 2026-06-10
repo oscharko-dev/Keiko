@@ -312,13 +312,25 @@ export function WorkspaceShader(): ReactNode {
     // WCAG 2.3.3 — skip continuous animation for users who prefer reduced motion.
     // The canvas remains transparent; the solid --bg colour shows through (same
     // graceful fallback as the no-WebGL path documented in setupShader).
-    if (
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ) {
-      return;
-    }
-    return setupShader(host, canvas);
+    // The preference is tracked reactively (audit C406): flipping the OS setting
+    // while the app runs tears the rAF loop down / brings it back without a
+    // reload — same pattern as usePrefersReducedMotion in ConnectionsLayer.
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    let dispose: (() => void) | undefined;
+    const apply = (): void => {
+      if (mq.matches) {
+        dispose?.();
+        dispose = undefined;
+      } else if (dispose === undefined) {
+        dispose = setupShader(host, canvas);
+      }
+    };
+    apply();
+    mq.addEventListener("change", apply);
+    return () => {
+      mq.removeEventListener("change", apply);
+      dispose?.();
+    };
   }, []);
 
   return <canvas ref={canvasRef} className="ws-shader" aria-hidden="true" />;

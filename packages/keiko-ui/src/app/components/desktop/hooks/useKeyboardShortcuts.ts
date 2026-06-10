@@ -63,12 +63,25 @@ function normalizeModifiers(
   return out;
 }
 
+// On macOS the Option key composes characters: Option+S yields event.key "ß"
+// (US and DE layouts alike), never "s" — a pure event.key comparison makes any
+// alt-modified letter chord unmatchable on Macs (audit C125). For single-letter
+// chords with an alt modifier we therefore also accept the layout-independent
+// physical key via event.code ("KeyS"). Cmd/Ctrl chords are unaffected.
+function chordKeyMatches(event: KeyboardEvent, chord: WorkspaceKeyChord): boolean {
+  if (event.key.toLowerCase() === chord.key.toLowerCase()) return true;
+  if (chord.mod.includes("alt") && /^[a-z]$/i.test(chord.key)) {
+    return event.code === `Key${chord.key.toUpperCase()}`;
+  }
+  return false;
+}
+
 function eventMatchesChord(
   event: KeyboardEvent,
   chord: WorkspaceKeyChord,
   platform: "mac" | "other",
 ): boolean {
-  if (event.key.toLowerCase() !== chord.key.toLowerCase()) return false;
+  if (!chordKeyMatches(event, chord)) return false;
   const required = normalizeModifiers(chord.mod, platform);
   if (event.metaKey !== required.has("meta")) return false;
   if (event.ctrlKey !== required.has("ctrl")) return false;

@@ -86,6 +86,7 @@ describe("runLifecycleCli", () => {
         },
         fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
         isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
         sleep: () => Promise.resolve(),
       },
@@ -96,6 +97,9 @@ describe("runLifecycleCli", () => {
     expect(spawned[0]?.args).toEqual(
       expect.arrayContaining(["ui", "--port", "4321", "--host", "127.0.0.1"]),
     );
+    expect(spawned[0]?.opts.env).toMatchObject({
+      KEIKO_STATE_DIR: join(root, ".keiko-test"),
+    });
     expect(readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8")).toBe("12345\n");
     expect(existsSync(join(root, ".keiko-test", "ui.log"))).toBe(true);
     expect(c.out()).toContain("Keiko UI running");
@@ -155,6 +159,7 @@ describe("runLifecycleCli", () => {
         fetchImpl: () =>
           Promise.resolve(Response.json({ status: "ok", version: "0.1.2" }, { status: 200 })),
         isProcessAlive: (pid) => (pid === 12345 ? oldProcessAlive : true),
+        isPortAvailable: () => Promise.resolve(true),
         killProcess,
         sleep: () => Promise.resolve(),
       },
@@ -175,5 +180,65 @@ describe("runLifecycleCli", () => {
 
     expect(code).toBe(2);
     expect(c.err().toLowerCase()).toContain("usage");
+  });
+
+  it("fails before spawning when the requested UI port is already occupied", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const spawnFn = vi.fn();
+
+    const code = await runLifecycleCli(
+      "start",
+      ["--port", "4321"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        spawnFn,
+        fetchImpl: () => Promise.resolve(new Response("{}", { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(false),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
+    expect(c.out()).toBe("");
+    expect(c.err()).toContain("port 127.0.0.1:4321 is already in use");
+    expect(c.err()).toContain("--port");
+  });
+
+  it("does not treat another process health response as a successful child start", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const child = { pid: 24680, unref: vi.fn() } as unknown as ChildProcess;
+    const killProcess = vi.fn();
+
+    const code = await runLifecycleCli(
+      "start",
+      ["--port", "4321", "--start-timeout", "1"],
+      c.io,
+      {},
+      {
+        cwd: root,
+        spawnFn: () => child,
+        fetchImpl: () =>
+          Promise.resolve(Response.json({ status: "ok", version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => false,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess,
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.out()).toContain("Starting Keiko UI");
+    expect(c.out()).not.toContain("Keiko UI running");
+    expect(c.err()).toContain("UI did not become healthy");
+    expect(killProcess).toHaveBeenCalledWith(24680, "SIGTERM");
+    expect(existsSync(join(root, ".keiko", "ui.pid"))).toBe(false);
   });
 });
