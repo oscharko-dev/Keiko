@@ -15,18 +15,22 @@ jobs:
     permissions: {}
     steps:
       - name: Confirm dev branch gate
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          REF_NAME: ${{ github.ref }}
         run: |
-          if [ "${{ github.ref }}" = "refs/heads/dev" ] || [ "${{ github.base_ref }}" = "dev" ]; then
+          if [ "$REF_NAME" = "refs/heads/dev" ] || [ "$BASE_REF" = "dev" ]; then
             echo "Protected dev branch gate satisfied."
             exit 0
           fi
-          if [ "${{ github.base_ref }}" = "main" ] && { [ "${{ github.head_ref }}" = "dev" ] || [ "${{ github.head_ref }}" = "codex/promote-main-020-beta0" ]; }; then
+          if [ "$BASE_REF" = "main" ] && { [ "$HEAD_REF" = "dev" ] || [ "$HEAD_REF" = "codex/promote-main-020-beta0" ]; }; then
             echo "Protected main promotion gate satisfied."
             exit 0
           fi
           echo "This gate is only valid for dev checks or approved dev-to-main release promotion."
-          echo "base_ref=${{ github.base_ref }} head_ref=${{ github.head_ref }} ref=${{ github.ref }}"
-            exit 1
+          echo "base_ref=$BASE_REF head_ref=$HEAD_REF ref=$REF_NAME"
+          exit 1
 
   ci:
     runs-on: ubuntu-latest
