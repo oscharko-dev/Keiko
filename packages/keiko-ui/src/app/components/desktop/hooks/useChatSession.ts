@@ -1129,8 +1129,8 @@ export function useChatSession(): UseChatSessionResult {
         // Refresh BOTH messages AND chats so the sidebar reflects the new updated_at and
         // re-sorts the active chat to the top after the assistant reply lands.
         const [messagePayload, chatsPayload] = await Promise.all([
-          fetchChatMessages(chat.id, project.path),
-          fetchChats(project.path),
+          fetchChatMessages(chat.id, chat.projectPath),
+          fetchChats(chat.projectPath),
         ]);
         const refreshedActive = chatsPayload.chats.find((c) => c.id === chat.id);
         setState((previous) => ({
