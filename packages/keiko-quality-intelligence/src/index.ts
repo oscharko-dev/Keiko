@@ -29,6 +29,11 @@ export type {
 } from "./domain/coverageRelevance.js";
 
 export {
+  buildRequirementExcerpt,
+  REQUIREMENT_EXCERPT_MAX_CHARS,
+} from "./domain/requirementExcerpt.js";
+
+export {
   computeCandidateEquivalenceSignature,
   deduplicateCandidates,
 } from "./domain/deduplication.js";

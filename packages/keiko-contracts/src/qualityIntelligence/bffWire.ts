@@ -84,11 +84,17 @@ export interface QualityIntelligenceUiEvidenceRef {
   readonly atomId: string;
 }
 
-/** Per-atom coverage row for the UI (refs only — no raw atom text). */
+/**
+ * Per-atom coverage row for the UI. Refs plus an optional short REDACTED requirement excerpt
+ * (#790) so the Gap Radar can name the requirement, not just its opaque atom id. Never raw atom
+ * text — the excerpt is redacted+truncated at build time and redacted again at persist time.
+ * Absent on runs recorded before #790.
+ */
 export interface QualityIntelligenceUiAtomCoverage {
   readonly atomId: string;
   readonly status: "covered" | "weakly-covered" | "uncovered";
   readonly confidence: number;
+  readonly requirementExcerptRedacted?: string;
 }
 
 /**

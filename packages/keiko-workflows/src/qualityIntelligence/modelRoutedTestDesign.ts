@@ -10,6 +10,7 @@ import { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import {
   buildAtomCoverageStatuses,
   buildCoverageMap,
+  buildRequirementExcerpt,
   deduplicateCandidates,
   scoreFromDimensions,
   TEST_QUALITY_WEAK_THRESHOLD,
@@ -174,10 +175,27 @@ function atomFingerprintsFor(ingestedAtoms: readonly QualityIntelligenceIngested
   );
 }
 
+/**
+ * Map each ingested atom's id to a short, redacted excerpt of its canonical text (#790) so
+ * coverage rows and gap findings can name the requirement, not just its opaque id. Atoms whose
+ * text collapses to nothing are omitted (the optional field is simply absent downstream).
+ */
+export function excerptsByAtomId(
+  ingestedAtoms: readonly QualityIntelligenceIngestedAtom[],
+): ReadonlyMap<string, string> {
+  const map = new Map<string, string>();
+  for (const entry of ingestedAtoms) {
+    const excerpt = buildRequirementExcerpt(entry.canonicalText);
+    if (excerpt !== undefined) map.set(String(entry.atom.id), excerpt);
+  }
+  return map;
+}
+
 function buildCoverageGapFinding(
   runId: QI.QualityIntelligenceRunId,
   atomStatus: AtomCoverageStatus,
   ordinal: number,
+  excerpt: string | undefined,
 ): QI.QualityIntelligenceCoverageGapFinding {
   const payload = ["v1-cov-gap", String(runId), String(atomStatus.atomId), String(ordinal)].join(
     "",
@@ -188,10 +206,16 @@ function buildCoverageGapFinding(
   // list honest: a flood of low-severity weak findings never drowns out the genuine zero-coverage
   // requirements, and severity-ordered truncation (below) protects the high ones.
   const severity = atomStatus.status === "uncovered" ? "high" : "low";
+  // Name the requirement, not just its id (#790): the excerpt is already redacted (and persist
+  // redacts every leaf again), so the finding stays evidence-safe while becoming auditor-readable.
+  const atomLabel =
+    excerpt === undefined
+      ? `Atom ${String(atomStatus.atomId)}`
+      : `Atom ${String(atomStatus.atomId)} ("${excerpt}")`;
   const summary =
     atomStatus.status === "uncovered"
-      ? `Atom ${String(atomStatus.atomId)} has no tracing test (uncovered).`
-      : `Atom ${String(atomStatus.atomId)} is only weakly covered (no dedicated test traces to it).`;
+      ? `${atomLabel} has no tracing test (uncovered).`
+      : `${atomLabel} is only weakly covered (no dedicated test traces to it).`;
   return Object.freeze({
     kind: "coverage-gap",
     id: QI.asQualityIntelligenceValidationFindingId(idStr),
@@ -512,12 +536,15 @@ export async function runQualityIntelligenceModelRoutedTestDesign(
       Promise.resolve(buildCoverageMap({ runId: input.plan.id, atoms, candidates })),
     );
     const atomStatuses = buildAtomCoverageStatuses(atoms, coverageMap);
-    const coverageMatrix = toCoverageMatrixRows(atomStatuses);
+    const excerptByAtomId = excerptsByAtomId(input.ingestedAtoms);
+    const coverageMatrix = toCoverageMatrixRows(atomStatuses, excerptByAtomId);
     const gapFindings: QI.QualityIntelligenceCoverageGapFinding[] = [];
     for (let i = 0; i < atomStatuses.length; i += 1) {
       const s = atomStatuses[i];
       if (s !== undefined && s.status !== "covered") {
-        gapFindings.push(buildCoverageGapFinding(input.plan.id, s, i));
+        gapFindings.push(
+          buildCoverageGapFinding(input.plan.id, s, i, excerptByAtomId.get(String(s.atomId))),
+        );
       }
     }
     const rawFindings = await withStage(ctx, "validate", async () =>
