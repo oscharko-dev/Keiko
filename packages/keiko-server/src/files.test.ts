@@ -130,6 +130,17 @@ describe("desktop files browser", () => {
     });
   });
 
+  it("denies a registered project nested under a credential location", async () => {
+    const nestedProject = join(root, ".aws", "sub");
+    await mkdir(nestedProject, { recursive: true });
+    store.createProject(nestedProject, "nested-project");
+
+    await expect(listFilesDirectories(store, nestedProject)).rejects.toMatchObject({
+      status: 403,
+      code: "DENIED",
+    });
+  });
+
   it("lazy-loads directories with directories first and files second", async () => {
     const listing = await readFilesTree(store, root, "");
 

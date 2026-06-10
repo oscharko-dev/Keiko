@@ -12,6 +12,7 @@ import {
   MAX_CONNECTED_SOURCES,
   MAX_LOCAL_KNOWLEDGE_SOURCES,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { pathIsDenied } from "../files-deny.js";
 import type {
   Chat,
   ChatConnectedScope,
@@ -108,7 +109,9 @@ function validateScopePathsForKind(
 // silently grounding against an attacker-chosen relative location.
 function decodeScopeRoot(raw: unknown): { readonly ok: boolean; readonly root?: string } {
   if (raw === undefined) return { ok: true };
-  if (typeof raw === "string" && raw.length > 0 && isAbsolute(raw)) return { ok: true, root: raw };
+  if (typeof raw === "string" && raw.length > 0 && isAbsolute(raw) && !pathIsDenied(raw)) {
+    return { ok: true, root: raw };
+  }
   return { ok: false };
 }
 
@@ -429,6 +432,9 @@ function validateConnectedScopeShape(scope: ChatConnectedScope): void {
     scope.connectedAtMs < 0
   ) {
     throw invalidRequest("connectedScope.connectedAtMs must be a finite non-negative integer.");
+  }
+  if (scope.root !== undefined && pathIsDenied(scope.root)) {
+    throw invalidRequest("connectedScope.root must not reference a deny-listed path.");
   }
 }
 

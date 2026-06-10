@@ -147,7 +147,9 @@ describe("ConnectedScopePill", () => {
     render(
       <ConnectedScopePill chat={chat} updateScopes={updateScopes} onDisconnect={onDisconnect} />,
     );
-    await user.click(screen.getByRole("button", { name: "Disconnect Folder: alpha from chat" }));
+    await user.click(
+      screen.getByRole("button", { name: "Disconnect Folder: alpha (/data/alpha) from chat" }),
+    );
     await waitFor(() => {
       expect(updateScopes).toHaveBeenCalledWith("chat-1", [scopes[1]]);
     });
@@ -166,10 +168,52 @@ describe("ConnectedScopePill", () => {
       },
     });
     render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
-    expect(screen.getByRole("status")).toHaveAttribute("title", "/Users/me/kunde-a/docs");
     expect(
-      screen.getByRole("button", { name: "Disconnect Folder: docs from chat" }),
+      screen.getByRole("status", { name: "Folder: docs (/Users/me/kunde-a/docs)" }),
+    ).toHaveAttribute("title", "/Users/me/kunde-a/docs");
+    expect(
+      screen.getByRole("button", {
+        name: "Disconnect Folder: docs (/Users/me/kunde-a/docs) from chat",
+      }),
     ).toHaveAttribute("title", "Disconnect Folder: docs from chat (/Users/me/kunde-a/docs)");
+  });
+
+  it("disambiguates same-basename scopes in accessible names while preserving titles", () => {
+    const scopes: ChatConnectedScope[] = [
+      {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: 1,
+        root: "/team-a/docs",
+      },
+      {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: 2,
+        root: "/team-b/docs",
+      },
+    ];
+    const chat = makeChat({ connectedScopes: scopes, connectedScope: scopes[0] });
+    render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
+
+    expect(screen.getByRole("status", { name: "Folder: docs (/team-a/docs)" })).toHaveAttribute(
+      "title",
+      "/team-a/docs",
+    );
+    expect(screen.getByRole("status", { name: "Folder: docs (/team-b/docs)" })).toHaveAttribute(
+      "title",
+      "/team-b/docs",
+    );
+    expect(
+      screen.getByRole("button", {
+        name: "Disconnect Folder: docs (/team-a/docs) from chat",
+      }),
+    ).toHaveAttribute("title", "Disconnect Folder: docs from chat (/team-a/docs)");
+    expect(
+      screen.getByRole("button", {
+        name: "Disconnect Folder: docs (/team-b/docs) from chat",
+      }),
+    ).toHaveAttribute("title", "Disconnect Folder: docs from chat (/team-b/docs)");
   });
 
   // uiux-fix F010 (C169, WCAG 2.4.3): the focused × unmounts with its pill on success —
@@ -194,10 +238,12 @@ describe("ConnectedScopePill", () => {
 
     const user = userEvent.setup();
     render(<Harness />);
-    await user.click(screen.getByRole("button", { name: "Disconnect Folder: alpha from chat" }));
+    await user.click(
+      screen.getByRole("button", { name: "Disconnect Folder: alpha (/data/alpha) from chat" }),
+    );
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: "Disconnect Folder: beta from chat" }),
+        screen.getByRole("button", { name: "Disconnect Folder: beta (/data/beta) from chat" }),
       ).toHaveFocus();
     });
   });
@@ -213,7 +259,9 @@ describe("ConnectedScopePill", () => {
     render(
       <ConnectedScopePill chat={chat} updateScopes={updateScopes} onDisconnect={onDisconnect} />,
     );
-    await user.click(screen.getByRole("button", { name: "Disconnect File: a.ts from chat" }));
+    await user.click(
+      screen.getByRole("button", { name: "Disconnect File: a.ts (src/a.ts) from chat" }),
+    );
     await waitFor(() => {
       expect(updateScopes).toHaveBeenCalledWith("chat-1", null);
     });
@@ -227,7 +275,9 @@ describe("ConnectedScopePill", () => {
     const updateScopes = vi.fn().mockRejectedValue(new Error("offline"));
     const user = userEvent.setup();
     render(<ConnectedScopePill chat={chat} updateScopes={updateScopes} />);
-    await user.click(screen.getByRole("button", { name: "Disconnect File: a.ts from chat" }));
+    await user.click(
+      screen.getByRole("button", { name: "Disconnect File: a.ts (src/a.ts) from chat" }),
+    );
     await waitFor(() => {
       expect(screen.getByRole("alert")).toHaveTextContent("offline");
     });

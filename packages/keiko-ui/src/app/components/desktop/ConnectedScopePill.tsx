@@ -170,6 +170,7 @@ function ScopePillItem({
   // (~/kunde-a/docs vs ~/kunde-b/docs) — surface the full path via title so it
   // stays reachable on both the label and the disconnect target.
   const fullPath = scope.root ?? scope.relativePaths[0];
+  const accessibleLabel = fullPath === undefined ? label : `${label} (${fullPath})`;
 
   async function handleDisconnect(): Promise<void> {
     if (busy) return;
@@ -196,7 +197,7 @@ function ScopePillItem({
     <span className="scope-pill-wrap">
       <span className="scope-pill">
         <span aria-hidden="true">●</span>
-        <span role="status" aria-live="polite" title={fullPath}>
+        <span role="status" aria-live="polite" aria-label={accessibleLabel} title={fullPath}>
           {label}
         </span>
         {/* aria-disabled (not native disabled) while busy: native disabled drops keyboard
@@ -206,7 +207,7 @@ function ScopePillItem({
           ref={disconnectRef}
           className="scope-pill-disconnect"
           aria-disabled={busy}
-          aria-label={`Disconnect ${label} from chat`}
+          aria-label={`Disconnect ${accessibleLabel} from chat`}
           title={
             fullPath === undefined
               ? `Disconnect ${label} from chat`

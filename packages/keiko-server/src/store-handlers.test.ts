@@ -2,7 +2,7 @@
 // happy and error paths goes through routeRequest dispatch and the SECURITY_HEADERS surface via the
 // real createUiServer. Every test injects an in-memory UiStore so the FS is never touched.
 
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -704,6 +704,45 @@ describe("PATCH /api/chats", () => {
       relativePaths: [],
       connectedAtMs: 42,
     });
+  });
+
+  it("rejects a rootless workspace-root scope when the project lives under a denied ancestor", async () => {
+    const deniedProject = join(tmp, ".aws", "sub");
+    mkdirSync(deniedProject, { recursive: true });
+    store.createProject(deniedProject);
+    const c = store.createChat(deniedProject, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 42 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const bodyText = await res.text();
+    expect(bodyText).not.toContain(".aws");
+    expect(bodyText).toContain("safe read surface");
+  });
+
+  it("rejects a rootless workspace-root scope when the raw project path contains a denied segment", async () => {
+    const deniedParent = join(tmp, ".aws");
+    const symlinkProject = join(deniedParent, "project-link");
+    mkdirSync(deniedParent, { recursive: true });
+    symlinkSync(projDir, symlinkProject, "dir");
+    store.createProject(symlinkProject);
+    const c = store.createChat(symlinkProject, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(c.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({
+        connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 42 },
+      }),
+    });
+    expect(res.status).toBe(400);
+    const bodyText = await res.text();
+    expect(bodyText).not.toContain(".aws");
+    expect(bodyText).not.toContain("project-link");
+    expect(bodyText).toContain("safe read surface");
   });
 
   it("sets a folder connectedScope on a chat", async () => {

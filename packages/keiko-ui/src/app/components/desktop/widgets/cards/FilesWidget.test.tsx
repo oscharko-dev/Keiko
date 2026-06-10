@@ -161,23 +161,33 @@ describe("FilesWidget", () => {
 
   it("connects the repository root scope from the Files window", async () => {
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({
-      root: "/repo",
+      root: "/resolved-repo",
       path: "",
       truncated: false,
       entries: [],
     });
     const updated = makeChat({
-      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 100 },
+      connectedScope: {
+        kind: "workspace-root",
+        relativePaths: [],
+        root: "/resolved-repo",
+        connectedAtMs: 100,
+      },
     });
     vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: updated });
-    const session = renderWithSession(<FilesWidget root="/repo" />);
+    const session = renderWithSession(<FilesWidget root="/configured-repo" />);
 
     await screen.findByText("Empty folder.");
     await userEvent.click(screen.getByRole("button", { name: "Connect repository" }));
 
     await waitFor(() => {
       expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
-        { kind: "workspace-root", relativePaths: [], connectedAtMs: expect.any(Number) },
+        {
+          kind: "workspace-root",
+          relativePaths: [],
+          root: "/resolved-repo",
+          connectedAtMs: expect.any(Number),
+        },
       ]);
     });
     expect(session.replaceChat).toHaveBeenCalledWith(updated);
@@ -185,16 +195,21 @@ describe("FilesWidget", () => {
 
   it("connects a readable folder scope from a directory row", async () => {
     vi.mocked(fetchFilesTree).mockResolvedValueOnce({
-      root: "/repo",
+      root: "/resolved-repo",
       path: "",
       truncated: false,
       entries: [{ ...treeEntryBase, name: "src", path: "src", kind: "directory" }],
     });
     const updated = makeChat({
-      connectedScope: { kind: "directory", relativePaths: ["src"], connectedAtMs: 101 },
+      connectedScope: {
+        kind: "directory",
+        relativePaths: ["src"],
+        root: "/resolved-repo",
+        connectedAtMs: 101,
+      },
     });
     vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: updated });
-    const session = renderWithSession(<FilesWidget root="/repo" />);
+    const session = renderWithSession(<FilesWidget root="/configured-repo" />);
 
     await screen.findByRole("treeitem", { name: /^src$/i });
     // accessible name carries the target folder so multiple tree pills are
@@ -203,7 +218,12 @@ describe("FilesWidget", () => {
 
     await waitFor(() => {
       expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
-        { kind: "directory", relativePaths: ["src"], connectedAtMs: expect.any(Number) },
+        {
+          kind: "directory",
+          relativePaths: ["src"],
+          root: "/resolved-repo",
+          connectedAtMs: expect.any(Number),
+        },
       ]);
     });
     expect(session.replaceChat).toHaveBeenCalledWith(updated);
@@ -424,5 +444,49 @@ describe("FilePreview", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("boom");
     expect(alert.textContent ?? "").not.toMatch(/excluded from the read surface for safety/i);
+  });
+
+  it("binds the previewed file with the Files root when a chat is active", async () => {
+    vi.mocked(fetchFilesPreview).mockResolvedValueOnce({
+      root: "/resolved-repo",
+      path: "hello.txt",
+      name: "hello.txt",
+      sizeBytes: 12,
+      modifiedAt: 1,
+      extension: "txt",
+      mime: "text/plain",
+      symlink: false,
+      kind: "text",
+      content: "hello\n",
+      truncated: false,
+      maxBytes: 1_000_000,
+    });
+    const updated = makeChat({
+      connectedScope: {
+        kind: "files",
+        relativePaths: ["hello.txt"],
+        root: "/resolved-repo",
+        connectedAtMs: 200,
+      },
+    });
+    vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: updated });
+    const session = renderWithSession(
+      <FilePreview root="/resolved-repo" path="hello.txt" onClose={() => undefined} />,
+    );
+
+    await screen.findByText("hello.txt");
+    await userEvent.click(screen.getByRole("button", { name: "Connect to chat" }));
+
+    await waitFor(() => {
+      expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
+        {
+          kind: "files",
+          relativePaths: ["hello.txt"],
+          root: "/resolved-repo",
+          connectedAtMs: expect.any(Number),
+        },
+      ]);
+    });
+    expect(session.replaceChat).toHaveBeenCalledWith(updated);
   });
 });

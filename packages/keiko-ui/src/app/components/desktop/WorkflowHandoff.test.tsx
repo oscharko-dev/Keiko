@@ -372,6 +372,40 @@ describe("WorkflowHandoff — launch action (AC#1, AC#3)", () => {
       unknowns: [],
     });
   });
+
+  it("hides grounded workflow handoff for multi-source connected answers", () => {
+    const launch = vi.fn().mockResolvedValue({ ok: true as const, runId: "run-99" });
+    renderWindow(
+      makeSession({
+        activeChat: makeChat({
+          connectedScopes: [
+            { kind: "workspace-root", relativePaths: [], root: "/alpha", connectedAtMs: 1 },
+            { kind: "workspace-root", relativePaths: [], root: "/beta", connectedAtMs: 2 },
+          ],
+        }),
+        activeProject: makeProject(),
+        models: [workflowEligibleModel("wf-model")],
+        selectedModel: "wf-model",
+        messages: [userMessage("hi")],
+        latestGrounded: {
+          ...connectedGroundedAnswer(),
+          citations: [
+            {
+              stableId: "atom-1",
+              scopePath: "README.md",
+              lineRange: { startLine: 1, endLine: 2 },
+              score: 0.9,
+              source: "alpha",
+            },
+          ],
+        },
+        launchGroundedWorkflowHandoff: launch,
+      }),
+    );
+
+    expect(screen.queryByRole("button", { name: /launch grounded workflow/i })).toBeNull();
+    expect(launch).not.toHaveBeenCalled();
+  });
 });
 
 // ─── 4. AC #3: system run-summary message renders as a RunSummaryCard ────────
