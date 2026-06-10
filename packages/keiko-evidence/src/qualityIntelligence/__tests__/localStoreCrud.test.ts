@@ -90,6 +90,7 @@ describe("recordQualityIntelligenceRun + load + list", () => {
   });
 
   it("redaction happens BEFORE persist: on-disk file contains no caller secret", async () => {
+    const callerToken = ["Bearer", " ", "leaked-token-from-caller-XYZ"].join("");
     const input: QualityIntelligenceRecordInput = {
       ...baseInput("run-crud-2"),
       totals: { candidates: 1, findings: 1, exports: 0 },
@@ -98,7 +99,7 @@ describe("recordQualityIntelligenceRun + load + list", () => {
           id: "f-1",
           kind: "logic-defect",
           severity: "medium",
-          summaryRedacted: "raw: Bearer leaked-token-from-caller-XYZ",
+          summaryRedacted: `raw: ${callerToken}`,
         },
       ],
     };

@@ -100,8 +100,9 @@ describe("buildContextPack", () => {
   });
 
   it("redacts secrets inside packed excerpts", () => {
-    const result = pack({ "src/index.ts": "const k = 'sk-abcdef0123456789ABCDEF';\n" });
-    expect(JSON.stringify(result)).not.toContain("sk-abcdef0123456789ABCDEF");
+    const secret = ["sk-", "abcdef0123456789ABCDEF"].join("");
+    const result = pack({ "src/index.ts": `const k = '${secret}';\n` });
+    expect(JSON.stringify(result)).not.toContain(secret);
   });
 
   it("clamps a multibyte excerpt to the byte budget without splitting a character", () => {

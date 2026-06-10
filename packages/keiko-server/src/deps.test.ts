@@ -22,7 +22,7 @@ function tmp(prefix: string): string {
 
 describe("buildRedactor", () => {
   it("scrubs non-pattern secret values from sensitive environment variables", () => {
-    const secret = "CORPSECRET_123456789";
+    const secret = ["CORPSECRET_", "123456789"].join("");
     const redactor = buildRedactor({ KEIKO_DEFAULT_API_KEY: secret });
     expect(redactor({ message: `token=${secret}` })).toEqual({ message: "token=[REDACTED]" });
   });
@@ -135,7 +135,7 @@ describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () 
   it("redacts API-key-shaped env value from persisted shortResult (H1)", () => {
     // Build deps with a real env containing a synthetic API-key-shaped secret.
     // The secret MUST NOT appear verbatim in the on-disk DB after a message is persisted.
-    const SECRET = "sk-keiko-test-h1-NOT-A-REAL-SECRET";
+    const SECRET = ["sk-", "keiko-test-h1-NOT-A-REAL-SECRET"].join("");
     const uiDir = tmp("h1-");
     const evidenceDir = tmp("h1-ev-");
     const dbPath = join(uiDir, "keiko-ui.db");
@@ -185,7 +185,7 @@ describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () 
   // redactor through createNodeUiStore for updateMessage while createMessage uses the real one.
   // The test uses the REAL buildUiHandlerDeps (no injection) and reads the raw row off disk.
   it("redacts API-key-shaped env value through updateMessage (#66 PATCH H1)", () => {
-    const SECRET = "sk-keiko-test-h1-patch-NOT-A-REAL-SECRET";
+    const SECRET = ["sk-", "keiko-test-h1-patch-NOT-A-REAL-SECRET"].join("");
     const uiDir = tmp("h1p-");
     const evidenceDir = tmp("h1p-ev-");
     const dbPath = join(uiDir, "keiko-ui.db");

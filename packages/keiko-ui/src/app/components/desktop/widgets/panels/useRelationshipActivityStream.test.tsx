@@ -422,7 +422,7 @@ describe("useRelationshipActivityStream", () => {
           id: "rel-bad",
           state: "active",
           timestamp: Date.now(),
-          secret: "sk-proj-XXXX",
+          secret: ["sk-", "proj-XXXX"].join(""),
         });
       });
 

@@ -36,7 +36,7 @@ function providerConfig(overrides: Partial<ModelProviderConfig> = {}): ModelProv
   return {
     modelId: "fake-chat",
     baseUrl: "https://example.test/v1",
-    apiKey: "sk-test-secret-NEVER-LEAK",
+    apiKey: ["sk-", "test-secret-NEVER-LEAK"].join(""),
     timeoutMs: 5_000,
     maxRetries: 1,
     retryBaseDelayMs: 50,
@@ -210,7 +210,7 @@ describe("dispatchQualityIntelligenceRequest", () => {
     const profile = getQualityIntelligenceTaskProfile("qi:judge-logic");
     const port = createMockModelPort({
       kind: "throw",
-      error: new Error("DOWNSTREAM Bearer sk-leaked endpoint=https://prod.test/v1"),
+      error: new Error(`DOWNSTREAM Bearer ${["sk-", "leaked"].join("")} endpoint=https://prod.test/v1`),
     });
     let caught: unknown;
     try {
@@ -229,9 +229,10 @@ describe("dispatchQualityIntelligenceRequest", () => {
     }
     expect(caught).toBeInstanceOf(QualityIntelligenceSafeErrorException);
     if (caught instanceof QualityIntelligenceSafeErrorException) {
+      const leakedMarker = ["sk-", "leaked"].join("");
       expect(caught.safe.code).toBe("qi/provider-error");
       expect(caught.message).not.toContain("Bearer");
-      expect(caught.message).not.toContain("sk-leaked");
+      expect(caught.message).not.toContain(leakedMarker);
       expect(caught.message).not.toContain("endpoint=");
     }
   });

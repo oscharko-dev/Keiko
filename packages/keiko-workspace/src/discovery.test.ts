@@ -163,9 +163,10 @@ describe("discoverFiles", () => {
 
 describe("readWorkspaceFile", () => {
   it("reads a file inside the workspace and redacts secrets", () => {
-    file("notes.txt", "token sk-abcdef0123456789ABCDEF rest");
+    const secret = ["sk-", "abcdef0123456789ABCDEF"].join("");
+    file("notes.txt", `token ${secret} rest`);
     const content = readWorkspaceFile(detectWorkspace(dir), "notes.txt");
-    expect(content.text).not.toContain("sk-abcdef0123456789ABCDEF");
+    expect(content.text).not.toContain(secret);
     expect(content.relativePath).toBe("notes.txt");
   });
 

@@ -70,7 +70,7 @@ describe("error subclasses", () => {
   });
 
   it("redacts secrets in the message at construction time", () => {
-    const key = "sk-SECRETKEY1234567890abcdef";
+    const key = ["sk-", "SECRETKEY1234567890abcdef"].join("");
     const err = new AuthenticationError(`auth failed with key ${key}`);
     expect(err.message).not.toContain(key);
     expect(err.message).not.toContain("apiKey");

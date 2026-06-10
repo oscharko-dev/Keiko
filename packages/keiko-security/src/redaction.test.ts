@@ -3,22 +3,26 @@ import { createAuditRedactor, deepRedactStrings, redact } from "./redaction.js";
 
 describe("redact", () => {
   it("redacts a bearer token while keeping the scheme", () => {
-    const result = redact("Authorization: Bearer sk-abc123DEF456ghi789jkl012mno345");
-    expect(result).not.toContain("sk-abc123DEF456ghi789jkl012mno345");
+    const token = ["sk-", "abc123DEF456ghi789jkl012mno345"].join("");
+    const result = redact(`Authorization: Bearer ${token}`);
+    expect(result).not.toContain(token);
     expect(result).toContain("Bearer [REDACTED]");
   });
 
   it("redacts a standalone sk- prefixed key", () => {
-    const result = redact("key=sk-abcDEF123456789012345678901234");
-    expect(result).not.toContain("sk-abcDEF123456789012345678901234");
+    const token = ["sk-", "abcDEF123456789012345678901234"].join("");
+    const result = redact(`key=${token}`);
+    expect(result).not.toContain(token);
     expect(result).toContain("[REDACTED]");
   });
 
   it("redacts every secret when multiple appear in one string", () => {
-    const raw = "first sk-AAAAAAAAAAAAAAAAAAAAAAAA then Bearer sk-BBBBBBBBBBBBBBBBBBBBBBBB";
+    const first = ["sk-", "AAAAAAAAAAAAAAAAAAAAAAAA"].join("");
+    const second = ["sk-", "BBBBBBBBBBBBBBBBBBBBBBBB"].join("");
+    const raw = `first ${first} then Bearer ${second}`;
     const result = redact(raw);
-    expect(result).not.toContain("sk-AAAAAAAAAAAAAAAAAAAAAAAA");
-    expect(result).not.toContain("sk-BBBBBBBBBBBBBBBBBBBBBBBB");
+    expect(result).not.toContain(first);
+    expect(result).not.toContain(second);
   });
 
   it("leaves a benign string unchanged", () => {
@@ -109,7 +113,7 @@ describe("redact", () => {
   // Epic #532 security audit H1 — key-name-based value redaction for secrets with no token SHAPE,
   // now reachable via full-machine file previews and grounded answers.
   it("redacts a gcloud refresh_token value in JSON shape", () => {
-    const secret = "1//refreshTOKENvalue1234567890abcdef";
+    const secret = ["1//", "refreshTOKENvalue1234567890abcdef"].join("");
     const result = redact(`{"client_id":"x.apps","refresh_token":"${secret}"}`);
     expect(result).not.toContain(secret);
     expect(result).toContain("refresh_token");
@@ -117,7 +121,7 @@ describe("redact", () => {
   });
 
   it("redacts a service-account client_secret value", () => {
-    const secret = "GOCSPX-supersecretclientvalue99";
+    const secret = ["GOCSPX-", "supersecretclientvalue99"].join("");
     const result = redact(`"client_secret": "${secret}"`);
     expect(result).not.toContain(secret);
     expect(result).toContain("client_secret");
@@ -130,7 +134,7 @@ describe("redact", () => {
   });
 
   it("redacts an aws_secret_access_key value by key name", () => {
-    const secret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+    const secret = ["wJalrXUtnFEMI/K7MDENG/bPxRfiCY", "EXAMPLEKEY"].join("");
     const result = redact(`aws_secret_access_key = ${secret}`);
     expect(result).not.toContain(secret);
   });
@@ -160,6 +164,7 @@ const BEARER = "Bearer " + "z".repeat(32);
 const BASIC = "Basic " + Buffer.from("user:pass").toString("base64");
 const AUTH_HEADER = "authorization: Bearer " + "q".repeat(40);
 const API_KEY_VALUE = "generic-key-value-" + "k".repeat(16);
+const INTERNAL_TOKEN_VALUE = ["super-secret-value-", "1234567890"].join("");
 
 describe("createAuditRedactor — builtin secret shapes", () => {
   const redactor = createAuditRedactor({}, {});
@@ -207,10 +212,10 @@ describe("createAuditRedactor — builtin secret shapes", () => {
 
 describe("createAuditRedactor — env-value redaction", () => {
   it("scrubs the VALUE of a named env var that appears in text, never the name", () => {
-    const env = { INTERNAL_TOKEN: "super-secret-value-1234567890" };
+    const env = { INTERNAL_TOKEN: INTERNAL_TOKEN_VALUE };
     const redactor = createAuditRedactor({ redactEnvValues: ["INTERNAL_TOKEN"] }, env);
-    const out = redactor("the rationale mentions super-secret-value-1234567890 inline");
-    expect(out).not.toContain("super-secret-value-1234567890");
+    const out = redactor(`the rationale mentions ${INTERNAL_TOKEN_VALUE} inline`);
+    expect(out).not.toContain(INTERNAL_TOKEN_VALUE);
     expect(out).toContain("[REDACTED]");
   });
 

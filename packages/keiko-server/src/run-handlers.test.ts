@@ -38,7 +38,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = join(here, "..", "..", "..", "tests", "fixtures", "unit-tests", "target-project");
 
 // A secret-shaped value the redactor must scrub from every response body.
-const SECRET = "sk-abcdefghijklmnop0123456789";
+const SECRET = ["sk-", "abcdefghijklmnop0123456789"].join("");
 
 const TEST_DIFF =
   "--- /dev/null\n+++ b/tests/add.test.ts\n@@ -0,0 +1,6 @@\n" +

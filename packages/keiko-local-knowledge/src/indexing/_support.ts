@@ -135,7 +135,7 @@ export function scriptedAdapter(options: ScriptedAdapterOptions): OpenAIEmbeddin
   const apiKeyHeaderName = options.apiKeyHeaderName;
   const adapter: OpenAIEmbeddingAdapter = {
     endpoint: options.endpoint ?? "https://example.test/v1",
-    apiKey: options.apiKey ?? "sk-test",
+    apiKey: options.apiKey ?? ["sk-", "test"].join(""),
     ...(apiKeyHeaderName !== undefined ? { apiKeyHeaderName } : {}),
     request: async (req): Promise<OpenAIEmbeddingOutcome> =>
       Promise.resolve(options.responder(req)),

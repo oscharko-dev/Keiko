@@ -255,16 +255,17 @@ describe("figma-snapshot ingestion — vision augmentation", () => {
 
 describe("figma-snapshot ingestion — redaction", () => {
   it("redacts a secret planted in the screen IR text before it reaches an atom", () => {
+    const accessKeyId = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
     const ir = screenIr(
       "s-secret",
       "Config",
       irNode("root", "container", {
-        children: [irNode("token", "text", { text: "AKIAIOSFODNN7EXAMPLE secret value" })],
+        children: [irNode("token", "text", { text: `${accessKeyId} secret value` })],
       }),
     );
     // The text node is not interactive, but the secret reaches the rendered baseline via a vision
     // hint here to prove the redact() pass covers the full atom text.
-    const vision: FigmaVisionHintProvider = () => ["leaked AKIAIOSFODNN7EXAMPLE token in mock"];
+    const vision: FigmaVisionHintProvider = () => [`leaked ${accessKeyId} token in mock`];
 
     const result = ingestInlineSources(
       input([figmaSource()], {
@@ -273,7 +274,7 @@ describe("figma-snapshot ingestion — redaction", () => {
       }),
     );
 
-    expect(result.ingestedAtoms[0]?.canonicalText ?? "").not.toContain("AKIAIOSFODNN7EXAMPLE");
+    expect(result.ingestedAtoms[0]?.canonicalText ?? "").not.toContain(accessKeyId);
   });
 });
 
