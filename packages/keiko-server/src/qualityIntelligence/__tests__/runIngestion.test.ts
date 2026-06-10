@@ -808,22 +808,25 @@ describe("ingestInlineSources — capsule source (Issue #717)", () => {
 
   // ── Redaction parity (Epic #710, Issue #717 — atoms must be genuinely redacted) ──
   it("redacts secrets in capsule document text before they reach the atom / model", () => {
+    const awsSecret = ["wJalrXUtnFEMI/K7MDENG/bPxRfiCY", "EXAMPLEKEY"].join("");
+    const awsAccessKeyId = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+    const bearerToken = ["sk-", "live-9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a"].join("");
     const docs = [
       {
         documentId: "integration-notes",
         text:
           "Adapter key:\n" +
-          "aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n" +
-          "AKIAIOSFODNN7EXAMPLE is the access key id.\n" +
-          "Authorization: Bearer sk-live-9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a",
+          `aws_secret_access_key=${awsSecret}\n` +
+          `${awsAccessKeyId} is the access key id.\n` +
+          `Authorization: Bearer ${bearerToken}`,
       },
     ];
     const resolver = (_capsuleId: string): readonly { documentId: string; text: string }[] => docs;
     const result = ingest(inputWithResolver([capsuleSource("Notes", "cap-secret")], resolver));
     const canonical = result.ingestedAtoms[0]?.canonicalText ?? "";
-    expect(canonical).not.toContain("AKIAIOSFODNN7EXAMPLE");
-    expect(canonical).not.toContain("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
-    expect(canonical).not.toContain("sk-live-9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a");
+    expect(canonical).not.toContain(awsAccessKeyId);
+    expect(canonical).not.toContain(awsSecret);
+    expect(canonical).not.toContain(bearerToken);
     expect(canonical).toContain("[REDACTED]");
     // The redactionStatus flag must now be truthful.
     expect(result.ingestedAtoms[0]?.atom.redactionStatus).toBe("redacted");

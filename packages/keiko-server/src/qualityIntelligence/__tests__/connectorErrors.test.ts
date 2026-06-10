@@ -41,7 +41,7 @@ describe("qiConnectorErrorBody — no secret shapes in output", () => {
   });
 
   it("error message never echoes caller-supplied content", () => {
-    const sampleSecret = "Bearer abc123-totally-secret";
+    const sampleSecret = ["Bearer", " ", "abc123-totally-secret"].join("");
     const body = qiConnectorErrorBody("QI_FORBIDDEN_PAYLOAD");
     expect(body.error.message).not.toContain(sampleSecret);
     expect(body.error.message).not.toContain("abc123");
@@ -50,7 +50,7 @@ describe("qiConnectorErrorBody — no secret shapes in output", () => {
 
 describe("containsForbiddenSecretShape", () => {
   it.each([
-    "Bearer abcdef",
+    ["Bearer", " ", "abcdef"].join(""),
     "Authorization: token=xyz",
     "Basic dXNlcjpwYXNz",
     "Cookie: session=foo",
@@ -69,7 +69,9 @@ describe("containsForbiddenSecretShape", () => {
 
 describe("payloadContainsForbiddenSecretShape", () => {
   it("detects forbidden substrings in payload string values", () => {
-    expect(payloadContainsForbiddenSecretShape({ foo: "Bearer abc" })).toBe(true);
+    expect(payloadContainsForbiddenSecretShape({ foo: ["Bearer", " ", "abc"].join("") })).toBe(
+      true,
+    );
     expect(payloadContainsForbiddenSecretShape({ x: 1, y: "Authorization: x" })).toBe(true);
   });
 

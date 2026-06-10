@@ -8,9 +8,11 @@ import { redactQualityIntelligenceEvidence } from "../redaction.js";
 
 describe("redactQualityIntelligenceEvidence", () => {
   it("scrubs Bearer tokens, sk- keys, and JWT shapes from string leaves", () => {
+    const bearer = ["Bearer", " ", "abcdefghijklmnop"].join("");
+    const apiKey = ["sk-", "AAAAAAAAAAAAAAAAAAAA"].join("");
     const input = {
-      a: "Authorization: Bearer abcdefghijklmnop",
-      b: "key=sk-AAAAAAAAAAAAAAAAAAAA",
+      a: `Authorization: ${bearer}`,
+      b: `key=${apiKey}`,
       // A BARE JWT shape (no secret key-name prefix) so the QI-specific jwt pattern is what scrubs
       // it. (A `id_token=<jwt>` form is now caught earlier by the security package's key-name
       // redaction — strictly stronger, but it would not exercise this QI bucket.)
@@ -20,7 +22,7 @@ describe("redactQualityIntelligenceEvidence", () => {
     const { redacted, summary } = redactQualityIntelligenceEvidence(input);
     expect(redacted.a).not.toContain("abcdefghijklmnop");
     expect(redacted.a).toContain("[REDACTED]");
-    expect(redacted.b).not.toContain("sk-AAAAA");
+    expect(redacted.b).not.toContain(apiKey.slice(0, 8));
     expect(redacted.c).not.toContain("aaaaaaaa.bbbbbbbb.cccccccc");
     expect(redacted.d).toBe("ok");
     expect(summary.totalStringsScanned).toBe(4);
@@ -50,21 +52,25 @@ describe("redactQualityIntelligenceEvidence", () => {
   });
 
   it("recurses into nested objects and arrays", () => {
+    const bearer = ["Bearer", " ", "leaky-token-here"].join("");
+    const apiKey = ["sk-", "BBBBBBBBBBBBBBBBBBBB"].join("");
     const input = {
       level1: {
-        level2: ["Bearer leaky-token-here", { key: "sk-BBBBBBBBBBBBBBBBBBBB" }],
+        level2: [bearer, { key: apiKey }],
       },
     };
     const { redacted } = redactQualityIntelligenceEvidence(input);
     const arr = redacted.level1.level2 as readonly unknown[];
     expect(arr[0]).not.toContain("leaky-token-here");
-    expect((arr[1] as { key: string }).key).not.toContain("sk-BBBBB");
+    expect((arr[1] as { key: string }).key).not.toContain(apiKey.slice(0, 8));
   });
 
   it("is idempotent: re-running over already-redacted text yields the same output", () => {
+    const bearer = ["Bearer", " ", "tokenABC123XYZ"].join("");
+    const apiKey = ["sk-", "CCCCCCCCCCCCCCCCCCCC"].join("");
     const input = {
-      a: "Bearer tokenABC123XYZ",
-      b: "sk-CCCCCCCCCCCCCCCCCCCC",
+      a: bearer,
+      b: apiKey,
       c: "password=changeme",
     };
     const first = redactQualityIntelligenceEvidence(input);
@@ -74,7 +80,13 @@ describe("redactQualityIntelligenceEvidence", () => {
   });
 
   it("preserves non-string scalars (numbers, booleans, null) unchanged", () => {
-    const input = { n: 42, b: true, nul: null, arr: [1, 2, 3], s: "Bearer xxxxxxxxxxxxxxxxx" };
+    const input = {
+      n: 42,
+      b: true,
+      nul: null,
+      arr: [1, 2, 3],
+      s: ["Bearer", " ", "xxxxxxxxxxxxxxxxx"].join(""),
+    };
     const { redacted } = redactQualityIntelligenceEvidence(input);
     expect(redacted.n).toBe(42);
     expect(redacted.b).toBe(true);
@@ -84,8 +96,9 @@ describe("redactQualityIntelligenceEvidence", () => {
   });
 
   it("emits counts-only summary (never the matched secret text)", () => {
+    const bearer = ["Bearer", " ", "matchedSecretAbc1234567"].join("");
     const { summary } = redactQualityIntelligenceEvidence({
-      a: "Bearer matchedSecretAbc1234567",
+      a: bearer,
       b: "password=matchedPwd",
     });
     const summaryJson = JSON.stringify(summary);

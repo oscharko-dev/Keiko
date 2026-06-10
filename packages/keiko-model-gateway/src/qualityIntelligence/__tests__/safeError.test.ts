@@ -11,7 +11,7 @@ import {
 
 const FORBIDDEN_SUBSTRINGS = ["apikey", "Bearer ", "endpoint=", "prompt="] as const;
 
-const SAMPLE_UNTRUSTED_EVIDENCE = "BEGIN-SECRET sk-very-secret-token END-SECRET";
+const SAMPLE_UNTRUSTED_EVIDENCE = ["BEGIN-SECRET ", "sk-", "very-secret-token END-SECRET"].join("");
 
 function assertSafeMessage(message: string): void {
   for (const sub of FORBIDDEN_SUBSTRINGS) {

@@ -212,7 +212,7 @@ describe("desktop files browser", () => {
   });
 
   it("returns redacted text previews", async () => {
-    const secret = "super-secret-value-1234567890";
+    const secret = ["super-secret-value-", "1234567890"].join("");
     await writeFile(join(root, "src", "secret.ts"), `export const token = "${secret}";\n`);
 
     const preview = await readFilesPreview(

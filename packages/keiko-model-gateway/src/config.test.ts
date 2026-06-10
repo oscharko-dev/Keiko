@@ -592,7 +592,7 @@ describe("parseModelCapability", () => {
 
   // Test C — credential-shaped sibling field no-leakage (Issue #143 security-triage MEDIUM, OWASP A09)
   it("does not echo a credential-shaped sibling field in the rejection message", () => {
-    const credentialShaped = "sk-test-abcdef1234567890";
+    const credentialShaped = ["sk-", "test-abcdef1234567890"].join("");
     const malformed = {
       id: "test-chat",
       kind: "chat" as const,

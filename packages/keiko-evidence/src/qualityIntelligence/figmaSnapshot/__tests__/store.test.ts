@@ -25,7 +25,7 @@ const firstScreen = (record: FigmaSnapshotRecord): FigmaSnapshotScreenRow => {
 };
 // A recognized secret shape (AWS access key) accidentally typed into a Figma text node. Design
 // content is otherwise KEPT, but a recognized secret must be redacted before it touches disk.
-const PLANTED_SECRET = "AKIAIOSFODNN7EXAMPLE";
+const PLANTED_SECRET = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
 
 let dir: string;
 

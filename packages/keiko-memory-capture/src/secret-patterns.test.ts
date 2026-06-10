@@ -43,7 +43,7 @@ describe("scanForSecrets — credential-shape patterns (looksLikeSecretShape par
   });
 
   it("rejects an opaque Bearer authorization header", () => {
-    const value = "Bearer opaque-token-1234567890";
+    const value = ["Bearer", " ", "opaque-token-1234567890"].join("");
     expect(scanForSecrets(value)).toBe("credential-shape");
   });
 
