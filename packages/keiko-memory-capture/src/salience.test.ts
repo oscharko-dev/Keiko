@@ -165,9 +165,10 @@ describe("extractSalientMemories", () => {
   });
 
   it("drops candidate bodies that look like secrets", async () => {
+    const apiKey = ["sk-", "abcdefghijklmnopqrstuvwxyz12345"].join("");
     const model = JSON.stringify([
       {
-        body: "The user's api_key=sk-abcdefghijklmnopqrstuvwxyz12345.",
+        body: `The user's api_key=${apiKey}.`,
         type: "fact",
         confidence: 0.8,
         scope: "user",

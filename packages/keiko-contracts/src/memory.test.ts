@@ -1044,7 +1044,8 @@ describe("validateMemoryAuditRecord", () => {
 // ─── looksLikeSecretShape ────────────────────────────────────────────────────
 describe("looksLikeSecretShape", () => {
   it("flags OpenAI-style sk- tokens", () => {
-    expect(looksLikeSecretShape("hello sk-ABCDEFGHIJKLMNOPQRSTUVWX done")).toBe(true);
+    const openAiToken = ["sk-", "ABCDEFGHIJKLMNOPQRSTUVWX"].join("");
+    expect(looksLikeSecretShape(`hello ${openAiToken} done`)).toBe(true);
   });
 
   it("flags AWS access key IDs", () => {

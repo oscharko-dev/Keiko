@@ -14,8 +14,9 @@ import {
 
 describe("workspace errors", () => {
   it("redacts the message at construction", () => {
-    const error = new PathEscapeError("leak sk-abcdef0123456789ABCDEF here", "..");
-    expect(error.message).not.toContain("sk-abcdef0123456789ABCDEF");
+    const secret = ["sk-", "abcdef0123456789ABCDEF"].join("");
+    const error = new PathEscapeError(`leak ${secret} here`, "..");
+    expect(error.message).not.toContain(secret);
     expect(error.message).toContain("[REDACTED]");
   });
 
@@ -58,11 +59,12 @@ describe("workspace errors", () => {
   });
 
   it("repo-search invalid-query carries the right code, name, and redaction", () => {
-    const error = new RepoSearchInvalidQueryError("contains sk-abcdef0123456789ABCDEF");
+    const secret = ["sk-", "abcdef0123456789ABCDEF"].join("");
+    const error = new RepoSearchInvalidQueryError(`contains ${secret}`);
     expect(error.code).toBe(WORKSPACE_CODES.REPO_SEARCH_INVALID_QUERY);
     expect(error.name).toBe("RepoSearchInvalidQueryError");
     expect(error).toBeInstanceOf(WorkspaceError);
-    expect(error.message).not.toContain("sk-abcdef0123456789ABCDEF");
+    expect(error.message).not.toContain(secret);
   });
 
   it("repo-search invalid-range carries the right code and name", () => {

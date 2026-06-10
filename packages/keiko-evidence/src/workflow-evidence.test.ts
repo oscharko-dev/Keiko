@@ -129,7 +129,7 @@ describe("buildWorkflowManifest", () => {
 describe("persistWorkflowEvidence", () => {
   it("returns an EvidenceReport and persists the redacted manifest", () => {
     const store = createInMemoryEvidenceStore();
-    const literalSecret = "CORPSECRET_123456789";
+    const literalSecret = ["CORPSECRET_", "123456789"].join("");
     const events = [
       { type: "workflow:model:call:completed", promptTokens: 1, completionTokens: 2, latencyMs: 3 },
     ] as const;

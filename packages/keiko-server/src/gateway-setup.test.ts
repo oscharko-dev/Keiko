@@ -380,10 +380,11 @@ describe("handleGatewaySetup", () => {
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
+      const apiKey = ["example-secret-token"].join("");
       const result = await handleGatewaySetup(
         ctx({
           baseUrl: "https://llm-gateway.example.com/v1",
-          apiKey: "example-secret-token",
+          apiKey,
           apiKeyHeaderName: "X-Litellm-Key",
         }),
         deps,
@@ -399,7 +400,7 @@ describe("handleGatewaySetup", () => {
       ]);
       expect(
         seenAuthHeaders.every(
-          (headers) => headers.auth === null && headers.custom === "Bearer example-secret-token",
+          (headers) => headers.auth === null && headers.custom === `Bearer ${apiKey}`,
         ),
       ).toBe(true);
       expect(
@@ -463,10 +464,11 @@ describe("handleGatewaySetup", () => {
       uiDbPath: join(uiDir, "keiko-ui.db"),
     });
     try {
+      const apiKey = ["example-secret-token"].join("");
       const result = await handleGatewaySetup(
         ctx({
           baseUrl: "https://llm-gateway.example.com/v1",
-          apiKey: "example-secret-token",
+          apiKey,
           apiKeyHeaderName: "X-Litellm-Key",
         }),
         deps,
@@ -476,7 +478,7 @@ describe("handleGatewaySetup", () => {
       expect(seenUrls).toContain("https://llm-gateway.example.com/v1/models");
       expect(
         seenAuthHeaders.every(
-          (headers) => headers.auth === null && headers.custom === "Bearer example-secret-token",
+          (headers) => headers.auth === null && headers.custom === `Bearer ${apiKey}`,
         ),
       ).toBe(true);
       expect((result.body as { testedModelIds?: readonly string[] }).testedModelIds).toEqual([

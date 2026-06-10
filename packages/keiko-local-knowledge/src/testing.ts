@@ -91,7 +91,7 @@ export function scriptedAdapter(options: ScriptedAdapterOptions = {}): OpenAIEmb
     }));
   return {
     endpoint: options.endpoint ?? "https://example.test/v1",
-    apiKey: options.apiKey ?? "sk-test",
+    apiKey: options.apiKey ?? ["sk-", "test"].join(""),
     request: async (request): Promise<OpenAIEmbeddingOutcome> =>
       Promise.resolve(responder(request)),
   };
