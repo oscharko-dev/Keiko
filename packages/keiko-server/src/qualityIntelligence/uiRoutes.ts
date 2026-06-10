@@ -123,6 +123,10 @@ function projectCoverageByAtom(
       atomId: row.atomId,
       status: row.status,
       confidence: row.confidence,
+      // Optional redacted excerpt (#790); absent on runs recorded before it existed.
+      ...(row.requirementExcerptRedacted !== undefined
+        ? { requirementExcerptRedacted: row.requirementExcerptRedacted }
+        : {}),
     })),
   );
 }

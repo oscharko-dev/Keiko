@@ -162,7 +162,9 @@ describe("handleListQiRuns", () => {
       listMock.mockReturnValue(ids(10));
       loadMock.mockImplementation((id: string) => manifest(id));
 
-      const result = asResult(handleListQiRuns(ctx("/api/quality-intelligence/runs?limit=3"), deps()));
+      const result = asResult(
+        handleListQiRuns(ctx("/api/quality-intelligence/runs?limit=3"), deps()),
+      );
       expect(result.status).toBe(200);
       const body = result.body as {
         runs: readonly { id: string }[];
@@ -268,6 +270,40 @@ describe("handleGetQiRun", () => {
     expect(body.id).toBe("run-x");
     expect(body.status).toBe("succeeded");
     expect(body.manifestSchemaVersion).toBe(1);
+  });
+
+  it("projects requirement excerpts onto coverageByAtom and tolerates legacy rows (#790)", () => {
+    const withCoverage = {
+      ...(manifest("run-x") as Record<string, unknown>),
+      coverageMatrix: [
+        {
+          atomId: "atom-1",
+          status: "uncovered",
+          confidence: 0,
+          coveringCandidateIds: [],
+          requirementExcerptRedacted: "Lock the account after five failed logins.",
+        },
+        // Legacy row recorded before #790: no excerpt field.
+        { atomId: "atom-2", status: "covered", confidence: 0.9, coveringCandidateIds: ["tc-1"] },
+      ],
+    };
+    loadMock.mockReturnValue(withCoverage);
+
+    const result = asResult(
+      handleGetQiRun(ctx("/api/quality-intelligence/runs/run-x", { id: "run-x" }), deps()),
+    );
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      coverageByAtom: readonly {
+        atomId: string;
+        requirementExcerptRedacted?: string;
+      }[];
+    };
+    const row1 = body.coverageByAtom.find((r) => r.atomId === "atom-1");
+    expect(row1?.requirementExcerptRedacted).toBe("Lock the account after five failed logins.");
+    const row2 = body.coverageByAtom.find((r) => r.atomId === "atom-2");
+    expect(row2).toBeDefined();
+    expect(row2?.requirementExcerptRedacted).toBeUndefined();
   });
 
   it("returns 400 BAD_REQUEST for an empty id", () => {
@@ -460,10 +496,7 @@ describe("evidenceDir wiring (issue #620)", () => {
 
     const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
     const result = asResult(
-      handleGetQiRun(
-        ctx(`/api/quality-intelligence/runs/${runId}`, { id: runId }),
-        depsWithDir,
-      ),
+      handleGetQiRun(ctx(`/api/quality-intelligence/runs/${runId}`, { id: runId }), depsWithDir),
     );
 
     expect(result.status).toBe(500);
@@ -529,10 +562,7 @@ describe("evidenceDir wiring (issue #620)", () => {
 
     const depsWithDir: UiHandlerDeps = { ...deps(), evidenceDir };
     const result = asResult(
-      handleGetQiRun(
-        ctx(`/api/quality-intelligence/runs/${runId}`, { id: runId }),
-        depsWithDir,
-      ),
+      handleGetQiRun(ctx(`/api/quality-intelligence/runs/${runId}`, { id: runId }), depsWithDir),
     );
 
     expect(result.status).toBe(200);

@@ -168,13 +168,25 @@ function CoveragePanel({ detail }: { readonly detail: QualityIntelligenceUiRunDe
             {gaps.map((row) => {
               const label = COVERAGE_STATUS_LABEL[row.status];
               const cls = COVERAGE_STATUS_CLASS[row.status];
+              const excerpt = row.requirementExcerptRedacted;
               return (
                 <li
                   key={row.atomId}
                   className="qi-coverage-gap-item"
-                  aria-label={`Atom ${row.atomId}: ${label}`}
+                  aria-label={
+                    excerpt === undefined
+                      ? `Atom ${row.atomId}: ${label}`
+                      : `Requirement "${excerpt}" (atom ${row.atomId}): ${label}`
+                  }
                 >
-                  <span className="qi-coverage-atom-id qi-monospace">{row.atomId}</span>
+                  <span className="qi-coverage-gap-req">
+                    {excerpt === undefined ? null : (
+                      <span className="qi-coverage-gap-text" data-testid="qi-coverage-gap-text">
+                        {excerpt}
+                      </span>
+                    )}
+                    <span className="qi-coverage-atom-id qi-monospace">{row.atomId}</span>
+                  </span>
                   <span className={`qi-badge ${cls}`} aria-hidden="true">
                     {label}
                   </span>

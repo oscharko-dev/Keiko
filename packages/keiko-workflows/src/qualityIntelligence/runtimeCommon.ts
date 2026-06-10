@@ -205,19 +205,27 @@ export function truncateFindings(
   return findings.length <= limit ? findings : Object.freeze(findings.slice(0, limit));
 }
 
-/** Project per-atom coverage statuses into persistable, refs-only matrix rows (Epic #734). */
+/**
+ * Project per-atom coverage statuses into persistable matrix rows (Epic #734). When the caller
+ * supplies `excerptByAtomId` (atom id -> already-redacted excerpt, see `buildRequirementExcerpt`),
+ * each row additionally carries `requirementExcerptRedacted` so coverage/traceability surfaces are
+ * auditor-readable (#790); rows without a map entry stay refs-only.
+ */
 export function toCoverageMatrixRows(
   statuses: readonly AtomCoverageStatus[],
+  excerptByAtomId?: ReadonlyMap<string, string>,
 ): readonly QualityIntelligenceCoverageMatrixRow[] {
   return Object.freeze(
-    statuses.map((s) =>
-      Object.freeze({
+    statuses.map((s) => {
+      const excerpt = excerptByAtomId?.get(String(s.atomId));
+      return Object.freeze({
         atomId: String(s.atomId),
         status: s.status,
         confidence: s.confidence,
         coveringCandidateIds: Object.freeze(s.coveringCandidateIds.map(String)),
-      }),
-    ),
+        ...(excerpt !== undefined ? { requirementExcerptRedacted: excerpt } : {}),
+      });
+    }),
   );
 }
 
@@ -229,9 +237,10 @@ export function coverageMatrixFor(
   runId: QI.QualityIntelligenceRunId,
   atoms: readonly QI.QualityIntelligenceEvidenceAtom[],
   candidates: readonly QI.QualityIntelligenceTestCaseCandidate[],
+  excerptByAtomId?: ReadonlyMap<string, string>,
 ): readonly QualityIntelligenceCoverageMatrixRow[] {
   const coverageMap = buildCoverageMap({ runId, atoms, candidates });
-  return toCoverageMatrixRows(buildAtomCoverageStatuses(atoms, coverageMap));
+  return toCoverageMatrixRows(buildAtomCoverageStatuses(atoms, coverageMap), excerptByAtomId);
 }
 
 export function emitCandidateProposed(

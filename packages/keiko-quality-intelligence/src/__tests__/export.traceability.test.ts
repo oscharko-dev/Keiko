@@ -35,10 +35,10 @@ describe("adaptToTraceabilityCsv", () => {
   it("emits a test->requirements (reverse) section that inverts the matrix", () => {
     const csv = adaptToTraceabilityCsv(rows);
     expect(csv).toContain("Tests to requirements");
-    expect(csv).toContain("Test ID,Requirements Covered,Requirement Count");
-    // tc-1 and tc-2 each cover atom-1.
-    expect(csv).toMatch(/tc-1,atom-1,1/u);
-    expect(csv).toMatch(/tc-2,atom-1,1/u);
+    expect(csv).toContain("Test ID,Test Title,Requirements Covered,Requirement Count");
+    // tc-1 and tc-2 each cover atom-1; the title cell falls back to an em-dash without a lookup.
+    expect(csv).toMatch(/tc-1,—,atom-1,1/u);
+    expect(csv).toMatch(/tc-2,—,atom-1,1/u);
   });
 
   it("reports covering test ids and the test count", () => {
@@ -72,13 +72,15 @@ describe("adaptToTraceabilityMarkdown", () => {
     const md = adaptToTraceabilityMarkdown(rows);
     expect(md).toContain("## Requirements → Tests");
     expect(md).toContain("## Tests → Requirements");
-    expect(md).toContain("| Requirement ID | Status | Confidence | Covering Tests | Test Count |");
-    expect(md).toContain("| atom-1 | covered | 0.90 | tc-1 ; tc-2 | 2 |");
-    expect(md).toMatch(/\| atom-2 \| uncovered \| 0\.00 \| — \| 0 \|/u);
-    // Reverse table rows.
-    expect(md).toContain("| Test ID | Requirements Covered | Requirement Count |");
-    expect(md).toContain("| tc-1 | atom-1 | 1 |");
-    expect(md).toContain("| tc-2 | atom-1 | 1 |");
+    expect(md).toContain(
+      "| Requirement ID | Requirement (redacted excerpt) | Status | Confidence | Covering Tests | Test Count |",
+    );
+    expect(md).toContain("| atom-1 | — | covered | 0.90 | tc-1 ; tc-2 | 2 |");
+    expect(md).toMatch(/\| atom-2 \| — \| uncovered \| 0\.00 \| — \| 0 \|/u);
+    // Reverse table rows (title falls back to an em-dash without a candidate-title lookup).
+    expect(md).toContain("| Test ID | Test Title | Requirements Covered | Requirement Count |");
+    expect(md).toContain("| tc-1 | — | atom-1 | 1 |");
+    expect(md).toContain("| tc-2 | — | atom-1 | 1 |");
   });
 
   it("neutralises a formula-lead atom id in Markdown", () => {
@@ -91,5 +93,68 @@ describe("adaptToTraceabilityMarkdown", () => {
 
   it("is deterministic", () => {
     expect(adaptToTraceabilityMarkdown(rows)).toBe(adaptToTraceabilityMarkdown(rows));
+  });
+});
+
+// ─── Requirement excerpts + candidate titles (#790) ────────────────────────────
+
+const readableRows: readonly QualityIntelligenceTraceabilityRow[] = [
+  {
+    atomId: "atom-1",
+    status: "covered",
+    confidence: 0.9,
+    coveringCandidateIds: ["tc-1"],
+    requirementExcerptRedacted: "Lock the account after five failed logins.",
+  },
+  // Legacy row recorded before #790: no excerpt.
+  { atomId: "atom-2", status: "uncovered", confidence: 0, coveringCandidateIds: [] },
+];
+
+const titles = new Map([["tc-1", "Verify lockout engages on the fifth failed login"]]);
+
+describe("traceability readability (#790)", () => {
+  it("CSV: emits the requirement excerpt and joins candidate titles in the reverse section", () => {
+    const csv = adaptToTraceabilityCsv(readableRows, { candidateTitleById: titles });
+    expect(csv).toContain("Lock the account after five failed logins.");
+    expect(csv).toContain("Verify lockout engages on the fifth failed login");
+    // The legacy row degrades to the em-dash placeholder, never to a crash or an empty shift.
+    expect(csv).toMatch(/atom-2,—,uncovered/u);
+  });
+
+  it("Markdown: emits the excerpt and title columns with em-dash fallbacks", () => {
+    const md = adaptToTraceabilityMarkdown(readableRows, { candidateTitleById: titles });
+    expect(md).toContain(
+      "| atom-1 | Lock the account after five failed logins. | covered | 0.90 | tc-1 | 1 |",
+    );
+    expect(md).toContain("| atom-2 | — | uncovered | 0.00 | — | 0 |");
+    expect(md).toContain(
+      "| tc-1 | Verify lockout engages on the fifth failed login | atom-1 | 1 |",
+    );
+  });
+
+  it("neutralises a formula-lead excerpt and pipe-escapes it in Markdown", () => {
+    const danger: readonly QualityIntelligenceTraceabilityRow[] = [
+      {
+        atomId: "atom-1",
+        status: "uncovered",
+        confidence: 0,
+        coveringCandidateIds: [],
+        requirementExcerptRedacted: "=SUM(A1) | drop table",
+      },
+    ];
+    const csv = adaptToTraceabilityCsv(danger);
+    expect(csv).not.toMatch(/(^|,)=SUM\(A1\)/mu);
+    const md = adaptToTraceabilityMarkdown(danger);
+    expect(md).toContain("'=SUM(A1) \\| drop table");
+  });
+
+  it("is deterministic with display options supplied", () => {
+    const display = { candidateTitleById: titles };
+    expect(adaptToTraceabilityCsv(readableRows, display)).toBe(
+      adaptToTraceabilityCsv(readableRows, display),
+    );
+    expect(adaptToTraceabilityMarkdown(readableRows, display)).toBe(
+      adaptToTraceabilityMarkdown(readableRows, display),
+    );
   });
 });

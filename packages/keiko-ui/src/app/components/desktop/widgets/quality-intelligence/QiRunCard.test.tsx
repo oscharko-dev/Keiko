@@ -237,6 +237,29 @@ describe("QiRunCard", () => {
     expect(await screen.findByLabelText(/Atom atom-b: Uncovered/i)).toBeInTheDocument();
   });
 
+  it("renders the requirement excerpt in the gap radar and names it in the label (#790)", async () => {
+    const atoms: QualityIntelligenceUiAtomCoverage[] = [
+      {
+        atomId: "atom-b",
+        status: "uncovered",
+        confidence: 0,
+        requirementExcerptRedacted: "Lock the account after five failed logins.",
+      },
+      // Legacy run recorded before #790: no excerpt — keeps the id-only presentation.
+      { atomId: "atom-c", status: "weakly-covered", confidence: 0.5 },
+    ];
+    const detail = makeDetail("qi-run-cov4", [], atoms, 0);
+    render(<QiRunCard runId="qi-run-cov4" fetchDetailImpl={fetchOk(detail)} />);
+    const item = await screen.findByLabelText(
+      /Requirement "Lock the account after five failed logins\." \(atom atom-b\): Uncovered/i,
+    );
+    expect(item).toBeInTheDocument();
+    expect(screen.getByTestId("qi-coverage-gap-text")).toHaveTextContent(
+      "Lock the account after five failed logins.",
+    );
+    expect(screen.getByLabelText(/Atom atom-c: Weakly covered/i)).toBeInTheDocument();
+  });
+
   it("shows a covered/total summary and gap count alongside the percentage", async () => {
     const atoms: QualityIntelligenceUiAtomCoverage[] = [
       { atomId: "atom-a", status: "covered", confidence: 0.9 },

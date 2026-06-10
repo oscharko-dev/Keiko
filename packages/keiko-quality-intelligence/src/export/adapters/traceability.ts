@@ -4,25 +4,37 @@
 // requirement<->test traceability matrix in CSV (spreadsheet-safe) and Markdown:
 //   * Requirements -> Tests: each requirement atom and the tests that cover it (+ status).
 //   * Tests -> Requirements: each test and the requirements it traces to.
-// Both directions are derived purely from the coverage matrix rows (refs + status only, never raw
-// atom text), so the adapter depends on nothing outside keiko-contracts/keiko-quality-intelligence
+// Both directions are derived purely from the coverage matrix rows plus optional ALREADY-REDACTED
+// display fields — a requirement excerpt per row and a candidate-title lookup (#790) — never raw
+// atom text, so the adapter depends on nothing outside keiko-contracts/keiko-quality-intelligence
 // (ADR-0019 direction rule). Deterministic: rows are sorted by id, confidence is fixed-precision,
-// and there are no timestamps — so the export is byte-stable.
+// and there are no timestamps — so the export is byte-stable for identical inputs.
 
 import type { CoverageStatus } from "../../domain/coverageRelevance.js";
 import { encodeSpreadsheetSafeRow, startsWithFormulaLead } from "./spreadsheetSafeCsv.js";
 
-/** One requirement row of the traceability matrix (refs + status only — no raw atom text). */
+/**
+ * One requirement row of the traceability matrix: refs + status, plus an optional short REDACTED
+ * requirement excerpt (#790) so an auditor can read WHICH requirement a row traces without
+ * cross-referencing atom ids. Absent on runs recorded before the excerpt existed.
+ */
 export interface QualityIntelligenceTraceabilityRow {
   readonly atomId: string;
   readonly status: CoverageStatus;
   readonly confidence: number;
   readonly coveringCandidateIds: readonly string[];
+  readonly requirementExcerptRedacted?: string;
+}
+
+/** Optional display enrichment: candidate id -> already-redacted candidate title (#790). */
+export interface QualityIntelligenceTraceabilityDisplayOptions {
+  readonly candidateTitleById?: ReadonlyMap<string, string>;
 }
 
 /** CSV header row for the requirement -> tests direction. */
 export const TRACEABILITY_HEADERS: readonly string[] = Object.freeze([
   "Requirement ID",
+  "Requirement (redacted excerpt)",
   "Status",
   "Confidence",
   "Covering Tests",
@@ -32,9 +44,13 @@ export const TRACEABILITY_HEADERS: readonly string[] = Object.freeze([
 /** CSV header row for the test -> requirements (reverse) direction. */
 export const TRACEABILITY_REVERSE_HEADERS: readonly string[] = Object.freeze([
   "Test ID",
+  "Test Title",
   "Requirements Covered",
   "Requirement Count",
 ]);
+
+/** Placeholder for an absent display value (legacy rows / unknown candidate). Em-dash, not a formula lead. */
+const ABSENT = "—";
 
 const byAtomIdAsc = (
   a: QualityIntelligenceTraceabilityRow,
@@ -95,6 +111,7 @@ const mdRow = (cells: readonly string[]): string => `| ${cells.map(mdCell).join(
  */
 export function adaptToTraceabilityCsv(
   rows: readonly QualityIntelligenceTraceabilityRow[],
+  display: QualityIntelligenceTraceabilityDisplayOptions = {},
 ): string {
   const sorted = [...rows].sort(byAtomIdAsc);
   let body = encodeSpreadsheetSafeRow(["Requirements to tests"]);
@@ -102,6 +119,7 @@ export function adaptToTraceabilityCsv(
   for (const row of sorted) {
     body += encodeSpreadsheetSafeRow([
       row.atomId,
+      row.requirementExcerptRedacted ?? ABSENT,
       row.status,
       fixed2(row.confidence),
       joinSemicolon(row.coveringCandidateIds),
@@ -114,6 +132,7 @@ export function adaptToTraceabilityCsv(
   for (const reverse of invertToReverseRows(sorted)) {
     body += encodeSpreadsheetSafeRow([
       reverse.candidateId,
+      display.candidateTitleById?.get(reverse.candidateId) ?? ABSENT,
       joinSemicolon(reverse.requirementIds),
       String(reverse.requirementIds.length),
     ]);
@@ -128,6 +147,7 @@ export function adaptToTraceabilityCsv(
  */
 export function adaptToTraceabilityMarkdown(
   rows: readonly QualityIntelligenceTraceabilityRow[],
+  display: QualityIntelligenceTraceabilityDisplayOptions = {},
 ): string {
   const sorted = [...rows].sort(byAtomIdAsc);
   const lines: string[] = [
@@ -140,10 +160,11 @@ export function adaptToTraceabilityMarkdown(
   ];
   for (const row of sorted) {
     const tests =
-      row.coveringCandidateIds.length > 0 ? joinSemicolon(row.coveringCandidateIds) : "—";
+      row.coveringCandidateIds.length > 0 ? joinSemicolon(row.coveringCandidateIds) : ABSENT;
     lines.push(
       mdRow([
         row.atomId,
+        row.requirementExcerptRedacted ?? ABSENT,
         row.status,
         fixed2(row.confidence),
         tests,
@@ -156,12 +177,13 @@ export function adaptToTraceabilityMarkdown(
   lines.push(`| ${TRACEABILITY_REVERSE_HEADERS.map(() => "---").join(" | ")} |`);
   const reverseRows = invertToReverseRows(sorted);
   if (reverseRows.length === 0) {
-    lines.push(mdRow(["—", "—", "0"]));
+    lines.push(mdRow([ABSENT, ABSENT, ABSENT, "0"]));
   }
   for (const reverse of reverseRows) {
     lines.push(
       mdRow([
         reverse.candidateId,
+        display.candidateTitleById?.get(reverse.candidateId) ?? ABSENT,
         joinSemicolon(reverse.requirementIds),
         String(reverse.requirementIds.length),
       ]),

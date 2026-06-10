@@ -39,6 +39,8 @@ export {
   adaptToTraceabilityCsv,
   adaptToTraceabilityMarkdown,
   TRACEABILITY_HEADERS,
+  TRACEABILITY_REVERSE_HEADERS,
+  type QualityIntelligenceTraceabilityDisplayOptions,
   type QualityIntelligenceTraceabilityRow,
 } from "./adapters/index.js";
 

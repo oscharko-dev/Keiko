@@ -680,3 +680,93 @@ describe("runQualityIntelligenceModelRoutedTestDesign — judge stage wiring", (
     expect(summary.status).toBe("cancelled");
   });
 });
+
+// ─── Requirement excerpts on coverage surfaces (#790) ───────────────────────────
+
+describe("runQualityIntelligenceModelRoutedTestDesign — requirement excerpts (#790)", () => {
+  const RUN_ID = QualityIntelligence.asQualityIntelligenceRunId("qi-run-excerpt-test-001");
+
+  async function runWithAtoms(
+    store: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
+    ingestedAtoms: QualityIntelligenceModelRoutedTestDesignInput["ingestedAtoms"],
+  ): Promise<void> {
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan: { ...PLAN, id: RUN_ID },
+      envelopes: [],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    await runQualityIntelligenceModelRoutedTestDesign(input, makeDeps(store));
+  }
+
+  it("persists a redacted requirement excerpt on every coverage matrix row", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    await runWithAtoms(store, [
+      makeIngestedAtom("atom-1", "docs/auth.md\nLock the account after five failed logins."),
+      makeIngestedAtom("atom-2", "Requirement atom 2"),
+      makeIngestedAtom("atom-3", "Reset the lockout counter after a successful login."),
+    ]);
+    const matrix = store.load(String(RUN_ID))?.coverageMatrix ?? [];
+    expect(matrix.length).toBe(3);
+    const row1 = matrix.find((row) => row.atomId === "atom-1");
+    // The path\ntext canonical shape collapses to a single readable line.
+    expect(row1?.requirementExcerptRedacted).toBe(
+      "docs/auth.md Lock the account after five failed logins.",
+    );
+    const row3 = matrix.find((row) => row.atomId === "atom-3");
+    expect(row3?.requirementExcerptRedacted).toBe(
+      "Reset the lockout counter after a successful login.",
+    );
+  });
+
+  it("names the requirement in the gap-finding summary, not just the atom id", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    await runWithAtoms(store, [
+      makeIngestedAtom("atom-1", "Requirement atom 1"),
+      makeIngestedAtom("atom-2", "Requirement atom 2"),
+      makeIngestedAtom("atom-3", "Reject a checkout when the cart is empty."),
+    ]);
+    const manifest = store.load(String(RUN_ID));
+    const gap = (manifest?.findings ?? []).find(
+      (f) => f.kind === "coverage-gap" && f.summaryRedacted.includes("atom-3"),
+    );
+    expect(gap?.summaryRedacted).toBe(
+      'Atom atom-3 ("Reject a checkout when the cart is empty.") has no tracing test (uncovered).',
+    );
+  });
+
+  it("redacts a planted secret out of the excerpt and the gap summary", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const secretText = `Use key AKIA${"C".repeat(16)} to call the payments API.`;
+    await runWithAtoms(store, [
+      makeIngestedAtom("atom-1", "Requirement atom 1"),
+      makeIngestedAtom("atom-2", "Requirement atom 2"),
+      makeIngestedAtom("atom-3", secretText),
+    ]);
+    const manifest = store.load(String(RUN_ID));
+    const row = (manifest?.coverageMatrix ?? []).find((r) => r.atomId === "atom-3");
+    expect(row?.requirementExcerptRedacted).toContain("[REDACTED]");
+    expect(row?.requirementExcerptRedacted).not.toContain("AKIA");
+    const gap = (manifest?.findings ?? []).find(
+      (f) => f.kind === "coverage-gap" && f.summaryRedacted.includes("atom-3"),
+    );
+    expect(gap?.summaryRedacted).not.toContain("AKIA");
+  });
+
+  it("omits the excerpt field (and keeps the id-only summary) for empty canonical text", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    await runWithAtoms(store, [
+      makeIngestedAtom("atom-1", "Requirement atom 1"),
+      makeIngestedAtom("atom-2", "Requirement atom 2"),
+      makeIngestedAtom("atom-3", "   \n\t "),
+    ]);
+    const manifest = store.load(String(RUN_ID));
+    const row = (manifest?.coverageMatrix ?? []).find((r) => r.atomId === "atom-3");
+    expect(row).toBeDefined();
+    expect(row?.requirementExcerptRedacted).toBeUndefined();
+    const gap = (manifest?.findings ?? []).find(
+      (f) => f.kind === "coverage-gap" && f.summaryRedacted.includes("atom-3"),
+    );
+    expect(gap?.summaryRedacted).toBe("Atom atom-3 has no tracing test (uncovered).");
+  });
+});

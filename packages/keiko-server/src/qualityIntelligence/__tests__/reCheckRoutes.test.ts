@@ -525,6 +525,12 @@ describe("handleQiRegenerateStale — no model configured", () => {
     expect(manifest?.status).toBe("succeeded");
     expect(manifest?.modelId).toBeUndefined();
     expect(manifest?.seedUsed).toBeUndefined();
+    // #790: the regenerated run's coverage rows carry redacted requirement excerpts so the new
+    // run's Gap Radar / traceability stay auditor-readable, mirroring the initial-run path.
+    const matrix = manifest?.coverageMatrix ?? [];
+    expect(matrix.length).toBeGreaterThan(0);
+    const excerpts = matrix.map((row) => row.requirementExcerptRedacted ?? "");
+    expect(excerpts.some((e) => e.includes("Login must work reliably"))).toBe(true);
   });
 });
 
