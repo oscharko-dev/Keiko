@@ -252,7 +252,7 @@ function CandidateCard({
     setEditing(false);
   };
   return (
-    <li className="qi-cand-card">
+    <li className={editing ? "qi-cand-card qi-cand-card-editing" : "qi-cand-card"}>
       {editing && onEdit !== undefined ? (
         <CandidateEditForm
           candidate={candidate}

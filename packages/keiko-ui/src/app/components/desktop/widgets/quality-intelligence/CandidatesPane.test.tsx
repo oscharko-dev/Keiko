@@ -465,6 +465,21 @@ describe("CandidatesPane — inline editing", () => {
     expect(screen.getByLabelText("Title")).toHaveValue("Original title");
   });
 
+  it("expands the active edit card across the candidate grid", async () => {
+    const user = userEvent.setup();
+    const c = makeCandidate({ title: "Original title" });
+    render(
+      <CandidatesPane candidates={[c, makeCandidate({ title: "Other title" })]} onEdit={vi.fn()} />,
+    );
+    const firstEditButton = screen.getAllByRole("button", { name: /^edit$/i })[0];
+    if (firstEditButton === undefined) throw new Error("Expected at least one Edit button.");
+    await user.click(firstEditButton);
+
+    const editingCard = screen.getByRole("form", { name: /edit original title/i }).closest("li");
+    if (editingCard === null) throw new Error("Expected the edit form to be inside a list item.");
+    expect(editingCard).toHaveClass("qi-cand-card-editing");
+  });
+
   it("editing the title and saving calls onEdit with only the changed field", async () => {
     const user = userEvent.setup();
     const c = makeCandidate({ title: "Old title" });

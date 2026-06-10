@@ -34,6 +34,15 @@ describe("CandidateEditForm", () => {
     expect(screen.getByRole("textbox", { name: /^title$/i })).toHaveFocus();
   });
 
+  it("keeps Save reachable before the long multi-line edit fields", () => {
+    render(<CandidateEditForm candidate={makeCandidate()} onSave={vi.fn()} onCancel={vi.fn()} />);
+    const saveButton = screen.getByRole("button", { name: /^save$/i });
+    const preconditions = screen.getByRole("textbox", { name: /preconditions/i });
+    expect(
+      (saveButton.compareDocumentPosition(preconditions) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+    ).toBe(true);
+  });
+
   it("submits only the changed fields (minimal diff)", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(undefined);

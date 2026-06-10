@@ -8370,6 +8370,9 @@ select.dlg-input {
   display: flex;
   flex-direction: column;
 }
+.qi-cand-card-editing {
+  grid-column: 1 / -1;
+}
 .qi-cand-header {
   display: flex;
   align-items: flex-start;
@@ -8452,6 +8455,7 @@ select.dlg-input {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  max-width: 760px;
 }
 .qi-edit-field {
   display: flex;
@@ -8494,6 +8498,13 @@ select.dlg-input {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+  justify-content: flex-end;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 8px 0;
+  background: var(--card);
+  border-bottom: 1px solid var(--line-soft);
 }
 .qi-edit-error {
   margin: 0;

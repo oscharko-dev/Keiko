@@ -271,6 +271,12 @@ export function CandidateEditForm({
           set("title", v);
         }}
       />
+      {saveError !== null ? (
+        <p className="qi-edit-error" role="alert" aria-live="assertive">
+          {saveError}
+        </p>
+      ) : null}
+      <EditActions onCancel={onCancel} saving={saving} />
       <TextAreaField
         id={`${id}-preconditions`}
         label="Preconditions (one per line)"
@@ -327,12 +333,6 @@ export function CandidateEditForm({
           set("tags", v);
         }}
       />
-      {saveError !== null ? (
-        <p className="qi-edit-error" role="alert" aria-live="assertive">
-          {saveError}
-        </p>
-      ) : null}
-      <EditActions onCancel={onCancel} saving={saving} />
     </form>
   );
 }
