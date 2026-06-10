@@ -102,6 +102,48 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("passes env egress to discovery and smoke tests without persisting topology", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-egress-");
+    const evidenceDir = await tempDir("keiko-gw-ev-egress-");
+    let discoveryEgress: unknown;
+    let testerEgress: unknown;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: {
+        KEIKO_HTTPS_PROXY: "http://proxy.internal.example:8443",
+        KEIKO_NO_PROXY: "localhost,.corp.example",
+        KEIKO_CA_BUNDLE_PATH: "/etc/keiko/internal-ca.pem",
+      },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: (_baseUrl, _apiKey, _apiKeyHeaderName, egress) => {
+        discoveryEgress = egress;
+        return Promise.resolve(["example-chat-model"]);
+      },
+      gatewaySetupTester: (config, modelIds) => {
+        testerEgress = config.egress;
+        return Promise.resolve(modelIds);
+      },
+    });
+    const result = await handleGatewaySetup(
+      ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+      deps,
+    );
+    expect(result.status).toBe(200);
+    expect(discoveryEgress).toEqual({
+      httpsProxy: "http://proxy.internal.example:8443/",
+      noProxy: ["localhost", ".corp.example"],
+      caBundlePath: "/etc/keiko/internal-ca.pem",
+    });
+    expect(testerEgress).toEqual(discoveryEgress);
+    expect(currentGatewayConfig(deps)?.egress).toEqual(discoveryEgress);
+    const saved = readFileSync(deps.gatewayConfig?.storagePath ?? "", "utf8");
+    expect(saved).not.toContain("proxy.internal.example");
+    expect(saved).not.toContain("internal-ca.pem");
+    expect(saved).not.toContain("egress");
+    deps.store.close();
+  });
+
   it("rejects a symlinked final gateway config target", async () => {
     const uiDir = await tempDir("keiko-gw-ui-link-target-");
     const evidenceDir = await tempDir("keiko-gw-ev-link-target-");

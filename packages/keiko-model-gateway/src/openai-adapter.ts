@@ -421,6 +421,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         body,
         signal,
         fetchImpl: this.deps.fetchImpl,
+        ...(config.egress !== undefined ? { egress: config.egress } : {}),
       });
     } catch (error) {
       throw this.mapDispatchError(error, config, cancel, timeoutSignal, secrets);

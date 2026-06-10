@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to npm after all release gates pass"
+        type: boolean
+        required: false
+        default: false
+      npm_dist_tag:
+        description: "npm dist-tag to publish under"
+        type: choice
+        required: false
+        default: beta
+        options:
+          - beta
+          - next
+          - latest
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-verify:
+    name: Release verification
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.x"
+          cache: "npm"
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Version consistency
+        run: npm run check:version-consistency
+      - name: Lint
+        run: npm run lint
+      - name: Architecture check
+        run: npm run arch:check
+      - name: Architecture negative check
+        run: npm run arch:check:negative
+      - name: Quality Intelligence supply-chain gate
+        run: npm run check:qi-supply-chain
+      - name: Unit tests
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Prepare packaged CLI and UI assets
+        run: |
+          npm run prepare:bin
+          npm run build:ui
+      - name: Package surface
+        run: npm run check:package-surface
+      - name: Installable-package smoke
+        run: npm run smoke:install
+      - name: Installable memory smoke
+        run: npm run smoke:install:memory
+      - name: Security audit
+        run: npm audit --audit-level=high
+      - name: Generate root CycloneDX SBOM
+        run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
+      - name: Workspace supply-chain gate
+        run: npm run check:workspace-supply-chain
+      - name: Generate UI CycloneDX SBOM
+        run: npm sbom --sbom-format cyclonedx --omit dev --workspace @oscharko-dev/keiko-ui > ui-sbom.cdx.json
+      - name: Upload root SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-root-sbom-cyclonedx
+          path: sbom.cdx.json
+          retention-days: 90
+      - name: Upload UI SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-ui-sbom-cyclonedx
+          path: ui-sbom.cdx.json
+          retention-days: 90
+
+  publish:
+    name: Publish to npm
+    needs: release-verify
+    if: github.event_name == 'workflow_dispatch' && inputs.publish && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.x"
+          cache: "npm"
+          registry-url: "https://registry.npmjs.org"
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate publish dist-tag
+        env:
+          NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+        run: |
+          node -e "const { version } = require('./package.json'); const tag = process.env.NPM_DIST_TAG; if (!['beta', 'next', 'latest'].includes(tag)) throw new Error('Unsupported npm dist-tag: ' + tag); if (version.includes('-') && tag === 'latest') throw new Error('Prerelease versions must not be published with the latest dist-tag.');"
+      - name: Publish package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+        run: npm publish --access public --tag "$NPM_DIST_TAG"

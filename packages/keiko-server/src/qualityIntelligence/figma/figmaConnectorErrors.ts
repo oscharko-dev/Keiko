@@ -120,6 +120,13 @@ const CONNECTIVITY_CODES: ReadonlySet<string> = new Set([
   "UND_ERR_BODY_TIMEOUT",
   "UND_ERR_SOCKET",
 ]);
+const OUTBOUND_TLS_CODES: ReadonlySet<string> = new Set(["TLS_CA_FAILURE"]);
+const OUTBOUND_PROXY_UNREACHABLE_CODES: ReadonlySet<string> = new Set(["PROXY_UNREACHABLE"]);
+const OUTBOUND_PROXY_EGRESS_CODES: ReadonlySet<string> = new Set([
+  "PROXY_AUTH_REQUIRED",
+  "PROXY_BLOCKED_BY_POLICY",
+  "PROXY_EGRESS_FAILED",
+]);
 
 const TLS_MSG_RE = /cert|self.?signed|unable to (?:verify|get).*(issuer|cert)|tls/i;
 const CONNECTIVITY_MSG_RE = /socket hang ?up|network|timeout|fetch failed|econn|enotfound/i;
@@ -157,6 +164,9 @@ const extractMessage = (err: unknown): string => {
 export const classifyFigmaTransportError = (err: unknown): FigmaConnectorErrorCode => {
   const code = extractCode(err) ?? extractCauseCode(err);
   if (code !== undefined) {
+    if (OUTBOUND_TLS_CODES.has(code)) return "FIGMA_TLS_CA_FAILURE";
+    if (OUTBOUND_PROXY_UNREACHABLE_CODES.has(code)) return "FIGMA_PROXY_UNREACHABLE";
+    if (OUTBOUND_PROXY_EGRESS_CODES.has(code)) return "FIGMA_PROXY_EGRESS_FAILED";
     if (TLS_CODES.has(code)) return "FIGMA_TLS_CA_FAILURE";
     if (CONNECTIVITY_CODES.has(code)) return "FIGMA_PROXY_UNREACHABLE";
   }

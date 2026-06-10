@@ -55,6 +55,57 @@ describe("parseGatewayConfig", () => {
     expect(config.circuitBreaker.failureThreshold).toBe(5);
   });
 
+  it("parses explicit enterprise egress settings and applies them to providers", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      egress: {
+        httpProxy: "http://proxy.local:8080",
+        httpsProxy: "https://secure-proxy.local:8443",
+        noProxy: "localhost, 127.0.0.1",
+        caBundlePath: "/etc/keiko/enterprise-ca.pem",
+      },
+    };
+    const config = parseGatewayConfig(raw);
+    expect(config.egress).toEqual({
+      httpProxy: "http://proxy.local:8080/",
+      httpsProxy: "https://secure-proxy.local:8443/",
+      noProxy: ["localhost", "127.0.0.1"],
+      caBundlePath: "/etc/keiko/enterprise-ca.pem",
+    });
+    expect(config.providers[0]?.egress).toEqual(config.egress);
+  });
+
+  it("parses enterprise egress settings from the environment", () => {
+    const config = parseGatewayConfig(validRaw(), {
+      KEIKO_HTTP_PROXY: "http://proxy.env.local:8080",
+      KEIKO_HTTPS_PROXY: "http://secure-proxy.env.local:8443",
+      KEIKO_NO_PROXY: "localhost,.corp.example",
+      KEIKO_CA_BUNDLE_PATH: "/etc/keiko/env-ca.pem",
+    });
+    expect(config.egress).toEqual({
+      httpProxy: "http://proxy.env.local:8080/",
+      httpsProxy: "http://secure-proxy.env.local:8443/",
+      noProxy: ["localhost", ".corp.example"],
+      caBundlePath: "/etc/keiko/env-ca.pem",
+    });
+    expect(config.providers[0]?.egress).toEqual(config.egress);
+  });
+
+  it("rejects credential-bearing proxy URLs without echoing the credentials", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      egress: { httpsProxy: "http://user:secret-pass@proxy.local:8080" },
+    };
+    try {
+      parseGatewayConfig(raw);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("must not embed credentials");
+      expect((error as Error).message).not.toContain("secret-pass");
+    }
+  });
+
   it("accepts a safe custom API key header name", () => {
     const raw = rawWithProvider((p) => ({ ...p, apiKeyHeaderName: "X-Litellm-Key" }));
     const config = parseGatewayConfig(raw);
@@ -373,6 +424,23 @@ describe("toSafeObject", () => {
     expect(serialised).not.toContain("apiKey");
     expect(serialised).not.toContain("https://host.example/v1");
     expect(serialised).not.toContain("baseUrl");
+  });
+
+  it("omits enterprise egress proxy and CA topology", () => {
+    const config = parseGatewayConfig(
+      {
+        ...(validRaw() as Record<string, unknown>),
+        egress: {
+          httpsProxy: "http://proxy.internal.example:8443",
+          caBundlePath: "/etc/keiko/internal-ca.pem",
+        },
+      },
+      {},
+    );
+    const serialised = JSON.stringify(toSafeObject(config));
+    expect(serialised).not.toContain("proxy.internal.example");
+    expect(serialised).not.toContain("internal-ca.pem");
+    expect(serialised).not.toContain("egress");
   });
 
   it("preserves non-secret fields", () => {

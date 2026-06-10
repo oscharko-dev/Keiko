@@ -12,6 +12,7 @@ import type {
   OpenAIEmbeddingRequest,
   OpenAIEmbeddingOutcome,
 } from "./openai-embedding-adapter.js";
+import type { OutboundHttpEgressConfig } from "./types.js";
 
 // ─── Failure taxonomy ─────────────────────────────────────────────────────────
 export type EmbeddingFailureReason =
@@ -57,6 +58,7 @@ export interface OpenAIEmbeddingAdapter {
   readonly endpoint: string;
   readonly apiKey: string;
   readonly apiKeyHeaderName?: string;
+  readonly egress?: OutboundHttpEgressConfig | undefined;
   readonly request: (input: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>;
 }
 
@@ -131,6 +133,7 @@ export async function verifyEmbeddingCapability(
     ...(adapter.apiKeyHeaderName !== undefined
       ? { apiKeyHeaderName: adapter.apiKeyHeaderName }
       : {}),
+    ...(adapter.egress !== undefined ? { egress: adapter.egress } : {}),
     modelId: options.modelId,
     input: PROBE_INPUT,
     ...(options.signal !== undefined ? { signal: options.signal } : {}),

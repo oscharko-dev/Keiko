@@ -10,6 +10,10 @@
 // logged here and never re-emitted by the port.
 
 import { classifyFigmaTransportError, FigmaConnectorError } from "./figmaConnectorErrors.js";
+import {
+  gatewayFetch,
+  type OutboundHttpEgressConfig,
+} from "@oscharko-dev/keiko-model-gateway/internal/http";
 
 export interface FigmaHttpRequest {
   readonly url: string;
@@ -52,10 +56,18 @@ const parseJsonBody = async (response: Response): Promise<unknown> => {
  * log, retry, or inspect the token. Resilience/backoff is out of scope here (#759); the
  * proxy/custom-CA transport is the platform prerequisite (#802) that replaces this adapter.
  */
-export const createDefaultFigmaHttpPort = (): FigmaHttpPort => {
+export const createDefaultFigmaHttpPort = (
+  egress?: OutboundHttpEgressConfig,
+  fetchImpl?: typeof fetch,
+): FigmaHttpPort => {
   return async (request: FigmaHttpRequest): Promise<FigmaHttpResponse> => {
     try {
-      const response = await fetch(request.url, { method: "GET", headers: { ...request.headers } });
+      const response = await gatewayFetch(request.url, {
+        method: "GET",
+        headers: { ...request.headers },
+        ...(egress !== undefined ? { egress } : {}),
+        ...(fetchImpl !== undefined ? { fetchImpl } : {}),
+      });
       const headers = collectHeaders(response);
       const json = await parseJsonBody(response);
       return { status: response.status, json, headers };

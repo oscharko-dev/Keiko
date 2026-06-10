@@ -39,6 +39,14 @@ export interface ModelProviderConfig {
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
+  readonly egress?: OutboundHttpEgressConfig | undefined;
+}
+
+export interface OutboundHttpEgressConfig {
+  readonly httpProxy?: string | undefined;
+  readonly httpsProxy?: string | undefined;
+  readonly noProxy?: readonly string[] | undefined;
+  readonly caBundlePath?: string | undefined;
 }
 
 export interface CircuitBreakerConfig {
@@ -52,6 +60,7 @@ export interface GatewayConfig {
   readonly circuitBreaker: CircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[] | undefined;
   readonly grounding?: Partial<GroundingLimits> | undefined;
+  readonly egress?: OutboundHttpEgressConfig | undefined;
 }
 
 // ─── Provider adapter interface (runtime port — STAYS local) ──────────────────

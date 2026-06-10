@@ -40,6 +40,7 @@ import {
 } from "./figma/index.js";
 import { QualityIntelligenceFigma } from "@oscharko-dev/keiko-quality-intelligence";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
+import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 
 const FIGMA_VAULT_SUBDIR = "figma";
 const FIGMA_TOKEN_VAULT_FILE = "figma-token.vault";
@@ -55,6 +56,8 @@ export interface GovernedSnapshotDeps {
   readonly acknowledgeReadOnly?: boolean;
   /** Deep scoped-pagination overrides (#837). */
   readonly pagination?: Partial<ScopedPaginationLimits>;
+  /** Shared enterprise egress settings for Figma API + render downloads (#802). */
+  readonly egress?: OutboundHttpEgressConfig | undefined;
   // Injectable transports + keychain so route tests run without real egress or the login keychain.
   readonly httpPort?: FigmaHttpPort;
   readonly renderPort?: FigmaRenderPort;
@@ -170,8 +173,8 @@ export const governedSnapshotBuild = async (
   const target = parseFigmaTarget(boardLink);
   if (target === null) throw new FigmaConnectorError("FIGMA_MALFORMED_URL");
   const scopeRef = deriveFigmaScopeRef(target.fileKey, target.nodeId);
-  const httpPort = deps.httpPort ?? createDefaultFigmaHttpPort();
-  const renderPort = deps.renderPort ?? createDefaultFigmaRenderPort();
+  const httpPort = deps.httpPort ?? createDefaultFigmaHttpPort(deps.egress);
+  const renderPort = deps.renderPort ?? createDefaultFigmaRenderPort(deps.egress);
   const vaultToken = readFigmaVaultToken(deps);
 
   gateConsent(deps, scopeRef);

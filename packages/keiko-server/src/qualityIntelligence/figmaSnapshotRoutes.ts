@@ -23,7 +23,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { RouteContext, RouteResult } from "../routes.js";
-import type { UiHandlerDeps } from "../deps.js";
+import { currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
 import {
   parseFigmaTarget,
@@ -61,6 +61,10 @@ const FIGMA_ROUTE_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   FIGMA_UPSTREAM_UNAVAILABLE: "Figma API is temporarily unavailable. Please try again.",
   FIGMA_PROXY_EGRESS_FAILED:
     "The forward proxy rejected the Figma egress request. Check proxy configuration.",
+  FIGMA_PROXY_UNREACHABLE:
+    "The configured forward proxy is unreachable. Check proxy host and port settings.",
+  FIGMA_TLS_CA_FAILURE:
+    "The Figma egress TLS certificate could not be verified. Check the configured CA bundle.",
   FIGMA_RATE_LIMITED: "Figma rate-limited the snapshot-build. Please wait a moment and try again.",
   FIGMA_OVERSIZED_SCOPE:
     "The selected Figma board section is too large. Select a smaller section (frame or page).",
@@ -98,6 +102,8 @@ const FIGMA_502_CODES = new Set<FigmaConnectorErrorCode>([
   "FIGMA_TOKEN_REVOKED",
   "FIGMA_INSUFFICIENT_SCOPE",
   "FIGMA_PROXY_EGRESS_FAILED",
+  "FIGMA_PROXY_UNREACHABLE",
+  "FIGMA_TLS_CA_FAILURE",
   "FIGMA_UPSTREAM_UNAVAILABLE",
 ]);
 
@@ -411,6 +417,7 @@ export async function handleFigmaTriggerSnapshot(
         now: new Date().toISOString(),
         acknowledgeReadOnly: body.acknowledgeReadOnly,
         pagination: figmaPaginationFromEnv(deps.env),
+        egress: currentGatewayEgressConfig(deps),
       },
       body.isResnapshot,
     );

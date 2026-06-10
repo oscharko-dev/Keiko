@@ -575,6 +575,99 @@ button {
   flex: none;
 }
 
+@media (max-width: 680px) {
+  .header {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    height: auto;
+    padding: 8px 8px 9px;
+    gap: 6px 8px;
+  }
+
+  .hd-brand {
+    padding-left: 2px;
+    padding-right: 2px;
+  }
+
+  .hd-wordmark {
+    display: none;
+  }
+
+  .tb-tabs {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 0;
+  }
+
+  .tb-tab {
+    min-width: 0;
+    max-width: 100%;
+    padding-inline: 9px;
+  }
+
+  .tb-tab > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tb-newtab {
+    flex: none;
+  }
+
+  .spacer {
+    display: none;
+  }
+
+  .hd-tools {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .hd-tools .hd-div,
+  .header > .hd-div {
+    display: none;
+  }
+
+  .hd-tool-cta {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .hd-tool-cta span {
+    display: none;
+  }
+
+  .edm-trigger {
+    padding-right: 7px;
+  }
+
+  .edm-trigger-label {
+    display: none;
+  }
+
+  .modesw {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .modesw-opt {
+    min-width: 0;
+    padding: 5px 8px;
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  .tb-status,
+  .tb-btn {
+    display: none;
+  }
+}
+
 /* ---------- OPEN-IN-EDITOR DROPDOWN ---------- */
 .edm {
   position: relative;

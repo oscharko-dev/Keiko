@@ -4,6 +4,7 @@
 
 import { apiKeyHeaderValue } from "./config.js";
 import { gatewayFetch, readJsonCapped } from "./http.js";
+import type { OutboundHttpEgressConfig } from "./types.js";
 
 export interface OpenAIEmbeddingRequest {
   readonly endpoint: string;
@@ -14,6 +15,7 @@ export interface OpenAIEmbeddingRequest {
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
   readonly fetchImpl?: typeof fetch;
+  readonly egress?: OutboundHttpEgressConfig | undefined;
 }
 
 export interface OpenAIEmbeddingSuccess {
@@ -173,6 +175,7 @@ async function dispatch(
       body: built.body,
       signal: built.signal,
       ...(request.fetchImpl !== undefined ? { fetchImpl: request.fetchImpl } : {}),
+      ...(request.egress !== undefined ? { egress: request.egress } : {}),
     });
   } catch (error) {
     return classifyDispatchError(error, built.timeoutSignal, built.callerSignal);

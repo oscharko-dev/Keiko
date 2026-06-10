@@ -58,6 +58,7 @@ function buildAdapter(
     ...(provider.apiKeyHeaderName !== undefined
       ? { apiKeyHeaderName: provider.apiKeyHeaderName }
       : {}),
+    ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
     request: (request) =>
       requestImpl({
         ...request,
@@ -66,6 +67,7 @@ function buildAdapter(
         ...(provider.apiKeyHeaderName !== undefined
           ? { apiKeyHeaderName: provider.apiKeyHeaderName }
           : {}),
+        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
       }),
   };
 }
@@ -109,6 +111,7 @@ export function createMemoryEmbedder(
         apiKey: provider.apiKey,
         modelId,
         input: text,
+        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
       });
       if (!outcome.ok) return null;
       return toEmbeddingInput("openai", outcome);

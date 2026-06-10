@@ -28,7 +28,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { redact } from "@oscharko-dev/keiko-security";
-import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -46,6 +46,7 @@ const CHAT_COMPATIBLE_MODES = new Set(["chat", "completion", "responses"]);
 
 type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
+type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
 
 class BodyTooLargeError extends Error {
   constructor() {
@@ -277,11 +278,13 @@ async function fetchDiscoveryJson(
   url: string,
   apiKey: string,
   apiKeyHeaderName: string,
+  egress?: GatewayEgressConfig,
 ): Promise<unknown> {
   const response = await gatewayFetch(url, {
     method: "GET",
     headers: apiKeyHeaders(apiKey, apiKeyHeaderName),
     signal: AbortSignal.timeout(30_000),
+    ...(egress !== undefined ? { egress } : {}),
   });
   if (!response.ok) {
     throw new Error(`model discovery returned HTTP ${String(response.status)}`);
@@ -297,10 +300,11 @@ async function discoverLiteLlmModelInfo(
   baseUrl: string,
   apiKey: string,
   apiKeyHeaderName: string,
+  egress?: GatewayEgressConfig,
 ): Promise<readonly string[] | undefined> {
   for (const endpoint of modelInfoEndpointCandidates(baseUrl)) {
     try {
-      return parseModelList(await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName));
+      return parseModelList(await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName, egress));
     } catch {
       // /model/info is a LiteLLM-specific enrichment endpoint. If it is absent or blocked,
       // continue with OpenAI-compatible /models discovery so customer gateways are not broken.
@@ -313,13 +317,14 @@ async function defaultGatewayModelDiscovery(
   baseUrl: string,
   apiKey: string,
   apiKeyHeaderName = DEFAULT_API_KEY_HEADER_NAME,
+  egress?: GatewayEgressConfig,
 ): Promise<readonly string[]> {
-  const litellmModels = await discoverLiteLlmModelInfo(baseUrl, apiKey, apiKeyHeaderName);
+  const litellmModels = await discoverLiteLlmModelInfo(baseUrl, apiKey, apiKeyHeaderName, egress);
   if (litellmModels !== undefined) {
     return litellmModels;
   }
   return parseModelList(
-    await fetchDiscoveryJson(modelsEndpoint(baseUrl), apiKey, apiKeyHeaderName),
+    await fetchDiscoveryJson(modelsEndpoint(baseUrl), apiKey, apiKeyHeaderName, egress),
   );
 }
 
@@ -368,9 +373,13 @@ function validateSetupConnection(
   baseUrl: string,
   apiKey: string,
   apiKeyHeaderName: string,
+  env: EnvSource,
 ): RouteResult | undefined {
   try {
-    parseGatewayConfig(buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }));
+    parseGatewayConfig(
+      buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }),
+      env,
+    );
     return undefined;
   } catch (error) {
     if (error instanceof ConfigInvalidError) {
@@ -494,7 +503,10 @@ function isSymlink(path: string): boolean {
   }
 }
 
-function readSetupRequest(raw: unknown):
+function readSetupRequest(
+  raw: unknown,
+  env: EnvSource,
+):
   | {
       readonly baseUrl: string;
       readonly apiKey: string;
@@ -527,7 +539,7 @@ function readSetupRequest(raw: unknown):
   if ("status" in deploymentNames) {
     return deploymentNames;
   }
-  const invalidConnection = validateSetupConnection(baseUrl, apiKey, apiKeyHeaderName);
+  const invalidConnection = validateSetupConnection(baseUrl, apiKey, apiKeyHeaderName, env);
   if (invalidConnection !== undefined) {
     return invalidConnection;
   }
@@ -554,14 +566,19 @@ async function verifySetupCandidate(
   deploymentNames: readonly string[],
   tester: GatewaySetupTester,
   discovery: GatewayModelDiscovery,
+  env: EnvSource,
 ): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(baseUrl, "candidate");
+  const validationConfig = parseGatewayConfig(
+    buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }),
+    env,
+  );
   const candidateModelIds =
     deploymentNames.length > 0
       ? deploymentNames
-      : await discovery(baseUrl, apiKey, apiKeyHeaderName);
+      : await discovery(baseUrl, apiKey, apiKeyHeaderName, validationConfig.egress);
   const smokeTimeoutMs =
     deploymentNames.length > 0 ? DEPLOYMENT_SMOKE_TIMEOUT_MS : DISCOVERED_MODEL_SMOKE_TIMEOUT_MS;
   const candidateRawConfig = buildRawConfig(baseUrl, apiKey, candidateModelIds, {
@@ -569,10 +586,10 @@ async function verifySetupCandidate(
     timeoutMs: smokeTimeoutMs,
     maxRetries: 0,
   });
-  const candidateConfig = parseGatewayConfig(candidateRawConfig);
+  const candidateConfig = parseGatewayConfig(candidateRawConfig, env);
   const testedModelIds = await tester(candidateConfig, candidateModelIds);
   const rawConfig = buildRawConfig(baseUrl, apiKey, testedModelIds, { apiKeyHeaderName });
-  const config = parseGatewayConfig(rawConfig);
+  const config = parseGatewayConfig(rawConfig, env);
   return { rawConfig, config, testedModelIds };
 }
 
@@ -653,7 +670,7 @@ export async function handleGatewaySetup(
   if ("status" in bodyResult) {
     return bodyResult;
   }
-  const request = readSetupRequest(bodyResult.parsed);
+  const request = readSetupRequest(bodyResult.parsed, deps.env);
   if ("status" in request) {
     return request;
   }
@@ -676,6 +693,7 @@ export async function handleGatewaySetup(
         request.deploymentNames,
         tester,
         discovery,
+        deps.env,
       );
       savePrivateJson(deps.gatewayConfig.storagePath, verified.rawConfig);
       deps.gatewayConfig.set(verified.config, true);

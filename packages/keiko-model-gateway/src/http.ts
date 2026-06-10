@@ -1,6 +1,13 @@
 import { readFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
+import type { IncomingMessage } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { connect as netConnect, isIP } from "node:net";
+import type { Socket } from "node:net";
 import * as tls from "node:tls";
+import type { OutboundHttpEgressConfig } from "./types.js";
+
+export type { OutboundHttpEgressConfig } from "./types.js";
 
 // Caps a single gateway response at 10 MB; real chat completions are far smaller.
 export const MAX_RESPONSE_BYTES = 10_000_000;
@@ -8,6 +15,24 @@ export const MAX_RESPONSE_BYTES = 10_000_000;
 export interface GatewayFetchOptions extends RequestInit {
   readonly fetchImpl?: typeof fetch | undefined;
   readonly useCaFallback?: boolean | undefined;
+  readonly egress?: OutboundHttpEgressConfig | undefined;
+}
+
+export type OutboundHttpEgressErrorCode =
+  | "PROXY_UNREACHABLE"
+  | "PROXY_AUTH_REQUIRED"
+  | "PROXY_EGRESS_FAILED"
+  | "PROXY_BLOCKED_BY_POLICY"
+  | "TLS_CA_FAILURE";
+
+export class OutboundHttpEgressError extends Error {
+  readonly code: OutboundHttpEgressErrorCode;
+
+  constructor(code: OutboundHttpEgressErrorCode, message: string) {
+    super(message);
+    this.name = "OutboundHttpEgressError";
+    this.code = code;
+  }
 }
 
 function headersFromNode(headers: Record<string, string | string[] | undefined>): Headers {
@@ -68,16 +93,19 @@ function usesHttps(url: string): boolean {
   }
 }
 
-function extraCaCertificates(): readonly string[] {
-  const path = process.env.NODE_EXTRA_CA_CERTS;
-  if (path === undefined || path.trim().length === 0) {
-    return [];
-  }
+function readCertificateFile(path: string): readonly string[] {
   try {
     return [readFileSync(path, "utf8")];
   } catch {
     return [];
   }
+}
+
+function extraCaCertificates(caBundlePath?: string): readonly string[] {
+  const paths = [process.env.NODE_EXTRA_CA_CERTS, caBundlePath].filter(
+    (path): path is string => path !== undefined && path.trim().length > 0,
+  );
+  return paths.flatMap((path) => readCertificateFile(path));
 }
 
 type CaCertificateSource = "default" | "system" | "bundled" | "extra";
@@ -94,14 +122,14 @@ function nodeCaCertificates(source: CaCertificateSource): readonly string[] {
   }
 }
 
-export function gatewayTrustedCaCertificates(): readonly string[] {
+export function gatewayTrustedCaCertificates(caBundlePath?: string): readonly string[] {
   return Array.from(
     new Set([
       ...nodeCaCertificates("default"),
       ...tls.rootCertificates,
       ...nodeCaCertificates("system"),
       ...nodeCaCertificates("extra"),
-      ...extraCaCertificates(),
+      ...extraCaCertificates(caBundlePath),
     ]),
   );
 }
@@ -158,7 +186,11 @@ export function streamingResponseFromNode(
   });
 }
 
-function fetchWithCaBundle(url: string, init: RequestInit): Promise<Response> {
+function fetchWithCaBundle(
+  url: string,
+  init: RequestInit,
+  egress?: OutboundHttpEgressConfig,
+): Promise<Response> {
   const body = bodyToString(init.body);
   const headers = headersToRecord(init.headers);
   return new Promise<Response>((resolve, reject) => {
@@ -167,7 +199,7 @@ function fetchWithCaBundle(url: string, init: RequestInit): Promise<Response> {
       {
         method: init.method ?? "GET",
         headers,
-        ca: [...gatewayTrustedCaCertificates()],
+        ca: [...gatewayTrustedCaCertificates(egress?.caBundlePath)],
         signal: init.signal ?? undefined,
       },
       (res) => {
@@ -179,17 +211,398 @@ function fetchWithCaBundle(url: string, init: RequestInit): Promise<Response> {
   });
 }
 
+function normalizeHost(hostname: string): string {
+  return hostname.toLowerCase().replace(/^\[/u, "").replace(/\]$/u, "");
+}
+
+function tlsServerName(hostname: string): string | undefined {
+  const normalized = normalizeHost(hostname);
+  return isIP(normalized) === 0 ? normalized : undefined;
+}
+
+function defaultPort(protocol: string): string {
+  return protocol === "https:" ? "443" : "80";
+}
+
+function targetPort(url: URL): string {
+  return url.port.length > 0 ? url.port : defaultPort(url.protocol);
+}
+
+function noProxyRuleMatches(rule: string, host: string, hostPort: string): boolean {
+  if (rule.length === 0) return false;
+  if (rule === "*") return true;
+  if (rule.includes(":") && normalizeHost(rule) === hostPort) return true;
+  const domain = rule.startsWith(".") ? rule.slice(1) : rule;
+  if (host === domain) return true;
+  return rule.startsWith(".") && host.endsWith(`.${domain}`);
+}
+
+function noProxyMatches(url: URL, rules: readonly string[] | undefined): boolean {
+  if (rules === undefined || rules.length === 0) return false;
+  const host = normalizeHost(url.hostname);
+  const hostPort = `${host}:${targetPort(url)}`;
+  for (const rawRule of rules) {
+    const rule = rawRule.trim().toLowerCase();
+    if (noProxyRuleMatches(rule, host, hostPort)) return true;
+  }
+  return false;
+}
+
+function parseProxyUrl(raw: string): URL {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new OutboundHttpEgressError("PROXY_EGRESS_FAILED", "Configured proxy URL is invalid.");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new OutboundHttpEgressError(
+      "PROXY_EGRESS_FAILED",
+      "Configured proxy URL uses an unsupported scheme.",
+    );
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new OutboundHttpEgressError(
+      "PROXY_AUTH_REQUIRED",
+      "Proxy credentials must not be embedded in the proxy URL.",
+    );
+  }
+  return url;
+}
+
+function proxyForTarget(
+  target: URL,
+  egress: OutboundHttpEgressConfig | undefined,
+): string | undefined {
+  if (egress === undefined || noProxyMatches(target, egress.noProxy)) return undefined;
+  if (target.protocol === "https:") return egress.httpsProxy ?? egress.httpProxy;
+  if (target.protocol === "http:") return egress.httpProxy;
+  return undefined;
+}
+
+function proxyPort(proxy: URL): number {
+  if (proxy.port.length > 0) return Number(proxy.port);
+  return proxy.protocol === "https:" ? 443 : 80;
+}
+
+const PROXY_UNREACHABLE_CODES = new Set([
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+]);
+
+function mapProxyError(error: unknown): Error {
+  if (error instanceof OutboundHttpEgressError) return error;
+  if (isRecoverableTlsTrustError(error)) {
+    return new OutboundHttpEgressError(
+      "TLS_CA_FAILURE",
+      "TLS certificate verification failed for outbound egress.",
+    );
+  }
+  const code = isRecord(error) && typeof error.code === "string" ? error.code : undefined;
+  if (code !== undefined && PROXY_UNREACHABLE_CODES.has(code)) {
+    return new OutboundHttpEgressError("PROXY_UNREACHABLE", "Configured proxy is unreachable.");
+  }
+  return error instanceof Error
+    ? error
+    : new OutboundHttpEgressError("PROXY_EGRESS_FAILED", "Outbound egress failed.");
+}
+
+function openProxySocket(
+  proxy: URL,
+  ca: readonly string[],
+  signal: AbortSignal | undefined,
+): Promise<Socket> {
+  const host = proxy.hostname;
+  const port = proxyPort(proxy);
+  return new Promise<Socket>((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+    const onConnect = (): void => {
+      settle(() => {
+        resolve(socket);
+      });
+    };
+    const onError = (error: Error): void => {
+      settle(() => {
+        reject(mapProxyError(error));
+      });
+    };
+    const onAbort = (): void => {
+      socket.destroy();
+      settle(() => {
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      });
+    };
+    const cleanup = (): void => {
+      socket.off("error", onError);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const socket =
+      proxy.protocol === "https:"
+        ? tls.connect({ host, port, servername: tlsServerName(host), ca: [...ca] }, onConnect)
+        : netConnect({ host, port }, onConnect);
+    socket.once("error", onError);
+    if (signal !== undefined) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+function readConnectHeader(socket: Socket, signal: AbortSignal | undefined): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let settled = false;
+    const cleanup = (): void => {
+      socket.off("data", onData);
+      socket.off("error", onError);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+    const onData = (chunk: Buffer): void => {
+      chunks.push(chunk);
+      const buffer = Buffer.concat(chunks);
+      const headerEnd = buffer.indexOf("\r\n\r\n");
+      if (headerEnd === -1) return;
+      const rest = buffer.subarray(headerEnd + 4);
+      if (rest.length > 0) socket.unshift(rest);
+      settle(() => {
+        resolve(buffer.subarray(0, headerEnd).toString("latin1"));
+      });
+    };
+    const onError = (error: Error): void => {
+      settle(() => {
+        reject(mapProxyError(error));
+      });
+    };
+    const onAbort = (): void => {
+      socket.destroy();
+      settle(() => {
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      });
+    };
+    socket.on("data", onData);
+    socket.once("error", onError);
+    if (signal !== undefined) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+function connectStatus(header: string): number {
+  const match = /^HTTP\/\d(?:\.\d)?\s+(\d{3})/iu.exec(header);
+  return match === null ? 0 : Number(match[1]);
+}
+
+function startTargetTls(
+  target: URL,
+  socket: Socket,
+  ca: readonly string[],
+  signal: AbortSignal | undefined,
+): Promise<tls.TLSSocket> {
+  return new Promise<tls.TLSSocket>((resolve, reject) => {
+    let settled = false;
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      fn();
+    };
+    const onError = (error: Error): void => {
+      settle(() => {
+        reject(mapProxyError(error));
+      });
+    };
+    const onAbort = (): void => {
+      tlsSocket.destroy();
+      settle(() => {
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      });
+    };
+    const cleanup = (): void => {
+      tlsSocket.off("error", onError);
+      signal?.removeEventListener("abort", onAbort);
+    };
+    const tlsSocket = tls.connect(
+      { socket, servername: tlsServerName(target.hostname), ca: [...ca] },
+      () => {
+        settle(() => {
+          resolve(tlsSocket);
+        });
+      },
+    );
+    tlsSocket.once("error", onError);
+    tlsSocket.resume();
+    if (signal !== undefined) {
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
+  });
+}
+
+async function createTlsTunnel(
+  target: URL,
+  proxy: URL,
+  ca: readonly string[],
+  signal: AbortSignal | undefined,
+): Promise<tls.TLSSocket> {
+  const socket = await openProxySocket(proxy, ca, signal);
+  const authority = `${target.hostname}:${targetPort(target)}`;
+  socket.write(`CONNECT ${authority} HTTP/1.1\r\nHost: ${authority}\r\n\r\n`);
+  const status = connectStatus(await readConnectHeader(socket, signal));
+  if (status === 407) {
+    socket.destroy();
+    throw new OutboundHttpEgressError(
+      "PROXY_AUTH_REQUIRED",
+      "The configured proxy requires authentication.",
+    );
+  }
+  if (status < 200 || status >= 300) {
+    socket.destroy();
+    throw new OutboundHttpEgressError(
+      status === 403 ? "PROXY_BLOCKED_BY_POLICY" : "PROXY_EGRESS_FAILED",
+      "The configured proxy rejected outbound egress.",
+    );
+  }
+  socket.resume();
+  return startTargetTls(target, socket, ca, signal);
+}
+
+function responseFromClientRequest(
+  start: (resolve: (response: Response) => void, reject: (error: Error) => void) => void,
+): Promise<Response> {
+  return new Promise<Response>((resolve, reject) => {
+    start(resolve, reject);
+  });
+}
+
+function fetchHttpViaProxy(
+  target: URL,
+  init: RequestInit,
+  proxy: URL,
+  ca: readonly string[],
+): Promise<Response> {
+  const body = bodyToString(init.body);
+  const headers = headersToRecord(init.headers);
+  const request = proxy.protocol === "https:" ? httpsRequest : httpRequest;
+  return responseFromClientRequest((resolve, reject) => {
+    const req = request(
+      {
+        protocol: proxy.protocol,
+        hostname: proxy.hostname,
+        port: proxyPort(proxy),
+        method: init.method ?? "GET",
+        path: target.href,
+        headers,
+        ca: proxy.protocol === "https:" ? [...ca] : undefined,
+        signal: init.signal ?? undefined,
+      },
+      (res: IncomingMessage) => {
+        resolve(
+          streamingResponseFromNode(res, () => {
+            req.destroy();
+          }),
+        );
+      },
+    );
+    req.on("error", (error) => {
+      reject(mapProxyError(error));
+    });
+    req.end(body);
+  });
+}
+
+async function fetchHttpsViaProxy(
+  target: URL,
+  init: RequestInit,
+  proxy: URL,
+  ca: readonly string[],
+): Promise<Response> {
+  const body = bodyToString(init.body);
+  const headers = headersToRecord(init.headers);
+  if (!Object.prototype.hasOwnProperty.call(headers, "connection")) {
+    headers.connection = "close";
+  }
+  const socket = await createTlsTunnel(target, proxy, ca, init.signal ?? undefined);
+  return responseFromClientRequest((resolve, reject) => {
+    const req = httpRequest(
+      {
+        method: init.method ?? "GET",
+        hostname: target.hostname,
+        port: Number(targetPort(target)),
+        path: `${target.pathname}${target.search}`,
+        headers,
+        signal: init.signal ?? undefined,
+        createConnection: () => socket,
+      },
+      (res) => {
+        resolve(
+          streamingResponseFromNode(res, () => {
+            req.destroy();
+          }),
+        );
+      },
+    );
+    req.on("error", (error) => {
+      reject(mapProxyError(error));
+    });
+    req.end(body);
+  });
+}
+
+function fetchViaProxy(
+  target: URL,
+  init: RequestInit,
+  proxyRaw: string,
+  egress: OutboundHttpEgressConfig | undefined,
+): Promise<Response> {
+  const proxy = parseProxyUrl(proxyRaw);
+  const ca = gatewayTrustedCaCertificates(egress?.caBundlePath);
+  return target.protocol === "https:"
+    ? fetchHttpsViaProxy(target, init, proxy, ca)
+    : fetchHttpViaProxy(target, init, proxy, ca);
+}
+
 export async function gatewayFetch(
   url: string,
   options: GatewayFetchOptions = {},
 ): Promise<Response> {
-  const { fetchImpl, useCaFallback = fetchImpl === undefined, ...init } = options;
+  const { fetchImpl, useCaFallback = fetchImpl === undefined, egress, ...init } = options;
   const doFetch = fetchImpl ?? globalThis.fetch;
+  const target = new URL(url);
+  const proxy = fetchImpl === undefined ? proxyForTarget(target, egress) : undefined;
+  if (proxy !== undefined) {
+    return fetchViaProxy(target, init, proxy, egress);
+  }
   try {
     return await doFetch(url, init);
   } catch (error) {
     if (useCaFallback && usesHttps(url) && isRecoverableTlsTrustError(error)) {
-      return fetchWithCaBundle(url, init);
+      return fetchWithCaBundle(url, init, egress);
     }
     throw error;
   }

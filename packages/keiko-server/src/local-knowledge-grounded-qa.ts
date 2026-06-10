@@ -148,6 +148,7 @@ export function createEmbeddingAdapter(
         ...(provider.apiKeyHeaderName !== undefined
           ? { apiKeyHeaderName: provider.apiKeyHeaderName }
           : {}),
+        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
       });
     },
   };

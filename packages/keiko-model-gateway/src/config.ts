@@ -19,6 +19,7 @@ import type {
   ModelCapability,
   ModelKind,
   ModelProviderConfig,
+  OutboundHttpEgressConfig,
 } from "./types.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -116,6 +117,120 @@ function optionalNonEmptyString(value: unknown, path: string, fallback: string):
     return fallback;
   }
   return requireNonEmptyString(value, path);
+}
+
+function optionalTrimmedString(value: unknown, path: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new ConfigInvalidError(`${path} must be a string`);
+  }
+  const trimmed = value.trim();
+  return trimmed.length === 0 ? undefined : trimmed;
+}
+
+function validateProxyUrl(value: string, path: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ConfigInvalidError(`${path} must be a valid absolute proxy URL`);
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new ConfigInvalidError(`${path} must use the http or https scheme`);
+  }
+  if (url.username !== "" || url.password !== "") {
+    throw new ConfigInvalidError(`${path} must not embed credentials`);
+  }
+  if (url.search !== "" || url.hash !== "") {
+    throw new ConfigInvalidError(`${path} must not contain a query string or fragment`);
+  }
+  return url.toString();
+}
+
+function optionalProxyUrl(value: unknown, path: string): string | undefined {
+  const raw = optionalTrimmedString(value, path);
+  return raw === undefined ? undefined : validateProxyUrl(raw, path);
+}
+
+function optionalCaBundlePath(value: unknown, path: string): string | undefined {
+  return optionalTrimmedString(value, path);
+}
+
+function normalizeNoProxyItems(values: readonly string[]): readonly string[] {
+  return Array.from(
+    new Set(
+      values
+        .flatMap((item) => item.split(","))
+        .map((item) => item.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function optionalNoProxy(value: unknown, path: string): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "string") {
+    return normalizeNoProxyItems([value]);
+  }
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+    return normalizeNoProxyItems(value);
+  }
+  throw new ConfigInvalidError(`${path} must be a string or an array of strings`);
+}
+
+function envValue(env: EnvSource, ...names: readonly string[]): string | undefined {
+  for (const name of names) {
+    const value = env[name];
+    if (value !== undefined && value.trim().length > 0) return value;
+  }
+  return undefined;
+}
+
+function egressBlock(raw: unknown): Record<string, unknown> {
+  if (raw !== undefined && !isRecord(raw)) {
+    throw new ConfigInvalidError("egress must be an object");
+  }
+  return isRecord(raw) ? raw : {};
+}
+
+function egressValue(
+  block: Record<string, unknown>,
+  key: string,
+  env: EnvSource,
+  ...names: readonly string[]
+): unknown {
+  return block[key] ?? envValue(env, ...names);
+}
+
+function emptyToUndefined(config: OutboundHttpEgressConfig): OutboundHttpEgressConfig | undefined {
+  return Object.keys(config).length === 0 ? undefined : config;
+}
+
+function parseEgressConfig(raw: unknown, env: EnvSource): OutboundHttpEgressConfig | undefined {
+  const block = egressBlock(raw);
+  const httpProxy = optionalProxyUrl(
+    egressValue(block, "httpProxy", env, "KEIKO_HTTP_PROXY", "HTTP_PROXY", "http_proxy"),
+    "egress.httpProxy",
+  );
+  const httpsProxy = optionalProxyUrl(
+    egressValue(block, "httpsProxy", env, "KEIKO_HTTPS_PROXY", "HTTPS_PROXY", "https_proxy"),
+    "egress.httpsProxy",
+  );
+  const noProxy = optionalNoProxy(
+    egressValue(block, "noProxy", env, "KEIKO_NO_PROXY", "NO_PROXY", "no_proxy"),
+    "egress.noProxy",
+  );
+  const caBundlePath = optionalCaBundlePath(
+    egressValue(block, "caBundlePath", env, "KEIKO_CA_BUNDLE_PATH"),
+    "egress.caBundlePath",
+  );
+  const config: OutboundHttpEgressConfig = {
+    ...(httpProxy !== undefined ? { httpProxy } : {}),
+    ...(httpsProxy !== undefined ? { httpsProxy } : {}),
+    ...(noProxy !== undefined ? { noProxy } : {}),
+    ...(caBundlePath !== undefined ? { caBundlePath } : {}),
+  };
+  return emptyToUndefined(config);
 }
 
 export function normalizeApiKeyHeaderName(
@@ -602,41 +717,75 @@ function parseCircuitBreaker(raw: unknown): CircuitBreakerConfig {
   };
 }
 
-export function parseGatewayConfig(raw: unknown, env: EnvSource = {}): GatewayConfig {
-  if (!isRecord(raw)) {
-    throw new ConfigInvalidError("config root must be a JSON object");
+function providersWithEgress(
+  parsed: readonly ParsedProvider[],
+  egress: OutboundHttpEgressConfig | undefined,
+): readonly ModelProviderConfig[] {
+  if (egress === undefined) {
+    return parsed.map((item) => item.provider);
   }
-  const providersRaw = raw.providers;
-  if (!Array.isArray(providersRaw) || providersRaw.length === 0) {
-    throw new ConfigInvalidError("providers must be a non-empty array");
-  }
-  const parsed = providersRaw.map((item, index) => parseProvider(item, index, env));
-  const providers = parsed.map((item) => item.provider);
-  const inlineCapabilities = parsed
+  return parsed.map((item) => ({ ...item.provider, egress }));
+}
+
+function inlineCapabilities(parsed: readonly ParsedProvider[]): readonly ModelCapability[] {
+  return parsed
     .map((item) => item.capability)
     .filter((item): item is ModelCapability => item !== undefined);
+}
+
+function topLevelCapabilities(raw: Record<string, unknown>): readonly ModelCapability[] {
   // Top-level `capabilities` array is the wire-facing surface for explicit
   // capability records (Issue #143). Validated by the strict parser so a
   // malformed entry fails closed before reaching any consumer.
-  const topLevelCapabilities =
-    raw.capabilities === undefined ? [] : parseCapabilityList(raw.capabilities, "capabilities");
+  return raw.capabilities === undefined
+    ? []
+    : parseCapabilityList(raw.capabilities, "capabilities");
+}
+
+function mergeCapabilities(
+  inlineItems: readonly ModelCapability[],
+  topLevelItems: readonly ModelCapability[],
+): readonly ModelCapability[] {
   const mergedCapabilities = new Map<string, ModelCapability>();
-  for (const capability of inlineCapabilities) {
+  for (const capability of inlineItems) {
     mergedCapabilities.set(capability.id, capability);
   }
   // Explicit top-level capability records are the authoritative surface for a
   // model id. They must override the inline provider defaults when both exist.
-  for (const capability of topLevelCapabilities) {
+  for (const capability of topLevelItems) {
     mergedCapabilities.set(capability.id, capability);
   }
-  const capabilities: readonly ModelCapability[] = [...mergedCapabilities.values()];
+  return [...mergedCapabilities.values()];
+}
+
+function buildGatewayConfig(
+  raw: Record<string, unknown>,
+  providersRaw: readonly unknown[],
+  env: EnvSource,
+  egress: OutboundHttpEgressConfig | undefined,
+): GatewayConfig {
+  const parsed = providersRaw.map((item, index) => parseProvider(item, index, env));
+  const capabilities = mergeCapabilities(inlineCapabilities(parsed), topLevelCapabilities(raw));
   const grounding = parseGroundingLimits(raw);
   return {
-    providers,
+    providers: providersWithEgress(parsed, egress),
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),
     ...(capabilities.length === 0 ? {} : { capabilities }),
     ...(grounding !== undefined ? { grounding } : {}),
+    ...(egress !== undefined ? { egress } : {}),
   };
+}
+
+export function parseGatewayConfig(raw: unknown, env: EnvSource = {}): GatewayConfig {
+  if (!isRecord(raw)) {
+    throw new ConfigInvalidError("config root must be a JSON object");
+  }
+  const egress = parseEgressConfig(raw.egress, env);
+  const providersRaw = raw.providers;
+  if (!Array.isArray(providersRaw) || providersRaw.length === 0) {
+    throw new ConfigInvalidError("providers must be a non-empty array");
+  }
+  return buildGatewayConfig(raw, providersRaw, env, egress);
 }
 
 export function loadConfigFromFile(path: string, env: EnvSource = {}): GatewayConfig {

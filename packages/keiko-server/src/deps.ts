@@ -64,6 +64,7 @@ export type Redactor = (value: unknown) => unknown;
 // model can be built so the run route maps it to a 400 NO_MODEL — the BFF never calls a model
 // directly, only through the harness/workflow entry points the port feeds.
 export type ModelPortFactory = (modelId: string) => ModelPort | undefined;
+type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
 
 export interface RuntimeGatewayConfig {
   readonly storagePath: string;
@@ -115,7 +116,12 @@ export interface UiHandlerDeps {
     | undefined;
   // Test seam for model discovery. Production calls the OpenAI-compatible /models endpoint.
   readonly gatewayModelDiscovery?:
-    | ((baseUrl: string, apiKey: string, apiKeyHeaderName?: string) => Promise<readonly string[]>)
+    | ((
+        baseUrl: string,
+        apiKey: string,
+        apiKeyHeaderName?: string,
+        egress?: GatewayEgressConfig,
+      ) => Promise<readonly string[]>)
     | undefined;
   // Issue #198 audit seam: lets local-knowledge route tests stub embedding requests without
   // touching global fetch. Production leaves this undefined and uses requestOpenAIEmbedding.
@@ -153,7 +159,12 @@ export interface BuildHandlerDepsOptions {
     | undefined;
   // Optional setup discovery seam (tests); production calls the model-list endpoint.
   readonly gatewayModelDiscovery?:
-    | ((baseUrl: string, apiKey: string, apiKeyHeaderName?: string) => Promise<readonly string[]>)
+    | ((
+        baseUrl: string,
+        apiKey: string,
+        apiKeyHeaderName?: string,
+        egress?: GatewayEgressConfig,
+      ) => Promise<readonly string[]>)
     | undefined;
 }
 
@@ -270,6 +281,38 @@ export function currentGatewayConfigPresent(deps: UiHandlerDeps): boolean {
   return deps.gatewayConfig?.present() ?? deps.configPresent;
 }
 
+function parseEnvOnlyEgressConfig(env: EnvSource): GatewayEgressConfig | undefined {
+  try {
+    return parseGatewayConfig(
+      {
+        providers: [
+          {
+            modelId: "keiko-egress-probe",
+            baseUrl: "http://127.0.0.1",
+            apiKey: "keiko-egress-probe-key",
+          },
+        ],
+      },
+      env,
+    ).egress;
+  } catch (error) {
+    if (error instanceof GatewayError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+export function currentGatewayEgressConfig(
+  deps: Pick<UiHandlerDeps, "config" | "gatewayConfig" | "env">,
+): GatewayEgressConfig | undefined {
+  return (
+    deps.gatewayConfig?.current()?.egress ??
+    deps.config?.egress ??
+    parseEnvOnlyEgressConfig(deps.env)
+  );
+}
+
 // Module-level: read KEIKO_GROUNDING_* env overrides ONCE at load (mirrors KEIKO_MODEL_* env
 // reads). Each value is parsed as a positive integer; unparseable values are silently ignored so
 // misconfigured env does not prevent the server from starting.
@@ -321,14 +364,58 @@ function configSecretValues(config: GatewayConfig | undefined): readonly string[
   // section claims both shapes are scrubbed at the BFF boundary.
   if (config === undefined) return [];
   const out: string[] = [];
+  const addEgressTopology = (egress: GatewayConfig["egress"]): void => {
+    if (egress === undefined) return;
+    if (egress.httpProxy !== undefined) out.push(egress.httpProxy);
+    if (egress.httpsProxy !== undefined) out.push(egress.httpsProxy);
+    if (egress.caBundlePath !== undefined) out.push(egress.caBundlePath);
+  };
+  addEgressTopology(config.egress);
   for (const provider of config.providers) {
     out.push(provider.apiKey, provider.baseUrl);
+    addEgressTopology(provider.egress);
   }
   return out;
 }
 
-function redactionSecrets(env: EnvSource, config: GatewayConfig | undefined): readonly string[] {
-  return [...keikoApiKeySecretValues(env), ...configSecretValues(config)];
+function egressSecretValues(egress: GatewayConfig["egress"]): readonly string[] {
+  if (egress === undefined) return [];
+  return [egress.httpProxy, egress.httpsProxy, egress.caBundlePath].filter(
+    (value): value is string => value !== undefined,
+  );
+}
+
+function redactionSecrets(
+  env: EnvSource,
+  config: GatewayConfig | undefined,
+  egress: GatewayConfig["egress"] = config?.egress,
+): readonly string[] {
+  return Array.from(
+    new Set([
+      ...keikoApiKeySecretValues(env),
+      ...configSecretValues(config),
+      ...egressSecretValues(egress),
+    ]),
+  );
+}
+
+function runtimeRedactionSecrets(
+  env: EnvSource,
+  runtimeConfig: RuntimeGatewayConfig,
+): readonly string[] {
+  const config = runtimeConfig.current();
+  return redactionSecrets(env, config, config?.egress ?? parseEnvOnlyEgressConfig(env));
+}
+
+function runtimeRedactString(
+  env: EnvSource,
+  runtimeConfig: RuntimeGatewayConfig,
+): (value: string) => string {
+  return (value: string): string =>
+    createAuditRedactor(
+      { additionalSecrets: runtimeRedactionSecrets(env, runtimeConfig) },
+      env,
+    )(value);
 }
 
 // Builds the live-payload redactor from the configured redaction settings + env. No new regex: this
@@ -336,14 +423,20 @@ function redactionSecrets(env: EnvSource, config: GatewayConfig | undefined): re
 // `deepRedactStrings` so every string leaf of a serialized payload is scrubbed.
 export function buildRedactor(env: EnvSource, config?: GatewayConfig): Redactor {
   const redactString = createAuditRedactor(
-    { additionalSecrets: redactionSecrets(env, config) },
+    {
+      additionalSecrets: redactionSecrets(
+        env,
+        config,
+        config?.egress ?? parseEnvOnlyEgressConfig(env),
+      ),
+    },
     env,
   );
   return (value: unknown): unknown => deepRedactStrings(value, redactString);
 }
 
 export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
-  return redactionSecrets(deps.env, currentGatewayConfig(deps));
+  return redactionSecrets(deps.env, currentGatewayConfig(deps), currentGatewayEgressConfig(deps));
 }
 
 // The production ModelPort factory: a GatewayModelPort over a Gateway built from the resolved
@@ -488,11 +581,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
   const evidenceStore = createNodeEvidenceStore(
     resolveEvidenceDir(options.evidenceDir, options.env),
   );
-  const redactString = (value: string): string =>
-    createAuditRedactor(
-      { additionalSecrets: redactionSecrets(options.env, runtimeConfig.current()) },
-      options.env,
-    )(value);
+  const redactString = runtimeRedactString(options.env, runtimeConfig);
   const liveRedactor = (value: unknown): unknown => deepRedactStrings(value, redactString);
   const { store: uiStore, relationship } = composePersistence(
     options.store,
@@ -510,7 +599,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     redactor: liveRedactor,
     registry: options.registry ?? createRunRegistry(),
     modelPortFactory: options.modelPortFactory ?? defaultModelPortFactory(runtimeConfig),
-    redactionSecrets: redactionSecrets(options.env, runtimeConfig.current()),
+    redactionSecrets: runtimeRedactionSecrets(options.env, runtimeConfig),
     store: uiStore,
     uiDbPath: resolvedUiDbPath,
     gatewayConfig: runtimeConfig,

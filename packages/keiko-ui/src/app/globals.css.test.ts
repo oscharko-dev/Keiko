@@ -265,5 +265,50 @@ describe("Fix 3 — light-theme text contrast tokens (WCAG 1.4.3)", () => {
   });
 });
 
+// ─── Fix 4: mobile root toolbar no-clip behavior ────────────────────────────
+
+describe("Fix 4 — mobile root toolbar compression", () => {
+  const mobileMedia = "@media (max-width: 680px)";
+  const mediaIdx = css.indexOf(mobileMedia);
+
+  it("adds a mobile breakpoint for the root header", () => {
+    expect(mediaIdx).toBeGreaterThan(-1);
+  });
+
+  function ruleBlockAfter(mediaStart: number, selector: string): string {
+    const selectorIdx = css.indexOf(selector, mediaStart);
+    expect(selectorIdx, `missing rule for ${selector} inside mobile block`).toBeGreaterThan(-1);
+    return css.slice(selectorIdx, css.indexOf("}", selectorIdx) + 1);
+  }
+
+  it("lets the header wrap instead of clipping horizontally", () => {
+    const block = ruleBlockAfter(mediaIdx, ".header {");
+    expect(block).toContain("flex-wrap: wrap");
+    expect(block).toContain("height: auto");
+    expect(block).toContain("align-items: flex-start");
+  });
+
+  it("hides the wordmark and spacer on narrow widths", () => {
+    expect(ruleBlockAfter(mediaIdx, ".hd-wordmark {")).toContain("display: none");
+    expect(ruleBlockAfter(mediaIdx, ".spacer {")).toContain("display: none");
+  });
+
+  it("compresses secondary toolbar labels on narrow widths", () => {
+    expect(ruleBlockAfter(mediaIdx, ".hd-tool-cta span {")).toContain("display: none");
+    expect(ruleBlockAfter(mediaIdx, ".edm-trigger-label {")).toContain("display: none");
+  });
+
+  it("hides the status pill and window chrome buttons on narrow widths", () => {
+    const statusBlock = ruleBlockAfter(mediaIdx, ".tb-status,");
+    expect(statusBlock).toContain("display: none");
+    expect(ruleBlockAfter(mediaIdx, ".tb-btn {")).toContain("display: none");
+  });
+
+  it("keeps the tab strip and mode switch shrinkable", () => {
+    expect(ruleBlockAfter(mediaIdx, ".tb-tabs {")).toContain("min-width: 0");
+    expect(ruleBlockAfter(mediaIdx, ".modesw {")).toContain("min-width: 0");
+  });
+});
+
 // ── Verify indexOfNth helper is unused externally (suppress unused-import lint) ─
 void indexOfNth;

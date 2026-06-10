@@ -283,10 +283,7 @@ function configuredCapabilityForModel(
   return findConfiguredCapability(config as GatewayConfig, modelId);
 }
 
-function isConfiguredEmbeddingModel(
-  config: EmbeddingSelectionConfig,
-  modelId: string,
-): boolean {
+function isConfiguredEmbeddingModel(config: EmbeddingSelectionConfig, modelId: string): boolean {
   return configuredCapabilityForModel(config, modelId)?.kind === "embedding";
 }
 
@@ -659,6 +656,7 @@ function createEmbeddingAdapter(
     ...(provider.apiKeyHeaderName !== undefined
       ? { apiKeyHeaderName: provider.apiKeyHeaderName }
       : {}),
+    ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
     request: (request) =>
       requestImpl({
         ...request,
@@ -667,6 +665,7 @@ function createEmbeddingAdapter(
         ...(provider.apiKeyHeaderName !== undefined
           ? { apiKeyHeaderName: provider.apiKeyHeaderName }
           : {}),
+        ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
       }),
   };
 }
@@ -1316,9 +1315,7 @@ export async function handleCancelLocalKnowledgeCapsuleIndexing(
         return notFound(`Capsule not found: ${capsuleId}`);
       }
       if (!requestRunningJobCancellation(env.store, capsule.id)) {
-        return conflict(
-          "No running indexing job was found for this capsule.",
-        );
+        return conflict("No running indexing job was found for this capsule.");
       }
       return actionResponse(capsule.id);
     } finally {
@@ -1390,12 +1387,17 @@ export async function handleConnectLocalKnowledgeCapsule(
       if (capsule === undefined) {
         return notFound(`Capsule not found: ${capsuleId}`);
       }
-      addSourceToCapsule(env.store, capsule.id, {
-        id: randomUUID() as KnowledgeSourceId,
-        displayName,
-        tags: [],
-        scope: guarded,
-      }, createSqliteAuditSink(env.store));
+      addSourceToCapsule(
+        env.store,
+        capsule.id,
+        {
+          id: randomUUID() as KnowledgeSourceId,
+          displayName,
+          tags: [],
+          scope: guarded,
+        },
+        createSqliteAuditSink(env.store),
+      );
       const updated = getCapsule(env.store, capsule.id) ?? capsule;
       return {
         status: 201,

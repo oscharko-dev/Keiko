@@ -12,6 +12,10 @@
 // never materialised here and never logged.
 
 import { classifyFigmaTransportError, FigmaConnectorError } from "./figmaConnectorErrors.js";
+import {
+  gatewayFetch,
+  type OutboundHttpEgressConfig,
+} from "@oscharko-dev/keiko-model-gateway/internal/http";
 
 export interface FigmaRenderRequest {
   readonly url: string;
@@ -34,10 +38,18 @@ export type FigmaRenderPort = (request: FigmaRenderRequest) => Promise<FigmaRend
  * bytes; it does not log, retry, or inspect any token. Resilience/backoff is out of scope here
  * (#759); the proxy/custom-CA transport is the platform prerequisite (#802) that replaces this.
  */
-export const createDefaultFigmaRenderPort = (): FigmaRenderPort => {
+export const createDefaultFigmaRenderPort = (
+  egress?: OutboundHttpEgressConfig,
+  fetchImpl?: typeof fetch,
+): FigmaRenderPort => {
   return async (request: FigmaRenderRequest): Promise<FigmaRenderResponse> => {
     try {
-      const response = await fetch(request.url, { method: "GET", headers: { ...request.headers } });
+      const response = await gatewayFetch(request.url, {
+        method: "GET",
+        headers: { ...request.headers },
+        ...(egress !== undefined ? { egress } : {}),
+        ...(fetchImpl !== undefined ? { fetchImpl } : {}),
+      });
       const headers: Record<string, string> = {};
       response.headers.forEach((value, name) => {
         headers[name] = value;

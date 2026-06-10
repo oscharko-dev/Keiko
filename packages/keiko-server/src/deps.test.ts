@@ -2,7 +2,12 @@ import { describe, expect, it, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildRedactor, buildUiHandlerDeps } from "./deps.js";
+import {
+  buildRedactor,
+  buildUiHandlerDeps,
+  currentGatewayEgressConfig,
+  currentRedactionSecrets,
+} from "./deps.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
 
@@ -127,6 +132,30 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
 
     expect(deps.configPresent).toBe(false);
     expect(deps.config).toBeUndefined();
+    store.close();
+  });
+
+  it("exposes env-only egress for Figma even when no model provider is configured", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-env-egress-only-");
+    const deps = buildUiHandlerDeps({
+      configPath: join(evidenceDir, "missing-keiko.config.json"),
+      evidenceDir,
+      env: {
+        KEIKO_HTTP_PROXY: "http://proxy.example.invalid:8080",
+        KEIKO_CA_BUNDLE_PATH: "/tmp/corp-root-ca.pem",
+      },
+      store,
+    });
+
+    expect(deps.configPresent).toBe(false);
+    expect(deps.config).toBeUndefined();
+    expect(currentGatewayEgressConfig(deps)).toEqual({
+      httpProxy: "http://proxy.example.invalid:8080/",
+      caBundlePath: "/tmp/corp-root-ca.pem",
+    });
+    expect(currentRedactionSecrets(deps)).toContain("http://proxy.example.invalid:8080/");
+    expect(currentRedactionSecrets(deps)).toContain("/tmp/corp-root-ca.pem");
     store.close();
   });
 });

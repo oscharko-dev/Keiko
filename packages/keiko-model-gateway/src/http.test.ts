@@ -1,5 +1,15 @@
 import { PassThrough } from "node:stream";
-import type { IncomingMessage } from "node:http";
+import {
+  createServer as createHttpServer,
+  type IncomingMessage,
+  type Server as HttpServer,
+} from "node:http";
+import { createServer as createHttpsServer, type Server as HttpsServer } from "node:https";
+import { once } from "node:events";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { connect as netConnect, type AddressInfo, type Socket } from "node:net";
 import { rootCertificates } from "node:tls";
 import { describe, expect, it } from "vitest";
 import {
@@ -12,6 +22,70 @@ import {
   readSseStream,
   streamingResponseFromNode,
 } from "./http.js";
+
+const TEST_TLS_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDAT3UYX+IFphaO
+RGpsT+BO1KXSO5/brgKNcz+B03xSdDdGDdW2gS5PsIEaWaUfV6FN2pW0qxG3ppm6
+mr38KMuLcM65VWvE0wABRtEiEeJtXwn2wjBYHh+Buzi/gtPA9S1trWmhr9anjNQT
+7q5oGXysIBCgJXIQTMX+hhEZpQSmEJH6gDfMptx+SgbwvO+anx1lfWoQR7WGEVIj
+eDX7EWJMRCtBs3eYDBNYzaiKZIR9Hx6LICvkUzQKyMXrdgsLRglSFz8sh1LSM10x
+cZNIJ2m5zM5peIAsZUMAZtI8ozNHgkwxFv4iCUSlnsPWWZ/gCvnXE+7f4kESGuqc
+NWGz+fQNAgMBAAECgf8AoEGWqA6US3YcqxxYPepSV17dev7fjYbJ7xYbK2pm2k9T
+wGJxtaSbnczNySeVx93pOEzvHvTFJEWxKyUd167R8AwRjmBLbmRm8f68SFKfCIV/
+yCIK0g5IMykmy8Y6BTz188U5ltjxXVlTYfOEuJCEqZYO72WaUqWnrnK1Iqm2i1XP
+z0pZ67EEgip3Kh6zykSSGhwT0x8mia4rkYMk8Hajs9D+zcr7rYQf0jQyqCAEOhRX
+kydSfbXg3Vb9VwgioJIzCuLHkr7GbyTAZKVGnfCa/JckYNN74Q8vwZ0PqJneO1P3
+dm2YUxD/mm+dvmJWelrHFZbIEFaM/ASpOptRelECgYEA9miUKX8WWJ4NbXFysOED
+g3f0153WPgBqYiji41YSEmlSTdrAUvM6nnwzWqoa19T97MqUpwIBVlnXYYyGiz1k
+gFuRmps3TstN53LsDw68kC38Mq079IYrhpQGfBWmEvOm2XK2sQLA4aKzR2hWR/L4
+1q2p5MQbslV2jYIoPb50fXkCgYEAx8vMqaZQMG+d1LNjNG7X9+JRKCA0S+5BSa4q
+EU130UmZBw7NzHqefnUCSAsZqqJqHJEmcU97Bc0UxFro7dA7vjoFDmquzDYxoxml
+HRv1YgjHp195gs2S23HQ9KAxsbpsAphNbp59MwH/n2oDPuQ9bjwsmbmh0fMoygFU
+e9uPSjUCgYEA5fWPYHK0fhty2JKpwJ0eVFFc9OTejpqArf8OT6+ByiD0qKfgGQnZ
+yRKMMq7Rwl+KYrRkqr/aU6YgtW8aGVRAOPI8HpeAtE5T9A5yc1MDc2MXHIxDid61
+PDFlI+RoSwOM0R6XlPbG30yiF6At9ZOx21fTWCYU2webTlEMESNvP7ECgYEAmUDM
+Rj1aOS0EpcjMCcYURwIEOoEpXCzvS3MatZb0l0aa6P0EAxrzRBDApT5Oe8KFHlCA
+al4LAZIjodIR5Yjaqrmac0qFtgLD5FWhf0iY2o/dhZcIf7rsMQOGwn22YJucigkF
+LBrJ8jxQNZl9z9oG/O2PUINBiue3m+uVQERUDxkCgYAOCAAFafD5yLAg9Q5Ls9iH
++uZy6J03qR+AoeVxBUP4JaycQyWr8PIC6ZqPhjWiyGHxJ2UgFJ7s4HYBRgBGdcdg
+IbT7k/+BVmfkMnc8d9EgQAzDLuL8myeDio/7FMWyaVVkejJqLUiRlzzGec8rE3JL
+zV+7W9e7xnIMuAVf0VKzWw==
+-----END PRIVATE KEY-----`;
+
+const TEST_TLS_CERT = `-----BEGIN CERTIFICATE-----
+MIIDJTCCAg2gAwIBAgIUQnB9dVzMdmk9GN7vzKBh+XoKWmAwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJbG9jYWxob3N0MB4XDTI2MDYxMDA3MDcyOFoXDTM2MDYw
+NzA3MDcyOFowFDESMBAGA1UEAwwJbG9jYWxob3N0MIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAwE91GF/iBaYWjkRqbE/gTtSl0juf264CjXM/gdN8UnQ3
+Rg3VtoEuT7CBGlmlH1ehTdqVtKsRt6aZupq9/CjLi3DOuVVrxNMAAUbRIhHibV8J
+9sIwWB4fgbs4v4LTwPUtba1poa/Wp4zUE+6uaBl8rCAQoCVyEEzF/oYRGaUEphCR
++oA3zKbcfkoG8Lzvmp8dZX1qEEe1hhFSI3g1+xFiTEQrQbN3mAwTWM2oimSEfR8e
+iyAr5FM0CsjF63YLC0YJUhc/LIdS0jNdMXGTSCdpuczOaXiALGVDAGbSPKMzR4JM
+MRb+IglEpZ7D1lmf4Ar51xPu3+JBEhrqnDVhs/n0DQIDAQABo28wbTAdBgNVHQ4E
+FgQUDt8KAqo9QmIwDk0IQLIGvlKb6VQwHwYDVR0jBBgwFoAUDt8KAqo9QmIwDk0I
+QLIGvlKb6VQwDwYDVR0TAQH/BAUwAwEB/zAaBgNVHREEEzARgglsb2NhbGhvc3SH
+BH8AAAEwDQYJKoZIhvcNAQELBQADggEBAG1fWollkC0ODYylqMgMShV+Qsbj9U17
+p42V/zYN+L2VNCo7PKtrMGDct5kaNsWI12RNr8smRR3VqIu/m86JIRMhxEcF4f3W
+C7p7AxSxggt5CZSbmX+5HvHiHx2Pzb9ScjTSHTGA+usfKeYbDRPNRusj2LF/Y9bc
+u1410r8a2yaMCxpWtWSvJ5jglXQa+A2E3XfFIkwTSGWdaeHXsfQ1Z6X33IKX0DX4
+zd4z7t+If2ThZ1V2mP4iHOUXyxhrjO8jck5v4ibwDkhpZqHZxXJnOlqR+p4Y/x0J
+7HO5cknmZC8MPbbwJajgLRm6+jUqvTjvOP9ZUhmet11ff/YHNctzZkE=
+-----END CERTIFICATE-----`;
+
+async function listen(server: HttpServer | HttpsServer): Promise<number> {
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  return (server.address() as AddressInfo).port;
+}
+
+async function close(server: HttpServer | HttpsServer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error !== undefined) reject(error);
+      else resolve();
+    });
+  });
+}
 
 // ---------------------------------------------------------------------------
 // gatewayFetch — success path with injected fetchImpl
@@ -39,6 +113,122 @@ describe("gatewayFetch", () => {
     const unrelated = Object.assign(new Error("boom"), { code: "CERT_HAS_EXPIRED" });
     expect(isMissingIssuerError(unrelated)).toBe(false);
     expect(isRecoverableTlsTrustError(unrelated)).toBe(false);
+  });
+
+  it("routes HTTP requests through a configured forward proxy", async () => {
+    let originHits = 0;
+    let proxyHits = 0;
+    const origin = createHttpServer((_req, res) => {
+      originHits += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "origin" }));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer((req, res) => {
+      proxyHits += 1;
+      expect(req.url).toBe(`http://127.0.0.1:${String(originPort)}/models`);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "proxy" }));
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      const response = await gatewayFetch(`http://127.0.0.1:${String(originPort)}/models`, {
+        egress: { httpProxy: `http://127.0.0.1:${String(proxyPort)}` },
+      });
+      expect(await response.json()).toEqual({ via: "proxy" });
+      expect(proxyHits).toBe(1);
+      expect(originHits).toBe(0);
+    } finally {
+      await close(proxy);
+      await close(origin);
+    }
+  });
+
+  it("honours NO_PROXY and bypasses the configured forward proxy", async () => {
+    let originHits = 0;
+    let proxyHits = 0;
+    const origin = createHttpServer((_req, res) => {
+      originHits += 1;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ via: "origin" }));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer((_req, res) => {
+      proxyHits += 1;
+      res.writeHead(502);
+      res.end("should not be used");
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      const response = await gatewayFetch(`http://127.0.0.1:${String(originPort)}/models`, {
+        egress: {
+          httpProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          noProxy: ["127.0.0.1"],
+        },
+      });
+      expect(await response.json()).toEqual({ via: "origin" });
+      expect(proxyHits).toBe(0);
+      expect(originHits).toBe(1);
+    } finally {
+      await close(proxy);
+      await close(origin);
+    }
+  });
+
+  it("routes HTTPS through CONNECT and trusts the configured CA bundle", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "keiko-egress-"));
+    const caBundlePath = join(dir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+    let originHits = 0;
+    let proxyConnects = 0;
+    const originSockets = new Set<Socket>();
+    const proxySockets = new Set<Socket>();
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+      originHits += 1;
+      res.writeHead(200, { "content-type": "application/json", connection: "close" });
+      res.end(JSON.stringify({ secure: true }));
+    });
+    origin.on("connection", (socket) => {
+      originSockets.add(socket);
+      socket.once("close", () => originSockets.delete(socket));
+    });
+    const originPort = await listen(origin);
+    const proxy = createHttpServer();
+    proxy.on("connection", (socket) => {
+      proxySockets.add(socket);
+      socket.once("close", () => proxySockets.delete(socket));
+    });
+    proxy.on("connect", (req, clientSocket, head) => {
+      proxyConnects += 1;
+      const [host, portText] = (req.url ?? "").split(":");
+      const upstream = netConnect(Number(portText), host, () => {
+        clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        if (head.length > 0) upstream.write(head);
+        upstream.pipe(clientSocket);
+        clientSocket.pipe(upstream);
+      });
+      upstream.on("error", () => {
+        clientSocket.destroy();
+      });
+    });
+    const proxyPort = await listen(proxy);
+    try {
+      const response = await gatewayFetch(`https://127.0.0.1:${String(originPort)}/secure`, {
+        egress: {
+          httpsProxy: `http://127.0.0.1:${String(proxyPort)}`,
+          caBundlePath,
+        },
+      });
+      expect(await response.json()).toEqual({ secure: true });
+      expect(proxyConnects).toBe(1);
+      expect(originHits).toBe(1);
+    } finally {
+      for (const socket of proxySockets) socket.destroy();
+      for (const socket of originSockets) socket.destroy();
+      await close(proxy);
+      await close(origin);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
