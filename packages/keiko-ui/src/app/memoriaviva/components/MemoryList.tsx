@@ -16,13 +16,7 @@ import Link from "next/link";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
 import { fetchMemories, type MemoryListFilters, type MemoryListResponse } from "@/lib/memory-api";
 import { formatError } from "./format-error";
-import {
-  MemoryFilters,
-  type MemoryFilterState,
-  EMPTY_FILTERS,
-  SCOPE_LABELS,
-  TYPE_LABELS,
-} from "./MemoryFilters";
+import { MemoryFilters, type MemoryFilterState, SCOPE_LABELS, TYPE_LABELS } from "./MemoryFilters";
 import type {
   MemoryScopeKind,
   MemorySensitivity,

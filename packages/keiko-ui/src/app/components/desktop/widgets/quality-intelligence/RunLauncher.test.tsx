@@ -15,7 +15,7 @@
 // Design note: startImpl is typed as the real function but replaced with a
 // controllable fake in every test. We never hit the network.
 
-import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { RunLauncher } from "./RunLauncher";
