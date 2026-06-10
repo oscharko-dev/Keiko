@@ -18,7 +18,7 @@
 import { render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { RunLauncher } from "./RunLauncher";
+import { RunLauncher, type RunLauncherProps } from "./RunLauncher";
 import type {
   QualityIntelligenceStartRunRequest,
   QualityIntelligenceRunStreamMessage,
@@ -38,6 +38,8 @@ type StartQiRunFn = (
   signal: AbortSignal,
   onMessage: (message: QualityIntelligenceRunStreamMessage) => void,
 ) => Promise<void>;
+type FetchCapsulesFn = NonNullable<RunLauncherProps["fetchCapsulesImpl"]>;
+type FetchCapsuleSetsFn = NonNullable<RunLauncherProps["fetchCapsuleSetsImpl"]>;
 
 const DONE_FRAME: QualityIntelligenceRunStreamMessage = {
   type: "done",
@@ -119,6 +121,14 @@ function makeStallingFake(): {
   };
 }
 
+function fakeFetchCapsules(capsules: readonly unknown[]): FetchCapsulesFn {
+  return vi.fn().mockResolvedValue({ capsules }) as unknown as FetchCapsulesFn;
+}
+
+function fakeFetchCapsuleSets(capsuleSets: readonly unknown[]): FetchCapsuleSetsFn {
+  return vi.fn().mockResolvedValue({ capsuleSets }) as unknown as FetchCapsuleSetsFn;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -129,13 +139,16 @@ describe("RunLauncher — initial render", () => {
     expect(screen.getByLabelText(/source label/i)).toBeInTheDocument();
   });
 
-  it("renders a source-type select with 'Requirements text' and 'Local folder' options", () => {
+  it("renders the shipped source-type options", () => {
     render(<RunLauncher />);
     const select = screen.getByRole("combobox", { name: /source type/i });
     expect(select).toBeInTheDocument();
     const options = Array.from(select.querySelectorAll("option")).map((o) => o.textContent);
     expect(options).toContain("Requirements text");
     expect(options).toContain("Local folder");
+    expect(options).toContain("Single file");
+    expect(options).toContain("Knowledge capsule");
+    expect(options).toContain("Capsule set");
   });
 
   it("renders a requirements textarea (default source type)", () => {
@@ -173,6 +186,16 @@ describe("RunLauncher — source-type switching", () => {
 
     // After switch: folder input present, textarea gone.
     expect(screen.getByRole("textbox", { name: /folder path/i })).toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /requirements/i })).not.toBeInTheDocument();
+  });
+
+  it("swaps the requirements textarea for a file-path input when 'Single file' is selected", async () => {
+    const user = userEvent.setup();
+    render(<RunLauncher />);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "file");
+
+    expect(screen.getByRole("textbox", { name: /file path/i })).toBeInTheDocument();
     expect(screen.queryByRole("textbox", { name: /requirements/i })).not.toBeInTheDocument();
   });
 
@@ -222,6 +245,17 @@ describe("RunLauncher — Generate button enable/disable", () => {
     expect(screen.getByRole("button", { name: /generate test cases/i })).toBeDisabled();
 
     await user.type(screen.getByRole("textbox", { name: /folder path/i }), "/code/my-project");
+    expect(screen.getByRole("button", { name: /generate test cases/i })).not.toBeDisabled();
+  });
+
+  it("enables the Generate button once file path is non-empty (single-file source)", async () => {
+    const user = userEvent.setup();
+    render(<RunLauncher />);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "file");
+    expect(screen.getByRole("button", { name: /generate test cases/i })).toBeDisabled();
+
+    await user.type(screen.getByRole("textbox", { name: /file path/i }), "/code/spec.md");
     expect(screen.getByRole("button", { name: /generate test cases/i })).not.toBeDisabled();
   });
 });
@@ -278,6 +312,104 @@ describe("RunLauncher — startImpl called with correct request shape", () => {
       label: "My project",
     });
     expect(calledRequest.seed).toBeUndefined();
+  });
+
+  it("calls startImpl with a file source when the single-file source type is selected", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(<RunLauncher startImpl={startImpl} />);
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "file");
+    await user.type(screen.getByLabelText(/source label/i), "Fachkonzept file");
+    await user.type(screen.getByRole("textbox", { name: /file path/i }), "/repos/specs/login.md");
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+
+    const [calledRequest] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(calledRequest.sources[0]).toMatchObject({
+      kind: "file",
+      path: "/repos/specs/login.md",
+      label: "Fachkonzept file",
+    });
+    expect(calledRequest.seed).toBeUndefined();
+  });
+
+  it("calls startImpl with a capsule source selected from Local Knowledge", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        fetchCapsulesImpl={fakeFetchCapsules([
+          {
+            id: "cap-audit-1",
+            displayName: "Audit Capsule 01",
+            lifecycleState: "ready",
+            sourceCount: 3,
+            updatedAt: 1,
+          },
+        ])}
+        fetchCapsuleSetsImpl={fakeFetchCapsuleSets([])}
+      />,
+    );
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "capsule");
+    await screen.findByRole("option", { name: "Audit Capsule 01" });
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+
+    const [calledRequest] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(calledRequest.sources[0]).toMatchObject({
+      kind: "capsule",
+      capsuleId: "cap-audit-1",
+      label: "Audit Capsule 01",
+    });
+  });
+
+  it("calls startImpl with a capsule-set source selected from Local Knowledge", async () => {
+    const user = userEvent.setup();
+    const { startImpl } = makeStreamingFake([DONE_FRAME]);
+    render(
+      <RunLauncher
+        startImpl={startImpl}
+        fetchCapsulesImpl={fakeFetchCapsules([])}
+        fetchCapsuleSetsImpl={fakeFetchCapsuleSets([
+          {
+            id: "set-audit-1",
+            displayName: "Audit Capsule Set",
+            capsuleCount: 2,
+            composedAt: 1,
+          },
+        ])}
+      />,
+    );
+
+    await user.selectOptions(screen.getByRole("combobox", { name: /source type/i }), "capsule-set");
+    await screen.findByRole("option", { name: "Audit Capsule Set (2 capsules)" });
+    await user.click(screen.getByRole("button", { name: /generate test cases/i }));
+
+    await waitFor(() => {
+      expect(startImpl).toHaveBeenCalledTimes(1);
+    });
+
+    const [calledRequest] = (startImpl as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      Parameters<StartQiRunFn>[0],
+    ];
+    expect(calledRequest.sources[0]).toMatchObject({
+      kind: "capsule-set",
+      capsuleSetId: "set-audit-1",
+      label: "Audit Capsule Set",
+    });
   });
 
   it("passes the selected profileId to startImpl", async () => {
