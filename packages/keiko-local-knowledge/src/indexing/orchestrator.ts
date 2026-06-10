@@ -105,6 +105,12 @@ function resolveSources(
   capsule: KnowledgeCapsule,
 ): readonly KnowledgeSource[] {
   const all = listCapsuleSources(options.store, capsule.id);
+  if (all.length === 0) {
+    throw new IndexingError(
+      "INVALID_OPTIONS",
+      `Capsule ${String(capsule.id)} has no attached sources to index.`,
+    );
+  }
   if (options.sourceIds === undefined) return all;
   const allow = new Set(options.sourceIds.map((s) => String(s)));
   return all.filter((s) => allow.has(String(s.id)));
@@ -597,10 +603,7 @@ function completeEmbeddedDocument(
   return { events };
 }
 
-function isCancellationOnlyEmbedResult(
-  state: RunState,
-  embedResult: EmbedDocumentResult,
-): boolean {
+function isCancellationOnlyEmbedResult(state: RunState, embedResult: EmbedDocumentResult): boolean {
   return (
     cancellationRequested(state) &&
     embedResult.errors.length > 0 &&
@@ -948,7 +951,10 @@ async function verifyEmbeddingPreflight(state: RunState): Promise<IndexingJobErr
       message: result.safeMessage,
     };
   } catch (cause) {
-    if (cancellationRequested(state) || (cause instanceof DOMException && cause.name === "AbortError")) {
+    if (
+      cancellationRequested(state) ||
+      (cause instanceof DOMException && cause.name === "AbortError")
+    ) {
       return { code: "CANCELLED", message: "indexing aborted via AbortSignal" };
     }
     return {

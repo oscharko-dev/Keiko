@@ -875,6 +875,10 @@ function requestRunningJobCancellation(
   return true;
 }
 
+function emptyCapsuleIndexingConflict(): RouteResult {
+  return conflict("Attach at least one source to this capsule before indexing it.");
+}
+
 function assertScopeShape(scope: KnowledgeSourceScope): void {
   const result = validateKnowledgeSourceScope(scope);
   if (result.ok) return;
@@ -1269,6 +1273,9 @@ export async function handleStartLocalKnowledgeCapsuleIndexing(
       if (capsule === undefined) {
         return notFound(`Capsule not found: ${capsuleId}`);
       }
+      if (capsule.sourceIds.length === 0) {
+        return emptyCapsuleIndexingConflict();
+      }
       if (configuredProviderForCapsule(deps, capsule) === undefined) {
         return conflict(
           "No configured embedding-capable model matches this capsule. Update the Model Gateway configuration before indexing it.",
@@ -1461,6 +1468,9 @@ export async function handleReindexLocalKnowledgeCapsule(
       const capsule = getCapsule(env.store, capsuleId);
       if (capsule === undefined) {
         return notFound(`Capsule not found: ${capsuleId}`);
+      }
+      if (capsule.sourceIds.length === 0) {
+        return emptyCapsuleIndexingConflict();
       }
       if (configuredProviderForCapsule(deps, capsule) === undefined) {
         return conflict(

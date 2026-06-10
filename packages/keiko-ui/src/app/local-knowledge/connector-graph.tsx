@@ -314,7 +314,7 @@ function IndexOrCancelBtn({
   onStart,
   onCancel,
 }: Pick<RowActionProps, "capsule" | "busy" | "onStart" | "onCancel">): ReactNode {
-  const { id, displayName, lifecycleState } = capsule;
+  const { id, displayName, lifecycleState, sourceCount } = capsule;
   if (lifecycleState === "indexing") {
     return (
       <button
@@ -330,12 +330,19 @@ function IndexOrCancelBtn({
       </button>
     );
   }
+  const hasSources = sourceCount > 0;
   return (
     <button
       type="button"
-      disabled={busy}
-      aria-label={`Start indexing capsule ${displayName}`}
+      disabled={busy || !hasSources}
+      aria-label={
+        hasSources
+          ? `Start indexing capsule ${displayName}`
+          : `Attach a source before indexing capsule ${displayName}`
+      }
+      title={hasSources ? undefined : "Attach a source before indexing this capsule."}
       onClick={() => {
+        if (!hasSources) return;
         onStart(id);
       }}
       className="lk-btn lk-btn-primary"

@@ -168,9 +168,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
       .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
     const user = userEvent.setup();
 
-    render(
-      <ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />,
-    );
+    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />);
 
     await waitFor(() => {
       expect(
@@ -212,6 +210,38 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     await waitFor(() => {
       expect(startIndexingImpl).toHaveBeenCalledWith(id);
     });
+  });
+
+  it("disables indexing for capsules without attached sources", async () => {
+    const id = makeCapsuleId("empty");
+    const capsule = makeCapsule({
+      id,
+      displayName: "Empty Cap",
+      lifecycleState: "draft",
+      sourceCount: 0,
+    });
+    const startIndexingImpl = vi.fn().mockImplementation(() => okAction(id));
+    const user = userEvent.setup();
+
+    render(
+      <ConnectorGraph
+        fetchCapsulesImpl={fetchWith([capsule])}
+        startIndexingImpl={startIndexingImpl}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Empty Cap")).toBeInTheDocument();
+    });
+
+    const indexBtn = screen.getByRole("button", {
+      name: /attach a source before indexing capsule empty cap/i,
+    });
+    expect(indexBtn).toBeDisabled();
+    expect(indexBtn).toHaveAttribute("title", "Attach a source before indexing this capsule.");
+
+    await user.click(indexBtn);
+    expect(startIndexingImpl).not.toHaveBeenCalled();
   });
 
   it("calls cancelIndexing with the right capsule ID when Cancel is clicked", async () => {
