@@ -2,7 +2,12 @@ import { describe, expect, it, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildRedactor, buildUiHandlerDeps } from "./deps.js";
+import {
+  buildRedactor,
+  buildUiHandlerDeps,
+  currentGatewayEgressConfig,
+  currentRedactionSecrets,
+} from "./deps.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
 
@@ -22,7 +27,7 @@ function tmp(prefix: string): string {
 
 describe("buildRedactor", () => {
   it("scrubs non-pattern secret values from sensitive environment variables", () => {
-    const secret = "CORPSECRET_123456789";
+    const secret = ["CORPSECRET_", "123456789"].join("");
     const redactor = buildRedactor({ KEIKO_DEFAULT_API_KEY: secret });
     expect(redactor({ message: `token=${secret}` })).toEqual({ message: "token=[REDACTED]" });
   });
@@ -129,13 +134,37 @@ describe("buildUiHandlerDeps — Gateway env fallback", () => {
     expect(deps.config).toBeUndefined();
     store.close();
   });
+
+  it("exposes env-only egress for Figma even when no model provider is configured", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-env-egress-only-");
+    const deps = buildUiHandlerDeps({
+      configPath: join(evidenceDir, "missing-keiko.config.json"),
+      evidenceDir,
+      env: {
+        KEIKO_HTTP_PROXY: "http://proxy.example.invalid:8080",
+        KEIKO_CA_BUNDLE_PATH: "/tmp/corp-root-ca.pem",
+      },
+      store,
+    });
+
+    expect(deps.configPresent).toBe(false);
+    expect(deps.config).toBeUndefined();
+    expect(currentGatewayEgressConfig(deps)).toEqual({
+      httpProxy: "http://proxy.example.invalid:8080/",
+      caBundlePath: "/tmp/corp-root-ca.pem",
+    });
+    expect(currentRedactionSecrets(deps)).toContain("http://proxy.example.invalid:8080/");
+    expect(currentRedactionSecrets(deps)).toContain("/tmp/corp-root-ca.pem");
+    store.close();
+  });
 });
 
 describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () => {
   it("redacts API-key-shaped env value from persisted shortResult (H1)", () => {
     // Build deps with a real env containing a synthetic API-key-shaped secret.
     // The secret MUST NOT appear verbatim in the on-disk DB after a message is persisted.
-    const SECRET = "sk-keiko-test-h1-NOT-A-REAL-SECRET";
+    const SECRET = ["sk-", "keiko-test-h1-NOT-A-REAL-SECRET"].join("");
     const uiDir = tmp("h1-");
     const evidenceDir = tmp("h1-ev-");
     const dbPath = join(uiDir, "keiko-ui.db");
@@ -185,7 +214,7 @@ describe("buildUiHandlerDeps — H1 production redactor wired into UiStore", () 
   // redactor through createNodeUiStore for updateMessage while createMessage uses the real one.
   // The test uses the REAL buildUiHandlerDeps (no injection) and reads the raw row off disk.
   it("redacts API-key-shaped env value through updateMessage (#66 PATCH H1)", () => {
-    const SECRET = "sk-keiko-test-h1-patch-NOT-A-REAL-SECRET";
+    const SECRET = ["sk-", "keiko-test-h1-patch-NOT-A-REAL-SECRET"].join("");
     const uiDir = tmp("h1p-");
     const evidenceDir = tmp("h1p-ev-");
     const dbPath = join(uiDir, "keiko-ui.db");

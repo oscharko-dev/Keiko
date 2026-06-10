@@ -35,6 +35,9 @@ export {
   FileTooLargeError,
   PathDeniedError,
   PathEscapeError,
+  RepoSearchInvalidQueryError,
+  RepoSearchInvalidRangeError,
+  RepoSearchUnsupportedFileError,
   WORKSPACE_CODES,
   WorkspaceError,
   WorkspaceNotFoundError,
@@ -56,7 +59,7 @@ export {
   type IgnoreMatcher,
 } from "./ignore.js";
 
-export { detectWorkspace } from "./detect.js";
+export { detectWorkspace, detectWorkspaceAt } from "./detect.js";
 
 export {
   discoverFiles,
@@ -75,4 +78,45 @@ export {
 
 export { buildWorkspaceSummary, summarizeForAudit } from "./summary.js";
 
+// ─── Repository search facade (Issue #179 / Epic #177) ──────────────────────
+export type {
+  SearchScope,
+  SearchLimits,
+  SearchResult,
+  ReadExcerptRequest,
+  ReadExcerptResult,
+} from "./repoSearch.js";
+export { DEFAULT_SEARCH_LIMITS, searchText, findFiles, readExcerpt } from "./repoSearch.js";
+export { looksBinary, DEFAULT_BINARY_PROBE } from "./binaryDetect.js";
+export type { BinaryProbeOptions } from "./binaryDetect.js";
+export { evidenceAtomStableId, connectedContextPackStableId } from "./stableId.js";
+
+// ─── Structural adapters (Issue #180 / Epic #177) ──────────────────────────
+export type {
+  AdapterError,
+  RunAllResult,
+  StructuralAdapter,
+  StructuralAdapterDeps,
+  StructuralAdapterRegistry,
+} from "./structuralAdapters.js";
+export { createDefaultStructuralRegistry, runStructuralAdapters } from "./structuralAdapters.js";
+export { testSourcePairingAdapter } from "./testSourcePairing.js";
+export { importGraphAdapter } from "./importGraph.js";
+export { gitHistoryAdapter } from "./gitHistory.js";
+
 export { KEIKO_WORKSPACE_VERSION } from "./version.js";
+
+// ─── Safe document context extraction (Issue #148 / Epic #142) ─────────────────
+export type {
+  DocumentExtractionBudget,
+  DocumentExtractionFailure,
+  DocumentExtractionResult,
+  ExtractedDocumentContext,
+} from "./document-extraction.js";
+export {
+  MAX_EXTRACTED_BYTES,
+  MAX_TOTAL_EXTRACTED_BYTES,
+  SUPPORTED_MIME_LITERALS,
+  SUPPORTED_MIME_PREFIXES,
+  extractDocumentContext,
+} from "./document-extraction.js";

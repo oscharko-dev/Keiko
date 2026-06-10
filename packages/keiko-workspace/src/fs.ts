@@ -4,6 +4,7 @@
 // mirror the existing `loadConfigFromFile`/`readFileSync` usage in the gateway.
 
 import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
 
 export interface WorkspaceStat {
   readonly size: number;
@@ -26,6 +27,10 @@ export interface WorkspaceFs {
   readonly readDir: (absolutePath: string) => readonly WorkspaceDirEntry[];
   readonly realPath: (absolutePath: string) => string;
   readonly exists: (absolutePath: string) => boolean;
+  // Optional: raw-byte read capped at `maxBytes`. Added in issue #179 for the repo-search
+  // facade's binary-detection probe. Optional so existing in-memory test fakes that only
+  // implement the synchronous surface keep compiling; callers must handle `undefined`.
+  readonly readFileBytes?: (absolutePath: string, maxBytes: number) => Promise<Uint8Array>;
 }
 
 function isSymlink(absolutePath: string): boolean {
@@ -57,6 +62,20 @@ export const nodeWorkspaceFs: WorkspaceFs = {
       return statSync(absolutePath, { throwIfNoEntry: false }) !== undefined;
     } catch {
       return false;
+    }
+  },
+  readFileBytes: async (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {
+    const handle = await open(absolutePath, "r");
+    try {
+      const cap = Math.max(0, Math.floor(maxBytes));
+      const buffer = new Uint8Array(cap);
+      if (cap === 0) {
+        return buffer;
+      }
+      const { bytesRead } = await handle.read(buffer, 0, cap, 0);
+      return buffer.subarray(0, bytesRead);
+    } finally {
+      await handle.close();
     }
   },
 };

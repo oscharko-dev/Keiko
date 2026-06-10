@@ -1,0 +1,64 @@
+// Figma render-byte seam (Epic #750, Issue #753).
+//
+// The `/v1/images` API returns an EPHEMERAL https url per rendered frame; a SECOND fetch
+// downloads the PNG bytes from that url. The snapshot builder NEVER calls `fetch`/undici
+// directly for that download — it depends only on this small injectable port so unit tests
+// can mock the transport and a future proxy-aware / custom-CA client (#802) can be slotted in
+// without touching builder logic.
+//
+// The request type carries the outbound headers. The render-url download itself needs no
+// Figma auth header (the ephemeral url is pre-signed), but the seam still forwards whatever
+// headers the caller supplies so the proxy adapter can add transport headers. The token is
+// never materialised here and never logged.
+
+import { classifyFigmaTransportError, FigmaConnectorError } from "./figmaConnectorErrors.js";
+import {
+  gatewayFetch,
+  type OutboundHttpEgressConfig,
+} from "@oscharko-dev/keiko-model-gateway/internal/http";
+
+export interface FigmaRenderRequest {
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+export interface FigmaRenderResponse {
+  readonly status: number;
+  readonly bytes: Uint8Array;
+  // Lower-cased response header names → values, so the resilience layer (#759) can honour a
+  // `retry-after` on a 429 from the ephemeral render host. Never contains any auth token.
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+export type FigmaRenderPort = (request: FigmaRenderRequest) => Promise<FigmaRenderResponse>;
+
+/**
+ * Thin default adapter over the platform `fetch`. This is the ONLY place in the render path
+ * `fetch` is named. It forwards the caller-built headers verbatim and reads the body as raw
+ * bytes; it does not log, retry, or inspect any token. Resilience/backoff is out of scope here
+ * (#759); the proxy/custom-CA transport is the platform prerequisite (#802) that replaces this.
+ */
+export const createDefaultFigmaRenderPort = (
+  egress?: OutboundHttpEgressConfig,
+  fetchImpl?: typeof fetch,
+): FigmaRenderPort => {
+  return async (request: FigmaRenderRequest): Promise<FigmaRenderResponse> => {
+    try {
+      const response = await gatewayFetch(request.url, {
+        method: "GET",
+        headers: { ...request.headers },
+        ...(egress !== undefined ? { egress } : {}),
+        ...(fetchImpl !== undefined ? { fetchImpl } : {}),
+      });
+      const headers: Record<string, string> = {};
+      response.headers.forEach((value, name) => {
+        headers[name] = value;
+      });
+      const buffer = await response.arrayBuffer();
+      return { status: response.status, bytes: new Uint8Array(buffer), headers };
+    } catch (err) {
+      if (err instanceof FigmaConnectorError) throw err;
+      throw new FigmaConnectorError(classifyFigmaTransportError(err));
+    }
+  };
+};

@@ -9,6 +9,7 @@ import type {
   NormalizedResponse,
   GatewayRequest,
 } from "@oscharko-dev/keiko-contracts";
+import type { GroundingLimits } from "@oscharko-dev/keiko-contracts/bff-wire";
 
 export type {
   ModelKind,
@@ -26,6 +27,7 @@ export type {
   StreamDelta,
   StreamEvent,
 } from "@oscharko-dev/keiko-contracts";
+export { CONVERSATION_CAPABILITY_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts";
 
 // ─── Provider configuration (credential-bearing — STAYS local) ────────────────
 
@@ -37,6 +39,14 @@ export interface ModelProviderConfig {
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
+  readonly egress?: OutboundHttpEgressConfig | undefined;
+}
+
+export interface OutboundHttpEgressConfig {
+  readonly httpProxy?: string | undefined;
+  readonly httpsProxy?: string | undefined;
+  readonly noProxy?: readonly string[] | undefined;
+  readonly caBundlePath?: string | undefined;
 }
 
 export interface CircuitBreakerConfig {
@@ -49,15 +59,31 @@ export interface GatewayConfig {
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[] | undefined;
+  readonly grounding?: Partial<GroundingLimits> | undefined;
+  readonly egress?: OutboundHttpEgressConfig | undefined;
 }
 
 // ─── Provider adapter interface (runtime port — STAYS local) ──────────────────
+
+// A single chunk emitted by the streaming chat path. Content deltas arrive as
+// `delta` chunks (one per provider token group); a terminal `done` chunk carries the
+// fully assembled, redacted NormalizedResponse. Tool-call streaming is out of scope
+// for Layer 1 — only content deltas are surfaced.
+export type GatewayStreamChunk =
+  | { readonly type: "delta"; readonly token: string }
+  | { readonly type: "done"; readonly response: NormalizedResponse };
 
 export interface ProviderAdapter {
   readonly call: (
     request: GatewayRequest,
     config: ModelProviderConfig,
   ) => Promise<NormalizedResponse>;
+  // Optional streaming variant. Absent on adapters that only support buffered calls;
+  // the Gateway synthesises a single delta+done from `call` in that case.
+  readonly callStream?: (
+    request: GatewayRequest,
+    config: ModelProviderConfig,
+  ) => AsyncIterable<GatewayStreamChunk>;
 }
 
 // ─── Clock interface (injectable for deterministic tests — STAYS local) ───────

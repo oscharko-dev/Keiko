@@ -14,16 +14,19 @@ import {
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME } from "./config.js";
-import { gatewayFetch, readJsonCapped } from "./http.js";
+import { gatewayFetch, readJsonCapped, readSseStream } from "./http.js";
 import { normalizeChatResponse } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import type {
   CostClass,
+  FinishReason,
   GatewayRequest,
+  GatewayStreamChunk,
   ModelProviderConfig,
   NormalizedResponse,
   NormalizedToolCall,
   ProviderAdapter,
+  UsageMetadata,
 } from "./types.js";
 
 export interface AdapterDeps {
@@ -49,6 +52,9 @@ interface ChatRequestBody {
   }[];
   readonly tools?: unknown;
   readonly response_format?: unknown;
+  readonly seed?: number;
+  readonly stream?: boolean;
+  readonly stream_options?: { readonly include_usage: boolean };
 }
 
 function buildMessage(
@@ -90,6 +96,65 @@ function buildBody(request: GatewayRequest): ChatRequestBody {
     ...base,
     ...(tools ? { tools } : {}),
     ...(responseFormat ? { response_format: responseFormat } : {}),
+    ...(request.seed !== undefined ? { seed: request.seed } : {}),
+  };
+}
+
+// Streaming body: identical to buildBody plus the OpenAI/Azure streaming flags.
+// `include_usage` requests a final usage-only chunk so token accounting survives.
+function buildStreamBody(request: GatewayRequest): ChatRequestBody {
+  return {
+    ...buildBody(request),
+    stream: true,
+    stream_options: { include_usage: true },
+  };
+}
+
+const FINISH_REASONS: ReadonlySet<FinishReason> = new Set([
+  "stop",
+  "tool_calls",
+  "length",
+  "content_filter",
+  "error",
+  "cancelled",
+]);
+
+function firstStreamChoice(chunk: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(chunk) || !Array.isArray(chunk.choices)) {
+    return undefined;
+  }
+  const choices = chunk.choices as readonly unknown[];
+  const choice = choices[0];
+  return isRecord(choice) ? choice : undefined;
+}
+
+// Extracts the assistant content delta from a streaming chunk, when present.
+function deltaFromChunk(chunk: unknown): string | undefined {
+  const choice = firstStreamChoice(chunk);
+  const delta = choice !== undefined && isRecord(choice.delta) ? choice.delta : undefined;
+  return delta !== undefined && typeof delta.content === "string" ? delta.content : undefined;
+}
+
+function finishReasonFromChunk(chunk: unknown): FinishReason | undefined {
+  const choice = firstStreamChoice(chunk);
+  const raw = choice?.finish_reason;
+  return typeof raw === "string" && FINISH_REASONS.has(raw as FinishReason)
+    ? (raw as FinishReason)
+    : undefined;
+}
+
+function nonNegativeCount(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+// Extracts prompt/completion token counts from the include_usage final chunk.
+function usageFromChunk(chunk: unknown): { prompt: number; completion: number } | undefined {
+  if (!isRecord(chunk) || !isRecord(chunk.usage)) {
+    return undefined;
+  }
+  return {
+    prompt: nonNegativeCount(chunk.usage.prompt_tokens),
+    completion: nonNegativeCount(chunk.usage.completion_tokens),
   };
 }
 
@@ -242,16 +307,109 @@ export class OpenAiAdapter implements ProviderAdapter {
     );
   };
 
+  // Streaming chat path (Layer 1): yields redacted content-delta tokens as they
+  // arrive, then a terminal `done` with the assembled, redacted NormalizedResponse.
+  // Tool-call streaming is out of scope — only `choices[0].delta.content` is surfaced.
+  callStream = async function* (
+    this: OpenAiAdapter,
+    request: GatewayRequest,
+    config: ModelProviderConfig,
+  ): AsyncGenerator<GatewayStreamChunk> {
+    const secrets = [config.apiKey, config.baseUrl];
+    if (request.cancellationSignal?.aborted === true) {
+      throw new CancelledError(
+        `request for '${config.modelId}' cancelled before dispatch`,
+        secrets,
+      );
+    }
+    const start = this.now();
+    const response = await this.dispatch(request, config, secrets, true);
+    if (!response.ok) {
+      const errorPayload = await this.readErrorBody(response);
+      mapHttpError(response, config.modelId, secrets, errorPayload);
+    }
+    const acc = { content: "", finishReason: "stop" as FinishReason, prompt: 0, completion: 0 };
+    for await (const token of this.streamDeltas(response, config, secrets, acc)) {
+      yield { type: "delta", token };
+    }
+    const assembled = this.assembleResponse(config, start, acc);
+    yield { type: "done", response: redactResponse(assembled, secrets) };
+  };
+
+  // Iterates the SSE stream, yielding each redacted content token while mutating
+  // `acc` with the raw accumulated content, finish reason, and final usage counts.
+  private async *streamDeltas(
+    response: Response,
+    config: ModelProviderConfig,
+    secrets: readonly string[],
+    acc: { content: string; finishReason: FinishReason; prompt: number; completion: number },
+  ): AsyncGenerator<string> {
+    try {
+      for await (const chunk of readSseStream(response)) {
+        const content = deltaFromChunk(chunk);
+        if (content !== undefined) {
+          acc.content += content;
+          yield redact(content, secrets);
+        }
+        const finish = finishReasonFromChunk(chunk);
+        if (finish !== undefined) acc.finishReason = finish;
+        const usage = usageFromChunk(chunk);
+        if (usage !== undefined) {
+          acc.prompt = usage.prompt;
+          acc.completion = usage.completion;
+        }
+      }
+    } catch (error) {
+      throw this.mapStreamError(error, config, secrets);
+    }
+  }
+
+  private assembleResponse(
+    config: ModelProviderConfig,
+    start: number,
+    acc: { content: string; finishReason: FinishReason; prompt: number; completion: number },
+  ): NormalizedResponse {
+    const usage: UsageMetadata = {
+      requestId: this.deps.requestId,
+      promptTokens: acc.prompt,
+      completionTokens: acc.completion,
+      latencyMs: this.now() - start,
+      costClass: this.deps.costClass,
+    };
+    return {
+      modelId: config.modelId,
+      content: acc.content,
+      finishReason: acc.finishReason,
+      toolCalls: [],
+      structuredOutput: null,
+      usage,
+    };
+  }
+
+  // A mid-stream read failure surfaces as a TransportError; an already-typed
+  // cancellation/timeout (e.g. raised by the underlying reader) passes through.
+  private mapStreamError(
+    error: unknown,
+    config: ModelProviderConfig,
+    secrets: readonly string[],
+  ): Error {
+    if (error instanceof CancelledError || error instanceof TimeoutError) {
+      return error;
+    }
+    return new TransportError(`stream read failed for '${config.modelId}'`, secrets);
+  }
+
   private async dispatch(
     request: GatewayRequest,
     config: ModelProviderConfig,
     secrets: readonly string[],
+    stream = false,
   ): Promise<Response> {
     const timeoutSignal = AbortSignal.timeout(config.timeoutMs);
     const cancel = request.cancellationSignal;
     const signal = cancel ? AbortSignal.any([timeoutSignal, cancel]) : timeoutSignal;
     const url = `${config.baseUrl}/chat/completions`;
-    const body = JSON.stringify(buildBody(request));
+    const body = JSON.stringify(stream ? buildStreamBody(request) : buildBody(request));
     const headers = {
       "content-type": "application/json",
       ...apiKeyHeaders(config),
@@ -263,6 +421,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         body,
         signal,
         fetchImpl: this.deps.fetchImpl,
+        ...(config.egress !== undefined ? { egress: config.egress } : {}),
       });
     } catch (error) {
       throw this.mapDispatchError(error, config, cancel, timeoutSignal, secrets);

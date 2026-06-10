@@ -20,7 +20,19 @@ export type WindowType =
   | "inspector"
   | "activity"
   | "notifications"
-  | "resources";
+  | "resources"
+  // Epic #189 Slice 3 — Local Knowledge connector picker window.
+  | "connector"
+  // Epic #270 — Quality Intelligence: a singleton hub (start runs + run list) plus per-run result
+  // cards. QI lives inside the Workspace like every other window, not as a full-page route.
+  | "quality"
+  | "qiRun"
+  // Epic #532 — Relationship engine: a singleton tool window (graph list + inspector + impact +
+  // health). Like QI, it lives inside the Workspace, not as a full-page route.
+  | "relationships"
+  // Epic #750, Issue #756 — Figma/Snapshot surface. Paste a board link, trigger a snapshot-build,
+  // view captured screens + IR summaries. Connects to the QI hub as a figma-snapshot source.
+  | "figma";
 
 export interface WindowSize {
   readonly w: number;
@@ -43,7 +55,23 @@ export interface ConfigField {
 export interface WindowRenderContext {
   readonly linkedRoot: string | null;
   readonly linkedFilePath: string | undefined;
+  readonly linkedRoots: readonly string[];
+  /** Epic #710 #718 — capsule ids from connected Connector windows (capsule kind only). */
+  readonly linkedCapsuleIds: readonly string[];
+  /** Epic #710 #718 — capsule-set ids from connected Connector windows (capsule-set kind only). */
+  readonly linkedCapsuleSetIds: readonly string[];
+  /** Epic #750 #756 — snapshot run ids from connected Figma Snapshot windows. */
+  readonly linkedFigmaSnapshotRunIds: readonly string[];
   readonly updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void;
+  /**
+   * Open another Workspace window from inside this one (e.g. the QI hub opening a per-run result
+   * card). Singleton targets focus the existing instance; others spawn a new card carrying `cfg`.
+   * Returns the new/focused window id, or null when the workspace viewport is not ready.
+   */
+  readonly openWindow: (
+    type: WindowType,
+    cfg?: Record<string, string | number | boolean>,
+  ) => string | null;
 }
 
 export interface WindowTypeDef {
@@ -102,13 +130,6 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
         def: "New chat",
         optional: true,
         placeholder: "Name this conversation",
-      },
-      {
-        key: "model",
-        label: "Model",
-        type: "select",
-        options: ["example-chat-model", "example-fast-model"],
-        def: "example-chat-model",
       },
     ],
   },
@@ -305,6 +326,73 @@ const PARTIAL: Readonly<Record<WindowType, PartialDef>> = {
     tool: true,
     singleton: true,
   },
+  // Epic #189 Slice 3 — compact connector picker window. The user selects a ready capsule or
+  // capsule-set; the selection is stored in cfg so the relationship-edge binding can read it.
+  connector: {
+    title: "Connector",
+    icon: "plugins",
+    accent: true,
+    desc: "Pick a Local Knowledge connector",
+    w: 320,
+    h: 380,
+    min: { w: 280, h: 300 },
+    config: [],
+    cta: "Select connector",
+  },
+  // Epic #270 — Quality Intelligence hub. Singleton tool window: start a run (requirements or
+  // workspace folder) and browse past runs. Selecting/finishing a run opens a `qiRun` result card.
+  quality: {
+    title: "Quality Intelligence",
+    icon: "check",
+    accent: true,
+    desc: "Design & review test cases",
+    w: 384,
+    h: 580,
+    min: { w: 300, h: 320 },
+    tiny: { w: 260, h: 200 },
+    tool: true,
+    singleton: true,
+  },
+  // Epic #270 — Quality Intelligence run result card. Non-singleton: one card per run (keyed by
+  // cfg.runId). Shows the generated test cases, per-candidate review, and export.
+  qiRun: {
+    title: "QI Run",
+    icon: "check",
+    desc: "Generated test cases",
+    w: 760,
+    h: 660,
+    min: { w: 320, h: 280 },
+    tiny: { w: 280, h: 200 },
+    config: [{ key: "runId", label: "Run ID", type: "text", def: "" }],
+  },
+  // Epic #532 — Relationship engine hub. Singleton tool window: browse the governed relationship
+  // graph (list + filters), inspect a relationship (type/lifecycle/activity/audit/evidence/impact),
+  // and review bounded impact, dependency, and health surfaces. Opens once from the LeftRail.
+  relationships: {
+    title: "Relationships",
+    icon: "branch",
+    accent: true,
+    desc: "Inspect the relationship graph",
+    w: 760,
+    h: 600,
+    min: { w: 360, h: 320 },
+    tiny: { w: 300, h: 220 },
+    tool: true,
+    singleton: true,
+  },
+  // Epic #750, Issue #756 — Figma/Snapshot surface. Paste a board link, trigger a snapshot-build,
+  // view captured screens + IR summaries, connect to the QI hub as a figma-snapshot source.
+  // PAT stays server-side; the window only stores the resulting snapshotRunId in cfg.
+  figma: {
+    title: "Figma Snapshot",
+    icon: "layers",
+    accent: true,
+    desc: "Capture a Figma board snapshot",
+    w: 420,
+    h: 540,
+    min: { w: 320, h: 360 },
+    tiny: { w: 280, h: 240 },
+  },
 };
 
 const RENDER_REGISTRY = new Map<
@@ -363,6 +451,8 @@ export const WIN_TYPES: Readonly<Record<WindowType, WindowTypeDef>> = buildAll()
 // Wave 5 palette ordering. Cards first, then tools.
 export const TYPE_ORDER: readonly WindowType[] = [
   "chat",
+  "connector",
+  "figma",
   "files",
   "editor",
   "browser",
@@ -370,6 +460,8 @@ export const TYPE_ORDER: readonly WindowType[] = [
   "review",
   "agents",
   "integ",
+  "quality",
+  "relationships",
   "keiko",
   "project",
   "search",

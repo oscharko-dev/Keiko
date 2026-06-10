@@ -26,10 +26,20 @@ import {
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { EvidenceReadError, EvidenceWriteError } from "./errors.js";
+import { EvidenceReadError, EvidenceWriteError, InvalidRunIdError } from "./errors.js";
 import { assertValidRunId } from "./runid.js";
 
 const MANIFEST_SUFFIX = ".json";
+
+// POSIX limits filenames to 255 bytes. Exceeding this causes an ENAMETOOLONG error whose message
+// includes the absolute path. Guard before any fs call so no path ever leaks (CWE-209).
+const POSIX_FILENAME_LIMIT = 255;
+
+function assertManifestFilenameFits(runId: string): void {
+  if (runId.length + MANIFEST_SUFFIX.length > POSIX_FILENAME_LIMIT) {
+    throw new InvalidRunIdError("runId produces a filename that exceeds the filesystem limit");
+  }
+}
 
 // The workspace-relative default evidence base dir (ADR-0010 D4): predictable, local, .gitignored.
 export const DEFAULT_EVIDENCE_DIR = "./.keiko/evidence";
@@ -107,6 +117,7 @@ function existingBaseDir(baseDir: string, fs: WorkspaceFs): string | undefined {
 // would escape. The runId is validated first so no separator/`..`/NUL can reach the join.
 function containedManifestPath(runId: string, realBase: string, fs: WorkspaceFs): string {
   assertValidRunId(runId);
+  assertManifestFilenameFits(runId);
   const lexical = resolveWithinWorkspace(realBase, `${runId}${MANIFEST_SUFFIX}`);
   return assertContainedRealPath(fs, realBase, lexical, `${runId}${MANIFEST_SUFFIX}`);
 }
@@ -202,6 +213,7 @@ function listManifests(baseDir: string, fs: WorkspaceFs): readonly string[] {
 
 function getManifest(baseDir: string, fs: WorkspaceFs, runId: string): string | undefined {
   assertValidRunId(runId);
+  assertManifestFilenameFits(runId);
   const realBase = existingBaseDir(baseDir, fs);
   if (realBase === undefined) {
     return undefined;

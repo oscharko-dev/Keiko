@@ -1,7 +1,17 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, fetchFilesPreview, fetchFilesTree } from "../../../../../lib/api";
+import {
+  ApiError,
+  fetchFilesPreview,
+  fetchFilesTree,
+  fetchProjects,
+  updateChatConnectedScopes,
+} from "../../../../../lib/api";
+import type { Chat } from "../../../../../lib/types";
+import { ChatSessionProvider } from "../../context/ChatSessionContext";
+import type { ChatSessionApi } from "../../hooks/useChatSession";
 import { FilePreview } from "./FilePreview";
 import { FilesWidget } from "./FilesWidget";
 
@@ -11,7 +21,9 @@ vi.mock("../../../../../lib/api", async () => {
   return {
     ...actual,
     fetchFilesPreview: vi.fn(),
+    fetchProjects: vi.fn(),
     fetchFilesTree: vi.fn(),
+    updateChatConnectedScopes: vi.fn(),
   };
 });
 
@@ -22,6 +34,76 @@ const treeEntryBase = {
   symlink: false,
   readable: true,
 };
+
+function makeChat(overrides: Partial<Chat> = {}): Chat {
+  return {
+    id: "chat-1",
+    projectPath: "/repo",
+    title: "t",
+    selectedModel: "example-chat-model",
+    branchLabel: undefined,
+    status: undefined,
+    connectedScope: undefined,
+    localKnowledgeScope: undefined,
+    createdAt: 1,
+    updatedAt: 2,
+    ...overrides,
+  };
+}
+
+function makeSession(overrides: Partial<ChatSessionApi> = {}): ChatSessionApi {
+  return {
+    projects: [],
+    chats: [],
+    messages: [],
+    models: [],
+    activeProject: undefined,
+    activeChat: makeChat(),
+    selectedModel: "example-chat-model",
+    noEligibleModels: false,
+    draft: "",
+    loading: false,
+    sending: false,
+    sendStatus: "idle",
+    error: undefined,
+    setDraft: vi.fn(),
+    setSelectedModel: vi.fn(),
+    openNewChat: vi.fn(),
+    openProject: vi.fn(),
+    openChat: vi.fn(),
+    addProject: vi.fn(),
+    sendMessage: vi.fn(),
+    cancelSend: vi.fn(),
+    replaceChat: vi.fn(),
+    latestGrounded: undefined,
+    cancelGrounded: vi.fn(),
+    // Issue #147 — attachment fields
+    pendingAttachments: [],
+    addPendingAttachment: vi.fn().mockResolvedValue({ ok: true }),
+    removePendingAttachment: vi.fn(),
+    clearPendingAttachments: vi.fn(),
+    budget: undefined,
+    memoryEnabled: true,
+    setMemoryEnabled: vi.fn(),
+    memoryBudgetTokens: 1200,
+    setMemoryBudgetTokens: vi.fn(),
+    latestMemory: undefined,
+    clearLatestMemory: vi.fn(),
+    acceptMemoryCandidate: vi.fn(),
+    rejectMemoryCandidate: vi.fn(),
+    forgetMemoryAction: vi.fn(),
+    clearHistory: vi.fn(),
+    launchWorkflowFromConversation: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
+    launchGroundedWorkflowHandoff: vi.fn().mockResolvedValue({ ok: true, runId: "test-run" }),
+    lastSentDocuments: [],
+    ...overrides,
+  };
+}
+
+function renderWithSession(ui: ReactElement, session = makeSession()): ChatSessionApi {
+  render(<ChatSessionProvider value={session}>{ui}</ChatSessionProvider>);
+  return session;
+}
 
 describe("FilesWidget", () => {
   afterEach(() => {
@@ -74,6 +156,63 @@ describe("FilesWidget", () => {
     );
     expect(onActiveFileChange).toHaveBeenCalledWith("package.json", "/repo space");
     expect(await screen.findByText('"keiko"')).toBeInTheDocument();
+  });
+
+  it("connects the repository root scope from the Files window", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [],
+    });
+    const updated = makeChat({
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 100 },
+    });
+    vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: updated });
+    const session = renderWithSession(<FilesWidget root="/repo" />);
+
+    await screen.findByText("Empty folder.");
+    await userEvent.click(screen.getByRole("button", { name: "Connect repository" }));
+
+    await waitFor(() => {
+      expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
+        { kind: "workspace-root", relativePaths: [], connectedAtMs: expect.any(Number) },
+      ]);
+    });
+    expect(session.replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("connects a readable folder scope from a directory row", async () => {
+    vi.mocked(fetchFilesTree).mockResolvedValueOnce({
+      root: "/repo",
+      path: "",
+      truncated: false,
+      entries: [{ ...treeEntryBase, name: "src", path: "src", kind: "directory" }],
+    });
+    const updated = makeChat({
+      connectedScope: { kind: "directory", relativePaths: ["src"], connectedAtMs: 101 },
+    });
+    vi.mocked(updateChatConnectedScopes).mockResolvedValueOnce({ chat: updated });
+    const session = renderWithSession(<FilesWidget root="/repo" />);
+
+    await screen.findByRole("button", { name: /src/i });
+    await userEvent.click(screen.getByRole("button", { name: "Connect folder" }));
+
+    await waitFor(() => {
+      expect(updateChatConnectedScopes).toHaveBeenCalledWith("chat-1", [
+        { kind: "directory", relativePaths: ["src"], connectedAtMs: expect.any(Number) },
+      ]);
+    });
+    expect(session.replaceChat).toHaveBeenCalledWith(updated);
+  });
+
+  it("shows the empty-workspace state without a repository connector", async () => {
+    vi.mocked(fetchProjects).mockResolvedValueOnce({ projects: [] });
+
+    renderWithSession(<FilesWidget />);
+
+    expect(await screen.findByText("No registered project is available.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Connect repository" })).toBeNull();
   });
 
   it("renders tree loading errors", async () => {

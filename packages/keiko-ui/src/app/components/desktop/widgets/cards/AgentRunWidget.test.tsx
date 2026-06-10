@@ -61,6 +61,9 @@ describe("AgentRunWidget", () => {
           toolCalling: false,
           structuredOutput: false,
           streaming: false,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          workflowEligible: false,
           costClass: "medium",
           latencyClass: "standard",
           throughputHint: "test",
@@ -139,5 +142,22 @@ describe("AgentRunWidget", () => {
     expect(screen.getByText("Failure")).toBeInTheDocument();
     expect(screen.getByText("provider rate limited model")).toBeInTheDocument();
     expect(screen.getByText("Retry after the provider recovers")).toBeInTheDocument();
+  });
+
+  // GAP-C2 (#146): "permissions coming soon" must never render
+  it("does not render the 'permissions coming soon' fake affordance (#146 GAP-C2)", () => {
+    vi.mocked(useSSE).mockReturnValue({ status: "connecting", error: null, events: [] });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    vi.mocked(fetchRunReport).mockResolvedValue({ report: { status: "running" } });
+
+    render(
+      <AgentRunWidget
+        cfg={{ workflow: "verify", model: "example-chat-model", runId: "run-test" }}
+        linkedRoot="/repo"
+        linkedFilePath={undefined}
+      />,
+    );
+
+    expect(screen.queryByText(/permissions coming soon/i)).toBeNull();
   });
 });

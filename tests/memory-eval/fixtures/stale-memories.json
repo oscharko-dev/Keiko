@@ -1,0 +1,66 @@
+[
+  {
+    "id": "stale-memories-mixed",
+    "description": "Mix of fresh, stale, and blocked memories that all share the same scope and topic. Retrieval must suppress low-confidence, expired, rejected, and conflicted records, leaving only the fresh fact eligible for inclusion.",
+    "memories": [
+      {
+        "id": "stale-low-confidence",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "semantic-fact",
+        "body": "low-confidence rumour about the deploy script",
+        "confidence": 0.1,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "stale-expired",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "semantic-fact",
+        "body": "deploy script still runs on the retired jenkins host",
+        "confidence": 0.85,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "validUntil": 1699999999000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "blocked-rejected",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "semantic-fact",
+        "body": "deploy script runs on an unapproved legacy server",
+        "status": "rejected",
+        "confidence": 0.95,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "blocked-conflicted",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "semantic-fact",
+        "body": "deploy script runs on a host with conflicting inventory data",
+        "status": "conflicted",
+        "confidence": 0.95,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "fresh-fact",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "semantic-fact",
+        "body": "deploy script runs from GitHub Actions after the green pipeline succeeds",
+        "confidence": 0.9,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    ]
+  }
+]

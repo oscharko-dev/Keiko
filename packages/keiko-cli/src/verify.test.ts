@@ -84,6 +84,24 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+describe("runVerifyCli — --help / -h (issue #640)", () => {
+  it("exits 0 with usage on stdout for --help", async () => {
+    const c = makeIo();
+    const code = await runVerifyCli(["--help"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Usage:");
+    expect(c.err()).toBe("");
+  });
+
+  it("exits 0 with usage on stdout for -h", async () => {
+    const c = makeIo();
+    const code = await runVerifyCli(["-h"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Usage:");
+    expect(c.err()).toBe("");
+  });
+});
+
 describe("runVerifyCli", () => {
   it("exits 0 when every step passes and prints a human table", async () => {
     writePackage({ test: 'node -e "process.exit(0)"' });

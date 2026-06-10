@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report User Findings
+    url: https://github.com/oscharko-dev/Keiko/issues/new?template=user_finding.yml
+    about: Report a production or pilot bug with a structured template.
+

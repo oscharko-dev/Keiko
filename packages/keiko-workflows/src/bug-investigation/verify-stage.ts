@@ -19,7 +19,7 @@ import {
   type VerificationAuditSummary,
   type VerificationPlan,
   type VerificationStep,
-} from "../../../../src/verification/index.js";
+} from "@oscharko-dev/keiko-verification";
 import { isSensitivePath } from "./guard.js";
 import type { BugRunState } from "./internal.js";
 

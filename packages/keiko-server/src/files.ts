@@ -154,18 +154,7 @@ function rootNameIsDenied(rootPath: string): boolean {
   return pathIsDenied(basename(rootPath));
 }
 
-async function resolveRoot(store: UiStore, rootInput: string | null): Promise<ResolvedProjectRoot> {
-  if (rootInput === null || rootInput.trim().length === 0) {
-    throw new FilesError(400, "BAD_REQUEST", "The root query parameter is required.");
-  }
-  const project = projectFor(store, rootInput);
-  if (project === undefined) {
-    throw new FilesError(
-      403,
-      "WORKSPACE_NOT_REGISTERED",
-      "The selected root is not a registered project.",
-    );
-  }
+async function resolveRegisteredRoot(project: Project): Promise<ResolvedProjectRoot> {
   if (rootNameIsDenied(project.path)) {
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
@@ -174,6 +163,37 @@ async function resolveRoot(store: UiStore, rootInput: string | null): Promise<Re
     throw new FilesError(403, "DENIED", DENIED_MESSAGE);
   }
   return { root: project.path, realRoot };
+}
+
+// Epic #532 — Keiko is a workspace for EVERYONE, not only devs: a Files window may browse ANY folder
+// on the machine, not just a registered project. An arbitrary input becomes its own root, gated by
+// the SAME realpath + FULL-PATH deny-list the grounded connect path enforces (deny matches on every
+// segment, so a root inside `.ssh`/`.aws`/credential dirs is rejected even when its basename is
+// innocuous). Browse and connect therefore accept the identical set of roots. The deny check runs
+// once on the raw input and again on the realpath, so a symlink whose target lands in a denied
+// location is caught after resolution.
+async function resolveArbitraryRoot(rootInput: string): Promise<ResolvedProjectRoot> {
+  if (!isAbsolute(rootInput)) {
+    throw new FilesError(400, "BAD_ROOT", "The root must be an absolute directory path.");
+  }
+  if (pathIsDenied(rootInput)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  const realRoot = await resolveDirectory(rootInput);
+  if (pathIsDenied(realRoot)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  return { root: rootInput, realRoot };
+}
+
+async function resolveRoot(store: UiStore, rootInput: string | null): Promise<ResolvedProjectRoot> {
+  if (rootInput === null || rootInput.trim().length === 0) {
+    throw new FilesError(400, "BAD_REQUEST", "The root query parameter is required.");
+  }
+  const project = projectFor(store, rootInput);
+  return project === undefined
+    ? resolveArbitraryRoot(rootInput.trim())
+    : resolveRegisteredRoot(project);
 }
 
 function directoryRoots(projectRoot: string): readonly FilesDirectoryRoot[] {

@@ -3,16 +3,21 @@
 // applied uniformly by the server layer. JSON body reading is bounded by MAX_STORE_BODY_BYTES.
 
 import type { IncomingMessage } from "node:http";
+import { realpathSync, statSync } from "node:fs";
+import { isAbsolute, relative, resolve } from "node:path";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig } from "./deps.js";
+import { currentGatewayConfig, currentGroundingLimits } from "./deps.js";
 import { findCapability, findConfiguredCapability } from "@oscharko-dev/keiko-model-gateway";
 import {
   UiStoreError,
   assertUiDbOutsideProject,
   isProjectAvailable,
   validateProjectPath,
+  type Chat,
+  type ChatConnectedScope,
+  type ChatLocalKnowledgeScope,
   type ChatRole,
   type NewChatMessage,
   type Project,
@@ -21,8 +26,30 @@ import {
   type UpdateProjectPatch,
   type WorkflowStatus,
 } from "./store/index.js";
+import { pathIsDenied } from "./files-deny.js";
+import {
+  clearGroundedContextIndexesForConversation,
+  clearGroundedContextIndexesForWorkspace,
+} from "./grounded-context-index.js";
+import {
+  clearGroundedTurnsForConversation,
+  clearGroundedTurnsForWorkspace,
+} from "./grounded-turn-registry.js";
+// Issue #184 — workspace-relative path gate. isValidScopePath is the canonical validator from
+// @oscharko-dev/keiko-contracts/connected-context (issue #178). Reusing it here keeps the BFF
+// boundary aligned with the rest of the connected-repo surface and avoids regex drift.
+import {
+  SELECTED_SCOPE_KINDS,
+  isValidScopePath,
+  type SelectedScopeKind,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 
 const MAX_STORE_BODY_BYTES = 256_000;
+const SELECTED_SCOPE_KIND_SET: ReadonlySet<SelectedScopeKind> = new Set(SELECTED_SCOPE_KINDS);
+const DEFAULT_CHAT_LIST_LIMIT = 100;
+const MAX_CHAT_LIST_LIMIT = 200;
+const DEFAULT_MESSAGE_LIST_LIMIT = 200;
+const MAX_MESSAGE_LIST_LIMIT = 500;
 
 class BodyTooLargeError extends Error {
   public constructor() {
@@ -244,6 +271,24 @@ function requireQuery(ctx: RouteContext, name: string): string {
   return v;
 }
 
+function optionalBoundedQueryInteger(
+  ctx: RouteContext,
+  name: string,
+  fallback: number,
+  max: number,
+): number {
+  const raw = ctx.url.searchParams.get(name);
+  if (raw === null || raw.length === 0) return fallback;
+  if (!/^\d+$/.test(raw)) {
+    throw new InvalidRequest(`Query "${name}" must be a positive integer.`);
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0 || value > max) {
+    throw new InvalidRequest(`Query "${name}" must be between 1 and ${String(max)}.`);
+  }
+  return value;
+}
+
 // ──────────────────────────────────────────────────────────────────────────
 // Response projections
 // ──────────────────────────────────────────────────────────────────────────
@@ -262,11 +307,18 @@ function projectWithAvailability(p: Project): ProjectWithAvailability {
 }
 
 function chatBelongsToProject(deps: UiHandlerDeps, projectPath: string, chatId: string): boolean {
-  return deps.store.listChats(projectPath).some((chat) => chat.id === chatId);
+  return deps.store.findChatById(chatId)?.projectPath === projectPath;
+}
+
+// Epic #177 audit: the chat PATCH path scanned every project's chat list per request
+// (O(projects × chats)). The chat id is unique across projects, so `UiStore.findChatById` is a
+// single-row SELECT. Helper preserved so callers stay decoupled from the store interface.
+function findChatById(deps: UiHandlerDeps, chatId: string): Chat | undefined {
+  return deps.store.findChatById(chatId);
 }
 
 function messageBelongsToChat(deps: UiHandlerDeps, chatId: string, messageId: string): boolean {
-  return deps.store.listMessages(chatId).some((message) => message.id === messageId);
+  return deps.store.findMessageById(messageId)?.chatId === chatId;
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -330,7 +382,10 @@ export async function handleUpdateProject(
 export function handleDeleteProject(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   return runHandlerSync(() => {
     const targetPath = requireQuery(ctx, "path");
-    deps.store.deleteProject(targetPath);
+    const normalizedPath = validateProjectPath(targetPath, { mustExist: false });
+    deps.store.deleteProject(normalizedPath);
+    clearGroundedContextIndexesForWorkspace(normalizedPath);
+    clearGroundedTurnsForWorkspace(normalizedPath);
     return { status: 204, body: null };
   });
 }
@@ -352,7 +407,13 @@ function runHandlerSync(worker: () => RouteResult): RouteResult {
 export function handleListChats(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   return runHandlerSync(() => {
     const projectPath = requireQuery(ctx, "projectPath");
-    const chats = deps.store.listChats(projectPath);
+    const limit = optionalBoundedQueryInteger(
+      ctx,
+      "limit",
+      DEFAULT_CHAT_LIST_LIMIT,
+      MAX_CHAT_LIST_LIMIT,
+    );
+    const chats = deps.store.listChats(projectPath, limit);
     return { status: 200, body: { chats } };
   });
 }
@@ -385,6 +446,341 @@ export async function handleCreateChat(
 // Route 19 — PATCH /api/chats?id=...
 // ──────────────────────────────────────────────────────────────────────────
 
+// Issue #184 — bound the number of paths the BFF will accept on one binding. Higher than the
+// realistic ad-hoc selection size (Files window selection caps at a handful) but low enough to
+// prevent JSON-blob inflation in connected_scope_paths. The store enforces the same cap as a
+// defense-in-depth subset of this gate.
+const MAX_CONNECTED_SCOPE_PATHS = 50;
+
+function isSelectedScopeKind(value: unknown): value is SelectedScopeKind {
+  return typeof value === "string" && SELECTED_SCOPE_KIND_SET.has(value as SelectedScopeKind);
+}
+
+function validateScopeKind(value: unknown): SelectedScopeKind {
+  if (!isSelectedScopeKind(value)) {
+    throw new InvalidRequest('Field "connectedScope.kind" must be a recognized scope kind.');
+  }
+  return value;
+}
+
+function assertScopePathCount(kind: SelectedScopeKind, count: number): void {
+  if (kind === "workspace-root") {
+    if (count !== 0) {
+      throw new InvalidRequest(
+        'Field "connectedScope.relativePaths" must be empty for repository scope.',
+      );
+    }
+    return;
+  }
+  if (kind === "directory") {
+    if (count !== 1) {
+      throw new InvalidRequest(
+        'Field "connectedScope.relativePaths" must contain exactly one folder path.',
+      );
+    }
+    return;
+  }
+  if (count === 0) {
+    throw new InvalidRequest('Field "connectedScope.relativePaths" must not be empty.');
+  }
+  if (count > MAX_CONNECTED_SCOPE_PATHS) {
+    throw new InvalidRequest(
+      `Field "connectedScope.relativePaths" must have at most ${String(
+        MAX_CONNECTED_SCOPE_PATHS,
+      )} entries.`,
+    );
+  }
+}
+
+// Issue #184 — validates the relativePaths sub-array. Pulled out of optionalConnectedScope so
+// the outer function's cyclomatic complexity stays within the project's ≤10 bound.
+function validateScopeRelativePaths(kind: SelectedScopeKind, paths: unknown): readonly string[] {
+  if (!Array.isArray(paths)) {
+    throw new InvalidRequest('Field "connectedScope.relativePaths" must be an array.');
+  }
+  assertScopePathCount(kind, paths.length);
+  const validated: string[] = [];
+  for (const entry of paths) {
+    if (typeof entry !== "string") {
+      throw new InvalidRequest('Field "connectedScope.relativePaths" entries must be strings.');
+    }
+    if (!isValidScopePath(entry, { mustBeRelative: true })) {
+      throw new InvalidRequest(
+        'Field "connectedScope.relativePaths" entry is not a valid workspace-relative path.',
+      );
+    }
+    validated.push(entry);
+  }
+  return validated;
+}
+
+function isContainedPath(root: string, target: string): boolean {
+  const rootCmp = process.platform === "win32" ? root.toLowerCase() : root;
+  const targetCmp = process.platform === "win32" ? target.toLowerCase() : target;
+  const rel = relative(rootCmp, targetCmp);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function scopeTargetPath(realProjectRoot: string, relativePath: string): string {
+  if (relativePath.length === 0) return realProjectRoot;
+  return resolve(realProjectRoot, ...relativePath.split("/").filter((part) => part.length > 0));
+}
+
+function assertScopePathMetadataSafe(deps: UiHandlerDeps, relativePath: string): void {
+  if (pathIsDenied(relativePath)) {
+    throw new InvalidRequest("Connected scope is excluded from Keiko's safe read surface.");
+  }
+  const redacted = deps.redactor(relativePath);
+  if (typeof redacted === "string" && redacted !== relativePath) {
+    throw new InvalidRequest("Connected scope path contains credential-shaped metadata.");
+  }
+}
+
+function validateScopePathAccess(
+  deps: UiHandlerDeps,
+  realProjectRoot: string,
+  kind: SelectedScopeKind,
+  entry: string,
+): void {
+  assertScopePathMetadataSafe(deps, entry);
+  const candidate = scopeTargetPath(realProjectRoot, entry);
+  let targetReal: string;
+  try {
+    targetReal = realpathSync(candidate);
+  } catch {
+    throw new InvalidRequest("Connected scope path is not accessible from the selected project.");
+  }
+  if (!isContainedPath(realProjectRoot, targetReal)) {
+    throw new InvalidRequest("Connected scope path must stay inside the selected project.");
+  }
+  let info: ReturnType<typeof statSync>;
+  try {
+    info = statSync(targetReal);
+  } catch {
+    throw new InvalidRequest("Connected scope path is not accessible from the selected project.");
+  }
+  if (kind === "directory" && !info.isDirectory()) {
+    throw new InvalidRequest("Connected folder scope must reference a folder.");
+  }
+  if (!info.isDirectory() && !info.isFile()) {
+    throw new InvalidRequest("Connected scope path must reference a file or folder.");
+  }
+}
+
+function resolveRealRoot(rootInput: string, notAccessibleMessage: string): string {
+  const root = validateProjectPath(rootInput, { mustExist: true });
+  try {
+    return realpathSync(root);
+  } catch {
+    throw new InvalidRequest(notAccessibleMessage);
+  }
+}
+
+// Epic #532 — a connected scope may carry its OWN absolute root pointing anywhere on the machine
+// (a folder outside the chat's project, so non-developers can connect any folder). Validate it like
+// a project root, then refuse credential/secret locations (deny-list) and credential-shaped path
+// metadata so home-directory browsing can never bind a secret folder as a grounded scope.
+function validateConnectedScopeRoot(deps: UiHandlerDeps, rootInput: string): string {
+  const realRoot = resolveRealRoot(rootInput, "Connected scope root is not accessible.");
+  if (pathIsDenied(realRoot)) {
+    throw new InvalidRequest("Connected scope root is excluded from Keiko's safe read surface.");
+  }
+  const redacted = deps.redactor(realRoot);
+  if (typeof redacted === "string" && redacted !== realRoot) {
+    throw new InvalidRequest("Connected scope root contains credential-shaped metadata.");
+  }
+  return realRoot;
+}
+
+function validateConnectedScopeAccess(
+  deps: UiHandlerDeps,
+  chat: Chat,
+  scope: ChatConnectedScope,
+): void {
+  const realRoot =
+    scope.root !== undefined
+      ? validateConnectedScopeRoot(deps, scope.root)
+      : resolveRealRoot(chat.projectPath, "Selected project is not accessible.");
+  if (scope.kind === "workspace-root") return;
+  for (const entry of scope.relativePaths) {
+    validateScopePathAccess(deps, realRoot, scope.kind, entry);
+  }
+}
+
+function validateScopeConnectedAtMs(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    throw new InvalidRequest(
+      'Field "connectedScope.connectedAtMs" must be a finite non-negative integer.',
+    );
+  }
+  return value;
+}
+
+// Epic #532 — shape check for the optional connected-scope root. Deep validation (existence,
+// deny-list, realpath containment) runs in validateConnectedScopeAccess against the live filesystem.
+function validateOptionalScopeRoot(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new InvalidRequest(
+      'Field "connectedScope.root" must be a non-empty string when provided.',
+    );
+  }
+  return value.trim();
+}
+
+function parseCapsuleLocalKnowledgeScope(
+  scope: Record<string, unknown>,
+  connectedAtMs: number,
+): Extract<ChatLocalKnowledgeScope, { readonly kind: "capsule" }> {
+  if (typeof scope.capsuleId !== "string" || scope.capsuleId.trim().length === 0) {
+    throw new InvalidRequest('Field "localKnowledgeScope.capsuleId" must be a non-empty string.');
+  }
+  return {
+    kind: "capsule",
+    capsuleId: scope.capsuleId.trim() as Extract<
+      ChatLocalKnowledgeScope,
+      { readonly kind: "capsule" }
+    >["capsuleId"],
+    connectedAtMs,
+  };
+}
+
+function parseCapsuleSetLocalKnowledgeScope(
+  scope: Record<string, unknown>,
+  connectedAtMs: number,
+): Extract<ChatLocalKnowledgeScope, { readonly kind: "capsule-set" }> {
+  if (typeof scope.capsuleSetId !== "string" || scope.capsuleSetId.trim().length === 0) {
+    throw new InvalidRequest(
+      'Field "localKnowledgeScope.capsuleSetId" must be a non-empty string.',
+    );
+  }
+  return {
+    kind: "capsule-set",
+    capsuleSetId: scope.capsuleSetId.trim() as Extract<
+      ChatLocalKnowledgeScope,
+      { readonly kind: "capsule-set" }
+    >["capsuleSetId"],
+    connectedAtMs,
+  };
+}
+
+// Shared per-connector shape validator. Used by both the single localKnowledgeScope field and each
+// entry of the Epic #189 localKnowledgeScopes list, so the two surfaces never drift.
+function parseLocalKnowledgeScopeObject(raw: unknown): ChatLocalKnowledgeScope {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new InvalidRequest('Field "localKnowledgeScope" must be an object or null.');
+  }
+  const scope = raw as Record<string, unknown>;
+  const connectedAtMs = validateScopeConnectedAtMs(scope.connectedAtMs);
+  if (scope.kind === "capsule") {
+    return parseCapsuleLocalKnowledgeScope(scope, connectedAtMs);
+  }
+  if (scope.kind === "capsule-set") {
+    return parseCapsuleSetLocalKnowledgeScope(scope, connectedAtMs);
+  }
+  throw new InvalidRequest('Field "localKnowledgeScope.kind" must be "capsule" or "capsule-set".');
+}
+
+function optionalLocalKnowledgeScope(
+  body: Record<string, unknown>,
+): ChatLocalKnowledgeScope | null | undefined {
+  if (!("localKnowledgeScope" in body)) return undefined;
+  const raw = body.localKnowledgeScope;
+  if (raw === null) return null;
+  return parseLocalKnowledgeScopeObject(raw);
+}
+
+// Epic #189 — parse the multi-source connector list (capsules/capsule-sets). undefined → absent;
+// null → clear all; array → fully validated list bounded by the runtime maxLocalKnowledgeSources
+// cap. Each entry runs the same shape validator as the single field. Capsule existence is checked
+// in the grounded path, not here (shape-only, like optionalConnectedScopes).
+function optionalLocalKnowledgeScopes(
+  body: Record<string, unknown>,
+  maxSources: number,
+): readonly ChatLocalKnowledgeScope[] | null | undefined {
+  if (!("localKnowledgeScopes" in body)) return undefined;
+  const raw = body.localKnowledgeScopes;
+  if (raw === null) return null;
+  if (!Array.isArray(raw)) {
+    throw new InvalidRequest('Field "localKnowledgeScopes" must be an array or null.');
+  }
+  if (raw.length > maxSources) {
+    throw new InvalidRequest(
+      `Field "localKnowledgeScopes" must contain at most ${String(maxSources)} sources.`,
+    );
+  }
+  return raw.map((entry) => parseLocalKnowledgeScopeObject(entry));
+}
+
+// Issue #184 — three return states: undefined → field absent (leave unchanged); null →
+// explicit clear (forward through to the store); ChatConnectedScope → fully validated value.
+// All input has crossed the wire and is `unknown` until proven otherwise.
+// Shared per-scope shape validator. Used by both the single connectedScope field and each entry
+// of the Epic #532 connectedScopes list, so the two surfaces never drift.
+function parseConnectedScopeObject(raw: unknown): ChatConnectedScope {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new InvalidRequest('Field "connectedScope" must be an object or null.');
+  }
+  const scope = raw as Record<string, unknown>;
+  const kind = validateScopeKind(scope.kind);
+  const relativePaths = validateScopeRelativePaths(kind, scope.relativePaths);
+  const connectedAtMs = validateScopeConnectedAtMs(scope.connectedAtMs);
+  const root = validateOptionalScopeRoot(scope.root);
+  return { kind, relativePaths, connectedAtMs, ...(root !== undefined ? { root } : {}) };
+}
+
+function optionalConnectedScope(
+  body: Record<string, unknown>,
+): ChatConnectedScope | null | undefined {
+  if (!("connectedScope" in body)) return undefined;
+  const raw = body.connectedScope;
+  if (raw === null) return null;
+  return parseConnectedScopeObject(raw);
+}
+
+// Epic #532 — parse the multi-source connectedScopes list. undefined → field absent; null →
+// clear all; array → fully validated list. Each entry runs the same shape validators (incl. the
+// optional root) as the single field; the list is bounded by the runtime maxConnectedSources cap.
+// Live-filesystem access (realpath + deny-list + redaction) for each scope runs later in
+// handleUpdateChat.
+function optionalConnectedScopes(
+  body: Record<string, unknown>,
+  maxSources: number,
+): readonly ChatConnectedScope[] | null | undefined {
+  if (!("connectedScopes" in body)) return undefined;
+  const raw = body.connectedScopes;
+  if (raw === null) return null;
+  if (!Array.isArray(raw)) {
+    throw new InvalidRequest('Field "connectedScopes" must be an array or null.');
+  }
+  if (raw.length > maxSources) {
+    throw new InvalidRequest(
+      `Field "connectedScopes" must contain at most ${String(maxSources)} sources.`,
+    );
+  }
+  return raw.map((entry) => parseConnectedScopeObject(entry));
+}
+
+// Epic #189/#532 — the four grounding-source patch fields (connected folders + local-knowledge
+// connectors, each single + plural). Extracted so buildChatPatch stays under the complexity gate.
+// Receives deps so runtime-resolved grounding limits are used for the source-count caps.
+function groundingScopePatchFields(
+  body: Record<string, unknown>,
+  deps: UiHandlerDeps,
+): Partial<UpdateChatPatch> {
+  const limits = currentGroundingLimits(deps);
+  const connectedScope = optionalConnectedScope(body);
+  const connectedScopes = optionalConnectedScopes(body, limits.maxConnectedSources);
+  const localKnowledgeScope = optionalLocalKnowledgeScope(body);
+  const localKnowledgeScopes = optionalLocalKnowledgeScopes(body, limits.maxLocalKnowledgeSources);
+  return {
+    ...(connectedScope !== undefined ? { connectedScope } : {}),
+    ...(connectedScopes !== undefined ? { connectedScopes } : {}),
+    ...(localKnowledgeScope !== undefined ? { localKnowledgeScope } : {}),
+    ...(localKnowledgeScopes !== undefined ? { localKnowledgeScopes } : {}),
+  };
+}
+
 function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): UpdateChatPatch {
   const title = optionalString(body, "title");
   const selectedModel = optionalChatModelId(deps, body, "selectedModel");
@@ -394,12 +790,37 @@ function buildChatPatch(deps: UiHandlerDeps, body: Record<string, unknown>): Upd
     ...(title !== undefined ? { title } : {}),
     ...(selectedModel !== undefined ? { selectedModel } : {}),
     ...(branchLabel !== undefined ? { branchLabel } : {}),
+    ...groundingScopePatchFields(body, deps),
   };
   if (statusRaw === undefined) return patch;
   if (statusRaw !== "open" && statusRaw !== "closed") {
     throw new InvalidRequest('Field "status" must be "open" or "closed".');
   }
   return { ...patch, status: statusRaw };
+}
+
+// Epic #532 — the connectedScopes list SUPERSEDES the single connectedScope. The effective set of
+// sources to access-validate is the list when present (non-null), else the single field. Returns
+// an empty list when the patch only clears or omits the binding (no filesystem checks needed).
+function scopesRequiringAccessValidation(patch: UpdateChatPatch): readonly ChatConnectedScope[] {
+  if (patch.connectedScopes !== undefined) {
+    return patch.connectedScopes ?? [];
+  }
+  if (patch.connectedScope !== undefined && patch.connectedScope !== null) {
+    return [patch.connectedScope];
+  }
+  return [];
+}
+
+// Epic #189 — the grounded index is invalidated when ANY grounding source changes: a connected
+// folder scope (#532) OR a local-knowledge connector scope. The hybrid path reads both.
+function patchTouchesGroundingScope(patch: UpdateChatPatch): boolean {
+  return (
+    patch.connectedScopes !== undefined ||
+    patch.connectedScope !== undefined ||
+    patch.localKnowledgeScopes !== undefined ||
+    patch.localKnowledgeScope !== undefined
+  );
 }
 
 export async function handleUpdateChat(
@@ -410,7 +831,19 @@ export async function handleUpdateChat(
     const id = requireQuery(ctx, "id");
     const body = await readJsonObject(ctx.req);
     const patch = buildChatPatch(deps, body);
+    const scopesToCheck = scopesRequiringAccessValidation(patch);
+    if (scopesToCheck.length > 0) {
+      const existing = findChatById(deps, id);
+      if (existing === undefined) return notFoundResult("Chat not found.");
+      for (const scope of scopesToCheck) {
+        validateConnectedScopeAccess(deps, existing, scope);
+      }
+    }
     const chat = deps.store.updateChat(id, patch);
+    if (patchTouchesGroundingScope(patch) || patch.status === "closed") {
+      clearGroundedContextIndexesForConversation(id);
+      clearGroundedTurnsForConversation(id);
+    }
     return { status: 200, body: { chat } };
   });
 }
@@ -423,6 +856,8 @@ export function handleDeleteChat(ctx: RouteContext, deps: UiHandlerDeps): RouteR
   return runHandlerSync(() => {
     const id = requireQuery(ctx, "id");
     deps.store.deleteChat(id);
+    clearGroundedContextIndexesForConversation(id);
+    clearGroundedTurnsForConversation(id);
     return { status: 204, body: null };
   });
 }
@@ -435,10 +870,16 @@ export function handleListMessages(ctx: RouteContext, deps: UiHandlerDeps): Rout
   return runHandlerSync(() => {
     const chatId = requireQuery(ctx, "chatId");
     const projectPath = requireQuery(ctx, "projectPath");
+    const limit = optionalBoundedQueryInteger(
+      ctx,
+      "limit",
+      DEFAULT_MESSAGE_LIST_LIMIT,
+      MAX_MESSAGE_LIST_LIMIT,
+    );
     if (!chatBelongsToProject(deps, projectPath, chatId)) {
       return notFoundResult("Chat not found.");
     }
-    const messages = deps.store.listMessages(chatId);
+    const messages = deps.store.listMessages(chatId, limit);
     return { status: 200, body: { messages } };
   });
 }

@@ -11,6 +11,7 @@ import {
   handleEvidenceDetail,
 } from "./read-handlers.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { STREAMING } from "./routes.js";
@@ -18,6 +19,7 @@ import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import {
   EvidenceReadError,
   EvidenceSchemaError,
+  InvalidRunIdError,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 
@@ -120,6 +122,9 @@ const SAMPLE_CONFIG: GatewayConfig = {
       toolCalling: true,
       structuredOutput: true,
       streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: false,
       costClass: "medium",
       latencyClass: "standard",
       throughputHint: "test fixture",
@@ -132,7 +137,7 @@ const SAMPLE_CONFIG: GatewayConfig = {
 describe("GET /api/config", () => {
   it("returns null config when none resolved", () => {
     const result = handleConfig(ctx("/api/config"), depsWith({}));
-    expect(result.body).toEqual({ config: null, configPresent: false });
+    expect(result.body).toMatchObject({ config: null, configPresent: false });
   });
 
   it("returns a safe config that never contains the apiKey or provider endpoint", () => {
@@ -146,6 +151,25 @@ describe("GET /api/config", () => {
     expect(json).not.toContain("apiKey");
     expect(json).not.toContain("baseUrl");
     expect(result.body).toMatchObject({ configPresent: true });
+  });
+
+  it("returns effectiveGroundingLimits with defaults when no config is resolved", () => {
+    const result = handleConfig(ctx("/api/config"), depsWith({}));
+    const body = result.body as { effectiveGroundingLimits: typeof DEFAULT_GROUNDING_LIMITS };
+    expect(body.effectiveGroundingLimits).toEqual(DEFAULT_GROUNDING_LIMITS);
+  });
+
+  it("returns effectiveGroundingLimits reflecting file config grounding block", () => {
+    const configWithGrounding = {
+      ...SAMPLE_CONFIG,
+      grounding: { maxConnectedSources: 4, maxLocalKnowledgeSources: 4 },
+    };
+    const result = handleConfig(
+      ctx("/api/config"),
+      depsWith({ config: configWithGrounding, configPresent: true }),
+    );
+    const body = result.body as { effectiveGroundingLimits: { maxConnectedSources: number } };
+    expect(body.effectiveGroundingLimits.maxConnectedSources).toBe(4);
   });
 });
 
@@ -549,6 +573,25 @@ describe("GET /api/evidence/:runId", () => {
     );
     expect(result.status).toBe(422);
     expect(result.body).toMatchObject({ error: { code: "EVIDENCE_READ" } });
+  });
+
+  it("maps an over-long runId to 400 with no filesystem path leaked (#622)", () => {
+    const store: EvidenceStore = {
+      put: () => "",
+      list: () => [],
+      get: () => {
+        throw new InvalidRunIdError("runId produces a filename that exceeds the filesystem limit");
+      },
+      delete: () => undefined,
+    };
+    const result = handleEvidenceDetail(
+      ctx("/api/evidence/run-x", { runId: "run-x" }),
+      depsWith({ evidenceStore: store }),
+    );
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
+    const message = (result.body as { error: { message: string } }).error.message;
+    expect(message).not.toMatch(/[/\\]/);
   });
 
   it("serves a present manifest as-is", () => {

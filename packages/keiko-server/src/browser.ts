@@ -119,6 +119,13 @@ async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promi
   }
 }
 
+const UNREACHABLE_BODY = {
+  reachable: false,
+  userAgent: null,
+  browserVersion: null,
+  webSocketDebuggerUrl: null,
+} as const;
+
 export async function handleBrowserStatus(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -134,8 +141,15 @@ export async function handleBrowserStatus(
     if (!Number.isFinite(port)) {
       throw new BrowserToolError("BAD_REQUEST", "Query parameter 'port' must be an integer.");
     }
-    const status = await guard.checkStatus(port);
-    return { status: 200, body: status };
+    try {
+      const status = await guard.checkStatus(port);
+      return { status: 200, body: status };
+    } catch (err) {
+      if (err instanceof BrowserToolError && err.code === "CHROME_UNREACHABLE") {
+        return { status: 200, body: UNREACHABLE_BODY };
+      }
+      throw err;
+    }
   });
 }
 

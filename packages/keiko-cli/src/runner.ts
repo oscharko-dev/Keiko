@@ -6,11 +6,13 @@ import { runGenTestsCli } from "./gen-tests.js";
 import { runInvestigateCli } from "./investigate.js";
 import { runEvidenceCli } from "./evidence.js";
 import { runEvaluateCli } from "./evaluate.js";
+import { runMemoryCli } from "./memory.js";
 import { runInitCli } from "./init.js";
 import { runLifecycleCli } from "./lifecycle.js";
 import { runUiCli } from "./ui.js";
+import { runLauncherCli } from "./launcher.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { SDK_VERSION } from "./_sdk-version.js";
+import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 
 // Pure CLI core: returns an exit code and writes through the injected IO so it is
 // testable without touching process.* (the thin process shim lives in index.ts).
@@ -36,7 +38,10 @@ Usage:
   keiko investigate [OPTIONS] Investigate a bug and propose a fix + regression test (dry-run by default).
   keiko evidence <list|show> Inspect redacted evidence manifests written by \`keiko run\`.
   keiko evaluate [OPTIONS]     Run the evaluation harness (offline by default; --live for live model).
+  keiko memory <maintain|stats> Run a memory maintenance pass or print vault stats (#204).
   keiko ui [OPTIONS]       Launch the local UI on 127.0.0.1 and print its URL.
+  keiko launcher <install|remove|status> [OPTIONS]
+                           Manage a user-local OS shortcut for \`keiko start --open\`.
 
 Exit codes:
   0  Success
@@ -59,12 +64,14 @@ const COMMAND_HANDLERS: Readonly<Record<string, CommandHandler>> = {
   investigate: runInvestigateCli,
   evidence: (rest, io, env) => runEvidenceCli(rest, io, { env }),
   evaluate: (rest, io, env) => runEvaluateCli(rest, io, env, {}),
+  memory: (rest, io, env) => runMemoryCli(rest, io, env),
   init: runInitCli,
   start: (rest, io, env) => runLifecycleCli("start", rest, io, env),
   stop: (rest, io, env) => runLifecycleCli("stop", rest, io, env),
   status: (rest, io, env) => runLifecycleCli("status", rest, io, env),
   restart: (rest, io, env) => runLifecycleCli("restart", rest, io, env),
   ui: runUiCli,
+  launcher: runLauncherCli,
 };
 
 // Dispatches named subcommands; returns undefined when the name is not recognised.

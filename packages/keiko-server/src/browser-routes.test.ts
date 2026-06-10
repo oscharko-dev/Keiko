@@ -22,6 +22,7 @@ import {
 interface FakeManagerOptions {
   readonly reachable?: boolean;
   readonly openShouldThrow?: BrowserToolError;
+  readonly checkShouldThrow?: BrowserToolError;
 }
 
 class FakeBrowserSessionManager implements BrowserSessionManager {
@@ -47,6 +48,7 @@ class FakeBrowserSessionManager implements BrowserSessionManager {
     browserVersion: string | null;
     webSocketDebuggerUrl: string | null;
   }> => {
+    if (this.opts.checkShouldThrow !== undefined) throw this.opts.checkShouldThrow;
     if (port < 1024 || port > 65535) {
       throw new BrowserToolError("BAD_PORT", "Port out of range.");
     }
@@ -295,6 +297,35 @@ describe("GET /api/browser/status", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { reachable: boolean };
     expect(body.reachable).toBe(false);
+  });
+
+  it("returns 200 reachable=false with null fields when CDP throws CHROME_UNREACHABLE", async () => {
+    const fx = await fixture({
+      fakeOpts: {
+        checkShouldThrow: new BrowserToolError("CHROME_UNREACHABLE", "connection refused"),
+      },
+    });
+    const res = await fetch(url(fx, "/api/browser/status?port=9222"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      reachable: boolean;
+      userAgent: unknown;
+      browserVersion: unknown;
+      webSocketDebuggerUrl: unknown;
+    };
+    expect(body.reachable).toBe(false);
+    expect(body.userAgent).toBeNull();
+    expect(body.browserVersion).toBeNull();
+    expect(body.webSocketDebuggerUrl).toBeNull();
+  });
+
+  it("still returns reachable=true with userAgent when CDP responds normally", async () => {
+    const fx = await fixture();
+    const res = await fetch(url(fx, "/api/browser/status?port=9222"));
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { reachable: boolean; userAgent: string | null };
+    expect(body.reachable).toBe(true);
+    expect(typeof body.userAgent).toBe("string");
   });
 
   it("rejects missing port query with 400 BAD_REQUEST envelope", async () => {

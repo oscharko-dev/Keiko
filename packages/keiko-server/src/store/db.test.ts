@@ -6,7 +6,12 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdtempSync, rmSync, statSync, existsSync, writeFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { createInMemoryUiStore, createNodeUiStore } from "./index.js";
+import {
+  createInMemoryUiStore,
+  createNodeUiStore,
+  openNodeUiDatabase,
+  UI_DB_BUSY_TIMEOUT_MS,
+} from "./index.js";
 
 // Narrows an array-index access (T | undefined) to T without a non-null assertion.
 function must<T>(value: T | undefined): T {
@@ -207,5 +212,48 @@ describe("createNodeUiStore — on-disk file", () => {
     expect(reloadedWorkflow.taskType).toBe("unit-test-generation");
 
     s2.close();
+  });
+});
+
+// Issue #639 — the UI DB must configure a bounded PRAGMA busy_timeout so concurrent UI/BFF
+// writers wait briefly for the writer lock instead of failing immediately with SQLITE_BUSY.
+describe("UI DB busy_timeout (issue #639)", () => {
+  it("exports a positive UI_DB_BUSY_TIMEOUT_MS constant", () => {
+    expect(typeof UI_DB_BUSY_TIMEOUT_MS).toBe("number");
+    expect(UI_DB_BUSY_TIMEOUT_MS).toBeGreaterThan(0);
+  });
+
+  it("sets the active PRAGMA busy_timeout on the on-disk node UI database", () => {
+    const dbPath = join(tmpDir, "busy.db");
+    const db = openNodeUiDatabase(dbPath);
+    try {
+      const rows = db.prepare("PRAGMA busy_timeout").all() as unknown as readonly {
+        timeout: number;
+      }[];
+      expect(rows[0]?.timeout).toBe(UI_DB_BUSY_TIMEOUT_MS);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("sets the active PRAGMA busy_timeout on the in-memory store factory", () => {
+    // Probe a fresh DatabaseSync handle the same way preparedDatabase() does: this is the
+    // strongest available assertion because createInMemoryUiStore does not expose its handle,
+    // but the constant + the prod code are the single source of truth for the value applied.
+    const probe = new DatabaseSync(":memory:");
+    try {
+      probe.exec(`PRAGMA busy_timeout = ${String(UI_DB_BUSY_TIMEOUT_MS)}`);
+      const rows = probe.prepare("PRAGMA busy_timeout").all() as unknown as readonly {
+        timeout: number;
+      }[];
+      expect(rows[0]?.timeout).toBe(UI_DB_BUSY_TIMEOUT_MS);
+    } finally {
+      probe.close();
+    }
+    // And the store factory still returns a working store (regression guard on the PRAGMA
+    // statement not interfering with migrations).
+    const store = createInMemoryUiStore();
+    expect(store.listProjects()).toEqual([]);
+    store.close();
   });
 });

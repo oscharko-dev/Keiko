@@ -2,7 +2,13 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["tests/**/*.test.ts", "packages/*/src/**/*.test.ts"],
+    include: [
+      "tests/**/*.test.ts",
+      "packages/*/src/**/*.test.ts",
+      // Issue #287: the QI supply-chain gate is a Node ESM script (.mjs), so its harness
+      // tests are .test.mjs and live under scripts/__tests__/ next to the script itself.
+      "scripts/__tests__/**/*.test.mjs",
+    ],
     // Fixture target-projects are standalone mini-projects copied to a tmp dir and run by the
     // integration tests via their OWN vitest config; their *.test.ts files (e.g. the
     // bug-investigation fixture's intentionally fail-before regression test) must not be collected
@@ -10,7 +16,6 @@ export default defineConfig({
     exclude: [
       "**/node_modules/**",
       "tests/fixtures/**",
-      "tests/upgrade-smoke/fixture/**",
       "packages/keiko-ui/**",
     ],
     // ADR-0013 D2 site 2 — `node:sqlite` requires --experimental-sqlite on Node 22.0–22.11 builds

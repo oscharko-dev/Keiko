@@ -1,0 +1,44 @@
+[
+  {
+    "id": "forget-by-type-preferences",
+    "description": "Two preference memories plus one decision the user wants to keep. selectMemoriesForForget(by-type preference) must select exactly the two preferences and leave the decision intact.",
+    "memories": [
+      {
+        "id": "forget-pref-one",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "preference",
+        "body": "prefer single quotes in javascript",
+        "tags": ["formatting"],
+        "confidence": 0.7,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "forget-pref-two",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "preference",
+        "body": "prefer semicolons in typescript",
+        "tags": ["formatting"],
+        "confidence": 0.75,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      },
+      {
+        "id": "keep-decision",
+        "scope": { "kind": "user", "userId": "user-alice" },
+        "type": "decision",
+        "body": "session timeout is thirty minutes",
+        "tags": ["security"],
+        "confidence": 0.9,
+        "capturedAt": 1700000000000,
+        "validFrom": 1700000000000,
+        "createdAt": 1700000000000,
+        "updatedAt": 1700000000000
+      }
+    ]
+  }
+]

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ApiError, setupGateway } from "@/lib/api";
 import { Icons } from "../Icons";
 
@@ -40,6 +41,7 @@ export function GatewaySetupDialog({
 }): ReactNode {
   const dialogRef = useRef<HTMLDivElement>(null);
   const baseUrlRef = useRef<HTMLInputElement>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
   const [baseUrl, setBaseUrl] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeyHeaderName, setApiKeyHeaderName] = useState("");
@@ -49,7 +51,11 @@ export function GatewaySetupDialog({
   const [success, setSuccess] = useState<string | undefined>();
 
   useEffect(() => {
+    triggerRef.current = document.activeElement as HTMLElement | null;
     baseUrlRef.current?.focus();
+    return () => {
+      triggerRef.current?.focus?.();
+    };
   }, []);
 
   const focusableInside = (root: HTMLElement): readonly HTMLElement[] => {
@@ -118,7 +124,14 @@ export function GatewaySetupDialog({
     }
   }
 
-  return (
+  // Issue #422: when this dialog is opened from the Settings panel, its
+  // ancestors include `.ws-scene`, which carries `will-change: transform` and
+  // a CSS `zoom`. Both establish a containing block for `position: fixed`
+  // descendants in Chromium, so the backdrop ends up sized to the zoomed
+  // scene (which has zero intrinsic width/height) instead of the viewport.
+  // Portalling to `document.body` makes the backdrop fixed to the viewport
+  // regardless of where the dialog is mounted in the React tree.
+  const dialogTree = (
     <div className="gw-setup-backdrop" role="presentation">
       <div
         ref={dialogRef}
@@ -218,4 +231,7 @@ export function GatewaySetupDialog({
       </div>
     </div>
   );
+
+  if (typeof document === "undefined") return dialogTree;
+  return createPortal(dialogTree, document.body);
 }

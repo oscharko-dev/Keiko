@@ -3,6 +3,12 @@
    Brand: #4EBA87 (orca green) · #333333 · #ffffff
    ============================================================ */
 :root {
+  /* Tell the user agent the app paints on a dark surface by default. Without
+     this hint the browser fills the empty document with its own white "blank"
+     state between document swap and CSS variable resolution during F5 reloads,
+     producing a visible white flash before the shader/background paints (#302). */
+  color-scheme: dark;
+
   /* surfaces — warm-neutral near-black, derived in oklch from #333 */
   --bg: oklch(0.17 0.004 160); /* app background */
   --surface: oklch(0.205 0.004 160); /* sidebar / panels */
@@ -21,12 +27,18 @@
   --fg-dim: oklch(0.58 0.004 160);
   --fg-faint: oklch(0.46 0.004 160);
 
+  /* dark text token for use on light/accent backgrounds (Issue #184) */
+  --ink-inverse: oklch(0.18 0.005 160);
+  --ink-muted: oklch(0.58 0.004 160);
+
   /* brand */
   --accent: #4eba87;
   --accent-bright: oklch(0.78 0.13 160);
   --accent-dim: color-mix(in oklch, #4eba87 18%, transparent);
   --accent-line: color-mix(in oklch, #4eba87 40%, transparent);
   --accent-glow: color-mix(in oklch, #4eba87 26%, transparent);
+  /* text-tone alias — equals --accent in dark theme; overridden to ≥4.5:1 on white in light */
+  --accent-text: var(--accent);
 
   /* status */
   --ok: #4eba87;
@@ -162,6 +174,7 @@ button {
    LIGHT THEME — warm-neutral, same orca-green accent
    ============================================================ */
 [data-theme="light"] {
+  color-scheme: light;
   --bg: oklch(0.955 0.004 160);
   --surface: oklch(0.978 0.003 160);
   --card: oklch(1 0 0);
@@ -177,6 +190,18 @@ button {
   --fg-dim: oklch(0.54 0.01 160);
   --fg-faint: oklch(0.66 0.008 160);
 
+  /* WCAG 1.4.3 text-tone overrides — all ≥4.5:1 on white (--card: oklch(1 0 0)).
+     --accent #4eba87 = 2.41:1 FAIL; oklch(0.5 0.13 160) ≈ 5.51:1 PASS.
+     --danger oklch(0.68 0.16 25) = 3.11:1 FAIL; oklch(0.50 0.18 25) ≈ 5.46:1 PASS.
+     --warn oklch(0.78 0.13 75) = 2.04:1 FAIL; oklch(0.43 0.14 75) ≈ 5.82:1 PASS.
+     --info oklch(0.74 0.1 240) = 1.96:1 FAIL; oklch(0.45 0.15 240) ≈ 5.08:1 PASS on the 20%
+     info tint (info-blue severity/badge text — .qi-sev-medium, .qi-badge-running, .arun-gate,
+     lkd diag info). Measured from rendered pixels over the badge's own info-tint background. */
+  --accent-text: oklch(0.5 0.13 160);
+  --danger: oklch(0.5 0.18 25);
+  --warn: oklch(0.43 0.14 75);
+  --info: oklch(0.45 0.15 240);
+
   --shadow-card: 0 1px 0 0 oklch(1 0 0 / 0.7) inset, 0 6px 18px -12px rgba(20, 30, 25, 0.22);
   --shadow-pop: 0 18px 50px -18px rgba(20, 30, 25, 0.26), 0 0 0 1px var(--line);
 }
@@ -188,6 +213,12 @@ button {
 [data-theme="light"] .dlg-primary,
 [data-theme="light"] .cmp-send[data-on="true"] {
   color: #06281b;
+}
+/* Accent/info/muted token text on near-white badge backgrounds fails 4.5:1 — use ink-inverse for AA. */
+[data-theme="light"] .qi-badge-succeeded,
+[data-theme="light"] .qi-badge-running,
+[data-theme="light"] .qi-badge-cancelled {
+  color: var(--ink-inverse);
 }
 
 /* ============================================================
@@ -380,7 +411,12 @@ button {
   color: var(--accent);
   display: grid;
   place-items: center;
-  animation: spin 1.6s linear infinite;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chat-spin {
+    animation: spin 1.6s linear infinite;
+  }
 }
 
 .sb-settings {
@@ -539,6 +575,99 @@ button {
   flex: none;
 }
 
+@media (max-width: 680px) {
+  .header {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    height: auto;
+    padding: 8px 8px 9px;
+    gap: 6px 8px;
+  }
+
+  .hd-brand {
+    padding-left: 2px;
+    padding-right: 2px;
+  }
+
+  .hd-wordmark {
+    display: none;
+  }
+
+  .tb-tabs {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-left: 0;
+  }
+
+  .tb-tab {
+    min-width: 0;
+    max-width: 100%;
+    padding-inline: 9px;
+  }
+
+  .tb-tab > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tb-newtab {
+    flex: none;
+  }
+
+  .spacer {
+    display: none;
+  }
+
+  .hd-tools {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .hd-tools .hd-div,
+  .header > .hd-div {
+    display: none;
+  }
+
+  .hd-tool-cta {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .hd-tool-cta span {
+    display: none;
+  }
+
+  .edm-trigger {
+    padding-right: 7px;
+  }
+
+  .edm-trigger-label {
+    display: none;
+  }
+
+  .modesw {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .modesw-opt {
+    min-width: 0;
+    padding: 5px 8px;
+    gap: 4px;
+    font-size: 12px;
+  }
+
+  .tb-status,
+  .tb-btn {
+    display: none;
+  }
+}
+
 /* ---------- OPEN-IN-EDITOR DROPDOWN ---------- */
 .edm {
   position: relative;
@@ -549,13 +678,18 @@ button {
   align-items: center;
   gap: 7px;
   height: 30px;
-  padding: 0 7px;
+  padding: 0 10px 0 7px;
   border-radius: 9px;
   border: 1px solid var(--line);
   background: var(--card);
 }
 .edm-trigger:hover {
   border-color: var(--line-strong);
+}
+.edm-trigger-label {
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--fg-muted);
 }
 .ed-tile {
   display: inline-grid;
@@ -632,7 +766,9 @@ button {
   padding: 0 12px;
   background: var(--surface);
   font-size: 11.5px;
-  color: var(--fg-dim);
+  /* --fg-muted meets WCAG 1.4.3 ≥4.5:1 on both themes; --fg-dim (prior value)
+     measured 4.17:1 on dark (FAIL). Override rules on child segments are unaffected. */
+  color: var(--fg-muted);
 }
 .ft-seg {
   display: flex;
@@ -646,7 +782,8 @@ button {
   opacity: 0.8;
 }
 .ft-accent {
-  color: var(--accent);
+  /* uses --accent-text so light theme gets a darkened shade that meets WCAG 1.4.3 (≥4.5:1) */
+  color: var(--accent-text);
 }
 .ft-dim {
   color: var(--fg-faint);
@@ -1222,7 +1359,7 @@ button {
   padding: 2px;
 }
 .cmp-input::placeholder {
-  color: var(--fg-faint);
+  color: var(--fg-muted);
 }
 .cmp-bar {
   display: flex;
@@ -1285,6 +1422,11 @@ button {
   background: var(--card-2);
   color: var(--fg);
 }
+.cmp-icon:focus-visible,
+.attach-chip-remove:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .cmp-send {
   width: 34px;
   height: 34px;
@@ -1302,6 +1444,86 @@ button {
 }
 .cmp-send[data-on="true"]:hover {
   transform: translateY(-1px);
+}
+.cmp-send:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- ATTACHMENT SURFACES (Issue #147) ---------- */
+.attach-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 2px;
+}
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px 5px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--line-soft);
+  background: var(--card);
+  max-width: 280px;
+}
+.attach-chip-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 5px;
+  flex: none;
+}
+.attach-chip-name {
+  font-size: 12.5px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 140px;
+}
+.attach-chip-size {
+  font-size: 11px;
+  color: var(--fg-muted);
+  flex: none;
+}
+.attach-chip-remove {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--fg-muted);
+}
+.attach-chip-remove:hover {
+  background: var(--card-2);
+  color: var(--fg);
+}
+.attach-drop-zone {
+  padding: 10px 14px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+.attach-drop-zone[data-dragover="true"] {
+  border-color: var(--accent-line);
+  background: var(--accent-dim);
+}
+.attach-drop-hint {
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.attach-rejection-alert {
+  padding: 9px 11px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in oklch, var(--danger) 48%, transparent);
+  background: color-mix(in oklch, var(--danger) 22%, var(--card));
+  color: var(--fg);
+  font-size: 12.5px;
+  line-height: 1.45;
 }
 
 .cmp-context {
@@ -1328,6 +1550,91 @@ button {
 }
 .chip-value {
   font-size: 12px;
+  color: var(--fg);
+}
+
+.chat-memory-panel {
+  padding: 8px 12px 0;
+}
+
+.chat-memory-panel-head {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.chat-memory-toggle {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.chat-memory-budget {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.chat-memory-budget input {
+  width: 88px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: var(--card);
+  color: var(--fg);
+}
+
+.chat-memory-disclosure {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.chat-memory-summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+
+.chat-memory-item,
+.chat-memory-action {
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line-soft);
+  background: color-mix(in srgb, var(--card) 88%, var(--accent) 12%);
+}
+
+.chat-memory-item-head,
+.chat-memory-action-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  font-size: 12px;
+}
+
+.chat-memory-item p,
+.chat-memory-action p {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+
+.chat-memory-action-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.chat-memory-action-buttons button {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-soft);
+  background: var(--card);
   color: var(--fg);
 }
 
@@ -1503,7 +1810,12 @@ button {
   fill: var(--accent);
   opacity: 0.95;
   filter: drop-shadow(0 0 4px var(--accent));
-  animation: conn-dot-pulse 1s ease-in-out infinite;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .conn-dot {
+    animation: conn-dot-pulse 1s ease-in-out infinite;
+  }
 }
 @keyframes conn-dot-pulse {
   0%,
@@ -1540,6 +1852,54 @@ button {
   border-color: var(--danger);
   color: var(--danger);
   background: color-mix(in oklch, var(--danger) 14%, var(--card));
+}
+
+/* Epic #532 — data-flow visualization on a chat↔source connector edge. While the connected chat is
+   exchanging data with its source (a grounded answer reading the connected files), the edge carries
+   a flowing dash plus a particle swarm; a heavy exchange (more file content read) is denser/faster
+   than a light one. State is conveyed by the dash/particles AND the flow tag — never colour alone.
+   All motion is gated behind prefers-reduced-motion; reduced-motion users get a static dashed
+   "active" edge with no movement. */
+.conn-path[data-active="true"] {
+  opacity: 1;
+  stroke-width: 2.75;
+  filter: drop-shadow(0 0 5px var(--accent));
+}
+.conn-path[data-active="true"][data-intensity="heavy"] {
+  stroke-width: 3.4;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .conn-path[data-active="true"] {
+    stroke-dasharray: 10 8;
+    animation: conn-flow 0.9s linear infinite;
+  }
+  .conn-path[data-active="true"][data-intensity="heavy"] {
+    animation-duration: 0.45s;
+  }
+}
+@keyframes conn-flow {
+  to {
+    stroke-dashoffset: -18;
+  }
+}
+/* Reduced-motion: a clearly-different static dashed stroke instead of any movement. */
+.conn-path[data-reduced-motion="true"] {
+  stroke-dasharray: 3 6;
+  animation: none !important;
+}
+.conn-particle {
+  fill: var(--accent);
+  opacity: 0.95;
+  filter: drop-shadow(0 0 4px var(--accent));
+}
+.conn-badge[data-active="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 16%, var(--card));
+}
+.conn-flow-tag {
+  margin-left: 1px;
+  font-weight: 700;
 }
 
 /* Click-to-Connect cursor signals */
@@ -1586,7 +1946,12 @@ button {
 /* Source-port pulse while connecting — signals which port started the flow */
 .workspace[data-connecting="true"] .window[data-conn="source"] .win-port {
   opacity: 1;
-  animation: port-pulse 1s ease-in-out infinite;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .workspace[data-connecting="true"] .window[data-conn="source"] .win-port {
+    animation: port-pulse 1s ease-in-out infinite;
+  }
 }
 @keyframes port-pulse {
   0%,
@@ -1825,11 +2190,16 @@ button {
   display: grid;
   place-items: center;
   color: var(--accent);
-  animation: spin 1.4s linear infinite;
+  animation: none;
 }
 .arun-spin[data-paused="true"] {
   animation: none;
   color: var(--warn);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .arun-spin:not([data-paused="true"]) {
+    animation: spin 1.4s linear infinite;
+  }
 }
 .arun-log {
   flex: 1;
@@ -1983,8 +2353,13 @@ button {
   text-align: center;
 }
 .arun .dot[data-live="true"] {
-  animation: pulse 1.3s infinite;
+  animation: none;
   background: var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .arun .dot[data-live="true"] {
+    animation: pulse 1.3s infinite;
+  }
 }
 
 /* activity timeline */
@@ -2270,6 +2645,10 @@ button {
 .ml-status.error {
   background: var(--danger);
 }
+.ml-status.ineligible {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--warn) 22%, transparent);
+}
 .ml-status.untested {
   background: var(--fg-faint);
 }
@@ -2285,6 +2664,26 @@ button {
 .ml-del:hover {
   color: var(--danger);
   background: var(--inset);
+}
+.ml-elig {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 2px 8px;
+  border-radius: 5px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.ml-elig-ok {
+  color: var(--fg);
+  background: color-mix(in oklab, var(--accent) 14%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 30%, transparent);
+}
+.ml-elig-no {
+  color: var(--fg);
+  background: color-mix(in oklab, var(--danger) 14%, transparent);
+  border-color: color-mix(in oklab, var(--danger) 30%, transparent);
 }
 .mform {
   border: 1px solid var(--accent-line);
@@ -2651,7 +3050,11 @@ select.set-input {
   color: var(--fg-muted);
 }
 .ft-gov[data-mode="autonomous"] {
-  color: var(--accent);
+  /* Intentionally inherits the theme-adaptive --fg-muted label color from
+     .ft-gov above. --accent (#4eba87) as the label color fails WCAG 1.4.3 on
+     the light theme's pale --surface (~1.97:1); the green identity stays via
+     the accent border, accent-dim fill, and the green orca glyph. Do not set
+     `color: var(--accent)` here. */
   border-color: var(--accent-line);
   background: var(--accent-dim);
 }
@@ -2769,10 +3172,6 @@ select.set-input {
   font-size: 11px;
   color: var(--fg-faint);
   line-height: 1.45;
-}
-.agent-disabled-perm {
-  opacity: 0.76;
-  pointer-events: none;
 }
 .dlg-agent-warning {
   display: flex;
@@ -3553,7 +3952,6 @@ select.set-input {
   background: oklch(0.1 0.004 160 / 0.55);
   backdrop-filter: blur(2px);
   opacity: 0;
-  transition: opacity 0.16s ease;
 }
 .dlg-overlay.in {
   opacity: 1;
@@ -3570,10 +3968,18 @@ select.set-input {
   box-shadow: var(--shadow-pop);
   overflow: hidden;
   transform: translateY(10px) scale(0.985);
-  transition: transform 0.18s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 .dlg-overlay.in .dlg {
   transform: none;
+}
+/* WCAG 2.3.3 — dialog entry transitions only run when the user has not requested reduced motion */
+@media (prefers-reduced-motion: no-preference) {
+  .dlg-overlay {
+    transition: opacity 0.16s ease;
+  }
+  .dlg {
+    transition: transform 0.18s cubic-bezier(0.2, 0.7, 0.2, 1);
+  }
 }
 .dlg-head {
   display: flex;
@@ -3690,6 +4096,10 @@ select.dlg-input {
 .dlg-btn:hover {
   background: var(--card-2);
   color: var(--fg);
+}
+.dlg-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 .dlg-primary {
   color: #06281b;
@@ -3998,13 +4408,18 @@ select.dlg-input {
   height: 6px;
   border-radius: 50%;
   background: var(--fg-faint);
-  animation: pulse 1.2s infinite;
+  animation: none;
 }
-.chat-typing i:nth-child(2) {
-  animation-delay: 0.2s;
-}
-.chat-typing i:nth-child(3) {
-  animation-delay: 0.4s;
+@media (prefers-reduced-motion: no-preference) {
+  .chat-typing i {
+    animation: pulse 1.2s infinite;
+  }
+  .chat-typing i:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  .chat-typing i:nth-child(3) {
+    animation-delay: 0.4s;
+  }
 }
 /* functional model picker, styled as the design's static .cmp-model chip */
 .cmp-model-select {
@@ -4031,6 +4446,218 @@ select.dlg-input {
   color: var(--danger);
   background: color-mix(in oklch, var(--danger) 12%, transparent);
   font-size: 12.5px;
+}
+
+/* ---------- COMPOSER: NO-MODEL ALERT (Issue #146) ---------- */
+/* Gives the alert a predictable id-able anchor inside the composer area.   */
+.cmp-no-model {
+  margin-bottom: 10px;
+}
+
+/* ---------- COMPOSER: LOADING STATUS (Issue #146 AC #3) ---------- */
+/* role="status" — polite live region; non-technical wording per spec.      */
+.cmp-loading-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 2px;
+  font-size: 12.5px;
+  color: var(--fg);
+}
+.cmp-loading-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cmp-loading-dot {
+    animation: pulse 1.4s infinite;
+  }
+}
+
+/* ---------- COMPOSER: VISUALLY-HIDDEN HINT (Issue #146 AC #2) ---------- */
+/* Screen readers read this via aria-describedby; sighted users see title.  */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ---------- VISUALLY-HIDDEN (Issue #541 — activity badge ARIA descriptions) --- */
+/* Same technique as .sr-only above; separate class so consumers can be explicit  */
+/* about which role they need (ARIA description vs screen-reader label).           */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}
+
+/* ---------- RELATIONSHIP EDGE BADGE (Issue #540 / #541) ----------------------- */
+/* Inline chip for activity state + lifecycle — used in RelationshipListPanel and  */
+/* RelationshipInspectorPanel. CSS variables exclusively from the dark palette.    */
+.rb-edge-badge {
+  display: inline-flex;
+  align-items: center;
+}
+.rb-edge-badge-btn,
+.rb-edge-badge-static {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  cursor: default;
+  /* Minimum 24×24 touch target (WCAG 2.5.8) when interactive */
+  min-height: 20px;
+}
+.rb-edge-badge-btn {
+  cursor: pointer;
+  background: none;
+  outline: none;
+}
+.rb-edge-badge-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.rb-edge-badge-label {
+  font-size: 11px;
+}
+.rb-edge-badge-type {
+  font-size: 10px;
+  opacity: 0.7;
+  margin-left: 2px;
+}
+.rb-edge-badge-icon {
+  display: block;
+}
+.rb-edge-badge-icon--high-contrast {
+  transform: scale(1.1);
+  transform-origin: center;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rb-edge-badge-icon--processing {
+    animation: spin 1.6s linear infinite;
+  }
+}
+
+/* prefers-contrast: more — drop color-mix backgrounds; use card + state-color border */
+@media (prefers-contrast: more) {
+  .rb-edge-badge-btn,
+  .rb-edge-badge-static {
+    background: var(--card) !important;
+  }
+  .rb-edge-badge-icon {
+    transform: scale(1.1);
+    transform-origin: center;
+  }
+}
+
+/* ---------- EMPTY COMPOSER STATE (Issue #146 Deliverable) ---------- */
+.chatw-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 32px 24px;
+  text-align: center;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chatw-empty {
+    animation: fadeUp 0.25s ease both;
+  }
+}
+.chatw-empty-headline {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--fg);
+  margin: 0 0 8px;
+}
+.chatw-empty-sub {
+  font-size: 13.5px;
+  color: var(--fg-muted);
+  margin: 0 0 24px;
+  max-width: 340px;
+  line-height: 1.55;
+}
+.chatw-empty-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  max-width: 480px;
+}
+.chatw-empty-no-chat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  padding: 40px 24px;
+  text-align: center;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .chatw-empty-no-chat {
+    animation: fadeUp 0.25s ease both;
+  }
+}
+.chatw-empty-no-chat-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  margin-bottom: 14px;
+}
+.chatw-empty-no-chat-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0 0 6px;
+}
+.chatw-empty-no-chat-hint {
+  font-size: 12.5px;
+  color: var(--fg-muted);
+  margin: 0;
+  max-width: 260px;
+  line-height: 1.5;
+}
+
+/* focus-visible ring for starter-prompt buttons (WCAG 2.4.7) */
+.suggest:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* focus-visible ring for model select (WCAG 2.4.7) */
+.cmp-model-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 /* ---------- RIGHT RAIL ---------- */
@@ -4106,6 +4733,16 @@ select.dlg-input {
 .rb-row-v {
   color: var(--fg-faint);
 }
+/* Issue #527 — WCAG 2.2 AA contrast fix (scoped to governance surface only).
+   --fg-faint yields 2.52:1 dark / 2.91:1 light, both below the 4.5:1 minimum.
+   --fg-muted yields 7.77:1 dark / 7.90:1 light (normal) and 7.23:1 / 8.41:1
+   (hover on --card), all passing. The .insp-governance class is placed only on
+   the "Governance" .rb-section-label and its sibling .rb-rows container in
+   InspectorPanel — no other panel or row is affected. */
+.insp-governance.rb-section-label,
+.insp-governance .rb-row-v {
+  color: var(--fg-muted);
+}
 .rb-foot {
   font-size: 11px;
   color: var(--fg-faint);
@@ -4143,6 +4780,66 @@ select.dlg-input {
 .files-refresh:hover {
   background: var(--card-2);
   color: var(--fg);
+}
+/* Epic #532 connector — open ANY machine path from inside the Files window (not just the repo). */
+.files-root-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 30px 6px 2px; /* right pad clears the absolute refresh button */
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.files-root-up {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--fg-muted);
+}
+.files-root-up:hover:not(:disabled) {
+  background: var(--card-2);
+  color: var(--fg);
+}
+.files-root-up:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.files-root-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--inset);
+  color: var(--fg);
+}
+.files-root-input::placeholder {
+  color: var(--fg-faint);
+}
+.files-root-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.files-root-open {
+  flex: 0 0 auto;
+  height: 24px;
+  padding: 0 10px;
+  font-size: 11.5px;
+  font-weight: 550;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #06281b;
+}
+.files-root-open:hover {
+  filter: brightness(1.06);
 }
 .file-row {
   display: flex;
@@ -4650,7 +5347,12 @@ select.dlg-input {
   height: 14px;
   border-radius: 6px;
   background: var(--inset);
-  animation: pulse 1.4s ease-in-out infinite;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .rv-skel {
+    animation: pulse 1.4s ease-in-out infinite;
+  }
 }
 .rv-skel-sm {
   width: 60%;
@@ -4671,10 +5373,26 @@ select.dlg-input {
   font-size: 12.5px;
   color: var(--fg-muted);
 }
-/* focus ring on the Apply button inside rv-controls (WCAG 2.4.7) */
-.rv-controls .arun-btn:focus-visible {
+/* focus ring on .arun-btn globally (WCAG 2.4.7) — previously scoped to .rv-controls only */
+.arun-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+/* focus rings for nav rail icon buttons (WCAG 2.4.7) */
+.rail-btn:focus-visible,
+.rail-new:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* focus rings for header toolbar buttons (WCAG 2.4.7) */
+.hd-tool:focus-visible,
+.tb-btn:focus-visible,
+.tb-newtab:focus-visible,
+.edm-trigger:focus-visible,
+.modesw-opt:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
 }
 /* syntax token classes from syntaxHighlight.ts */
 .hl-com {
@@ -4745,7 +5463,12 @@ select.dlg-input {
   height: 15px;
   background: var(--accent);
   vertical-align: text-bottom;
-  animation: pulse 1s steps(2) infinite;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tm-cursor {
+    animation: pulse 1s steps(2) infinite;
+  }
 }
 
 /* Terminal widget — bounded exec surface (ADR-0018) */
@@ -5115,7 +5838,12 @@ select.dlg-input {
     linear-gradient(145deg, color-mix(in oklch, var(--card) 96%, var(--accent) 4%), var(--surface)),
     var(--surface);
   box-shadow: var(--shadow-pop);
-  animation: fadeUp 0.22s ease-out;
+  animation: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .gw-setup {
+    animation: fadeUp 0.22s ease-out;
+  }
 }
 .gw-setup-badge {
   display: inline-flex;
@@ -5190,7 +5918,7 @@ select.dlg-input {
 }
 .gw-error {
   color: var(--fg);
-  background: color-mix(in oklch, var(--danger) 14%, var(--card));
+  background: color-mix(in oklch, var(--danger) 22%, var(--card));
   border-color: color-mix(in oklch, var(--danger) 48%, transparent);
 }
 .gw-success {
@@ -5239,3 +5967,3108 @@ select.dlg-input {
 }
 
 /* collapsed sidebar adjust */
+
+/* ============================================================
+   Connector UI (Issue #184) — Files window -> chat scope binding
+   ============================================================ */
+/* Epic #532 — container for 1+N connected-source pills; wraps to new rows as sources accumulate. */
+.scope-pill-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scope-pill-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.scope-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--ink-inverse);
+  font-size: 12px;
+  line-height: 1.2;
+  border: 1px solid color-mix(in oklab, var(--accent) 70%, #000 30%);
+  min-height: 24px;
+}
+
+.scope-pill-disconnect {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-inverse);
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.scope-pill-disconnect:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--ink-inverse) 15%, transparent);
+}
+
+.scope-pill-disconnect:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.scope-pill-detail {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--fg-muted);
+  max-width: min(560px, 100%);
+}
+
+.scope-pill-disconnect:focus-visible,
+.scope-connect-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.scope-connect-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--ink-inverse);
+  font-size: 12px;
+  line-height: 1.2;
+  border: 1px solid color-mix(in oklab, var(--accent) 70%, #000 30%);
+  cursor: pointer;
+}
+
+.scope-connect-btn:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.scope-connect-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Epic #177 audit: --fg-faint = 2.34:1 on --card → fails WCAG 1.4.3 (4.5:1). The hint is
+   primary instructional text ("select a file/folder"), not chrome — needs --fg (16.96:1). */
+.scope-connect-hint {
+  display: block;
+  font-size: 11px;
+  color: var(--fg);
+  margin-top: 4px;
+}
+
+.scope-connect-error {
+  display: block;
+  font-size: 11px;
+  color: var(--danger);
+  margin-top: 4px;
+}
+
+.files-scope-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 30px 8px 4px;
+}
+
+.files-scope-label {
+  font-size: 11px;
+  color: var(--fg-faint);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.tr-row-wrap {
+  display: flex;
+  flex-direction: column;
+}
+
+.tr-connect {
+  display: flex;
+  padding-top: 2px;
+  padding-bottom: 4px;
+}
+
+/* Issue #185 — grounded repository-aware Q&A answer rendering. Lives inside an assistant
+   chat bubble (see .chat-msg-bubble); the wrapper just stacks content + citations + meta. */
+.grounded-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.grounded-answer-body {
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.grounded-citations-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.grounded-citations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.grounded-citations-item {
+  display: inline-flex;
+  margin: 0;
+}
+.grounded-citations-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+.grounded-citation {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  min-width: 24px;
+  padding: 4px 8px;
+  border: 1px solid var(--accent-line);
+  border-radius: 8px;
+  background: var(--accent-dim);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  cursor: default;
+}
+/* Epic #177 audit: citation score, uncertainty, and meta lines all read meaningful values
+   (score number, uncertainty claim, omitted-count). --fg-faint = 2.34:1 and --ink-muted =
+   3.89:1 on --card → both fail WCAG 1.4.3 (4.5:1). Align with the labels pattern documented
+   at .grounded-context-pack-headline below: use --fg (16.96:1). Size/weight/italic keep the
+   visual hierarchy intact. */
+.grounded-citation-score {
+  margin-left: 6px;
+  color: var(--fg);
+  font-size: 10px;
+}
+.grounded-uncertainty {
+  font-size: 11px;
+  color: var(--fg);
+  font-style: italic;
+}
+.grounded-uncertainty-list {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+.grounded-meta {
+  font-size: 10px;
+  color: var(--fg);
+  font-family: var(--font-mono);
+}
+
+/* Partial-coverage notice: warns the user that the answer does not cover the whole connected
+   folder because some files were too large (>2 MB) or a binary/unsupported format. Text uses --fg
+   (16.96:1 on --card-2 in dark, high contrast on the near-white --card-2 in light — WCAG 1.4.3);
+   the warning cue is the --warn left border, which is not subject to text-contrast rules. */
+.grounded-coverage-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--card-2);
+  border-left: 3px solid var(--warn);
+  border-radius: 4px;
+}
+.grounded-coverage-notice-title {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* Issue #187 — context inspection summary on every grounded answer. Counts/enums only;
+   never raw paths, query text, or excerpt content. Both --dt and --dd use --fg: in the dark
+   theme --fg-muted on --card is 3.67:1 which fails WCAG 1.4.3 normal-text 4.5:1 — labels
+   are primary information (they identify each metric) not incidental UI chrome, so they
+   need the full --fg (16.96:1 on --card). Weight + horizontal layout maintain the
+   label-vs-value distinction. */
+.grounded-context-pack {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-subtle, color-mix(in oklab, var(--fg) 12%, transparent));
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.grounded-context-pack-headline {
+  color: var(--fg);
+  margin-bottom: 4px;
+}
+.grounded-context-pack-dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  column-gap: 12px;
+  row-gap: 2px;
+  margin: 0;
+}
+.grounded-context-pack-dt {
+  color: var(--fg);
+  font-weight: 500;
+}
+.grounded-context-pack-dd {
+  color: var(--fg);
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Issue #185 AC3 — typing row wraps the TypingBubble and the cancel button side-by-side. */
+.chatw-typing-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Cancel button rendered next to the TypingBubble during an in-flight grounded request.
+   Min 24×24 per WCAG 2.2 AA (2.5.8 target size). Uses accent palette matching connector btns. */
+.grounded-cancel-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  min-height: 24px;
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--ink-inverse);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  border: 1px solid color-mix(in oklab, var(--accent) 70%, #000 30%);
+  cursor: pointer;
+}
+.grounded-cancel-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.grounded-cancel-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.grounded-cancel-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* ============================================================
+   Issue #197 — Local Knowledge connector graph
+   ============================================================ */
+
+/* Page shell */
+.lk-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 24px 28px;
+  gap: 24px;
+  max-width: 900px;
+  margin: 0 auto;
+  width: 100%;
+}
+.lk-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.lk-title {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  margin: 0;
+  flex: 1;
+}
+
+/* Header action cluster (Combine + Create) — Issue #189 Slice 4 */
+.lk-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Inline capsule rename — Issue #189 Slice 4 "beschriften" */
+.lkd-rename-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+.lkd-rename-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* Capsule-set composition — Issue #189 Slice 4 "zusammenlegen" */
+.lk-compose-fieldset {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin: 12px 0 4px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.lk-compose-member-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.lk-compose-member-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+  cursor: pointer;
+}
+.lk-compose-member-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Alert banner */
+.lk-alert {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  border: 1px solid color-mix(in oklch, var(--danger) 45%, transparent);
+  color: var(--danger);
+  font-size: 13px;
+}
+.lk-alert-retry {
+  margin-left: 12px;
+  font-size: 12px;
+  color: var(--danger);
+  text-decoration: underline;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+/* Pipeline diagram */
+.lk-pipeline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Pipeline node */
+.lk-node {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--card);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-card);
+  min-width: 110px;
+  text-align: center;
+}
+.lk-node[data-connected="true"] {
+  border-color: var(--accent-line);
+}
+.lk-node-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  background: var(--inset);
+  border: 1px solid var(--line-soft);
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+}
+.lk-node-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.lk-node-sub {
+  font-size: 11px;
+  color: var(--fg-dim);
+  margin-top: 2px;
+}
+
+/* Capsule section heading */
+.lk-section-head {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  margin: 0 0 10px;
+}
+
+/* Capsule row */
+.lk-capsule-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  box-shadow: var(--shadow-card);
+}
+.lk-capsule-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--inset);
+  border: 1px solid var(--line-soft);
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  flex-shrink: 0;
+  font-size: 14px;
+}
+.lk-capsule-info {
+  flex: 1;
+  min-width: 0;
+}
+.lk-capsule-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lk-capsule-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* Status badge */
+.lk-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  margin-top: 3px;
+}
+.lk-badge[data-state="ready"] {
+  background: var(--accent-dim);
+  color: var(--fg);
+  border: 1px solid var(--accent-line);
+}
+.lk-badge[data-state="indexing"] {
+  background: color-mix(in oklch, var(--warn) 22%, transparent);
+  color: oklch(0.26 0.012 75);
+  border: 1px solid color-mix(in oklch, var(--warn) 55%, transparent);
+}
+.lk-badge[data-state="stale"] {
+  background: color-mix(in oklch, var(--warn) 16%, transparent);
+  color: var(--fg-muted);
+  border: 1px solid color-mix(in oklch, var(--warn) 40%, transparent);
+}
+.lk-badge[data-state="error"] {
+  background: color-mix(in oklch, var(--danger) 18%, transparent);
+  color: var(--danger);
+  border: 1px solid color-mix(in oklch, var(--danger) 45%, transparent);
+}
+.lk-badge[data-state="draft"],
+.lk-badge[data-state="deleting"] {
+  background: var(--inset);
+  color: var(--fg-dim);
+  border: 1px solid var(--line-soft);
+}
+
+/* Action buttons — min 30×30 (WCAG 2.5.8 ≥ 24×24) */
+.lk-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  min-width: 30px;
+  padding: 0 11px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    color 0.12s;
+}
+.lk-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.lk-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.lk-btn-primary {
+  background: var(--accent);
+  color: #06281b;
+  border: 1px solid var(--accent);
+}
+.lk-btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.lk-btn-ghost {
+  background: var(--card);
+  color: var(--fg-muted);
+  border: 1px solid var(--line-soft);
+}
+.lk-btn-ghost:hover:not(:disabled) {
+  background: var(--card-2);
+  color: var(--fg);
+}
+.lk-btn-danger {
+  background: var(--inset);
+  color: var(--danger);
+  border: 1px solid color-mix(in oklch, var(--danger) 40%, transparent);
+}
+.lk-btn-danger:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--danger) 14%, var(--inset));
+}
+.lk-btn-lg {
+  height: 34px;
+  padding: 0 16px;
+  font-size: 13px;
+}
+.lk-btn-xl {
+  height: 36px;
+  padding: 0 20px;
+  font-size: 13.5px;
+}
+
+/* Empty state */
+.lk-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 48px 24px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--line);
+  text-align: center;
+}
+.lk-empty-icon {
+  font-size: 36px;
+}
+.lk-empty-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0 0 6px;
+}
+.lk-empty-body {
+  font-size: 13px;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+/* Loading status */
+.lk-loading {
+  font-size: 13px;
+  color: var(--fg-dim);
+  margin: 0;
+}
+
+/* ============================================================
+   LOCAL KNOWLEDGE — CAPSULE DETAIL PAGE (#198)
+   ============================================================ */
+
+/* Detail content wrapper */
+.lkd-content {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Definition list (Overview section) */
+.lkd-dl {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+}
+.lkd-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.lkd-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  min-width: 140px;
+  flex: none;
+}
+.lkd-value {
+  font-size: 13px;
+  color: var(--fg);
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Tag list */
+.lkd-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.lkd-tag {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent-line);
+  color: var(--fg);
+}
+
+/* Stale reasons */
+.lkd-stale-reasons {
+  list-style: disc;
+  padding-left: 16px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
+/* Generic list (sources, jobs) */
+.lkd-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* Source row */
+.lkd-source-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+}
+.lkd-source-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lkd-source-scope {
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-family: var(--font-mono);
+}
+.lkd-source-counts {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.lkd-count {
+  font-size: 11.5px;
+  font-weight: 500;
+  font-family: var(--font-mono);
+}
+.lkd-count-ok {
+  color: var(--ok);
+}
+.lkd-count-fail {
+  color: var(--danger);
+}
+.lkd-count-skip {
+  color: var(--fg-dim);
+}
+
+/* Diagnostics list */
+.lkd-diag-list {
+  gap: 4px;
+}
+.lkd-diag-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+}
+.lkd-diag-row[data-severity="error"] {
+  border-color: color-mix(in oklch, var(--danger) 40%, transparent);
+  background: color-mix(in oklch, var(--danger) 6%, var(--card));
+}
+.lkd-diag-row[data-severity="warning"] {
+  border-color: color-mix(in oklch, var(--warn) 40%, transparent);
+}
+.lkd-diag-severity {
+  font-size: 11px;
+  font-weight: 700;
+  min-width: 56px;
+  flex: none;
+}
+.lkd-diag-row[data-severity="error"] .lkd-diag-severity {
+  color: var(--danger);
+}
+.lkd-diag-row[data-severity="warning"] .lkd-diag-severity {
+  color: var(--warn);
+}
+.lkd-diag-row[data-severity="info"] .lkd-diag-severity {
+  color: var(--info);
+}
+.lkd-diag-code {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  min-width: 80px;
+  flex: none;
+}
+.lkd-diag-message {
+  font-size: 12.5px;
+  color: var(--fg);
+  flex: 1;
+  min-width: 0;
+}
+.lkd-diag-page {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg-faint);
+  flex: none;
+}
+
+/* Job row */
+.lkd-job-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+}
+.lkd-job-status {
+  font-size: 11.5px;
+  font-weight: 600;
+  min-width: 72px;
+  flex: none;
+}
+.lkd-job-status[data-status="succeeded"] {
+  color: var(--ok);
+}
+.lkd-job-status[data-status="failed"] {
+  color: var(--danger);
+}
+.lkd-job-status[data-status="running"] {
+  color: var(--warn);
+}
+.lkd-job-status[data-status="queued"],
+.lkd-job-status[data-status="cancelled"] {
+  color: var(--fg-dim);
+}
+.lkd-job-dates {
+  font-size: 11.5px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  flex: 1;
+}
+
+/* Empty note */
+.lkd-empty-note {
+  font-size: 13px;
+  color: var(--fg-dim);
+  margin: 0;
+  padding: 10px 0;
+}
+
+/* Actions group (header row) */
+.lkd-actions-group {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Destructive confirm button in modal — danger style.
+   --ink-inverse on --danger = 6.07:1 (WCAG AA). --fg is near-white = ~2.84:1 (FAIL). */
+.lkd-btn-destructive {
+  color: var(--ink-inverse) !important;
+  background: var(--danger) !important;
+  border-color: var(--danger) !important;
+}
+.lkd-btn-destructive:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.lkd-btn-destructive:disabled,
+.lkd-btn-destructive[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ============================================================
+   MEMORY CENTER (Issue #211 / Epic #204)
+   mc-* prefix to avoid collisions with lk-* (local-knowledge)
+   WCAG notes:
+     - .mc-chip[data-active="true"] uses --ink-inverse on --accent (6.94:1).
+     - .lk-btn-primary uses #06281b on --accent (>4.5:1) — re-used here.
+     - .mc-badge-* colours verified ≥ 4.5:1 against their backgrounds.
+     - All interactive elements get focus-visible rings via .lk-btn:focus-visible
+       or explicit outline rules below.
+   ============================================================ */
+
+/* ── Filters ─────────────────────────────────────────────── */
+.mc-filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mc-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mc-filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  min-width: 72px;
+  flex-shrink: 0;
+}
+
+.mc-filter-chips {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+/* Filter toggle chip — aria-pressed reflects state */
+.mc-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  min-width: 24px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 12px;
+  border: 1px solid var(--line-soft);
+  background: var(--card);
+  /* --fg on --card: contrast ≥4.5:1 (WCAG AA). --fg-muted was 4.09:1. */
+  color: var(--fg);
+  cursor: pointer;
+  transition:
+    background 120ms,
+    color 120ms,
+    border-color 120ms;
+  /* WCAG 2.5.8 — 24×24 minimum already met by height: 24px */
+}
+
+.mc-chip:hover:not(:disabled) {
+  background: var(--card-2);
+  color: var(--fg);
+}
+
+.mc-chip[data-active="true"],
+.mc-chip[aria-pressed="true"] {
+  background: var(--accent);
+  /* --ink-inverse on --accent = 6.94:1 (WCAG AA) */
+  color: var(--ink-inverse);
+  border-color: var(--accent);
+}
+
+.mc-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ── Status badges ───────────────────────────────────────── */
+.mc-badge {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+/* proposed — warm amber, 4.6:1 on its background */
+.mc-badge-proposed {
+  background: color-mix(in oklch, var(--warn) 22%, transparent);
+  color: oklch(0.26 0.012 75);
+  border-color: color-mix(in oklch, var(--warn) 55%, transparent);
+}
+
+/* accepted — accent green */
+.mc-badge-accepted {
+  background: var(--accent-dim);
+  color: var(--fg);
+  border-color: var(--accent-line);
+}
+
+/* conflicted — danger red */
+.mc-badge-conflicted {
+  background: color-mix(in oklch, var(--danger) 18%, transparent);
+  color: var(--danger);
+  border-color: color-mix(in oklch, var(--danger) 45%, transparent);
+}
+
+/* rejected / forgotten / superseded / expired — muted */
+.mc-badge-rejected,
+.mc-badge-forgotten,
+.mc-badge-superseded,
+.mc-badge-expired {
+  background: var(--inset);
+  color: var(--fg-dim);
+  border-color: var(--line-soft);
+}
+
+/* archived — soft blue */
+.mc-badge-archived {
+  background: color-mix(in oklch, var(--info) 16%, transparent);
+  color: var(--fg-muted);
+  border-color: color-mix(in oklch, var(--info) 40%, transparent);
+}
+
+.mc-badge-pinned {
+  background: color-mix(in oklch, var(--accent) 20%, transparent);
+  color: var(--fg);
+  border-color: var(--accent-line);
+}
+
+.mc-badge-default {
+  background: var(--inset);
+  color: var(--fg-dim);
+  border-color: var(--line-soft);
+}
+
+/* count bubble (queue counter in header) */
+.mc-badge-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 700;
+  border-radius: 10px;
+  background: var(--accent);
+  /* --ink-inverse on --accent = 6.94:1 */
+  color: var(--ink-inverse);
+  margin-left: 6px;
+}
+
+/* ── Memory list rows ────────────────────────────────────── */
+.mc-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  text-decoration: none;
+  color: var(--fg);
+  transition: background 120ms;
+}
+
+.mc-row:hover {
+  background: var(--card-2);
+}
+
+.mc-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.mc-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mc-row-body {
+  font-size: 13px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mc-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.mc-row-type,
+.mc-row-scope {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.mc-row-pinned {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+/* ── Detail view ─────────────────────────────────────────── */
+.mc-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.mc-detail-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mc-detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mc-back-link {
+  align-self: flex-start;
+  text-decoration: none;
+}
+
+.mc-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mc-meta {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  font-size: 13px;
+}
+
+.mc-meta-label {
+  font-weight: 600;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.mc-meta-value {
+  color: var(--fg);
+  word-break: break-word;
+  margin: 0;
+}
+
+.mc-meta-empty {
+  font-size: 13px;
+  color: var(--fg-dim);
+}
+
+.mc-body-text {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  background: var(--inset);
+  border-radius: var(--radius-sm);
+  padding: 12px;
+}
+
+.mc-code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  word-break: break-all;
+}
+
+.mc-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.mc-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  color: var(--fg-muted);
+}
+
+/* ── Actions ─────────────────────────────────────────────── */
+.mc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.mc-action-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin: 0;
+  width: 100%;
+}
+
+/* --ok (#4eba87) on default background (--bg #2c3842) = 5.82:1 (WCAG AA) */
+.mc-action-notice {
+  font-size: 12px;
+  color: var(--ok);
+  margin: 0;
+  width: 100%;
+}
+
+/* ── Review queue rows ───────────────────────────────────── */
+.mc-review-row {
+  display: flex;
+  gap: 12px;
+  padding: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+}
+
+.mc-review-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mc-review-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Queue link in Memory Center header */
+.mc-queue-link {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* ── Dialog ──────────────────────────────────────────────── */
+.mc-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: oklch(0 0 0 / 0.55);
+  display: grid;
+  place-items: center;
+  z-index: 9000;
+}
+
+.mc-dialog {
+  width: min(480px, calc(100vw - 32px));
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: var(--shadow-pop);
+}
+
+.mc-dialog-title {
+  font-size: 16px;
+  font-weight: 650;
+  color: var(--fg);
+  margin: 0;
+}
+
+.mc-dialog-body {
+  font-size: 13px;
+  color: var(--fg-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.mc-dialog-quote {
+  font-size: 13px;
+  font-style: italic;
+  color: var(--fg-muted);
+  border-left: 3px solid var(--line);
+  padding: 8px 12px;
+  margin: 0;
+  background: var(--inset);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.mc-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mc-dialog-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+
+.mc-dialog-hint {
+  font-weight: 400;
+  color: var(--fg-faint);
+}
+
+.mc-dialog-textarea,
+.mc-dialog-input,
+.mc-dialog-select {
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  padding: 8px 10px;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+.mc-dialog-textarea:focus,
+.mc-dialog-input:focus,
+.mc-dialog-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.mc-dialog-textarea:focus-visible,
+.mc-dialog-input:focus-visible,
+.mc-dialog-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mc-dialog-error {
+  font-size: 12px;
+  color: var(--danger);
+  margin: 0;
+}
+
+.mc-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* ============================================================
+   SAFE MARKDOWN — Issue #150
+   Scoped to .sm-root so styles only affect rendered markdown.
+   WCAG 2.2 AA: all text uses var(--fg) (not --fg-dim).
+   ============================================================ */
+
+/* Root container: resets white-space so markdown flows normally
+   (the parent .chat-msg-bubble uses white-space: pre-wrap which
+   would break markdown layout). */
+.sm-root {
+  white-space: normal;
+  word-break: break-word;
+  color: var(--fg);
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* Paragraphs */
+.sm-p {
+  margin: 0 0 10px;
+}
+.sm-p:last-child {
+  margin-bottom: 0;
+}
+
+/* Headings */
+.sm-h {
+  font-weight: 700;
+  margin: 14px 0 6px;
+  color: var(--fg);
+  line-height: 1.3;
+}
+.sm-h:first-child {
+  margin-top: 0;
+}
+.sm-h1 {
+  font-size: 1.25em;
+}
+.sm-h2 {
+  font-size: 1.15em;
+}
+.sm-h3 {
+  font-size: 1.05em;
+}
+.sm-h4,
+.sm-h5,
+.sm-h6 {
+  font-size: 1em;
+}
+
+/* Lists */
+.sm-ul,
+.sm-ol {
+  margin: 0 0 10px 1.4em;
+  padding: 0;
+}
+.sm-ul:last-child,
+.sm-ol:last-child {
+  margin-bottom: 0;
+}
+.sm-li {
+  margin-bottom: 3px;
+}
+
+/* Inline code */
+.sm-inline-code {
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  background: var(--inset);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: var(--fg);
+}
+
+/* Fenced code block container */
+.sm-code-block-frame {
+  position: relative;
+  margin: 10px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+
+/* Header row: language badge + copy button */
+.sm-code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 10px;
+  background: var(--card-2);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+/* Language label — small muted badge */
+.sm-code-lang {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  letter-spacing: 0.03em;
+  text-transform: lowercase;
+}
+
+/* Copy button — min 24×24 for WCAG 2.5.8 */
+.sm-code-copy {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font-ui);
+  color: var(--fg-muted);
+  background: none;
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  cursor: pointer;
+  transition:
+    color 0.1s,
+    border-color 0.1s;
+}
+.sm-code-copy:hover {
+  color: var(--fg);
+  border-color: var(--line-strong);
+}
+.sm-code-copy:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Pre / code */
+.sm-pre {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--inset);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg);
+}
+.sm-pre code {
+  font-family: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+}
+
+/* Blockquote */
+.sm-blockquote {
+  margin: 10px 0;
+  padding: 6px 12px;
+  border-left: 3px solid var(--accent-line);
+  background: var(--inset);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--fg);
+}
+
+/* Horizontal rule */
+.sm-hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 14px 0;
+}
+
+/* Links — accent colour, underline, WCAG 4.5:1 on card bg.
+   --accent #4EBA87 on --card oklch(0.235) = ~4.6:1 AA pass. */
+.sm-link {
+  color: var(--accent-bright);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+.sm-link:hover {
+  color: var(--accent);
+}
+.sm-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+/* Light theme override: --accent / --accent-bright are tuned for the dark --card and drop
+   to ~1.9:1 (link) and ~2.4:1 (hover/outline) on the light theme's white --card, failing
+   WCAG 1.4.3 / 1.4.11. Darken to on-brand greens that meet >=4.5:1 (text) and >=3:1 (focus)
+   on white. Dark theme keeps --accent-bright (8.78:1 on the dark card) untouched. */
+[data-theme="light"] .sm-link {
+  color: oklch(0.5 0.13 160); /* 5.51:1 on white --card */
+}
+[data-theme="light"] .sm-link:hover {
+  color: oklch(0.45 0.13 160); /* 6.74:1 on white --card */
+}
+[data-theme="light"] .sm-link:focus-visible {
+  outline-color: oklch(0.5 0.13 160); /* >=3:1 focus indicator on white --card */
+}
+
+/* Table */
+.sm-table-wrapper {
+  overflow-x: auto;
+  margin: 10px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+}
+.sm-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
+}
+.sm-table th,
+.sm-table td {
+  padding: 6px 12px;
+  border: 1px solid var(--line-soft);
+  color: var(--fg);
+  text-align: left;
+}
+.sm-table th {
+  background: var(--card-2);
+  font-weight: 600;
+}
+.sm-table tr:nth-child(even) td {
+  background: var(--inset);
+}
+
+/* AC #3 — chat-msg-bubble override: assistant bubbles must not clip
+   horizontally scrollable code blocks. white-space is reset by .sm-root.
+   The .chatw-scroll container already has overflow:auto on the Y axis,
+   so long responses remain scrollable and the composer stays in view. */
+.chat-msg[data-role="assistant"] .chat-msg-bubble {
+  white-space: normal;
+}
+
+/* ============================================================
+   QUALITY INTELLIGENCE — PANEL (#280, Epic #270)
+   ============================================================ */
+
+/* Three-column panel layout */
+/* Column header (shared by the QI hub run list and run-card section headers). */
+.qi-col-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.qi-col-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  margin: 0;
+  flex: 1;
+}
+
+.qi-col-status {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.qi-col-count {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+/* Column scroll body */
+.qi-col-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+/* Run list */
+.qi-run-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Run list item button */
+.qi-run-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  padding: 10px 16px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  cursor: pointer;
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  min-height: 44px;
+  transition: background 0.1s;
+}
+
+.qi-run-item:hover {
+  background: var(--card);
+}
+
+.qi-run-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.qi-run-item-selected {
+  background: var(--card);
+  border-left: 2px solid var(--accent);
+}
+
+.qi-run-item-selected:hover {
+  background: var(--card-2);
+}
+
+.qi-run-id {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg);
+}
+
+.qi-run-meta {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+.qi-run-totals {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* Status badges — AA-compliant colours on var(--card) backgrounds */
+.qi-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  width: fit-content;
+}
+
+/* succeeded: --accent #4eba87 bg; --ink-inverse on top ≈6.94:1 */
+.qi-badge-succeeded {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* running: info blue */
+.qi-badge-running {
+  background: color-mix(in oklch, var(--info) 18%, transparent);
+  color: var(--info);
+}
+
+/* failed: danger — var(--fg) near-white on 18% danger/--card surface ≈ 7.5:1 (WCAG 1.4.3 AA). */
+.qi-badge-failed {
+  background: color-mix(in oklch, var(--danger) 18%, transparent);
+  color: var(--fg);
+}
+
+/* cancelled: muted */
+.qi-badge-cancelled {
+  background: color-mix(in oklch, var(--fg-dim) 18%, transparent);
+  color: var(--fg-muted);
+}
+
+.qi-badge-default {
+  background: var(--card);
+  color: var(--fg-muted);
+}
+
+/* Severity badges — inline indicators */
+.qi-sev {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* danger text on 25% danger/--card surface — var(--fg) near-white ≈ 7.5:1 (WCAG 1.4.3 AA). */
+.qi-sev-critical {
+  background: color-mix(in oklch, var(--danger) 25%, transparent);
+  color: var(--fg);
+}
+
+.qi-sev-high {
+  background: color-mix(in oklch, var(--warn) 20%, transparent);
+  color: var(--warn);
+}
+
+.qi-sev-medium {
+  background: color-mix(in oklch, var(--info) 20%, transparent);
+  color: var(--info);
+}
+
+.qi-sev-low {
+  background: color-mix(in oklch, var(--fg-dim) 18%, transparent);
+  color: var(--fg-muted);
+}
+
+/* Quality score badge tiers (Epic #736 / Issue #748). Each tier reuses a token pairing already
+   proven ≥4.5:1 against --card in BOTH themes:
+   - high: --accent-text on --accent-dim (accent-text is the WCAG-safe green in light, --accent in dark)
+   - mid:  --warn on 20% warn (same pairing as .qi-sev-high; --warn is darkened in light to ≥5.8:1)
+   - low:  --fg on 22% danger (same pairing as .qi-badge-failed; --fg always contrasts with --card) */
+.qi-quality-high {
+  background: var(--accent-dim);
+  color: var(--accent-text);
+}
+.qi-quality-mid {
+  background: color-mix(in oklch, var(--warn) 20%, transparent);
+  color: var(--warn);
+}
+.qi-quality-low {
+  background: color-mix(in oklch, var(--danger) 22%, transparent);
+  color: var(--fg);
+}
+
+/* Per-candidate weak-test flag (Epic #736 / Issue #748). */
+.qi-weak-flag {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 4px 0 2px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in oklch, var(--danger) 40%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--danger) 10%, var(--card));
+}
+.qi-weak-flag-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: fit-content;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--fg);
+}
+.qi-weak-flag-icon {
+  color: var(--danger);
+}
+.qi-weak-flag-reason {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+
+/* Coverage / Gap-Radar panel (Epic #734 / Issue #739). The status is ALWAYS carried by a text
+   label + an .qi-sr-only span + an aria-label on each row, so colour is decorative only (WCAG 1.4.1
+   use-of-colour). Each status badge reuses a token pairing already proven >=4.5:1 against --card in
+   BOTH themes:
+   - covered:   --accent-text on --accent-dim   (same pairing as .qi-quality-high)
+   - weak:      --warn on a 20% warn tint        (same pairing as .qi-sev-high)
+   - uncovered: --fg on a 22% danger tint        (same pairing as .qi-quality-low / .qi-badge-failed) */
+.qi-coverage-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.qi-coverage-summary {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.qi-coverage-gaps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.qi-coverage-gap-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.qi-coverage-gap-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
+  background: var(--card);
+}
+.qi-coverage-atom-id {
+  font-size: 12px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Requirement excerpt + atom id stack inside a gap item (#790). min-width: 0 lets the
+   single-line children ellipsize instead of forcing the badge out of the row. */
+.qi-coverage-gap-req {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.qi-coverage-gap-text {
+  font-size: 12px;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qi-cov-covered {
+  background: var(--accent-dim);
+  color: var(--accent-text);
+}
+.qi-cov-weak {
+  background: color-mix(in oklch, var(--warn) 20%, transparent);
+  color: var(--warn);
+}
+.qi-cov-uncovered {
+  background: color-mix(in oklch, var(--danger) 22%, transparent);
+  color: var(--fg);
+}
+
+/* Living Tests drift panel (Epic #735 / Issue #744). */
+.qi-drift-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-soft);
+}
+.qi-drift-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+/* stale: --warn text on a warn tint (same pairing as .qi-sev-high; AA in both themes). */
+.qi-drift-stale {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--warn);
+}
+.qi-drift-icon-warn {
+  font-size: 13px;
+}
+/* fresh: accent-text on transparent — accent-text is the WCAG-safe green in both themes. */
+.qi-drift-fresh {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--accent-text);
+}
+.qi-drift-icon-ok {
+  font-size: 13px;
+}
+.qi-drift-regenerated {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+/* Monospace strings (IDs, hashes) */
+.qi-monospace {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* Findings list */
+.qi-finding-list {
+  list-style: none;
+  padding: 0 8px;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.qi-finding-item {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  border: 1px solid var(--line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.qi-finding-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.qi-finding-kind {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: capitalize;
+}
+
+.qi-finding-summary {
+  font-size: 12px;
+  color: var(--fg);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Skeleton loading animation — respects prefers-reduced-motion */
+.qi-skeleton {
+  background: var(--card);
+  border-radius: 4px;
+  position: relative;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .qi-skeleton::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in oklch, var(--fg) 6%, transparent) 50%,
+      transparent 100%
+    );
+    animation: qi-shimmer 1.4s infinite;
+  }
+
+  @keyframes qi-shimmer {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(100%);
+    }
+  }
+}
+
+/* ============================================================
+   INSTALL BANNER (#124 — PWA install guidance)
+   Surface A: non-intrusive affordance, WCAG 2.2 AA
+   ============================================================ */
+
+.install-banner {
+  /* Fixed to the bottom of the viewport, above the app footer. */
+  position: fixed;
+  bottom: 40px; /* clear the footer (~36px) with 4px gap */
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 900;
+
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-pop);
+  padding: 14px 18px;
+
+  max-width: 480px;
+  width: calc(100vw - 48px);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .install-banner {
+    animation: install-banner-slide-in 180ms ease-out both;
+  }
+
+  @keyframes install-banner-slide-in {
+    from {
+      opacity: 0;
+      transform: translateX(-50%) translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  }
+}
+
+.install-banner-body {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.install-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.install-banner-heading {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--fg);
+}
+
+.install-banner-desc {
+  font-size: 13px;
+  line-height: 1.5;
+  /* --fg-muted: oklch(0.74 0.004 160) ≈ #b3b9b7 on --card ≈ #2e3330.
+     Computed relative luminance: fg-muted ~0.19, card ~0.04 → contrast ≈ 5.0:1 (AA pass). */
+  color: var(--fg-muted);
+}
+
+.install-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Primary install button: --ink-inverse on --accent = 6.94:1 (WCAG AA) */
+.install-banner-btn-install {
+  height: 32px;
+  min-width: 120px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--accent);
+  /* ink-inverse #1a1e23 on accent #4eba87 = 6.94:1 (AA pass) */
+  color: var(--ink-inverse);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  /* 32px height meets WCAG 2.5.8 24×24 minimum target size */
+  outline: none;
+}
+
+.install-banner-btn-install:hover:not(:disabled) {
+  background: var(--accent-bright);
+}
+
+.install-banner-btn-install:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--accent-glow);
+}
+
+/* Dismiss button: --fg-muted on --card surface.
+   fg-muted oklch(0.74) on card oklch(0.235) → contrast ≈ 5.0:1 (AA pass). */
+.install-banner-btn-dismiss {
+  height: 32px;
+  min-width: 60px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-soft);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  /* 32px height meets WCAG 2.5.8 24×24 minimum target size */
+  outline: none;
+}
+
+.install-banner-btn-dismiss:hover {
+  background: var(--card-2);
+  color: var(--fg);
+}
+
+.install-banner-btn-dismiss:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--accent-glow);
+}
+
+/* Light-theme override: --fg-muted on white falls below WCAG 4.5:1 (2.98:1). The
+   informational copy and the dismiss control switch to --fg in light theme, which
+   the a11y audit measured at 5.47:1. Dark theme is unchanged. */
+[data-theme="light"] .install-banner-btn-dismiss,
+[data-theme="light"] .install-banner-desc {
+  color: var(--fg);
+}
+
+/* ─── Quality Intelligence run launcher + candidate review (Issue #280/#282) ─── */
+.qi-launcher {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+}
+.qi-launcher-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 16px 16px;
+}
+/* Connected-source banner (Epic #270 Slice 1): shown when a Files window is bound to the QI hub. */
+.qi-connected-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklch, var(--accent) 45%, var(--line));
+  border-radius: var(--radius-sm, 6px);
+  background: color-mix(in oklch, var(--accent) 12%, var(--card));
+}
+.qi-connected-kind {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg);
+}
+.qi-connected-path {
+  font-size: 11px;
+  color: var(--fg);
+  word-break: break-all;
+}
+.qi-connected-hint {
+  font-size: 11px;
+  color: var(--fg-muted);
+  width: 100%;
+}
+/* Multi-source connected list (Epic #729 / Issue #731). */
+.qi-connected-roots {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.qi-connected-root-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.qi-connected-root-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg);
+}
+/* Coverage notice (Epic #729 / Issue #730): sources dropped past the 16-source cap, or skipped
+   because they ingested to nothing usable. Mirrors .grounded-coverage-notice — text uses --fg
+   (16.96:1 on --card-2 in dark, high contrast on near-white --card-2 in light; WCAG 1.4.3) and the
+   warning cue is the --warn left border, which is not subject to text-contrast rules. */
+.qi-coverage-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--fg);
+  background: var(--card-2);
+  border-left: 3px solid var(--warn);
+  border-radius: 4px;
+}
+.qi-coverage-line {
+  margin: 0;
+  color: var(--fg);
+}
+.qi-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.qi-field-inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.qi-launcher-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.qi-launcher-row > .qi-field:first-child {
+  flex: 1;
+  min-width: 220px;
+}
+.qi-field-kind {
+  min-width: 160px;
+}
+.qi-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+.qi-input,
+.qi-textarea,
+.qi-select {
+  width: 100%;
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.qi-textarea {
+  resize: vertical;
+  min-height: 96px;
+  line-height: 1.5;
+}
+.qi-input:focus-visible,
+.qi-textarea:focus-visible,
+.qi-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+.qi-launcher-controls {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.qi-btn {
+  min-height: 32px;
+  min-width: 64px;
+  padding: 6px 14px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--line);
+  background: var(--card-2);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.qi-btn:hover:not(:disabled) {
+  border-color: var(--line-strong);
+}
+.qi-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.qi-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.qi-btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #06120c;
+}
+.qi-btn-secondary {
+  background: transparent;
+}
+.qi-btn-approve {
+  color: var(--accent-bright);
+  border-color: color-mix(in oklch, var(--accent) 50%, var(--line));
+}
+.qi-btn-approve[aria-pressed="true"] {
+  background: var(--accent);
+  color: #06120c;
+}
+.qi-btn-reject {
+  color: #f2a4a0;
+  border-color: color-mix(in oklch, #d9534f 45%, var(--line));
+}
+.qi-btn-reject[aria-pressed="true"] {
+  background: #b23b37;
+  border-color: #b23b37;
+  color: #fff;
+}
+.qi-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.qi-progress-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: qi-spin 0.8s linear infinite;
+}
+@keyframes qi-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qi-progress-spinner {
+    animation: none;
+  }
+}
+/* Candidate review surface */
+.qi-col-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  margin: 0;
+  padding: 0;
+}
+.qi-cand-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(248px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+.qi-cand-card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+}
+.qi-cand-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.qi-cand-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0;
+  line-height: 1.4;
+}
+.qi-cand-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.qi-cand-pri,
+.qi-cand-risk {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--card-2);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.qi-cand-block {
+  margin-top: 8px;
+}
+.qi-cand-block-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  margin: 0 0 3px;
+}
+.qi-cand-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--fg);
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.qi-cand-tags {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.qi-cand-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--card-2);
+  color: var(--fg-muted);
+}
+.qi-cand-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.qi-cand-governance-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.qi-edit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.qi-edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.qi-edit-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+}
+.qi-edit-input,
+.qi-edit-textarea,
+.qi-edit-select {
+  width: 100%;
+  background: var(--card-2);
+  color: var(--fg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.qi-edit-textarea {
+  resize: vertical;
+  min-height: 72px;
+  line-height: 1.45;
+}
+.qi-edit-input:focus-visible,
+.qi-edit-textarea:focus-visible,
+.qi-edit-select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+.qi-edit-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.qi-edit-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+.qi-cand-more {
+  margin: 12px 0 0;
+  justify-self: start;
+}
+.qi-review-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+/* Review badges: opaque tinted backgrounds + primary --fg text so contrast holds in BOTH themes
+   (the tint differentiates state; --fg on a mostly-card background is high-contrast either way). */
+.qi-review-open {
+  background: color-mix(in oklch, var(--fg-muted) 26%, var(--card));
+  color: var(--fg);
+}
+.qi-review-approved {
+  background: color-mix(in oklch, var(--accent) 32%, var(--card));
+  color: var(--fg);
+}
+.qi-review-changes {
+  background: color-mix(in oklch, #d8a657 38%, var(--card));
+  color: var(--fg);
+}
+.qi-review-rejected {
+  background: color-mix(in oklch, #d9534f 38%, var(--card));
+  color: var(--fg);
+}
+.qi-review-withdrawn {
+  background: var(--card-2);
+  color: var(--fg);
+}
+/* Light theme: the small priority/risk pills use the strong text colour for 4.5:1 (a11y M2). */
+[data-theme="light"] .qi-cand-pri,
+[data-theme="light"] .qi-cand-risk {
+  color: var(--fg);
+}
+/* Export control */
+.qi-export {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.qi-export-preview {
+  width: 100%;
+  max-height: 220px;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--fg-muted);
+  white-space: pre-wrap;
+  margin: 8px 0 0;
+  font-family: var(--font-mono, monospace);
+}
+.qi-export-hint {
+  width: 100%;
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-muted);
+}
+.qi-export-success {
+  width: 100%;
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg);
+}
+
+/* ─── Epic #270 — QI Workspace windows (hub + run card) ───────────────────── */
+
+/* Hub: vertical fill — launcher on top, scrollable run list below. */
+.qi-hub {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.qi-hub .qi-launcher {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--line);
+}
+.qi-hub-runs {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Run result card */
+.qi-run-card {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.qi-run-card-head {
+  flex-shrink: 0;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.qi-run-card-head .qi-run-id {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qi-run-card-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.qi-run-governance {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+}
+.qi-run-governance-input {
+  max-width: 320px;
+}
+.qi-run-governance-help,
+.qi-run-governance-warning {
+  margin: 0;
+  font-size: 12px;
+}
+.qi-run-governance-help {
+  color: var(--fg-muted);
+}
+.qi-run-governance-warning {
+  color: var(--danger);
+}
+
+/* Run summary strip: clean horizontal wrap, no cramped vertical stack. */
+.qi-run-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm, 6px);
+}
+.qi-run-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.qi-run-summary-item dt {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  margin: 0;
+}
+.qi-run-summary-item dd {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg);
+}
+.qi-run-summary-review {
+  text-transform: capitalize;
+}
+
+.qi-run-cases,
+.qi-run-findings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.qi-run-cases-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.qi-skeleton-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card);
+}
+
+/* ── Figma Snapshot window (Epic #750, Issue #756) ─────────────────────────────
+   Mirror the qi-launcher / connector-picker design language.
+   Token contract: --bg, --card, --card-2, --fg, --fg-muted, --fg-dim,
+                   --accent, --accent-text, --border, --radius-sm, --radius-md
+   ─────────────────────────────────────────────────────────────────────────── */
+
+.figma-snapshot-window {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  height: 100%;
+  overflow-y: auto;
+  color: var(--fg);
+}
+
+/* ── Input form ───────────────────────────────────────────────────────────── */
+
+.figma-snapshot-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.figma-snapshot-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--fg-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.figma-snapshot-input-row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.figma-snapshot-input {
+  flex: 1;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm, 6px);
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--fg);
+  font-size: 0.8125rem;
+  outline-offset: 2px;
+  min-width: 0;
+}
+.figma-snapshot-input:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.figma-snapshot-input[aria-invalid="true"] {
+  border-color: hsl(6 80% 52%);
+}
+.figma-snapshot-input:disabled {
+  opacity: 0.6;
+}
+
+.figma-snapshot-trigger-btn {
+  padding: 7px 14px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+  border: none;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.figma-snapshot-trigger-btn:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.figma-snapshot-trigger-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.figma-snapshot-hint {
+  font-size: 0.75rem;
+  color: var(--fg-dim);
+  margin: 0;
+}
+
+/* ── Status / progress ────────────────────────────────────────────────────── */
+
+.figma-snapshot-status {
+  min-height: 20px;
+}
+
+.figma-snapshot-progress {
+  font-size: 0.8125rem;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+.figma-snapshot-error {
+  font-size: 0.8125rem;
+  color: hsl(6 80% 52%);
+  margin: 0;
+}
+
+/* ── Stored-snapshot notice ───────────────────────────────────────────────── */
+
+.figma-snapshot-stored-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card-2);
+  border: 1px solid var(--border);
+}
+
+.figma-snapshot-stored-text {
+  flex: 1;
+  font-size: 0.8125rem;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+.figma-snapshot-load-btn {
+  padding: 5px 12px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.figma-snapshot-load-btn:focus-visible {
+  outline: 2px solid var(--accent);
+}
+
+/* ── Snapshot result ──────────────────────────────────────────────────────── */
+
+.figma-snapshot-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.figma-snapshot-reduction {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card);
+  border: 1px solid var(--border);
+}
+
+.figma-snapshot-reduction-hint {
+  font-size: 0.8125rem;
+  color: var(--fg);
+  font-weight: 600;
+  margin: 0;
+}
+
+.figma-snapshot-skipped-notice {
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  margin: 4px 0 0;
+}
+
+.figma-snapshot-resnapshot-btn {
+  align-self: flex-start;
+  padding: 5px 14px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.figma-snapshot-resnapshot-btn:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.figma-snapshot-resnapshot-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── Read-only-scope consent (#760) ────────────────────────────────────────── */
+
+.figma-snapshot-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.figma-snapshot-consent-checkbox {
+  margin-top: 1px;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* ── Design-to-code (#755) ─────────────────────────────────────────────────── */
+
+.figma-snapshot-codegen {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.figma-snapshot-codegen-btn {
+  align-self: flex-start;
+  padding: 5px 14px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--accent);
+  color: var(--accent-fg, #fff);
+  border: 1px solid var(--accent);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  outline-offset: 2px;
+}
+.figma-snapshot-codegen-btn:focus-visible {
+  outline: 2px solid var(--accent);
+}
+.figma-snapshot-codegen-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.figma-snapshot-code-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.figma-snapshot-code-summary {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+}
+.figma-snapshot-code-file-path {
+  cursor: pointer;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.75rem;
+  color: var(--fg);
+  padding: 3px 0;
+  outline-offset: 2px;
+}
+.figma-snapshot-code-file-path:focus-visible {
+  outline: 2px solid var(--accent);
+  border-radius: 2px;
+}
+.figma-snapshot-code-file-contents {
+  margin: 4px 0 0;
+  padding: 8px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  white-space: pre;
+  color: var(--fg);
+}
+
+/* ── PAT scopes info (informational <details>) ────────────────────────────── */
+
+.figma-snapshot-scopes {
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  border-radius: var(--radius-sm, 6px);
+  padding: 4px 0;
+}
+
+.figma-snapshot-scopes-summary {
+  cursor: pointer;
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  padding: 4px 0;
+  outline-offset: 2px;
+}
+.figma-snapshot-scopes-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  border-radius: 2px;
+}
+
+.figma-snapshot-scopes-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.figma-snapshot-scopes-note {
+  margin: 6px 0 0;
+  color: var(--fg-dim);
+}
+
+/* ── Screen gallery ───────────────────────────────────────────────────────── */
+
+.figma-snapshot-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.figma-snapshot-screen-card {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card);
+  border: 1px solid var(--border);
+  align-items: flex-start;
+}
+
+.figma-snapshot-screen-placeholder {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--card-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.figma-snapshot-screen-index {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--fg-muted);
+}
+
+.figma-snapshot-screen-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.figma-snapshot-screen-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--fg);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.figma-snapshot-screen-summary {
+  font-size: 0.75rem;
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+.figma-snapshot-screen-size,
+.figma-snapshot-screen-id {
+  font-size: 0.6875rem;
+  color: var(--fg-dim);
+  margin: 0;
+}

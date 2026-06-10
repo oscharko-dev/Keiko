@@ -2,10 +2,10 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { API_ROUTES, isApiPath, matchRoute, STREAMING, type RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
-import { SDK_VERSION } from "./_sdk-version.js";
 
 const emptyCtx: RouteContext = {
   req: {} as RouteContext["req"],
@@ -26,8 +26,151 @@ const stubDeps: UiHandlerDeps = {
 };
 
 describe("API route contract", () => {
-  it("declares the 44 route contract (ADR-0017 browser + ADR-0018 terminal + first-run gateway setup)", () => {
-    expect(API_ROUTES).toHaveLength(44);
+  it("declares the additive route contract including the grounded workflow handoff route, local-knowledge capsule management, Quality Intelligence connector routes, the QI UI read routes, the QI run execution + review + export routes, the QI Conversation Center handoff route, the relationship engine routes (Epic #532), the memory maintenance route (#204), and the desktop chat SSE streaming route (#152)", () => {
+    expect(API_ROUTES.length).toBeGreaterThanOrEqual(98);
+    expect(
+      API_ROUTES.find(
+        (route) =>
+          route.method === "POST" &&
+          route.pattern === "/api/chats/messages/grounded/handoff",
+      ),
+    ).toBeDefined();
+  });
+
+  it("includes the Quality Intelligence UI read routes (#280)", () => {
+    const list = API_ROUTES.find(
+      (r) => r.method === "GET" && r.pattern === "/api/quality-intelligence/runs",
+    );
+    const detail = API_ROUTES.find(
+      (r) => r.method === "GET" && r.pattern === "/api/quality-intelligence/runs/:id",
+    );
+    expect(list).toBeDefined();
+    expect(detail).toBeDefined();
+  });
+
+  it("includes the Quality Intelligence run execution, review, and export routes (#273/#280/#282/#283)", () => {
+    const patterns = [
+      { method: "POST", pattern: "/api/quality-intelligence/runs" },
+      { method: "POST", pattern: "/api/quality-intelligence/runs/:id/cancel" },
+      { method: "POST", pattern: "/api/quality-intelligence/runs/:id/review" },
+      { method: "POST", pattern: "/api/quality-intelligence/runs/:id/export" },
+    ];
+    for (const { method, pattern } of patterns) {
+      expect(
+        API_ROUTES.find((r) => r.method === method && r.pattern === pattern),
+        `${method} ${pattern} must be registered`,
+      ).toBeDefined();
+    }
+  });
+
+  it("includes the Quality Intelligence Conversation Center handoff route (#281)", () => {
+    const handoff = API_ROUTES.find(
+      (r) => r.method === "POST" && r.pattern === "/api/quality-intelligence/handoff",
+    );
+    expect(handoff).toBeDefined();
+  });
+
+  it("includes the local-knowledge capsule detail routes", () => {
+    const localKnowledgeRoutes = API_ROUTES.filter((r) =>
+      r.pattern.startsWith("/api/local-knowledge"),
+    );
+    expect(localKnowledgeRoutes).toHaveLength(12);
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsules",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "POST" && r.pattern === "/api/local-knowledge/capsules",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsule-sets",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "POST" && r.pattern === "/api/local-knowledge/capsule-sets",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "GET" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "PATCH" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "POST" && r.pattern === "/api/local-knowledge/capsules/:capsuleId/index",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "DELETE" && r.pattern === "/api/local-knowledge/capsules/:capsuleId/index",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "DELETE" &&
+          r.pattern === "/api/local-knowledge/capsules/:capsuleId/connection",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "POST" &&
+          r.pattern === "/api/local-knowledge/capsules/:capsuleId/connection",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) =>
+          r.method === "POST" && r.pattern === "/api/local-knowledge/capsules/:capsuleId/reindex",
+      ),
+    ).toBeDefined();
+    expect(
+      localKnowledgeRoutes.find(
+        (r) => r.method === "DELETE" && r.pattern === "/api/local-knowledge/capsules/:capsuleId",
+      ),
+    ).toBeDefined();
+  });
+
+  it("includes the 18 memory routes (12 from #211, 2 from #212, 3 consolidation-job routes from #208, 1 maintenance route from #204)", () => {
+    const memoryRoutes = API_ROUTES.filter((r) => r.pattern.startsWith("/api/memory"));
+    expect(memoryRoutes).toHaveLength(18);
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/maintenance"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/context"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find(
+        (r) => r.method === "POST" && r.pattern === "/api/memory/capture-from-conversation",
+      ),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/memory/consolidation/jobs"),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find(
+        (r) => r.method === "GET" && r.pattern === "/api/memory/consolidation/jobs/:jobId",
+      ),
+    ).toBeDefined();
+    expect(
+      API_ROUTES.find(
+        (r) => r.method === "POST" && r.pattern === "/api/memory/consolidation/jobs/:jobId/cancel",
+      ),
+    ).toBeDefined();
   });
 
   it("includes the first-run gateway setup route", () => {
@@ -71,6 +214,10 @@ describe("API route contract", () => {
     ).toBeDefined();
     expect(
       API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat"),
+    ).toBeDefined();
+    // Issue #152 — additive SSE streaming surface alongside the buffered send route.
+    expect(
+      API_ROUTES.find((r) => r.method === "POST" && r.pattern === "/api/desktop/chat/stream"),
     ).toBeDefined();
   });
 
@@ -147,6 +294,10 @@ describe("matchRoute", () => {
     expect(matchRoute("DELETE", "/api/health")).toBe("method-not-allowed");
   });
 
+  it("treats DELETE /api/relationships/health as method-not-allowed instead of binding health to :id", () => {
+    expect(matchRoute("DELETE", "/api/relationships/health")).toBe("method-not-allowed");
+  });
+
   it("returns undefined for an unknown path", () => {
     expect(matchRoute("GET", "/api/nope")).toBeUndefined();
   });
@@ -190,13 +341,10 @@ describe("isApiPath", () => {
   });
 });
 
-// Drift guard: the SDK_VERSION literal copied into this package's
-// `_sdk-version.ts` (avoids a transitive-import cascade through the root SDK
-// surface; see file header) must stay in sync with the root product's
-// `package.json` "version" field. The root SDK module enforces the same
-// invariant in tests/cli/runner.test.ts:73 — keeping the assertion mirror'd
-// catches drift on either side at test time, well before a release.
-describe("_sdk-version local literal", () => {
+// Drift guard: the BFF health route surfaces the canonical SDK package version, which must stay in
+// sync with the root product's `package.json` "version" field. The CLI mirrors the same invariant
+// in packages/keiko-cli/src/runner.test.ts.
+describe("SDK package version", () => {
   it("matches the root package.json version", () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const rootPackageJsonPath = join(here, "..", "..", "..", "package.json");

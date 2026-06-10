@@ -85,7 +85,12 @@ function selectBody(
   cfg: Record<string, unknown>,
   linkedRoot: string | null,
   linkedFilePath: string | undefined,
+  linkedRoots: readonly string[],
+  linkedCapsuleIds: readonly string[],
+  linkedCapsuleSetIds: readonly string[],
+  linkedFigmaSnapshotRunIds: readonly string[],
   updateCfg: (patch: Record<string, string | number | boolean | undefined>) => void,
+  openWindow: (type: WindowType, cfg?: Record<string, string | number | boolean>) => string | null,
 ): BodySelection {
   if (type === "chat") {
     const mini = ew < CHAT_MINI_W || eh < CHAT_MINI_H;
@@ -98,7 +103,19 @@ function selectBody(
   if (ew < def.tiny.w || eh < def.tiny.h) {
     return { mode: "tiny", node: <TooSmall icon={def.icon} label={def.title} /> };
   }
-  return { mode: "full", node: def.render(cfg, { linkedRoot, linkedFilePath, updateCfg }) };
+  return {
+    mode: "full",
+    node: def.render(cfg, {
+      linkedRoot,
+      linkedFilePath,
+      linkedRoots,
+      linkedCapsuleIds,
+      linkedCapsuleSetIds,
+      linkedFigmaSnapshotRunIds,
+      updateCfg,
+      openWindow,
+    }),
+  };
 }
 
 interface DragGeometry {
@@ -233,9 +250,24 @@ export function WindowFrame({
   const Icon = Icons[def.icon];
   const zoom = win.zoom ?? 1;
   const linkedRoot =
-    win.type === "chat" || win.type === "agents" ? api.linkedFilesRoot(win.id) : null;
+    win.type === "chat" || win.type === "agents" || win.type === "quality"
+      ? api.linkedFilesRoot(win.id)
+      : null;
   const linkedFilePath =
-    win.type === "agents" ? api.linkedFilesContext(win.id)?.activeFilePath : undefined;
+    win.type === "agents" || win.type === "quality"
+      ? api.linkedFilesContext(win.id)?.activeFilePath
+      : undefined;
+  const linkedRoots =
+    win.type === "quality"
+      ? api.linkedAllFilesRoots(win.id)
+      : linkedRoot !== null
+        ? [linkedRoot]
+        : [];
+  const linkedCapsuleIds = win.type === "quality" ? api.linkedConnectorCapsuleIds(win.id) : [];
+  const linkedCapsuleSetIds =
+    win.type === "quality" ? api.linkedConnectorCapsuleSetIds(win.id) : [];
+  const linkedFigmaSnapshotRunIds =
+    win.type === "quality" ? api.linkedFigmaSnapshotRunIds(win.id) : [];
   const ew = win.w / zoom;
   const eh = win.h / zoom;
   const updateCfg = useCallback(
@@ -244,6 +276,11 @@ export function WindowFrame({
     },
     [api, win.cfg, win.id],
   );
+  const openWindow = useCallback(
+    (type: WindowType, cfg?: Record<string, string | number | boolean>): string | null =>
+      api.add(type, cfg),
+    [api],
+  );
   const { mode: bodyMode, node: body } = selectBody(
     win.type,
     ew,
@@ -251,7 +288,12 @@ export function WindowFrame({
     win.cfg,
     linkedRoot,
     linkedFilePath,
+    linkedRoots,
+    linkedCapsuleIds,
+    linkedCapsuleSetIds,
+    linkedFigmaSnapshotRunIds,
     updateCfg,
+    openWindow,
   );
 
   const setZoom = useCallback(

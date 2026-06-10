@@ -12,6 +12,8 @@
 import type {
   Project,
   Chat,
+  ChatConnectedScope,
+  ChatLocalKnowledgeScope,
   ChatRole,
   WorkflowStatus,
   ChatMessage,
@@ -24,6 +26,8 @@ import type {
 export type {
   Project,
   Chat,
+  ChatConnectedScope,
+  ChatLocalKnowledgeScope,
   ChatRole,
   WorkflowStatus,
   ChatMessage,
@@ -40,7 +44,8 @@ export interface UiStore {
   readonly updateProject: (path: string, patch: UpdateProjectPatch) => Project;
   readonly deleteProject: (path: string) => void;
 
-  readonly listChats: (projectPath: string) => readonly Chat[];
+  readonly listChats: (projectPath: string, limit?: number) => readonly Chat[];
+  readonly findChatById: (id: string) => Chat | undefined;
   readonly createChat: (
     projectPath: string,
     title: string,
@@ -50,7 +55,8 @@ export interface UiStore {
   readonly updateChat: (id: string, patch: UpdateChatPatch) => Chat;
   readonly deleteChat: (id: string) => void;
 
-  readonly listMessages: (chatId: string) => readonly ChatMessage[];
+  readonly listMessages: (chatId: string, limit?: number) => readonly ChatMessage[];
+  readonly findMessageById: (id: string) => ChatMessage | undefined;
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;
   readonly createMessages: (messages: readonly NewChatMessage[]) => readonly ChatMessage[];
   readonly updateMessage: (id: string, patch: UpdateChatMessagePatch) => ChatMessage;

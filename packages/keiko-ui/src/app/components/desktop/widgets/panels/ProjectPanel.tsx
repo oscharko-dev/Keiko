@@ -1,94 +1,87 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import type { Chat, ProjectWithAvailability } from "@/lib/types";
 import { Icons } from "../../Icons";
-
-interface Chat {
-  id: string;
-  title: string;
-  time?: string;
-  running?: boolean;
-  pinned?: boolean;
-}
-
-interface Project {
-  name: string;
-  open: boolean;
-  chats: Chat[];
-}
-
-const PROJECTS: Project[] = [
-  {
-    name: "Keiko",
-    open: true,
-    chats: [
-      { id: "c1", title: "Workspace bootstrap", time: "2h" },
-      { id: "c2", title: "Resizable card system", time: "5h" },
-    ],
-  },
-  { name: "c2c-PreBeta", open: false, chats: [] },
-  {
-    name: "example-workspace",
-    open: true,
-    chats: [
-      { id: "c3", title: "Start work mode", running: true },
-      { id: "c4", title: "Create agent team for #29", time: "8h" },
-      { id: "c5", title: "Begin work", pinned: true },
-    ],
-  },
-];
+import { useChatSessionContext } from "../../context/ChatSessionContext";
 
 interface ProjectRowProps {
-  project: Project;
-  activeChat: string;
-  onChat: (id: string) => void;
+  readonly project: ProjectWithAvailability;
+  readonly activeProjectPath: string | undefined;
+  readonly chats: readonly Chat[];
+  readonly activeChatId: string | undefined;
+  readonly onProject: (project: ProjectWithAvailability) => void;
+  readonly onChat: (chat: Chat) => void;
 }
 
-function ProjectRow({ project, activeChat, onChat }: ProjectRowProps): ReactNode {
-  const [exp, setExp] = useState(project.open);
+function projectAvailabilityLabel(project: ProjectWithAvailability): string {
+  return project.available ? "Available" : "Unavailable";
+}
+
+function ProjectRow({
+  project,
+  activeProjectPath,
+  chats,
+  activeChatId,
+  onProject,
+  onChat,
+}: ProjectRowProps): ReactNode {
+  const isActiveProject = activeProjectPath === project.path;
+  const [expanded, setExpanded] = useState(isActiveProject);
+  const availabilityLabel = projectAvailabilityLabel(project);
+
+  useEffect(() => {
+    if (isActiveProject) setExpanded(true);
+  }, [isActiveProject]);
+
   return (
     <div className="proj">
       <button
         className="proj-head"
+        type="button"
+        data-active={isActiveProject ? "true" : "false"}
+        aria-expanded={expanded}
+        aria-current={isActiveProject ? "true" : undefined}
+        aria-label={`${project.name} (${availabilityLabel})`}
         onClick={() => {
-          setExp((e) => !e);
+          setExpanded((current) => !current);
+          onProject(project);
         }}
       >
-        <span className="proj-caret" data-open={exp}>
+        <span className="proj-caret" data-open={expanded}>
           <Icons.chevronR size={13} />
         </span>
         <Icons.folder size={15} />
         <span className="proj-name">{project.name}</span>
+        <span className="chat-time">{availabilityLabel}</span>
       </button>
-      {exp && (
+      {expanded && (
         <div className="proj-chats">
-          {project.chats.length === 0 ? (
-            <div className="proj-empty">No chats</div>
+          {isActiveProject ? (
+            chats.length === 0 ? (
+              <div className="proj-empty">No chats</div>
+            ) : (
+              chats.map((chat) => (
+                <button
+                  key={chat.id}
+                  type="button"
+                  className="chat-row"
+                  data-active={activeChatId === chat.id}
+                  aria-pressed={activeChatId === chat.id}
+                  onClick={() => {
+                    void onChat(chat);
+                  }}
+                >
+                  <span className="chat-title">{chat.title}</span>
+                  {chat.branchLabel !== undefined ? (
+                    <span className="chat-meta mono">{chat.branchLabel}</span>
+                  ) : null}
+                </button>
+              ))
+            )
           ) : (
-            project.chats.map((c) => (
-              <button
-                key={c.id}
-                className="chat-row"
-                data-active={activeChat === c.id}
-                onClick={() => {
-                  onChat(c.id);
-                }}
-              >
-                {c.running === true && (
-                  <span className="chat-spin">
-                    <Icons.reset size={12} />
-                  </span>
-                )}
-                <span className="chat-title">{c.title}</span>
-                {c.pinned === true && (
-                  <span className="chat-meta">
-                    <Icons.pin size={12} />
-                  </span>
-                )}
-                {c.time !== undefined && <span className="chat-time">{c.time}</span>}
-              </button>
-            ))
+            <div className="proj-empty">Select project to load chats</div>
           )}
         </div>
       )}
@@ -97,36 +90,32 @@ function ProjectRow({ project, activeChat, onChat }: ProjectRowProps): ReactNode
 }
 
 export function ProjectPanel(): ReactNode {
-  const stored =
-    typeof window !== "undefined"
-      ? (localStorage.getItem("keiko.project.activeChat") ?? "c3")
-      : "c3";
-  const [activeChat, setActiveChat] = useState(stored);
-
-  const handleChat = (id: string): void => {
-    setActiveChat(id);
-    if (typeof window !== "undefined") {
-      localStorage.setItem("keiko.project.activeChat", id);
-    }
-  };
+  const session = useChatSessionContext();
 
   return (
     <div className="tw-scroll">
       <div className="sb-section">
         <span className="sb-section-label">Projects</span>
-        <button className="sb-section-add" aria-label="Add project">
-          <Icons.plus size={14} />
-        </button>
       </div>
-      {PROJECTS.map((p) => (
-        <ProjectRow key={p.name} project={p} activeChat={activeChat} onChat={handleChat} />
-      ))}
-      <div className="sb-section" style={{ marginTop: 14 }}>
-        <span className="sb-section-label">Chats</span>
-      </div>
-      <div className="proj-empty" style={{ paddingLeft: 12 }}>
-        No chats
-      </div>
+      {session.projects.length === 0 ? (
+        <div className="proj-empty">No registered projects</div>
+      ) : (
+        session.projects.map((project) => (
+          <ProjectRow
+            key={project.path}
+            project={project}
+            activeProjectPath={session.activeProject?.path}
+            chats={session.activeProject?.path === project.path ? session.chats : []}
+            activeChatId={session.activeChat?.id}
+            onProject={(nextProject) => {
+              void session.openProject(nextProject);
+            }}
+            onChat={(chat) => {
+              void session.openChat(chat);
+            }}
+          />
+        ))
+      )}
     </div>
   );
 }

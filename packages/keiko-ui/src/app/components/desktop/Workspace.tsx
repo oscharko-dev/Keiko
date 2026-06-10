@@ -96,10 +96,19 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
     [view],
   );
 
+  // Scale the scene with the CSS `zoom` property instead of `transform: scale()`
+  // so children re-layout (and text/SVG re-rasterize) at the new pixel grid —
+  // otherwise the browser samples a once-rasterized bitmap of the scene at its
+  // natural size and upscales it, blurring widget content at zoom > 1 (#305).
+  // Translation stays in `transform`; `transform` values are in outer pixels
+  // and are not themselves affected by the element's own `zoom`, so the visual
+  // mapping (worldPt -> workspaceLeft + view.x + worldPt * view.zoom) and the
+  // pan/zoom/drag math in useWorkspace/WindowFrame are preserved.
   const sceneStyle: CSSProperties = useMemo(
     () => ({
-      transform: `translate(${String(view.x)}px, ${String(view.y)}px) scale(${String(view.zoom)})`,
+      transform: `translate(${String(view.x)}px, ${String(view.y)}px)`,
       transformOrigin: "0 0",
+      zoom: view.zoom,
     }),
     [view],
   );
@@ -117,9 +126,10 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
   const empty = wins !== null && wins.length === 0;
 
   return (
-    <div
+    <main
       className="workspace"
       ref={wsRef}
+      aria-label="Workspace surface"
       data-connecting={connecting !== null ? "true" : undefined}
       onPointerDownCapture={onWorkspacePointerDownCapture}
       onPointerDown={onBgPointerDown}
@@ -205,6 +215,6 @@ export function Workspace({ ws, wsRef, openPalette, palette }: WorkspaceProps): 
       </button>
 
       {palette ?? null}
-    </div>
+    </main>
   );
 }

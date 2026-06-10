@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { fetchConfig, fetchModels } from "@/lib/api";
-import type { ModelCapability } from "@/lib/types";
+import type { ConversationIneligibilityReason, ModelCapability } from "@/lib/types";
+import { explainConversationIneligibility, isConversationEligibleModel } from "@/lib/types";
 import { Icons } from "../../Icons";
 import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
 
@@ -12,7 +13,46 @@ function kindLabel(kind: ModelCapability["kind"]): string {
   return kind;
 }
 
+// Issue #144 AC #3: returns the human-readable explanation for an
+// ineligibility reason. Pure function of the typed reason — never reads
+// model.baseUrl / model.apiKey / anything credential-shaped (those fields do
+// not exist on ModelCapability by design; this comment pins the invariant).
+function conversationIneligibilityLabel(reason: ConversationIneligibilityReason): string {
+  if (reason === "embedding-only") return "Embedding model — not selectable for text conversation";
+  if (reason === "ocr-vision-only") return "OCR/vision-only — not selectable for text conversation";
+  return "Not a chat model — not selectable for text conversation";
+}
+
+function ConversationEligibilityBadge({ model }: { readonly model: ModelCapability }): ReactNode {
+  const reason = explainConversationIneligibility(model);
+  if (reason === undefined) {
+    return (
+      <span
+        className="ml-elig ml-elig-ok"
+        data-testid="conv-elig-ok"
+        role="status"
+        aria-label="Model eligibility: eligible for conversation"
+      >
+        Conversation-eligible
+      </span>
+    );
+  }
+  return (
+    <span
+      className="ml-elig ml-elig-no"
+      data-testid="conv-elig-no"
+      role="status"
+      aria-label={"Model eligibility: " + conversationIneligibilityLabel(reason)}
+    >
+      Not selectable: {conversationIneligibilityLabel(reason)}
+    </span>
+  );
+}
+
 function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): ReactNode {
+  const eligible = isConversationEligibleModel(model);
+  const statusClass = eligible ? "connected" : "ineligible";
+  const statusTitle = eligible ? "conversation-eligible" : "not selectable for conversation";
   return (
     <div className="ml-row">
       <span className="ml-ico">
@@ -22,16 +62,14 @@ function ModelCapabilityRow({ model }: { readonly model: ModelCapability }): Rea
         <div className="ml-top">
           <span className="ml-name">{model.id}</span>
           <span className="ml-type mono">{kindLabel(model.kind)}</span>
+          <ConversationEligibilityBadge model={model} />
         </div>
         <div className="ml-url mono">
           tools {model.toolCalling ? "yes" : "no"} · structured{" "}
           {model.structuredOutput ? "yes" : "no"} · {model.costClass}/{model.latencyClass}
         </div>
       </div>
-      <span
-        className={"ml-status " + (model.kind === "chat" ? "connected" : "untested")}
-        title={model.kind}
-      />
+      <span className={"ml-status " + statusClass} title={statusTitle} aria-hidden="true" />
     </div>
   );
 }
@@ -134,8 +172,21 @@ export function SettingsPanel(): ReactNode {
     };
   }, []);
 
-  const chatCount = models.filter((model) => model.kind === "chat").length;
-  const connected = configPresent && models.length > 0;
+  // Issue #144: source of truth is the helper, not an inline kind check.
+  const chatCount = models.filter(isConversationEligibleModel).length;
+  const gatewayConfigured = configPresent;
+  const hasDiscoveredModels = models.length > 0;
+  const gatewayStatusLabel = !gatewayConfigured
+    ? "Gateway setup required"
+    : hasDiscoveredModels
+      ? "Gateway connected"
+      : "Gateway configured";
+  const gatewayStatusDetail = !gatewayConfigured
+    ? "Enter the gateway base URL and API token before using chat or agent workflows."
+    : hasDiscoveredModels
+      ? "Keiko can use the configured gateway models for chat and agent workflows."
+      : "The gateway is configured, but no conversation-capable models are currently available.";
+  const gatewayStatusTone = gatewayConfigured ? "connected" : "untested";
 
   return (
     <div className="set">
@@ -172,7 +223,7 @@ export function SettingsPanel(): ReactNode {
               </div>
               <button type="button" className="set-add" onClick={() => setSetupOpen(true)}>
                 <Icons.plus size={14} />
-                {connected ? "Update credentials" : "Connect gateway"}
+                {gatewayConfigured ? "Update credentials" : "Connect gateway"}
               </button>
             </div>
 
@@ -182,21 +233,16 @@ export function SettingsPanel(): ReactNode {
               </span>
               <div className="ml-info">
                 <div className="ml-top">
-                  <span className="ml-name">
-                    {connected ? "Gateway connected" : "Gateway setup required"}
-                  </span>
+                  <span className="ml-name">{gatewayStatusLabel}</span>
                   <span className="ml-type mono">{models.length.toString()} models</span>
                   <span className="ml-type mono">{chatCount.toString()} chat</span>
                 </div>
-                <div className="ml-url mono">
-                  {connected
-                    ? "Keiko can use the configured gateway models for chat and agent workflows."
-                    : "Enter the gateway base URL and API token before using chat or agent workflows."}
-                </div>
+                <div className="ml-url mono">{gatewayStatusDetail}</div>
               </div>
               <span
-                className={"ml-status " + (connected ? "connected" : "untested")}
-                title={connected ? "connected" : "setup required"}
+                className={"ml-status " + gatewayStatusTone}
+                title={gatewayConfigured ? "gateway configured" : "setup required"}
+                aria-hidden="true"
               />
             </div>
 
@@ -206,8 +252,9 @@ export function SettingsPanel(): ReactNode {
               <div className="set-placeholder">Loading gateway models...</div>
             ) : models.length === 0 ? (
               <div className="set-placeholder">
-                No models are configured yet. Connect the gateway to load configured model
-                capabilities.
+                {gatewayConfigured
+                  ? "No conversation-capable models are currently available. Review the gateway configuration or discovered model set."
+                  : "No models are configured yet. Connect the gateway to load configured model capabilities."}
               </div>
             ) : (
               <div className="set-list">

@@ -13,12 +13,39 @@ function readPackageJson(): { scripts: Record<string, string> } {
   return JSON.parse(readText("package.json")) as { scripts: Record<string, string> };
 }
 
+function readCiJobBlock(): string {
+  const workflow = readText(".github/workflows/ci.yml");
+  const lines = workflow.split(/\r?\n/);
+  const start = lines.findIndex((line) => line === "  ci:");
+  if (start === -1) {
+    throw new Error("jobs.ci block not found in .github/workflows/ci.yml");
+  }
+  const block = [];
+  for (let index = start; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    if (index > start && /^ {2}[^ ]/u.test(line)) break;
+    block.push(line);
+  }
+  return block.join("\n");
+}
+
+// Issue #287 extended the chain with `check:qi-supply-chain` (ADR-0023 D5/D11/D12); issue
+// #433 (Epic #423) added `check:version-consistency` so the packed artifact cannot ship with
+// a manifest/version mismatch; Epic #423 also restores `arch:check` to the real publish path
+// so architecture violations cannot bypass the release hook; Epic #423 post-closure audit
+// added `arch:check:negative` immediately after `arch:check` so rule deletions are caught in
+// the publish path, not only in CI. The pin stays "exact" against the live `package.json`;
+// it does not lock the chain to a particular historical length.
 const PACKAGE_SURFACE_CHAIN = [
   "npm run clean",
   "npm run build",
   "npm run prepare:bin",
   "npm run build:ui",
+  "npm run arch:check",
+  "npm run arch:check:negative",
   "npm run check:package-surface",
+  "npm run check:version-consistency",
+  "npm run check:qi-supply-chain",
 ].join(" && ");
 
 describe("Issue #12 docs drift", () => {
@@ -31,6 +58,26 @@ describe("Issue #12 docs drift", () => {
     expect(existsSync(resolve(process.cwd(), "docs", "npm-packaging.md"))).toBe(false);
     expect(readme).not.toContain("npm packaging");
     expect(readme).not.toContain(PACKAGE_SURFACE_CHAIN);
+  });
+
+  it("keeps the protected ci workflow and SDK alias contract aligned with issue #433", () => {
+    const ciJob = readCiJobBlock();
+    const sdkIndex = readText("packages/keiko-sdk/src/index.ts");
+    const versionGate = readText("scripts/check-version-consistency.mjs");
+
+    expect(ciJob).toContain("      - run: npm run check:version-consistency");
+    expect(sdkIndex).toMatch(
+      /^import\s+\{\s*KEIKO_PRODUCT_VERSION\s*\}\s+from\s+"@oscharko-dev\/keiko-contracts";$/m,
+    );
+    expect(sdkIndex).toMatch(
+      /^export\s+const\s+SDK_VERSION(?:\s*:\s*string)?\s*=\s*KEIKO_PRODUCT_VERSION;$/m,
+    );
+    expect(versionGate).toContain("SDK_VERSION does not directly re-export");
+    expect(versionGate).toContain(
+      'const APPROVED_ROOT_SRC_FILES = ["src/cli/index.ts", "src/index.ts"];',
+    );
+    expect(versionGate).toContain("root src/ must stay minimal");
+    expect(versionGate).toContain("root facade drifted beyond the approved minimal facade");
   });
 
   it("states that gen-tests and investigate do not persist evidence manifests", () => {

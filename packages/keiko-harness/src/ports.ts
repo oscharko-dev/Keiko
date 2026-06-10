@@ -2,12 +2,15 @@
 // abstractions, never on the concrete Gateway, file system, or terminal. Issues #6,
 // #10, and #13 each plug in their own implementations without touching the harness.
 //
-// The tool ports (ToolPort, ToolCallRequest, ToolCallResult, ToolCallMetadata) moved to
-// @oscharko-dev/keiko-contracts in issue #162: they are SHARED between the harness consumer
-// and the tools-package implementer, so both sides import from contracts. Re-exported here
-// so every existing `import ... from "../harness/ports.js"` keeps resolving unchanged.
+// The tool ports (ToolPort, ToolCallRequest, ToolCallResult, ToolCallMetadata) are
+// shared with the tools package via contracts. Re-export them here as part of the
+// harness package surface.
 
-import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayRequest,
+  GatewayStreamChunk,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
 import type {
   ToolCallMetadata,
   ToolCallRequest,
@@ -20,6 +23,14 @@ export type { ToolCallMetadata, ToolCallRequest, ToolCallResult, ToolPort };
 
 export interface ModelPort {
   readonly call: (request: GatewayRequest, signal: AbortSignal) => Promise<NormalizedResponse>;
+  // Optional streaming variant (#152). Present only on ports backed by a streaming-capable
+  // gateway; absent on buffered-only ports. Yields content deltas then a terminal `done` chunk
+  // carrying the redacted NormalizedResponse. Keeping it optional leaves every existing
+  // ModelPort and its tests valid without a streaming implementation.
+  readonly callStream?: (
+    request: GatewayRequest,
+    signal: AbortSignal,
+  ) => AsyncIterable<GatewayStreamChunk>;
 }
 
 export interface EventSink {

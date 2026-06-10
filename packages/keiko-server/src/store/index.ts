@@ -2,6 +2,8 @@
 
 export type {
   Chat,
+  ChatConnectedScope,
+  ChatLocalKnowledgeScope,
   ChatMessage,
   ChatRole,
   CreateChatOptions,
@@ -37,4 +39,11 @@ export {
   UI_DB_DIRNAME,
 } from "./paths.js";
 export { runMigrations, SCHEMA_VERSION } from "./schema.js";
-export { createInMemoryUiStore, createNodeUiStore, isProjectAvailable } from "./db.js";
+export {
+  buildUiStoreOverDatabase,
+  createInMemoryUiStore,
+  createNodeUiStore,
+  isProjectAvailable,
+  openNodeUiDatabase,
+  UI_DB_BUSY_TIMEOUT_MS,
+} from "./db.js";

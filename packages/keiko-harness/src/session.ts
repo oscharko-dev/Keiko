@@ -21,8 +21,8 @@ import {
   type TaskInput,
 } from "./types.js";
 
-// HARNESS_VERSION lives in @oscharko-dev/keiko-contracts (issue #162); re-exported here so
-// every existing `import { HARNESS_VERSION } from "../harness/session.js"` keeps resolving.
+// HARNESS_VERSION lives in @oscharko-dev/keiko-contracts and is re-exported here as
+// part of the harness session surface.
 export { HARNESS_VERSION };
 
 export interface AgentConfig {

@@ -46,6 +46,24 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+describe("runContextCli — --help / -h (issue #640)", () => {
+  it("exits 0 with usage on stdout for --help", () => {
+    const c = makeIo();
+    const code = runContextCli(["--help"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Usage:");
+    expect(c.err()).toBe("");
+  });
+
+  it("exits 0 with usage on stdout for -h", () => {
+    const c = makeIo();
+    const code = runContextCli(["-h"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("Usage:");
+    expect(c.err()).toBe("");
+  });
+});
+
 describe("runContextCli", () => {
   it("prints a human summary and exits 0", () => {
     const c = makeIo();

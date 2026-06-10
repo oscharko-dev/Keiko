@@ -1,0 +1,115 @@
+name: User Finding
+description: Report a bug or defect found while using Keiko.
+title: "[User Finding]: "
+labels: ["User Findings", "bug", "status: new"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for bugs found by pilot or production users.
+
+        Do not include API keys, customer data, private screenshots, internal model endpoints, private logs, or other secrets. Redact sensitive values before submitting.
+
+        Maintainers and agents must track this finding in the public Keiko Product Delivery project. New reports start with project `Status` = `Open Issues`, `Workflow State` = `New`, and label `status: new`. When an agent claims the finding, it must set `Status` and `Workflow State` to `In Progress`, fill `Owner / Agent`, `Branch`, `Pull Request`, and keep `Human Review Required` set to `Yes`. When the PR is ready, use `Workflow State` = `Ready for Human Review` and label `status: ready for human review`; mark `Done` only after merge, closure evidence, and issue closure.
+
+  - type: input
+    id: version
+    attributes:
+      label: Keiko version
+      description: Enter the installed Keiko version.
+      placeholder: "0.1.7"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Select the operating system where the issue occurred.
+      options:
+        - macOS
+        - Windows
+        - Linux
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: browser
+    attributes:
+      label: Browser
+      description: Enter the browser and version if the UI is involved.
+      placeholder: "Firefox 139, Edge 148, Chrome 137"
+    validations:
+      required: false
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the problem in one or two sentences.
+      placeholder: "What went wrong?"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Provide the exact steps needed to reproduce the issue.
+      placeholder: |
+        1. Install Keiko with ...
+        2. Open ...
+        3. Enter ...
+        4. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: What happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: Add redacted screenshots, console output, or logs if available.
+      placeholder: "Redacted evidence only. Do not include secrets or customer data."
+    validations:
+      required: false
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: User impact
+      description: Select the highest observed impact.
+      options:
+        - Blocks installation or startup
+        - Blocks model or credential setup
+        - Blocks core workflow
+        - Degrades core workflow
+        - Visual or usability issue
+        - Unknown
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Submission safety
+      options:
+        - label: I have removed secrets, API keys, customer data, private endpoints, and private logs from this report.
+          required: true

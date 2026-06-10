@@ -1,19 +1,27 @@
 // Installable-package smoke (Issue #169 D2, AC2). Packs the root, installs the tarball into a
 // fresh tmpdir, and asserts that (a) every bundleDependencies workspace ships under
 // node_modules/@oscharko-dev/keiko/node_modules/@oscharko-dev/keiko-<name>/dist/, (b) the CLI bin
-// is executable end-to-end (`--version`, `--help`), and (c) the SDK root export resolves with the
-// bundle in place. This is the runtime mirror of `scripts/check-package-surface.mjs`'s static
-// tarball assertions, intended to fire BEFORE publish so a broken bundle can never reach users.
+// is executable end-to-end (`--version`, `--help`), (c) the SDK root export resolves with the
+// bundle in place, and (d) the packaged UI static export resolves through `keiko ui`. This is the
+// runtime mirror of `scripts/check-package-surface.mjs`'s static tarball assertions, intended to
+// fire BEFORE publish so a broken bundle can never reach users.
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import ts from "typescript";
 
 const NPM_INSTALL_TIMEOUT_MS = 90_000;
+const UI_HEALTH_TIMEOUT_MS = 30_000;
+const UI_HEALTH_POLL_INTERVAL_MS = 250;
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackageJson = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+const rootPackageSurfaceContract = JSON.parse(
+  readFileSync(join(repoRoot, "scripts", "root-package-surface.contract.json"), "utf8"),
+);
 const rootVersion = rootPackageJson.version;
 const bundled = rootPackageJson.bundleDependencies ?? [];
 
@@ -28,6 +36,93 @@ function run(cmd, args, options) {
     fail(`${cmd} ${args.join(" ")} could not spawn: ${result.error.message}`);
   }
   return result;
+}
+
+function sleep(ms) {
+  return new Promise((resolvePromise) => globalThis.setTimeout(resolvePromise, ms));
+}
+
+function formatTsDiagnostics(diagnostics) {
+  return diagnostics
+    .map((diagnostic) => {
+      const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n");
+      if (diagnostic.file === undefined || diagnostic.start === undefined) {
+        return message;
+      }
+      const { line, character } = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
+      return `${diagnostic.file.fileName}:${String(line + 1)}:${String(character + 1)} ${message}`;
+    })
+    .join("\n");
+}
+
+function diffExpectedExports(actual, expected) {
+  const actualSet = new Set(actual);
+  const expectedSet = new Set(expected);
+  return {
+    missing: expected.filter((item) => !actualSet.has(item)),
+    unexpected: actual.filter((item) => !expectedSet.has(item)),
+  };
+}
+
+function externalConsumerCompilerOptions() {
+  return {
+    baseUrl: repoRoot,
+    ignoreDeprecations: "6.0",
+    moduleResolution: ts.ModuleResolutionKind.NodeNext,
+    module: ts.ModuleKind.NodeNext,
+    target: ts.ScriptTarget.ES2022,
+    noEmit: true,
+    skipLibCheck: false,
+    paths: {
+      ws: ["node_modules/@types/ws/index.d.ts"],
+    },
+    strict: true,
+    typeRoots: [join(repoRoot, "node_modules", "@types")],
+    types: ["node", "ws"],
+  };
+}
+
+function probeHost(compilerOptions, probeFile, probeText) {
+  const host = ts.createCompilerHost(compilerOptions, true);
+  host.readFile = (fileName) => {
+    if (fileName === probeFile) {
+      return probeText;
+    }
+    return ts.sys.readFile(fileName);
+  };
+  host.fileExists = (fileName) => fileName === probeFile || ts.sys.fileExists(fileName);
+  return host;
+}
+
+function collectConsumerVisibleTypeExports(specifier, fromDirectory) {
+  const probeFile = join(fromDirectory, "__keiko-public-api-probe__.ts");
+  const probeText =
+    `export * from ${JSON.stringify(specifier)};\n` +
+    `export type __Probe = typeof import(${JSON.stringify(specifier)});\n`;
+  const compilerOptions = externalConsumerCompilerOptions();
+  const host = probeHost(compilerOptions, probeFile, probeText);
+  const program = ts.createProgram([probeFile], compilerOptions, host);
+  const diagnostics = ts.getPreEmitDiagnostics(program);
+  if (diagnostics.length > 0) {
+    fail(
+      "installed declarations do not typecheck for an external consumer:\n" +
+        formatTsDiagnostics(diagnostics),
+    );
+  }
+  const sourceFile = program.getSourceFile(probeFile);
+  if (sourceFile === undefined) {
+    fail(`TypeScript source file not found: ${probeFile}`);
+  }
+  const checker = program.getTypeChecker();
+  const symbol = checker.getSymbolAtLocation(sourceFile);
+  if (symbol === undefined) {
+    fail(`TypeScript module symbol not found for: ${probeFile}`);
+  }
+  return checker
+    .getExportsOfModule(symbol)
+    .map((item) => item.getName())
+    .filter((item) => item !== "__Probe")
+    .sort();
 }
 
 function packRoot() {
@@ -107,27 +202,137 @@ function assertCliVersionAndHelp(tmp) {
   }
 }
 
-// `runVerification` is the SDK sentinel mirrored from `scripts/check-package-surface.mjs`:
-// the static surface check asserts the same symbol resolves as a function, so the runtime
-// smoke would otherwise be weaker than the static gate (issue #169 verifier finding gap 1).
-const SDK_SENTINEL_TOKEN = "runVerification";
-
-function assertSdkRootImport(tmp) {
-  const sdkProbe =
-    "import('@oscharko-dev/keiko').then(m => { " +
-    "if (typeof m !== 'object' || m === null) process.exit(2); " +
-    "const keys = Object.keys(m); " +
-    "if (keys.length === 0) process.exit(3); " +
-    `if (typeof m["${SDK_SENTINEL_TOKEN}"] !== 'function') process.exit(4); ` +
-    "console.log(String(keys.length)); " +
-    "});";
-  const result = run("node", ["-e", sdkProbe], { cwd: tmp });
-  if (result.status !== 0) {
-    fail(`SDK root import exited ${String(result.status)}: ${result.stderr}`);
+async function assertInstalledRootRuntimeSurface(tmp) {
+  try {
+    const moduleUrl = pathToFileURL(
+      join(tmp, "node_modules", "@oscharko-dev", "keiko", "dist", "index.js"),
+    ).href;
+    const mod = await import(moduleUrl);
+    const runtimeExports = Object.keys(mod).sort();
+    const diff = diffExpectedExports(runtimeExports, rootPackageSurfaceContract.runtimeExports);
+    if (diff.missing.length > 0 || diff.unexpected.length > 0) {
+      fail(
+        "installed root runtime contract drifted " +
+          `(missing ${String(diff.missing.length)}, unexpected ${String(diff.unexpected.length)}).`,
+      );
+    }
+  } catch (error) {
+    fail(`installed root import failed: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
-function main() {
+function assertInstalledRootTypeSurface(tmp) {
+  const typeExports = collectConsumerVisibleTypeExports("@oscharko-dev/keiko", tmp);
+  const diff = diffExpectedExports(typeExports, rootPackageSurfaceContract.declarationExports);
+  if (diff.missing.length > 0 || diff.unexpected.length > 0) {
+    fail(
+      "installed root declaration contract drifted " +
+        `(missing ${String(diff.missing.length)}, unexpected ${String(diff.unexpected.length)}).`,
+    );
+  }
+}
+
+async function reserveUiPort() {
+  return await new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("could not reserve a loopback TCP port for keiko ui"));
+        return;
+      }
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolvePort(address.port);
+      });
+    });
+  });
+}
+
+async function waitForHealth(baseUrl, child, stdoutChunks, stderrChunks) {
+  const deadline = Date.now() + UI_HEALTH_TIMEOUT_MS;
+  let lastError = "health endpoint did not respond";
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      fail(
+        `keiko ui exited ${String(child.exitCode)} before /api/health was reachable.\n` +
+          `stdout:\n${stdoutChunks.join("")}\n` +
+          `stderr:\n${stderrChunks.join("")}`,
+      );
+    }
+    try {
+      const res = await globalThis.fetch(`${baseUrl}/api/health`);
+      if (res.ok) return;
+      lastError = `/api/health returned ${String(res.status)}`;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+    }
+    await sleep(UI_HEALTH_POLL_INTERVAL_MS);
+  }
+  fail(
+    `keiko ui did not become healthy within ${String(UI_HEALTH_TIMEOUT_MS)}ms: ${lastError}\n` +
+      `stdout:\n${stdoutChunks.join("")}\n` +
+      `stderr:\n${stderrChunks.join("")}`,
+  );
+}
+
+async function stopChild(child) {
+  if (child.exitCode !== null) return;
+  child.kill("SIGTERM");
+  await Promise.race([
+    new Promise((resolvePromise) => child.once("exit", () => resolvePromise())),
+    sleep(5_000).then(() => {
+      if (child.exitCode === null) {
+        child.kill("SIGKILL");
+      }
+    }),
+  ]);
+}
+
+async function assertPackagedUi(tmp) {
+  const packageRoot = join(tmp, "node_modules", "@oscharko-dev", "keiko");
+  const staticRoot = join(packageRoot, "dist", "ui", "static");
+  const hashesFile = join(packageRoot, "dist", "ui", "csp-hashes.json");
+  if (!existsSync(staticRoot)) {
+    fail(`installed tarball missing packaged UI static root at ${staticRoot}`);
+  }
+  if (readdirSync(staticRoot).length === 0) {
+    fail(`installed packaged UI static root is empty: ${staticRoot}`);
+  }
+  if (!existsSync(hashesFile)) {
+    fail(`installed tarball missing packaged UI CSP hashes at ${hashesFile}`);
+  }
+  const bin = join(packageRoot, "dist", "cli", "index.js");
+  const port = await reserveUiPort();
+  const baseUrl = `http://127.0.0.1:${String(port)}`;
+  const stdoutChunks = [];
+  const stderrChunks = [];
+  const child = spawn("node", [bin, "ui", "--port", String(port)], {
+    cwd: tmp,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  child.stdout?.on("data", (chunk) => stdoutChunks.push(String(chunk)));
+  child.stderr?.on("data", (chunk) => stderrChunks.push(String(chunk)));
+  try {
+    await waitForHealth(baseUrl, child, stdoutChunks, stderrChunks);
+    const home = await globalThis.fetch(`${baseUrl}/`);
+    if (!home.ok) {
+      fail(`keiko ui GET / exited with HTTP ${String(home.status)}`);
+    }
+    const html = await home.text();
+    if (!html.includes("Keiko")) {
+      fail("keiko ui home page did not contain the Keiko shell marker");
+    }
+  } finally {
+    await stopChild(child);
+  }
+}
+
+async function main() {
   const tarballPath = packRoot();
   const tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
   try {
@@ -135,9 +340,11 @@ function main() {
     assertCliExecutable(tmp);
     assertBundledPayload(tmp);
     assertCliVersionAndHelp(tmp);
-    assertSdkRootImport(tmp);
+    await assertInstalledRootRuntimeSurface(tmp);
+    assertInstalledRootTypeSurface(tmp);
+    await assertPackagedUi(tmp);
     console.log(
-      `installable-smoke ok: tarball installed, ${String(bundled.length)} bundled packages present, CLI + SDK reachable.`,
+      `installable-smoke ok: tarball installed, ${String(bundled.length)} bundled packages present, root runtime/types + CLI + UI reachable.`,
     );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
@@ -145,4 +352,4 @@ function main() {
   }
 }
 
-main();
+void main();

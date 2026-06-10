@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { Icons, type IconName } from "./Icons";
 import type { Theme } from "./hooks/useTheme";
 
@@ -40,6 +41,7 @@ function RailButton({
       data-active={active ? "true" : "false"}
       data-side="left"
       aria-label={tool.label}
+      aria-pressed={active}
       title={tool.label}
       onClick={onClick}
     >
@@ -67,7 +69,7 @@ export function LeftRail({
   readonly onToggleTheme: () => void;
 }): ReactNode {
   return (
-    <div className="rail rail-left">
+    <nav className="rail rail-left" aria-label="Primary workspace navigation">
       <button
         type="button"
         className="rail-new"
@@ -99,6 +101,54 @@ export function LeftRail({
             onClick={() => onTool(tool.id)}
           />
         ))}
+        {/* Issue #211 — MemoriaViva is a page route, not a window tool */}
+        <Link
+          href="/memoriaviva"
+          className="rail-btn"
+          data-active="false"
+          data-side="left"
+          aria-label="MemoriaViva"
+          title="MemoriaViva"
+        >
+          <Icons.brain size={19} />
+        </Link>
+        {/* Epic #270 — Quality Intelligence opens as a singleton Workspace window (not a page route). */}
+        <button
+          type="button"
+          className="rail-btn"
+          data-side="left"
+          data-active={openTools.has("quality") ? "true" : "false"}
+          aria-label="Quality Intelligence"
+          aria-pressed={openTools.has("quality")}
+          title="Quality Intelligence"
+          onClick={() => onTool("quality")}
+        >
+          <Icons.check size={19} />
+        </button>
+        {/* Issue #189 — Local Knowledge is a page route, not a window tool */}
+        <Link
+          href="/local-knowledge"
+          className="rail-btn"
+          data-active="false"
+          data-side="left"
+          aria-label="Local Knowledge"
+          title="Local Knowledge"
+        >
+          <Icons.localKnowledge size={19} />
+        </Link>
+        {/* Epic #532 — Relationships opens as a singleton Workspace window (not a page route). */}
+        <button
+          type="button"
+          className="rail-btn"
+          data-side="left"
+          data-active={openTools.has("relationships") ? "true" : "false"}
+          aria-label="Relationships"
+          aria-pressed={openTools.has("relationships")}
+          title="Relationships"
+          onClick={() => onTool("relationships")}
+        >
+          <Icons.branch size={19} />
+        </button>
       </div>
       <div className="rail-div" />
       <button
@@ -117,6 +167,7 @@ export function LeftRail({
         data-side="left"
         data-active={openTools.has("settings") ? "true" : "false"}
         aria-label="Settings"
+        aria-pressed={openTools.has("settings")}
         title="Settings"
         onClick={() => onTool("settings")}
       >
@@ -131,6 +182,6 @@ export function LeftRail({
       >
         M
       </button>
-    </div>
+    </nav>
   );
 }

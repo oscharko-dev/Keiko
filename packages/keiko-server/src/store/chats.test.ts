@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInMemoryUiStore, UiStoreError, type UiStore } from "./index.js";
+import type { ChatLocalKnowledgeScope } from "./types.js";
 
 let tmp: string;
 let proj: string;
@@ -86,6 +87,32 @@ describe("createChat", () => {
   });
 });
 
+// Epic #177 audit: grounded-ask and chat PATCH paths used a project-scan + chat-scan helper
+// that fired O(projects × chats) row fetches per request. `findChatById` is the single-row
+// SELECT replacement; these tests pin its three semantic boundaries.
+describe("findChatById (#177)", () => {
+  it("returns the chat regardless of which project owns it", () => {
+    const otherProj = join(tmp, "other");
+    mkdirSync(otherProj);
+    store.createProject(otherProj);
+    const a = store.createChat(proj, "A", "m1");
+    const c = store.createChat(otherProj, "C", "m1");
+    expect(store.findChatById(a.id)?.title).toBe("A");
+    expect(store.findChatById(c.id)?.title).toBe("C");
+  });
+
+  it("returns undefined for an unknown chat id without throwing", () => {
+    expect(store.findChatById("does-not-exist")).toBeUndefined();
+  });
+
+  it("returns the same Chat shape as listChats (round-trip equality)", () => {
+    const created = store.createChat(proj, "Round", "m1", { branchLabel: "feature" });
+    const listed = store.listChats(proj).find((c) => c.id === created.id);
+    const found = store.findChatById(created.id);
+    expect(found).toEqual(listed);
+  });
+});
+
 describe("updateChat", () => {
   it("updates fields and bumps updatedAt", () => {
     const c = store.createChat(proj, "t", "m");
@@ -104,6 +131,403 @@ describe("updateChat", () => {
     expect(() =>
       store.updateChat(c.id, { selectedModel: '{"apiKey":"secret","modelId":"m"}' }),
     ).toThrow(UiStoreError);
+  });
+});
+
+// Issue #184 — round-trip tests for the connectedScope wire round-trip through SQLite.
+// Three-state semantics: undefined (omit) leaves the binding alone; null clears; a value writes.
+describe("updateChat — connectedScope round-trip (#184)", () => {
+  it("createChat leaves connectedScope undefined", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(c.connectedScope).toBeUndefined();
+  });
+
+  it("sets a connectedScope and round-trips it through SELECT", () => {
+    const c = store.createChat(proj, "t", "m");
+    const updated = store.updateChat(c.id, {
+      connectedScope: {
+        kind: "files",
+        relativePaths: ["src/lib", "src/app/page.tsx"],
+        connectedAtMs: 42,
+      },
+    });
+    expect(updated.connectedScope).toEqual({
+      kind: "files",
+      relativePaths: ["src/lib", "src/app/page.tsx"],
+      connectedAtMs: 42,
+    });
+    const fetched = store.listChats(proj).find((x) => x.id === c.id);
+    expect(fetched?.connectedScope).toEqual({
+      kind: "files",
+      relativePaths: ["src/lib", "src/app/page.tsx"],
+      connectedAtMs: 42,
+    });
+  });
+
+  it("sets a repository-root connectedScope with empty relativePaths", () => {
+    const c = store.createChat(proj, "t", "m");
+    const updated = store.updateChat(c.id, {
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 42 },
+    });
+    expect(updated.connectedScope).toEqual({
+      kind: "workspace-root",
+      relativePaths: [],
+      connectedAtMs: 42,
+    });
+  });
+
+  it("round-trips an external scope root through SELECT (#532)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const externalRoot = "/Users/someone/Documents/quarterly-reports";
+    const updated = store.updateChat(c.id, {
+      connectedScope: {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: 99,
+        root: externalRoot,
+      },
+    });
+    expect(updated.connectedScope?.root).toBe(externalRoot);
+    const fetched = store.listChats(proj).find((x) => x.id === c.id);
+    // The root must survive the JSON column encode/decode — a connected folder outside the chat's
+    // project is otherwise silently lost and the grounded path falls back to the wrong root.
+    expect(fetched?.connectedScope?.root).toBe(externalRoot);
+  });
+
+  it("leaves connectedScope.root undefined when not provided (#532)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const updated = store.updateChat(c.id, {
+      connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 },
+    });
+    expect(updated.connectedScope?.root).toBeUndefined();
+  });
+
+  it("clears connectedScope when patched with null", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      connectedScope: { kind: "files", relativePaths: ["src/a"], connectedAtMs: 1 },
+    });
+    const cleared = store.updateChat(c.id, { connectedScope: null });
+    expect(cleared.connectedScope).toBeUndefined();
+    const fetched = store.listChats(proj).find((x) => x.id === c.id);
+    expect(fetched?.connectedScope).toBeUndefined();
+  });
+
+  it("leaves connectedScope untouched when the field is omitted from the patch", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      connectedScope: { kind: "files", relativePaths: ["src/keep"], connectedAtMs: 7 },
+    });
+    const renamed = store.updateChat(c.id, { title: "renamed" });
+    expect(renamed.title).toBe("renamed");
+    expect(renamed.connectedScope).toEqual({
+      kind: "files",
+      relativePaths: ["src/keep"],
+      connectedAtMs: 7,
+    });
+  });
+
+  it("supports replacement: a second scope patch overwrites the prior binding", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      connectedScope: { kind: "files", relativePaths: ["src/a"], connectedAtMs: 1 },
+    });
+    const replaced = store.updateChat(c.id, {
+      connectedScope: { kind: "files", relativePaths: ["src/b", "src/c"], connectedAtMs: 2 },
+    });
+    expect(replaced.connectedScope).toEqual({
+      kind: "files",
+      relativePaths: ["src/b", "src/c"],
+      connectedAtMs: 2,
+    });
+  });
+
+  it("rejects an empty relativePaths array", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, {
+        connectedScope: { kind: "files", relativePaths: [], connectedAtMs: 1 },
+      }),
+    ).toThrow(UiStoreError);
+  });
+
+  it("rejects a non-integer connectedAtMs", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, {
+        connectedScope: { kind: "files", relativePaths: ["src/a"], connectedAtMs: 1.5 },
+      }),
+    ).toThrow(UiStoreError);
+  });
+});
+
+// Epic #532 — multi-source connectedScopes list round-trip through SQLite. A chat may bind N
+// connected folders/files at once; the list is encoded as a JSON ARRAY in connected_scope_paths.
+describe("updateChat — connectedScopes list round-trip (#532)", () => {
+  it("sets two sources with distinct roots and round-trips both (list + back-compat single)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const scopes = [
+      {
+        kind: "directory" as const,
+        relativePaths: ["docs"],
+        connectedAtMs: 10,
+        root: "/srv/alpha",
+      },
+      {
+        kind: "files" as const,
+        relativePaths: ["a.md", "b.md"],
+        connectedAtMs: 11,
+        root: "/srv/beta",
+      },
+    ];
+    const updated = store.updateChat(c.id, { connectedScopes: scopes });
+    expect(updated.connectedScopes).toEqual(scopes);
+    // Back-compat readers see the first source on the single field.
+    expect(updated.connectedScope).toEqual(scopes[0]);
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.connectedScopes).toEqual(scopes);
+    expect(fetched?.connectedScopes?.[0]?.root).toBe("/srv/alpha");
+    expect(fetched?.connectedScopes?.[1]?.root).toBe("/srv/beta");
+    expect(fetched?.connectedScope).toEqual(scopes[0]);
+  });
+
+  it("decodes a legacy single-object row as a 1-element connectedScopes list", () => {
+    const c = store.createChat(proj, "t", "m");
+    // Write via the single-field path (legacy encoding = one object, not an array).
+    store.updateChat(c.id, {
+      connectedScope: { kind: "files", relativePaths: ["src/a"], connectedAtMs: 5 },
+    });
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.connectedScopes).toEqual([
+      { kind: "files", relativePaths: ["src/a"], connectedAtMs: 5 },
+    ]);
+    expect(fetched?.connectedScope).toEqual({
+      kind: "files",
+      relativePaths: ["src/a"],
+      connectedAtMs: 5,
+    });
+  });
+
+  it("clears the list when patched with connectedScopes: null", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      connectedScopes: [{ kind: "files", relativePaths: ["src/a"], connectedAtMs: 1 }],
+    });
+    const cleared = store.updateChat(c.id, { connectedScopes: null });
+    expect(cleared.connectedScopes ?? []).toHaveLength(0);
+    expect(cleared.connectedScope).toBeUndefined();
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.connectedScopes ?? []).toHaveLength(0);
+    expect(fetched?.connectedScope).toBeUndefined();
+  });
+
+  it("treats a single-element connectedScopes list identically to the legacy single field", () => {
+    const c = store.createChat(proj, "t", "m");
+    const one = { kind: "files" as const, relativePaths: ["src/x"], connectedAtMs: 3 };
+    const viaList = store.updateChat(c.id, { connectedScopes: [one] });
+    expect(viaList.connectedScope).toEqual(one);
+    expect(viaList.connectedScopes).toEqual([one]);
+  });
+
+  it("rejects a list exceeding MAX_CONNECTED_SOURCES (17 entries)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const tooMany = Array.from({ length: 17 }, (_unused, i) => ({
+      kind: "files" as const,
+      relativePaths: [`src/f${String(i)}`],
+      connectedAtMs: 1,
+    }));
+    expect(() => store.updateChat(c.id, { connectedScopes: tooMany })).toThrow(UiStoreError);
+  });
+
+  it("rejects a list whose entry has an invalid (absolute) relative path", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, {
+        connectedScopes: [{ kind: "files", relativePaths: ["/etc/passwd"], connectedAtMs: 1 }],
+      }),
+    ).toThrow(UiStoreError);
+  });
+
+  it("accepts the maximum allowed list size (16 entries)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const max = Array.from({ length: 16 }, (_unused, i) => ({
+      kind: "files" as const,
+      relativePaths: [`src/f${String(i)}`],
+      connectedAtMs: 1,
+    }));
+    const updated = store.updateChat(c.id, { connectedScopes: max });
+    expect(updated.connectedScopes).toHaveLength(16);
+  });
+
+  it("prefers connectedScopes over connectedScope when both are present in a patch", () => {
+    const c = store.createChat(proj, "t", "m");
+    const updated = store.updateChat(c.id, {
+      connectedScope: { kind: "files", relativePaths: ["src/single"], connectedAtMs: 1 },
+      connectedScopes: [{ kind: "files", relativePaths: ["src/list"], connectedAtMs: 2 }],
+    });
+    expect(updated.connectedScopes).toEqual([
+      { kind: "files", relativePaths: ["src/list"], connectedAtMs: 2 },
+    ]);
+    expect(updated.connectedScope).toEqual({
+      kind: "files",
+      relativePaths: ["src/list"],
+      connectedAtMs: 2,
+    });
+  });
+
+  it("drops a scope whose persisted root is not absolute (L2 read-side tamper defense, #532)", () => {
+    const c = store.createChat(proj, "t", "m");
+    // The BFF validates root absoluteness on write; the store write layer does not. A directly
+    // tampered DB row (or a caller that bypassed the BFF) could carry a relative root. The
+    // read/decode layer must treat a non-absolute root as tampering and collapse the whole scope to
+    // undefined rather than ground against an attacker-chosen relative location.
+    const written = store.updateChat(c.id, {
+      connectedScope: {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: 9,
+        root: "relative/evil",
+      },
+    });
+    expect(written.connectedScope).toBeUndefined();
+    expect(written.connectedScopes ?? []).toHaveLength(0);
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.connectedScope).toBeUndefined();
+  });
+
+  it("round-trips a scope whose persisted root IS absolute (L2 allows the valid shape, #532)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const written = store.updateChat(c.id, {
+      connectedScope: {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: 9,
+        root: "/srv/data/reports",
+      },
+    });
+    expect(written.connectedScope?.root).toBe("/srv/data/reports");
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.connectedScope?.root).toBe("/srv/data/reports");
+  });
+});
+
+// Epic #189 — multi-source localKnowledgeScopes list round-trip through SQLite. A chat may bind N
+// connector sources (capsules/capsule-sets); the list is encoded as a JSON ARRAY in the existing
+// local_knowledge_scope_json column (single object kept for the legacy 1-element form).
+describe("updateChat — localKnowledgeScopes list round-trip (#189)", () => {
+  it("sets two connector sources and round-trips both (list + back-compat single)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const scopes = [
+      { kind: "capsule" as const, capsuleId: "cap-a", connectedAtMs: 10 },
+      { kind: "capsule-set" as const, capsuleSetId: "set-b", connectedAtMs: 11 },
+    ] as ChatLocalKnowledgeScope[];
+    const updated = store.updateChat(c.id, { localKnowledgeScopes: scopes });
+    expect(updated.localKnowledgeScopes).toEqual(scopes);
+    expect(updated.localKnowledgeScope).toEqual(scopes[0]);
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.localKnowledgeScopes).toEqual(scopes);
+    expect(fetched?.localKnowledgeScope).toEqual(scopes[0]);
+  });
+
+  it("decodes a legacy single-object row as a 1-element localKnowledgeScopes list", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      localKnowledgeScope: {
+        kind: "capsule",
+        capsuleId: "cap-x",
+        connectedAtMs: 5,
+      } as ChatLocalKnowledgeScope,
+    });
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.localKnowledgeScopes).toEqual([
+      { kind: "capsule", capsuleId: "cap-x", connectedAtMs: 5 },
+    ]);
+    expect(fetched?.localKnowledgeScope).toEqual({
+      kind: "capsule",
+      capsuleId: "cap-x",
+      connectedAtMs: 5,
+    });
+  });
+
+  it("clears the list when patched with localKnowledgeScopes: null", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, {
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: "cap-a", connectedAtMs: 1 },
+      ] as ChatLocalKnowledgeScope[],
+    });
+    const cleared = store.updateChat(c.id, { localKnowledgeScopes: null });
+    expect(cleared.localKnowledgeScopes ?? []).toHaveLength(0);
+    expect(cleared.localKnowledgeScope).toBeUndefined();
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.localKnowledgeScopes ?? []).toHaveLength(0);
+    expect(fetched?.localKnowledgeScope).toBeUndefined();
+  });
+
+  it("treats a single-element localKnowledgeScopes list identically to the legacy single field", () => {
+    const c = store.createChat(proj, "t", "m");
+    const one = {
+      kind: "capsule-set" as const,
+      capsuleSetId: "set-x",
+      connectedAtMs: 3,
+    } as ChatLocalKnowledgeScope;
+    const viaList = store.updateChat(c.id, { localKnowledgeScopes: [one] });
+    expect(viaList.localKnowledgeScope).toEqual(one);
+    expect(viaList.localKnowledgeScopes).toEqual([one]);
+  });
+
+  it("rejects a list exceeding MAX_LOCAL_KNOWLEDGE_SOURCES (17 entries)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const tooMany = Array.from({ length: 17 }, (_unused, i) => ({
+      kind: "capsule" as const,
+      capsuleId: `cap-${String(i)}`,
+      connectedAtMs: 1,
+    })) as ChatLocalKnowledgeScope[];
+    expect(() => store.updateChat(c.id, { localKnowledgeScopes: tooMany })).toThrow(UiStoreError);
+  });
+
+  it("accepts the maximum allowed list size (16 entries)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const max = Array.from({ length: 16 }, (_unused, i) => ({
+      kind: "capsule" as const,
+      capsuleId: `cap-${String(i)}`,
+      connectedAtMs: 1,
+    })) as ChatLocalKnowledgeScope[];
+    const updated = store.updateChat(c.id, { localKnowledgeScopes: max });
+    expect(updated.localKnowledgeScopes).toHaveLength(16);
+  });
+
+  it("rejects a list entry with an empty capsule id", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, {
+        localKnowledgeScopes: [
+          { kind: "capsule", capsuleId: "", connectedAtMs: 1 },
+        ] as ChatLocalKnowledgeScope[],
+      }),
+    ).toThrow(UiStoreError);
+  });
+
+  it("prefers localKnowledgeScopes over localKnowledgeScope when both are present in a patch", () => {
+    const c = store.createChat(proj, "t", "m");
+    const updated = store.updateChat(c.id, {
+      localKnowledgeScope: {
+        kind: "capsule",
+        capsuleId: "cap-single",
+        connectedAtMs: 1,
+      } as ChatLocalKnowledgeScope,
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: "cap-list", connectedAtMs: 2 },
+      ] as ChatLocalKnowledgeScope[],
+    });
+    expect(updated.localKnowledgeScopes).toEqual([
+      { kind: "capsule", capsuleId: "cap-list", connectedAtMs: 2 },
+    ]);
+    expect(updated.localKnowledgeScope).toEqual({
+      kind: "capsule",
+      capsuleId: "cap-list",
+      connectedAtMs: 2,
+    });
   });
 });
 

@@ -10,6 +10,7 @@ import { writeFileSync } from "node:fs";
 import { GatewayError, redact, type EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { createAuditRedactor, deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues } from "@oscharko-dev/keiko-security";
+import { parseRunRequest } from "@oscharko-dev/keiko-server";
 import {
   fixtureByName,
   fixturesForSuite,
@@ -19,7 +20,9 @@ import {
   type EvalRunnerDeps,
   type EvalScorecard,
   type EvaluationFixture,
-} from "../../../src/evaluations/index.js";
+} from "@oscharko-dev/keiko-evaluations";
+import { runGenTestsCli } from "./gen-tests.js";
+import { runInvestigateCli } from "./investigate.js";
 import type { CliIo } from "./runner.js";
 
 const USAGE = `Usage:
@@ -218,7 +221,16 @@ async function runSuite(
       },
       // Provide Date.now as the default wall-clock so a real `keiko evaluate` prints the actual
       // current time. Tests override this via deps.runner.now for deterministic evaluatedAt.
-      { env, now: Date.now, ...deps.runner },
+      {
+        env,
+        now: Date.now,
+        surfaceParity: {
+          runGenTestsCli,
+          runInvestigateCli,
+          parseRunRequest,
+        },
+        ...deps.runner,
+      },
     );
     emit(scorecard, parsed, io, env);
     return exitCodeFor(scorecard);

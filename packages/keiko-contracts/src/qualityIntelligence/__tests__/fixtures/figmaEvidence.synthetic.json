@@ -1,0 +1,12 @@
+{
+  "_header": "synthetic — no customer data; safe to bundle",
+  "kind": "figma-evidence",
+  "id": "env-figma-synthetic-01",
+  "displayLabel": "synthetic-frame-1",
+  "provenance": {
+    "origin": "figma-cache-synthetic",
+    "registeredAt": "2026-06-05T00:00:00Z",
+    "integrityHashSha256Hex": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  },
+  "localRef": "figma-cache:synthetic:frame-1"
+}

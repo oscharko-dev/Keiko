@@ -4,10 +4,10 @@
 // nothing new is invented here.
 //
 // Reuse (UNCHANGED):
-//   • runCommand from src/tools/exec.ts (sandbox env, no-shell, cwd realpath, output cap, abort)
-//   • EvidenceStore from src/audit/store.ts (atomic O_EXCL + realpath-contained write)
-//   • deepRedactStrings from src/audit/redaction.ts (Layer-2 redact-before-persist)
-//   • ProjectStore from src/ui/store/** (projectId → workspaceRoot)
+//   • runCommand from @oscharko-dev/keiko-tools exec.ts (sandbox env, no-shell, cwd realpath, output cap, abort)
+//   • EvidenceStore from @oscharko-dev/keiko-evidence (atomic O_EXCL + realpath-contained write)
+//   • deepRedactStrings from @oscharko-dev/keiko-security redaction.ts (Layer-2 redact-before-persist)
+//   • ProjectStore from packages/keiko-server/src/store/ (projectId → workspaceRoot)
 //
 // New (bounded composition):
 //   • TerminalExecutionManager: execute(input) / abort(executionId) / subscribe(handler).
@@ -27,7 +27,7 @@ import { runCommand, type RunCommandDeps } from "@oscharko-dev/keiko-tools";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import { isTerminalCommandAllowed, TERMINAL_COMMAND_RULES } from "@oscharko-dev/keiko-tools";
 import { isWithinWorkspace, resolveWithinWorkspace } from "@oscharko-dev/keiko-workspace";
-import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
+import { PathDeniedError, PathEscapeError } from "@oscharko-dev/keiko-workspace";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -167,24 +167,41 @@ function projectFor(store: UiStore, projectId: string): Project | undefined {
 // Tier-2 cwd containment (ADR-0018 D2 project-scoped pre-check). The requested cwd must resolve
 // lexically inside the project root before we hand it to `runCommand`, which then re-checks via
 // realpath/deny-list (Tier 1). A path traversal is denied here; a symlink escape is denied there.
-function assertCwdInsideProject(projectRoot: string, requested: string | undefined): string {
+function assertCwdInsideProject(
+  projectPath: string,
+  projectRoot: string,
+  requested: string | undefined,
+  fs: WorkspaceFs,
+): string {
   const candidate = requested === undefined || requested.length === 0 ? "." : requested;
   let lexical: string;
   try {
-    lexical = resolveWithinWorkspace(projectRoot, candidate);
+    lexical = resolveWithinWorkspace(projectPath, candidate);
   } catch {
     throw new TerminalToolError(
       "CWD_OUTSIDE_PROJECT",
       "Working directory is outside the selected project.",
     );
   }
-  if (!isWithinWorkspace(projectRoot, lexical)) {
+  if (!isWithinWorkspace(projectPath, lexical) && !isWithinWorkspace(projectRoot, lexical)) {
     throw new TerminalToolError(
       "CWD_OUTSIDE_PROJECT",
       "Working directory is outside the selected project.",
     );
   }
-  return lexical;
+  try {
+    const info = containedRealPathInfo(fs, projectRoot, lexical);
+    if (isDenied(info.realRelative)) {
+      throw new TerminalToolError("CWD_DENIED", "Working directory is denied by policy.");
+    }
+    return info.path;
+  } catch (error) {
+    if (error instanceof TerminalToolError) throw error;
+    throw new TerminalToolError(
+      "CWD_DENIED",
+      "Working directory is denied by policy.",
+    );
+  }
 }
 
 function projectRootOrThrow(project: Project): string {
@@ -712,8 +729,9 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
       );
     }
     const projectRoot = projectRootOrThrow(project);
-    const cwd = assertCwdInsideProject(projectRoot, input.cwd);
-    validateCommandOperands(projectRoot, cwd, input, this.runDeps.fs ?? nodeWorkspaceFs);
+    const fs = this.runDeps.fs ?? nodeWorkspaceFs;
+    const cwd = assertCwdInsideProject(project.path, projectRoot, input.cwd, fs);
+    validateCommandOperands(projectRoot, cwd, input, fs);
     return this.runExecution(projectRoot, cwd, input);
   };
 
@@ -959,7 +977,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
     if (error instanceof CommandCancelledError || entry.cancelledByUser) {
       return new TerminalToolError("CANCELLED", "Command was cancelled.");
     }
-    if (error instanceof PathDeniedError) {
+    if (error instanceof PathDeniedError || error instanceof PathEscapeError) {
       return new TerminalToolError("CWD_DENIED", "Working directory is denied by policy.");
     }
     if (error instanceof CommandDeniedError) {

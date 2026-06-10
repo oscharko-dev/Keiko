@@ -117,6 +117,22 @@ describe("runInvestigateCli (AC #1 CLI)", () => {
     expect(cap.out()).toContain("keiko investigate");
   });
 
+  it("exits 0 with usage on stdout for --help (issue #640)", async () => {
+    const cap = makeIo();
+    const code = await runInvestigateCli(["--help"], cap.io);
+    expect(code).toBe(0);
+    expect(cap.out()).toContain("Usage:");
+    expect(cap.err()).toBe("");
+  });
+
+  it("exits 0 with usage on stdout for -h (issue #640)", async () => {
+    const cap = makeIo();
+    const code = await runInvestigateCli(["-h"], cap.io);
+    expect(code).toBe(0);
+    expect(cap.out()).toContain("Usage:");
+    expect(cap.err()).toBe("");
+  });
+
   it("exits 2 with usage when no evidence source is given", async () => {
     const cap = makeIo();
     const code = await runInvestigateCli(

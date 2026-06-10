@@ -18,6 +18,7 @@ import {
   assertValidRunId,
   EvidenceReadError,
   EvidenceSchemaError,
+  InvalidRunIdError,
   type EvidenceListEntry,
 } from "@oscharko-dev/keiko-evidence";
 import {
@@ -34,10 +35,16 @@ import {
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
-import { currentGatewayConfig, currentGatewayConfigPresent } from "./deps.js";
+import {
+  currentGatewayConfig,
+  currentGatewayConfigPresent,
+  currentGroundingLimits,
+} from "./deps.js";
 import { validateProjectPath } from "./store/validation.js";
 
 // Route 2 — resolved config (SafeGatewayConfig, never apiKey/baseUrl) or null when no config was resolved.
+// effectiveGroundingLimits carries the runtime-resolved limits (file config + env) so the UI can
+// surface caps without a separate API call.
 export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const config = currentGatewayConfig(deps);
   return {
@@ -45,6 +52,7 @@ export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
     body: {
       config: config === undefined ? null : toSafeObject(config),
       configPresent: currentGatewayConfigPresent(deps),
+      effectiveGroundingLimits: currentGroundingLimits(deps),
     },
   };
 }
@@ -133,6 +141,11 @@ const WORKSPACE_ERROR_MESSAGES: Record<WorkspaceCode, string> = {
   [WORKSPACE_CODES.NOT_FOUND]: "The workspace could not be found.",
   [WORKSPACE_CODES.FILE_TOO_LARGE]: "The workspace file is too large.",
   [WORKSPACE_CODES.READ_FAILED]: "The workspace could not be read.",
+  [WORKSPACE_CODES.REPO_SEARCH_INVALID_QUERY]: "The repository search query is invalid.",
+  [WORKSPACE_CODES.REPO_SEARCH_INVALID_RANGE]:
+    "The repository search range or scope path is invalid.",
+  [WORKSPACE_CODES.REPO_SEARCH_UNSUPPORTED_FILE]:
+    "The repository search does not support this file.",
 };
 
 function workspaceErrorMessage(code: WorkspaceCode): string {
@@ -313,6 +326,11 @@ export function handleEvidenceDetail(ctx: RouteContext, deps: UiHandlerDeps): Ro
     }
     return { status: 200, body: { manifest } };
   } catch (error) {
+    // Issue #622 — an over-long runId is rejected by the store with a static, path-free
+    // InvalidRunIdError before any fs read; surface it as a 400 (not a generic 500).
+    if (error instanceof InvalidRunIdError) {
+      return { status: 400, body: errorBody("BAD_REQUEST", error.message) };
+    }
     if (error instanceof EvidenceSchemaError) {
       return { status: 422, body: errorBody("EVIDENCE_SCHEMA", error.message) };
     }

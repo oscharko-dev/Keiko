@@ -60,6 +60,7 @@ export function persistWorkflowEvidence(
   report: unknown,
   events: readonly StreamEvent[],
   ctx: EvidencePersistContext,
+  governedHandoff?: EvidenceManifest["governedHandoff"],
 ): EvidenceReport {
   return persistWorkflowEvidenceCore(
     {
@@ -75,6 +76,7 @@ export function persistWorkflowEvidence(
     report,
     events,
     { ...ctx, costClassResolver: resolveCostClass },
+    { governedHandoff },
   );
 }
 
@@ -102,7 +104,7 @@ const KIND_TO_TASK_TYPE: Readonly<Record<RunKind, TaskType>> = {
 
 // Persists a terminated VERIFY run. Verify never calls a model, so usageTotals are all zero and
 // stateTransitions/toolCalls/commandExecutions stay empty (the verification orchestrator's own
-// audit summarisation lives in `src/verification/summary.ts` and is out of scope for this leaf).
+// audit summarisation lives in `@oscharko-dev/keiko-verification` and is out of scope for this leaf).
 export function persistVerifyEvidence(
   identity: RunIdentity,
   ctx: EvidencePersistContext,

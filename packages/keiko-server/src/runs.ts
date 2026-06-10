@@ -6,6 +6,7 @@
 // registry is created via `createRunRegistry` and hung off the handler deps, never a module global,
 // so each server instance (and each test) owns an isolated registry with no cross-talk.
 
+import type { WorkflowHandoffRequest } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import type { QueueEventSink } from "./sink.js";
 
 export type RunStatus = "running" | "completed" | "cancelled" | "failed";
@@ -18,6 +19,7 @@ export interface AppliableSnapshot {
   readonly kind: "unit-tests" | "bug-investigation";
   readonly payload: unknown;
   readonly limits: Record<string, unknown> | undefined;
+  readonly governedHandoff?: WorkflowHandoffRequest | undefined;
 }
 
 export interface RunRecord {
@@ -71,6 +73,8 @@ const DEFAULT_TERMINATED_TTL_MS = 600_000;
 export interface RunRegistry {
   register: (input: RegisterRunInput) => RunRecord;
   get: (runId: string) => RunRecord | undefined;
+  // Bounded inspection snapshot for read-only projections such as local activity streams.
+  snapshot?: (limit?: number) => readonly RunRecord[];
   // Marks a run terminal, captures its final report + appliable snapshot, and starts the TTL clock.
   complete: (
     runId: string,
@@ -168,6 +172,14 @@ export function createRunRegistry(options: RunRegistryOptions = {}): RunRegistry
     },
     complete: (runId, status, report, appliable): void => {
       completeRun(state, runId, status, report, appliable);
+    },
+    snapshot: (limit): readonly RunRecord[] => {
+      evictExpired(state);
+      const records = Array.from(state.records.values());
+      if (limit === undefined || limit >= records.length) {
+        return records;
+      }
+      return records.slice(Math.max(0, records.length - limit));
     },
     activeCount: (): number => {
       evictExpired(state);

@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-contracts",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.0",
   "private": true,
   "type": "module",
   "license": "Apache-2.0",
@@ -20,9 +20,17 @@
       "types": "./dist/bug-investigation-events.d.ts",
       "import": "./dist/bug-investigation-events.js"
     },
+    "./connected-context": {
+      "types": "./dist/connected-context.d.ts",
+      "import": "./dist/connected-context.js"
+    },
     "./verification-summary": {
       "types": "./dist/verification-summary.d.ts",
       "import": "./dist/verification-summary.js"
+    },
+    "./workflow-handoff": {
+      "types": "./dist/workflow-handoff.d.ts",
+      "import": "./dist/workflow-handoff.js"
     },
     "./evidence": {
       "types": "./dist/evidence.d.ts",
@@ -31,11 +39,23 @@
     "./bff-wire": {
       "types": "./dist/bff-wire.d.ts",
       "import": "./dist/bff-wire.js"
+    },
+    "./memory": {
+      "types": "./dist/memory-barrel.d.ts",
+      "import": "./dist/memory-barrel.js"
+    },
+    "./memory-workflow-port": {
+      "types": "./dist/memory-workflow-port.d.ts",
+      "import": "./dist/memory-workflow-port.js"
+    },
+    "./memory-audit-events": {
+      "types": "./dist/memory-audit-events.d.ts",
+      "import": "./dist/memory-audit-events.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json --noEmit",
     "test": "vitest run"
   },
   "files": [

@@ -7,16 +7,18 @@ import { ModeSwitch } from "./ModeSwitch";
 import type { TwinMode } from "./hooks/useTwinMode";
 
 interface HeaderProps {
-  mode: TwinMode;
-  onModeChange: (next: TwinMode) => void;
-  openPalette: () => void;
-  onTileAll: () => void;
-  onSplitFront: () => void;
-  onCascade: () => void;
+  readonly mode: TwinMode;
+  readonly projectName: string;
+  readonly onModeChange: (next: TwinMode) => void;
+  readonly openPalette: () => void;
+  readonly onTileAll: () => void;
+  readonly onSplitFront: () => void;
+  readonly onCascade: () => void;
 }
 
 export function Header({
   mode,
+  projectName,
   onModeChange,
   openPalette,
   onTileAll,
@@ -33,7 +35,7 @@ export function Header({
 
       <div className="tb-tabs">
         <div className="tb-tab" data-active="true">
-          <span>example-workspace</span>
+          <span>{projectName}</span>
           <Icons.chevron size={13} style={{ color: "var(--fg-faint)" }} />
         </div>
         <button type="button" className="tb-newtab" aria-label="New tab">
@@ -54,9 +56,15 @@ export function Header({
           <span>New</span>
         </button>
         <span className="hd-div" />
-        <EditorMenu project="example-workspace" />
+        <EditorMenu project={projectName} />
         <span className="hd-div" />
-        <button type="button" className="hd-tool" onClick={onTileAll} title="Tile all windows">
+        <button
+          type="button"
+          className="hd-tool"
+          onClick={onTileAll}
+          title="Tile all windows"
+          aria-label="Tile all windows"
+        >
           <Icons.tile size={16} />
         </button>
         <button
@@ -64,10 +72,17 @@ export function Header({
           className="hd-tool"
           onClick={onSplitFront}
           title="Split the two front windows"
+          aria-label="Split the two front windows"
         >
           <Icons.split size={16} />
         </button>
-        <button type="button" className="hd-tool" onClick={onCascade} title="Cascade windows">
+        <button
+          type="button"
+          className="hd-tool"
+          onClick={onCascade}
+          title="Cascade windows"
+          aria-label="Cascade windows"
+        >
           <Icons.cascade size={16} />
         </button>
       </div>

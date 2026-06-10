@@ -21,7 +21,7 @@ import {
   detectScripts,
   runVerification,
   type VerificationReport,
-} from "../../../src/verification/index.js";
+} from "@oscharko-dev/keiko-verification";
 import { detectWorkspace, readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
 import type { UnitTestWorkflowInput, UnitTestWorkflowReport } from "@oscharko-dev/keiko-workflows";
 import type { BugInvestigationInput, BugInvestigationReport } from "@oscharko-dev/keiko-workflows";
@@ -35,6 +35,7 @@ import type {
 } from "@oscharko-dev/keiko-harness";
 import { DEFAULT_LIMITS } from "@oscharko-dev/keiko-harness";
 import type { EvidenceReport } from "@oscharko-dev/keiko-evidence";
+import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { RunRequest } from "./run-request.js";
 import { QueueEventSink } from "./sink.js";
 import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";
@@ -45,6 +46,8 @@ import {
   type EvidencePersistContext,
   type RunIdentity,
 } from "./evidence.js";
+import { createWorkflowMemoryPort } from "./memory-workflow-port.js";
+import { buildGovernedHandoffEvidence } from "./governed-workflow.js";
 
 export interface StartRunResult {
   readonly runId: string;
@@ -69,6 +72,8 @@ interface EngineContext {
   // Where terminated runs persist their redacted evidence manifest (AC5). Optional so the 3-arg
   // engine-context form in older tests still compiles; persistence is simply skipped when absent.
   readonly evidence?: EvidencePersistContext | undefined;
+  readonly memoryVault?: MemoryVaultStore | undefined;
+  readonly memoryAuditRedactString?: ((input: string) => string) | undefined;
 }
 
 // Assembles the workflow/task input by overlaying the request-level fields onto the client `input`
@@ -122,6 +127,8 @@ function workflowFingerprint(request: RunRequest): string {
     taskInput: { taskType, input: request.input },
     limits: request.limits ?? {},
     modelId: request.modelId,
+    governedHandoff: request.governedHandoff ?? null,
+    governedHandoffSourceGroundedRunId: request.governedHandoffSourceGroundedRunId ?? null,
     workingDirectory: workspaceRoot(request),
     dryRun: true,
     harnessVersion: HARNESS_VERSION,
@@ -151,7 +158,12 @@ function unitTestAppliable(
   report: UnitTestWorkflowReport,
 ): AppliableSnapshot | undefined {
   return report.status === "dry-run" && report.proposedDiff !== undefined
-    ? { kind: "unit-tests", payload: request.input, limits: request.limits }
+    ? {
+        kind: "unit-tests",
+        payload: request.input,
+        limits: request.limits,
+        governedHandoff: request.governedHandoff,
+      }
     : undefined;
 }
 
@@ -160,7 +172,12 @@ function bugAppliable(
   report: BugInvestigationReport,
 ): AppliableSnapshot | undefined {
   return report.status === "fix-proposed" && report.proposedDiff !== undefined
-    ? { kind: "bug-investigation", payload: request.input, limits: request.limits }
+    ? {
+        kind: "bug-investigation",
+        payload: request.input,
+        limits: request.limits,
+        governedHandoff: request.governedHandoff,
+      }
     : undefined;
 }
 
@@ -189,6 +206,19 @@ function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: strin
     sink,
     signal: controller.signal,
     idSource: (): string => runId,
+    ...(ctx.request.governedHandoff === undefined
+      ? {}
+      : { workflowHandoff: ctx.request.governedHandoff }),
+    ...(ctx.memoryVault !== undefined && ctx.evidence !== undefined
+      ? {
+          memoryPort: createWorkflowMemoryPort({
+            vault: ctx.memoryVault,
+            evidenceStore: ctx.evidence.store,
+            runId,
+            redactString: ctx.memoryAuditRedactString ?? ((input: string): string => input),
+          }),
+        }
+      : {}),
   };
   if (ctx.request.kind === "unit-tests") {
     const result = generateUnitTests(unitTestInput(ctx.request), commonDeps).then((report) => ({
@@ -459,6 +489,12 @@ function persistOutcome(
     outcome.report,
     identity.sink.buffered(),
     ctx.evidence,
+    ctx.request.governedHandoff === undefined
+      ? undefined
+      : buildGovernedHandoffEvidence({
+          request: ctx.request.governedHandoff,
+          sourceGroundedRunId: ctx.request.governedHandoffSourceGroundedRunId,
+        }),
   );
 }
 
@@ -484,7 +520,10 @@ export async function applyRun(
 ): Promise<unknown> {
   const input = isRecord(snapshot.payload) ? snapshot.payload : {};
   const limitsOverride = snapshot.limits !== undefined ? { limits: snapshot.limits } : {};
-  const deps = { model };
+  const deps =
+    snapshot.governedHandoff === undefined
+      ? { model }
+      : { model, workflowHandoff: snapshot.governedHandoff };
   if (snapshot.kind === "unit-tests") {
     const report = await generateUnitTests(
       { ...input, modelId, apply: true, ...limitsOverride } as unknown as UnitTestWorkflowInput,

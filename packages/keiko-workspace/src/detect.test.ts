@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { detectWorkspace } from "./detect.js";
+import { detectWorkspace, detectWorkspaceAt } from "./detect.js";
 import { WorkspaceNotFoundError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 
@@ -150,5 +150,31 @@ describe("detectWorkspace", () => {
       exists: (): boolean => false,
     };
     expect(() => detectWorkspace("/some/deep/path", emptyFs)).toThrow(WorkspaceNotFoundError);
+  });
+});
+
+describe("detectWorkspaceAt", () => {
+  let dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+    dirs = [];
+  });
+
+  it("uses the given folder as the root even without a .git/package.json marker", () => {
+    const dir = mkdtempSync(join(tmpdir(), "kw-at-"));
+    dirs.push(dir);
+    writeFileSync(join(dir, "notes.txt"), "hello world\n", "utf8");
+    const info = detectWorkspaceAt(dir);
+    expect(info.root).toBe(dir);
+    expect(info.name).toBeUndefined();
+  });
+
+  it("does not walk up to a parent marker (the connected folder is the root)", () => {
+    const parent = mkdtempSync(join(tmpdir(), "kw-at-parent-"));
+    dirs.push(parent);
+    writeFileSync(join(parent, "package.json"), JSON.stringify({ name: "parent" }), "utf8");
+    const child = join(parent, "child");
+    mkdirSync(child);
+    expect(detectWorkspaceAt(child).root).toBe(child);
   });
 });

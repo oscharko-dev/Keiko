@@ -28,14 +28,18 @@ import {
 } from "./projects.js";
 import {
   deleteChat as sqlDeleteChat,
+  findChatById as sqlFindChatById,
   insertChat as sqlInsertChat,
   listChats as sqlListChats,
+  listChatsLimited as sqlListChatsLimited,
   touchChat as sqlTouchChat,
   updateChat as sqlUpdateChat,
 } from "./chats.js";
 import {
+  findMessageById as sqlFindMessageById,
   insertMessage as sqlInsertMessage,
   listMessages as sqlListMessages,
+  listMessagesLimited as sqlListMessagesLimited,
   updateMessage as sqlUpdateMessage,
 } from "./messages.js";
 import { validateProjectPath } from "./validation.js";
@@ -162,7 +166,9 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     deleteProject: (path: string): void => {
       deleteProjectRecord(db, path);
     },
-    listChats: (projectPath: string) => sqlListChats(db, projectPath),
+    listChats: (projectPath: string, limit?: number) =>
+      limit === undefined ? sqlListChats(db, projectPath) : sqlListChatsLimited(db, projectPath, limit),
+    findChatById: (id: string): Chat | undefined => sqlFindChatById(db, id),
     createChat: (
       projectPath: string,
       title: string,
@@ -174,7 +180,9 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     deleteChat: (id: string): void => {
       sqlDeleteChat(db, id);
     },
-    listMessages: (chatId: string): readonly ChatMessage[] => sqlListMessages(db, chatId),
+    listMessages: (chatId: string, limit?: number): readonly ChatMessage[] =>
+      limit === undefined ? sqlListMessages(db, chatId) : sqlListMessagesLimited(db, chatId, limit),
+    findMessageById: (id: string): ChatMessage | undefined => sqlFindMessageById(db, id),
     createMessage: (msg: NewChatMessage): ChatMessage => {
       const message = createMessageRecord(db, options, msg);
       sqlTouchChat(db, msg.chatId, options.now());
@@ -200,9 +208,17 @@ function quarantineCorruptDb(target: string): void {
   }
 }
 
+// Issue #639 — bound the SQLITE_BUSY window so concurrent UI/BFF writers (chat writes,
+// relationship writes, evidence-adjacent updates) wait for the writer lock for a short, bounded
+// interval instead of failing immediately. 5_000ms matches the conservative default we want for
+// the local single-writer desktop pattern; exported so the regression test can assert the value
+// without re-deriving it.
+export const UI_DB_BUSY_TIMEOUT_MS = 5_000;
+
 function preparedDatabase(target: string): DatabaseSync {
   const db = new DatabaseSync(target);
   db.exec("PRAGMA foreign_keys = ON");
+  db.exec(`PRAGMA busy_timeout = ${String(UI_DB_BUSY_TIMEOUT_MS)}`);
   return db;
 }
 
@@ -242,7 +258,11 @@ function chmodIfPresent(path: string, mode: number): void {
   }
 }
 
-export function createNodeUiStore(dbPath: string, opts?: UiStoreFactoryOptions): UiStore {
+// Issue #539: deps.ts needs the raw DatabaseSync to compose the relationship-engine store on
+// the same UI database file. The relationship V5 schema lives in this DB (schema.ts §V5);
+// keeping a single connection avoids WAL-coordination overhead. `createNodeUiStore` stays a
+// one-shot convenience for callers that do not need the underlying handle.
+export function openNodeUiDatabase(dbPath: string): DatabaseSync {
   ensureDirHardened(dirname(dbPath));
   let db = preparedDatabase(dbPath);
   try {
@@ -259,5 +279,13 @@ export function createNodeUiStore(dbPath: string, opts?: UiStoreFactoryOptions):
   chmodIfPresent(dbPath, 0o600);
   chmodIfPresent(`${dbPath}-wal`, 0o600);
   chmodIfPresent(`${dbPath}-shm`, 0o600);
+  return db;
+}
+
+export function buildUiStoreOverDatabase(db: DatabaseSync, opts?: UiStoreFactoryOptions): UiStore {
   return buildStore(db, resolveOptions(opts));
+}
+
+export function createNodeUiStore(dbPath: string, opts?: UiStoreFactoryOptions): UiStore {
+  return buildUiStoreOverDatabase(openNodeUiDatabase(dbPath), opts);
 }

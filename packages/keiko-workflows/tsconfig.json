@@ -4,18 +4,21 @@
     "composite": true,
     "declaration": true,
     "declarationMap": true,
-    "rootDir": "../..",
+    "rootDir": "src",
     "outDir": "dist",
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
-  "include": [
-    "src",
-    "../../src/verification/**/*.ts",
-    "../../src/workspace/**/*.ts",
-    "../../src/gateway/**/*.ts",
-    "../../src/tools/**/*.ts",
-    "../../src/harness/**/*.ts",
-    "../../src/audit/**/*.ts"
-  ],
-  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_support.ts"]
+  "include": ["src"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_support.ts"],
+  "references": [
+    { "path": "../keiko-contracts" },
+    { "path": "../keiko-security" },
+    { "path": "../keiko-model-gateway" },
+    { "path": "../keiko-workspace" },
+    { "path": "../keiko-tools" },
+    { "path": "../keiko-evidence" },
+    { "path": "../keiko-verification" },
+    { "path": "../keiko-harness" },
+    { "path": "../keiko-quality-intelligence" }
+  ]
 }

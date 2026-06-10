@@ -129,6 +129,12 @@ export const Icons = {
     <Ico {...p} d="M12 3l1.8 5.6L19 10l-5.2 1.4L12 17l-1.8-5.6L5 10l5.2-1.4z" />
   ),
   pin: (p: IcoProps): ReactNode => <Ico {...p} d="M9 3h6l-1 5 3 3-5 1-1 8-1-8-5-1 3-3z" />,
+  brain: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z" />
+      <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z" />
+    </Ico>
+  ),
   archive: (p: IcoProps): ReactNode => (
     <Ico {...p}>
       <rect x="3.5" y="5" width="17" height="4" rx="1" />
@@ -283,6 +289,13 @@ export const Icons = {
     </Ico>
   ),
   activity: (p: IcoProps): ReactNode => <Ico {...p} d="M3 12h3l2.5-7 5 14 2.5-7H21" />,
+  localKnowledge: (p: IcoProps): ReactNode => (
+    <Ico {...p}>
+      <path d="M4 19V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12" />
+      <path d="M4 19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2" />
+      <path d="M9 7v14M9 11h6" />
+    </Ico>
+  ),
 } as const;
 
 export type IconName = keyof typeof Icons;

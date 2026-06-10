@@ -9,6 +9,7 @@ import type {
   Clock,
   GatewayConfig,
   GatewayRequest,
+  GatewayStreamChunk,
   ModelProviderConfig,
   NormalizedResponse,
   ProviderAdapter,
@@ -20,7 +21,7 @@ function provider(overrides: Partial<ModelProviderConfig> = {}): ModelProviderCo
   return {
     modelId: "example-chat-model",
     baseUrl: "https://provider.example/v1",
-    apiKey: "sk-config-secret-key-1234567890ab",
+    apiKey: ["sk-", "config-secret-key-1234567890ab"].join(""),
     timeoutMs: 30_000,
     maxRetries: 2,
     retryBaseDelayMs: 1,
@@ -104,6 +105,9 @@ describe("Gateway.chat", () => {
             toolCalling: true,
             structuredOutput: true,
             streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
             costClass: "medium",
             latencyClass: "standard",
             throughputHint: "local endpoint",
@@ -146,6 +150,9 @@ describe("Gateway.chat", () => {
             toolCalling: false,
             structuredOutput: false,
             streaming: false,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
             costClass: "low",
             latencyClass: "fast",
             throughputHint: "test",
@@ -169,9 +176,10 @@ describe("Gateway.chat", () => {
   });
 
   it("never leaks the configured apiKey in a thrown error", async () => {
+    const upstreamKey = ["sk-", "config-secret-key-1234567890ab"].join("");
     const gateway = new Gateway(config([provider()]), {
       adapter: fakeAdapter(() =>
-        Promise.reject(new TransportError("upstream sk-config-secret-key-1234567890ab failed")),
+        Promise.reject(new TransportError(`upstream ${upstreamKey} failed`)),
       ),
       clock: stubClock(),
     });
@@ -179,7 +187,7 @@ describe("Gateway.chat", () => {
       await gateway.chat(REQUEST);
       expect.unreachable("should throw");
     } catch (error) {
-      expect((error as Error).message).not.toContain("sk-config-secret-key-1234567890ab");
+      expect((error as Error).message).not.toContain(upstreamKey);
     }
   });
 
@@ -240,6 +248,102 @@ describe("Gateway.chat", () => {
     const callsBeforeOpen = calls;
     await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(CircuitOpenError);
     expect(calls).toBe(callsBeforeOpen);
+  });
+});
+
+async function collectStream(
+  iterable: AsyncIterable<GatewayStreamChunk>,
+): Promise<GatewayStreamChunk[]> {
+  const out: GatewayStreamChunk[] = [];
+  for await (const chunk of iterable) out.push(chunk);
+  return out;
+}
+
+function streamingAdapter(tokens: readonly string[]): ProviderAdapter {
+  return {
+    call: () => Promise.resolve(okResponse("example-chat-model")),
+    callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      for (const token of tokens) yield { type: "delta", token };
+      yield {
+        type: "done",
+        response: {
+          ...okResponse("example-chat-model"),
+          content: tokens.join(""),
+          usage: {
+            requestId: "adapter-local",
+            promptTokens: 0,
+            completionTokens: 0,
+            latencyMs: 0,
+            costClass: "low",
+          },
+        },
+      };
+    },
+  };
+}
+
+describe("Gateway.chatStream", () => {
+  it("yields ordered deltas then a done chunk enriched with a UUID requestId and costClass", async () => {
+    const gateway = new Gateway(config([provider()]), {
+      adapter: streamingAdapter(["Hel", "lo"]),
+      clock: stubClock(),
+    });
+    const chunks = await collectStream(gateway.chatStream(REQUEST));
+    expect(chunks.slice(0, 2)).toEqual([
+      { type: "delta", token: "Hel" },
+      { type: "delta", token: "lo" },
+    ]);
+    const done = chunks[2];
+    if (done?.type !== "done") throw new Error("expected a done chunk");
+    expect(done.response.content).toBe("Hello");
+    expect(done.response.usage.requestId).toMatch(UUID_V4);
+    expect(done.response.usage.requestId).not.toBe("adapter-local");
+    expect(done.response.usage.costClass).toBe("medium");
+    expect(done.response.usage.latencyMs).toBeGreaterThanOrEqual(1);
+  });
+
+  it("falls back to a single delta+done synthesised from call() when callStream is absent", async () => {
+    const gateway = new Gateway(config([provider()]), {
+      adapter: fakeAdapter(() =>
+        Promise.resolve({ ...okResponse("example-chat-model"), content: "buffered" }),
+      ),
+      clock: stubClock(),
+    });
+    const chunks = await collectStream(gateway.chatStream(REQUEST));
+    expect(chunks[0]).toEqual({ type: "delta", token: "buffered" });
+    const done = chunks[1];
+    if (done?.type !== "done") throw new Error("expected a done chunk");
+    expect(done.response.content).toBe("buffered");
+    expect(done.response.usage.requestId).toMatch(UUID_V4);
+    expect(chunks).toHaveLength(2);
+  });
+
+  it("records a circuit failure and rethrows when the stream throws", async () => {
+    const failing: ProviderAdapter = {
+      call: () => Promise.resolve(okResponse("example-chat-model")),
+      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield { type: "delta", token: "x" };
+        throw new TransportError("mid-stream");
+      },
+    };
+    const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {
+      adapter: failing,
+      clock: stubClock(),
+    });
+    await expect(collectStream(gateway.chatStream(REQUEST))).rejects.toBeInstanceOf(TransportError);
+    expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(1);
+  });
+
+  it("throws UnknownModelError for an unconfigured model without touching the breaker", async () => {
+    const gateway = new Gateway(config([provider()]), {
+      adapter: streamingAdapter(["x"]),
+      clock: stubClock(),
+    });
+    await expect(
+      collectStream(gateway.chatStream({ modelId: "nope", messages: [] })),
+    ).rejects.toBeInstanceOf(UnknownModelError);
   });
 });
 

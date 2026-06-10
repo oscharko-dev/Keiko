@@ -66,5 +66,14 @@ export function memFs(root: string, files: Readonly<Record<string, string>>): Wo
     realPath: (absolutePath: string): string => absolutePath,
     exists: (absolutePath: string): boolean =>
       findKey(absolutePath) !== undefined || absolutePath === root,
+    readFileBytes: (absolutePath: string, maxBytes: number): Promise<Uint8Array> => {
+      const key = findKey(absolutePath);
+      if (key === undefined) {
+        return Promise.reject(new Error(`ENOENT: ${absolutePath}`));
+      }
+      const cap = Math.max(0, Math.floor(maxBytes));
+      const encoded = new TextEncoder().encode(files[key] ?? "");
+      return Promise.resolve(encoded.subarray(0, Math.min(encoded.length, cap)));
+    },
   };
 }

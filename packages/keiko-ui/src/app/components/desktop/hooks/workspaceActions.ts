@@ -6,6 +6,8 @@ import type { SnapZone } from "../windows/connectionUtils";
 import { WIN_TYPES, type WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import type { FilesWindowContext, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
+import type { KnowledgeCapsuleId, CapsuleSetId } from "@oscharko-dev/keiko-contracts";
+import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
 
 function addPosition(
   vp: ViewportWorld,
@@ -92,6 +94,16 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
       const list = ws ?? [];
       if (t.singleton === true) {
         const existing = list.find((w) => w.type === type);
+        if (existing !== undefined) {
+          createdId = existing.id;
+          return list.map((w) => (w.id === existing.id ? { ...w, z: ++zc.current } : w));
+        }
+      }
+      // Epic #270 — QI run cards are identified by runId: opening a run that already has a card
+      // focuses it instead of stacking a duplicate (the per-run "n+1" model is per-run, not per-click).
+      const dedupeRunId = type === "qiRun" ? cfg?.["runId"] : undefined;
+      if (typeof dedupeRunId === "string" && dedupeRunId.length > 0) {
+        const existing = list.find((w) => w.type === "qiRun" && w.cfg["runId"] === dedupeRunId);
         if (existing !== undefined) {
           createdId = existing.id;
           return list.map((w) => (w.id === existing.id ? { ...w, z: ++zc.current } : w));
@@ -284,6 +296,16 @@ interface ConnectArgs {
   readonly focus: WorkspaceApi["focus"];
   readonly setConns: Dispatch<SetStateAction<Connection[]>>;
   readonly setConnecting: Dispatch<SetStateAction<ConnectingState | null>>;
+  // Epic #532 — invoked when a Files↔Chat relationship edge is created/removed, with the Files
+  // window's resolved absolute root. The composition root (AppShell) binds it to the active chat's
+  // connectedScopes so the relationship gesture actually grounds the chat against the folder.
+  readonly onScopeBind?: ((filesRoot: string) => void) | undefined;
+  readonly onScopeUnbind?: ((filesRoot: string) => void) | undefined;
+  // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
+  // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
+  // root (AppShell) appends/removes it from the active chat's localKnowledgeScopes.
+  readonly onConnectorBind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
+  readonly onConnectorUnbind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
 }
 
 function isDuplicate(cs: readonly Connection[], a: string, b: string): boolean {
@@ -299,6 +321,10 @@ type ConnectApi = Pick<
   | "connect"
   | "linkedFilesRoot"
   | "linkedFilesContext"
+  | "linkedAllFilesRoots"
+  | "linkedConnectorCapsuleIds"
+  | "linkedConnectorCapsuleSetIds"
+  | "linkedFigmaSnapshotRunIds"
   | "currentFilesContext"
 >;
 
@@ -319,6 +345,10 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     focus,
     setConns,
     setConnecting,
+    onScopeBind,
+    onScopeUnbind,
+    onConnectorBind,
+    onConnectorUnbind,
   } = args;
 
   const cancelConnect: WorkspaceApi["cancelConnect"] = () => {
@@ -345,6 +375,14 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
           : [...cs, { id: `${c.from}~${toId}`, a: c.from, b: toId }],
       );
       focus(toId);
+      // Epic #532 — a Files↔Chat edge also binds the folder to the chat's connectedScopes so the
+      // relationship gesture grounds the chat. No-op for any other window pairing.
+      const boundRoot = filesChatBindRoot(from, to);
+      if (boundRoot !== null) onScopeBind?.(boundRoot);
+      // Epic #189 Slice 3 M3 — a Connector↔Chat edge binds the selected connector scope to the
+      // chat's localKnowledgeScopes. No-op for any other window pairing.
+      const connectorScope = connectorChatBind(from, to);
+      if (connectorScope !== null) onConnectorBind?.(connectorScope);
     }
     cancelConnect();
   };
@@ -383,8 +421,21 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     };
   };
 
-  const removeConn: WorkspaceApi["removeConn"] = (id) =>
+  const removeConn: WorkspaceApi["removeConn"] = (id) => {
+    // Epic #532 — if the removed edge was a Files↔Chat binding, unbind that folder from the chat.
+    // Epic #189 Slice 3 M3 — if the removed edge was a Connector↔Chat binding, unbind that scope.
+    const conn = connsRef.current.find((c) => c.id === id);
     setConns((cs) => cs.filter((c) => c.id !== id));
+    if (conn === undefined) return;
+    const list = winsRef.current;
+    const a = list.find((w) => w.id === conn.a);
+    const b = list.find((w) => w.id === conn.b);
+    if (a === undefined || b === undefined) return;
+    const boundRoot = filesChatBindRoot(a, b);
+    if (boundRoot !== null) onScopeUnbind?.(boundRoot);
+    const connectorScope = connectorChatBind(a, b);
+    if (connectorScope !== null) onConnectorUnbind?.(connectorScope);
+  };
 
   const connect: WorkspaceApi["connect"] = (a, b) => {
     const list = winsRef.current;
@@ -413,17 +464,51 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   };
 
   const linkedFilesContext: WorkspaceApi["linkedFilesContext"] = (id) => {
+    // Collect EVERY Files window connected to `id`. A hub can be connected to several Files windows
+    // plus connector/figma windows (CONNECTABLE.quality). Skip non-files connections instead of
+    // stopping at the first one — a connector/figma edge that happens to precede the files edge in
+    // connection order must NOT hide a Files window connected afterwards (Issue #714).
+    const filesWindows: AppWindow[] = [];
     for (const c of connsRef.current) {
       const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
       if (otherId === null) continue;
       const w = winsRef.current.find((x) => x.id === otherId);
-      if (w !== undefined) return filesContextFor(w);
+      if (w === undefined || w.type !== "files") continue;
+      filesWindows.push(w);
     }
-    return null;
+    if (filesWindows.length === 0) return null;
+    // Prefer the most recently focused (highest-z) connected Files window that HAS a focused file, so
+    // a Fachkonzept focused in ANY connected Files window — not just the first-connected — becomes the
+    // single-file run source and switching focus live-updates the binding. Fall back to the highest-z
+    // connected Files window when none has a focused file (folder binding, unchanged behaviour).
+    const byZDesc = [...filesWindows].sort((a, b) => b.z - a.z);
+    const focused = byZDesc.find((w) => {
+      const active = w.cfg["activeFilePath"];
+      return typeof active === "string" && active.length > 0;
+    });
+    const chosen = focused ?? byZDesc[0];
+    return chosen === undefined ? null : filesContextFor(chosen);
   };
 
   const linkedFilesRoot: WorkspaceApi["linkedFilesRoot"] = (id) =>
     linkedFilesContext(id)?.root ?? null;
+
+  const linkedAllFilesRoots: WorkspaceApi["linkedAllFilesRoots"] = (id) => {
+    const seen = new Set<string>();
+    const roots: string[] = [];
+    for (const c of connsRef.current) {
+      if (roots.length >= MAX_SCOPES) break;
+      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
+      if (otherId === null) continue;
+      const w = winsRef.current.find((x) => x.id === otherId);
+      if (w === undefined) continue;
+      const root = resolvedFilesRoot(w);
+      if (root === null || seen.has(root)) continue;
+      seen.add(root);
+      roots.push(root);
+    }
+    return roots;
+  };
 
   const currentFilesContext: WorkspaceApi["currentFilesContext"] = () => {
     const files = winsRef.current
@@ -437,6 +522,54 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     return active === undefined ? null : filesContextFor(active);
   };
 
+  // Epic #710 #718 — read the selected id of the given kind ("capsule" or "capsule-set") from
+  // every connected Connector window, deduped and capped at MAX_SCOPES. Both QI capsule and
+  // capsule-set sources flow through this one reader so the hub can bind either (Issue #716/#718).
+  const linkedConnectorSelectionIds = (id: string, selectedKind: string): readonly string[] => {
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const c of connsRef.current) {
+      if (ids.length >= MAX_SCOPES) break;
+      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
+      if (otherId === null) continue;
+      const w = winsRef.current.find((x) => x.id === otherId);
+      if (w === undefined || w.type !== "connector") continue;
+      if (w.cfg["selectedKind"] !== selectedKind) continue;
+      const selectedId = w.cfg["selectedId"];
+      if (typeof selectedId !== "string" || selectedId.length === 0) continue;
+      if (seen.has(selectedId)) continue;
+      seen.add(selectedId);
+      ids.push(selectedId);
+    }
+    return ids;
+  };
+
+  const linkedConnectorCapsuleIds: WorkspaceApi["linkedConnectorCapsuleIds"] = (id) =>
+    linkedConnectorSelectionIds(id, "capsule");
+
+  const linkedConnectorCapsuleSetIds: WorkspaceApi["linkedConnectorCapsuleSetIds"] = (id) =>
+    linkedConnectorSelectionIds(id, "capsule-set");
+
+  // Epic #750 #756 — read the snapshotRunId stored in cfg of each connected Figma Snapshot window.
+  // Deduped and capped at MAX_SCOPES, matching the connector capsule reader above.
+  const linkedFigmaSnapshotRunIds: WorkspaceApi["linkedFigmaSnapshotRunIds"] = (id) => {
+    const seen = new Set<string>();
+    const ids: string[] = [];
+    for (const c of connsRef.current) {
+      if (ids.length >= MAX_SCOPES) break;
+      const otherId = c.a === id ? c.b : c.b === id ? c.a : null;
+      if (otherId === null) continue;
+      const w = winsRef.current.find((x) => x.id === otherId);
+      if (w === undefined || w.type !== "figma") continue;
+      const runId = w.cfg["snapshotRunId"];
+      if (typeof runId !== "string" || runId.length === 0) continue;
+      if (seen.has(runId)) continue;
+      seen.add(runId);
+      ids.push(runId);
+    }
+    return ids;
+  };
+
   return {
     startConnect,
     confirmConnect,
@@ -445,9 +578,166 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     connect,
     linkedFilesRoot,
     linkedFilesContext,
+    linkedAllFilesRoots,
+    linkedConnectorCapsuleIds,
+    linkedConnectorCapsuleSetIds,
+    linkedFigmaSnapshotRunIds,
     currentFilesContext,
   };
 }
 
 // Re-exports for callers that need the lower-level type
 export type { WindowType };
+
+// ─── M3 (#532) pure scope-list helpers (exported for tests) ─────────────────
+
+export const MAX_SCOPES = 16;
+
+/** True when `root` is a non-empty absolute POSIX or Windows path. */
+function isAbsoluteRoot(root: string): boolean {
+  return root.length > 0 && (root.startsWith("/") || /^[A-Za-z]:[/\\]/u.test(root));
+}
+
+/**
+ * Resolves the real absolute root of a Files window.
+ * Returns null when only the "src" sentinel fallback would apply — the spec
+ * says we must NOT bind that fallback as a connectedScope.
+ */
+export function resolvedFilesRoot(w: AppWindow): string | null {
+  if (w.type !== "files") return null;
+  const resolvedRoot = w.cfg["resolvedRoot"];
+  const configuredRoot = w.cfg["root"];
+  const root =
+    typeof resolvedRoot === "string" && resolvedRoot.length > 0
+      ? resolvedRoot
+      : typeof configuredRoot === "string" && configuredRoot.length > 0
+        ? configuredRoot
+        : null;
+  return root !== null && isAbsoluteRoot(root) ? root : null;
+}
+
+/**
+ * For a window pair, returns the Files window's resolved root when exactly one side is a Files
+ * window and the other is a Chat window; otherwise null. Used to detect a Files↔Chat binding edge.
+ */
+export function filesChatBindRoot(a: AppWindow, b: AppWindow): string | null {
+  const files = a.type === "files" ? a : b.type === "files" ? b : null;
+  const chat = a.type === "chat" ? a : b.type === "chat" ? b : null;
+  if (files === null || chat === null) return null;
+  return resolvedFilesRoot(files);
+}
+
+/**
+ * Appends a new source to the current scopes list (de-duped by root, capped at
+ * `maxScopes` — defaults to MAX_SCOPES). Returns null when the root is empty/not
+ * absolute (caller should surface "browse/choose a folder first").
+ */
+export function appendScope(
+  current: readonly ChatConnectedScope[],
+  root: string,
+  now: number,
+  maxScopes: number = MAX_SCOPES,
+): readonly ChatConnectedScope[] | null {
+  if (!isAbsoluteRoot(root)) return null;
+  if (current.some((s) => s.root === root)) return current;
+  const next: ChatConnectedScope = {
+    kind: "workspace-root",
+    relativePaths: [],
+    root,
+    connectedAtMs: now,
+  };
+  const combined = [...current, next];
+  return combined.length > maxScopes ? combined.slice(-maxScopes) : combined;
+}
+
+/**
+ * Removes the source with the given root from the scopes list. Returns an
+ * empty array (not null) when the list becomes empty so callers can PATCH null.
+ */
+export function removeScope(
+  current: readonly ChatConnectedScope[],
+  root: string,
+): readonly ChatConnectedScope[] {
+  return current.filter((s) => s.root !== root);
+}
+
+/** Canonical reader: derive effective scopes from Chat fields. */
+export function effectiveScopes(chat: {
+  connectedScopes?: readonly ChatConnectedScope[] | undefined;
+  connectedScope?: ChatConnectedScope | undefined;
+}): readonly ChatConnectedScope[] {
+  return chat.connectedScopes ?? (chat.connectedScope !== undefined ? [chat.connectedScope] : []);
+}
+
+// ─── M1 (#189 Slice 3) pure connector-scope helpers (exported for tests) ─────
+
+/**
+ * Canonical reader: derive effective local-knowledge scopes from Chat fields.
+ * Prefers the plural `localKnowledgeScopes` list; falls back to a 1-element list
+ * from the legacy singular `localKnowledgeScope` field.
+ */
+export function effectiveLocalKnowledgeScopes(chat: {
+  localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[] | undefined;
+  localKnowledgeScope?: ChatLocalKnowledgeScope | undefined;
+}): readonly ChatLocalKnowledgeScope[] {
+  return (
+    chat.localKnowledgeScopes ??
+    (chat.localKnowledgeScope !== undefined ? [chat.localKnowledgeScope] : [])
+  );
+}
+
+/** Stable de-dupe key for a local-knowledge scope. */
+function lkScopeKey(scope: ChatLocalKnowledgeScope): string {
+  return scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
+}
+
+/**
+ * Appends a connector scope to the list (de-duped by capsuleId / capsuleSetId, capped at
+ * MAX_SCOPES). Returns the same list reference when the scope is already present.
+ */
+export function appendConnectorScope(
+  current: readonly ChatLocalKnowledgeScope[],
+  scope: ChatLocalKnowledgeScope,
+  max: number,
+): readonly ChatLocalKnowledgeScope[] {
+  const key = lkScopeKey(scope);
+  if (current.some((s) => lkScopeKey(s) === key)) return current;
+  const combined = [...current, scope];
+  return combined.length > max ? combined.slice(-max) : combined;
+}
+
+/**
+ * Removes the connector scope identified by `key` (e.g. `"capsule:<id>"` or
+ * `"set:<id>"`) from the list. Returns an empty array when the last scope is removed.
+ */
+export function removeConnectorScope(
+  current: readonly ChatLocalKnowledgeScope[],
+  key: string,
+): readonly ChatLocalKnowledgeScope[] {
+  return current.filter((s) => lkScopeKey(s) !== key);
+}
+
+/**
+ * For a window pair, returns the connector scope extracted from the Connector
+ * window's cfg when exactly one side is a `"connector"` window and the other
+ * is a `"chat"` window; otherwise null.
+ */
+export function connectorChatBind(a: AppWindow, b: AppWindow): ChatLocalKnowledgeScope | null {
+  const connector = a.type === "connector" ? a : b.type === "connector" ? b : null;
+  const chatWin = a.type === "chat" ? a : b.type === "chat" ? b : null;
+  if (connector === null || chatWin === null) return null;
+  const kind = connector.cfg["selectedKind"];
+  const id = connector.cfg["selectedId"];
+  if (typeof kind !== "string" || typeof id !== "string" || id.length === 0) return null;
+  if (kind === "capsule") {
+    return { kind: "capsule", capsuleId: id as KnowledgeCapsuleId, connectedAtMs: Date.now() };
+  }
+  if (kind === "capsule-set") {
+    return {
+      kind: "capsule-set",
+      capsuleSetId: id as CapsuleSetId,
+      connectedAtMs: Date.now(),
+    };
+  }
+  return null;
+}

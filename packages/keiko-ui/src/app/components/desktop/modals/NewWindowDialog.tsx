@@ -24,6 +24,7 @@ import {
   type WindowType,
 } from "../windows/WindowsRegistry";
 import { PermControl, type Cfg, type CfgValue } from "./PermControl";
+import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
 
 interface NewWindowDialogProps {
   readonly type: WindowType;
@@ -60,8 +61,20 @@ interface DirectoryPickerProps {
   readonly onClose: () => void;
 }
 
-function errorMessage(error: unknown): string {
+// M2 (#532) — exported so tests can assert the mapping independently of the
+// component render cycle. Maps BFF error codes to user-facing copy:
+//   400 BAD_ROOT  → absolute path required
+//   403 DENIED    → path on the filesystem deny-list
+export function directoryPickerError(error: unknown): string {
+  if (error instanceof ApiError) {
+    if (error.code === "BAD_ROOT") return "Enter an absolute folder path.";
+    if (error.code === "DENIED") return "That location is excluded.";
+  }
   return error instanceof Error ? error.message : "Unable to read directories.";
+}
+
+function errorMessage(error: unknown): string {
+  return directoryPickerError(error);
 }
 
 function DirectoryPicker({
@@ -79,10 +92,12 @@ function DirectoryPicker({
 
   const load = useCallback(
     async (path?: string): Promise<void> => {
+      // M2 (#532): the BFF now accepts any absolute folder. When there is no
+      // requestRoot yet, show a prompt rather than an error so the input feels
+      // intentional (the user hasn't typed anything yet, not an error state).
       if (requestRoot.length === 0) {
         setListing(null);
-        setDraft("");
-        setError("Select a registered project first.");
+        setError("Enter an absolute folder path.");
         return;
       }
       setLoading(true);
@@ -206,13 +221,17 @@ function splitPaths(value: string): string[] {
     .filter((entry) => entry.length > 0);
 }
 
-function chooseDefaultModel(models: readonly ModelCapability[]): string {
-  return (models.find((model) => model.id === "example-chat-model") ?? models[0])?.id ?? "";
+// AC #4: no longer prefers a placeholder id — use the first available model.
+// When models is empty, returns "" (handled by the caller via `current || ...`).
+export function chooseDefaultModel(models: readonly ModelCapability[]): string {
+  return models[0]?.id ?? "";
 }
 
-export function isAgentWorkflowModel(model: ModelCapability): boolean {
-  return model.kind === "chat" && model.toolCalling && model.structuredOutput;
-}
+// Issue #153 — single source of truth lives in @/lib/workflow-eligibility so the in-chat
+// launcher (ChatWindow → WorkflowHandoff) and this legacy modal cannot drift. The thin
+// alias below preserves the historical `isAgentWorkflowModel` export name so the existing
+// NewWindowDialog.test imports keep resolving.
+export const isAgentWorkflowModel = isWorkflowEligibleModel;
 
 function toPosix(value: string): string {
   return value.replaceAll("\\", "/");
@@ -873,22 +892,6 @@ function AgentLauncher({
         </button>
       ) : null}
       {renderWorkflowFields()}
-      <div className="permctl agent-disabled-perm" aria-disabled="true">
-        <div className="perm-toggle" data-on={true}>
-          {/* eslint-disable-next-line @next/next/no-img-element -- raw SVG sized by .perm-orca */}
-          <img className="perm-orca" src="/assets/keiko-logo.svg" alt="" />
-          <span className="perm-tt">
-            <span className="perm-name">Keiko-Mode</span>
-            <span className="perm-desc">coming soon</span>
-          </span>
-          <span className="perm-sw on">
-            <span />
-          </span>
-        </div>
-        <div className="perm-note">
-          Runs are dry-run only. Apply requires explicit review and Apply.
-        </div>
-      </div>
       <div className="dlg-agent-actions">
         <button
           type="button"
@@ -998,7 +1001,8 @@ export function NewWindowDialog({
         className="dlg"
         role="dialog"
         aria-modal="true"
-        aria-label={`New ${t.title} window`}
+        aria-labelledby="new-window-title"
+        aria-describedby="new-window-desc"
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={onKey}
       >
@@ -1007,8 +1011,12 @@ export function NewWindowDialog({
             <Icon size={20} />
           </span>
           <div className="dlg-htext">
-            <span className="dlg-title">New {t.title} window</span>
-            <span className="dlg-sub">{t.desc}</span>
+            <span id="new-window-title" className="dlg-title">
+              New {t.title} window
+            </span>
+            <span id="new-window-desc" className="dlg-sub">
+              {t.desc}
+            </span>
           </div>
           <span className="spacer" />
           <button

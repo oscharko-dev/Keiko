@@ -10,6 +10,21 @@ import type { VerificationAuditSummary } from "./verification-summary.js";
 // the optional capabilities table to the UI without crossing into the credential-bearing
 // GatewayConfig in gateway.ts.
 import type { ModelCapability } from "./gateway.js";
+// GroundedAnswerContextPackSummary projects the connected-context pack into a counts-only,
+// browser-safe shape (Issue #187 / ADR-0022). The connected-context module is a pure-data
+// peer; importing it does not pull in any IO or redaction code.
+import {
+  CANDIDATE_OMISSION_REASONS,
+  CONNECTED_CONTEXT_SCHEMA_VERSION,
+  type CandidateOmissionReason,
+  type ConnectedContextPack,
+  type ExplorationBudget,
+  type ExplorationUsage,
+  type RetrievalQueryKind,
+  type SelectedScopeKind,
+} from "./connected-context.js";
+import type { CapsuleSetId, KnowledgeCapsuleId } from "./local-knowledge.js";
+import type { ExpectedCheck, WorkflowKind } from "./workflow-handoff.js";
 
 export interface Project {
   readonly path: string;
@@ -19,6 +34,111 @@ export interface Project {
   readonly lastOpenedAt: number;
 }
 
+// Issue #184 — the workspace-relative scope binding a Files window selection to a chat. `kind`
+// mirrors SelectedScope so the binding can represent the repository root, one folder, or one or
+// more file paths. The patch shape distinguishes "no change" (field absent) from "clear" (field
+// set to null) using the standard JSON-patch convention; the stored entity surface carries
+// `undefined` when no scope is bound. Path validation happens at the BFF boundary via
+// isValidScopePath from @oscharko-dev/keiko-contracts/connected-context; this shape carries
+// already-validated paths.
+export interface ChatConnectedScope {
+  readonly kind: SelectedScopeKind;
+  readonly relativePaths: readonly string[];
+  readonly connectedAtMs: number;
+  // Epic #177/#532 — absolute root of the connected folder. Keiko is a workspace for everyone, not
+  // only developers: a user keeps a single Keiko project but connects folders from ANYWHERE on the
+  // machine (outside that project root) to the chat. When present, the grounded path resolves
+  // `relativePaths` against THIS root instead of the chat's projectPath. Absent (legacy chats) →
+  // the chat's projectPath is used. Always an already-validated, deny-list-cleared absolute path.
+  readonly root?: string;
+}
+
+// ─── Grounding limits (operator-configurable fan-out caps) ───────────────────────
+// Shape for all grounded Q&A fan-out limits. An operator may tune these via the gateway config
+// `grounding` block; absent → DEFAULT_GROUNDING_LIMITS are used (behaviour identical to before).
+// Every value must be a positive integer; over-ceiling values are clamped by resolveGroundingLimits.
+
+export interface GroundingLimits {
+  readonly maxConnectedSources: number; // folder sources per chat (was MAX_CONNECTED_SOURCES)
+  readonly maxLocalKnowledgeSources: number; // connector sources per chat (was MAX_LOCAL_KNOWLEDGE_SOURCES)
+  readonly maxPromptReferences: number; // connector refs retrieved/surfaced per connector (was MAX_PROMPT_REFERENCES)
+  readonly maxExcerptChars: number; // per connector excerpt cap (was MAX_EXCERPT_CHARS)
+  readonly referenceBudget: number; // connector reference budget (was DEFAULT_REFERENCE_BUDGET)
+  readonly hybridMaxCandidates: number; // NEW: shared global top-K for the hybrid rerank
+  readonly hybridMaxExcerptBytes: number; // NEW: shared excerpt-byte budget for the hybrid rerank
+}
+
+export const DEFAULT_GROUNDING_LIMITS: GroundingLimits = {
+  maxConnectedSources: 16,
+  maxLocalKnowledgeSources: 16,
+  maxPromptReferences: 8,
+  maxExcerptChars: 900,
+  referenceBudget: 10,
+  hybridMaxCandidates: 24,
+  hybridMaxExcerptBytes: 131_072,
+} as const;
+
+// Hard safety ceilings: an operator config may TUNE a limit but never raise it past these
+// (preserves the original DoS-bounding intent of the fan-out caps).
+export const GROUNDING_LIMIT_CEILINGS: GroundingLimits = {
+  maxConnectedSources: 64,
+  maxLocalKnowledgeSources: 64,
+  maxPromptReferences: 64,
+  maxExcerptChars: 20_000,
+  referenceBudget: 256,
+  hybridMaxCandidates: 256,
+  hybridMaxExcerptBytes: 524_288,
+} as const;
+
+// Pure resolver: fill each field from `partial` when it is a positive integer, else the default;
+// then clamp to the ceiling. Invalid (non-positive / non-integer) present fields fall back to the
+// default here (the gateway parse layer is responsible for REJECTING malformed config explicitly).
+export function resolveGroundingLimits(partial?: Partial<GroundingLimits>): GroundingLimits {
+  const pick = (key: keyof GroundingLimits): number => {
+    const supplied = partial?.[key];
+    const resolved =
+      supplied !== undefined && Number.isInteger(supplied) && supplied >= 1
+        ? supplied
+        : DEFAULT_GROUNDING_LIMITS[key];
+    return Math.min(resolved, GROUNDING_LIMIT_CEILINGS[key]);
+  };
+  return {
+    maxConnectedSources: pick("maxConnectedSources"),
+    maxLocalKnowledgeSources: pick("maxLocalKnowledgeSources"),
+    maxPromptReferences: pick("maxPromptReferences"),
+    maxExcerptChars: pick("maxExcerptChars"),
+    referenceBudget: pick("referenceBudget"),
+    hybridMaxCandidates: pick("hybridMaxCandidates"),
+    hybridMaxExcerptBytes: pick("hybridMaxExcerptBytes"),
+  };
+}
+
+// Epic #532 — a sane cap on the number of folders/files one chat may connect at once. The BFF
+// rejects PATCHes whose connectedScopes list exceeds this; the store enforces the same as a
+// defense-in-depth subset. Bounds retrieval fan-out cost (each source runs an independent,
+// budget-split retrieval pass), so total work stays bounded regardless of N.
+// Kept for back-compat; new code should read from a resolved GroundingLimits instance instead.
+export const MAX_CONNECTED_SOURCES = DEFAULT_GROUNDING_LIMITS.maxConnectedSources;
+
+// Epic #189 — sibling of MAX_CONNECTED_SOURCES for the local-knowledge (connector) source list. A
+// chat may bind multiple capsules/capsule-sets at once; the BFF rejects PATCHes whose
+// localKnowledgeScopes list exceeds this, and the store enforces the same as a defense-in-depth
+// subset. Bounds the connector fan-out cost in the hybrid grounded path (Slice 2).
+// Kept for back-compat; new code should read from a resolved GroundingLimits instance instead.
+export const MAX_LOCAL_KNOWLEDGE_SOURCES = DEFAULT_GROUNDING_LIMITS.maxLocalKnowledgeSources;
+
+export type ChatLocalKnowledgeScope =
+  | {
+      readonly kind: "capsule";
+      readonly capsuleId: KnowledgeCapsuleId;
+      readonly connectedAtMs: number;
+    }
+  | {
+      readonly kind: "capsule-set";
+      readonly capsuleSetId: CapsuleSetId;
+      readonly connectedAtMs: number;
+    };
+
 export interface Chat {
   readonly id: string;
   readonly projectPath: string;
@@ -26,6 +146,22 @@ export interface Chat {
   readonly selectedModel: string;
   readonly branchLabel: string | undefined;
   readonly status: "open" | "closed" | undefined;
+  // Epic #532 — `connectedScopes` is the canonical list of connected sources (a chat may ground
+  // against multiple folders/files at once). `connectedScope` is retained for backward-compat
+  // (legacy single-source readers and rows). `connectedScopes` SUPERSEDES `connectedScope`:
+  // readers should derive the effective list as
+  //   `chat.connectedScopes ?? (chat.connectedScope ? [chat.connectedScope] : [])`.
+  // When both are present, `connectedScope` equals `connectedScopes[0]`.
+  readonly connectedScopes?: readonly ChatConnectedScope[];
+  readonly connectedScope: ChatConnectedScope | undefined;
+  // Epic #189 — `localKnowledgeScopes` is the canonical list of connector sources (a chat may
+  // ground against multiple capsules/capsule-sets at once). `localKnowledgeScope` is retained for
+  // backward-compat (legacy single-source readers and rows). `localKnowledgeScopes` SUPERSEDES
+  // `localKnowledgeScope`: readers should derive the effective list as
+  //   `chat.localKnowledgeScopes ?? (chat.localKnowledgeScope ? [chat.localKnowledgeScope] : [])`.
+  // When both are present, `localKnowledgeScope` equals `localKnowledgeScopes[0]`.
+  readonly localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[];
+  readonly localKnowledgeScope: ChatLocalKnowledgeScope | undefined;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
@@ -55,11 +191,26 @@ export interface UpdateProjectPatch {
   readonly favorite?: boolean;
 }
 
+// Issue #184 — `connectedScope: null` explicitly clears the binding; `undefined` (field absent)
+// leaves it untouched. The BFF PATCH handler is responsible for validating each scopePath via
+// isValidScopePath; this shape carries the post-validation values across the wire.
 export interface UpdateChatPatch {
   readonly title?: string;
   readonly selectedModel?: string;
   readonly branchLabel?: string;
   readonly status?: "open" | "closed";
+  // Epic #532 — set `connectedScopes` to bind a list of sources (null clears ALL). Back-compat:
+  // `connectedScope` is still accepted and is treated as a 1-element list. When a caller supplies
+  // both, `connectedScopes` wins. As with the single field, `undefined` (absent) leaves the
+  // binding untouched while `null` explicitly clears it.
+  readonly connectedScopes?: readonly ChatConnectedScope[] | null;
+  readonly connectedScope?: ChatConnectedScope | null;
+  // Epic #189 — set `localKnowledgeScopes` to bind a list of connector sources (null clears ALL).
+  // Back-compat: `localKnowledgeScope` is still accepted and is treated as a 1-element list. When a
+  // caller supplies both, `localKnowledgeScopes` wins. As with the single field, `undefined`
+  // (absent) leaves the binding untouched while `null` explicitly clears it.
+  readonly localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[] | null;
+  readonly localKnowledgeScope?: ChatLocalKnowledgeScope | null;
 }
 
 export interface NewChatMessage {
@@ -134,6 +285,22 @@ export interface MessageResponse {
   readonly message: ChatMessage;
 }
 
+export interface GroundedWorkflowHandoffRequest {
+  readonly assistantMessageId: string;
+  readonly modelId: string;
+  readonly workflowKind: WorkflowKind;
+  readonly input: Record<string, unknown>;
+  readonly editablePaths: readonly string[];
+  readonly expectedChecks?: readonly ExpectedCheck[] | undefined;
+  readonly unknowns?: readonly string[] | undefined;
+  readonly requestedAtMs: number;
+}
+
+export interface GroundedWorkflowHandoffResponse {
+  readonly run: { readonly runId: string; readonly fingerprint: string };
+  readonly messages: readonly ChatMessage[];
+}
+
 // ─── Desktop chat bootstrap (BFF /api/desktop/chat/bootstrap) ─────────────────────
 
 export interface DesktopChatBootstrapResponse {
@@ -154,10 +321,107 @@ export interface DesktopChatSendUsage {
   readonly latencyMs: number;
 }
 
+export interface ConversationMemoryScopeContextWire {
+  readonly userId: string;
+  readonly workspaceId?: string | undefined;
+  readonly projectId?: string | undefined;
+  readonly conversationId?: string | undefined;
+}
+
+export interface ConversationMemoryRequestWire {
+  readonly enabled?: boolean | undefined;
+  readonly budgetTokens?: number | undefined;
+  readonly context: ConversationMemoryScopeContextWire;
+}
+
+export interface ConversationMemoryContextEntryWire {
+  readonly memoryId: string;
+  readonly bodyExcerpt: string;
+  readonly inclusionReason: string;
+}
+
+export interface ConversationMemoryContextWire {
+  readonly enabled: boolean;
+  readonly text: string;
+  readonly memories: readonly ConversationMemoryContextEntryWire[];
+  readonly budget: {
+    readonly tokens: number;
+    readonly used: number;
+  };
+}
+
+export type ConversationMemoryActionWire =
+  | {
+      readonly kind: "candidate";
+      readonly proposalId: string;
+      readonly body: string;
+      readonly scopeLabel: string;
+      readonly requiresApproval: boolean;
+    }
+  | {
+      readonly kind: "update";
+      readonly memoryId: string;
+      readonly bodyPatch?: string | undefined;
+    }
+  | {
+      readonly kind: "forget";
+      readonly memoryId: string;
+      readonly requiresConfirmation: boolean;
+    }
+  | { readonly kind: "rejected"; readonly reason: string };
+
+export interface ConversationMemoryResultWire {
+  readonly context: ConversationMemoryContextWire;
+  readonly actions: readonly ConversationMemoryActionWire[];
+}
+
 export interface DesktopChatSendResponse {
   readonly chat: Chat;
   readonly messages: readonly ChatMessage[];
   readonly usage?: DesktopChatSendUsage;
+  readonly memory?: ConversationMemoryResultWire;
+}
+
+// Issue #148 — Safe document context extraction for conversation inputs.
+// One wire entry per attached document the UI has extracted text from. The server passes the
+// `text` field through into a structured prompt block — it does NOT re-extract from disk
+// (the server-side modality guard is owned by issue #149). `displayName` is the file basename
+// only; absolute filesystem paths NEVER cross this wire (AC #4 of issue #147).
+export interface ConversationDocumentContextWire {
+  readonly id: string;
+  readonly displayName: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly extractedBytes: number;
+  readonly truncated: boolean;
+  readonly truncationMarker?: string | undefined;
+  readonly text: string;
+}
+
+// Issue #149 — descriptor for a single image/document attachment carried on the conversation
+// send path. Only kind/mime/size metadata travels here; bytes are not on this wire. The server
+// validator enforces modality + mime allowlist + per-attachment size cap before any model is
+// invoked.
+export interface ConversationAttachmentDescriptorWire {
+  readonly id: string;
+  readonly kind: "image" | "document";
+  readonly name: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+}
+
+// Issue #148 — wire shape for POST /api/desktop/chat. Authored here (not inside keiko-server)
+// so the UI and the server share a single source of truth for the send payload. Existing
+// callers that omit `documentContext` or `attachments` keep working — both fields are optional
+// and additive. `attachments` was already parsed and validated by the server (PR #367 review);
+// this field exposes it on the typed wire so the UI compiles against the same surface.
+export interface DesktopChatSendRequestWire {
+  readonly chatId: string;
+  readonly projectPath: string;
+  readonly content: string;
+  readonly modelId?: string | undefined;
+  readonly documentContext?: readonly ConversationDocumentContextWire[] | undefined;
+  readonly attachments?: readonly ConversationAttachmentDescriptorWire[] | undefined;
 }
 
 // ─── Gateway safe-config projection (BFF /api/gateway/config) ─────────────────────
@@ -183,6 +447,7 @@ export interface SafeGatewayConfig {
   readonly providers: readonly SafeProviderConfig[];
   readonly circuitBreaker: SafeCircuitBreakerConfig;
   readonly capabilities?: readonly ModelCapability[];
+  readonly grounding?: GroundingLimits;
 }
 
 // ─── Workflow descriptor wire shapes (BFF /api/workflows) ─────────────────────────
@@ -259,6 +524,196 @@ export interface AgentBugInvestigationInput {
   readonly targetFiles?: readonly string[];
 }
 
+// ─── Grounded Q&A (BFF POST /api/chats/messages/grounded — issue #185) ───────────
+// Wire shapes for the grounded repository-aware Q&A pipeline. The server composes the
+// connected-context layers (#179 search, #180 structural, #181 planner, #182 ranker,
+// #183 assembler) into a single response that carries both the persisted message ids
+// and a redacted citation list. The citation list is the UI-safe projection of the
+// underlying ConnectedContextPack — never the raw excerpts.
+
+export interface GroundedAskRequest {
+  readonly chatId: string;
+  readonly content: string;
+  // The browser sends the selected registry model id so grounded Q&A preserves the Conversation
+  // Center model-selection guardrails instead of silently falling back to the chat's stored model.
+  readonly modelId?: string | undefined;
+}
+
+export interface GroundedEvidenceCitation {
+  readonly scopePath: string;
+  readonly lineRange: { readonly startLine: number; readonly endLine: number } | undefined;
+  readonly score: number;
+  readonly stableId: string;
+  // Epic #532 — a short, human-readable label of the connected source this citation came from
+  // (the connected root's basename; disambiguated with a short hash when two sources share a
+  // basename). Absent for legacy single-source answers, which carry no per-source attribution.
+  readonly source?: string;
+  // Global evidence marker in the hybrid reranked prompt ([n]); absent for non-hybrid
+  // (folder-only) answers.
+  readonly marker?: number;
+}
+
+export interface GroundedUncertainty {
+  readonly kind: string;
+  readonly claim: string;
+}
+
+// Counts-only projection of a ConnectedContextPack used to display "what was inspected" on
+// every grounded answer (Issue #187 / ADR-0022). Structurally redaction-free by construction:
+// no raw scope id, no scope path, no workspace root, no excerpt content, no query text. The
+// sentinel `fileCount === -1` distinguishes the workspace-root scope (no enumerable file set)
+// from directory/files scopes that always report `relativePaths.length` (>= 1).
+export interface GroundedAnswerContextPackSummary {
+  readonly schemaVersion: typeof CONNECTED_CONTEXT_SCHEMA_VERSION;
+  // Deterministic display fingerprint, not the raw SelectedScope.scopeId.
+  readonly scopeId: string;
+  readonly scopeKind: SelectedScopeKind;
+  readonly fileCount: number;
+  readonly queryKind: RetrievalQueryKind;
+  readonly usage: ExplorationUsage;
+  readonly budget: ExplorationBudget;
+  readonly citationCount: number;
+  readonly omittedCount: number;
+  readonly omittedCounts: Readonly<Record<CandidateOmissionReason, number>>;
+  readonly uncertaintyCount: number;
+  readonly elapsedMs: number;
+}
+
+export interface LocalKnowledgeGroundedAnswerContextSummary {
+  readonly kind: "local-knowledge";
+  readonly scopeKind: "capsule" | "capsule-set";
+  readonly scopeId: string;
+  readonly scopeLabel: string;
+  readonly capsuleCount: number;
+  readonly sourceCount: number;
+  readonly citationCount: number;
+  readonly referenceBudget: number;
+  readonly referencesUsed: number;
+}
+
+function buildOmittedCounts(
+  pack: ConnectedContextPack,
+): Readonly<Record<CandidateOmissionReason, number>> {
+  const counts = {} as Record<CandidateOmissionReason, number>;
+  for (const reason of CANDIDATE_OMISSION_REASONS) {
+    counts[reason] = 0;
+  }
+  for (const entry of pack.omitted) {
+    counts[entry.reason] += 1;
+  }
+  return counts;
+}
+
+function hashString32(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function displayScopeId(scopeId: string): string {
+  return `scope-${hashString32(scopeId)}`;
+}
+
+// Pure builder: derives a GroundedAnswerContextPackSummary from the source pack plus the
+// BFF-computed citation count and total elapsed wall time. No IO, no redaction (the only
+// scope-derived string carried is a deterministic display fingerprint); allocates one fresh object.
+export function buildGroundedAnswerContextPackSummary(
+  pack: ConnectedContextPack,
+  citationCount: number,
+  elapsedMs: number,
+): GroundedAnswerContextPackSummary {
+  return {
+    schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
+    scopeId: displayScopeId(pack.scope.scopeId),
+    scopeKind: pack.scope.kind,
+    fileCount: pack.scope.kind === "workspace-root" ? -1 : pack.scope.relativePaths.length,
+    queryKind: pack.query.kind,
+    usage: pack.usage,
+    budget: pack.budget,
+    citationCount,
+    omittedCount: pack.omitted.length,
+    omittedCounts: buildOmittedCounts(pack),
+    uncertaintyCount: pack.uncertainty.length,
+    elapsedMs,
+  };
+}
+
+export interface ConnectedContextGroundedAnswer {
+  readonly groundingKind: "connected-context";
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
+  readonly evidenceRunId?: string | undefined;
+  readonly content: string;
+  readonly citations: readonly GroundedEvidenceCitation[];
+  readonly uncertainty: readonly GroundedUncertainty[];
+  readonly omittedCount: number;
+  readonly elapsedMs: number;
+  // Issue #187 AC1: every grounded answer reports which scope was inspected and how much
+  // budget was spent. The summary is REQUIRED so the wire shape pins the privacy contract.
+  readonly contextPack: GroundedAnswerContextPackSummary;
+}
+
+export interface LocalKnowledgeEvidenceCitation {
+  readonly stableId: string;
+  readonly marker: string;
+  readonly label: string;
+  readonly score: number;
+  // Epic #189 — a short, human-readable label of the connector source this citation came from
+  // (the capsule/capsule-set displayName). Absent for legacy single-connector answers, which carry
+  // no per-source attribution (mirrors GroundedEvidenceCitation.source for folder evidence).
+  readonly source?: string;
+}
+
+export interface LocalKnowledgeGroundedAnswer {
+  readonly groundingKind: "local-knowledge";
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
+  readonly evidenceRunId?: string | undefined;
+  readonly content: string;
+  readonly citations: readonly LocalKnowledgeEvidenceCitation[];
+  readonly uncertainty: readonly GroundedUncertainty[];
+  readonly omittedCount: number;
+  readonly elapsedMs: number;
+  readonly noEvidence: boolean;
+  readonly noEvidenceReason?: string | undefined;
+  readonly contextPack: LocalKnowledgeGroundedAnswerContextSummary;
+}
+
+// Epic #189 — the hybrid grounded answer merges folder evidence (#177/#532 lexical) and connector
+// evidence (#189 vector) from one chat into a single model call. Defined here in Slice 1 so the
+// wire shape and store/BFF layers type-check; Slice 2 populates it, Slice 3 renders it.
+export interface HybridGroundedAnswerContextSummary {
+  readonly kind: "hybrid";
+  readonly folderSourceCount: number;
+  readonly connectorSourceCount: number;
+  readonly folder: GroundedAnswerContextPackSummary;
+  readonly knowledge: LocalKnowledgeGroundedAnswerContextSummary;
+}
+
+export interface HybridGroundedAnswer {
+  readonly groundingKind: "hybrid";
+  readonly userMessageId: string;
+  readonly assistantMessageId: string;
+  readonly evidenceRunId?: string | undefined;
+  readonly content: string;
+  // folder evidence (source-tagged, like the multi-source connected answer)
+  readonly citations: readonly GroundedEvidenceCitation[];
+  // connector evidence (source-tagged)
+  readonly knowledgeCitations: readonly LocalKnowledgeEvidenceCitation[];
+  readonly uncertainty: readonly GroundedUncertainty[];
+  readonly omittedCount: number;
+  readonly elapsedMs: number;
+  readonly contextPack: HybridGroundedAnswerContextSummary;
+}
+
+export type GroundedAnswer =
+  | ConnectedContextGroundedAnswer
+  | LocalKnowledgeGroundedAnswer
+  | HybridGroundedAnswer;
+
 // ─── BFF error envelope ───────────────────────────────────────────────────────────
 
 export type BffErrorCode =
@@ -271,6 +726,14 @@ export type BffErrorCode =
   | "WORKSPACE_PATH_DENIED"
   | "WORKSPACE_PATH_ESCAPE"
   | "WORKSPACE_READ_FAILED"
+  // Issue #149 (Epic #142) — Conversation Center server-side modality guardrails. The
+  // browser surfaces these codes via the existing `gw-error` envelope; messages are static
+  // English strings (no echoing of model ids, file names, or byte counts) so they pass
+  // through the BFF redactor without leaking any caller-supplied value.
+  | "CONVERSATION_UNAVAILABLE_MODEL"
+  | "CONVERSATION_UNSUPPORTED_MODALITY"
+  | "CONVERSATION_UNSUPPORTED_FILE_TYPE"
+  | "CONVERSATION_OVERSIZED_CONTEXT"
   | "INTERNAL";
 
 // The wire shape carries `code: string` — the BFF can emit codes outside the BffErrorCode union

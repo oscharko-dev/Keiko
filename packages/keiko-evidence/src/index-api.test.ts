@@ -50,6 +50,12 @@ describe("listEvidence", () => {
     expect(listEvidence(createInMemoryEvidenceStore())).toEqual([]);
   });
 
+  it("ignores non-run JSON records that do not declare an evidence schema version", () => {
+    const store = seed();
+    store.put("memory-audit-2026-06-07", JSON.stringify({ date: "2026-06-07", events: [] }));
+    expect(listEvidence(store).map((entry) => entry.runId)).toEqual(["run-a", "run-b"]);
+  });
+
   it("lists additive browser capture manifests", () => {
     const store = createInMemoryEvidenceStore();
     store.put(

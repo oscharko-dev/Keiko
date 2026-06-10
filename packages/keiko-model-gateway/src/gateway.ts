@@ -13,6 +13,7 @@ import type {
   CircuitBreakerStatus,
   GatewayConfig,
   GatewayRequest,
+  GatewayStreamChunk,
   ModelCapability,
   ModelProviderConfig,
   NormalizedResponse,
@@ -64,6 +65,61 @@ export class Gateway {
       ...result,
       usage: {
         ...result.usage,
+        requestId,
+        latencyMs: Math.max(1, this.clock.now() - start),
+        costClass: route.capability.costClass,
+      },
+    };
+  }
+
+  // Streaming counterpart of chat(). Routes identically and guards with the circuit
+  // breaker, but is NOT wrapped in executeWithRetry: a mid-stream retry would replay
+  // already-emitted tokens. An adapter without a streaming variant falls back to a
+  // single delta+done synthesised from its buffered call().
+  async *chatStream(request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
+    const route = this.route(request.modelId);
+    const breaker = this.breakerFor(route.provider);
+    breaker.assertAllowed();
+    const requestId = randomUUID();
+    const start = this.clock.now();
+    const adapter = this.adapterFor(requestId, route.capability);
+    try {
+      for await (const chunk of this.streamFrom(adapter, request, route.provider)) {
+        yield chunk.type === "done"
+          ? { type: "done", response: this.enrich(chunk.response, requestId, start, route) }
+          : chunk;
+      }
+      breaker.recordSuccess();
+    } catch (error) {
+      breaker.recordFailure();
+      throw error;
+    }
+  }
+
+  private async *streamFrom(
+    adapter: ProviderAdapter,
+    request: GatewayRequest,
+    provider: ModelProviderConfig,
+  ): AsyncGenerator<GatewayStreamChunk> {
+    if (adapter.callStream !== undefined) {
+      yield* adapter.callStream(request, provider);
+      return;
+    }
+    const response = await adapter.call(request, provider);
+    yield { type: "delta", token: response.content };
+    yield { type: "done", response };
+  }
+
+  private enrich(
+    response: NormalizedResponse,
+    requestId: string,
+    start: number,
+    route: RoutedCall,
+  ): NormalizedResponse {
+    return {
+      ...response,
+      usage: {
+        ...response.usage,
         requestId,
         latencyMs: Math.max(1, this.clock.now() - start),
         costClass: route.capability.costClass,

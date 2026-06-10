@@ -28,13 +28,15 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { gatewayFetch, readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { redact } from "@oscharko-dev/keiko-security";
-import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 
 const MAX_BODY_BYTES = 64_000;
-const MAX_DISCOVERED_MODELS = 100;
+// Issue #144: exported so discovery-normalization tests can pin the slice cap
+// without hardcoding the number. The discovery surface is a public seam.
+export const MAX_DISCOVERED_MODELS = 100;
 const MAX_DEPLOYMENT_NAMES = 100;
 const MAX_MODEL_ID_LENGTH = 160;
 const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 15_000;
@@ -44,6 +46,7 @@ const CHAT_COMPATIBLE_MODES = new Set(["chat", "completion", "responses"]);
 
 type GatewaySetupTester = NonNullable<UiHandlerDeps["gatewaySetupTester"]>;
 type GatewayModelDiscovery = NonNullable<UiHandlerDeps["gatewayModelDiscovery"]>;
+type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
 
 class BodyTooLargeError extends Error {
   constructor() {
@@ -218,7 +221,10 @@ function modelModeFromDiscoveryItem(item: Record<string, unknown>): string | und
   return undefined;
 }
 
-function isExplicitlyNonChatModel(item: Record<string, unknown>): boolean {
+// Issue #144: exported as part of the discovery-normalization seam so a
+// sibling test file can drive it with synthetic payloads. Behaviour unchanged
+// — only the visibility is widened.
+export function isExplicitlyNonChatModel(item: Record<string, unknown>): boolean {
   const capabilities = isRecord(item.capabilities) ? item.capabilities : undefined;
   if (capabilities?.chat_completion === false) {
     return true;
@@ -227,14 +233,21 @@ function isExplicitlyNonChatModel(item: Record<string, unknown>): boolean {
   return mode !== undefined && !CHAT_COMPATIBLE_MODES.has(mode);
 }
 
-function modelIdFromDiscoveryItem(item: unknown): string | undefined {
+// Issue #144: exported as part of the discovery-normalization seam. Behaviour
+// unchanged. Returns undefined for unknown/non-record/non-chat/malformed input
+// so callers can drop the entry silently and keep healthy peers.
+export function modelIdFromDiscoveryItem(item: unknown): string | undefined {
   if (!isRecord(item) || isExplicitlyNonChatModel(item)) {
     return undefined;
   }
   return modelIdFromKnownFields(item);
 }
 
-function parseModelList(payload: unknown): readonly string[] {
+// Issue #144: exported as part of the discovery-normalization seam. Behaviour
+// unchanged. Throws on schema-level malformation (no data array) and on the
+// "every entry filtered" terminal case so the caller (production path) returns
+// an honest error rather than a silently-empty model list.
+export function parseModelList(payload: unknown): readonly string[] {
   if (!isRecord(payload) || !Array.isArray(payload.data)) {
     throw new Error("model discovery response must contain a data array");
   }
@@ -252,15 +265,26 @@ function parseModelList(payload: unknown): readonly string[] {
   return unique.slice(0, MAX_DISCOVERED_MODELS);
 }
 
+// Issue #144 AC #4: the public discovery-normalization seam. Test target. Pure
+// wrapper around `parseModelList` so the AC ("Discovery handles additional
+// customer gateway models without requiring code changes for each model name")
+// can be pinned against a stable export name even if the internal helper is
+// reshaped later.
+export function normalizeDiscoveryPayload(payload: unknown): readonly string[] {
+  return parseModelList(payload);
+}
+
 async function fetchDiscoveryJson(
   url: string,
   apiKey: string,
   apiKeyHeaderName: string,
+  egress?: GatewayEgressConfig,
 ): Promise<unknown> {
   const response = await gatewayFetch(url, {
     method: "GET",
     headers: apiKeyHeaders(apiKey, apiKeyHeaderName),
     signal: AbortSignal.timeout(30_000),
+    ...(egress !== undefined ? { egress } : {}),
   });
   if (!response.ok) {
     throw new Error(`model discovery returned HTTP ${String(response.status)}`);
@@ -276,10 +300,11 @@ async function discoverLiteLlmModelInfo(
   baseUrl: string,
   apiKey: string,
   apiKeyHeaderName: string,
+  egress?: GatewayEgressConfig,
 ): Promise<readonly string[] | undefined> {
   for (const endpoint of modelInfoEndpointCandidates(baseUrl)) {
     try {
-      return parseModelList(await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName));
+      return parseModelList(await fetchDiscoveryJson(endpoint, apiKey, apiKeyHeaderName, egress));
     } catch {
       // /model/info is a LiteLLM-specific enrichment endpoint. If it is absent or blocked,
       // continue with OpenAI-compatible /models discovery so customer gateways are not broken.
@@ -292,13 +317,14 @@ async function defaultGatewayModelDiscovery(
   baseUrl: string,
   apiKey: string,
   apiKeyHeaderName = DEFAULT_API_KEY_HEADER_NAME,
+  egress?: GatewayEgressConfig,
 ): Promise<readonly string[]> {
-  const litellmModels = await discoverLiteLlmModelInfo(baseUrl, apiKey, apiKeyHeaderName);
+  const litellmModels = await discoverLiteLlmModelInfo(baseUrl, apiKey, apiKeyHeaderName, egress);
   if (litellmModels !== undefined) {
     return litellmModels;
   }
   return parseModelList(
-    await fetchDiscoveryJson(modelsEndpoint(baseUrl), apiKey, apiKeyHeaderName),
+    await fetchDiscoveryJson(modelsEndpoint(baseUrl), apiKey, apiKeyHeaderName, egress),
   );
 }
 
@@ -347,9 +373,13 @@ function validateSetupConnection(
   baseUrl: string,
   apiKey: string,
   apiKeyHeaderName: string,
+  env: EnvSource,
 ): RouteResult | undefined {
   try {
-    parseGatewayConfig(buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }));
+    parseGatewayConfig(
+      buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }),
+      env,
+    );
     return undefined;
   } catch (error) {
     if (error instanceof ConfigInvalidError) {
@@ -359,43 +389,63 @@ function validateSetupConnection(
   }
 }
 
-async function defaultGatewaySetupTester(
-  config: GatewayConfig,
-  candidateModelIds: readonly string[],
+// Issue #144: pure smoke-test loop extracted from `defaultGatewaySetupTester`
+// for testability. Concurrency is a parameter so callers (tests) can pin peak
+// in-flight count deterministically. Original-order preservation among
+// survivors is part of the observable contract — pinned by gateway-setup tests
+// that assert tested-model-id order matches input order with failed entries
+// dropped.
+//
+// Throws with the exact error message that `defaultGatewaySetupTester` has
+// always thrown so existing call sites and tests keep compiling.
+export async function smokeTestCandidates(
+  candidates: readonly string[],
+  probe: (modelId: string) => Promise<void>,
+  concurrency: number,
 ): Promise<readonly string[]> {
-  const gateway = new Gateway(config);
-  const tested = Array<string | undefined>(candidateModelIds.length).fill(undefined);
+  const tested = Array<string | undefined>(candidates.length).fill(undefined);
   let next = 0;
   async function worker(): Promise<void> {
-    while (next < candidateModelIds.length) {
+    while (next < candidates.length) {
       const index = next;
       next += 1;
-      const modelId = candidateModelIds[index];
+      const modelId = candidates[index];
       if (modelId === undefined) {
         continue;
       }
       try {
-        await gateway.chat({
-          modelId,
-          messages: [{ role: "user", content: "Reply with exactly: OK" }],
-        });
+        await probe(modelId);
         tested[index] = modelId;
       } catch {
-        // Non-chat models can appear in OpenAI-compatible model discovery responses. They are
-        // intentionally ignored so only chat-callable models become selectable in the UI.
+        // Probe rejection is the documented signal that this candidate is not
+        // chat-callable. We drop it silently so healthy peers still surface.
       }
     }
   }
-  await Promise.all(
-    Array.from({ length: Math.min(SETUP_SMOKE_CONCURRENCY, candidateModelIds.length) }, () =>
-      worker(),
-    ),
-  );
+  const workerCount = Math.max(1, Math.min(concurrency, candidates.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
   const accepted = tested.filter((modelId): modelId is string => modelId !== undefined);
   if (accepted.length === 0) {
     throw new Error("no discovered model accepted the chat-completions smoke test");
   }
   return accepted;
+}
+
+async function defaultGatewaySetupTester(
+  config: GatewayConfig,
+  candidateModelIds: readonly string[],
+): Promise<readonly string[]> {
+  const gateway = new Gateway(config);
+  return smokeTestCandidates(
+    candidateModelIds,
+    async (modelId) => {
+      await gateway.chat({
+        modelId,
+        messages: [{ role: "user", content: "Reply with exactly: OK" }],
+      });
+    },
+    SETUP_SMOKE_CONCURRENCY,
+  );
 }
 
 function savePrivateJson(path: string, raw: Record<string, unknown>): void {
@@ -453,7 +503,10 @@ function isSymlink(path: string): boolean {
   }
 }
 
-function readSetupRequest(raw: unknown):
+function readSetupRequest(
+  raw: unknown,
+  env: EnvSource,
+):
   | {
       readonly baseUrl: string;
       readonly apiKey: string;
@@ -486,7 +539,7 @@ function readSetupRequest(raw: unknown):
   if ("status" in deploymentNames) {
     return deploymentNames;
   }
-  const invalidConnection = validateSetupConnection(baseUrl, apiKey, apiKeyHeaderName);
+  const invalidConnection = validateSetupConnection(baseUrl, apiKey, apiKeyHeaderName, env);
   if (invalidConnection !== undefined) {
     return invalidConnection;
   }
@@ -513,14 +566,19 @@ async function verifySetupCandidate(
   deploymentNames: readonly string[],
   tester: GatewaySetupTester,
   discovery: GatewayModelDiscovery,
+  env: EnvSource,
 ): Promise<VerifiedSetup> {
   // Defence-in-depth: never send the credential to a candidate URL that has not passed the same
   // scheme/credential/loopback validation as the originally submitted base URL.
   validateBaseUrl(baseUrl, "candidate");
+  const validationConfig = parseGatewayConfig(
+    buildRawConfig(baseUrl, apiKey, ["setup-validation"], { apiKeyHeaderName }),
+    env,
+  );
   const candidateModelIds =
     deploymentNames.length > 0
       ? deploymentNames
-      : await discovery(baseUrl, apiKey, apiKeyHeaderName);
+      : await discovery(baseUrl, apiKey, apiKeyHeaderName, validationConfig.egress);
   const smokeTimeoutMs =
     deploymentNames.length > 0 ? DEPLOYMENT_SMOKE_TIMEOUT_MS : DISCOVERED_MODEL_SMOKE_TIMEOUT_MS;
   const candidateRawConfig = buildRawConfig(baseUrl, apiKey, candidateModelIds, {
@@ -528,10 +586,10 @@ async function verifySetupCandidate(
     timeoutMs: smokeTimeoutMs,
     maxRetries: 0,
   });
-  const candidateConfig = parseGatewayConfig(candidateRawConfig);
+  const candidateConfig = parseGatewayConfig(candidateRawConfig, env);
   const testedModelIds = await tester(candidateConfig, candidateModelIds);
   const rawConfig = buildRawConfig(baseUrl, apiKey, testedModelIds, { apiKeyHeaderName });
-  const config = parseGatewayConfig(rawConfig);
+  const config = parseGatewayConfig(rawConfig, env);
   return { rawConfig, config, testedModelIds };
 }
 
@@ -612,7 +670,7 @@ export async function handleGatewaySetup(
   if ("status" in bodyResult) {
     return bodyResult;
   }
-  const request = readSetupRequest(bodyResult.parsed);
+  const request = readSetupRequest(bodyResult.parsed, deps.env);
   if ("status" in request) {
     return request;
   }
@@ -635,6 +693,7 @@ export async function handleGatewaySetup(
         request.deploymentNames,
         tester,
         discovery,
+        deps.env,
       );
       savePrivateJson(deps.gatewayConfig.storagePath, verified.rawConfig);
       deps.gatewayConfig.set(verified.config, true);

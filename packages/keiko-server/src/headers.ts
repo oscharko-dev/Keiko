@@ -10,6 +10,7 @@ const BASE_SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "Referrer-Policy": "no-referrer",
   "Cross-Origin-Opener-Policy": "same-origin",
   "Cross-Origin-Resource-Policy": "same-origin",
+  "Permissions-Policy": "camera=(), geolocation=(), microphone=(), payment=(), usb=()",
 };
 
 // Applies the CSP and the base security headers, plus `Cache-Control: no-store` for API responses

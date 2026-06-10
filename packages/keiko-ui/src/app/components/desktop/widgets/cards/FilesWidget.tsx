@@ -3,14 +3,32 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { fetchFilesTree, fetchProjects } from "../../../../../lib/api";
-import type { FilesTreeEntry } from "../../../../../lib/types";
+import type { FilesTreeEntry, SelectedScopeKind } from "../../../../../lib/types";
+import { useOptionalChatSessionContext } from "../../context/ChatSessionContext";
 import { Icons } from "../../Icons";
+import { ScopeConnectButton } from "../../ScopeConnectButton";
 import { FileIcon } from "../shared/projectTree";
 import { FilePreview } from "./FilePreview";
 
 interface FilesWidgetProps {
   root?: string;
   onActiveFileChange?: (path: string | null, root: string | null) => void;
+  // Called when the user opens a different machine path from the root bar. The window host
+  // persists it into cfg.root so the new root survives reload (widgets/index.tsx). When omitted,
+  // the root bar is hidden (the widget is then locked to its configured/fallback root).
+  onRootChange?: (root: string) => void;
+}
+
+// Parent directory of an absolute POSIX/Windows path, or null at the filesystem root. Pure string
+// math (no IO) so the root bar can offer "up" without a round-trip; the BFF still validates.
+function parentDir(path: string): string | null {
+  const trimmed = path.replace(/[/\\]+$/, "");
+  const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
+  if (idx < 0) return null;
+  if (idx === 0) return "/"; // POSIX root
+  // Windows drive root e.g. "C:" → keep the backslash form "C:\"
+  if (/^[A-Za-z]:$/.test(trimmed.slice(0, idx))) return `${trimmed.slice(0, idx)}\\`;
+  return trimmed.slice(0, idx);
 }
 
 interface DirectoryState {
@@ -37,12 +55,21 @@ function formatBytes(bytes: number): string {
   return `${value} ${units[idx]}`;
 }
 
-export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): ReactNode {
+export function FilesWidget({
+  root,
+  onActiveFileChange,
+  onRootChange,
+}: FilesWidgetProps): ReactNode {
+  const session = useOptionalChatSessionContext();
+  const activeChat = session?.activeChat;
   const trimmedRoot = root?.trim();
   const configuredRoot = trimmedRoot !== undefined && trimmedRoot.length > 0 ? trimmedRoot : null;
   const [fallbackRoot, setFallbackRoot] = useState<string | null>(null);
   const apiRoot = configuredRoot ?? fallbackRoot ?? "";
   const [resolvedRoot, setResolvedRoot] = useState<string | null>(null);
+  // Root bar draft: what the user is typing as the next folder to open. Synced to the resolved
+  // (real) root whenever the widget loads a folder, so it always shows where we are.
+  const [rootDraft, setRootDraft] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [directories, setDirectories] = useState<Record<string, DirectoryState>>({});
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set([""]));
@@ -129,6 +156,27 @@ export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): Rea
     void loadDirectory("");
   }, [apiRoot, loadDirectory, refreshKey]);
 
+  // Keep the root-bar input showing where we actually are (the resolved real root, else the api root).
+  useEffect(() => {
+    const current = resolvedRoot ?? (apiRoot.length > 0 ? apiRoot : "");
+    setRootDraft(current);
+  }, [resolvedRoot, apiRoot]);
+
+  const openRoot = useCallback(
+    (next: string): void => {
+      const target = next.trim();
+      if (onRootChange === undefined || target.length === 0) return;
+      if (target === (resolvedRoot ?? apiRoot)) return;
+      onRootChange(target);
+    },
+    [onRootChange, resolvedRoot, apiRoot],
+  );
+
+  const goUp = useCallback((): void => {
+    const parent = parentDir(resolvedRoot ?? apiRoot);
+    if (parent !== null) openRoot(parent);
+  }, [resolvedRoot, apiRoot, openRoot]);
+
   const toggleDirectory = (entry: FilesTreeEntry): void => {
     if (!entry.readable) return;
     const wasOpen = expanded.has(entry.path);
@@ -147,13 +195,40 @@ export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): Rea
     void loadDirectory(path);
   };
 
+  const renderScopeConnector = (scopeKind: SelectedScopeKind, relativePath: string): ReactNode => {
+    if (session === null || activeChat === undefined) return null;
+    if (apiRoot.length === 0) return null;
+    if (scopeKind !== "workspace-root" && relativePath.length === 0) return null;
+    return (
+      <ScopeConnectButton
+        chatId={activeChat.id}
+        scopeKind={scopeKind}
+        currentScopeKind={activeChat.connectedScope?.kind}
+        candidateRelativePaths={scopeKind === "workspace-root" ? [] : [relativePath]}
+        chat={activeChat}
+        onConnected={session.replaceChat}
+      />
+    );
+  };
+
+  const renderRootConnector = (): ReactNode => {
+    const connector = renderScopeConnector("workspace-root", "");
+    if (connector === null) return null;
+    return (
+      <div className="files-scope-bar" role="group" aria-label="Repository scope connector">
+        <span className="files-scope-label">Repository scope</span>
+        {connector}
+      </div>
+    );
+  };
+
   const renderEntry = (entry: FilesTreeEntry, depth: number): ReactNode => {
     const pad = 8 + depth * 13;
     const open = expanded.has(entry.path);
     if (entry.kind === "directory") {
       const state = directories[entry.path];
       return (
-        <div key={entry.path}>
+        <div className="tr-row-wrap" key={entry.path}>
           <button
             className="tr-row"
             data-readable={entry.readable}
@@ -173,6 +248,11 @@ export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): Rea
             <span className="tr-name tr-folder">{entry.name}</span>
             {entry.symlink ? <span className="tr-badge">link</span> : null}
           </button>
+          {entry.readable ? (
+            <div className="tr-connect" style={{ paddingLeft: pad + 20 }}>
+              {renderScopeConnector("directory", entry.path)}
+            </div>
+          ) : null}
           {open ? renderDirectory(entry.path, depth + 1, state) : null}
         </div>
       );
@@ -248,6 +328,40 @@ export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): Rea
 
   return (
     <div className="files">
+      {onRootChange !== undefined ? (
+        <form
+          className="files-root-bar"
+          role="group"
+          aria-label="Folder root"
+          onSubmit={(event) => {
+            event.preventDefault();
+            openRoot(rootDraft);
+          }}
+        >
+          <button
+            type="button"
+            className="files-root-up"
+            onClick={goUp}
+            disabled={parentDir(resolvedRoot ?? apiRoot) === null}
+            title="Open parent folder"
+            aria-label="Open parent folder"
+          >
+            <Icons.arrowUp size={13} />
+          </button>
+          <input
+            type="text"
+            className="files-root-input mono"
+            aria-label="Folder path — open any folder on this machine"
+            placeholder="/path/to/any/folder"
+            spellCheck={false}
+            value={rootDraft}
+            onChange={(event) => setRootDraft(event.target.value)}
+          />
+          <button type="submit" className="files-root-open" title="Open this folder">
+            Open
+          </button>
+        </form>
+      ) : null}
       <button
         className="files-refresh"
         type="button"
@@ -257,6 +371,7 @@ export function FilesWidget({ root, onActiveFileChange }: FilesWidgetProps): Rea
       >
         <Icons.reset size={13} />
       </button>
+      {renderRootConnector()}
       <div className="tr files-tree">{renderDirectory("", 0)}</div>
     </div>
   );

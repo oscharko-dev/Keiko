@@ -1,0 +1,14 @@
+[
+  {
+    "id": "invalid-user-scope",
+    "description": "Malformed fixture used only to prove scope validation rejects missing coordinates.",
+    "memories": [
+      {
+        "id": "broken-record",
+        "scope": { "kind": "user" },
+        "type": "preference",
+        "body": "this fixture must be rejected before any scenario can use it"
+      }
+    ]
+  }
+]

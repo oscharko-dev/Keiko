@@ -1,0 +1,23 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "include": ["src"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_support.ts"],
+  "references": [
+    { "path": "../keiko-contracts" },
+    { "path": "../keiko-evaluations" },
+    { "path": "../keiko-evidence" },
+    { "path": "../keiko-harness" },
+    { "path": "../keiko-model-gateway" },
+    { "path": "../keiko-verification" },
+    { "path": "../keiko-workflows" },
+    { "path": "../keiko-workspace" }
+  ]
+}

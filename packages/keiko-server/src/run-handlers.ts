@@ -19,6 +19,8 @@ import { errorBody, STREAMING } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentRedactionSecrets } from "./deps.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import { createAuditRedactor } from "@oscharko-dev/keiko-evidence";
+import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
 import { UiStoreError, type ChatMessage, type NewChatMessage } from "./store/index.js";
 
 const MAX_BODY_BYTES = 1_000_000;
@@ -208,6 +210,18 @@ function storeErrorResult(error: UiStoreError): RouteResult {
   return { status: error.status, body: errorBody(error.code, error.message) };
 }
 
+// Static, path-safe message for workspace errors surfaced during run launch. The underlying
+// WorkspaceError messages may carry absolute paths — we never echo them (ADR-0005, CWE-209).
+const WORKSPACE_RUN_ERROR_MESSAGE =
+  "The selected workspace could not be prepared: no recognized project workspace marker was found, or the target file could not be read.";
+
+function workspaceRunErrorResult(): RouteResult {
+  return {
+    status: 400,
+    body: errorBody("WORKSPACE_UNAVAILABLE", WORKSPACE_RUN_ERROR_MESSAGE),
+  };
+}
+
 function markSummaryFailed(deps: UiHandlerDeps, message: ChatMessage, shortResult: string): void {
   try {
     deps.store.updateMessage(message.id, { workflowStatus: "failed", shortResult });
@@ -273,6 +287,11 @@ function engineContextFor(
       env: deps.env,
       additionalSecrets: currentRedactionSecrets(deps),
     },
+    memoryVault: deps.memoryVault,
+    memoryAuditRedactString: createAuditRedactor(
+      { additionalSecrets: currentRedactionSecrets(deps) },
+      deps.env,
+    ),
   };
 }
 
@@ -307,11 +326,18 @@ function startPersistedChatRun(
     if (summary !== undefined) {
       markSummaryFailed(deps, summary, "Run could not be started.");
     }
-    if (error instanceof ActiveRunLimitError) {
-      return { status: 429, body: errorBody("TOO_MANY_RUNS", "The active run limit is reached.") };
-    }
-    throw error;
+    return mapRunStartError(error);
   }
+}
+
+function mapRunStartError(error: unknown): RouteResult {
+  if (error instanceof ActiveRunLimitError) {
+    return { status: 429, body: errorBody("TOO_MANY_RUNS", "The active run limit is reached.") };
+  }
+  if (error instanceof WorkspaceError) {
+    return workspaceRunErrorResult();
+  }
+  throw error;
 }
 
 // Route 5 — POST /api/runs. Validates the body, resolves the ModelPort, starts the run, returns 202.
@@ -357,10 +383,7 @@ export async function handleCreateRun(
     const started = startRun(engineCtx, deps.redactor);
     return { status: 202, body: { runId: started.runId, fingerprint: started.fingerprint } };
   } catch (error) {
-    if (error instanceof ActiveRunLimitError) {
-      return { status: 429, body: errorBody("TOO_MANY_RUNS", "The active run limit is reached.") };
-    }
-    throw error;
+    return mapRunStartError(error);
   }
 }
 
@@ -488,12 +511,18 @@ function reportWithApply(
 
 // Route 9 — POST /api/runs/:runId/apply. The ONLY write path. 404 unknown; 409 when not in an
 // appliable (dry-run-success) state; otherwise re-invokes the gated workflow with apply:true.
+//
+// Issue #638: the pending snapshot is claimed atomically (set to `undefined`) BEFORE we await
+// `applyRun`, so a second overlapping request sees `record.appliable === undefined` and 409s
+// out. Clearing AFTER the await would let two requests both observe the same pending patch and
+// double-apply the workspace mutation, which is the race the regression test reproduces.
 export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Promise<RouteResult> {
   const record = deps.registry.get(ctx.params.runId ?? "");
   if (record === undefined) {
     return { status: 404, body: errorBody("NOT_FOUND", "Unknown run.") };
   }
-  if (record.appliable === undefined) {
+  const snapshot = record.appliable;
+  if (snapshot === undefined) {
     return {
       status: 409,
       body: errorBody("NOT_APPLIABLE", "The run is not in an appliable state."),
@@ -503,8 +532,8 @@ export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Pr
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  const report = await applyRun(record.appliable, model, record.modelId, deps.redactor);
   record.appliable = undefined;
+  const report = await applyRun(snapshot, model, record.modelId, deps.redactor);
   record.applyReport = report;
   record.appliedAt = Date.now();
   return {

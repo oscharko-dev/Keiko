@@ -3,7 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
-import { loadConfigFromFile, parseGatewayConfig, toSafeObject } from "./config.js";
+import {
+  loadConfigFromFile,
+  parseCapabilityList,
+  parseGatewayConfig,
+  parseModelCapability,
+  toSafeObject,
+} from "./config.js";
 
 interface RawProvider {
   modelId: string;
@@ -47,6 +53,57 @@ describe("parseGatewayConfig", () => {
     expect(config.providers[0]?.modelId).toBe("example-chat-model");
     expect(config.providers[0]?.apiKeyHeaderName).toBe("authorization");
     expect(config.circuitBreaker.failureThreshold).toBe(5);
+  });
+
+  it("parses explicit enterprise egress settings and applies them to providers", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      egress: {
+        httpProxy: "http://proxy.local:8080",
+        httpsProxy: "https://secure-proxy.local:8443",
+        noProxy: "localhost, 127.0.0.1",
+        caBundlePath: "/etc/keiko/enterprise-ca.pem",
+      },
+    };
+    const config = parseGatewayConfig(raw);
+    expect(config.egress).toEqual({
+      httpProxy: "http://proxy.local:8080/",
+      httpsProxy: "https://secure-proxy.local:8443/",
+      noProxy: ["localhost", "127.0.0.1"],
+      caBundlePath: "/etc/keiko/enterprise-ca.pem",
+    });
+    expect(config.providers[0]?.egress).toEqual(config.egress);
+  });
+
+  it("parses enterprise egress settings from the environment", () => {
+    const config = parseGatewayConfig(validRaw(), {
+      KEIKO_HTTP_PROXY: "http://proxy.env.local:8080",
+      KEIKO_HTTPS_PROXY: "http://secure-proxy.env.local:8443",
+      KEIKO_NO_PROXY: "localhost,.corp.example",
+      KEIKO_CA_BUNDLE_PATH: "/etc/keiko/env-ca.pem",
+    });
+    expect(config.egress).toEqual({
+      httpProxy: "http://proxy.env.local:8080/",
+      httpsProxy: "http://secure-proxy.env.local:8443/",
+      noProxy: ["localhost", ".corp.example"],
+      caBundlePath: "/etc/keiko/env-ca.pem",
+    });
+    expect(config.providers[0]?.egress).toEqual(config.egress);
+  });
+
+  it("rejects credential-bearing proxy URLs without echoing the credentials", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      egress: { httpsProxy: "http://user:secret-pass@proxy.local:8080" },
+    };
+    try {
+      parseGatewayConfig(raw);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("must not embed credentials");
+      expect((error as Error).message).not.toContain("secret-pass");
+    }
   });
 
   it("accepts a safe custom API key header name", () => {
@@ -129,6 +186,77 @@ describe("parseGatewayConfig", () => {
     });
   });
 
+  // Issue #810 (Epic #761 silent-drop gotcha): supportsImageInput must round-trip through
+  // parseGatewayConfig via the inline provider-capability path. Validated against the real
+  // deployment id llama-4-maverick-vision so a vision provider becomes capability-routable.
+  it("round-trips supportsImageInput: true through the inline provider capability path", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "llama-4-maverick-vision",
+      capability: {
+        kind: "chat",
+        contextWindow: 128_000,
+        maxOutputTokens: 4_096,
+        toolCalling: true,
+        structuredOutput: true,
+        streaming: true,
+        supportsImageInput: true,
+        costClass: "medium",
+        latencyClass: "standard",
+        throughputHint: "vision endpoint",
+        preferredUseCases: ["Vision"],
+        knownLimitations: ["Validate against the target endpoint"],
+      },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "llama-4-maverick-vision");
+    expect(cap?.supportsImageInput).toBe(true);
+  });
+
+  // Mutation guard: the inline path defaults supportsImageInput to false when omitted, so a
+  // text provider is never mistaken for a vision provider.
+  it("defaults supportsImageInput to false when the inline capability omits it", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-text-chat",
+      capability: { kind: "chat", contextWindow: 8_192 },
+    }));
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "example-text-chat");
+    expect(cap?.supportsImageInput).toBe(false);
+  });
+
+  // Issue #810: the strict top-level `capabilities` array (parseModelCapability) must also
+  // round-trip supportsImageInput: true — this is the wire-facing surface, not just inline.
+  it("round-trips supportsImageInput: true through the strict top-level capabilities array", () => {
+    const raw = {
+      providers: [{ ...validProvider(), modelId: "llama-4-maverick-vision" }],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
+      capabilities: [
+        {
+          id: "llama-4-maverick-vision",
+          kind: "chat",
+          contextWindow: 128_000,
+          maxOutputTokens: 4_096,
+          toolCalling: true,
+          structuredOutput: true,
+          streaming: true,
+          supportsImageInput: true,
+          supportsDocumentInput: false,
+          workflowEligible: true,
+          costClass: "medium",
+          latencyClass: "standard",
+          throughputHint: "vision endpoint",
+          preferredUseCases: ["Vision"],
+          knownLimitations: ["Validate against the target endpoint"],
+        },
+      ],
+    };
+    const config = parseGatewayConfig(raw);
+    const cap = config.capabilities?.find((c) => c.id === "llama-4-maverick-vision");
+    expect(cap?.supportsImageInput).toBe(true);
+  });
+
   it("rejects custom capability metadata whose id differs from the provider modelId", () => {
     const raw = rawWithProvider((p) => ({
       ...p,
@@ -136,6 +264,31 @@ describe("parseGatewayConfig", () => {
       capability: { id: "other-model", kind: "chat" },
     }));
     expect(() => parseGatewayConfig(raw)).toThrow(/capability\.id/);
+  });
+
+  // Test B — parseProviderCapability non-chat workflow rejection via inline path (Issue #143 verifier LOW)
+  // Exercises config.ts:323 — the kind !== "chat" && workflowEligible guard inside the
+  // per-provider inline capability parser. This path is distinct from the top-level
+  // parseModelCapability surface tested in the parseModelCapability describe block.
+  it("rejects an inline provider capability with kind: 'embedding' and workflowEligible: true", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      capability: {
+        kind: "embedding",
+        workflowEligible: true,
+      },
+    }));
+    try {
+      parseGatewayConfig(raw);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      const message = (error as ConfigInvalidError).message;
+      expect(message).toContain("providers[0].capability.workflowEligible");
+      expect(message).toMatch(
+        /providers\[0\]\.capability\.workflowEligible must be false when providers\[0\]\.capability\.kind is not "chat"/u,
+      );
+    }
   });
 
   it("rejects an empty providers array", () => {
@@ -273,6 +426,23 @@ describe("toSafeObject", () => {
     expect(serialised).not.toContain("baseUrl");
   });
 
+  it("omits enterprise egress proxy and CA topology", () => {
+    const config = parseGatewayConfig(
+      {
+        ...(validRaw() as Record<string, unknown>),
+        egress: {
+          httpsProxy: "http://proxy.internal.example:8443",
+          caBundlePath: "/etc/keiko/internal-ca.pem",
+        },
+      },
+      {},
+    );
+    const serialised = JSON.stringify(toSafeObject(config));
+    expect(serialised).not.toContain("proxy.internal.example");
+    expect(serialised).not.toContain("internal-ca.pem");
+    expect(serialised).not.toContain("egress");
+  });
+
   it("preserves non-secret fields", () => {
     const config = parseGatewayConfig(validRaw());
     const safe = toSafeObject(config);
@@ -338,5 +508,394 @@ describe("loadConfigFromFile", () => {
       KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY: "example-file-load-token-1234567890",
     });
     expect(config.providers[0]?.apiKey).toBe("example-file-load-token-1234567890");
+  });
+});
+
+// ─── Strict capability parser (Issue #143) ───────────────────────────────────────
+// `parseModelCapability` is the fail-closed parser for explicit, wire-facing
+// capability records (top-level `capabilities` array). Every boolean is required
+// (no implicit defaults) — callers that want a default chat capability must call
+// `createDefaultChatCapability`. Sibling-field values (especially anything from a
+// ModelProviderConfig such as apiKey) must NEVER appear in error messages.
+
+function validCapability(): Record<string, unknown> {
+  return {
+    id: "example-chat-model",
+    kind: "chat",
+    contextWindow: 64_000,
+    maxOutputTokens: 4_096,
+    toolCalling: true,
+    structuredOutput: true,
+    streaming: true,
+    supportsImageInput: false,
+    supportsDocumentInput: false,
+    workflowEligible: false,
+    costClass: "medium",
+    latencyClass: "standard",
+    throughputHint: "runtime-configured",
+    preferredUseCases: ["Chat"],
+    knownLimitations: ["Validate against the target endpoint"],
+  };
+}
+
+function withoutKey(source: Record<string, unknown>, key: string): Record<string, unknown> {
+  const clone = { ...source };
+  Reflect.deleteProperty(clone, key);
+  return clone;
+}
+
+describe("parseModelCapability", () => {
+  it("accepts a valid chat capability and round-trips every declared field", () => {
+    const raw = validCapability();
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed).toEqual(raw);
+  });
+
+  it("rejects a missing supportsImageInput with a path-scoped ConfigInvalidError", () => {
+    const rest = withoutKey(validCapability(), "supportsImageInput");
+    try {
+      parseModelCapability(rest, "capabilities[0]");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      const message = (error as Error).message;
+      expect(message).toContain("capabilities[0].supportsImageInput");
+      // No sibling-field VALUES (provider modelId/url/key) leak into the message.
+      // The path itself may contain field NAMES; values are what must not appear.
+      expect(message).not.toContain("64000");
+      expect(message).not.toContain("runtime-configured");
+      expect(message).not.toContain("Validate against the target endpoint");
+    }
+  });
+
+  it("rejects a missing supportsDocumentInput", () => {
+    const rest = withoutKey(validCapability(), "supportsDocumentInput");
+    expect(() => parseModelCapability(rest, "capabilities[0]")).toThrow(/supportsDocumentInput/);
+  });
+
+  it("rejects a missing workflowEligible", () => {
+    const rest = withoutKey(validCapability(), "workflowEligible");
+    expect(() => parseModelCapability(rest, "capabilities[0]")).toThrow(/workflowEligible/);
+  });
+
+  it("rejects a non-chat kind with workflowEligible: true (invariant: workflow ⇒ chat)", () => {
+    const raw = {
+      ...validCapability(),
+      kind: "embedding",
+      workflowEligible: true,
+    };
+    try {
+      parseModelCapability(raw, "capabilities[0]");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("workflowEligible");
+    }
+  });
+
+  it("rejects an unknown kind discriminant", () => {
+    const raw = { ...validCapability(), kind: "unknown-kind" };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/kind/);
+  });
+
+  it("rejects an unknown top-level field (strict — no silent absorption)", () => {
+    const raw = { ...validCapability(), surpriseField: "value" };
+    try {
+      parseModelCapability(raw, "capabilities[0]");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("surpriseField");
+    }
+  });
+
+  it("rejects a non-object input", () => {
+    expect(() => parseModelCapability("not-an-object", "capabilities[0]")).toThrow(
+      ConfigInvalidError,
+    );
+  });
+
+  it("rejects a non-integer contextWindow", () => {
+    const raw = { ...validCapability(), contextWindow: -1 };
+    expect(() => parseModelCapability(raw, "capabilities[0]")).toThrow(/contextWindow/);
+  });
+
+  it("accepts an embedding capability whose workflowEligible is false", () => {
+    const raw = { ...validCapability(), kind: "embedding", workflowEligible: false };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.kind).toBe("embedding");
+    expect(parsed.workflowEligible).toBe(false);
+  });
+
+  it("accepts an ocr-vision capability whose workflowEligible is false", () => {
+    const raw = { ...validCapability(), kind: "ocr-vision", workflowEligible: false };
+    const parsed = parseModelCapability(raw, "capabilities[0]");
+    expect(parsed.kind).toBe("ocr-vision");
+  });
+
+  // Test A — ocr-vision + workflowEligible rejection (top-level parser, Issue #143 verifier LOW)
+  it("rejects kind: 'ocr-vision' with workflowEligible: true", () => {
+    const malformed = {
+      id: "test-vision",
+      kind: "ocr-vision" as const,
+      contextWindow: 8000,
+      maxOutputTokens: 4000,
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: false,
+      supportsImageInput: true,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass: "medium" as const,
+      latencyClass: "standard" as const,
+      throughputHint: "test",
+      preferredUseCases: [],
+      knownLimitations: [],
+    };
+    expect(() => parseModelCapability(malformed, "capability")).toThrow(ConfigInvalidError);
+    expect(() => parseModelCapability(malformed, "capability")).toThrow(
+      /capability\.workflowEligible must be false when capability\.kind is not "chat"/u,
+    );
+  });
+
+  // Test C — credential-shaped sibling field no-leakage (Issue #143 security-triage MEDIUM, OWASP A09)
+  it("does not echo a credential-shaped sibling field in the rejection message", () => {
+    const credentialShaped = ["sk-", "test-abcdef1234567890"].join("");
+    const malformed = {
+      id: "test-chat",
+      kind: "chat" as const,
+      contextWindow: 8000,
+      maxOutputTokens: 4000,
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: false,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: false,
+      costClass: "medium" as const,
+      latencyClass: "standard" as const,
+      throughputHint: "test",
+      preferredUseCases: [],
+      knownLimitations: [],
+      apiKey: credentialShaped,
+    };
+    try {
+      parseModelCapability(malformed, "capability");
+      throw new Error("expected parseModelCapability to throw");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      const message = (error as ConfigInvalidError).message;
+      expect(message).toContain("capability.apiKey");
+      expect(message).not.toContain(credentialShaped);
+    }
+  });
+});
+
+describe("parseCapabilityList", () => {
+  it("returns parsed entries in declaration order", () => {
+    const raw = [
+      { ...validCapability(), id: "first" },
+      { ...validCapability(), id: "second" },
+      { ...validCapability(), id: "third" },
+    ];
+    const parsed = parseCapabilityList(raw, "capabilities");
+    expect(parsed.map((c) => c.id)).toEqual(["first", "second", "third"]);
+  });
+
+  it("rejects the whole list when any single entry is malformed (no partial acceptance)", () => {
+    const raw = [
+      { ...validCapability(), id: "ok" },
+      { ...validCapability(), id: "bad", kind: "unknown-kind" },
+      { ...validCapability(), id: "alsoOk" },
+    ];
+    try {
+      parseCapabilityList(raw, "capabilities");
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).toContain("capabilities[1].kind");
+    }
+  });
+
+  it("rejects a non-array input", () => {
+    expect(() => parseCapabilityList({ not: "an array" }, "capabilities")).toThrow(
+      ConfigInvalidError,
+    );
+  });
+
+  it("returns an empty list for an empty array", () => {
+    expect(parseCapabilityList([], "capabilities")).toEqual([]);
+  });
+});
+
+describe("parseGatewayConfig top-level capabilities array", () => {
+  it("validates a top-level capabilities array through parseCapabilityList", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      capabilities: [{ ...validCapability(), id: "example-chat-model" }],
+    };
+    const config = parseGatewayConfig(raw);
+    expect(config.capabilities?.[0]?.id).toBe("example-chat-model");
+    expect(config.capabilities?.[0]?.supportsImageInput).toBe(false);
+  });
+
+  it("rejects a malformed top-level capabilities array without echoing the apiKey", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      capabilities: [{ ...validCapability(), kind: "unknown-kind" }],
+    };
+    try {
+      parseGatewayConfig(raw);
+      expect.unreachable("should have thrown");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigInvalidError);
+      expect((error as Error).message).not.toContain("example-test-token-1234567890");
+    }
+  });
+
+  it("prefers a top-level capability over an inline provider capability with the same id", () => {
+    const raw = rawWithProvider((p) => ({
+      ...p,
+      modelId: "example-private-chat",
+      capability: {
+        kind: "chat",
+        toolCalling: false,
+        structuredOutput: false,
+        supportsImageInput: false,
+        supportsDocumentInput: false,
+        workflowEligible: false,
+        preferredUseCases: ["Inline default"],
+        knownLimitations: ["inline"],
+      },
+    })) as Record<string, unknown>;
+    raw.capabilities = [
+      {
+        ...validCapability(),
+        id: "example-private-chat",
+        toolCalling: true,
+        structuredOutput: true,
+        supportsImageInput: true,
+        supportsDocumentInput: true,
+        workflowEligible: true,
+        preferredUseCases: ["Top-level explicit"],
+        knownLimitations: ["top-level"],
+      },
+    ];
+
+    const config = parseGatewayConfig(raw);
+    expect(config.capabilities).toHaveLength(1);
+    expect(config.capabilities?.[0]).toMatchObject({
+      id: "example-private-chat",
+      toolCalling: true,
+      structuredOutput: true,
+      supportsImageInput: true,
+      supportsDocumentInput: true,
+      workflowEligible: true,
+      preferredUseCases: ["Top-level explicit"],
+      knownLimitations: ["top-level"],
+    });
+  });
+});
+
+describe("parseGatewayConfig grounding block", () => {
+  it("grounding is undefined when the block is absent (no-config behaviour unchanged)", () => {
+    const config = parseGatewayConfig(validRaw());
+    expect(config.grounding).toBeUndefined();
+  });
+
+  it("parses a valid grounding block with a single positive-integer field", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { maxConnectedSources: 4 },
+    };
+    const config = parseGatewayConfig(raw);
+    expect(config.grounding?.maxConnectedSources).toBe(4);
+  });
+
+  it("parses all grounding fields when all are provided as positive integers", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: {
+        maxConnectedSources: 8,
+        maxLocalKnowledgeSources: 8,
+        maxPromptReferences: 4,
+        maxExcerptChars: 500,
+        referenceBudget: 5,
+        hybridMaxCandidates: 12,
+        hybridMaxExcerptBytes: 65536,
+      },
+    };
+    const config = parseGatewayConfig(raw);
+    expect(config.grounding?.maxConnectedSources).toBe(8);
+    expect(config.grounding?.maxLocalKnowledgeSources).toBe(8);
+    expect(config.grounding?.maxPromptReferences).toBe(4);
+    expect(config.grounding?.maxExcerptChars).toBe(500);
+    expect(config.grounding?.referenceBudget).toBe(5);
+    expect(config.grounding?.hybridMaxCandidates).toBe(12);
+    expect(config.grounding?.hybridMaxExcerptBytes).toBe(65536);
+  });
+
+  it("clamps an over-ceiling value (9999) to the ceiling (64) rather than rejecting it", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { maxConnectedSources: 9999 },
+    };
+    const config = parseGatewayConfig(raw);
+    expect(config.grounding?.maxConnectedSources).toBe(64);
+  });
+
+  it("throws ConfigInvalidError for a non-integer grounding field (1.5)", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { maxConnectedSources: 1.5 },
+    };
+    expect(() => parseGatewayConfig(raw)).toThrow(ConfigInvalidError);
+    expect(() => parseGatewayConfig(raw)).toThrow(/grounding\.maxConnectedSources/);
+  });
+
+  it("throws ConfigInvalidError for a zero grounding field (not positive)", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { referenceBudget: 0 },
+    };
+    expect(() => parseGatewayConfig(raw)).toThrow(ConfigInvalidError);
+    expect(() => parseGatewayConfig(raw)).toThrow(/grounding\.referenceBudget/);
+  });
+
+  it("throws ConfigInvalidError for a negative grounding field", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { maxPromptReferences: -5 },
+    };
+    expect(() => parseGatewayConfig(raw)).toThrow(ConfigInvalidError);
+  });
+
+  it("ignores unknown keys in the grounding block (forward-compat)", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { maxConnectedSources: 4, unknownFutureKey: 99 },
+    };
+    expect(() => parseGatewayConfig(raw)).not.toThrow();
+    const config = parseGatewayConfig(raw);
+    expect(config.grounding?.maxConnectedSources).toBe(4);
+  });
+});
+
+describe("toSafeObject grounding field", () => {
+  it("includes resolved grounding limits when the config has a grounding block", () => {
+    const raw = {
+      ...(validRaw() as Record<string, unknown>),
+      grounding: { maxConnectedSources: 4 },
+    };
+    const config = parseGatewayConfig(raw);
+    const safe = toSafeObject(config);
+    expect(safe.grounding?.maxConnectedSources).toBe(4);
+  });
+
+  it("omits grounding from the safe object when no grounding block was configured", () => {
+    const config = parseGatewayConfig(validRaw());
+    const safe = toSafeObject(config);
+    expect(safe.grounding).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(safe, "grounding")).toBe(false);
   });
 });

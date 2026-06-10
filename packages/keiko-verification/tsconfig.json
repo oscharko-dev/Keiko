@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "include": ["src"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "**/_support.ts"],
+  "references": [
+    { "path": "../keiko-contracts" },
+    { "path": "../keiko-security" },
+    { "path": "../keiko-tools" },
+    { "path": "../keiko-workspace" }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "_header": "synthetic — no customer data; safe to bundle",
+  "id": "tc-synthetic-01",
+  "runId": "run-synthetic-01",
+  "derivedFromAtomIds": ["atom-synthetic-01", "atom-synthetic-02"],
+  "title": "Synthetic acceptance: empty cart shows empty-state message",
+  "preconditions": ["A synthetic user session is open", "The synthetic cart is empty"],
+  "steps": ["Navigate to the cart route", "Observe the rendered empty-state region"],
+  "expectedResults": ["The empty-state region is visible and announces no items present"],
+  "priority": "P1",
+  "riskClass": "functional",
+  "tags": ["synthetic", "cart"],
+  "status": "proposed"
+}

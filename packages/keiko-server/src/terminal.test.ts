@@ -286,6 +286,22 @@ describe("TerminalExecutionManager — denials and validation", () => {
     ).rejects.toMatchObject({ code: "CWD_OUTSIDE_PROJECT" });
   });
 
+  it("rejects a symlink cwd whose real target escapes the selected project before spawn", async () => {
+    const outside = mkdtempSync(join(tmpdir(), "keiko-term-outside-"));
+    outsideRoots.push(outside);
+    const symlinkPath = join(workspaceRoot, "escaped-cwd");
+    symlinkSync(outside, symlinkPath, "dir");
+    const manager = makeManager();
+    await expect(
+      manager.execute({
+        projectId: workspaceRoot,
+        command: "ls",
+        args: [],
+        cwd: symlinkPath,
+      }),
+    ).rejects.toMatchObject({ code: "CWD_DENIED" });
+  });
+
   it("rejects git -C / status even though the subcommand is otherwise read-only", async () => {
     const manager = makeManager();
     await expect(

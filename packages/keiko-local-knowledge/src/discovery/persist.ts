@@ -1,0 +1,426 @@
+// SQLite persistence helpers for the discovery layer (Issue #194). Every helper here is a
+// prepared-statement wrapper around a single table; the transaction boundary lives in
+// extract.ts so a per-file failure rolls back exactly the rows from that file.
+//
+// All inserts use REPLACE semantics on the document row (PRIMARY KEY id), but the
+// dependent rows (pages, sections, parsed_units, parser_diagnostics) are deleted first via
+// the documents-cascade chain — see deleteDependentRows. That keeps a re-extract idempotent:
+// running extract twice on the same file leaves exactly one set of rows on disk.
+
+import type {
+  DocumentId,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+  PageRecord,
+  ParsedUnit,
+  ParserDiagnostic,
+  SectionRecord,
+} from "@oscharko-dev/keiko-contracts";
+import type { DatabaseSync } from "node:sqlite";
+
+const INSERT_DOCUMENT_SQL = [
+  "INSERT OR REPLACE INTO documents (",
+  "  id, capsule_id, source_id, document_path, size_bytes, media_type,",
+  "  content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name",
+  ") VALUES (",
+  "  :id, :capsule_id, :source_id, :document_path, :size_bytes, :media_type,",
+  "  :content_hash, :parser_id, :parser_version, :last_extracted_at, :status, :safe_display_name",
+  ")",
+].join(" ");
+
+const INSERT_DOCUMENT_TEXT_SQL = [
+  "INSERT OR REPLACE INTO document_texts (",
+  "  capsule_id, document_id, normalized_text",
+  ") VALUES (",
+  "  :capsule_id, :document_id, :normalized_text",
+  ")",
+].join(" ");
+
+const INSERT_PAGE_SQL = [
+  "INSERT INTO pages (",
+  "  capsule_id, document_id, page_number, page_label, character_start, character_end,",
+  "  bbox_x, bbox_y, bbox_w, bbox_h",
+  ") VALUES (",
+  "  :capsule_id, :document_id, :page_number, :page_label, :character_start, :character_end,",
+  "  :bbox_x, :bbox_y, :bbox_w, :bbox_h",
+  ")",
+].join(" ");
+
+const INSERT_SECTION_SQL = [
+  "INSERT INTO sections (",
+  "  capsule_id, document_id, section_path_json, character_start, character_end",
+  ") VALUES (",
+  "  :capsule_id, :document_id, :section_path_json, :character_start, :character_end",
+  ")",
+].join(" ");
+
+const INSERT_PARSED_UNIT_SQL = [
+  "INSERT INTO parsed_units (",
+  "  id, capsule_id, document_id, kind, page_number, page_label, section_path_json,",
+  "  json_pointer, table_name, row_index, heading_path_json, unsupported_reason,",
+  "  character_start, character_end",
+  ") VALUES (",
+  "  :id, :capsule_id, :document_id, :kind, :page_number, :page_label, :section_path_json,",
+  "  :json_pointer, :table_name, :row_index, :heading_path_json, :unsupported_reason,",
+  "  :character_start, :character_end",
+  ")",
+].join(" ");
+
+const INSERT_DIAGNOSTIC_SQL = [
+  "INSERT INTO parser_diagnostics (",
+  "  id, capsule_id, document_id, severity, code, message, page_number, created_at",
+  ") VALUES (",
+  "  :id, :capsule_id, :document_id, :severity, :code, :message, :page_number, :created_at",
+  ")",
+].join(" ");
+
+const DELETE_PAGES_SQL = "DELETE FROM pages WHERE capsule_id = :c AND document_id = :d";
+const DELETE_SECTIONS_SQL = "DELETE FROM sections WHERE capsule_id = :c AND document_id = :d";
+const DELETE_DOCUMENT_TEXT_SQL =
+  "DELETE FROM document_texts WHERE capsule_id = :c AND document_id = :d";
+const DELETE_PARSED_UNITS_SQL =
+  "DELETE FROM parsed_units WHERE capsule_id = :c AND document_id = :d";
+const DELETE_DIAGNOSTICS_SQL =
+  "DELETE FROM parser_diagnostics WHERE capsule_id = :c AND document_id = :d";
+const SELECT_DOCUMENT_TEXT_SQL =
+  "SELECT normalized_text FROM document_texts WHERE capsule_id = :c AND document_id = :d";
+const SELECT_DOCUMENTS_FOR_SOURCE_SQL = [
+  "SELECT id, document_path FROM documents",
+  "WHERE capsule_id = :c AND source_id = :s",
+  "ORDER BY document_path ASC",
+].join(" ");
+const DELETE_DOCUMENT_SQL = "DELETE FROM documents WHERE capsule_id = :c AND id = :d";
+const UPDATE_DOCUMENT_STATUS_SQL =
+  "UPDATE documents SET status = :status WHERE capsule_id = :c AND id = :d";
+
+type SqlValue = string | number | null | Uint8Array;
+type SqlParams = Record<string, SqlValue>;
+
+interface RunStatement {
+  readonly run: (params?: SqlParams) => unknown;
+}
+
+interface GetStatement {
+  readonly get: (params?: SqlParams) => unknown;
+}
+
+interface DiscoveryStatements {
+  readonly insertDocument: RunStatement;
+  readonly insertDocumentText: RunStatement;
+  readonly insertPage: RunStatement;
+  readonly insertSection: RunStatement;
+  readonly insertParsedUnit: RunStatement;
+  readonly insertDiagnostic: RunStatement;
+  readonly deletePages: RunStatement;
+  readonly deleteSections: RunStatement;
+  readonly deleteDocumentText: RunStatement;
+  readonly deleteParsedUnits: RunStatement;
+  readonly deleteDiagnostics: RunStatement;
+  readonly deleteDocument: RunStatement;
+  readonly selectDocumentText: GetStatement;
+  readonly selectDocumentsForSource: {
+    readonly all: (params?: SqlParams) => readonly unknown[];
+  };
+}
+
+const statementsByDb = new WeakMap<DatabaseSync, DiscoveryStatements>();
+
+function statements(db: DatabaseSync): DiscoveryStatements {
+  const cached = statementsByDb.get(db);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const prepared: DiscoveryStatements = {
+    insertDocument: db.prepare(INSERT_DOCUMENT_SQL) as RunStatement,
+    insertDocumentText: db.prepare(INSERT_DOCUMENT_TEXT_SQL) as RunStatement,
+    insertPage: db.prepare(INSERT_PAGE_SQL) as RunStatement,
+    insertSection: db.prepare(INSERT_SECTION_SQL) as RunStatement,
+    insertParsedUnit: db.prepare(INSERT_PARSED_UNIT_SQL) as RunStatement,
+    insertDiagnostic: db.prepare(INSERT_DIAGNOSTIC_SQL) as RunStatement,
+    deletePages: db.prepare(DELETE_PAGES_SQL) as RunStatement,
+    deleteSections: db.prepare(DELETE_SECTIONS_SQL) as RunStatement,
+    deleteDocumentText: db.prepare(DELETE_DOCUMENT_TEXT_SQL) as RunStatement,
+    deleteParsedUnits: db.prepare(DELETE_PARSED_UNITS_SQL) as RunStatement,
+    deleteDiagnostics: db.prepare(DELETE_DIAGNOSTICS_SQL) as RunStatement,
+    deleteDocument: db.prepare(DELETE_DOCUMENT_SQL) as RunStatement,
+    selectDocumentText: db.prepare(SELECT_DOCUMENT_TEXT_SQL) as GetStatement,
+    selectDocumentsForSource: db.prepare(SELECT_DOCUMENTS_FOR_SOURCE_SQL) as {
+      readonly all: (params?: SqlParams) => readonly unknown[];
+    },
+  };
+  statementsByDb.set(db, prepared);
+  return prepared;
+}
+
+export interface DocumentInsertRow {
+  readonly id: DocumentId;
+  readonly capsuleId: KnowledgeCapsuleId;
+  readonly sourceId: string;
+  readonly documentPath: string;
+  readonly sizeBytes: number;
+  readonly mediaType: string;
+  readonly contentHash: string;
+  readonly parserId: string;
+  readonly parserVersion: string;
+  readonly lastExtractedAt: number;
+  readonly status: string;
+  readonly safeDisplayName: string;
+}
+
+export function insertDocumentRow(db: DatabaseSync, row: DocumentInsertRow): void {
+  statements(db).insertDocument.run({
+    id: row.id,
+    capsule_id: row.capsuleId,
+    source_id: row.sourceId,
+    document_path: row.documentPath,
+    size_bytes: row.sizeBytes,
+    media_type: row.mediaType,
+    content_hash: row.contentHash,
+    parser_id: row.parserId,
+    parser_version: row.parserVersion,
+    last_extracted_at: row.lastExtractedAt,
+    status: row.status,
+    safe_display_name: row.safeDisplayName,
+  });
+}
+
+export function deleteDependentRows(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): void {
+  const params = { c: capsuleId, d: documentId };
+  statements(db).deleteDocumentText.run(params);
+  statements(db).deletePages.run(params);
+  statements(db).deleteSections.run(params);
+  statements(db).deleteParsedUnits.run(params);
+  statements(db).deleteDiagnostics.run(params);
+}
+
+export function insertDocumentTextRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+  normalizedText: string,
+): void {
+  statements(db).insertDocumentText.run({
+    capsule_id: capsuleId,
+    document_id: documentId,
+    normalized_text: normalizedText,
+  });
+}
+
+interface DocumentTextRow {
+  readonly normalized_text: string;
+}
+
+export function readDocumentTextRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): string | undefined {
+  const row = statements(db).selectDocumentText.get({
+    c: capsuleId,
+    d: documentId,
+  }) as DocumentTextRow | undefined;
+  return row?.normalized_text;
+}
+
+export interface PersistedSourceDocumentRow {
+  readonly id: DocumentId;
+  readonly document_path: string;
+}
+
+export function listPersistedDocumentsForSource(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  sourceId: KnowledgeSourceId,
+): readonly PersistedSourceDocumentRow[] {
+  const rows = statements(db).selectDocumentsForSource.all({
+    c: capsuleId,
+    s: sourceId,
+  });
+  return rows as readonly PersistedSourceDocumentRow[];
+}
+
+export function deleteDocumentRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): void {
+  statements(db).deleteDocument.run({ c: capsuleId, d: documentId });
+}
+
+export function updateDocumentStatusRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+  status: DocumentInsertRow["status"],
+): void {
+  db.prepare(UPDATE_DOCUMENT_STATUS_SQL).run({
+    status,
+    c: capsuleId,
+    d: documentId,
+  });
+}
+
+export function insertPageRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  page: PageRecord,
+): void {
+  statements(db).insertPage.run({
+    capsule_id: capsuleId,
+    document_id: page.documentId,
+    page_number: page.pageNumber,
+    page_label: page.pageLabel ?? null,
+    character_start: page.characterStart,
+    character_end: page.characterEnd,
+    bbox_x: page.boundingBox?.x ?? null,
+    bbox_y: page.boundingBox?.y ?? null,
+    bbox_w: page.boundingBox?.w ?? null,
+    bbox_h: page.boundingBox?.h ?? null,
+  });
+}
+
+export function insertSectionRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  section: SectionRecord,
+): void {
+  statements(db).insertSection.run({
+    capsule_id: capsuleId,
+    document_id: section.documentId,
+    section_path_json: JSON.stringify(section.sectionPath),
+    character_start: section.characterStart,
+    character_end: section.characterEnd,
+  });
+}
+
+// Mutable record shape — `Statement.run` requires `Record<string, SQLInputValue>`, which
+// rejects `readonly` field signatures.
+type ParsedUnitParams = Record<string, string | number | null>;
+
+function parsedUnitParams(
+  capsuleId: KnowledgeCapsuleId,
+  unitId: string,
+  unit: ParsedUnit,
+): ParsedUnitParams {
+  const base: ParsedUnitParams = {
+    id: unitId,
+    capsule_id: String(capsuleId),
+    document_id: String(unit.documentId),
+    kind: unit.kind,
+    page_number: null,
+    page_label: null,
+    section_path_json: null,
+    json_pointer: null,
+    table_name: null,
+    row_index: null,
+    heading_path_json: null,
+    unsupported_reason: null,
+    character_start: null,
+    character_end: null,
+  };
+  return populateUnitFields(base, unit);
+}
+
+function populateUnitFields(base: ParsedUnitParams, unit: ParsedUnit): ParsedUnitParams {
+  if (unit.kind === "page") {
+    return {
+      ...base,
+      page_number: unit.pageNumber,
+      page_label: unit.pageLabel ?? null,
+      character_start: unit.characterStart,
+      character_end: unit.characterEnd,
+    };
+  }
+  if (unit.kind === "section") {
+    return {
+      ...base,
+      section_path_json: JSON.stringify(unit.sectionPath),
+      character_start: unit.characterStart,
+      character_end: unit.characterEnd,
+    };
+  }
+  if (unit.kind === "json-path") {
+    return {
+      ...base,
+      json_pointer: unit.jsonPointer,
+      character_start: unit.characterStart,
+      character_end: unit.characterEnd,
+    };
+  }
+  if (unit.kind === "csv-row") {
+    return {
+      ...base,
+      table_name: unit.tableName,
+      row_index: unit.rowIndex,
+      character_start: unit.characterStart,
+      character_end: unit.characterEnd,
+    };
+  }
+  if (unit.kind === "html-block") {
+    return {
+      ...base,
+      heading_path_json: unit.headingPath !== undefined ? JSON.stringify(unit.headingPath) : null,
+      character_start: unit.characterStart,
+      character_end: unit.characterEnd,
+    };
+  }
+  return { ...base, unsupported_reason: unit.reason };
+}
+
+export function insertParsedUnitRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  unitId: string,
+  unit: ParsedUnit,
+): void {
+  statements(db).insertParsedUnit.run(parsedUnitParams(capsuleId, unitId, unit));
+}
+
+export function insertDiagnosticRow(
+  db: DatabaseSync,
+  params: {
+    readonly id: string;
+    readonly capsuleId: KnowledgeCapsuleId;
+    readonly diagnostic: ParserDiagnostic;
+    readonly createdAt: number;
+  },
+): void {
+  statements(db).insertDiagnostic.run({
+    id: params.id,
+    capsule_id: params.capsuleId,
+    document_id: params.diagnostic.documentId ?? null,
+    severity: params.diagnostic.severity,
+    code: params.diagnostic.code,
+    message: params.diagnostic.message,
+    page_number: params.diagnostic.pageNumber ?? null,
+    created_at: params.createdAt,
+  });
+}
+
+interface ExistingDocumentRow {
+  readonly content_hash: string;
+  readonly status: string;
+  readonly size_bytes: number;
+  readonly media_type: string;
+  readonly parser_id: string;
+  readonly parser_version: string;
+  readonly last_extracted_at: number;
+  readonly safe_display_name: string;
+  readonly document_path: string;
+  readonly source_id: string;
+}
+
+export function readExistingDocumentRow(
+  db: DatabaseSync,
+  capsuleId: KnowledgeCapsuleId,
+  documentId: DocumentId,
+): ExistingDocumentRow | undefined {
+  const row = db
+    .prepare("SELECT * FROM documents WHERE capsule_id = :c AND id = :d")
+    .get({ c: capsuleId, d: documentId });
+  return row === undefined ? undefined : (row as unknown as ExistingDocumentRow);
+}

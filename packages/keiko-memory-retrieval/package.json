@@ -1,0 +1,32 @@
+{
+  "name": "@oscharko-dev/keiko-memory-retrieval",
+  "version": "0.2.0-beta.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "MemoriaViva — Internal memory-retrieval package (Epic #204 child #210): pure-function scoped retrieval + hybrid ranking + token-budgeted context assembly over Governed Enterprise Memory Vault records. Caller supplies a MemoryQueryPort (no keiko-memory-vault import) so the vault remains injectable and this layer stays pure (no IO, no clock, no randomness; caller supplies nowMs). Ranking combines deterministic lexical relevance, recency decay, provenance confidence, pinned boost, correction boost, and graph proximity into a weighted sum. The context block carries inclusion/omission reasons per memory so downstream callers (Conversation Center #212, workflow agents #213) and audit (#214) can render fully explainable surfaces. Suppression check is duplicated inline (synced with @oscharko-dev/keiko-memory-governance/suppression.ts) to keep the dep graph on contracts+security only. ADR-0019 direction rule 3j enforces this scope. Not published independently.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@oscharko-dev/keiko-contracts": "*",
+    "@oscharko-dev/keiko-security": "*"
+  }
+}

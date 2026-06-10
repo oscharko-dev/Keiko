@@ -1,0 +1,39 @@
+{
+  "name": "@oscharko-dev/keiko-evaluations",
+  "version": "0.2.0-beta.0",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "description": "Internal evaluations package: deterministic evaluation harness — scripted ModelPort fixtures, six scored dimensions, surface-parity check, scorecard renderer, and the offline-vs-live model provider selector (ADR-0012, ADR-0019). Not published independently.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "prebuild": "rm -rf dist",
+    "build": "tsc -b tsconfig.json",
+    "typecheck": "tsc -b tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@oscharko-dev/keiko-contracts": "*",
+    "@oscharko-dev/keiko-evidence": "*",
+    "@oscharko-dev/keiko-harness": "*",
+    "@oscharko-dev/keiko-model-gateway": "*",
+    "@oscharko-dev/keiko-security": "*",
+    "@oscharko-dev/keiko-tools": "*",
+    "@oscharko-dev/keiko-workflows": "*",
+    "@oscharko-dev/keiko-workspace": "*"
+  }
+}

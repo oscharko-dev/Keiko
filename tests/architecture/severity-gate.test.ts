@@ -45,8 +45,10 @@ const REQUIRED_TRUST_RULES = [
   "adr-0019-trust-1-provider-sdk-isolation",
   "adr-0019-trust-2-ui-no-provider-config",
   "adr-0019-trust-3-ui-no-gateway-internals",
+  "adr-0019-trust-4-no-direct-fs-outside-workspace",
   "adr-0019-trust-5-patch-routes-through-tools",
   "adr-0019-trust-6-evidence-allowed-callers",
+  "adr-0019-trust-7-cli-server-no-port-bypass",
   "adr-0019-trust-8-no-do-not-follow-in-prod",
 ];
 

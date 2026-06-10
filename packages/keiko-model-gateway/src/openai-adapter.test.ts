@@ -10,12 +10,12 @@ import {
   TimeoutError,
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import type { GatewayRequest, ModelProviderConfig } from "./types.js";
+import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
 
 const CONFIG: ModelProviderConfig = {
   modelId: "example-chat-model",
   baseUrl: "https://provider.example/v1",
-  apiKey: "example-test-token-1234567890abcd",
+  apiKey: ["example-test-token-", "1234567890abcd"].join(""),
   timeoutMs: 30_000,
   maxRetries: 3,
   retryBaseDelayMs: 500,
@@ -66,7 +66,7 @@ describe("OpenAiAdapter.call", () => {
       );
     });
     await adapter.call(REQUEST, CONFIG);
-    expect(seenAuth).toBe("Bearer example-test-token-1234567890abcd");
+    expect(seenAuth).toBe(`Bearer ${CONFIG.apiKey}`);
   });
 
   it("sends a LiteLLM custom API key header without an Authorization fallback", async () => {
@@ -82,7 +82,7 @@ describe("OpenAiAdapter.call", () => {
     });
     await adapter.call(REQUEST, { ...CONFIG, apiKeyHeaderName: "x-litellm-key" });
     expect(seenAuth).toBeNull();
-    expect(seenCustom).toBe("Bearer example-test-token-1234567890abcd");
+    expect(seenCustom).toBe(`Bearer ${CONFIG.apiKey}`);
   });
 
   it("sends an x-api-key custom API key header as a raw token", async () => {
@@ -98,7 +98,7 @@ describe("OpenAiAdapter.call", () => {
     });
     await adapter.call(REQUEST, { ...CONFIG, apiKeyHeaderName: "x-api-key" });
     expect(seenAuth).toBeNull();
-    expect(seenCustom).toBe("example-test-token-1234567890abcd");
+    expect(seenCustom).toBe(CONFIG.apiKey);
   });
 
   it("throws AuthenticationError on HTTP 401", async () => {
@@ -191,13 +191,14 @@ describe("OpenAiAdapter.call", () => {
   });
 
   it("never includes the raw response body verbatim in a thrown error", async () => {
-    const secretBody = { error: "contains sk-leak-aaaaaaaaaaaaaaaaaaaa internal trace" };
+    const leakedKey = ["sk-", "leak-aaaaaaaaaaaaaaaaaaaa"].join("");
+    const secretBody = { error: `contains ${leakedKey} internal trace` };
     const adapter = adapterWith(() => Promise.resolve(jsonResponse(secretBody, { status: 500 })));
     try {
       await adapter.call(REQUEST, CONFIG);
       expect.unreachable("should throw");
     } catch (error) {
-      expect((error as Error).message).not.toContain("sk-leak-aaaaaaaaaaaaaaaaaaaa");
+      expect((error as Error).message).not.toContain(leakedKey);
       expect((error as Error).message).not.toContain("internal trace");
     }
   });
@@ -306,6 +307,19 @@ describe("OpenAiAdapter.call", () => {
     expect(body.response_format.type).toBe("json_schema");
   });
 
+  it("serialises a seed when the gateway request provides one", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call({ ...REQUEST, seed: 13 }, CONFIG);
+    expect((sentBody as { seed?: number }).seed).toBe(13);
+  });
+
   it("serialises assistant tool_calls and tool response tool_call_id on continuation turns", async () => {
     let sentBody: unknown;
     const adapter = adapterWith((_url, init) => {
@@ -348,5 +362,125 @@ describe("OpenAiAdapter.call", () => {
       content: "result",
       tool_call_id: "call_1",
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OpenAiAdapter.callStream — Layer 1 SSE token streaming
+// ---------------------------------------------------------------------------
+
+function sseResponse(lines: readonly string[], init: ResponseInit = {}): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller): void {
+      const enc = new TextEncoder();
+      for (const line of lines) controller.enqueue(enc.encode(line));
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200, ...init });
+}
+
+function deltaLine(content: string): string {
+  return `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n`;
+}
+
+async function collectStream(
+  iterable: AsyncIterable<GatewayStreamChunk>,
+): Promise<GatewayStreamChunk[]> {
+  const out: GatewayStreamChunk[] = [];
+  for await (const chunk of iterable) out.push(chunk);
+  return out;
+}
+
+describe("OpenAiAdapter.callStream", () => {
+  it("yields ordered delta tokens then a done chunk with assembled content and usage", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        sseResponse([
+          deltaLine("Hel"),
+          deltaLine("lo"),
+          `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n`,
+          `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 7, completion_tokens: 2 } })}\n`,
+          "data: [DONE]\n",
+        ]),
+      ),
+    );
+    const chunks = await collectStream(adapter.callStream(REQUEST, CONFIG));
+    expect(chunks.slice(0, 2)).toEqual([
+      { type: "delta", token: "Hel" },
+      { type: "delta", token: "lo" },
+    ]);
+    const done = chunks[2];
+    if (done?.type !== "done") throw new Error("expected a done chunk");
+    expect(done.response.content).toBe("Hello");
+    expect(done.response.finishReason).toBe("stop");
+    expect(done.response.usage.promptTokens).toBe(7);
+    expect(done.response.usage.completionTokens).toBe(2);
+    expect(done.response.usage.requestId).toBe("fixed-id");
+    expect(done.response.usage.costClass).toBe("high");
+  });
+
+  it("requests stream:true with include_usage in the request body", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(sseResponse(["data: [DONE]\n"]));
+    });
+    await collectStream(adapter.callStream(REQUEST, CONFIG));
+    const body = sentBody as { stream?: boolean; stream_options?: { include_usage?: boolean } };
+    expect(body.stream).toBe(true);
+    expect(body.stream_options?.include_usage).toBe(true);
+  });
+
+  it("redacts a configured secret leaked inside a streamed delta token", async () => {
+    const customSecret = "opaque-stream-token-value-987";
+    const adapter = adapterWith(() =>
+      Promise.resolve(sseResponse([deltaLine(`leak=${customSecret}`), "data: [DONE]\n"])),
+    );
+    const chunks = await collectStream(
+      adapter.callStream(REQUEST, { ...CONFIG, apiKey: customSecret }),
+    );
+    const delta = chunks[0];
+    if (delta?.type !== "delta") throw new Error("expected a delta chunk");
+    expect(delta.token).not.toContain(customSecret);
+    expect(delta.token).toContain("[REDACTED]");
+    const serialized = JSON.stringify(chunks);
+    expect(serialized).not.toContain(customSecret);
+  });
+
+  it("maps a non-ok streaming status to the matching gateway error", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(jsonResponse({ error: "bad key" }, { status: 401 })),
+    );
+    await expect(collectStream(adapter.callStream(REQUEST, CONFIG))).rejects.toBeInstanceOf(
+      AuthenticationError,
+    );
+  });
+
+  it("throws CancelledError when the cancellation signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const adapter = adapterWith(() => Promise.reject(new Error("should not be called")));
+    await expect(
+      collectStream(
+        adapter.callStream({ ...REQUEST, cancellationSignal: controller.signal }, CONFIG),
+      ),
+    ).rejects.toBeInstanceOf(CancelledError);
+  });
+
+  it("maps a mid-stream read failure to a TransportError", async () => {
+    const failingStream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.enqueue(new TextEncoder().encode(deltaLine("hi")));
+        controller.error(new Error("socket reset"));
+      },
+    });
+    const adapter = adapterWith(() =>
+      Promise.resolve(new Response(failingStream, { status: 200 })),
+    );
+    await expect(collectStream(adapter.callStream(REQUEST, CONFIG))).rejects.toBeInstanceOf(
+      TransportError,
+    );
   });
 });

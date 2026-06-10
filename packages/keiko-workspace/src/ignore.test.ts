@@ -35,10 +35,46 @@ describe("isDenied (always-on security)", () => {
     ".turbo/cache",
     ".git",
     ".git/config",
-    "app.log",
-    "logs/error.log",
     ".DS_Store",
     "sub/.DS_Store",
+    // Epic #532 — credential locations must stay denied when any folder is connectable.
+    ".ssh",
+    ".ssh/config",
+    "home/user/.ssh/known_hosts",
+    ".aws",
+    ".aws/credentials",
+    ".gnupg/secring.gpg",
+    ".kube/config",
+    ".docker/config.json",
+    ".netrc",
+    ".git-credentials",
+    "Library/Keychains/login.keychain-db",
+    // Epic #532 security audit H1/M1 — additional credential stores.
+    ".config",
+    ".config/gcloud/application_default_credentials.json",
+    "home/alice/.config/gcloud/credentials.db",
+    ".terraform/terraform.tfstate",
+    ".terraform.d/credentials.tfrc.json",
+    ".vault-token",
+    ".cargo/credentials.toml",
+    ".pypirc",
+    ".m2/settings.xml",
+    ".password-store/work/aws.gpg",
+    "id_ecdsa_sk",
+    "id_ed25519_sk",
+    // Epic #532 security audit H1 — pure-credential FILES reachable under full-machine browse.
+    "terraform.tfstate",
+    "infra/terraform.tfstate.backup",
+    "home/alice/Documents/proj/service-account.json",
+    "service-account-prod.json",
+    "kubeconfig",
+    ".rclone.conf",
+    "site/wp-config.php",
+    ".htpasswd",
+    "home/alice/.bash_history",
+    ".zsh_history",
+    ".psql_history",
+    ".node_repl_history",
   ]) {
     it(`denies ${denied}`, () => {
       expect(isDenied(denied)).toBe(true);
@@ -53,6 +89,16 @@ describe("isDenied (always-on security)", () => {
     "src/env.ts",
     "documentation.md",
     "envoy.config.ts",
+    // Log files are intentionally searchable (connected-context format coverage); not denied.
+    "app.log",
+    "logs/error.log",
+    // The H1 credential-file denies must NOT over-match adjacent legitimate files: terraform CONFIG
+    // (.tf) is searchable (only .tfstate is denied); a regular accounts/config file is searchable.
+    "main.tf",
+    "modules/network.tf",
+    "accounts.json",
+    "config.php",
+    "history.txt",
   ]) {
     it(`does not deny ${allowed}`, () => {
       expect(isDenied(allowed)).toBe(false);

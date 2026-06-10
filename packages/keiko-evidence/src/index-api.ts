@@ -126,6 +126,7 @@ function validateManifestShape(parsed: Record<string, unknown>, runId: string): 
   requireOptionalRecord(parsed, "verification", runId);
   requireOptionalRecord(parsed, "failure", runId);
   requireOptionalRecord(parsed, "browser", runId);
+  requireOptionalRecord(parsed, "connectedContext", runId);
 }
 
 function parseManifest(json: string, runId: string): EvidenceManifest {
@@ -163,6 +164,10 @@ export function listEvidence(store: EvidenceStore): readonly EvidenceListEntry[]
   for (const runId of store.list()) {
     const json = store.get(runId);
     if (json === undefined) {
+      continue;
+    }
+    const parsed = parseJson(json, runId);
+    if (!isRecord(parsed) || typeof parsed.evidenceSchemaVersion !== "string") {
       continue;
     }
     entries.push(toListEntry(parseManifest(json, runId)));

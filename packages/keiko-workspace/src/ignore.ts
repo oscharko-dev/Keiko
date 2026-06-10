@@ -19,6 +19,55 @@ export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
   "*.p12",
   "*.pfx",
   ".npmrc",
+  // credential directories & stores — Epic #532 makes any folder on the machine connectable, so
+  // the deny gate must keep well-known secret locations out of every tree listing, excerpt, and
+  // grounded answer even when the user points a Files window at their home directory.
+  ".ssh",
+  ".aws",
+  ".gnupg",
+  ".kube",
+  ".azure",
+  ".docker",
+  ".netrc",
+  ".pgpass",
+  ".git-credentials",
+  "Keychains",
+  "*.keychain",
+  "*.keychain-db",
+  "*.keystore",
+  "*.jks",
+  // Epic #532 security audit (H1/M1): additional well-known credential stores reachable when a
+  // user connects their home directory. `.config` is the XDG base whose subdirectories (gcloud
+  // ADC, many per-app tokens) consistently hold secrets; the rest are exact credential locations.
+  ".config",
+  ".terraform",
+  ".terraform.d",
+  ".vault-token",
+  ".cargo",
+  ".pypirc",
+  ".m2",
+  ".password-store",
+  "id_ecdsa_sk",
+  "id_ed25519_sk",
+  // Epic #532 security audit (H1): full-machine browse makes pure-credential FILES reachable in
+  // otherwise-allowed locations (not just credential dirs). These filenames hold secrets or secret
+  // state by convention, so they are denied outright — never listed, previewed, or grounded. Secrets
+  // that are merely content-shaped elsewhere are caught by the redaction layer instead.
+  "*.tfstate",
+  "*.tfstate.backup",
+  "kubeconfig",
+  ".rclone.conf",
+  "wp-config.php",
+  ".htpasswd",
+  ".bash_history",
+  ".zsh_history",
+  ".sh_history",
+  ".mysql_history",
+  ".psql_history",
+  ".python_history",
+  ".node_repl_history",
+  ".irb_history",
+  "service-account*.json",
   // deps
   "node_modules",
   // build
@@ -32,11 +81,12 @@ export const DEFAULT_DENY_PATTERNS: readonly string[] = Object.freeze([
   ".turbo",
   // vcs
   ".git",
-  // logs
-  "*.log",
   // os
   ".DS_Store",
 ]);
+// Note: `*.log` is intentionally NOT denied — connected-context search must cover every text
+// format, including log files. Secret-shaped strings inside any matched content are still scrubbed
+// by the redaction layer before they reach an answer or the evidence ledger.
 
 // Iterates from the end rather than using /\/+$/ to avoid quadratic ReDoS on
 // inputs with many consecutive trailing slashes (CodeQL js/polynomial-redos).

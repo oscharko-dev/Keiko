@@ -15,7 +15,7 @@ import {
   VerificationError,
   type VerificationKind,
   type VerificationReport,
-} from "../../../src/verification/index.js";
+} from "@oscharko-dev/keiko-verification";
 import type { CliIo } from "./runner.js";
 
 const VALID_KINDS: ReadonlySet<string> = new Set<VerificationKind>([
@@ -101,6 +101,12 @@ function renderText(report: VerificationReport, io: CliIo): void {
 }
 
 export async function runVerifyCli(args: readonly string[], io: CliIo): Promise<number> {
+  // Issue #640: handle --help / -h before workflow-arg validation so help discovery exits 0
+  // with usage on stdout, not 2 with a validation error on stderr.
+  if (args.includes("--help") || args.includes("-h")) {
+    io.out(USAGE);
+    return 0;
+  }
   const parsed = parseArgs(args);
   if (parsed === null) {
     io.err(USAGE);

@@ -108,6 +108,21 @@ describe("runUiCli", () => {
     expect(err.join("")).toContain("Usage:");
   });
 
+  it("fails fast when --ui-db is relative", async () => {
+    const { io, err } = captureIo();
+    const code = await runUiCli(["--ui-db", ".keiko/ui.db"], io, {}, { staticRoot });
+    expect(code).toBe(2);
+    expect(err.join("")).toContain("UI database path must be absolute");
+  });
+
+  it("fails fast when --ui-db is inside the current workspace", async () => {
+    const { io, err } = captureIo();
+    const nested = join(process.cwd(), ".keiko-test-ui", "ui.db");
+    const code = await runUiCli(["--ui-db", nested], io, {}, { staticRoot });
+    expect(code).toBe(2);
+    expect(err.join("")).toContain("UI database path must not be inside the current workspace");
+  });
+
   it("returns 1 with a clear error when the static export is missing", async () => {
     const { io, err } = captureIo();
     const deps: UiCliDeps = { staticRoot: join(staticRoot, "does-not-exist") };

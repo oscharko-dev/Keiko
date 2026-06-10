@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_PATCH_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/workflow-handoff";
 import { generateUnitTests } from "./workflow.js";
 import type { UnitTestWorkflowDeps, UnitTestWorkflowInput } from "./types.js";
 import { SKIP_UNRESOLVED } from "./verify-stage.js";
 import { memFs } from "../../../../packages/keiko-workspace/src/_memfs.js";
-import { recordingSpawn, scriptChildClose } from "../../../../tests/verification/_support.js";
-import { recordingSink, recordingWriter, response, scriptedModel } from "./_support.js";
+import {
+  recordingSink,
+  recordingSpawn,
+  recordingWriter,
+  response,
+  scriptChildClose,
+  scriptedModel,
+} from "./_support.js";
 
 const ROOT = "/repo";
 
@@ -146,6 +153,33 @@ describe("generateUnitTests — production-code guard (AC #9, D6)", () => {
     expect(validated.some((e) => e.rejectionCode === "out-of-scope")).toBe(true);
   });
 
+  it("rejects a patch that falls outside the governed editablePaths", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input(),
+      deps(model.port, {
+        workflowHandoff: {
+          schemaVersion: "1",
+          contextPackStableId: "pl-1234567890abcdef",
+          workflowKind: "unit-test-generation",
+          patchScope: {
+            schemaVersion: "1",
+            editablePaths: ["tests/other.test.ts"],
+            readOnlyPaths: ["src/add.ts"],
+            evidenceAtomIds: ["atom-1"],
+            limits: DEFAULT_PATCH_SCOPE_LIMITS,
+            expectedChecks: ["tests"],
+            unknowns: [],
+          },
+          requestedAtMs: 1,
+          userApprovalToken: "a".repeat(64),
+        },
+      }),
+    );
+    expect(report.status).toBe("rejected");
+    expect(report.nextActions[0]).toContain("out-of-scope");
+  });
+
   it("recovers when a retry produces an in-scope patch", async () => {
     const model = scriptedModel([
       response({ content: SOURCE_DIFF }),
@@ -236,5 +270,64 @@ describe("generateUnitTests — apply mode verification", () => {
     expect(report.status).toBe("completed");
     expect(report.verificationSummary).toBeUndefined();
     expect(report.verificationSkipReason).toBe(SKIP_UNRESOLVED);
+  });
+});
+
+describe("generateUnitTests — target workspace containment (issue #641)", () => {
+  it("fails closed on an escaped target file path with modelCallCount=0 and no diff", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input({ target: { kind: "file", filePath: "../package.json" } }),
+      deps(model.port),
+    );
+    expect(report.status).toBe("failed");
+    expect(report.modelCallCount).toBe(0);
+    expect(report.proposedDiff).toBeUndefined();
+    expect(report.addedTestFiles).toHaveLength(0);
+    expect(model.calls()).toBe(0);
+    expect(report.failureReason).toContain("path escapes the workspace boundary");
+  });
+
+  it("fails closed on an escaped target module dir before any model call", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input({ target: { kind: "module", moduleDir: "../escape" } }),
+      deps(model.port),
+    );
+    expect(report.status).toBe("failed");
+    expect(report.modelCallCount).toBe(0);
+    expect(model.calls()).toBe(0);
+  });
+
+  it("fails closed on an escaped changedFiles entry before any model call", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input({
+        target: { kind: "changedFiles", filePaths: ["src/add.ts", "../package.json"] },
+      }),
+      deps(model.port),
+    );
+    expect(report.status).toBe("failed");
+    expect(report.modelCallCount).toBe(0);
+    expect(model.calls()).toBe(0);
+  });
+
+  it("fails closed when the normalized target resolves to a denied path", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(
+      input({ target: { kind: "file", filePath: "node_modules/x/index.js" } }),
+      deps(model.port),
+    );
+    expect(report.status).toBe("failed");
+    expect(report.modelCallCount).toBe(0);
+    expect(model.calls()).toBe(0);
+    expect(report.failureReason).toContain("denied");
+  });
+
+  it("accepts a valid in-workspace target path (no regression on the happy path)", async () => {
+    const model = scriptedModel([response({ content: FENCED_VALID })]);
+    const report = await generateUnitTests(input(), deps(model.port));
+    expect(report.status).toBe("dry-run");
+    expect(report.modelCallCount).toBe(1);
   });
 });

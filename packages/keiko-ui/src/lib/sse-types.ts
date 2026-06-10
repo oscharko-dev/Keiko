@@ -1,4 +1,4 @@
-// UI-side SSE stream aggregation (issue #167). The BFF emits events from three orchestration
+// UI-side SSE stream aggregation. The BFF emits events from three orchestration
 // layers (harness, unit-test workflow, bug-investigation workflow) plus a synthetic `ready`
 // sentinel. EventSource's `event:` framing requires per-name listeners, so the canonical
 // list of event names lives next to its sole consumer (useSSE.ts). No contracts package

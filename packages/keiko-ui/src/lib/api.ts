@@ -6,8 +6,12 @@
 
 import type {
   BffError,
+  ChatConnectedScope,
+  ChatLocalKnowledgeScope,
   ChatResponse,
   ChatsResponse,
+  ConversationDocumentContextWire,
+  ConversationMemoryRequestWire,
   ChatStatus,
   ChatMessageRole,
   ChatWorkflowStatus,
@@ -15,9 +19,14 @@ import type {
   DesktopChatSendResponse,
   EvidenceListEntry,
   EvidenceManifest,
+  GroundedAnswer,
+  GroundedAskRequest,
+  GroundedWorkflowHandoffRequest,
+  GroundedWorkflowHandoffResponse,
   FilesDirectoryListing,
   FilesPreviewResponse,
   FilesTreeResponse,
+  GroundingLimits,
   MessageResponse,
   MessagesResponse,
   ModelCapability,
@@ -30,6 +39,7 @@ import type {
   WorkspaceSummary,
   WorkflowsResponse,
 } from "./types";
+import { DEFAULT_GROUNDING_LIMITS } from "./types";
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -97,8 +107,18 @@ export async function fetchHealth(): Promise<{ status: "ok"; version: string }> 
 export async function fetchConfig(): Promise<{
   config: SafeGatewayConfig | null;
   configPresent: boolean;
+  effectiveGroundingLimits: GroundingLimits;
 }> {
-  return fetchJson("/api/config");
+  const raw = await fetchJson<{
+    config: SafeGatewayConfig | null;
+    configPresent: boolean;
+    effectiveGroundingLimits?: GroundingLimits;
+  }>("/api/config");
+  return {
+    config: raw.config,
+    configPresent: raw.configPresent,
+    effectiveGroundingLimits: raw.effectiveGroundingLimits ?? DEFAULT_GROUNDING_LIMITS,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -195,6 +215,15 @@ export async function startChatRun(body: StartChatRunInput): Promise<{
   messages: MessagesResponse["messages"];
 }> {
   return fetchJson("/api/chats/runs", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function startGroundedWorkflowHandoff(
+  body: GroundedWorkflowHandoffRequest,
+): Promise<GroundedWorkflowHandoffResponse> {
+  return fetchJson("/api/chats/messages/grounded/handoff", {
     method: "POST",
     body: JSON.stringify(body),
   });
@@ -357,12 +386,51 @@ export interface UpdateChatInput {
   selectedModel?: string;
   branchLabel?: string;
   status?: ChatStatus;
+  connectedScope?: ChatConnectedScope | null;
+  localKnowledgeScope?: ChatLocalKnowledgeScope | null;
 }
 
 export async function updateChat(id: string, patch: UpdateChatInput): Promise<ChatResponse> {
   return fetchJson(`/api/chats?id=${encodeURIComponent(id)}`, {
     method: "PATCH",
     body: JSON.stringify(patch),
+  });
+}
+
+// Epic #532 — M3: bind a list of sources (1+N) to a chat. `null` clears ALL
+// connected scopes. Kept separate from the single-source helper so callers
+// that still use singular binding are not affected. Always patches the plural
+// `connectedScopes` field so the BFF stores and returns the canonical list.
+export async function updateChatConnectedScopes(
+  chatId: string,
+  scopes: readonly ChatConnectedScope[] | null,
+): Promise<ChatResponse> {
+  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ connectedScopes: scopes }),
+  });
+}
+
+export async function updateChatLocalKnowledgeScope(
+  chatId: string,
+  scope: ChatLocalKnowledgeScope | null,
+): Promise<ChatResponse> {
+  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ localKnowledgeScope: scope }),
+  });
+}
+
+// Epic #189 — Slice 3 M1: bind a plural list of connector sources to a chat. `null` clears ALL
+// localKnowledgeScopes. Mirrors `updateChatConnectedScopes` for the local-knowledge side.
+// Always patches the plural `localKnowledgeScopes` field so the BFF stores and returns the list.
+export async function updateChatLocalKnowledgeScopes(
+  chatId: string,
+  scopes: readonly ChatLocalKnowledgeScope[] | null,
+): Promise<ChatResponse> {
+  return fetchJson(`/api/chats?id=${encodeURIComponent(chatId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ localKnowledgeScopes: scopes }),
   });
 }
 
@@ -470,15 +538,229 @@ export interface SendDesktopChatInput {
   projectPath: string;
   content: string;
   modelId?: string;
+  memory?: ConversationMemoryRequestWire;
+  // Issue #148 — client-extracted, byte-bounded text from attached documents. The server
+  // re-validates the caps before any of this reaches a model prompt.
+  documentContext?: readonly ConversationDocumentContextWire[];
 }
 
+// Issue #152 — accepts an optional AbortSignal so the Conversation Center can
+// cancel an in-flight ungrounded send. RequestInit.signal is `AbortSignal |
+// null` under exactOptionalPropertyTypes; convert at the boundary so callers
+// pass `AbortSignal | undefined` like every other API helper here.
 export async function sendDesktopChat(
   input: SendDesktopChatInput,
+  signal?: AbortSignal,
 ): Promise<DesktopChatSendResponse> {
   return fetchJson("/api/desktop/chat", {
     method: "POST",
     body: JSON.stringify(input),
+    signal: signal ?? null,
   });
+}
+
+// ---------------------------------------------------------------------------
+// Desktop chat SSE streaming — Issue #152 Layer 3
+// ---------------------------------------------------------------------------
+
+// Thrown pre-stream when the BFF responds with a non-SSE content-type (e.g.
+// STREAMING_UNSUPPORTED). The caller falls back to sendDesktopChat.
+export class StreamingUnavailableError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "StreamingUnavailableError";
+  }
+}
+
+// Typed SSE event payloads — no `any`.
+interface SseTokenPayload {
+  readonly text: string;
+}
+interface SseDonePayload {
+  readonly chat: import("./types").Chat;
+  readonly messages: readonly import("./types").ChatMessage[];
+  readonly usage?: import("@oscharko-dev/keiko-contracts/bff-wire").DesktopChatSendUsage;
+  readonly memory?: import("./types").ConversationMemoryResultWire;
+}
+interface SseErrorPayload {
+  readonly code: string;
+  readonly message: string;
+}
+
+// Narrow an unknown SSE data value to a specific payload shape.
+function asSseTokenPayload(value: unknown): SseTokenPayload | undefined {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "text" in value &&
+    typeof (value as Record<string, unknown>).text === "string"
+  ) {
+    return value as SseTokenPayload;
+  }
+  return undefined;
+}
+
+function asSseErrorPayload(value: unknown): SseErrorPayload | undefined {
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "code" in value &&
+    "message" in value &&
+    typeof (value as Record<string, unknown>).code === "string" &&
+    typeof (value as Record<string, unknown>).message === "string"
+  ) {
+    return value as SseErrorPayload;
+  }
+  return undefined;
+}
+
+function asSseDonePayload(value: unknown): SseDonePayload | undefined {
+  if (typeof value === "object" && value !== null && "chat" in value && "messages" in value) {
+    return value as SseDonePayload;
+  }
+  return undefined;
+}
+
+export interface StreamHandlers {
+  readonly onToken: (text: string) => void;
+  readonly onDone: (payload: SseDonePayload) => void;
+  readonly onError: (payload: SseErrorPayload) => void;
+  readonly onCancelled: () => void;
+}
+
+// Re-export so callers (useChatSession.ts) can type the done payload without
+// reaching into the private SSE types above.
+export type { SseDonePayload };
+
+// Dispatches a parsed SSE (event, data) pair to the appropriate handler.
+function dispatchSseEvent(
+  eventName: string | undefined,
+  parsed: unknown,
+  handlers: StreamHandlers,
+): void {
+  switch (eventName) {
+    case "token": {
+      const token = asSseTokenPayload(parsed);
+      if (token !== undefined) handlers.onToken(token.text);
+      break;
+    }
+    case "done": {
+      const done = asSseDonePayload(parsed);
+      if (done !== undefined) handlers.onDone(done);
+      break;
+    }
+    case "error": {
+      const err = asSseErrorPayload(parsed);
+      if (err !== undefined) handlers.onError(err);
+      break;
+    }
+    case "cancelled": {
+      handlers.onCancelled();
+      break;
+    }
+  }
+}
+
+// Processes one chunk of lines from the SSE stream. Returns the updated
+// `pendingEvent` name (carries over across chunk boundaries).
+function processSseLines(
+  lines: readonly string[],
+  pendingEvent: string | undefined,
+  handlers: StreamHandlers,
+): string | undefined {
+  let current = pendingEvent;
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    if (line.startsWith("event:")) {
+      current = line.slice("event:".length).trim();
+    } else if (line.startsWith("data:")) {
+      const dataText = line.slice("data:".length).trim();
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(dataText) as unknown;
+      } catch {
+        continue;
+      }
+      dispatchSseEvent(current, parsed, handlers);
+      current = undefined;
+    } else if (line === "") {
+      current = undefined;
+    }
+  }
+  return current;
+}
+
+// Reads `response.body` as a text/event-stream, buffering partial lines across
+// reads. Dispatches typed events to `handlers`. Respects the passed `signal` —
+// when aborted it stops reading without dispatching further events.
+async function consumeSseStream(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+  handlers: StreamHandlers,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let lineBuffer = "";
+  let pendingEvent: string | undefined;
+
+  try {
+    while (!signal.aborted) {
+      const read = await reader.read();
+      if (read.done) break;
+      lineBuffer += decoder.decode(read.value, { stream: true });
+      const lines = lineBuffer.split("\n");
+      lineBuffer = lines.pop() ?? "";
+      pendingEvent = processSseLines(lines, pendingEvent, handlers);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// Issue #152 Layer 3 — POST to /api/desktop/chat/stream with the same
+// headers/body as sendDesktopChat. If the response is NOT text/event-stream
+// (BFF returned a JSON pre-stream error), throws StreamingUnavailableError
+// so the caller can fall back. Otherwise reads the stream and dispatches to
+// handlers. Respects `signal` (abort stops reading immediately).
+export async function sendDesktopChatStream(
+  input: SendDesktopChatInput,
+  signal: AbortSignal,
+  handlers: StreamHandlers,
+): Promise<void> {
+  const res = await fetch("/api/desktop/chat/stream", {
+    method: "POST",
+    headers: {
+      Accept: "text/event-stream",
+      "Content-Type": "application/json",
+      "X-Keiko-CSRF": "1",
+    },
+    body: JSON.stringify(input),
+    signal,
+  });
+
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!contentType.includes("text/event-stream")) {
+    // Pre-stream error — parse the JSON envelope and throw typed.
+    let code = "STREAMING_UNSUPPORTED";
+    let message = `HTTP ${res.status.toString()}`;
+    try {
+      const envelope = (await res.json()) as { error?: { code?: string; message?: string } };
+      code = envelope.error?.code ?? code;
+      message = envelope.error?.message ?? message;
+    } catch {
+      // parse failure — keep generic values, never log body
+    }
+    throw new StreamingUnavailableError(code, message);
+  }
+
+  if (res.body === null) {
+    throw new StreamingUnavailableError("STREAMING_UNSUPPORTED", "Response body was null.");
+  }
+
+  await consumeSseStream(res.body, signal, handlers);
 }
 
 // ---------------------------------------------------------------------------
@@ -511,4 +793,25 @@ export async function fetchFilesPreview(root: string, path: string): Promise<Fil
   params.set("root", root);
   params.set("path", path);
   return fetchJson(`/api/files/preview?${params.toString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// Issue #185 — Grounded repository Q&A
+// ---------------------------------------------------------------------------
+// POSTs to the BFF orchestrator which composes the #179-#183 connected-context layers,
+// persists the chat round-trip as a normal user/assistant message pair, and returns the
+// redacted citation projection. The CSRF header is supplied by `fetchJson` for all non-GET
+// methods; the caller never sets it directly.
+
+export async function askGrounded(
+  req: GroundedAskRequest,
+  signal?: AbortSignal,
+): Promise<GroundedAnswer> {
+  // RequestInit.signal is `AbortSignal | null`. Under exactOptionalPropertyTypes we cannot
+  // pass `undefined`, so convert here.
+  return fetchJson("/api/chats/messages/grounded", {
+    method: "POST",
+    body: JSON.stringify(req),
+    signal: signal ?? null,
+  });
 }

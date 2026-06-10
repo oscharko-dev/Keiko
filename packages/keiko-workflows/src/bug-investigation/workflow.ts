@@ -14,6 +14,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { buildBugContext } from "./context.js";
 import { computeBugFingerprint } from "./emit.js";
 import { parseFailureEvidence } from "./failure-parse.js";
+import { acquireMemoryContext, emitMemoryWriteCandidate } from "./memory.js";
 import { runBugModelLoop } from "./model-loop.js";
 import {
   cancelledReport,
@@ -60,6 +61,11 @@ async function runPipeline(state: BugRunState): Promise<BugInvestigationReport> 
   const fs = state.deps.fs ?? nodeWorkspaceFs;
   const workspace = detectWorkspace(state.input.workspaceRoot, fs);
   const evidence = parseFailureEvidence(report);
+  // Memory composition (Issue #213): fetch a scoped memory context before any model call so
+  // the model loop can prepend it to the user message. NO-OP when no port is injected; the
+  // returned text is redacted + byte-capped at the prompt boundary (defence-in-depth).
+  const memoryContext = await acquireMemoryContext(state.deps.memoryPort, report);
+  state.memoryPromptText = memoryContext?.text;
   state.emitter.emit({
     type: "bug:failure:parsed",
     frameCount: evidence.frames.length,
@@ -91,5 +97,10 @@ export async function investigateBug(
         ? cancelledReport(state, EMPTY_BUG_LOOP, undefined, { frames: [], messages: [] })
         : failedReport(state, error);
   }
+  // Memory write-candidate (Issue #213): emit ONLY for terminal success outcomes
+  // (fix-applied / fix-proposed / investigation-only). NO-OP for cancelled / failed /
+  // rejected, and NO-OP when no port is injected. Emitted before emitCompleted so the audit
+  // ledger and Memory Center UI see the candidate alongside the run-completed event.
+  emitMemoryWriteCandidate(state.deps.memoryPort, report);
   return emitCompleted(state, report);
 }

@@ -26,7 +26,7 @@ Please include:
 - Affected version, commit, or branch.
 - Reproduction steps, proof-of-concept details, or a minimal failing case.
 - Impact assessment, including whether secrets, repository contents, generated
-  patches, evidence manifests, or local UI access are affected.
+  patches, evidence manifests, memory records, or local UI access are affected.
 - Any known workaround or mitigation.
 
 Expected handling:
@@ -37,5 +37,9 @@ Expected handling:
 - Public disclosure after a fix, mitigation, or explicit non-affected decision
   is available.
 
-The security model and known Wave 1 boundaries are documented in
-[`docs/security-and-audit-boundaries.md`](docs/security-and-audit-boundaries.md).
+The current security and audit boundary model is documented in
+[`docs/security-and-audit-boundaries.md`](docs/security-and-audit-boundaries.md)
+and [ADR-0030](docs/adr/ADR-0030-workspace-security-evidence.md). Those documents
+are the source of truth for the loopback-only UI, Model Gateway-only model access,
+workspace containment, allowlisted command execution, patch/evidence protections,
+and workspace durable-state restrictions.

@@ -2,8 +2,8 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { runCli, type CliIo } from "./runner.js";
-import { SDK_VERSION } from "./_sdk-version.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 // Root product package.json sits three directories above this test file:
@@ -45,9 +45,8 @@ function isPackageJson(value: unknown): value is { readonly version: string } {
 // Reads the ROOT product package.json via an absolute path derived from this
 // test file's location, so the assertion works whether `vitest` runs from the
 // repo root (`npm test`) or from this package (`cd packages/keiko-cli && npm test`).
-// The CLI surfaces the root product version via `keiko --version`, so the assertion
-// below guards against drift between the local SDK_VERSION literal
-// (_sdk-version.ts) and the root package's version field.
+// The CLI surfaces the canonical SDK package version via `keiko --version`, so the assertion
+// below guards against drift between the workspace SDK surface and the root package's version field.
 function packageVersion(): string {
   const parsed: unknown = JSON.parse(readFileSync(ROOT_PACKAGE_JSON, "utf8"));
   if (!isPackageJson(parsed)) {
@@ -95,6 +94,24 @@ describe("runCli", () => {
     expect(c.out()).toContain("keiko evidence");
     expect(c.out()).toContain("keiko init");
     expect(c.out()).toContain("keiko start|stop|status|restart");
+  });
+
+  it("lists the launcher subcommand in help (epic #121 child #125)", () => {
+    const c = makeIo();
+    const code = runCli(["--help"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("keiko launcher");
+    expect(c.out()).toContain("install|remove|status");
+  });
+
+  it("dispatches the launcher subcommand (prints USAGE and returns 0 with no args)", () => {
+    const c = makeIo();
+    // Bare `keiko launcher` is `runLauncherCli([], ...)` which prints USAGE and returns 0
+    // per the launcher dispatcher contract; the runner.ts wiring must forward the empty rest.
+    const code = runCli(["launcher"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("keiko launcher install");
+    expect(c.err()).toBe("");
   });
 
   it("dispatches the evidence subcommand (usage error 2 with no subcommand, no disk touched)", () => {

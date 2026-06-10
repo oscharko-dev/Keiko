@@ -17,11 +17,18 @@ import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
 import type { UseWorkspaceResult, ViewportWorld, WorkspaceApi } from "./useWorkspace.types";
 import {
+  parsePersistedConnections,
+  parsePersistedWindows,
+  sanitizePersistedConnections,
+  sanitizePersistedWindows,
+} from "./workspace-persistence";
+import {
   makeConnectActions,
   makeLayoutActions,
   makeMutations,
   makeSnapActions,
 } from "./workspaceActions";
+import type { ChatLocalKnowledgeScope } from "@/lib/types";
 
 export type { AppWindow, Connection, ConnectingState, SnapPrev, View };
 export type { SnapZone } from "../windows/connectionUtils";
@@ -89,28 +96,6 @@ function persistList<T>(key: string, value: T): void {
   } catch {
     /* ignore */
   }
-}
-
-function parseWinArray(raw: string | null): AppWindow[] | null {
-  if (raw === null) return null;
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed as AppWindow[];
-  } catch {
-    /* ignore */
-  }
-  return null;
-}
-
-function parseConns(raw: string | null): Connection[] {
-  if (raw === null) return [];
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed as Connection[];
-  } catch {
-    /* ignore */
-  }
-  return [];
 }
 
 interface ArrowState {
@@ -257,15 +242,17 @@ function useHydrate({ wsRef, setWins, setConns, zc }: UseHydrateArgs): void {
     const r = el.getBoundingClientRect();
     let init: AppWindow[] | null = null;
     try {
-      init = parseWinArray(window.localStorage.getItem(WS_LS));
+      init = parsePersistedWindows(window.localStorage.getItem(WS_LS));
     } catch {
       init = null;
     }
-    if (init === null) init = defaultLayout(r.width, r.height) as unknown as AppWindow[];
-    zc.current = Math.max(1, ...init.map((w) => w.z));
+    // M1 (#532) — no seeded windows on first launch; the empty-state "New window" button
+    // in Workspace.tsx and the FAB (+) are always reachable even when `wins` is [].
+    if (init === null) init = [];
+    zc.current = init.length === 0 ? 1 : Math.max(1, ...init.map((w) => w.z));
     setWins(init);
     try {
-      setConns(parseConns(window.localStorage.getItem(CONN_LS)));
+      setConns(parsePersistedConnections(window.localStorage.getItem(CONN_LS), init));
     } catch {
       /* ignore */
     }
@@ -382,7 +369,21 @@ function useConnectionPrune(
   }, [wins, setConns]);
 }
 
-export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspaceResult {
+// Epic #532 — optional Files↔Chat scope-binding callbacks. The composition root (AppShell) wires
+// these to the active chat's connectedScopes so a relationship edge grounds the chat against a folder.
+// Epic #189 Slice 3 M3 — optional Connector↔Chat scope-binding callbacks. The composition root
+// (AppShell) wires these to the active chat's localKnowledgeScopes.
+export interface UseWorkspaceOptions {
+  readonly onScopeBind?: ((filesRoot: string) => void) | undefined;
+  readonly onScopeUnbind?: ((filesRoot: string) => void) | undefined;
+  readonly onConnectorBind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
+  readonly onConnectorUnbind?: ((scope: ChatLocalKnowledgeScope) => void) | undefined;
+}
+
+export function useWorkspace(
+  wsRef: RefObject<HTMLElement | null>,
+  opts: UseWorkspaceOptions = {},
+): UseWorkspaceResult {
   const [wins, setWins] = useState<AppWindow[] | null>(null);
   const [snapPrev, setSnapPrev] = useState<SnapPrev | null>(null);
   const [palOpen, setPalOpen] = useState(false);
@@ -410,13 +411,14 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
   useHydrate({ wsRef, setWins, setConns, zc });
 
   useEffect(() => {
-    persistList(CONN_LS, conns);
-  }, [conns]);
+    if (wins === null) return;
+    persistList(CONN_LS, sanitizePersistedConnections(conns, wins));
+  }, [conns, wins]);
 
   useConnectionPrune(wins, setConns);
 
   useEffect(() => {
-    if (wins !== null) persistList(WS_LS, wins);
+    if (wins !== null) persistList(WS_LS, sanitizePersistedWindows(wins));
   }, [wins]);
 
   useKeyboardCtrls({ setWins, rect, cancelConnectRef });
@@ -437,6 +439,10 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
     connect,
     linkedFilesRoot,
     linkedFilesContext,
+    linkedAllFilesRoots,
+    linkedConnectorCapsuleIds,
+    linkedConnectorCapsuleSetIds,
+    linkedFigmaSnapshotRunIds,
     currentFilesContext,
   } = makeConnectActions({
     wsRef,
@@ -448,6 +454,10 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
     focus,
     setConns,
     setConnecting,
+    onScopeBind: opts.onScopeBind,
+    onScopeUnbind: opts.onScopeUnbind,
+    onConnectorBind: opts.onConnectorBind,
+    onConnectorUnbind: opts.onConnectorUnbind,
   });
   cancelConnectRef.current = cancelConnect;
 
@@ -481,6 +491,10 @@ export function useWorkspace(wsRef: RefObject<HTMLElement | null>): UseWorkspace
     connect,
     linkedFilesRoot,
     linkedFilesContext,
+    linkedAllFilesRoots,
+    linkedConnectorCapsuleIds,
+    linkedConnectorCapsuleSetIds,
+    linkedFigmaSnapshotRunIds,
     currentFilesContext,
     zoomTo,
     resetView,
