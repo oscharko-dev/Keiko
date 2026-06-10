@@ -3,7 +3,7 @@
 // Uses a temp evidenceDir (real filesystem), a fake ModelPort that returns canned JSON,
 // and identity redaction. Tests the happy-path contracts + all coded error cases.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +35,30 @@ function emptyStore(): EvidenceStore {
 
 /** A canned response that the model-routed workflow can parse as zero candidates (empty array). */
 const EMPTY_CANDIDATES_JSON = JSON.stringify({ testCases: [] });
+const COVERING_TWO_REQUIREMENTS_JSON = JSON.stringify({
+  testCases: [
+    {
+      title: "Verify MFA is required before audit login access",
+      preconditions: ["An audit user is registered."],
+      steps: ["Attempt audit login without MFA."],
+      expectedResults: ["Access is not granted before MFA verification."],
+      priority: "P1",
+      riskClass: "compliance",
+      derivedFromEvidenceIndexes: [1],
+      tags: ["audit-login"],
+    },
+    {
+      title: "Verify transfer confirmation is shown before submission",
+      preconditions: ["An audit transfer is ready for review."],
+      steps: ["Attempt to submit the transfer."],
+      expectedResults: ["A confirmation screen appears before funds are submitted."],
+      priority: "P1",
+      riskClass: "regression",
+      derivedFromEvidenceIndexes: [2],
+      tags: ["audit-transfer"],
+    },
+  ],
+});
 
 function usageMeta(promptTokens: number, completionTokens: number): NormalizedResponse["usage"] {
   return {
@@ -76,7 +100,10 @@ function fakeUnparseablePort(): ModelPort {
   };
 }
 
-function chatCapability(modelId: string, overrides: Partial<ModelCapability> = {}): ModelCapability {
+function chatCapability(
+  modelId: string,
+  overrides: Partial<ModelCapability> = {},
+): ModelCapability {
   return {
     id: modelId,
     kind: "chat",
@@ -236,6 +263,42 @@ describe("executeQiRun — happy path", () => {
     const summary = await runQi(makeInput(evidenceDir));
     expect(typeof summary.runId).toBe("string");
     expect((summary.runId as string).length).toBeGreaterThan(0);
+  });
+
+  it("persists one coverage row per requirement atom from a multi-requirement local file", async () => {
+    const sourceDir = join(evidenceDir, "source");
+    mkdirSync(sourceDir);
+    writeFileSync(
+      join(sourceDir, "requirements.md"),
+      [
+        "REQ-DRIFT-001: The audit login flow must require multi-factor verification before account access is granted.",
+        "REQ-DRIFT-002: The audit transfer flow must show a confirmation screen before funds are submitted.",
+      ].join("\n"),
+      "utf8",
+    );
+    await runQi(
+      makeInput(evidenceDir, {
+        request: makeRequest({
+          sources: [{ kind: "workspace", label: "Drift fixture", path: sourceDir }],
+          modelId: MODEL_ID,
+        }),
+        deps: buildDeps({
+          evidenceDir,
+          modelPort: fakeChatPort(COVERING_TWO_REQUIREMENTS_JSON),
+        }),
+      }),
+    );
+
+    const manifest = loadQualityIntelligenceRun("run-exec-001", { evidenceDir });
+    const matrix = manifest?.coverageMatrix ?? [];
+    expect(matrix).toHaveLength(2);
+    expect(matrix.map((row) => row.status)).toEqual(["covered", "covered"]);
+    expect(matrix.map((row) => row.requirementExcerptRedacted ?? "")).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("REQ-DRIFT-001"),
+        expect.stringContaining("REQ-DRIFT-002"),
+      ]),
+    );
   });
 });
 
@@ -515,9 +578,7 @@ describe("executeQiRun — N+1 coverage propagation", () => {
       label: `S${String(i)}`,
       text: `The system shall satisfy requirement ${String(i)} for coverage precisely.`,
     }));
-    await executeQiRun(
-      makeInput(evidenceDir, { onAccepted, request: makeRequest({ sources }) }),
-    );
+    await executeQiRun(makeInput(evidenceDir, { onAccepted, request: makeRequest({ sources }) }));
     expect(onAccepted.mock.calls[0]?.[0]?.droppedSourceCount).toBe(1);
   });
 
