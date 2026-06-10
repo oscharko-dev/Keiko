@@ -317,6 +317,10 @@ const forbidden = [
     test: (p) => p === "packages/keiko-ui" || p.startsWith("packages/keiko-ui/"),
     label: "keiko-ui workspace source",
   },
+  {
+    test: (p) => p.includes("node_modules/@napi-rs/canvas"),
+    label: "a platform-specific optional native canvas dependency",
+  },
   { test: (p) => p.startsWith("/") || /^[A-Za-z]:[\\/]/.test(p), label: "an absolute local path" },
 ];
 

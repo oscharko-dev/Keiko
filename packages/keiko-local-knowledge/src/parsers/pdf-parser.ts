@@ -4,7 +4,6 @@ import type {
   ParserDiagnostic,
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
-import * as pdfjs from "pdfjs-dist/legacy/build/pdf.mjs";
 
 import { diagnostic, emptyResult, oversizeDiagnostic, shouldStop } from "./_internal.js";
 import type {
@@ -39,6 +38,14 @@ interface PdfDocumentLike {
 
 interface PdfLoadingTaskLike {
   readonly promise: Promise<PdfDocumentLike>;
+}
+
+interface PdfJsModule {
+  readonly getDocument: (params: {
+    readonly data: Uint8Array;
+    readonly useWorkerFetch: false;
+    readonly verbosity: 0;
+  }) => PdfLoadingTaskLike;
 }
 
 function hasPdfMagic(bytes: Uint8Array): boolean {
@@ -90,7 +97,8 @@ function syncFallback(capability: ParserCapability): ParserAdapter["parse"] {
   };
 }
 
-function loadPdfDocument(bytes: Uint8Array): Promise<PdfDocumentLike> {
+async function loadPdfDocument(bytes: Uint8Array): Promise<PdfDocumentLike> {
+  const pdfjs = (await import("pdfjs-dist/legacy/build/pdf.mjs")) as unknown as PdfJsModule;
   const task = pdfjs.getDocument({
     data: bytes,
     useWorkerFetch: false,
