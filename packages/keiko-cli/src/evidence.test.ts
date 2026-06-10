@@ -128,6 +128,16 @@ describe("keiko evidence list", () => {
     expect(c.out().toLowerCase()).toContain("no evidence");
     expect(existsSync(missing)).toBe(false);
   });
+
+  it("rejects unknown --dir instead of silently falling back to the default evidence dir", () => {
+    const defaultDir = freshDir();
+    createNodeEvidenceStore(defaultDir).put("run-default", JSON.stringify(manifest("run-default")));
+    const c = capture();
+    const code = runEvidenceCli(["list", "--dir", defaultDir], c.io);
+    expect(code).toBe(2);
+    expect(c.err().toLowerCase()).toContain("invalid arguments");
+    expect(c.out()).not.toContain("run-default");
+  });
 });
 
 describe("keiko evidence show", () => {
@@ -179,6 +189,16 @@ describe("keiko evidence show", () => {
     const c = capture();
     const code = runEvidenceCli(["show", "../escape"], c.io, { store: seededStore(["run-a"]) });
     expect(code).toBe(2);
+  });
+
+  it("rejects unknown --dir for show instead of reading the default evidence dir", () => {
+    const defaultDir = freshDir();
+    createNodeEvidenceStore(defaultDir).put("run-default", JSON.stringify(manifest("run-default")));
+    const c = capture();
+    const code = runEvidenceCli(["show", "run-default", "--dir", defaultDir], c.io);
+    expect(code).toBe(2);
+    expect(c.err().toLowerCase()).toContain("invalid arguments");
+    expect(c.out()).toBe("");
   });
 
   it("exits 1 (no unhandled throw) on a corrupt/unparseable manifest (C1)", () => {
