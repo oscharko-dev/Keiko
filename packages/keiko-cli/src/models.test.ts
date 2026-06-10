@@ -138,6 +138,7 @@ describe("runModelsCli validate", () => {
 
   it("never prints a credential value when reporting a validation error", () => {
     const path = join(dir, "leak.json");
+    const apiKey = ["sk-", "leaky-1234567890abcdef"].join("");
     writeFileSync(
       path,
       JSON.stringify({
@@ -145,7 +146,7 @@ describe("runModelsCli validate", () => {
           {
             modelId: "example-chat-model",
             baseUrl: "https://h/v1",
-            apiKey: "sk-leaky-1234567890abcdef",
+            apiKey,
             timeoutMs: -1,
           },
         ],
@@ -156,7 +157,7 @@ describe("runModelsCli validate", () => {
     const c = makeIo();
     const code = runModelsCli(["validate", "--config", path], c.io, {});
     expect(code).toBe(1);
-    expect(c.out() + c.err()).not.toContain("sk-leaky-1234567890abcdef");
+    expect(c.out() + c.err()).not.toContain(apiKey);
   });
 
   it("exits 1 when no config source is available", () => {

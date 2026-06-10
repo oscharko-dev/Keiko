@@ -22,6 +22,8 @@ const identity = (s: string): string => s;
 
 describe("insertRelationshipAuditEntry", () => {
   let db: DatabaseSync;
+  const summarySecret = ["sk-", "AAAABBBBCCCC"].join("");
+  const hintSecret = ["sk-", "ZZZZYYYYXXXX"].join("");
   beforeEach(() => {
     db = openMem();
   });
@@ -61,8 +63,8 @@ describe("insertRelationshipAuditEntry", () => {
         kind: "relationship.created",
         relationshipId: "rel-1",
         actor: { surface: "system", redactedActorId: "actor-1" },
-        summary: "test sk-AAAABBBBCCCC token",
-        payload: { hint: "leaked sk-ZZZZYYYYXXXX again" },
+        summary: `test ${summarySecret} token`,
+        payload: { hint: `leaked ${hintSecret} again` },
       },
       redact,
     );

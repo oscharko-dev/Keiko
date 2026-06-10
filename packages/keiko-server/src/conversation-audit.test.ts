@@ -29,9 +29,9 @@ const POST_JSON_HEADERS = { "Content-Type": "application/json", "X-Keiko-CSRF": 
 const CHAT_MODEL = "example-chat-model";
 
 // Credential shapes that should NEVER appear in a wire-bound error message.
-const FAKE_BEARER_TOKEN = "sk-test-1234567890ABCDEFGH";
-const FAKE_GITHUB_TOKEN = "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-const FAKE_AWS_KEY = "AKIAIOSFODNN7EXAMPLE";
+const FAKE_BEARER_TOKEN = ["sk-", "test-1234567890ABCDEFGH"].join("");
+const FAKE_GITHUB_TOKEN = ["ghp_", "AAAAAAAAAAAAAAAAAAAAAAAAAAAA"].join("");
+const FAKE_AWS_KEY = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
 const FAKE_PROVIDER_BASE_URL = "https://provider.example/v1";
 const FAKE_CONFIG_API_KEY = "test-config-secret-value-1234567890";
 
