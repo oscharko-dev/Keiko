@@ -4,35 +4,40 @@ This repository now has a dedicated automated release workflow at [`.github/work
 
 ## Triggering
 
-- Tag pushes matching `v*` run the full release verification job.
-- Manual `workflow_dispatch` runs the same verification job.
-- Manual `workflow_dispatch` with `publish: true` enables the publish job, but only when the selected ref is a tag that starts with `v`.
+- Releases are started manually with `workflow_dispatch`.
+- Select a tag ref that starts with `v`.
+- The tag must match the root `package.json` version, for example `v0.2.0-beta.3`.
+- The selected tag must point at `origin/main`.
+- Manual `workflow_dispatch` with `publish: true` enables the publish step.
 - Manual publishes require an explicit npm dist-tag. The default is `beta`.
 
-## Gates
+## Quality Gates
 
-The verification job runs the current release gates in a conservative order:
+Full quality gates run on pull requests targeting `dev` before a change can be promoted to `main`.
+The release workflow does not re-run the dev gate suite. In particular, it does not run the
+workspace typecheck, lint, architecture checks, tests, install smokes, audit, or SBOM generation.
 
-1. `npm ci`
-2. `npm run typecheck`
-3. `npm run check:version-consistency`
-4. `npm run lint`
-5. `npm run arch:check`
-6. `npm run arch:check:negative`
-7. `npm run check:qi-supply-chain`
-8. `npm test`
-9. `npm run build`
-10. `npm run prepare:bin`
-11. `npm run build:ui`
-12. `npm run check:package-surface`
-13. `npm run smoke:install`
-14. `npm run smoke:install:memory`
-15. `npm audit --audit-level=high`
-16. `npm sbom --sbom-format cyclonedx --omit dev`
-17. `npm run check:workspace-supply-chain`
-18. `npm sbom --sbom-format cyclonedx --omit dev --workspace @oscharko-dev/keiko-ui`
+## Release Guardrails
 
-The workflow uploads the root and UI CycloneDX SBOMs as artifacts so release evidence stays attached to the run.
+The release workflow keeps only the checks needed to prevent publishing from the wrong source:
+
+1. Verify that the run uses a tag ref.
+2. Verify that the tag name equals `v${package.json.version}`.
+3. Verify that the tagged commit equals `origin/main`.
+4. Reject unsupported npm dist-tags.
+5. Reject prerelease versions published with `latest`.
+
+## Publish Preparation
+
+The publish job installs dependencies once with lifecycle scripts disabled and builds the publish
+artifact explicitly:
+
+1. `npm ci --ignore-scripts`
+2. `npm run clean`
+3. `npm run build`
+4. `npm run prepare:bin`
+5. `npm run build:ui`
+6. `npm run prune:package-native-optionals`
 
 ## Publish control
 
@@ -44,4 +49,6 @@ Publish is intentionally off by default. To publish, a maintainer must:
 - keep `npm_dist_tag` at `beta` for prereleases such as `0.2.0-beta.0`,
 - provide `NPM_TOKEN` in repository secrets.
 
-The publish job uses `npm publish --access public --tag "$NPM_DIST_TAG"` after the verification job has completed successfully. Prerelease package versions are blocked from publishing with the `latest` dist-tag.
+The publish step uses `npm publish --access public --tag "$NPM_DIST_TAG" --ignore-scripts`.
+`--ignore-scripts` is required so npm lifecycle hooks such as `prepublishOnly` cannot re-run the
+heavy dev gates during release publication.

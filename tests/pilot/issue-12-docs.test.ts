@@ -54,6 +54,18 @@ function expectPruneBeforePackageSurface(jobBlock: string): void {
   expect(pruneIndex).toBeLessThan(surfaceIndex);
 }
 
+function expectReleasePublishUsesPrunedArtifact(jobBlock: string): void {
+  const pruneIndex = jobBlock.indexOf("npm run prune:package-native-optionals");
+  const publishIndex = jobBlock.indexOf('npm publish --access public --tag "$NPM_DIST_TAG" --ignore-scripts');
+
+  expect(jobBlock).toContain("npm ci --ignore-scripts");
+  expect(pruneIndex).toBeGreaterThanOrEqual(0);
+  expect(publishIndex).toBeGreaterThanOrEqual(0);
+  expect(pruneIndex).toBeLessThan(publishIndex);
+  expect(jobBlock).not.toContain("npm run check:package-surface");
+  expect(jobBlock).not.toContain("npm test");
+}
+
 // Issue #287 extended the chain with `check:qi-supply-chain` (ADR-0023 D5/D11/D12); issue
 // #433 (Epic #423) added `check:version-consistency` so the packed artifact cannot ship with
 // a manifest/version mismatch; Epic #423 also restores `arch:check` to the real publish path
@@ -108,10 +120,10 @@ describe("Issue #12 docs drift", () => {
     expect(versionGate).toContain("root facade drifted beyond the approved minimal facade");
   });
 
-  it("prunes publisher-native optional dependencies before manual package-surface gates", () => {
+  it("prunes publisher-native optional dependencies before package validation and publish", () => {
     expectPruneBeforePackageSurface(readWorkflowJobBlock(".github/workflows/ci.yml", "ui"));
-    expectPruneBeforePackageSurface(
-      readWorkflowJobBlock(".github/workflows/release.yml", "release-verify"),
+    expectReleasePublishUsesPrunedArtifact(
+      readWorkflowJobBlock(".github/workflows/release.yml", "publish"),
     );
   });
 
