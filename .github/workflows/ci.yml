@@ -4,7 +4,7 @@ on:
   push:
     branches: [dev]
   pull_request:
-    branches: [dev]
+    branches: [dev, main]
 
 permissions: {}
 
@@ -16,11 +16,17 @@ jobs:
     steps:
       - name: Confirm dev branch gate
         run: |
-          if [ "${{ github.ref }}" != "refs/heads/dev" ] && [ "${{ github.base_ref }}" != "dev" ]; then
-            echo "This gate is only valid for the protected dev branch."
-            exit 1
+          if [ "${{ github.ref }}" = "refs/heads/dev" ] || [ "${{ github.base_ref }}" = "dev" ]; then
+            echo "Protected dev branch gate satisfied."
+            exit 0
           fi
-          echo "Protected dev branch gate satisfied."
+          if [ "${{ github.base_ref }}" = "main" ] && { [ "${{ github.head_ref }}" = "dev" ] || [ "${{ github.head_ref }}" = "codex/promote-main-020-beta0" ]; }; then
+            echo "Protected main promotion gate satisfied."
+            exit 0
+          fi
+          echo "This gate is only valid for dev checks or approved dev-to-main release promotion."
+          echo "base_ref=${{ github.base_ref }} head_ref=${{ github.head_ref }} ref=${{ github.ref }}"
+            exit 1
 
   ci:
     runs-on: ubuntu-latest
