@@ -27,6 +27,7 @@ import type {
   QualityIntelligenceUiCandidate,
   QualityIntelligenceUiAtomCoverage,
   QualityIntelligenceUiWeakTestFlag,
+  QualityIntelligenceUiDriftMetadata,
 } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -139,6 +140,22 @@ function computeCoveragePercentage(
   return (covered / coverageByAtom.length) * 100;
 }
 
+function projectDriftMetadata(
+  manifest: NonNullable<ReturnType<typeof loadQualityIntelligenceRun>>,
+  candidateRows: readonly QualityIntelligenceCandidateRow[],
+): QualityIntelligenceUiDriftMetadata {
+  const sourceFingerprintCount = manifest.sourceFingerprints?.length ?? 0;
+  const atomFingerprintCount = manifest.atomFingerprints?.length ?? 0;
+  const supported = sourceFingerprintCount > 0 && candidateRows.length > 0;
+  return {
+    status: supported ? "not-checked" : "unavailable",
+    sourceFingerprintCount,
+    atomFingerprintCount,
+    reCheckSupported: supported,
+    regenerateStaleSupported: supported,
+  };
+}
+
 function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDetail {
   const { manifest, candidateRows, reviewArtifact } = inputs;
   const findingRefs: QualityIntelligenceUiFindingSummary[] = manifest.findings.map((f) => ({
@@ -177,6 +194,7 @@ function projectRunDetail(inputs: RunDetailInputs): QualityIntelligenceUiRunDeta
     coveragePercentage: computeCoveragePercentage(coverageByAtom),
     coverageByAtom,
     qualityScore: manifest.qualityScore ?? null,
+    drift: projectDriftMetadata(manifest, candidateRows),
   };
 }
 

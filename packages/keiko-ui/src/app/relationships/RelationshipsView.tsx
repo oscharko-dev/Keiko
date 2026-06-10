@@ -44,12 +44,19 @@ export function RelationshipsView(): ReactNode {
   // ─── Component-local view state (no URL; this is a Workspace window) ──────
   const [filters, setFilters] = useState<RelationshipFilters>(EMPTY_FILTERS);
   const selectedId = filters.relFocus;
-  const densityMode: DensityMode = (filters.relDensity as DensityMode | undefined) ?? "standard";
+  // Fallback "minimal" matches the list panel's first-load default (visual-density-
+  // rules.md: density defaults to minimal) — the inspector used to assume "standard"
+  // until the first density click, diverging from the list (uiux-fix F046 C395).
+  const densityMode: DensityMode = (filters.relDensity as DensityMode | undefined) ?? "minimal";
 
   // ─── Create dialog ───────────────────────────────────────────────────────
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const createButtonRef = useRef<HTMLButtonElement | null>(null);
   const restoreCreateButtonFocusRef = useRef(false);
+
+  // Root container — Escape is bound here, NOT on window (WCAG 2.1.4: shortcuts
+  // active only while focus is inside the Relationships window).
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   // ─── Graph health view (#542) — replaces the inspector pane while active. ──
   const [showHealth, setShowHealth] = useState(false);
@@ -122,8 +129,12 @@ export function RelationshipsView(): ReactNode {
   // ─── Window-scoped keyboard shortcuts ─────────────────────────────────────
   // Escape clears focus. The filter-input '/' shortcut is handled inside
   // RelationshipListPanel. Shortcuts are suppressed while a field is focused.
+  // Bound to the container (not window): a window listener cleared the selection
+  // even when Escape was pressed in a completely different desktop window.
 
   useEffect(() => {
+    const el = rootRef.current;
+    if (el === null) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       const inInput =
@@ -134,11 +145,14 @@ export function RelationshipsView(): ReactNode {
       if (inInput) return;
       if (e.key === "Escape") {
         if (createDialogOpen) return; // let the dialog handle it
+        // Same modal guard as the list panel — Escape in a modal must not have
+        // side effects on the selection behind it.
+        if (document.querySelector('[role="dialog"][aria-modal="true"]') !== null) return;
         handleClearFocus();
       }
     };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    el.addEventListener("keydown", handleKeyDown);
+    return () => el.removeEventListener("keydown", handleKeyDown);
   }, [createDialogOpen, handleClearFocus]);
 
   return (
@@ -146,6 +160,7 @@ export function RelationshipsView(): ReactNode {
       {createDialogOpen && <RelationshipCreateDialog onClose={handleCreateClose} />}
 
       <div
+        ref={rootRef}
         style={{
           display: "flex",
           flexDirection: "column",
@@ -161,7 +176,7 @@ export function RelationshipsView(): ReactNode {
             alignItems: "center",
             gap: 8,
             padding: "6px 12px",
-            borderBottom: "1px solid var(--border)",
+            borderBottom: "1px solid var(--line)",
             flexShrink: 0,
           }}
         >
@@ -193,7 +208,7 @@ export function RelationshipsView(): ReactNode {
           <div
             style={{
               flex: "0 0 280px",
-              borderRight: "1px solid var(--border)",
+              borderRight: "1px solid var(--line)",
               overflowY: "auto",
             }}
           >

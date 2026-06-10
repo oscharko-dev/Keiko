@@ -13,7 +13,7 @@
 
 import type { Server } from "node:http";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
@@ -32,6 +32,7 @@ import type { CliIo } from "./runner.js";
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const SQLITE_FLAG = "--experimental-sqlite";
 const KEIKO_ENV_NAME_RE = /^KEIKO_[A-Z0-9_]+$/;
+const DEFAULT_STATE_DIR = ".keiko";
 
 const USAGE = `Usage:
   keiko ui [--port PORT] [--host 127.0.0.1|localhost] [--evidence-dir PATH] [--config PATH] [--ui-db PATH]
@@ -45,6 +46,17 @@ export interface UiCliArgs {
   readonly evidenceDir: string | undefined;
   readonly config: string | undefined;
   readonly uiDbPath: string | undefined;
+}
+
+type UiParseResult = UiCliArgs | "help" | null;
+type UiFlag = "--port" | "--host" | "--evidence-dir" | "--config" | "--ui-db";
+
+interface RawUiOptions {
+  portRaw?: string | undefined;
+  hostRaw?: string | undefined;
+  evidenceRaw?: string | undefined;
+  configRaw?: string | undefined;
+  uiDbRaw?: string | undefined;
 }
 
 // Test seam: inject a server factory and the resolved asset paths so unit tests never bind a real
@@ -76,15 +88,6 @@ export type SpawnFn = (
   opts: SpawnOptions,
 ) => ChildProcess;
 
-function flagValue(args: readonly string[], name: string): string | undefined | null {
-  const i = args.indexOf(name);
-  if (i === -1) {
-    return undefined;
-  }
-  const value = args[i + 1];
-  return value === undefined || value.startsWith("--") ? null : value;
-}
-
 function parsePort(raw: string): number | null {
   if (!/^\d{1,5}$/.test(raw)) {
     return null;
@@ -93,23 +96,62 @@ function parsePort(raw: string): number | null {
   return port >= 1 && port <= 65535 ? port : null;
 }
 
+function readFlagValue(args: readonly string[], index: number): string | null {
+  const value = args[index + 1];
+  return value === undefined || value.startsWith("--") ? null : value;
+}
+
+function isUiFlag(arg: string): arg is UiFlag {
+  return (
+    arg === "--port" ||
+    arg === "--host" ||
+    arg === "--evidence-dir" ||
+    arg === "--config" ||
+    arg === "--ui-db"
+  );
+}
+
+function setRawUiOption(raw: RawUiOptions, flag: UiFlag, value: string): void {
+  switch (flag) {
+    case "--port":
+      raw.portRaw = value;
+      return;
+    case "--host":
+      raw.hostRaw = value;
+      return;
+    case "--evidence-dir":
+      raw.evidenceRaw = value;
+      return;
+    case "--config":
+      raw.configRaw = value;
+      return;
+    case "--ui-db":
+      raw.uiDbRaw = value;
+      return;
+  }
+}
+
+function collectUiOptions(args: readonly string[]): RawUiOptions | "help" | null {
+  const raw: RawUiOptions = {};
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === undefined) return null;
+    if (arg === "--help" || arg === "-h") return "help";
+    if (!isUiFlag(arg)) return null;
+    const value = readFlagValue(args, i);
+    if (value === null) return null;
+    setRawUiOption(raw, arg, value);
+    i += 1;
+  }
+  return raw;
+}
+
 // Parses flags. Returns the parsed args, or null on any usage error (missing flag value, invalid
 // port, or a host other than the two loopback names).
-export function parseUiArgs(args: readonly string[]): UiCliArgs | null {
-  const portRaw = flagValue(args, "--port");
-  const hostRaw = flagValue(args, "--host");
-  const evidenceRaw = flagValue(args, "--evidence-dir");
-  const configRaw = flagValue(args, "--config");
-  const uiDbRaw = flagValue(args, "--ui-db");
-  if (
-    portRaw === null ||
-    hostRaw === null ||
-    evidenceRaw === null ||
-    configRaw === null ||
-    uiDbRaw === null
-  ) {
-    return null;
-  }
+export function parseUiArgs(args: readonly string[]): UiParseResult {
+  const raw = collectUiOptions(args);
+  if (raw === "help" || raw === null) return raw;
+  const { portRaw, hostRaw, evidenceRaw, configRaw, uiDbRaw } = raw;
   if (hostRaw !== undefined && !ALLOWED_HOSTS.has(hostRaw)) {
     return null;
   }
@@ -164,6 +206,34 @@ function loadLocalKeikoEnv(cwd: string, env: EnvSource): EnvSource {
 
 function resolveUiConfigPath(parsed: UiCliArgs, env: EnvSource): string | undefined {
   return parsed.config ?? env.KEIKO_CONFIG_FILE;
+}
+
+function hasEnvValue(value: string | undefined): value is string {
+  return value !== undefined && value.length > 0;
+}
+
+function resolveRuntimeStateDir(cwd: string, env: EnvSource): string {
+  const raw = env.KEIKO_STATE_DIR;
+  if (hasEnvValue(raw)) {
+    return isAbsolute(raw) ? raw : resolve(cwd, raw);
+  }
+  return resolve(cwd, DEFAULT_STATE_DIR);
+}
+
+function withDefaultLocalRuntimeStateEnv(
+  cwd: string,
+  parsed: UiCliArgs,
+  env: EnvSource,
+): EnvSource {
+  const stateDir = resolveRuntimeStateDir(cwd, env);
+  const next: Record<string, string | undefined> = { ...env, KEIKO_STATE_DIR: stateDir };
+  if (parsed.uiDbPath === undefined && !hasEnvValue(next.KEIKO_UI_DATA_DIR)) {
+    next.KEIKO_UI_DATA_DIR = join(stateDir, "ui");
+  }
+  if (!hasEnvValue(next.KEIKO_MEMORY_DIR)) {
+    next.KEIKO_MEMORY_DIR = join(stateDir, "memory");
+  }
+  return next;
 }
 
 // Conservative request/header timeouts on the loopback BFF (defense in depth, L2/L3): even on
@@ -297,6 +367,19 @@ function ensureStaticRoot(staticRoot: string, io: CliIo): boolean {
   return false;
 }
 
+function parseUiArgsOrExit(args: readonly string[], io: CliIo): UiCliArgs | number {
+  const parsed = parseUiArgs(args);
+  if (parsed === "help") {
+    io.out(USAGE);
+    return 0;
+  }
+  if (parsed === null) {
+    io.err(USAGE);
+    return 2;
+  }
+  return parsed;
+}
+
 async function maybeWaitForShutdown(server: Server, deps: UiCliDeps): Promise<void> {
   if (deps.createServer !== undefined) {
     return;
@@ -310,20 +393,22 @@ export async function runUiCli(
   env: EnvSource,
   deps: UiCliDeps = {},
 ): Promise<number> {
-  const effectiveEnv = loadLocalKeikoEnv(deps.cwd ?? process.cwd(), env);
+  const cwd = deps.cwd ?? process.cwd();
+  const effectiveEnv = loadLocalKeikoEnv(cwd, env);
+  const parsed = parseUiArgsOrExit(args, io);
+  if (typeof parsed === "number") return parsed;
   const reExec = await maybeReExecForSqlite(effectiveEnv, deps);
   if (reExec !== undefined) return reExec;
-  const parsed = parseUiArgs(args);
-  if (parsed === null) {
-    io.err(USAGE);
-    return 2;
-  }
   const staticRoot = deps.staticRoot ?? defaultStaticRoot();
   if (!ensureStaticRoot(staticRoot, io)) {
     return 1;
   }
   const csp = await loadCspHeader(deps.hashesFile ?? join(staticRoot, "..", "csp-hashes.json"));
-  const handlerDeps = buildHandlerDepsOrReport(parsed, effectiveEnv, io);
+  const handlerDeps = buildHandlerDepsOrReport(
+    parsed,
+    withDefaultLocalRuntimeStateEnv(cwd, parsed, effectiveEnv),
+    io,
+  );
   if (typeof handlerDeps === "number") return handlerDeps;
   const factory = deps.createServer ?? createUiServer;
   const server = await factory({ staticRoot, csp, port: parsed.port, handlerDeps });

@@ -12,6 +12,8 @@ import {
   buildCoverageMap,
   buildRequirementExcerpt,
   deduplicateCandidates,
+  deriveIntent,
+  designTestCaseCandidates,
   scoreFromDimensions,
   TEST_QUALITY_WEAK_THRESHOLD,
   validateCandidates,
@@ -234,6 +236,55 @@ interface GenerationOutput {
   readonly modelParameters: Record<string, unknown> | undefined;
 }
 
+function deterministicBaselineCandidates(
+  ctx: RunContext,
+  input: QualityIntelligenceModelRoutedTestDesignInput,
+): readonly Candidate[] {
+  const candidates = designTestCaseCandidates({
+    runId: input.plan.id,
+    intent: deriveIntent(input.envelopes, ctx.profile),
+    atoms: input.ingestedAtoms.map((entry) => entry.atom),
+    profile: ctx.profile,
+  });
+  return truncateCandidates(deduplicateCandidates(candidates), ctx.limits.maxCandidatesPerRun);
+}
+
+function parseModelCandidates(
+  result: QualityIntelligenceGenerationPortResult,
+  ctx: RunContext,
+  input: QualityIntelligenceModelRoutedTestDesignInput,
+  maxCandidates: number,
+): readonly Candidate[] {
+  const parsed = QualityIntelligenceGeneration.parseGeneratedCandidates(result.rawText, {
+    runId: input.plan.id,
+    atomIds: input.ingestedAtoms.map((a) => a.atom.id),
+    profile: ctx.profile,
+    maxCandidates,
+  });
+  if (!parsed.recovered) {
+    throw new UnparseableModelOutputError();
+  }
+  return truncateCandidates(deduplicateCandidates(parsed.candidates), maxCandidates);
+}
+
+function modelGenerationOutput(
+  result: QualityIntelligenceGenerationPortResult,
+  ctx: RunContext,
+  input: QualityIntelligenceModelRoutedTestDesignInput,
+  maxCandidates: number,
+): GenerationOutput {
+  return {
+    candidates: parseModelCandidates(result, ctx, input, maxCandidates),
+    ...(result.modelId !== undefined ? { modelId: result.modelId } : {}),
+    ...(result.modelId !== undefined
+      ? { seedUsed: result.seedUsed ?? null }
+      : result.seedUsed !== undefined
+        ? { seedUsed: result.seedUsed }
+        : {}),
+    modelParameters: result.modelParameters,
+  };
+}
+
 async function generateCandidates(
   ctx: RunContext,
   input: QualityIntelligenceModelRoutedTestDesignInput,
@@ -261,25 +312,14 @@ async function generateCandidates(
     signal: ctx.signal,
   });
   ctx.modelGatewayCallCount += result.modelCallCount;
-  const parsed = QualityIntelligenceGeneration.parseGeneratedCandidates(result.rawText, {
-    runId: input.plan.id,
-    atomIds: input.ingestedAtoms.map((a) => a.atom.id),
-    profile: ctx.profile,
-    maxCandidates,
-  });
-  if (!parsed.recovered) {
-    throw new UnparseableModelOutputError();
+  if (result.modelId === undefined && result.modelCallCount === 0) {
+    return {
+      candidates: deterministicBaselineCandidates(ctx, input),
+      ...(result.seedUsed !== undefined ? { seedUsed: result.seedUsed } : {}),
+      modelParameters: result.modelParameters,
+    };
   }
-  return {
-    candidates: truncateCandidates(deduplicateCandidates(parsed.candidates), maxCandidates),
-    ...(result.modelId !== undefined ? { modelId: result.modelId } : {}),
-    ...(result.modelId !== undefined
-      ? { seedUsed: result.seedUsed ?? null }
-      : result.seedUsed !== undefined
-        ? { seedUsed: result.seedUsed }
-        : {}),
-    modelParameters: result.modelParameters,
-  };
+  return modelGenerationOutput(result, ctx, input, maxCandidates);
 }
 
 function candidateSummaryText(candidate: Candidate): string {

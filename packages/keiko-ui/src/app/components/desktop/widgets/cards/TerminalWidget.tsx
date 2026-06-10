@@ -15,6 +15,7 @@ import {
   type ReactNode,
 } from "react";
 import { ApiError } from "../../../../../lib/api";
+import { formatBytes, formatMs } from "../../../../../lib/format";
 import {
   abortTerminalExecution,
   createTerminalExecution,
@@ -248,6 +249,18 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
 
   const limits = useMemo(() => policy?.limits ?? null, [policy]);
 
+  // uiux-fix F018 C124: the Cancel button unmounts the moment the run ends; if it
+  // held keyboard focus the browser silently drops focus to <body>. Return it to
+  // the Run button so keyboard users keep their place.
+  const runBtnRef = useRef<HTMLButtonElement | null>(null);
+  const prevRunningStateRef = useRef(false);
+  useEffect(() => {
+    if (prevRunningStateRef.current && !running && document.activeElement === document.body) {
+      runBtnRef.current?.focus();
+    }
+    prevRunningStateRef.current = running;
+  }, [running]);
+
   return (
     <div className="terminal">
       <form className="tm-form" onSubmit={(e) => void onSubmit(e)}>
@@ -301,31 +314,49 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
           </datalist>
         </label>
         <div className="tm-actions">
-          <button type="submit" className="tm-action" disabled={running || policy === null}>
+          {/* data-primary — accent primary affordance, mirrors bw-btn-primary/arun-btn
+              primary hierarchy in the neighbour widgets (uiux-fix F023 C154) */}
+          {/* uiux-fix F018 C124: aria-disabled instead of HTML disabled while running —
+              disabling the focused submit button throws keyboard focus to <body>.
+              onSubmit already guards re-entry; policy===null stays hard-disabled
+              (pre-interaction load state). */}
+          <button
+            type="submit"
+            className="tm-action"
+            data-primary="true"
+            ref={runBtnRef}
+            disabled={policy === null}
+            aria-disabled={running || policy === null}
+          >
             {running ? "Running…" : "Run"}
           </button>
           {running ? (
             <button
               type="button"
               className="tm-action"
-              disabled={inFlightExecutionId === null}
+              aria-disabled={inFlightExecutionId === null}
               onClick={() => void onAbort()}
             >
               Cancel
             </button>
           ) : null}
         </div>
+        {/* uiux-fix F018 C152: human-readable limits via the shared presenters
+            ("256.0 KB · 30.0 s") instead of raw byte/ms integers. */}
         {limits !== null ? (
           <p className="tm-limits">
-            Limits: {limits.maxOutputBytes} bytes output, {limits.defaultTimeoutMs} ms timeout
+            Limits: {formatBytes(limits.maxOutputBytes)} output ·{" "}
+            {formatMs(limits.defaultTimeoutMs)} timeout
           </p>
         ) : null}
       </form>
 
       {error !== null ? (
         <div className="tm-error" role="alert">
+          {/* uiux-fix F018 C124: human message first; the machine code is a small
+              mono detail instead of a bold prefix ("INTERNAL: Unexpected error."). */}
           <span className="tm-error-text">
-            <strong>{error.code}</strong>: {error.message}
+            {error.message} <span className="err-code mono">({error.code})</span>
           </span>
           {/* B3 — dismissible so keyboard users can clear the error without resubmitting */}
           <button
@@ -339,9 +370,20 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
         </div>
       ) : null}
 
+      {/* uiux-fix F018 C124: the live region must exist BEFORE its content changes —
+          a region mounted together with its content is often not announced by
+          NVDA/VoiceOver. This persistent sr-only mirror carries the announcement;
+          the visible result block below stays conditional. */}
+      <p className="sr-only" role="status" aria-live="polite">
+        {result !== null
+          ? `Command finished: exit ${String(result.exitCode)}, ${String(result.durationMs)} ms${
+              result.truncated ? ", output truncated" : ""
+            }${result.timedOut ? ", timed out" : ""}`
+          : ""}
+      </p>
+
       {result !== null ? (
-        /* B2 — role="status" + aria-live="polite" satisfies WCAG 4.1.3 */
-        <div className="tm-result" role="status" aria-live="polite">
+        <div className="tm-result">
           <div className="tm-badges">
             <span
               className={result.exitCode === 0 ? "tm-badge tm-badge-ok" : "tm-badge tm-badge-fail"}

@@ -126,6 +126,40 @@ describe("CapsuleRename — validation and errors", () => {
   });
 });
 
+describe("CapsuleRename — focus management (WCAG 2.4.3, audit C031)", () => {
+  it("moves focus into the name input on open and back to the Rename button on Escape", async () => {
+    const user = userEvent.setup();
+    render(<CapsuleRename {...defaultProps()} />);
+
+    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
+    expect(screen.getByLabelText(/capsule display name/i)).toHaveFocus();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByLabelText(/capsule display name/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /rename capsule/i })).toHaveFocus();
+  });
+
+  it("returns focus to the Rename button after Cancel and after a successful save", async () => {
+    const user = userEvent.setup();
+    const renameImpl = vi.fn().mockResolvedValue(okRename());
+    render(<CapsuleRename {...defaultProps({ renameImpl })} />);
+
+    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
+    await user.click(screen.getByRole("button", { name: /^cancel$/i }));
+    expect(screen.getByRole("button", { name: /rename capsule/i })).toHaveFocus();
+
+    await user.click(screen.getByRole("button", { name: /rename capsule/i }));
+    const nameInput = screen.getByLabelText(/capsule display name/i);
+    await user.clear(nameInput);
+    await user.type(nameInput, "Renamed Docs");
+    await user.click(screen.getByRole("button", { name: /^save$/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /rename capsule/i })).toHaveFocus();
+    });
+  });
+});
+
 describe("CapsuleRename — accessibility", () => {
   it("has no axe violations in the collapsed state", async () => {
     const { container } = render(<CapsuleRename {...defaultProps()} />);

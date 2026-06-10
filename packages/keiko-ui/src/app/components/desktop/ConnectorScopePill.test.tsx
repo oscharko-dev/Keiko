@@ -48,7 +48,8 @@ describe("ConnectorScopePill", () => {
     const chat = makeChat({ localKnowledgeScope: makeCapsule("cap-abc") });
     render(<ConnectorScopePill chat={chat} updateScopes={vi.fn()} />);
     expect(screen.getAllByRole("status")).toHaveLength(1);
-    expect(screen.getByRole("status")).toHaveTextContent("Connector: cap-abc");
+    // uiux-fix F041 (C173) — the entity is a "capsule" product-wide, not a "connector".
+    expect(screen.getByRole("status")).toHaveTextContent("Capsule: cap-abc");
   });
 
   it("renders resolved label from the labels map when provided", () => {
@@ -70,8 +71,8 @@ describe("ConnectorScopePill", () => {
     const chat = makeChat({ localKnowledgeScopes: scopes });
     render(<ConnectorScopePill chat={chat} updateScopes={vi.fn()} />);
     const buttons = screen.getAllByRole("button");
-    expect(buttons[0]).toHaveAttribute("aria-label", "Disconnect Connector: c1 from chat");
-    expect(buttons[1]).toHaveAttribute("aria-label", "Disconnect Connector: c2 from chat");
+    expect(buttons[0]).toHaveAttribute("aria-label", "Disconnect Capsule: c1 from chat");
+    expect(buttons[1]).toHaveAttribute("aria-label", "Disconnect Capsule: c2 from chat");
   });
 
   it("PATCHes with the remaining scopes when a single connector is removed (#189)", async () => {
@@ -84,7 +85,7 @@ describe("ConnectorScopePill", () => {
     render(
       <ConnectorScopePill chat={chat} updateScopes={updateScopes} onDisconnect={onDisconnect} />,
     );
-    await user.click(screen.getByRole("button", { name: "Disconnect Connector: c1 from chat" }));
+    await user.click(screen.getByRole("button", { name: "Disconnect Capsule: c1 from chat" }));
     await waitFor(() => {
       expect(updateScopes).toHaveBeenCalledWith("chat-1", [scopes[1]]);
     });
@@ -97,7 +98,7 @@ describe("ConnectorScopePill", () => {
     const updateScopes = vi.fn().mockResolvedValue({ chat: cleared } satisfies ChatResponse);
     const user = userEvent.setup();
     render(<ConnectorScopePill chat={chat} updateScopes={updateScopes} />);
-    await user.click(screen.getByRole("button", { name: "Disconnect Connector: only from chat" }));
+    await user.click(screen.getByRole("button", { name: "Disconnect Capsule: only from chat" }));
     await waitFor(() => {
       expect(updateScopes).toHaveBeenCalledWith("chat-1", null);
     });

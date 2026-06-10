@@ -10,8 +10,9 @@
 // it removes, with a 24×24 minimum target. Color contrast uses --ink-inverse on --accent
 // (ink-inverse #1a1e23 on accent #4EBA87 = 6.94:1, ≥4.5:1).
 
-import { useState, type ReactNode } from "react";
-import { ApiError, updateChatConnectedScopes } from "@/lib/api";
+import { useRef, useState, type ReactNode } from "react";
+import { updateChatConnectedScopes } from "@/lib/api";
+import { formatUserError } from "./format-error";
 import type { GroundedAnswerContextPackSummary } from "@/lib/types";
 import { effectiveScopes } from "./hooks/workspaceActions";
 import type { Chat, ChatConnectedScope } from "@/lib/types";
@@ -78,13 +79,7 @@ export function buildLastGroundedBudgetStatus(
   ].filter((ratio): ratio is number => ratio !== undefined);
   const maxRatio = ratios.length === 0 ? 0 : Math.max(...ratios);
   const pressure: GroundedBudgetPressure =
-    maxRatio > 1
-      ? "exceeded"
-      : maxRatio >= 0.85
-        ? "high"
-        : maxRatio >= 0.6
-          ? "moderate"
-          : "low";
+    maxRatio > 1 ? "exceeded" : maxRatio >= 0.85 ? "high" : maxRatio >= 0.6 ? "moderate" : "low";
   const totalTokens = usage.modelInputTokens + usage.modelOutputTokens;
   return {
     pressure,
@@ -129,9 +124,25 @@ function scopeBoundaryText(scope: ChatConnectedScope): string {
 }
 
 function formatErrorMessage(error: unknown): string {
-  if (error instanceof ApiError) return `${error.code}: ${error.message}`;
-  if (error instanceof Error) return error.message;
-  return "Unable to disconnect scope.";
+  // uiux-fix F041 (C171) — message first, machine code as trailing detail.
+  return formatUserError(error, "Unable to disconnect scope.");
+}
+
+// uiux-fix F010 (C169, WCAG 2.4.3): after a successful disconnect the focused × button
+// unmounts together with its pill and keyboard focus silently drops to <body>. Re-anchor
+// focus on the next remaining disconnect button inside the scope header — or, when the
+// last pill is gone, on any other control left in the header (e.g. the grounding control).
+// The header element must be captured BEFORE the pill unmounts. Shared with
+// ConnectorScopePill (same pattern, same header).
+export function restoreScopeHeaderFocus(header: Element | null | undefined): void {
+  if (header === null || header === undefined) return;
+  // Defer until React has committed the unmount that follows onDisconnect.
+  window.setTimeout(() => {
+    const next =
+      header.querySelector<HTMLElement>(".scope-pill-disconnect") ??
+      header.querySelector<HTMLElement>("button, select, input, [href], [tabindex]");
+    next?.focus();
+  }, 0);
 }
 
 interface ScopePillItemProps {
@@ -153,17 +164,25 @@ function ScopePillItem({
 }: ScopePillItemProps): ReactNode {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const disconnectRef = useRef<HTMLButtonElement | null>(null);
   const label = pillLabel(scope);
+  // uiux-fix F010 (C174): the basename label collides for same-named folders
+  // (~/kunde-a/docs vs ~/kunde-b/docs) — surface the full path via title so it
+  // stays reachable on both the label and the disconnect target.
+  const fullPath = scope.root ?? scope.relativePaths[0];
 
   async function handleDisconnect(): Promise<void> {
     if (busy) return;
     setError(null);
     setBusy(true);
+    // Capture the stable header ancestor before this pill unmounts (C169).
+    const header = disconnectRef.current?.closest(".chat-scope-header");
     try {
       // Remove THIS source by position; clear the binding entirely when it was the last one.
       const remaining = allScopes.filter((_, i) => i !== index);
       const response = await updateScopes(chat.id, remaining.length > 0 ? remaining : null);
       onDisconnect?.(response.chat);
+      restoreScopeHeaderFocus(header);
     } catch (caught) {
       setError(formatErrorMessage(caught));
     } finally {
@@ -177,15 +196,22 @@ function ScopePillItem({
     <span className="scope-pill-wrap">
       <span className="scope-pill">
         <span aria-hidden="true">●</span>
-        <span role="status" aria-live="polite">
+        <span role="status" aria-live="polite" title={fullPath}>
           {label}
         </span>
+        {/* aria-disabled (not native disabled) while busy: native disabled drops keyboard
+            focus mid-request (C169); the handleDisconnect busy guard blocks re-activation. */}
         <button
           type="button"
+          ref={disconnectRef}
           className="scope-pill-disconnect"
-          disabled={busy}
+          aria-disabled={busy}
           aria-label={`Disconnect ${label} from chat`}
-          title={`Disconnect ${label} from chat`}
+          title={
+            fullPath === undefined
+              ? `Disconnect ${label} from chat`
+              : `Disconnect ${label} from chat (${fullPath})`
+          }
           onClick={() => {
             void handleDisconnect();
           }}

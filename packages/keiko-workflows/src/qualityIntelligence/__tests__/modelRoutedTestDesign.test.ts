@@ -168,6 +168,78 @@ describe("runQualityIntelligenceModelRoutedTestDesign — coverage-gap wiring", 
     expect(manifest?.seedUsed).toBeNull();
   });
 
+  it("uses the deterministic structural baseline when generation is model-free", async () => {
+    const store = createInMemoryQualityIntelligenceLocalStore();
+    const recorded: QualityIntelligence.QualityIntelligenceTestCaseCandidate[] = [];
+    const ingestedAtoms = [
+      makeIngestedAtom(
+        "atom-1",
+        "REQ-DETERMINISM-001: A payment approval screen must require a second approver.",
+      ),
+      makeIngestedAtom(
+        "atom-2",
+        "REQ-DETERMINISM-002: The approval screen must reject same-user approval.",
+      ),
+    ];
+    const plan: QualityIntelligence.QualityIntelligenceRunPlan = {
+      ...PLAN,
+      id: QualityIntelligence.asQualityIntelligenceRunId("qi-run-baseline-test-001"),
+    };
+    const input: QualityIntelligenceModelRoutedTestDesignInput = {
+      plan,
+      envelopes: [
+        {
+          id: QualityIntelligence.asQualityIntelligenceSourceEnvelopeId("env-1"),
+          kind: "human-context",
+          displayLabel: "Determinism audit source",
+          localRef: "env-1",
+          provenance: {
+            origin: "requirements",
+            registeredAt: "2026-06-08T00:00:00.000Z",
+            integrityHashSha256Hex: "b".repeat(64),
+          },
+        },
+      ],
+      ingestedAtoms,
+      provenanceRefs: PROVENANCE,
+    };
+    const summary = await runQualityIntelligenceModelRoutedTestDesign(input, {
+      sink: { emit: () => undefined },
+      evidenceStore: store,
+      candidatesSink: {
+        record: (candidates) => {
+          recorded.push(...candidates);
+        },
+      },
+      generate: {
+        generate: () =>
+          Promise.resolve({
+            rawText: JSON.stringify({ testCases: [] }),
+            modelCallCount: 0,
+          }),
+      },
+      clock: { nowIso: () => "2026-06-08T00:01:00.000Z" },
+    });
+
+    expect(summary.status).toBe("succeeded");
+    expect(summary.modelGatewayCallCount).toBe(0);
+    expect(recorded).toHaveLength(2);
+    expect(recorded.map((candidate) => candidate.derivedFromAtomIds.map(String))).toEqual([
+      ["atom-1"],
+      ["atom-2"],
+    ]);
+    expect(recorded.map((candidate) => candidate.title)).toEqual([
+      "#001 audit / determinism — requirement",
+      "#002 audit / determinism — requirement",
+    ]);
+
+    const manifest = store.load(String(plan.id));
+    expect(manifest?.modelId).toBeUndefined();
+    expect(manifest?.seedUsed).toBeUndefined();
+    expect(manifest?.totals.candidates).toBe(2);
+    expect(manifest?.coverageMatrix?.map((row) => row.status)).toEqual(["covered", "covered"]);
+  });
+
   it("persists sourceFingerprints for each supplied envelope", async () => {
     const store = createInMemoryQualityIntelligenceLocalStore();
     const ingestedAtoms = [

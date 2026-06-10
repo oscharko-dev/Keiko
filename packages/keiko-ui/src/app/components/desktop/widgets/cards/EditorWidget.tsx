@@ -87,9 +87,13 @@ export function EditorWidget({ file = "windows.jsx" }: EditorWidgetProps): React
         <span className="ed-tab active">
           <Icons.editor size={12} /> {file}
         </span>
-        <span className="ed-tab">styles.css</span>
       </div>
-      <div className="ed-code mono">
+      <div className="ed-mock-note" role="note">
+        Static demo — file editing isn&apos;t available yet. Use the Files window to browse real
+        files.
+      </div>
+      {/* eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable code region must be keyboard-focusable (axe scrollable-region-focusable) */}
+      <div className="ed-code mono" tabIndex={0} role="region" aria-label={`Code preview: ${file}`}>
         {CODE.map((l) => (
           <div key={l.n} className="ed-line">
             <span className="ed-num">{l.n}</span>
