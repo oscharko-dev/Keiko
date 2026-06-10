@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "*",
-    "next": "15.5.18",
+    "next": "16.2.9",
     "react": "18.3.1",
     "react-dom": "18.3.1"
   },
