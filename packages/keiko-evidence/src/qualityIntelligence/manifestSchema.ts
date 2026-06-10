@@ -55,12 +55,19 @@ export interface QualityIntelligenceManifestTotals {
   readonly exports: number;
 }
 
-/** Per-atom coverage status row persisted in the run manifest (refs only, no raw text). */
+/**
+ * Per-atom coverage status row persisted in the run manifest. Carries refs plus an optional short
+ * REDACTED requirement excerpt (#790) so coverage/traceability surfaces are auditor-readable —
+ * mirroring the `summaryRedacted` precedent on findings. Never raw source content: the excerpt is
+ * redacted+truncated at build time and every string leaf is redacted again at persist time. Absent
+ * on rows written before #790 (read paths must tolerate it).
+ */
 export interface QualityIntelligenceCoverageMatrixRow {
   readonly atomId: string;
   readonly status: "covered" | "weakly-covered" | "uncovered";
   readonly confidence: number;
   readonly coveringCandidateIds: readonly string[];
+  readonly requirementExcerptRedacted?: string;
 }
 
 export interface QualityIntelligenceFindingRow {
@@ -113,7 +120,8 @@ export interface QualityIntelligenceProvenanceRefs {
 // - `qiEvidenceSchemaVersion` is the literal `1` (per `QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION`).
 // - Every string leaf has already been passed through `redactQualityIntelligenceEvidence`.
 // - No raw prompt, no raw source content, no apiKey, no Bearer token reaches this shape — refs
-//   (envelope ids, atom ids, sha-256 hashes) only.
+//   (envelope ids, atom ids, sha-256 hashes) plus explicitly-redacted text fields only
+//   (`summaryRedacted`, `requirementExcerptRedacted`).
 // - `totals` MUST match the lengths of the corresponding collections (asserted on read).
 export interface QualityIntelligenceEvidenceManifest {
   readonly qiEvidenceSchemaVersion: typeof QUALITY_INTELLIGENCE_EVIDENCE_SCHEMA_VERSION;

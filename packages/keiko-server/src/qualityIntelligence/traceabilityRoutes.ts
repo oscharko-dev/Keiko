@@ -5,11 +5,15 @@
 //
 // A dedicated route (not folded into the generic export route) so the matrix-driven serializer,
 // which needs the coverage matrix rather than the candidate bodies, stays self-contained. The
-// matrix carries refs + status only (no raw atom text); the serializers are deterministic and
-// formula-injection safe.
+// matrix carries refs + status plus an optional already-redacted requirement excerpt (#790); the
+// reverse direction is enriched with the run's redacted candidate titles when the candidate
+// artifact is loadable. The serializers are deterministic and formula-injection safe.
 
 import type { IncomingMessage } from "node:http";
-import { loadQualityIntelligenceRun } from "@oscharko-dev/keiko-evidence";
+import {
+  loadQualityIntelligenceCandidates,
+  loadQualityIntelligenceRun,
+} from "@oscharko-dev/keiko-evidence";
 import { QualityIntelligenceExport } from "@oscharko-dev/keiko-quality-intelligence";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -69,6 +73,39 @@ async function parseFormat(req: IncomingMessage): Promise<Format> {
   return "csv";
 }
 
+type TraceabilityRows = Parameters<typeof QualityIntelligenceExport.adaptToTraceabilityCsv>[0];
+
+// Project persisted matrix rows onto adapter rows; the redacted excerpt (#790) is optional and
+// absent on runs recorded before it existed.
+function toTraceabilityRows(
+  matrix: NonNullable<NonNullable<ReturnType<typeof loadQualityIntelligenceRun>>["coverageMatrix"]>,
+): TraceabilityRows {
+  return matrix.map((r) => ({
+    atomId: r.atomId,
+    status: r.status,
+    confidence: r.confidence,
+    coveringCandidateIds: r.coveringCandidateIds,
+    ...(r.requirementExcerptRedacted !== undefined
+      ? { requirementExcerptRedacted: r.requirementExcerptRedacted }
+      : {}),
+  }));
+}
+
+// Candidate id -> redacted title for the tests->requirements direction (#790). Best-effort: a
+// missing/unreadable candidate artifact only drops the titles, never the export.
+function candidateTitlesFor(id: string, evidenceDir: string): ReadonlyMap<string, string> {
+  const titles = new Map<string, string>();
+  try {
+    const artifact = loadQualityIntelligenceCandidates(id, { evidenceDir });
+    for (const candidate of artifact?.candidates ?? []) {
+      titles.set(candidate.id, candidate.title);
+    }
+  } catch {
+    // Titles are a display enrichment; the matrix itself is loaded and validated separately.
+  }
+  return titles;
+}
+
 export async function handleQiTraceabilityExport(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -97,16 +134,12 @@ export async function handleQiTraceabilityExport(
   if (matrix.length === 0) {
     return errorResult(409, "QI_NO_COVERAGE", "This run has no coverage matrix to export.");
   }
-  const rows = matrix.map((r) => ({
-    atomId: r.atomId,
-    status: r.status,
-    confidence: r.confidence,
-    coveringCandidateIds: r.coveringCandidateIds,
-  }));
+  const rows = toTraceabilityRows(matrix);
+  const display = { candidateTitleById: candidateTitlesFor(id, evidenceDir) };
   const body =
     format === "markdown"
-      ? QualityIntelligenceExport.adaptToTraceabilityMarkdown(rows)
-      : QualityIntelligenceExport.adaptToTraceabilityCsv(rows);
+      ? QualityIntelligenceExport.adaptToTraceabilityMarkdown(rows, display)
+      : QualityIntelligenceExport.adaptToTraceabilityCsv(rows, display);
   const meta = FORMAT_META[format];
   return {
     status: 200,
