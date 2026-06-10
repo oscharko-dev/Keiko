@@ -1,21 +1,42 @@
-# Keiko — Ex experientia disco
+<p align="center">
+  <img src="packages/keiko-ui/public/assets/keiko-logo.svg" alt="Keiko logo" width="144" />
+</p>
 
-Keiko is a governed agentic workspace for knowledge work that learns from experience.
+<h1 align="center">Keiko</h1>
 
-The current npm release starts with local developer-assist workflows for regulated engineering teams. Keiko helps inspect a repository, chat with configured language models, generate reviewable unit tests, investigate bugs, run verification, and keep redacted evidence for human review.
+<p align="center"><strong>Ex experientia disco</strong></p>
+
+<p align="center">
+  Keiko is a governed agentic workspace for knowledge work that learns from experience.
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-4EBA87.svg"></a>
+  <a href="package.json"><img alt="Node.js" src="https://img.shields.io/badge/node-%3E%3D22-4EBA87.svg?logo=node.js&logoColor=white"></a>
+  <a href="package.json"><img alt="npm" src="https://img.shields.io/badge/npm-%3E%3D10.9-4EBA87.svg?logo=npm&logoColor=white"></a>
+  <a href="https://github.com/oscharko-dev/Keiko/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/oscharko-dev/Keiko/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
+  <a href="https://github.com/oscharko-dev/Keiko/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/oscharko-dev/Keiko/actions/workflows/codeql.yml/badge.svg?branch=dev"></a>
+  <img alt="TypeScript" src="https://img.shields.io/badge/language-TypeScript-3178C6.svg?logo=typescript&logoColor=white">
+  <img alt="Local first" src="https://img.shields.io/badge/runtime-local--first-1F2937.svg">
+</p>
+
+<p align="center">
+  <a href="#quickstart">Quickstart</a>
+  ·
+  <a href="#core-workflows">Workflows</a>
+  ·
+  <a href="#security-boundaries">Security</a>
+  ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+  ·
+  <a href="SECURITY.md">Security policy</a>
+</p>
+
+## Overview
+
+Keiko starts with local developer-assist workflows for regulated engineering teams. It helps inspect a repository, chat with configured language models, generate reviewable unit tests, investigate bugs, run verification, and keep redacted evidence for human review.
 
 Keiko is human-controlled by design. It does not commit, push, open pull requests, merge code, or apply changes without an explicit local action. The manifest-producing surfaces emit redacted evidence for audit.
-
-## Report User Findings
-
-If you find a bug or defect while using Keiko, open a GitHub issue with the
-[User Finding template](https://github.com/oscharko-dev/Keiko/issues/new?template=user_finding.yml).
-Do not open a blank issue for this workflow.
-
-The template adds the `User Findings` label automatically and asks for the
-Keiko version, platform, reproduction steps, expected result, actual result,
-and redacted evidence. Do not include API keys, customer data, private
-screenshots, internal model endpoints, private logs, or other secrets.
 
 ## Vision
 
@@ -29,13 +50,15 @@ Keiko's long-term direction is a governed workspace where people can delegate kn
 
 Software engineering is the first use case because repositories, tests, reviews, and tool calls create hard evidence. The product direction is broader: a controlled agentic workspace for enterprise knowledge work.
 
-## Requirements
+## Quickstart
 
-- Node.js 22 or newer.
-- npm 10 or newer.
-- A model gateway with an OpenAI-compatible chat-completions API and an API token for model-backed work.
+### Requirements
 
-## Install and Start
+- Node.js 22 or newer
+- npm 10 or newer
+- An OpenAI-compatible chat-completions gateway and an API token for model-backed work
+
+### Install and start
 
 Install Keiko in the project where you want to use it:
 
@@ -72,7 +95,7 @@ npm run keiko:stop
 | `npm run keiko:start` | Starts the local Keiko UI on the default port. |
 | `npm run keiko:stop`  | Stops the local Keiko UI process.              |
 
-## First-Run Setup
+## First-run setup
 
 If no model gateway is configured, the UI asks for:
 
@@ -87,19 +110,9 @@ For OpenAI-compatible gateways such as LiteLLM, usually leave deployment names e
 
 The UI runs on loopback only. The `--host` option can validate a loopback host value; the server always binds `127.0.0.1`.
 
-## Install as an App
+## Core workflows
 
-After Keiko's UI loads in a Chromium-family browser (Chrome, Edge, or Chromium), an "Install Keiko" affordance appears in the page header. Accepting the prompt installs Keiko as a standalone application with the Keiko icon in your OS application shelf, Dock, or Start menu.
-
-For an OS shortcut that starts the local server in one step:
-
-```bash
-keiko launcher install
-```
-
-This generates a shortcut in `~/.local/share/applications/` (Linux), `~/Applications/` (macOS), or `%APPDATA%\Microsoft\Windows\Start Menu\Programs\` (Windows). Remove it with `keiko launcher remove`. Firefox and Safari users can follow the manual fallback instructions in the [PWA installability contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pwa-installability-contract.md).
-
-## Daily Use
+### Daily use
 
 1. Add a local project path.
 2. Select one of the configured chat models.
@@ -109,7 +122,7 @@ This generates a shortcut in `~/.local/share/applications/` (Linux), `~/Applicat
 
 Surface coverage is intentionally not identical. The UI is the primary surface for day-to-day use; the CLI remains available for focused inspection, verification, and automation.
 
-## CLI Essentials
+### CLI essentials
 
 | Command                       | Purpose                                                          |
 | ----------------------------- | ---------------------------------------------------------------- |
@@ -127,6 +140,18 @@ Surface coverage is intentionally not identical. The UI is the primary surface f
 | `keiko evidence show <runId>` | Shows one redacted evidence manifest.                            |
 
 `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest. Use `keiko run`, `keiko verify`, or the UI evidence view when a stored manifest is required.
+
+## Install as an app
+
+After Keiko's UI loads in a Chromium-family browser (Chrome, Edge, or Chromium), an "Install Keiko" affordance appears in the page header. Accepting the prompt installs Keiko as a standalone application with the Keiko icon in your OS application shelf, Dock, or Start menu.
+
+For an OS shortcut that starts the local server in one step:
+
+```bash
+keiko launcher install
+```
+
+This generates a shortcut in `~/.local/share/applications/` (Linux), `~/Applications/` (macOS), or `%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\` (Windows). Remove it with `keiko launcher remove`. Firefox and Safari users can follow the manual fallback instructions in the [PWA installability contract](docs/pwa-installability-contract.md).
 
 ## Configuration
 
@@ -162,7 +187,7 @@ Supported credential headers are `authorization`, `x-litellm-key`, `x-api-key`, 
 
 Do not commit gateway config files, API tokens, `.keiko/`, or evidence that contains project-specific review material unless your process explicitly requires it.
 
-## Security Boundaries
+## Security boundaries
 
 Keiko is a local tool, not a remote service.
 
@@ -181,9 +206,20 @@ Known limits:
 - Local project scripts can execute repository code when you run verification.
 - Do not run Keiko against untrusted repositories.
 
-## Privacy and Evidence
+## Privacy and evidence
 
-Every grounded answer in the Conversation Center shows a context inspection summary so you can see which scope was searched and how much budget was spent. The connected context pack itself is ephemeral and never persisted, while evidence runs survive chat deletion intentionally for audit. See the [connected context privacy contract](https://github.com/oscharko-dev/Keiko/blob/dev/docs/connected-context-privacy.md) for the full surface — what is sent to the model, what stays local, and how to remove evidence — and the matching decision record [ADR-0022](https://github.com/oscharko-dev/Keiko/blob/dev/docs/adr/ADR-0022-connected-context-privacy.md).
+Every grounded answer in the Conversation Center shows a context inspection summary so you can see which scope was searched and how much budget was spent. The connected context pack itself is ephemeral and never persisted, while evidence runs survive chat deletion intentionally for audit.
+
+Read the full contracts and decisions:
+
+- [Connected context privacy contract](docs/connected-context-privacy.md)
+- [ADR-0022: Connected context privacy](docs/adr/ADR-0022-connected-context-privacy.md)
+
+## Report bugs and findings
+
+If you find a defect while using Keiko, open a GitHub issue with the structured [Bug report form](https://github.com/oscharko-dev/Keiko/issues/new?template=2.bug.yml). Do not open a blank issue for reproducible bug intake.
+
+The form captures version, platform, reproduction steps, expected behavior, actual behavior, impact, environment, and redacted evidence. Do not include API keys, customer data, private screenshots, internal model endpoints, private logs, or other secrets.
 
 ## Troubleshooting
 
@@ -196,17 +232,26 @@ Every grounded answer in the Conversation Center shows a context inspection summ
 | Custom proxy key fails | Confirm whether your gateway expects `Authorization` or a custom API-key header such as `X-Litellm-Key`. |
 | Stale process state    | Run `npm run keiko:stop`, delete `.keiko/ui.pid` if the process is no longer running, then start again.  |
 
-For categorised playbooks covering TLS trust, first-run gateway setup,
-`NO_MODEL`, workspace path validation, and run-engine command denials,
-see the [Troubleshooting guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/troubleshooting/README.md).
+For categorized playbooks covering TLS trust, first-run gateway setup, `NO_MODEL`, workspace path validation, and run-engine command denials, see the [Troubleshooting guide](docs/troubleshooting/README.md).
 
-## Further Reading
+## Repository notes
 
-- [Local UI guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/ui-runbook.md)
-- [Security boundaries](https://github.com/oscharko-dev/Keiko/blob/dev/docs/security-and-audit-boundaries.md)
-- [Troubleshooting guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/troubleshooting/README.md)
-- [Pilot guide](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pilot/runbook.md)
-- [Pilot evaluation](https://github.com/oscharko-dev/Keiko/blob/dev/docs/pilot/go-no-go.md)
+This repository already carries several strong open-source engineering patterns worth preserving and extending:
+
+- Monorepo package boundaries enforced through dependency-cruiser and import-policy checks
+- Required `ci`, CodeQL, dependency review, pinned-action SHA checks, SBOM generation, and supply-chain gates
+- Explicit security and audit boundaries in the product and in the workflow design
+- Installability, smoke, and verification-oriented scripts for release discipline
+
+## Further reading
+
+- [Local UI guide](docs/ui-runbook.md)
+- [Security and audit boundaries](docs/security-and-audit-boundaries.md)
+- [Troubleshooting guide](docs/troubleshooting/README.md)
+- [Pilot guide](docs/pilot/runbook.md)
+- [Pilot evaluation](docs/pilot/go-no-go.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
 
 ## License
 
